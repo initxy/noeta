@@ -14,6 +14,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
+from noeta.core.errors import HeldElsewhere
 from noeta.core.events import Answer, ToolFinished, Waiting
 from noeta.core.questions import ask
 from noeta.core.runner import Runtime
@@ -303,3 +304,24 @@ async def test_a_list_changed_notice_refreshes_the_tools_for_the_next_step(
 
     assert names(0) == ["mcp__fake__changed"]
     assert names(1) == ["mcp__fake__changed", "mcp__fake__fresh"]
+
+
+async def test_a_question_is_declined_while_another_worker_holds_the_tree(
+        store: SqliteStore, pool: McpPool) -> None:
+    """The parked call would live in this process, but the tree's next turn
+    runs on the worker that holds it: the question is declined at once."""
+    provider = ScriptedProvider([reply("", ("mcp__fake__ask", {"message": "ok?"})),
+                                 reply("carried on")])
+    ext = Mcp([server()], pool=pool)
+    rt = runtime(store, provider, Agent(name="a", model="m", extensions=[ext]))
+
+    async def held_elsewhere(_root: str) -> Any:
+        raise HeldElsewhere("held by another worker")
+
+    rt.hold = held_elsewhere  # type: ignore[method-assign]
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert ext._parked == {}
+    assert [json.loads(t) for t in results(await client.events(tid))] == [{"action": "decline"}]
+    assert (await client.get(tid)).waiting_on == "input"  # type: ignore[union-attr]

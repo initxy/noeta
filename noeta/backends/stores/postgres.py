@@ -101,6 +101,7 @@ log = logging.getLogger("noeta.backends.stores.postgres")
 SCHEMA_VERSION = 1
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
 _TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
+_HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree
 _RETRY_SQLSTATES = frozenset({"40001", "40P01"})  # serialization failure, deadlock
 _LOST_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 _DEADLOCK_RETRIES = 5
@@ -835,6 +836,15 @@ class PostgresStore:
                     " AND root_id = %s AND worker = %s RETURNING epoch"),
                     (seconds, epoch, root_id, worker))
             else:
+                # Two workers taking a hold at once would each find no other
+                # holder; one at a time per tree, so a tree has one holder.
+                await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                                   (_HOLD_LOCK_CLASS, f"{self.schema}:{root_id}"))
+                cur = await conn.execute(self._q(
+                    "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
+                    (root_id, worker))
+                if await cur.fetchone() is not None:
+                    return None
                 cur = await conn.execute(self._q(
                     "INSERT INTO {s}.tree_holds (root_id, worker, until)"
                     f" VALUES (%s, %s, {_NOW} + %s) ON CONFLICT (root_id, worker)"

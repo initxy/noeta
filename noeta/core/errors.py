@@ -34,6 +34,12 @@ class UnknownTask(NoetaError):
     pass
 
 
+class HeldElsewhere(NoetaError):
+    """A hold on a task tree was refused: another worker holds the tree
+    (``Store.hold``), and a tree has at most one holding worker. What needed
+    the hold (a background job) cannot start in this process."""
+
+
 class ModelError(NoetaError):
     def __init__(self, message: str, *, status: int | None = None, body: str = "") -> None:
         super().__init__(message)

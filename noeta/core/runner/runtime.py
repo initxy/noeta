@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.agent import Agent
+from noeta.core.errors import HeldElsewhere
 from noeta.core.execenv import ExecEnv
 from noeta.core.holds import Release, TreeHold
 from noeta.core.provider import Provider
@@ -108,11 +109,17 @@ class Runtime:
         counted and renewed while this runtime lives. For what lives only in
         this process, e.g. a background job: it registers
         ``release.tree.on_lost`` to stop when the hold is gone (reaped after
-        this worker was silent too long, or this runtime stopping)."""
+        this worker was silent too long, or this runtime stopping).
+        Raises ``HeldElsewhere`` while another worker holds the tree (one
+        whose hold ran out is reaped first)."""
         tree = self._holds.get(root_id)
         if tree is None or tree.lost:
             epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
-            assert epoch is not None  # taking a hold always succeeds
+            if epoch is None:
+                await self._reap()
+                epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
+            if epoch is None:
+                raise HeldElsewhere(f"task tree {root_id} is held by another worker")
             tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
                             seconds=self.hold_seconds)
             self._holds[root_id] = tree

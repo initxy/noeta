@@ -370,6 +370,31 @@ async def test_a_held_tree_is_claimed_only_by_its_holders(store: Store) -> None:
     assert got == {"root", "root.child"}
 
 
+async def test_a_tree_has_at_most_one_holding_worker(store: Store) -> None:
+    """A second worker's hold is refused, so the held tree's tasks always
+    have a worker that may claim them; once released, another may hold."""
+    await store.create(new("root"))
+    await store.create(NewTask(task_id="root.child",
+                               created=TaskCreated(agent="a", parent_id="root", root_id="root")))
+    epoch = await store.hold("root", "A", 30)
+    assert epoch is not None
+    assert await store.hold("root", "B", 30) is None
+    assert await store.hold("root", "A", 30) == epoch
+    assert await store.claim("B", ["default"], 30) is None
+    assert await store.claim("C", ["default"], 30) is None
+    got = {c.task_id for c in [await store.claim("A", ["default"], 30) for _ in range(2)] if c}
+    assert got == {"root", "root.child"}
+    await store.unhold("root", "A", epoch)
+    other = await store.hold("root", "B", 30)
+    assert other is not None and other != epoch
+
+
+async def test_workers_holding_one_tree_at_once_leave_one_holder(store: Store) -> None:
+    await store.create(new("root"))
+    got = await asyncio.gather(*(store.hold("root", f"w{i}", 30) for i in range(6)))
+    assert len([e for e in got if e is not None]) == 1
+
+
 async def test_an_expired_hold_blocks_claims_until_it_is_reaped(store: Store) -> None:
     await store.create(new("root"))
     root = await store.claim("w1", ["default"], 30)

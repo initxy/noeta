@@ -46,7 +46,8 @@ A runner claims a task from the store (`claim` / `renew` / `release`; Postgres u
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
 unfinished call is answered "outcome unknown", never re-run, unless its tool looks the outcome
 up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe`. What lives only in one worker
-process (a background job) holds the task tree there (`Store.hold`): other workers skip it until
+process (a background job) holds the task tree there (`Store.hold`; a tree has one holding worker,
+so another worker's hold is refused, `HeldElsewhere`): other workers skip it until
 the hold is released, or reaped once it ran out (every worker reaps), which posts `hold_lost` to
 the tree's tasks, waking them (a worker stopping on purpose posts it without waking: the task
 hears with its next message); a hold's epoch fences its old holder.

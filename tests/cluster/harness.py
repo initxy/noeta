@@ -101,12 +101,13 @@ class Spec:
     lookup: float = 0.0
     child_bg: float = 0.0
     cron: int = 0
+    agent_first: bool = False
 
     def prompt(self, journal: str) -> str:
         return "CLUSTER-ROOT " + json.dumps({
             "id": self.id, "journal": journal, "effects": self.effects, "bg": self.bg,
             "agent": self.agent, "wake": self.wake, "lookup": self.lookup,
-            "child_bg": self.child_bg, "cron": self.cron})
+            "child_bg": self.child_bg, "cron": self.cron, "agent_first": self.agent_first})
 
 
 @dataclass

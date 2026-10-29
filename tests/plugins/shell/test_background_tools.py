@@ -15,12 +15,15 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.core.errors import HeldElsewhere
 from noeta.core.events import External, Say
+from noeta.core.holds import Release, TreeHold
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Text
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.jobs import JOB_ENDED, Job
 from noeta.plugins.shell.notices import format_duration, monitor_expired_note
+from noeta.plugins.shell.tools import HELD_ELSEWHERE
 from noeta.toolkit.notices import NOTICE_GUARD
 
 
@@ -305,3 +308,52 @@ async def test_a_command_starting_with_sleep_is_killed_at_its_timeout(h: Harness
     out = await h.call("Bash", command="sleep 3; echo late", timeout=1000)
     assert out.is_error and text(out).startswith("Command timed out after 1s")
     assert h.records == [] and h.registry.jobs == {}
+
+
+# -- a task tree another worker holds ------------------------------------------
+
+
+async def _held_elsewhere() -> Release:
+    raise HeldElsewhere("held by another worker")
+
+
+def _ctx_holding(h: Harness, hold: Any) -> ToolContext:
+    ctx = h.ctx()
+    ctx.hold = hold
+    return ctx
+
+
+async def test_no_background_job_starts_while_another_worker_holds_the_tree(h: Harness) -> None:
+    ctx = _ctx_holding(h, _held_elsewhere)
+    out = await h.tool("Bash").run({"command": "sleep 5", "run_in_background": True}, ctx)
+    assert out.is_error and HELD_ELSEWHERE in text(out)
+    assert h.records == [] and h.registry.jobs == {}
+
+
+async def test_a_timeout_kills_the_command_while_another_worker_holds_the_tree(
+        h: Harness) -> None:
+    ctx = _ctx_holding(h, _held_elsewhere)
+    out = await h.tool("Bash").run({"command": "echo started; sleep 3; echo late",
+                                    "timeout": 1000}, ctx)
+    assert out.is_error and text(out).startswith("Command timed out after 1s")
+    assert "late" not in text(out)
+    await asyncio.sleep(0.05)
+    assert h.records == [] and h.registry.jobs == {}
+
+
+async def test_a_hold_taken_for_a_command_that_ended_meanwhile_is_given_back(
+        h: Harness) -> None:
+    released: list[str] = []
+
+    async def slow_hold() -> Release:
+        await asyncio.sleep(0.6)  # the command ends while the hold is taken
+
+        async def give_back() -> None:
+            released.append("hold")
+
+        return Release(TreeHold(root_id="task", worker="w", epoch=1, seconds=60), give_back)
+
+    ctx = _ctx_holding(h, slow_hold)
+    out = await h.tool("Bash").run({"command": "echo hi; sleep 1.2", "timeout": 1000}, ctx)
+    assert not out.is_error and text(out) == "hi"
+    assert released == ["hold"] and h.records == []

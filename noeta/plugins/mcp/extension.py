@@ -52,6 +52,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Union
 
+from noeta.core.errors import HeldElsewhere
 from noeta.core.events import Answer, Recorded, TaskEnded, Waiting
 from noeta.core.extension import (
     Command,
@@ -300,8 +301,16 @@ class Mcp(Extension):
                     ctx.notify(f"The MCP server {tool.alias!r} asked a further question "
                                "during one call; it was declined.")
                     continue
+                try:
+                    release = await ctx.hold() if ctx.hold is not None else None
+                except HeldElsewhere:
+                    # The open call lives in this process, and the tree's
+                    # next turn would run on the worker that holds it.
+                    answer.set_result({"action": "decline"})
+                    ctx.notify(f"The MCP server {tool.alias!r} asked a question that could "
+                               "not wait for an answer on this worker; it was declined.")
+                    continue
                 park = ask(*elicitation_questions(tool.alias, params))
-                release = await ctx.hold() if ctx.hold is not None else None
                 key = (ctx.task_id, ctx.call_id)
                 self._parked[key] = _Parked(call, params, answer, park, release)
                 if release is not None:

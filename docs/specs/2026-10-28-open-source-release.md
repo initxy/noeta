@@ -72,6 +72,13 @@ servers and runs on many machines.
   missing a task's pinned plugin fails the task with `plugin_missing` (no silent run); `add_to`
   defaults to `()`; channel replies relay from inside the task; Claude Code plugin directories
   load only from noeta's places, fetched at a pinned commit by `noeta plugin add`.
+- D10 A task tree has at most one holding worker (refines D6, ADR-011): a hold by another
+  worker while one exists (expired but unreaped included) is refused in the store's
+  transaction; `Runtime.hold` reaps once, then raises `HeldElsewhere`; a background `Bash` /
+  `Monitor` is refused with a tool error, a foreground command past its timeout is killed
+  instead of moved to the background, an MCP question is declined. Rejected: "any current
+  holder may claim" (the root could run where its jobs are not, so ending it or `TaskStop`
+  would miss the other worker's jobs).
 - D9 Evaluation model: the `.env` live endpoint (gateway token gateway) or DeepSeek Flash;
   `make eval` must not drop below `evals/baseline.json`.
 

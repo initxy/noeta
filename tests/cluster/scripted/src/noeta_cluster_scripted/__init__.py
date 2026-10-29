@@ -26,7 +26,10 @@ running ``lookup`` seconds (when ``lookup`` > 0), a background
 once and answers), a ``ScheduleWakeup`` whose prompt is
 ``CLUSTER-WAKE <id>``. With ``child_bg`` > 0 the sub-agent also starts a
 background ``Bash`` (``child_bg`` seconds, journalling ``<id>-cbg``) and ends
-without waiting for it; the root then waits for that job's end or loss too.
+without waiting for it; the root then waits for that job's end or loss too
+(a sub-agent whose job could not start answers ``CHILD-DONE <id> NO-JOB``
+and leaves nothing to wait for). With ``agent_first`` the ``Agent`` call
+comes right after the ``Effect`` calls, before ``Lookup`` and the job.
 With ``cron`` > 0 it loads the cron tools (``ToolSearch``), creates a
 recurring ``CronCreate`` job whose prompt is ``CLUSTER-CRON <id>``, and
 deletes it (``CronDelete``, again if a crash leaves the outcome unknown)
@@ -221,6 +224,14 @@ def _spec(text: str, prefix: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _agent_call(spec: dict[str, Any], rid: str, journal: str) -> ModelResponse:
+    child = json.dumps({"id": rid, "journal": journal,
+                        "bg": float(spec.get("child_bg", 0) or 0)})
+    return _call(f"agt-{rid}", "Agent", {"description": f"cluster child {rid}",
+                                         "prompt": CHILD + child,
+                                         "subagent_type": CHILD_AGENT})
+
+
 def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
     rid = str(spec["id"])
     journal = str(spec["journal"])
@@ -228,6 +239,9 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         cid = f"eff-{rid}-{i}"
         if cid not in seen.issued:
             return _call(cid, "Effect", {"token": f"{rid}-e{i}"})
+    agent_id = f"agt-{rid}"
+    if spec.get("agent") and spec.get("agent_first") and agent_id not in seen.issued:
+        return _agent_call(spec, rid, journal)
     lookup = float(spec.get("lookup", 0) or 0)
     if lookup > 0 and f"lkp-{rid}" not in seen.issued:
         return _call(f"lkp-{rid}", "Lookup", {"token": f"{rid}-l", "seconds": lookup})
@@ -238,13 +252,8 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
                    f" >> {shlex.quote(journal)}")
         return _call(bg_id, "Bash", {"command": command, "run_in_background": True,
                                      "description": f"cluster job {rid}"})
-    agent_id = f"agt-{rid}"
     if spec.get("agent") and agent_id not in seen.issued:
-        child = json.dumps({"id": rid, "journal": journal,
-                            "bg": float(spec.get("child_bg", 0) or 0)})
-        return _call(agent_id, "Agent", {"description": f"cluster child {rid}",
-                                         "prompt": CHILD + child,
-                                         "subagent_type": CHILD_AGENT})
+        return _agent_call(spec, rid, journal)
     wake_id = f"wake-{rid}"
     if spec.get("wake") and wake_id not in seen.issued:
         return _call(wake_id, "ScheduleWakeup", {
@@ -269,7 +278,8 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
     if spec.get("agent") and not seen.failed(agent_id) and not seen.notified(agent_id):
         pending.append("agent")
     if spec.get("agent") and float(spec.get("child_bg", 0) or 0) > 0 \
-            and not seen.failed(agent_id) and not seen.notified(f"cbg-{rid}"):
+            and not seen.failed(agent_id) and not seen.notified(f"cbg-{rid}") \
+            and f"CHILD-DONE {rid} NO-JOB" not in seen.text:
         pending.append("the sub-agent's job")
     if spec.get("wake") and not seen.failed(wake_id) and not woke:
         pending.append("wake")
@@ -322,6 +332,8 @@ def child_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         return _call(f"cbg-{rid}", "Bash", {
             "command": f"sleep {bg}; echo {line} >> {shlex.quote(str(spec['journal']))}",
             "run_in_background": True, "description": f"cluster child job {rid}"})
+    if bg > 0 and seen.failed(f"cbg-{rid}"):
+        return _say(f"CHILD-DONE {rid} NO-JOB")
     return _say(f"CHILD-DONE {rid}")
 
 

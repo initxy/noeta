@@ -1,6 +1,7 @@
 # ADR-005: Process-bound work holds its task tree, with epochs and a hold_lost notice
 
 - Status: accepted
+- Refined by: ADR-011
 - Date: 2026-10-28
 
 ## Context

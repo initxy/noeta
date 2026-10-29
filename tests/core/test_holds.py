@@ -14,6 +14,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
+from noeta.core.errors import HeldElsewhere
 from noeta.core.events import External, InputTaken
 from noeta.core.runner import Runtime
 from noeta.core.store import HOLD_LOST
@@ -92,3 +93,25 @@ async def test_a_stopping_worker_tells_the_trees_it_held(store: SqliteStore) -> 
     assert stopped == ["job"]
     lost = External(name=HOLD_LOST, data={"worker": rt.worker, "epoch": release.tree.epoch})
     assert (await store.inbox(tid))[-1].body == lost
+
+
+async def test_a_tree_another_worker_holds_cannot_be_held_here(store: SqliteStore) -> None:
+    here = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
+    there = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
+    release = await there.hold("root")
+    with pytest.raises(HeldElsewhere):
+        await here.hold("root")
+    assert here._holds == {}
+    await release()
+    mine = await here.hold("root")
+    assert mine.tree.worker == here.worker
+    await mine()
+
+
+async def test_a_silent_workers_hold_is_reaped_before_holding(store: SqliteStore) -> None:
+    rt = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
+    await store.hold("root", "dead-worker", 0.05)
+    await asyncio.sleep(0.1)
+    release = await rt.hold("root")
+    assert release.tree.worker == rt.worker
+    await release()

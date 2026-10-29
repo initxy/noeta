@@ -12,7 +12,9 @@ from importlib import resources
 from typing import Any
 from urllib.parse import urlsplit
 
+from noeta.core.errors import HeldElsewhere
 from noeta.core.execenv import RunResult
+from noeta.core.holds import Release
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.shell.bash import (
     _CWD_MARK,
@@ -46,6 +48,12 @@ _CD_WORD = re.compile(r"(?:^|[\s;&|(])cd(?:\s|$)")
 NOT_AVAILABLE = "background execution is not available on this host"
 #: Why a job is gone: its worker held the task tree while the job ran, so a
 #: worker that does not have it is not the one that started it.
+#: Why a job cannot start: a tree's jobs all run on one worker, and another
+#: worker already runs one for this tree.
+HELD_ELSEWHERE = ("cannot start a background command now: another worker process is running "
+                  "a background job of this task tree, and every background job of a tree "
+                  "runs on one worker; run the command in the foreground, or start it once "
+                  "that job has ended")
 LOST_REASON = ("the worker process running it stopped, so its further output and exit "
                "status are unknown")
 
@@ -198,27 +206,37 @@ class BackgroundBash(BashTool):
                 ctx, command=command, script=script, hardened=hardened, cwd=cwd,
                 timeout_s=timeout_s, disable=disable, description=description)
         assert job.proc is not None
+        held: Release | None = None
+        refused = False
         try:
             await asyncio.wait({job.proc}, timeout=float(timeout_s))
+            if ctx.hold is not None and not job.proc.done():
+                try:
+                    held = await ctx.hold()
+                except HeldElsewhere:
+                    refused = True
         except asyncio.CancelledError:
             self.registry.kill(job, quiet=True)
             self.registry.discard_later(job)
             if confined is not None:
                 await asyncio.shield(confined.close())
             raise
-        hold = asyncio.ensure_future(ctx.hold()) if ctx.hold is not None else None
 
         async def release() -> None:
             if confined is not None:
                 await confined.close()
-            if hold is not None:
-                await (await hold)()
+            if held is not None:
+                await held()
 
-        if self.registry.to_background(job, release):
-            return await self._moved(ctx, job, command, cwd, timeout_s, hold,
+        if not refused and self.registry.to_background(job, release):
+            return await self._moved(ctx, job, command, cwd, timeout_s, held,
                                      tracked=hardened is None)
-        if hold is not None:
-            hold.cancel()
+        if held is not None:
+            await held()  # it ended meanwhile: nothing to keep
+        if refused:
+            # Another worker holds the tree: a job here could not be read or
+            # stopped later, so it times out as a plain command does.
+            self.registry.kill(job, quiet=True)
         try:
             return await self._foreground_result(job), (
                 confined.violations() if confined else [])
@@ -249,10 +267,10 @@ class BackgroundBash(BashTool):
                          stdout=data, stdout_truncated=size > take, timed_out=killed)
 
     async def _moved(self, ctx: ToolContext, job: Job, command: str, cwd: str,
-                     timeout_s: int, hold: asyncio.Future[Any] | None, *,
+                     timeout_s: int, held: Release | None, *,
                      tracked: bool) -> ToolOutput:
-        if hold is not None:
-            self.registry.hold_with(job, (await hold).tree)
+        if held is not None:
+            self.registry.hold_with(job, held.tree)
         ctx.record(SHELL, "started", {
             "job_id": job.job_id, "command": command, "description": job.description,
             "tool_use_id": ctx.call_id, "monitor": False, "output_file": job.out_path,
@@ -315,7 +333,10 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         resolve = _ws_policy(ctx.env, ws[0])
         if isinstance(resolve, str):
             return tool_error(tool, resolve)
-        release = await ctx.hold() if ctx.hold is not None else None
+        try:
+            release = await ctx.hold() if ctx.hold is not None else None
+        except HeldElsewhere:
+            return tool_error(tool, HELD_ELSEWHERE)
         job = await shell.registry.spawn(
             env=ctx.env, command=command, cwd="", env_vars={}, root_id=_root(ctx),
             spawner_id=ctx.task_id, tool_use_id=ctx.call_id, description=description,
@@ -340,7 +361,12 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         return tool_error(tool, confined)
     # The job lives in this process only: keep the task tree with this
     # worker while it runs, so the next turn can read and stop it.
-    held = await ctx.hold() if ctx.hold is not None else None
+    try:
+        held = await ctx.hold() if ctx.hold is not None else None
+    except HeldElsewhere:
+        if confined is not None:
+            await confined.close()
+        return tool_error(tool, HELD_ELSEWHERE)
     release_job: Callable[[], Awaitable[None]] | None = held
     if confined is not None:
         sandbox_done = confined

@@ -42,7 +42,8 @@ Timers (`view.set_timer`) are kernel state too, so a scheduled wake-up survives 
 See [Park](../CONTEXT.md#park).
 
 **Holds** cover what lives in one process: a background shell job holds its task tree on its
-worker (`Store.hold`), so no other worker claims those tasks while the job runs. Each hold has
+worker (`Store.hold`, one holding worker per tree), so no other worker claims those tasks while
+the job runs. Each hold has
 an epoch; when a worker goes silent any worker reaps its holds and posts `hold_lost` to the
 tree, so the model is told the job is gone instead of waiting forever.
 

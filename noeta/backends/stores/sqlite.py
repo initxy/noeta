@@ -558,6 +558,9 @@ class SqliteStore:
                     "UPDATE tree_holds SET until = ? WHERE epoch = ? AND root_id = ?"
                     " AND worker = ?", (until, epoch, root_id, worker))
                 return epoch if cur.rowcount else None
+            if conn.execute("SELECT 1 FROM tree_holds WHERE root_id = ? AND worker <> ?",
+                            (root_id, worker)).fetchone() is not None:
+                return None  # one holding worker per tree
             row = conn.execute(
                 "SELECT epoch FROM tree_holds WHERE root_id = ? AND worker = ?",
                 (root_id, worker)).fetchone()

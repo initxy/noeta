@@ -33,8 +33,9 @@ from typing import Any
 
 import pytest
 
-from noeta.core.events import ToolStarted
+from noeta.core.events import ToolFinished, ToolStarted
 from noeta.core.store import HOLD_LOST
+from noeta.plugins.shell.tools import HELD_ELSEWHERE
 from tests.cluster.harness import (
     Cluster,
     Faults,
@@ -423,3 +424,71 @@ async def test_frozen_holder_job_not_reported_twice(tmp_path: Path, pg_url: str)
     assert not late, fail(outcome, late)
     assert not any(line.startswith("r00-bg ") for line in outcome.journal), fail(
         outcome, ["the job of a frozen worker wrote after the log said lost"])
+
+
+#: How long the jobs of the two-workers scenario run: past the checks.
+LONG_JOB = 20.0
+
+
+def _finished(records: list[Any], call_id: str) -> str | None:
+    """The text of call ``call_id``'s result in ``records``, if it has one."""
+    return next((r.event.result.text for r in records if isinstance(r.event, ToolFinished)
+                 and r.event.result.call_id == call_id), None)
+
+
+async def test_long_jobs_of_one_tree_on_two_workers(tmp_path: Path, pg_url: str) -> None:
+    """A root starts a sub-agent, which another worker may claim, then both
+    start a long background job. A tree has one holding worker, so the
+    second job is refused (the model is told) and the root still takes a
+    message while the first job runs: its tree never has two holders that
+    each keep it from the other."""
+    cluster = Cluster(tmp_path, pg_url, workers=2, lease=LEASE)
+    await cluster.start()
+    specs = {f"r{i:02d}": Spec(id=f"r{i:02d}", effects=1, agent=True, agent_first=True,
+                               lookup=1.0, bg=LONG_JOB, child_bg=LONG_JOB, pings=1)
+             for i in range(8)}
+    faults = Faults()
+    try:
+        roots = {sid: await cluster.create(spec) for sid, spec in specs.items()}
+
+        async def both_jobs_asked() -> bool:
+            for sid, tid in roots.items():
+                tree = await cluster.tree(tid)
+                children = [r.task_id for r in tree if r.parent_id == tid]
+                if _finished(await cluster.client.events(tid), f"bg-{sid}") is None \
+                        or not children or _finished(await cluster.client.events(children[0]),
+                                                     f"cbg-{sid}") is None:
+                    return False
+            return True
+
+        assert await wait_until(both_jobs_asked, 30), "the jobs were never started"
+        for sid, tid in roots.items():
+            await cluster.client.send(tid, f"CLUSTER-PING {sid} 0", dedupe_key=f"ping-{sid}-0")
+
+        async def pings_taken() -> bool:
+            for sid, tid in roots.items():
+                if f"CLUSTER-PING {sid} 0" not in taken_texts(await cluster.client.events(tid)):
+                    return False
+            return True
+
+        taken = await wait_until(pings_taken, LONG_JOB / 2)
+        await wait_until(lambda: _all_finished(cluster, roots, specs), LONG_JOB + 30)
+        cluster.stop_workers()
+        outcome = await collect(cluster, seed=0, specs=specs, roots=roots,
+                                pings={s: 1 for s in specs}, watch=EpochWatch(), faults=faults)
+    finally:
+        await cluster.close()
+    refused = [f"{tid}: {r.event.result.call_id}" for tid, records in outcome.logs.items()
+               for r in records if isinstance(r.event, ToolFinished)
+               and HELD_ELSEWHERE in r.event.result.text]
+    assert taken, fail(outcome, ["a root held by two workers took no message while its "
+                                 "jobs ran"])
+    assert refused, fail(outcome, ["no sub-agent ran on another worker than its root; rerun"])
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+
+
+async def _all_finished(cluster: Cluster, roots: dict[str, str], specs: dict[str, Spec]) -> bool:
+    done = await asyncio.gather(*(root_finished(cluster, roots[s], spec)
+                                  for s, spec in specs.items()))
+    return all(done)

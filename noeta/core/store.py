@@ -15,7 +15,9 @@ Leases (``lease_until``) only decide when a silent runner's task may be
 claimed by someone else. A wrong guess costs a retry, never a double write.
 
 Holds (:meth:`Store.hold`) keep a task tree with the worker that runs
-something only it has (a background job). A hold carries an epoch: renewing
+something only it has (a background job). A tree has at most one holding
+worker, so a held tree's tasks always have a worker that may claim them and
+that worker has every job of the tree. A hold carries an epoch: renewing
 needs it, so a hold that was reaped stays lost to its old holder. A hold's
 time running out only makes it reapable; :meth:`Store.reap_holds` releases
 it and tells the tree's tasks (``hold_lost``) in one transaction, so no task
@@ -273,13 +275,16 @@ class Store(Protocol):
                    *, epoch: int | None = None) -> int | None:
         """Keep the task tree of ``root_id`` with ``worker``: until the hold
         is released or reaped, ``claim`` by any other worker skips every task
-        of the tree (several workers may hold one tree). ``seconds`` is how
-        long it lasts without renewal before it may be reaped.
+        of the tree. ``seconds`` is how long it lasts without renewal before
+        it may be reaped.
 
         Without ``epoch`` it takes the hold (or extends the one ``worker``
-        already has) and returns its epoch, never reused by another hold.
-        With ``epoch`` it renews that hold: ``None`` when it is gone
-        (released, or reaped while its worker was silent)."""
+        already has) and returns its epoch, never reused by another hold;
+        ``None`` when another worker holds the tree (one whose hold ran out
+        counts until it is reaped): a tree has at most one holding worker,
+        decided in the same transaction. With ``epoch`` it renews that hold:
+        ``None`` when it is gone (released, or reaped while its worker was
+        silent)."""
         ...
 
     async def unhold(self, root_id: str, worker: str, epoch: int,
