@@ -273,6 +273,33 @@ async def test_a_task_whose_log_cannot_be_read_ends_failed_after_a_few_claims(
         await store.close()
 
 
+async def test_a_workers_count_of_unreadable_logs_is_bounded(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A task whose log failed to load here once and then ended on another
+    worker is never loaded here again: its count must not stay forever."""
+    import sqlite3
+
+    from noeta.core.runner import task
+
+    monkeypatch.setattr(task, "UNREADABLE_KEEP", 2)
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: None, lease_seconds=30)  # type: ignore[arg-type,return-value]
+    try:
+        for tid in ("t1", "t2", "t3"):
+            await store.create(NewTask(task_id=tid, created=TaskCreated(agent="a")))
+        conn = sqlite3.connect(path)
+        conn.execute("UPDATE events SET data = x'7b'")
+        conn.commit()
+        conn.close()
+        for _ in range(3):
+            assert await rt.run_once()
+        assert len(rt._unreadable) == 2 and "t1" not in rt._unreadable
+    finally:
+        await store.close()
+
+
 @pytest.mark.parametrize("data", [
     b'{"type":"FutureEvent"}',
     b'{"type":"ModelReplied","response":{"message":{"role":"assistant",'

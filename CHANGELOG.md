@@ -465,6 +465,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **A hold given back after a store hiccup is asked for once more.** One failed unhold left
   the hold to run out and be reaped, which told the tree (`hold_lost`) that a background job
   that had ended normally was lost.
+- **A worker's count of unreadable logs is bounded.** A task whose log failed to load once
+  and then ended elsewhere kept its entry in the worker for good; the 1,024 most recent are
+  kept.
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.

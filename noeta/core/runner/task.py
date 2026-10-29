@@ -61,6 +61,9 @@ MAX_HISTORY_DEPTH = 64
 #: Claims in a row (in one worker) whose log could not be read or folded
 #: before the task is ended failed instead of claimed again.
 LOAD_ATTEMPTS = 3
+#: Tasks a worker keeps that count for (the oldest is forgotten): one that
+#: ends on another worker is never loaded here again.
+UNREADABLE_KEEP = 1024
 
 class LostClaim(Exception):
     pass
@@ -170,7 +173,10 @@ class TaskRun:
         are cancelled."""
         tries = self.rt._unreadable.get(self.task_id, 0) + 1
         if tries < LOAD_ATTEMPTS:
-            self.rt._unreadable[self.task_id] = tries
+            counts = self.rt._unreadable
+            if self.task_id not in counts and len(counts) >= UNREADABLE_KEEP:
+                counts.pop(next(iter(counts)))
+            counts[self.task_id] = tries
             return
         self.rt._unreadable.pop(self.task_id, None)
         error = texts.UNREADABLE_LOG.format(attempts=tries, error=repr(exc))
