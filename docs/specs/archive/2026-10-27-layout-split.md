@@ -24,7 +24,7 @@ answer and a check catches the wrong one:
 
 - Any behavior change. This is a structure-only diff (AGENTS.md: never mix the two).
 - Compatibility: no forwarding modules, aliases or re-exports at old paths. 1.0 is unreleased;
-  host-app is on 0.6 and unaffected.
+  hosts on 0.6 are unaffected.
 - New extension points (HTTP endpoints for commands and pending questions, TUI extension
   points, `noeta plugin install`, timers). Separate specs.
 - Renaming `noeta.apps`: after the split it holds the `noeta` command (`worker` and `serve`

@@ -42,8 +42,8 @@ Measured on `fix/audit-closure-2026-10-26` @717e437:
 - 59 event types, 72 ADRs. ADRs 065–072 all patch crash, cancel or idempotency corner cases.
 - Configuration surface: 82 `Options` fields, 65 `HostConfig` fields, 58 `Protocol` classes,
   five resolvers, plus plugin bundles and activation identity.
-- Hosts (host-app, host-app-2, noeta-agent) call only `create_task`, `send_goal`,
-  `inject_goal`, `task_answer` and `subscribe`, plus one `workflow(` in noeta-agent. No host uses
+- Host applications call only `create_task`, `send_goal`,
+  `inject_goal`, `task_answer` and `subscribe`, plus one `workflow(` in one of them. No host uses
   Postgres, `deliver_event` / `WaitExternal` or worker queues. The owner still wants
   multi-machine deployment later, so it has to be designed in, not dropped.
 
@@ -59,8 +59,8 @@ Root causes of the recurring bugs:
 4. **Two idempotency mechanisms.** There is the `idempotency` table and the
    `IdempotencyKeyClaimed` events (ADR-070, 072), because the table is tied to leases.
 5. **4 KB inline cap** (`EVENT_PAYLOAD_MAX_BYTES`). Events carry 19 kinds of `*_ref` fields into
-   `content`. Readers fetch them back (`get_many`), the table grows without bound (the 8.7 GB
-   host-app store), and every new event decides what to split out.
+   `content`. Readers fetch them back (`get_many`), the table grows without bound (an 8.7 GB
+   store on one host), and every new event decides what to split out.
 6. **Many extension mechanisms** that overlap.
 
 ## Decisions
@@ -367,8 +367,8 @@ Phase 4 — surfaces
 Phase 5 — cutover
 - [ ] Distill the surviving Decisions into the 1.0 ADR set; mark replaced 0.6 ADRs `superseded`
 - [ ] Docs rewrite, migration guide for hosts
-- [ ] Sync client facade, if host-app needs one
-- [ ] Migrate host-app on a branch and run it against its own scenarios
+- [ ] Sync client facade, if a host needs one
+- [ ] Migrate a host application on a branch and run it against its own scenarios
 - [ ] Delete the 0.6 packages from `main`, release `noeta` 1.0.0 (owner tags)
 
 ## Acceptance criteria
@@ -382,7 +382,7 @@ Phase 5 — cutover
   at least 0.6's score, mean of 3 runs.
 - Source size of `packages/noeta` excluding tests is ≤ 30k lines, and no file is over 800 lines.
 - `noeta` (TUI) can resume a task created by a host process, and vice versa.
-- host-app runs on 1.0 on a branch with its existing scenarios passing.
+- A host application runs on 1.0 on a branch with its existing scenarios passing.
 
 ## Risks
 
@@ -392,7 +392,7 @@ Phase 5 — cutover
 - **Behavior drift in the default preset.** Mitigation: prompts are moved byte-for-byte; `make
   eval` and recorded-request snapshots are compared with 0.6.
 - **Hosts stall on 0.6 during the rewrite.** Mitigation: 0.6 keeps getting security fixes;
-  host-app migrates in phase 5 only.
+  host applications migrate in phase 5 only.
 - **TUI scope creep.** Mitigation: 1.0 TUI = chat, tool view, approvals, resume; nothing else.
 
 ## Progress log
@@ -415,6 +415,6 @@ Phase 5 — cutover
 2026-10-27 released 0.6.42 (merged PR #75 with owner's go-ahead; both wheels verified from PyPI).
 2026-10-27 fresh-context reviews: core/front ends (4 P1, 8 P2) and extensions (4 P1, 5 P2), all with repros; two fix branches in flight. Spec drift fixed here: no blob table (payloads inline), deltas are a separate channel, `tasks()` filters by parent/status, sync facade moved to phase 5.
 2026-10-27 review fixes merged: core (store roots filter and error mapping, unique call ids, answers re-gated, parked-call Waiting.detail, turn close rules, release on shutdown, front ends serve only their own trees, ACP turn gating by inbox seq, SSE/remote reconnect, Delta call_seq/attempt) and extensions (hardened env capture through the ExecEnv, `Extension.resident` + `TaskView.residents()` so residents return right after a summary, background job ownership, `.noeta/` writes ask, todo reminder after compaction, 0.6 sub-agent sets, inherited always-rules, private log dir). 1285 passed (sqlite), 1309 (postgres:16); make check green.
-2026-10-27 host-app migration assessed (read-only): overall L, about 3-5 weeks in host-app plus about 2 weeks of Noeta additions (sync facade, per-turn config overlay on Say, error class on turn_failed, store prune, tasks(updated_after) + store-wide observer, opt-in request capture, provider_for(task), rewind or drop take_back, public estimate_tokens). One-branch cutover (0.6 and 1.0 cannot be installed together). Owner to decide scope. Fixed the task_answer mapping above.
+2026-10-27 A host application's migration assessed (read-only): overall L, about 3-5 weeks in the host plus about 2 weeks of Noeta additions (sync facade, per-turn config overlay on Say, error class on turn_failed, store prune, tasks(updated_after) + store-wide observer, opt-in request capture, provider_for(task), rewind or drop take_back, public estimate_tokens). One-branch cutover (0.6 and 1.0 cannot be installed together). Owner to decide scope. Fixed the task_answer mapping above.
 2026-10-27 re-review fixes merged (typed answers to AskUserQuestion from TUI/ACP, descendants' approvals/questions surface in -p/TUI/ACP, repo git filters never run, foreign-agent tasks open read-only, held messages reopen a stopped turn, identical rewrites ignored). After these: make eval 0.982 vs 0.6 baseline 0.952; 1304 passed; make check green.
-2026-10-27 owner: drop 0.6 now, no host-app gate. Repository restructure continues in `2026-10-27-noeta-1-0-layout.md`; 0.6 deleted from the branch there.
+2026-10-27 owner: drop 0.6 now, no host-migration gate. Repository restructure continues in `2026-10-27-noeta-1-0-layout.md`; 0.6 deleted from the branch there.

@@ -362,7 +362,7 @@ Phase 5 — front ends
   (`!!!` in `<session>.marks`, also checked by distill). Root cause of the stage-1 400s: the
   classifier's first stage sends `thinking: {type: disabled}`, which the gateway turns into a
   DeepSeek reasoning setting DeepSeek rejects; DeepSeek was also taking minutes per call, so
-  r2 used `gateway/seed-evolving`, which accepts the request as sent (`record.py
+  r2 used another model behind the gateway, which accepts the request as sent (`record.py
   --drop-disabled-thinking` stays for DeepSeek). New: m2 (approve, "don't ask again" for
   `python3 *`, deny via Escape, a sub-agent's approval), m5 (a project `PreToolUse` hook,
   a failing Read, background Bash + Monitor, TaskStop, `rm -rf .git` in the project).
