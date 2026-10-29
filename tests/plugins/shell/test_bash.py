@@ -251,6 +251,18 @@ async def test_a_recorded_directory_outside_the_workspace_is_given_up(
     assert text_of(out) == f"{h.root}\nShell cwd was reset to {h.root}"
 
 
+async def test_a_directory_swapped_for_a_link_out_starts_back_at_the_root(
+    h: Harness, tmp_path: Path
+) -> None:
+    await bash(h, "mkdir sub && cd sub")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.rmdir(h.root / "sub")
+    os.symlink(elsewhere, h.root / "sub")
+    out = await bash(h, "pwd")
+    assert text_of(out) == f"{h.root}\nShell cwd was reset to {h.root}"
+
+
 async def test_a_failing_command_does_not_move_the_shell(h: Harness) -> None:
     out = await bash(h, "mkdir sub && cd sub && exit 2")
     assert out.is_error and text_of(out) == "Exit code 2"

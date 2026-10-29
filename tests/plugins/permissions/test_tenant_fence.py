@@ -378,3 +378,77 @@ def test_the_protected_set_beyond_noetas_places(tmp_path: Path,
     unknown = {**kw, "tenant": "globex"}
     assert fence.refusal(str(tmp_path / "anywhere"), **unknown) is None
     assert fence.refusal(str(tmp_path / "anywhere"), write=True, **unknown) is not None
+
+
+class Swap:
+    """A tool whose run replaces the task's working directory with a link
+    (what the tenant's own command in its workspace may do)."""
+
+    description = "swap"
+    input_schema: dict[str, Any] = {"type": "object"}
+    read_only = False
+    clearable = False
+    name = "Swap"
+
+    def __init__(self, sub: Path, target: Path) -> None:
+        self.sub, self.target = sub, target
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> Any:
+        from noeta.core.tool import text_output
+
+        self.sub.rmdir()
+        os.symlink(self.target, self.sub)
+        return text_output("swapped")
+
+
+@pytest.mark.parametrize("where", ["home", "beta"])
+async def test_a_working_directory_swapped_for_a_link_fails_the_turn(
+        store: SqliteStore, places: dict[str, Path], where: str) -> None:
+    sub = places["acme"] / "sub"
+    sub.mkdir()
+    read = Fake("Read")
+    provider = ScriptedProvider([reply("", ("Read", {"file_path": "x"})), reply("done")])
+    rt = runtime(store, provider, agent([perms(places, mode="bypassPermissions")], [read]))
+    client = Client(store).scoped("acme")
+    tid = await client.create("a", "go", config={"cwd": str(sub)})
+    sub.rmdir()
+    os.symlink(places[where], sub)
+    await rt.run_until_idle()
+    assert not provider.requests and not read.runs
+    failed = [d for e in await events(client, tid)
+              if isinstance(d := records.decode(e), records.TurnFailed)]
+    assert failed and failed[0].reason == "tenant_cwd_refused"
+    assert str(sub) in failed[0].detail and str(places[where]) in failed[0].detail
+
+
+async def test_a_working_directory_swapped_mid_turn_fails_it_at_the_next_step(
+        store: SqliteStore, places: dict[str, Path]) -> None:
+    sub = places["acme"] / "sub"
+    sub.mkdir()
+    read = Fake("Read")
+    provider = ScriptedProvider([reply("", ("Swap", {})), reply("", ("Read", {"file_path": "x"})),
+                                 reply("done")])
+    rt = runtime(store, provider, agent([perms(places, mode="bypassPermissions")],
+                                        [Swap(sub, places["home"]), read]))
+    client = Client(store).scoped("acme")
+    tid = await client.create("a", "go", config={"cwd": str(sub)})
+    await rt.run_until_idle()
+    assert len(provider.requests) == 1 and not read.runs
+    failed = [d for e in await events(client, tid)
+              if isinstance(d := records.decode(e), records.TurnFailed)]
+    assert failed and failed[0].reason == "tenant_cwd_refused"
+
+
+async def test_a_tenant_whose_workspace_this_worker_does_not_know_fails_its_turns(
+        store: SqliteStore, places: dict[str, Path]) -> None:
+    read = Fake("Read")
+    provider = ScriptedProvider([reply("", ("Read", {"file_path": "README"})), reply("done")])
+    rt = runtime(store, provider, agent([perms(places)], [read]))
+    client = Client(store).scoped("gamma")
+    tid = await client.create("a", "go", config={"cwd": str(places["acme"])})
+    await rt.run_until_idle()
+    assert not provider.requests and not read.runs
+    failed = [d for e in await events(client, tid)
+              if isinstance(d := records.decode(e), records.TurnFailed)]
+    assert failed and failed[0].reason == "tenant_not_isolated"
+    assert "tenant 'gamma'" in failed[0].detail and "workspace" in failed[0].detail

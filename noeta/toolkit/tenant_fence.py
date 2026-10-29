@@ -8,9 +8,9 @@ temp directories but for its tenant's own, other tenants' workspaces, the
 server's own directories (the default tenant's workspace), the credential
 stores of every home directory (:data:`~noeta.toolkit.sandbox.DEFAULT_DENY_READ`
 under each of :func:`home_dirs`) and the operator's ``denyRead``. It may write
-only its tenant's workspace, its own corners and its tenant's own temporary
-directory (:meth:`TenantFence.temp_dir`: its commands' ``TMPDIR`` and its job
-logs). Its own corners are its spilled tool outputs and its tree's
+only its tenant's workspace, its own corners and its commands' ``TMPDIR`` in
+its tenant's own temporary directory (:meth:`TenantFence.temp_dir`, which
+also holds its job logs, readable only). Its own corners are its spilled tool outputs and its tree's
 transcripts, its tenant's plan files, in its tenant's project directory of
 its working directory the memory and, to read, its tree's compaction
 transcripts, and read access to the operator's skills and saved workflows.
@@ -187,6 +187,11 @@ class TenantFence:
         if not _within(path, own_temp) and any(
                 _within(path, p) or _within(path, _real(p)) for p in self.temp_places()):
             return head + "it holds other tasks' command output and temporary files"
+        # Of its own, file tools write only its commands' TMPDIR: not the job
+        # logs and their state files, nor a command's sandbox files.
+        own_tmp = posixpath.join(own_temp, "tmp")
+        if write and _within(path, own_temp) and not _within(path, own_tmp):
+            return head + "it holds the tenant's job logs and sandbox files"
         fenced = [p for p in (self.home or str(noeta_home()), self.spill_root, self.plans_dir)
                   if p]
         if any(_within(path, _real(p)) for p in fenced):
@@ -199,9 +204,27 @@ class TenantFence:
         why = self._protected(real, tenant)
         if why is not None:
             return head + why
-        if not write or self._workspace_owner(real) == tenant or _within(real, own_temp):
+        if not write or self._workspace_owner(real) == tenant or _within(real, own_tmp):
             return None
         return head + "it is outside the tenant's workspace and its own places in noeta"
+
+    def cwd_refusal(self, real: str, *, tenant: str, task_id: str, root_id: str = "",
+                    cwd: str = "") -> str | None:
+        """Why the task may not work in ``cwd``, which resolves to ``real``
+        now: outside its tenant's workspace, or in a place it may not write
+        (a directory on the way swapped for a link since the task was made).
+        ``None`` for the default tenant, or one whose workspace is not
+        known here."""
+        workspace = self.workspaces.get(tenant)
+        if tenant == DEFAULT_TENANT or workspace is None:
+            return None
+        real = posixpath.normpath(real)
+        head = f"the working directory {cwd or real} resolves to {real}"
+        if self._workspace_owner(real) != tenant:
+            return f"{head}, outside tenant {tenant!r}'s workspace {workspace}"
+        why = self.refusal(real, tenant=tenant, task_id=task_id, root_id=root_id, cwd=cwd,
+                           write=True)
+        return None if why is None else f"{head}; {why}"
 
     def _protected(self, real: str, tenant: str) -> str | None:
         """Why ``real`` is in the protected set beyond noeta's own places: the
@@ -259,6 +282,7 @@ class TenantFence:
             settings, tenant_deny_read=tuple(dict.fromkeys(denied)),
             tenant_allow_read=tuple(own), allow_write=(), allow_read=(),
             tenant_temp_places=tuple(temps), tenant_temp_dir=self.temp_dir(tenant),
+            tenant_write_roots=(workspace,) if workspace else (),
             noeta_home_readable=(),
             excluded_commands=(), allow_unsandboxed=False, filesystem_disabled=False,
             weaker_nested=False)

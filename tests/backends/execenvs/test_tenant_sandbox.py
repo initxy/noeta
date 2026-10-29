@@ -21,6 +21,7 @@ from noeta.backends.execenvs import sandbox as sb
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.cli.config import local_env_for
 from noeta.core.loop.state import TaskState
+from noeta.plugins.shell.sandbox import confine
 from noeta.toolkit.paths import project_slug
 from noeta.toolkit.sandbox import SandboxSettings
 from noeta.toolkit.tenant_fence import TenantFence
@@ -201,8 +202,14 @@ def test_the_fence_keeps_tenants_out_of_shared_temp_places(
         assert s.fence.refusal(str(path), tenant="default", task_id="t1") is None
     own = s.mine / "jobs" / "w1" / "x.output"
     assert s.fence.refusal(str(own), tenant="acme", task_id="t1", cwd=str(p.mine)) is None
-    assert s.fence.refusal(str(own), tenant="acme", task_id="t1", cwd=str(p.mine),
-                           write=True) is None
+    # File tools write only its commands' TMPDIR there, never the job logs,
+    # their state files or a command's sandbox files.
+    for theirs in (own, s.mine / "jobs" / "w1" / "x.cwd", s.mine / "0123abcd" / "empty"):
+        why = s.fence.refusal(str(theirs), tenant="acme", task_id="t1", cwd=str(p.mine),
+                              write=True)
+        assert why is not None and "may not write" in why
+    assert s.fence.refusal(str(s.mine / "tmp" / "f"), tenant="acme", task_id="t1",
+                           cwd=str(p.mine), write=True) is None
 
 
 async def test_a_tenants_env_keeps_its_temp_files_and_job_logs_apart(
@@ -405,3 +412,66 @@ async def test_a_credential_store_made_after_the_task_starts_stays_hidden(
     (carol / ".netrc").write_text("CAROLNETRC")
     out = await _out(tenant, f"cat {carol}/.aws/credentials {carol}/.netrc; cat f.txt")
     assert "CAROLKEY" not in out and "CAROLNETRC" not in out and "MYFILE" in out, out
+
+
+def _swap(sub: Path, target: Path) -> None:
+    """What a tenant's own command in its workspace may do: replace a
+    directory with a link to anywhere."""
+    shutil.rmtree(sub)
+    os.symlink(target, sub)
+
+
+@needs_bwrap
+@pytest.mark.parametrize("where", ["theirs", "home"])
+async def test_a_working_directory_swapped_for_a_link_runs_nothing(
+        tmp_path: Path, where: str) -> None:
+    p = Places(tmp_path)
+    sub = p.mine / "sub"
+    sub.mkdir()
+    tenant = local_env_for(SandboxSettings(enabled=True), p.fence)(_state("acme", sub))
+    assert isinstance(tenant, LocalExecEnv)
+    assert "MINE" in await _out(tenant, "echo MINE > m && cat m")
+    target = p.theirs if where == "theirs" else p.home
+    _swap(sub, target)
+    with pytest.raises(PermissionError, match="may not"):
+        await _out(tenant, "cat f.txt tokens.json; echo PWN > settings.json")
+    assert not (target / "settings.json").exists()
+    # The Bash tool's refusal says why.
+    refused = await confine(tenant, "ls", False, ["ls"], str(sub))
+    assert isinstance(refused, str) and "was not run" in refused
+    # The plan itself refuses a writable root in a protected place, rather
+    # than dropping the place from what the command may not read.
+    assert tenant.sandbox is not None
+    with pytest.raises(PermissionError, match="may not"):
+        sb.plan_paths(tenant.sandbox.settings, str(sub), tenant.sandbox.tmpdir())
+
+
+def test_a_tenants_writable_root_must_lie_in_its_workspace(tmp_path: Path) -> None:
+    p = Places(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    box = p.fence.confine(SandboxSettings(enabled=True), tenant="acme", task_id="t1",
+                          cwd=str(p.mine))
+    with pytest.raises(PermissionError, match="outside"):
+        sb.plan_paths(box, str(elsewhere), str(tmp_path / "tmp"))
+    # A tenant whose workspace this worker does not know writes nowhere.
+    unknown = p.fence.confine(SandboxSettings(enabled=True), tenant="initech",
+                              task_id="t1", cwd=str(p.mine))
+    with pytest.raises(PermissionError, match="outside"):
+        sb.plan_paths(unknown, str(p.mine), str(tmp_path / "tmp"))
+
+
+@pytest.mark.parametrize("where", ["theirs", "home"])
+async def test_a_file_tools_relative_path_follows_no_swapped_link(
+        tmp_path: Path, where: str) -> None:
+    p = Places(tmp_path)
+    sub = p.mine / "sub"
+    sub.mkdir()
+    tenant = local_env_for(None, p.fence)(_state("acme", sub))
+    target = p.theirs if where == "theirs" else p.home
+    _swap(sub, target)
+    with pytest.raises(PermissionError, match="may not read"):
+        await tenant.read_bytes("f.txt" if where == "theirs" else "tokens.json")
+    with pytest.raises(PermissionError, match="may not write"):
+        await tenant.write_bytes("settings.json", b"{}")
+    assert not (target / "settings.json").exists()

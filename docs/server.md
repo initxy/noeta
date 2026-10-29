@@ -247,9 +247,13 @@ A worker that knows of no tenants (no tokens file, no tenant directories, as on 
 machine) still starts, but when it claims a task of a tenant other than the default one
 without one of the boundaries above, it runs none of that task's tools: the turn fails with
 `tenant_not_isolated` and the reason, before any model call (a one-shot task ends failed;
-an interactive one waits for its next message). Give every worker the same `~/.noeta`, or
-route tenants to their own queues (`queues = ["acme"]`) served only by workers set up for
-them.
+an interactive one waits for its next message). The same happens, with the boundary in
+place, to a task of a tenant whose workspace the worker does not know: nothing would say
+where its commands may write. Workers read the tenant directories when they start, and a
+worker hides from a tenant's tasks only the workspaces it knows, so every worker needs the
+same tenant set: when adding a tenant, copy its directory to every machine and restart the
+workers before giving out its token. Give every worker the same `~/.noeta`, or route
+tenants to their own queues (`queues = ["acme"]`) served only by workers set up for them.
 
 For hard isolation (separate machines or databases per tenant), run a worker pool per queue
 (`noeta worker --queue acme`) or a store schema per tenant.

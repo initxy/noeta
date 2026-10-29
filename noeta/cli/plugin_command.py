@@ -7,7 +7,7 @@
     noeta plugin remove <name>
 
 A plugin is a noeta plugin file or directory, or a Claude Code plugin
-directory (``noeta.cli.claude_plugins``). A git source must name a commit
+directory (``noeta.cli.claude_plugins``). A git source must name a full commit
 (``@<sha>``): what is installed never changes under the person. A
 marketplace (``<root>/.claude-plugin/marketplace.json``, a local path or
 ``<git-url>@<commit>``) is only read, to find where its plugin comes from;
@@ -34,8 +34,14 @@ from noeta.cli import home_dir
 __all__ = ["add_parser", "install", "run"]
 
 SOURCES_FILE = "plugin-sources.json"
-_COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
-_GIT_URL = re.compile(r"^(https?://|ssh://|git://|file://|[\w.-]+@[\w.-]+:)")
+#: What may be meant as a commit after ``@`` (a short one is refused with a
+#: reason: a commit made later could share its prefix).
+_COMMIT = re.compile(r"^[0-9a-f]{4,64}$")
+#: A full commit id: SHA-1, or SHA-256 for a repository in that format.
+_FULL_COMMIT = re.compile(r"^([0-9a-f]{40}|[0-9a-f]{64})$")
+#: Encrypted transports only (and local ``file://``): over ``http://`` or
+#: ``git://`` anyone on the way could hand over other code.
+_GIT_URL = re.compile(r"^(https://|ssh://|file://|[\w.-]+@[\w.-]+:)")
 
 
 class PluginInstallError(Exception):
@@ -82,14 +88,15 @@ def _checkout(url: str, commit: str, into: Path) -> str:
     returns the full commit id. ``url`` must look like a git URL (a
     marketplace's entry could otherwise smuggle in a git option)."""
     if not _GIT_URL.match(url):
-        raise PluginInstallError(f"{url!r} is not a git URL (https://, ssh://, git://, "
-                                 "file:// or user@host:path)")
-    if not _COMMIT.match(commit):
-        raise PluginInstallError(f"{commit!r} is not a commit id")
+        raise PluginInstallError(f"{url!r} is not a git URL over an encrypted transport "
+                                 "(https://, ssh://, user@host:path, or a local file://)")
+    if not _FULL_COMMIT.match(commit):
+        raise PluginInstallError(f"{commit!r} is not a full commit id (40 hex digits): a "
+                                 "short one could match a commit pushed later")
     _git("clone", "--quiet", "--no-checkout", "--", url, str(into))
     _git("checkout", "--quiet", "--detach", commit, cwd=str(into))
     full = _git("rev-parse", "HEAD", cwd=str(into))
-    if not full.startswith(commit):
+    if full != commit:
         raise PluginInstallError(f"{url}@{commit} resolved to {full}")
     shutil.rmtree(into / ".git")
     return full
@@ -151,7 +158,7 @@ def _from_marketplace(market: str, name: str, commit: str | None, work: Path) ->
     """Where the marketplace ``market`` says ``name`` comes from, fetched
     into ``work``; records nothing, runs nothing."""
     source, market_commit = _split(market)
-    if _GIT_URL.match(source):
+    if _GIT_URL.match(source) or "://" in source:  # another scheme: refused
         if market_commit is None:
             raise PluginInstallError("a git marketplace needs @<commit>")
         root = work / "marketplace"
@@ -207,8 +214,8 @@ def install(spec: str, *, marketplace: str | None = None,
             record: dict[str, Any] = {"marketplace": marketplace, "plugin": spec}
         else:
             source, pinned = _split(spec)
-            pinned = pinned or commit
-            if _GIT_URL.match(source):
+            pinned = pinned or (commit.lower() if commit else None)
+            if _GIT_URL.match(source) or "://" in source:  # another scheme: refused
                 if pinned is None:
                     raise PluginInstallError("a git source needs @<commit> (a pinned "
                                              "install never changes under you)")

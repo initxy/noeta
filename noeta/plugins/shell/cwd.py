@@ -40,12 +40,13 @@ async def start_cwd(ws: Workspace, ctx: ToolContext) -> tuple[str, bool]:
     """Where this command starts, and whether the recorded directory had
     to be given up for the root: the last directory a command left the
     shell in, unless it is outside the workspace or no longer a
-    directory."""
+    directory. Resolved again: a directory on the way may have become a
+    link out of the workspace since."""
     raw = shell_state(ctx.state).cwd
     if not raw or raw == ws.root:
         return ws.root, False
-    cwd = posixpath.normpath(raw)
     try:
+        cwd = posixpath.normpath(await ws.env.realpath(posixpath.normpath(raw)))
         st = await ws.env.stat(cwd)
         usable = path_within(cwd, ws.root) and st is not None and st.is_dir
     except OSError:

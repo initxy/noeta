@@ -741,6 +741,35 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A tenant's commands no longer follow a working directory swapped for a link.** The
+  `cwd` was checked only when the task was created; the tenant could then replace a
+  directory on the way with a link to noeta's home or another tenant's workspace, and its
+  sandboxed commands got that place as their writable root (with noeta's home, its tokens
+  and settings, and hooks in those settings run unsandboxed). The sandbox now resolves the
+  working directory for every command of a tenant's task and refuses the command unless it
+  lies in the tenant's workspace and outside the places its commands may not read, instead
+  of making such a place writable. The permissions plugin also resolves it before every
+  model call and fails the turn with `tenant_cwd_refused` and the reason, and `Bash`
+  resolves the directory a command left the shell in before starting the next one there
+  (one now leading out of the workspace starts back at the root).
+- **A worker runs no tools of a tenant whose workspace it does not know.** Such a worker
+  (one with an older copy of the tenant directories) still ran the task with the sandbox
+  in place; the turn now fails with `tenant_not_isolated` before any model call, as on a
+  worker without a boundary. Workers read the tenant directories at start: restart every
+  worker after adding a tenant (`docs/server.md`).
+- A tenant's file tools write only its commands' `TMPDIR` (`tmp/`) in the tenant's
+  temporary directory. Before, they could write anywhere in it, its background jobs' logs
+  and state files (`jobs/w<pid>/*.output`, `.alive`, `.cwd`) and its commands' sandbox files
+  included.
+- `noeta plugin add` takes only a full commit id (40 hex digits, or 64 for a SHA-256
+  repository) and only `https://`, `ssh://`, `user@host:path` or a local `file://` source,
+  for a plugin and for a marketplace and its entries. Before, a 7-character prefix (which a
+  commit pushed later could share) and `http://` or `git://` (which anyone on the way could
+  answer with other code) were accepted.
+- An instruction file's `@import` is read only when it resolves inside the importing
+  file's directory or the working directory. Before, the check used the path as written, so
+  a repository's link (`docs/x.md` -> `~/.ssh/id_rsa`) put the target's text into the
+  model's context.
 - **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another

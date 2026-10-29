@@ -80,6 +80,9 @@ DENIED_BY_HUMAN = "denied by human"
 #: The reason a turn fails with on a worker that may not run the task's
 #: tenant (``tenant_refusal``).
 TENANT_NOT_ISOLATED = "tenant_not_isolated"
+#: The reason a tenant's turn fails with when its working directory now
+#: resolves outside its workspace or into a place it may not write.
+TENANT_CWD_REFUSED = "tenant_cwd_refused"
 
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
@@ -356,10 +359,19 @@ class Permissions(Extension):
             "choices": choices(decision), "classify": decision.classify})
 
     def _tenant_refused(self, view: TaskView) -> str | None:
-        if self.tenant_refusal is None or view.state.tenant == DEFAULT_TENANT:
+        tenant = view.state.tenant
+        if tenant == DEFAULT_TENANT:
             return None
-        return (f"this worker does not run tasks of tenant {view.state.tenant!r}: "
-                f"{self.tenant_refusal}")
+        if self.tenant_refusal is not None:
+            return f"this worker does not run tasks of tenant {tenant!r}: {self.tenant_refusal}"
+        if tenant not in self.fence.workspaces:
+            # Nothing here would keep its commands out of a workspace this
+            # worker does not know, nor say where its own may write.
+            return (f"this worker does not run tasks of tenant {tenant!r}: it does not know "
+                    "the tenant's workspace. Every worker needs the server's tenant "
+                    "directories (tenants/<name>/config.toml in noeta's home, with "
+                    "workspace = ...) and a restart after one is added")
+        return None
 
     def _guards(self, view: TaskView, st: PermState, call: ToolUse) -> Gate | None:
         """noeta's own guards: the budget, the risk ceiling, the repetition
@@ -516,6 +528,9 @@ class Permissions(Extension):
         refused = self._tenant_refused(view)
         if refused is not None:
             raise TurnFailed(TENANT_NOT_ISOLATED, refused)
+        moved = await fc.cwd_refusal(self.fence, view)
+        if moved is not None:
+            raise TurnFailed(TENANT_CWD_REFUSED, moved)
         if self.budget.max_iterations is not None:
             view.record(NAME, "step")
         if self.allowed is not None or self.disallowed:

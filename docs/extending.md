@@ -77,9 +77,9 @@ reads `~/.claude` or `.claude/`.
 ### Installing
 
 ```sh
-noeta plugin add https://github.com/you/your-plugin@3f2a9c1   # a commit is required
-noeta plugin add ./my_plugin.py                               # copied
-noeta plugin add --marketplace ./team-marketplace formatter    # a Claude Code marketplace.json
+noeta plugin add https://github.com/you/your-plugin@<40-hex commit>   # https or ssh, a full commit
+noeta plugin add ./my_plugin.py                                       # copied
+noeta plugin add --marketplace ./team-marketplace formatter           # a Claude Code marketplace.json
 noeta plugin list
 noeta plugin remove your-plugin
 ```
