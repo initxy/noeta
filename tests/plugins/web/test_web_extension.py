@@ -401,40 +401,6 @@ async def _no_sleep(_: float) -> None:
     return None
 
 
-async def test_digest_runs_through_the_runner(store: SqliteStore, tmp_path: Path) -> None:
-    def digest_reply(request: ModelRequest) -> ModelResponse:
-        assert request.model == "main-model" and request.max_tokens == 4096
-        assert not request.thinking and not request.tools
-        assert request.headers == {"x-tenant": "t1"}
-        prompt = request.messages[0].text
-        assert prompt.startswith("You are answering a request about a web page")
-        assert "\nRequest: price?\n" in prompt and "Price is 42" in prompt
-        return reply("The price is 42.")
-
-    provider = ScriptedProvider([LOAD, reply("", ("WebFetch", {"url": "https://e.com",
-                                                         "prompt": "price?"})),
-                                 digest_reply, reply("done")])
-
-    class Headers(Extension):
-        name = "headers"
-
-        async def before_model(self, view: Any, request: ModelRequest) -> ModelRequest:
-            import msgspec
-
-            return msgspec.structs.replace(request, headers={"x-tenant": "t1"})
-
-    agent = Agent(name="a", model="main-model",
-                  extensions=[Headers(), Web(fetch_transport=FakeFetch())])
-    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
-                 sleep=_no_sleep)
-    client = Client(store)
-    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
-    await rt.run_until_idle()
-    [_loaded, result] = [r.event.result for r in await client.events(tid)
-                if isinstance(r.event, ToolFinished)]
-    assert result.text == "The price is 42."
-
-
 async def test_webfetch_model_names_the_digest_model(store: SqliteStore,
                                                      tmp_path: Path) -> None:
     def digest_reply(request: ModelRequest) -> ModelResponse:
@@ -497,3 +463,37 @@ def test_per_task_bindings_are_bounded() -> None:
 
 def test_the_user_agent_points_at_the_project() -> None:
     assert HttpFetchTransport().user_agent.endswith("(+https://github.com/initxy/noeta)")
+
+
+async def test_digest_runs_through_the_runner(store: SqliteStore, tmp_path: Path) -> None:
+    def digest_reply(request: ModelRequest) -> ModelResponse:
+        assert request.model == "main-model" and request.max_tokens == 4096
+        assert not request.thinking and not request.tools
+        assert request.headers == {"x-request": "r1"}
+        prompt = request.messages[0].text
+        assert prompt.startswith("You are answering a request about a web page")
+        assert "\nRequest: price?\n" in prompt and "Price is 42" in prompt
+        return reply("The price is 42.")
+
+    provider = ScriptedProvider([LOAD, reply("", ("WebFetch", {"url": "https://e.com",
+                                                         "prompt": "price?"})),
+                                 digest_reply, reply("done")])
+
+    class Headers(Extension):
+        name = "headers"
+
+        async def before_model(self, view: Any, request: ModelRequest) -> ModelRequest:
+            import msgspec
+
+            return msgspec.structs.replace(request, headers={"x-request": "r1"})
+
+    agent = Agent(name="a", model="main-model",
+                  extensions=[Headers(), Web(fetch_transport=FakeFetch())])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    [_loaded, result] = [r.event.result for r in await client.events(tid)
+                if isinstance(r.event, ToolFinished)]
+    assert result.text == "The price is 42."

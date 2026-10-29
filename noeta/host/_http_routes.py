@@ -1,7 +1,7 @@
 """The request/response handlers of ``noeta serve``: tasks, their pending
 cards, messages, answers, signals, usage, context, rewind, commands, agents
 and models. Each runs behind :class:`~noeta.host._http_guard.Guard`, which
-sets the request's tenant scope."""
+sets the request's scope."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from starlette.responses import Response
 
 from noeta.core import models
 from noeta.core.agent import Agent
-from noeta.core.events import DEFAULT_TENANT, TaskCreated
+from noeta.core.events import TaskCreated
 from noeta.core.extension import CommandContext
 from noeta.core.types import Image, Message, Text
 from noeta.host._http_guard import REQUEST_CONFIG, scope
@@ -51,18 +51,16 @@ async def _command_place(request: Request, agent: str | None, task_id: str | Non
     """The agent and context a slash command is listed or run in: a task's
     own agent and the ``cwd`` it was created with, else the request's
     ``cwd`` checked as a new task's would be (commands read the
-    directory's skills and may start its MCP servers), for the request's
-    tenant."""
-    tenant = getattr(scope(request).client, "tenant", None) or DEFAULT_TENANT
+    directory's skills and may start its MCP servers)."""
     if task_id:
         mine = scope(request).client
         row = await mine.get(task_id)
         first = (await mine.events(task_id, 0))[:1]
         made = first[0].event if first else None
         where = made.config.get("cwd") if isinstance(made, TaskCreated) else None
-        return row.agent, CommandContext(cwd=str(where or ""), task_id=task_id, tenant=tenant)
-    where = scope(request).guarded.check_cwd(cwd) or scope(request).guarded.workspace or ""
-    return agent or "main", CommandContext(cwd=str(where), tenant=tenant)
+        return row.agent, CommandContext(cwd=str(where or ""), task_id=task_id)
+    where = scope(request).guarded.check_cwd(cwd) or ""
+    return agent or "main", CommandContext(cwd=str(where))
 
 
 class Routes:
@@ -93,11 +91,14 @@ class Routes:
         return _json(await scope(request).client.get(request.path_params["task_id"]))
 
     async def events(self, request: Request) -> Response:
+        task_id = request.path_params["task_id"]
         after = int(request.query_params.get("after", "0"))
-        return _json(await scope(request).client.events(request.path_params["task_id"], after))
+        await scope(request).client.get(task_id)  # an unknown task answers 404
+        return _json(await scope(request).client.events(task_id, after))
 
     async def pending(self, request: Request) -> Response:
         task_id = request.path_params["task_id"]
+        await scope(request).client.get(task_id)
         out = []
         for item in await pending_tree(scope(request).client, task_id):
             row = dataclasses.asdict(item)
@@ -177,8 +178,8 @@ class Routes:
         body = await request.json()
         points = await rewind_points(scope(request).client, task_id)
         point = points[int(body["index"])]
-        # The new task is a request's: the guard's checks and the tenant's
-        # queues, and only the config a request may set.
+        # The new task is a request's: the guard's checks, and only the
+        # config a request may set.
         done = await rewind(scope(request).guarded, task_id, point,
                             conversation=bool(body.get("conversation", True)),
                             files=bool(body.get("files", True)), config_keys=REQUEST_CONFIG)

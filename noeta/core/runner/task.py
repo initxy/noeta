@@ -29,7 +29,6 @@ from noeta.core import records as core_records
 from noeta.core import registry, snapshots
 from noeta.core.agent import Agent
 from noeta.core.errors import (
-    BudgetSpent,
     Conflict,
     InboxUnread,
     StoreUnavailable,
@@ -529,16 +528,14 @@ class TaskRun:
                         child_tasks=self._child_ids, serves_queue=self.serves_queue)
 
     async def _read_log(self, task_id: str, after: int = 0) -> Sequence[Recorded]:
-        """``TaskView.read_log``: another tenant's task is not there for it."""
-        if task_id != self.task_id:
-            row = await self.store.get(task_id)
-            if row is None or row.tenant != self.state.tenant:
-                return []
+        """``TaskView.read_log``: an unknown task reads as empty."""
+        if task_id != self.task_id and await self.store.get(task_id) is None:
+            return []
         return await self.store.read(task_id, after)
 
     async def _child_ids(self, task_id: str) -> list[str]:
         return [row.task_id for row in await self.store.tasks(
-            parent_id=task_id, limit=10_000, tenant=self.state.tenant)]
+            parent_id=task_id, limit=10_000)]
 
     def counter(self, model: str) -> Any:
         """``count_tokens(text)`` against ``model``'s provider, or ``None``
@@ -546,7 +543,7 @@ class TaskRun:
         if not model:
             return None
         try:
-            provider = self.rt.provider(model, self.state.tenant)
+            provider = self.rt.provider_for(model)
         except Exception:  # noqa: BLE001 — no provider, no exact count
             return None
         count = getattr(provider, "count_tokens", None)
@@ -576,17 +573,11 @@ class TaskRun:
 
     async def complete(self, request: Any) -> Any:
         """A model call for an extension (a summary, a judge): retried like
-        the main call, not recorded as a step. Refused (:class:`BudgetSpent`)
-        past the tenant's budget."""
+        the main call, not recorded as a step."""
         from noeta.core.retry import complete_with_retries
 
-        refusal = await self.rt.budget_refusal(self.state.tenant)
-        if refusal is not None:
-            raise BudgetSpent(refusal)
-        response = await complete_with_retries(
-            self.rt.provider(request.model, self.state.tenant), request, sleep=self.rt.sleep)
-        await self.rt.charge(self.state.tenant, request.model, response.usage)
-        return response
+        return await complete_with_retries(
+            self.rt.provider_for(request.model), request, sleep=self.rt.sleep)
 
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates or view.enqueued:
@@ -602,13 +593,13 @@ class TaskRun:
 
     async def enqueued(self, view: TaskView) -> list[Post]:
         """The posts ``view.enqueue`` staged, taken out of the view; one to a
-        task that is not of this task's tenant is dropped."""
+        task that does not exist is dropped."""
         staged, view.enqueued = list(view.enqueued), []
         posts: list[Post] = []
         for body, key, target in staged:
             if target is not None and target != self.task_id:
                 row = await self.store.get(target)
-                if row is None or row.tenant != self.state.tenant:
+                if row is None:
                     log.warning("task %s: post to unknown task %s dropped", self.task_id, target)
                     continue
             else:

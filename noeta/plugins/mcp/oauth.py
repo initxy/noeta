@@ -181,7 +181,7 @@ class TokenStore:
 def store_for(server: McpServer, scope: str | None = None,
               home: Path | None = None) -> TokenStore:
     """The token file of ``server`` in connection ``scope``: one per server
-    url, so two tenants (scopes) never share a sign-in."""
+    url, so two scopes never share a sign-in."""
     digest = hashlib.sha256(f"{scope or ''}\n{server.url}".encode()).hexdigest()[:16]
     return TokenStore((home or noeta_home()) / AUTH_DIR / f"{server.alias}-{digest}.json")
 

@@ -41,11 +41,12 @@ All notable changes to Noeta are documented here. The format is based on
   `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
   that picks up a task a newer one touched fails on it again and again. Logs written by
   older versions still load.
-- **Stores are at schema version 3 and refuse a newer store.** Holds moved to `tree_holds`,
-  and `tasks.tenant`, `tenant_usage` and `snapshots` (keyed by task and fold version) were
-  added. The first process of this version moves a version 1 store (sqlite or Postgres)
+- **Stores are at schema version 4 and refuse a newer store.** Holds moved to `tree_holds`,
+  and `snapshots` (keyed by task and fold version) were added. The first process of this version moves a version 1 store (sqlite or Postgres)
   forward in place, posting `hold_lost` for the old `holds` rows and then dropping that table
-  (a version 2 store from a development build gets its snapshot rows re-keyed); a store at a
+  (a version 2 store from a development build gets its snapshot rows re-keyed, and a version
+  3 one loses the `tasks.tenant` column and `tenant_usage` table of the tenants that were
+  removed before release); a store at a
   later version than the code knows is refused with `StoreUnavailable` before anything is
   written to it (sqlite never checked before). Upgrading: stop every worker first; an older
   sqlite binary does not refuse the upgraded store: one left running fails, one started again
@@ -253,7 +254,7 @@ All notable changes to Noeta are documented here. The format is based on
   `noeta.plugins.structured` -> `noeta.plugins.structured_output` (its registry name).
 - **Store interface.** `append` returns `Appended(seq, at)` (the stored time); a claim clears
   the row's `waiting_on`; giving back a claim or a hold reports a `released` change, only when a
-  row changed; optional `snapshot(task_id, version=None)` / `put_snapshot`; `claim(tenant_limits=)`; `Post.wake`.
+  row changed; optional `snapshot(task_id, version=None)` / `put_snapshot`; `Post.wake`.
   Creating a task with a known id is idempotent under a race (store contract test).
 - **The plugin set is pinned per task.** A task records each plugin's name, source (package
   version or file hash) and a hash of its arguments when it first starts and when a pickup
@@ -267,7 +268,7 @@ All notable changes to Noeta are documented here. The format is based on
   plugins read the working directory through `TaskView.cwd` (config, else the exec env), so a
   task created without a `cwd` runs its hooks and finds its project MCP servers where its
   commands run; `UsageRank` reads through a client; `ToolContext.post` takes a `dedupe_key` and
-  reaches any task of the caller's tenant; permissions records `probed` / `compacted` and a
+  reaches any task; permissions records `probed` / `compacted` and a
   front end's `resumed` signal is SessionStart `resume` (so a task moving between workers
   sends the same request).
 - **The permissions plugin publishes its modes** (a `modes` record without
@@ -337,9 +338,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   (`ToolContext.post(forward_if_ended=True)`).
 - **`Claim.queue`.** A claim (and its renewal) names the queue of the task claimed; a store
   that leaves it out puts every child on `default`, as before.
-- **`claim(tenant_limits=)` counts live leases only.** A running task whose `lease_until`
-  has passed does not count toward its tenant's limit, and taking one back is limited like
-  any claim.
 - **`Store.hold(queues=)`.** Taking a hold with the holder's queues is refused (`None`) while
   an unended task of the tree is on a queue not among them, decided in the hold's
   transaction; `Runtime.hold` passes its queues.
@@ -377,18 +375,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   (`PostgresStore.publish_deltas`, channel `<schema>_deltas`, best effort) and a server's
   `/watch` hears it (`on_delta`), so `noeta serve --no-worker` streams tasks that `noeta
   worker` processes elsewhere run. On sqlite live output stays in its process.
-- **Tenants**: a task carries `TaskCreated.tenant` (children inherit it; the `tasks` table
-  gains a `tenant` column at store open, existing rows `default`). `Client.scoped(tenant)`,
-  `create_app(tokens=)` and `noeta token add --tenant X` (`~/.noeta/tokens.json`) confine every
-  read, list, watch, message, answer, signal and cancel to the caller's tenant; a task's
-  `SendMessage` / `ToolContext.post` reaches only its own tenant's tasks. The server token
-  stays the default tenant's.
-- **Per-tenant settings** in `~/.noeta/tenants/<name>/config.toml`: a `workspace` its tasks'
-  `cwd` must lie in (and default to), `max_running` (the claim leaves its other tasks
-  waiting; exact across workers), `budget_tokens` / `budget_usd` per UTC month (a model call
-  past it fails the turn with `budget_spent`; counted in a new `tenant_usage` table), and its
-  own `provider` / `base_url` / `api_key` (`{env:}` / `{keyring:}`). `Runtime(tenants=)`,
-  `Store.claim(tenant_limits=)`, `create_app(workspaces=)`.
 - **Claude Code's headless protocol** (`noeta.host.stream_json`): the stream-json messages
   (`system`/`init`, `assistant`, tool-result `user`, `stream_event`, `result` with usage, cost,
   durations, turns, permission denials and `structured_output`; the root task's id is the
@@ -442,7 +428,7 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **`SendMessage` `notify_when_idle`**: one notice when another open session next goes idle
   or ends (expires after 12 hours); `message` is optional with it. A background agent keeps its
   transcript in `<spill root>/<root>/tasks/<agent id>.output`, named by the launch result and
-  the completion notice. `TaskView.enqueue(task_id=)` posts to another task of the tenant.
+  the completion notice. `TaskView.enqueue(task_id=)` posts to another task.
 - **ACP**: `Edit`, `Write` and `NotebookEdit` changes are sent as diffs (old and new text);
   plan mode's plan file is sent as the editor's plan; model and mode are session config
   options, also advertised by a loaded session.
@@ -522,9 +508,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   the tool recovers by handing back again).
 - **An MCP sign-in no longer hangs the worker while a token refresh holds the token file's
   lock**: `SignIn` writes the file with `TokenStore.update_async`.
-- **Tenant fence:** the "did you mean" guess for a missing file no longer lists a directory
-  the fence refuses. **WebFetch** refuses a redirect whose target (not the URL being left)
-  carries credentials.
 - The per-input state skills and markdown commands keep for an erase, and fork skill prompts,
   keep the newest 32 entries; a failed MCP server resolution leaves no per-task entries.
 
@@ -544,10 +527,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **A plugin can no longer write a `core` record of an unknown kind.** `ToolContext.record`
   and `TaskView.record` raise `ValueError` for one; written, it left the task to a newer
   worker for good.
-- **A tenant's running limit no longer counts a dead worker's task.** A running task whose
-  lease ran out holds no worker and no longer keeps the tenant's other tasks waiting. Taking
-  such a task back now counts toward the limit; before, a worker could reclaim it while the
-  tenant's next task ran, two running at a limit of one.
 - **A child is not stranded by a hold taken while its call finished.** The queue check above
   ran before the call's `PostToolUse` hooks and an extension's spawn was checked when staged;
   another task of the tree taking the hold meanwhile left the child unclaimed. The store now
@@ -640,7 +619,7 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 - **A sub-agent is created on its caller's queue.** Children went to `default` unless a
   queue was named (`Subtasks(queue=)`, a roster entry's `queue`, `spawn(queue=)`), so a task
-  on its own queue (a tenant's, a GPU worker's) had children only other workers ran, and a
+  on its own queue (a GPU worker's) had children only other workers ran, and a
   tree held by one of them waited for a worker that never came.
 - **A tree is held only by a worker that can run all of it.** A worker serving one queue
   could hold a tree (for a background job) whose root was on another; other workers skip a
@@ -653,9 +632,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   counting, so a newer worker claims it. A corrupt or misshapen log still ends failed after
   three claims. Workers from this release on do this; 0.x workers still fail such a task
   (see Changed).
-- **A tenant's budget counts every model call it paid for.** Usage was counted after the
-  reply was appended, so a reply whose claim was lost meanwhile, or an empty one, was not
-  counted; it is counted as soon as the call returns.
 - **A hold given back after a store hiccup is asked for once more.** One failed unhold left
   the hold to run out and be reaped, which told the tree (`hold_lost`) that a background job
   that had ended normally was lost.
@@ -725,7 +701,7 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   outside its directories), and the TUI's model, which overrode the server's. They now send
   a model only with `--model` and a directory only with `--cwd PATH` (a directory on the
   server; a relative one is taken from the server's); otherwise the server records its own
-  directory (a tenant's: its workspace) in the task and the agent's model applies.
+  directory in the task and the agent's model applies.
   `noeta -p --server` ran locally and silently ignored `--server`; it now refuses it.
 - **A hold whose commit was cut off is no longer left behind.** When the store's connection
   dropped while a hold committed (`CommitUnknown`), a hold that had landed was neither
@@ -935,44 +911,19 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
-- On macOS, `noeta serve` and `noeta worker` no longer take the sandbox as a boundary between
-  tenants: Seatbelt's profile leaves Mach services such as launchd and Apple Events reachable,
-  so a tenant's command could likely have something run outside it as the OS user. Tenants
-  besides the default one are refused there (at start-up, and per task with
-  `tenant_not_isolated`) unless `[server] shared_os_user_tenants = true`; run their tools in
-  a container or a remote exec env instead. A single-user or default-tenant server is
-  unchanged.
 - The permissions plugin decides whether a workspace is trusted from each task's own working
   directory (`noeta trust`), as the MCP and skills plugins do. Before, the `noeta` command
   took the trust of the directory it started in for every task, so a server started in a
-  trusted project treated tasks in `--allow-root` directories or tenants' workspaces as
-  trusted: the auto-mode classifier read their `NOETA.md` as the person's intent, and
-  "always" answers were written into their `.noeta/settings.local.json`.
+  trusted project treated tasks in `--allow-root` directories as trusted: the auto-mode
+  classifier read their `NOETA.md` as the person's intent, and "always" answers were written into their `.noeta/settings.local.json`.
   `Permissions(trusted_workspace=)` also takes a `(cwd) -> bool`.
-- `noeta token add` says that a `noeta serve` started with `--no-token` never reads the new
-  token (it serves every request as the default tenant) and must restart with a token.
-- A fenced `LocalExecEnv.write_bytes` makes missing parent directories one at a time, each
-  relative to its parent opened and checked first. Before, `os.makedirs` followed a link a
-  tenant's command swapped in after the check and made empty directories outside the fence
-  (the file itself was refused).
 - `LocalExecEnv.read_bytes` / `read_range` open without blocking and refuse anything but a
   regular file (a directory still raises `IsADirectoryError`). Before, reading a FIFO a
   command had made held a worker thread until something wrote to it.
-- A non-default tenant's sandbox profile drops the operator's `allowLocalBinding` too, as it
-  drops the Unix-socket and namespace allowances: on macOS it lets a command reach every
-  localhost port, the server's own included.
-- `noeta serve` refuses at the edge a tenant's request for a `cwd` in one of the `[server] dirs`
-  inside its workspace, as `docs/server.md` says; the HTTP guard knew only the server's own
-  directory and `--allow-root` (the worker still refused it). `create_app(server_dirs=)` takes
-  them.
 - The end of a `noeta serve` event stream (`/tasks/{id}/watch`) and stream-json's "lost the
   task's events" result no longer carry an error's raw text: as for other requests, a client
   gets the text only of an error noeta raised itself, else a generic message (the server logs
   the error).
-- A non-default tenant's slash-command listing no longer follows its `.noeta/skills` (or
-  `.agents/skills`) linked out of its workspace: it listed the names and descriptions of the
-  skills it pointed at, such as another tenant's. A workspace skill directory must resolve
-  inside the tenant's working directory.
 - The Linux sandbox's filter refused `socket(AF_UNIX)` but not `socketpair(AF_UNIX, ...)`,
   whose datagram sockets send to any Unix socket by address (the host's journald). It is
   refused under the same rule, unless Unix sockets are allowed.
@@ -1001,13 +952,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   worktree's `commondir` and `gitdir` seen from the main checkout. A missing `.git/commondir`
   cannot be covered (git dies on an empty one, on the host too): on Linux one the command
   creates is removed when the command ends; Seatbelt refuses creating it.
-- **A tenant's `Read` of a PDF no longer lets its commands swap the converters' input or
-  output.** The copy and the rendered pages were in the tenant's own commands' `TMPDIR`, so a
-  background command could replace them with links: `pdfinfo` and `pdftoppm`, run by the
-  worker unsandboxed, then read another tenant's PDF or wrote pages into another tenant's
-  workspace. A fenced task's PDF is now read once through the fence and fed to the converters
-  on stdin, and each page is rendered to stdout, so no file is made anywhere. A PDF the fence
-  refuses is now a `Read` error instead of an exception.
 - **A sandboxed command can no longer reach into the network relay it runs under.** The
   relay inside the Linux sandbox (same user, same PID namespace, no system-call filter, and
   holding the proxies' Unix sockets) was dumpable, so where `kernel.yama.ptrace_scope` is 0 a
@@ -1017,62 +961,14 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - The sandbox's filter refused `socket(AF_UNIX)` but let a command set up io_uring, which
   creates sockets without `socket(2)` on Linux 5.19 and later. `io_uring_setup`,
   `io_uring_enter` and `io_uring_register` are now refused unless Unix sockets are allowed.
-- **A tenant's agent memory can no longer link to a protected file.** An agent's `project` /
-  `local` memory is in the tenant's workspace, and the memory plugin read its `MEMORY.md`
-  and its memory files (recall's listing and the files it attached) in-process, past the
-  tenant fence, so a link there put a server file into the context. For a task of a
-  non-default tenant these reads now go through the task's fenced env, which refuses the
-  file it opens; so does the instructions plugin's read of `MEMORY.md`.
-- A tenant's skills and rules no longer list what a link leads to behind the fence. A
-  skill's resources and the rules directory's files are listed without what the tenant
-  fence refuses (their contents already were read through the fence), and the skill
-  commands a front end lists for a non-default tenant skip a `SKILL.md` that resolves out
-  of its skill directory, read with no task env to fence it.
-- `noeta serve` and `noeta worker` with tenants besides the default one refuse to start
-  when a server directory (where they started, `--allow-root`, `--server-dir`,
-  `[server] dirs`) holds the machine's programs or temporary directories (`/`, `/var`,
-  `/opt`, ...): it cannot be hidden from a tenant's commands, and was silently left
-  visible.
 - **An agent hook's tool calls go through the task's permission checks.** It ran every
   read-only tool (`Read`, `WebFetch`, `WebSearch`, read-only MCP tools) with no check; now a
   deny refuses the call and so does anything that would ask, as Claude Code runs an agent
   hook in `dontAsk` mode.
-- **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
-  allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
-  `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so
-  they could open the user's D-Bus (`systemd-run --user` ran a command outside the sandbox
-  that read `~/.noeta/tokens.json`), Docker's or Postgres's socket. `TenantFence.confine` now
-  clears all three for a task of a tenant other than the default one.
-- **A tenant with its own model endpoint no longer borrows the server's key or headers.**
-  A tenant directory with `provider` or `base_url` but no `api_key` got a provider that fell
-  back to the worker's `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (the server's key, sent to the
-  tenant's endpoint), and every tenant provider carried the server's `extra_headers`. Such a
-  tenant must now set a non-empty `api_key` (`noeta serve` and `noeta worker` refuse to start
-  otherwise), and its provider gets only the `extra_headers` table of its own config.
 - On Linux machines other than x86_64 and aarch64 the sandbox's system-call filter (no Unix
   sockets, no new user namespaces) was silently left out. The sandbox now reports itself
   unavailable there unless the settings allow both, so `failIfUnavailable` refuses the
-  commands, a tenant's always (its settings never allow them).
-- **A tenant's commands no longer follow a working directory swapped for a link.** The
-  `cwd` was checked only when the task was created; the tenant could then replace a
-  directory on the way with a link to noeta's home or another tenant's workspace, and its
-  sandboxed commands got that place as their writable root (with noeta's home, its tokens
-  and settings, and hooks in those settings run unsandboxed). The sandbox now resolves the
-  working directory for every command of a tenant's task and refuses the command unless it
-  lies in the tenant's workspace and outside the places its commands may not read, instead
-  of making such a place writable. The permissions plugin also resolves it before every
-  model call and fails the turn with `tenant_cwd_refused` and the reason, and `Bash`
-  resolves the directory a command left the shell in before starting the next one there
-  (one now leading out of the workspace starts back at the root).
-- **A worker runs no tools of a tenant whose workspace it does not know.** Such a worker
-  (one with an older copy of the tenant directories) still ran the task with the sandbox
-  in place; the turn now fails with `tenant_not_isolated` before any model call, as on a
-  worker without a boundary. Workers read the tenant directories at start: restart every
-  worker after adding a tenant (`docs/server.md`).
-- A tenant's file tools write only its commands' `TMPDIR` (`tmp/`) in the tenant's
-  temporary directory. Before, they could write anywhere in it, its background jobs' logs
-  and state files (`jobs/w<pid>/*.output`, `.alive`, `.cwd`) and its commands' sandbox files
-  included.
+  commands.
 - `noeta plugin add` takes only a full commit id (40 hex digits, or 64 for a SHA-256
   repository) and only `https://`, `ssh://`, `user@host:path` or a local `file://` source,
   for a plugin and for a marketplace and its entries. Before, a 7-character prefix (which a
@@ -1082,24 +978,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   file's directory or the working directory. Before, the check used the path as written, so
   a repository's link (`docs/x.md` -> `~/.ssh/id_rsa`) put the target's text into the
   model's context.
-- **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
-  would be its sandboxed commands' writable root, so they could read and change the
-  server's files there; the HTTP guard now refuses such a `cwd` as it refuses another
-  tenant's workspace.
-- **A child continues only its own tenant's conversation.** A tool's
-  `spawn(history_from=)` could name another tenant's task, and the child folded that
-  conversation in; the call now fails with `UnknownTask` and stages no child, as
-  `Client.create(history_from=)` already refused it.
 - **noeta's home and the sqlite store are owner-only when noeta creates them.** `~/.noeta`
   (`NOETA_HOME`) was made 0775 and the store's database with its `-wal` and `-shm` files
   0644 under the usual umask, though the store holds every conversation. noeta now makes its
   home 0700 and a new database 0600 (SQLite gives the side files the same mode). Existing
   ones keep their mode; a front end, worker or server whose home or store is open to other
   users says so at start, with the `chmod` to run.
-- An extension's `TaskView.read_log` reads another tenant's task as empty and
-  `TaskView.child_tasks` lists only children of its own tenant, as `ToolContext.post` and
-  `ToolContext.tasks` already did. Before, a plugin given another tenant's task id could read
-  its log.
 - `noeta serve` takes only `model`, `effort`, `max_turns`, `cwd`, `permission_mode` and
   `output_schema` in a new task's `config`, and only `model`, `effort` and `max_turns` in a
   `config` signal; any other key is refused with 403 naming it. Before, a request could set
@@ -1108,73 +992,14 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - `POST /tasks/{id}/signals` takes only the signals front ends send (`permission_mode`,
   `config`, `resumed`, `restore_files`). Before, a request could post a plugin's own signal,
   such as a background job's end (a forged `<task-notification>`) or a sub-agent's idle
-  subscription naming another tenant's task, which then received the notice.
+  subscription naming another task, which then received the notice.
 - `GET /commands` and `POST /commands/run` check `cwd` as a new task's (outside the server's
-  directories or the tenant's workspace: 403) and, given a `task_id`, use the directory that
+  directories: 403) and, given a `task_id`, use the directory that
   task was created in. Before, any `cwd` was scanned for skills and could start a trusted
   directory's MCP servers.
-- Resuming or forking over `/stream-json` looks the task up through the tenant's client
-  first. Before, resuming another tenant's task had this server serve its tree and could
-  name its agent in the error.
-- A tenant creates tasks only on its own queues: `queues = [...]` in
-  `~/.noeta/tenants/<name>/config.toml`, by default `default` and the queue of its own name
-  (`create_app(queues=)`). Before, any tenant could push tasks onto another tenant's dedicated
-  worker pool.
-- `noeta serve` and `noeta worker` refuse to start with tenants besides the default one
-  unless the sandbox confines every command (`enabled`, `failIfUnavailable`, no
-  `allowUnsandboxedCommands`) or `[server] shared_os_user_tenants = true` accepts tenants
-  separated at the API only; a tenant token added later is not accepted by such a server.
-  Before, every tenant's tools ran as the server's OS user and could read `~/.noeta`, the
-  store and the process environment.
-- A task of a tenant other than the default one is denied any file tool call (`Read`,
-  `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) that reaches noeta's home, the
-  sqlite store's files, `/etc/noeta`, `/proc` or another tenant's workspace, after symlinks
-  and `..` are resolved; no rule, mode (`bypassPermissions` included) or approval lifts it
-  (`noeta.toolkit.tenant_fence`; `Permissions(tenant_workspaces=, store_files=,
-  spill_root=)`). Such a task keeps its own spilled outputs, its plan files (now under
-  `plans/<tenant>/`) and its project memory. Before, file tools ran in the worker process
-  bounded only by permission rules the tenant answered itself, so even under the strict
-  sandbox a tenant could approve reading the tokens file, the store or other tenants'
-  settings.
-- The same fence holds when the file is opened: `LocalExecEnv(fence=)` checks the file it
-  actually opened for a read and the opened directory a write lands in, and `noeta serve` /
-  `noeta worker` give every non-default tenant's task such an env, so a symlink swapped by a
-  background command between the permission check and the read cannot redirect it.
-- A worker with no OS-level boundary for tenants (no strict sandbox, no `[server]
-  shared_os_user_tenants = true`) that claims a task of a tenant other than the default one
-  runs none of its tools: the turn fails with `tenant_not_isolated` and the reason before any
-  model call (`Permissions(tenant_refusal=)`, set by `noeta serve` and `noeta worker`).
-  Before, a worker that knew no tenants (no tokens file or tenant directories, e.g. on
-  another machine) started and ran such tasks unconfined.
-- A non-default tenant's task shares a repository's memory only with a main checkout that
-  holds its working directory, and keeps an agent's `user`-scope memory in
-  `.noeta/agent-memory/` of its working directory. Before, a `.git` file naming another
-  tenant's repository loaded that tenant's `MEMORY.md`, and `~/.noeta/agent-memory/` was
-  shared by every tenant.
-- Under the sandbox, a non-default tenant's commands may not read noeta's home (but the
-  task's own spill directories, its tenant's plans, its working directory's project memory,
-  `skills/` and `workflows/`), the spill directory wherever it is (but the task's own), the
-  sqlite store's files wherever they are, `/etc/noeta` or another tenant's workspace; they
-  always run inside it (no `excludedCommands`, no `dangerouslyDisableSandbox`, no
-  `filesystem.disabled`, no `enableWeakerNestedSandbox`), with `/proc` of their own PID
-  namespace (`TenantFence.confine`). Before, the sandbox hid only noeta's home, minus every
-  task's spilled outputs and every project's memory.
-- A non-default tenant's skill scripts (`run_skill_script`), inline skill commands run
-  without `Bash`, `git` for worktrees (with its hooks) and a rewind's deletes run inside its
-  sandbox (`noeta.toolkit.sandbox.run_in_tenant_sandbox`). Before, they ran as the worker's
-  OS user, so a hook the tenant wrote into its own repository could read the tokens file.
-- Read of a PDF by a non-default tenant's task reads the file once through the fence and
-  hands the page converters a copy. Before, `pdfinfo` and `pdftoppm` opened the path
-  themselves after only its first bytes were checked.
-- A non-default tenant's task gets no MCP server that runs a process on the worker (a stdio
-  server, a `headersHelper`); they show as down with the reason, also when its slash commands
-  are listed (`CommandContext.tenant`). Remote servers connect in a partition of the tenant's
-  own (`tenant:<name>/<scope>`), so connections and OAuth sign-ins are never shared across
-  tenants. Before, such servers ran as the worker's OS user and tenants shared the default
-  tenant's connections unless the host scoped them.
-- The tenant fence lets a tenant read the operator's saved workflows (`~/.noeta/workflows`,
-  which the `Workflow` tool reads by name) as it reads `skills/`.
-- `~/.noeta/server-token` keeps only the server token's SHA-256, like tenant tokens; the token
+- Resuming or forking over `/stream-json` looks the task up through the client first.
+  Before, resuming an unknown task id had this server serve a tree for it.
+- `~/.noeta/server-token` keeps only the server token's SHA-256; the token
   is printed once, when made (`noeta serve` no longer prints it on every start). A file an
   older noeta left holding the token itself is rewritten to its digest on the next start,
   which prints the token one last time. Clients (`noeta --server`, `noeta acp --server`) read
@@ -1184,11 +1009,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - `noeta plugin add` fetches only from git URLs (`https://`, `ssh://`, `git://`, `file://`,
   `user@host:path`) and passes `--` before them, so a marketplace entry's `url` cannot be a
   git option such as `--upload-pack=…`.
-- The git snapshot of the first user turn and the memory plugin's repository lookup run
-  inside the sandbox for a non-default tenant's task. Before, they ran as the worker's OS
-  user in the tenant's repository, so a `gpg.program` the tenant set in its own
-  `.git/config` (with `log.showSignature` and a signed commit) ran outside the sandbox and
-  could read the tokens file.
 - The first user turn's git snapshot runs no signature program (`-c log.showSignature=false`)
   and does not look inside submodules (`--ignore-submodules=dirty`), so a cloned
   repository's `gpg.program` or a submodule's filter driver no longer runs when a task
@@ -1201,92 +1021,27 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   on any bind, added to the loopback names on a loopback bind. Without it a non-loopback
   bind checks no `Host`, which SECURITY.md now says (it claimed unexpected `Host` headers
   were always refused).
-- `noeta serve --no-token` refuses to start when a tenant token or tenant directory exists.
-  Before, it served every request as the default tenant and ignored the tenants' tokens.
 - A command missing an optional extra names the install from this repository
   (`pip install 'noeta[server] @ git+https://github.com/initxy/noeta'`, and the same for
   `uv tool install --reinstall`). Before, it named `noeta[server]` on PyPI, where noeta 1.0
   is not published and the name may install someone else's package.
-- A task of a tenant other than the default one keeps its background job logs and its
-  sandboxed commands' `TMPDIR` in its tenant's own temporary directory
-  (`<temp>/noeta-temp-<uid>/tenants/<tenant>/`, made 0700), and neither its file tools nor
-  its sandboxed commands can read noeta's shared temp places (`noeta-background-<uid>` in
-  each temp directory, `noeta-temp-<uid>` but its own). Before, every task's command output
-  (`noeta-background-<uid>/w<pid>/<job>.output`) and a worker's shared `TMPDIR`
-  (`noeta-sandbox-*`) were readable, and the latter writable, by every tenant's tasks. A
-  worker's sandbox directory moves to `<temp>/noeta-temp-<uid>/sandbox/`.
-- A tenant other than the default one needs a workspace: `noeta serve` refuses to start
-  while a tenant in `tokens.json` or `~/.noeta/tenants/` has none, `noeta token add` refuses
-  such a tenant, and the HTTP API (`create_app`) answers 403 when one without a workspace
-  starts a task or names a `cwd`. A request's `cwd` inside another tenant's workspace is
-  refused even where that lies inside the requester's own. Before, a tenant with only a
-  token could start tasks anywhere under the server's directory and `--allow-root` paths,
-  another tenant's workspace and the default tenant's included.
-- A tenant other than the default one keeps its auto memory and compaction transcripts in
-  a project directory of its own, `~/.noeta/projects/<tenant>/<slug>/`; the default
-  tenant's stay in `projects/<slug>/`. Before, every tenant working in one directory shared
-  its `projects/<slug>/` (memory read into the prompt and writable by each, transcripts of
-  each other's tasks).
-- In its project directory a tenant's task reaches only the memory (`memory/`) and, to
-  read, the compaction transcripts of its own task and its root (`<task id>.jsonl`), with a
-  file tool and in the sandbox. Before, the whole directory was open, so the transcripts of
-  every other task working in that directory could be read and rewritten.
 - A started workflow's script is kept in its task's own spill directory
   (`tool-results/<task id>/workflows/`). Before, every task's went to one shared
-  `tool-results/workflows/`, which a tenant's task could not read back.
-- `Read` of a PDF by a tenant's task makes its copy and rendered pages in the tenant's own
-  temporary directory. Before, they went to a fresh directory in the worker's shared temp
-  directory, readable by other tenants' sandboxed commands while the conversion ran.
-- A non-default tenant's file tools never reach the server's own directories (the
-  directory `noeta serve` / `noeta worker` started in and `--allow-root` paths), the
-  sandbox's credential stores (`~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, ...) in
-  every home directory, or the operator's sandbox `denyRead`, besides the places they were
-  already fenced from; they write only in the tenant's workspace, its own corners of
-  noeta's places and its temporary directory (`noeta.toolkit.tenant_fence`;
-  `Permissions(server_dirs=, deny_read=)`). The rest of the machine stays readable. No rule,
-  mode or approval lifts it, and the operator's `additionalDirectories` are no longer a
-  tenant's working directories. Before, a tenant could approve its own
-  `Read ~/.ssh/id_rsa`, `Read <server dir>/.env` or a write anywhere the OS user could.
-- Under the sandbox, a non-default tenant's commands cannot read those places either (but
-  a workspace inside a server directory), and write only where its file tools may: the
-  operator's `allowWrite` / `allowRead` / `additionalDirectories` do not apply to them
-  (`TenantFence.confine`). Before, they read the server's directories and other accounts'
-  credential stores.
+  `tool-results/workflows/`.
 - An MCP prompt command (`/mcp__<server>__<prompt>`) runs in the connection partition of the
   request that runs it: listed prompts are kept per partition. Before, they were kept by
-  command name only, so after another tenant listed the same command, a tenant's
-  `/commands/run` used that tenant's connection and OAuth sign-in.
+  command name only, so after a request in another partition listed the same command,
+  `/commands/run` used that partition's connection and OAuth sign-in.
 - `POST /tasks/{id}/rewind` creates the new task through the request's guard: only the
-  config a request may set is carried over, `bypassPermissions` and a `cwd` outside the
-  tenant's workspace are refused (403), and the tenant's queues apply. A rewind keeps the
-  task's queue (`noeta.host.rewind.rewind(config_keys=)`). Before, it copied the original's
-  whole config through the unguarded client, so a tenant could rewind a task host code made
+  config a request may set is carried over, and `bypassPermissions` and a `cwd` outside the
+  server's directories are refused (403). A rewind keeps the task's queue
+  (`noeta.host.rewind.rewind(config_keys=)`). Before, it copied the original's whole config
+  through the unguarded client, so a request could rewind a task host code made
   with plugin keys (`permission_rules`) or a mode a request may not ask for, on the
   `default` queue.
-- A non-default tenant's sandboxed commands cannot read or write a server directory (the
-  worker's working directory, serve's `--allow-root`) that lies inside the tenant's
-  workspace. Before, `TenantFence.confine` left such a directory out of what it hides, so
-  the tenant's `Bash` read and overwrote the server's files there while its file tools were
-  refused.
-- A credential store created after a non-default tenant's task started (a new `~/.aws`,
-  `~/.netrc`, ... in any home directory) is hidden from that task's next sandboxed
-  command. Before, `TenantFence.confine` hid only the ones that existed when the task's
-  environment was built.
 - `noeta serve` keeps a query-string token out of uvicorn's logs whatever way its key is
   spelled: `?%74oken=` (which the server decodes to `token` and accepts) is redacted too.
   Before, only a literal `token=` was.
-- `noeta worker` hides `noeta serve`'s directories from other tenants' tasks when told
-  where they are: `[server] dirs = [...]` in `config.toml` (read by both) or
-  `noeta worker --server-dir PATH` (repeatable). A worker also refuses `bypassPermissions`
-  unless started with `--allow-bypass-permissions`, as `noeta serve` does. Before, with
-  `noeta serve --no-worker` and separate workers, serve's working directory and
-  `--allow-root` paths were readable to other tenants' tasks (and a worker started in `/`
-  hid no server directory), and a worker's tasks could be switched into bypassPermissions.
-- **A tenant's slash commands over `/stream-json` run as that tenant.** The stream-json
-  front (WebSocket and POST) listed and ran commands as the default tenant, so a tenant's
-  `/mcp__…` command started the server's local stdio MCP servers and used the default
-  tenant's connections; a scheduled `/loop` command expanded the same way. For plugin
-  authors: `CommandContext.tenant` is now required (keyword only), so every caller names it.
 - **A continued task no longer keeps bypassPermissions where bypass is disabled.** A fork,
   rewind or resumed fork of a task that ran in bypassPermissions (on the CLI, say) kept that
   mode on a server started without `--allow-bypass-permissions`, and ran tools without
@@ -1302,24 +1057,7 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   provider's tool-use id, so a gateway answering with `../` in it could have the transcript
   written outside the project directory. A spill file of a task or call named `..` now
   stays in its directory too.
-- `Workflow`'s list of saved workflows (named when a name is not found) no longer lists a
-  tenant's `.noeta/workflows` when it is a link to a place the tenant fence refuses, such as
-  another tenant's workspace: the listing ran `ls` outside the fence.
-- A tenant's memory directory is no longer created where the tenant fence refuses writes:
-  the worker made it with `mkdir -p` itself, following a link in the tenant's `.noeta/` (or
-  a repository's shared directory outside the workspace) to a place outside it.
 - The HTTP server and `/stream-json` control requests no longer send a client the text of an
   error that a library or the system raised (it may name the server's paths); the client
   gets a generic message and the server logs the error. Errors noeta raises for the caller
   keep their text.
-- In auto mode, a tenant's tasks no longer send the server's home directory, OS user name or
-  permission rules (the operator's among them) to the tenant's model provider: the
-  server-side check's context leaves them out, and the classifier is told the tenant's name
-  as the user.
-- A tenant's `Read` of a PDF no longer always fails: its copy and pages were made in the
-  tenant's temporary directory itself, where the fence lets file tools write nothing; they
-  now go in its `tmp/`.
-- On macOS and Windows the tenant fence compares names without case, so `~/.SSH` or another
-  tenant's workspace spelled in other case is refused like the name it reaches. On Linux it
-  compares with case (documented in docs/server.md "Not a boundary" for case-insensitive
-  file systems mounted there).

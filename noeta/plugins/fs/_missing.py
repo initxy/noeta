@@ -8,7 +8,6 @@ from __future__ import annotations
 import posixpath
 import re
 
-from noeta.toolkit.context import fence_refuses
 from noeta.toolkit.tools import Workspace, path_within
 
 __all__ = ["missing_file_message"]
@@ -39,8 +38,6 @@ async def _rerooted(ws: Workspace, resolved: str) -> str | None:
 async def _other_extension(ws: Workspace, resolved: str) -> str | None:
     directory, name = posixpath.split(resolved)
     stem = posixpath.splitext(name)[0]
-    if fence_refuses(ws.env, directory):
-        return None  # the listing would name files the task may not read
     try:
         listing = await ws.env.run(["ls", "-1A", directory], cwd=ws.root, timeout=10.0,
                                    output_cap=1024 * 1024)

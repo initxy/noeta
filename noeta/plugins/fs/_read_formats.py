@@ -5,10 +5,7 @@ their outputs). The wording, page caps and size limits are Claude Code's.
 PDF pages are rendered by poppler's ``pdftoppm`` (page count from
 ``pdfinfo``) through the ``ExecEnv``, so a container renders inside itself
 exactly as the host does locally; no Python dependency. Each page is written
-to the converter's stdout, so no directory is made for it. A fenced env (a
-tenant's task) reads the PDF once through its fence and feeds the bytes to
-the converters on stdin: they never open a path the tenant's commands could
-swap for a link.
+to the converter's stdout, so no directory is made for it.
 """
 
 from __future__ import annotations
@@ -101,18 +98,18 @@ def _parse_pages(spec: str) -> tuple[int, int | None] | None:
     return first, last
 
 
-async def _run(env: ExecEnv, argv: list[str], cwd: str, stdin: bytes | None,
+async def _run(env: ExecEnv, argv: list[str], cwd: str,
                output_cap: int = _PDF_OUTPUT_CAP) -> RunResult | None:
     """One bounded helper-program run; ``None`` when the program is missing."""
     try:
-        return await env.run(argv, cwd=cwd, stdin=stdin, timeout=_PDF_TIMEOUT_S,
+        return await env.run(argv, cwd=cwd, timeout=_PDF_TIMEOUT_S,
                              output_cap=output_cap)
     except OSError:
         return None
 
 
-async def _page_count(env: ExecEnv, source: str, cwd: str, data: bytes | None) -> int | None:
-    outcome = await _run(env, ["pdfinfo", source], cwd, data)
+async def _page_count(env: ExecEnv, path: str, cwd: str) -> int | None:
+    outcome = await _run(env, ["pdfinfo", path], cwd)
     if outcome is None or outcome.exit_code != 0:
         return None
     m = re.search(rb"^Pages:\s+(\d+)", outcome.stdout, re.MULTILINE)
@@ -139,24 +136,19 @@ async def read_pdf(
     if size > PDF_MAX_BYTES:
         return tool_error(tool_name, f"The PDF {display} is over the "
                                      f"{format_size(PDF_MAX_BYTES)} that page rendering accepts.")
-    # A fenced env (a tenant's task) reads the file once through the fence;
-    # the converters, run by the worker, get the bytes on stdin ("-") and
-    # never a path.
     cwd = posixpath.dirname(path)
     try:
-        data = await env.read_bytes(path) if getattr(env, "fence", None) is not None else None
-        head = data[:5] if data is not None else await env.read_range(path, 0, 5)
+        head = await env.read_range(path, 0, 5)
     except OSError as exc:
         return tool_error(tool_name, f"read failed: {exc}")
     if head != b"%PDF-":
         return tool_error(tool_name,
                           f"{display} does not start with a %PDF- header, so it is not a PDF.")
-    source = "-" if data is not None else path
-    total = await _page_count(env, source, cwd, data)
+    total = await _page_count(env, path, cwd)
     span = _page_span(pages, total)
     if isinstance(span, str):
         return tool_error(tool_name, span)
-    images = await _render_pages(env, source, cwd, data, *span)
+    images = await _render_pages(env, path, cwd, *span)
     if isinstance(images, str):
         return tool_error(tool_name, images)
     count = len(images)
@@ -207,7 +199,7 @@ def _page_span(pages: Any, total: int | None) -> tuple[int, int | None] | str:
     return first, last
 
 
-async def _render_pages(env: ExecEnv, source: str, cwd: str, data: bytes | None,
+async def _render_pages(env: ExecEnv, path: str, cwd: str,
                         first: int, last: int | None) -> list[Image] | str:
     """Pages ``first`` to ``last`` as JPEG images, one ``pdftoppm`` run per
     page writing it to stdout, or why they could not be made."""
@@ -215,8 +207,8 @@ async def _render_pages(env: ExecEnv, source: str, cwd: str, data: bytes | None,
     page = first
     end = first + PDF_MAX_PAGES_PER_READ - 1 if last is None else last
     while page <= end:
-        argv = ["pdftoppm", "-jpeg", "-r", "100", "-f", str(page), "-l", str(page), source]
-        outcome = await _run(env, argv, cwd, data, _PDF_PAGE_CAP)
+        argv = ["pdftoppm", "-jpeg", "-r", "100", "-f", str(page), "-l", str(page), path]
+        outcome = await _run(env, argv, cwd, _PDF_PAGE_CAP)
         if outcome is None or outcome.exit_code == 127:
             return (
                 "PDF pages cannot be rendered: pdftoppm is missing. It comes with "

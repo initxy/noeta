@@ -18,7 +18,6 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.toolkit.context import task_env
-from noeta.toolkit.sandbox import run_in_tenant_sandbox
 from noeta.toolkit.shell import SHELL_META_CHARS
 from noeta.toolkit.tools import load_description, path_within, truncate_bytes
 
@@ -180,8 +179,8 @@ class RunSkillScriptTool:
         argv = [interpreter, real, *raw_args]
         started = time.monotonic()
         try:
-            outcome = await run_in_tenant_sandbox(env, argv, cwd=env.cwd, timeout=_TIMEOUT_S,
-                                                  output_cap=_OUTPUT_CAP)
+            outcome = await env.run(argv, cwd=env.cwd, timeout=_TIMEOUT_S,
+                                    output_cap=_OUTPUT_CAP)
         except OSError as exc:
             return _err(f"could not execute {interpreter!r}: {exc}")
         duration_ms = int((time.monotonic() - started) * 1000)

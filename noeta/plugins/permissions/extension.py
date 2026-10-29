@@ -16,9 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core import records
-from noeta.core.errors import TurnFailed
 from noeta.core.events import (
-    DEFAULT_TENANT,
     Answer,
     Compacted,
     External,
@@ -42,7 +40,6 @@ from noeta.core.extension import (
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import auto as a
-from noeta.plugins.permissions import fence as fc
 from noeta.plugins.permissions import guards as g
 from noeta.plugins.permissions import modes as md
 from noeta.plugins.permissions import plan as pl
@@ -64,7 +61,6 @@ from noeta.toolkit import permission_rules as r
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from noeta.toolkit.tenant_fence import TenantFence
 
 __all__ = ["DENIED_BY_HUMAN", "MODE_SIGNAL", "CanUseTool", "PermState", "Permissions",
            "UntrustedProjectShellAllowlistWarning", "inherited_rules"]
@@ -77,12 +73,6 @@ CanUseTool = Callable[[str, dict[str, Any]], "bool | Awaitable[bool]"]
 #: Text a call refused by ``can_use_tool`` returns (0.6's deny default).
 DENIED_BY_HUMAN = "denied by human"
 
-#: The reason a turn fails with on a worker that may not run the task's
-#: tenant (``tenant_refusal``).
-TENANT_NOT_ISOLATED = "tenant_not_isolated"
-#: The reason a tenant's turn fails with when its working directory now
-#: resolves outside its workspace or into a place it may not write.
-TENANT_CWD_REFUSED = "tenant_cwd_refused"
 
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
@@ -149,18 +139,6 @@ class Permissions(Extension):
     * ``can_use_tool`` — ``(tool, input) -> bool`` (sync or async) that
       answers this extension's asks instead of a person; recorded with
       ``resolver="can_use_tool"``.
-    * ``tenant_workspaces`` (tenant -> workspace), ``store_files``,
-      ``spill_root``, ``server_dirs`` (the default tenant's workspace) and
-      ``deny_read`` (the operator's ``denyRead``) — the file tools of a task
-      of a tenant other than the default one never reach the protected set
-      of :mod:`noeta.toolkit.tenant_fence` and write only in its workspace
-      and its own places; no rule, mode or answer lifts it, and
-      ``additional_directories`` are not its. Such a task keeps its plan
-      files under ``plans_dir/<tenant>``.
-    * ``tenant_refusal`` — why this worker may not run tools of tenants
-      other than the default one (``noeta worker`` without an OS-level
-      boundary): such a task's turn fails with ``tenant_not_isolated`` and
-      this reason before any model call, and its calls are denied.
 
     Remembered rules are per task; a child spawned by ``Subtasks`` starts
     with its parent's (``config["permission_rules"]``).
@@ -197,14 +175,7 @@ class Permissions(Extension):
         repetition_window: int = 8,
         pre_tool_use: Sequence[g.PreToolUseRule] = (),
         can_use_tool: CanUseTool | None = None,
-        tenant_workspaces: Mapping[str, str] | None = None,
-        store_files: Sequence[str] = (),
-        spill_root: str | None = None,
-        server_dirs: Sequence[str] = (),
-        deny_read: Sequence[str] = (),
-        tenant_refusal: str | None = None,
     ) -> None:
-        self.tenant_refusal = tenant_refusal
         self.mode = p.check_mode(mode)
         self.disable_bypass = bool(disable_bypass_mode)
         #: What front ends offer for this task (published on start).
@@ -249,11 +220,6 @@ class Permissions(Extension):
         self.pre_rules = tuple(g.check_pre_rule(f"pre_tool_use[{i}]", rule)
                                for i, rule in enumerate(pre_tool_use))
         self.can_use_tool = can_use_tool
-        self.fence = TenantFence(spill_root=spill_root, plans_dir=self.plans_dir,
-                                 store_files=tuple(store_files),
-                                 workspaces=dict(tenant_workspaces or {}),
-                                 server_dirs=tuple(server_dirs),
-                                 deny_read=tuple(deny_read))
         self._check = RuleCheck(
             allow_rules=self.allow_rules, deny_rules=self.deny_rules, ask_rules=self.ask_rules,
             additional_directories=self.additional_directories, risk=self.risk,
@@ -326,18 +292,7 @@ class Permissions(Extension):
         # Sub-agents do not plan for approval (none is offered it).
         if view.state.parent_id:
             return ()
-        if view.state.tenant == DEFAULT_TENANT:
-            return (self._enter_plan, self._exit_plan)
-        plans = self._plans_dir(view)
-        return (pl.EnterPlanModeTool(lambda ctx: md.enter_plan(
-            ctx, default_mode=self.mode, plans_dir=plans)), self._exit_plan)
-
-    def _plans_dir(self, view: TaskView) -> str:
-        """Where this task's plan files go: a tenant's own directory for a
-        task of a tenant other than the default one."""
-        tenant = view.state.tenant
-        return self.plans_dir if tenant == DEFAULT_TENANT \
-            else os.path.join(self.plans_dir, tenant)
+        return (self._enter_plan, self._exit_plan)
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         return (Command(name="plan", description="Switch to plan mode; with a request, plan it",
@@ -349,12 +304,6 @@ class Permissions(Extension):
     # ------------------------------------------------------------ the gate
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        refused = self._tenant_refused(view)
-        if refused is not None:
-            return Deny(reason=refused)
-        fenced = await fc.refusal(self.fence, view, call)
-        if fenced is not None:
-            return Deny(reason=fenced)
         updated = _updated_input(view, call)
         if updated is not None:
             # Approved with changed input (a headless client's
@@ -382,21 +331,6 @@ class Permissions(Extension):
             "title": w.TITLES.get(name, name),
             "always": rules or None, "always_label": decision.always_label,
             "choices": choices(decision), "classify": decision.classify})
-
-    def _tenant_refused(self, view: TaskView) -> str | None:
-        tenant = view.state.tenant
-        if tenant == DEFAULT_TENANT:
-            return None
-        if self.tenant_refusal is not None:
-            return f"this worker does not run tasks of tenant {tenant!r}: {self.tenant_refusal}"
-        if tenant not in self.fence.workspaces:
-            # Nothing here would keep its commands out of a workspace this
-            # worker does not know, nor say where its own may write.
-            return (f"this worker does not run tasks of tenant {tenant!r}: it does not know "
-                    "the tenant's workspace. Every worker needs the server's tenant "
-                    "directories (tenants/<name>/config.toml in noeta's home, with "
-                    "workspace = ...) and a restart after one is added")
-        return None
 
     def _guards(self, view: TaskView, st: PermState, call: ToolUse) -> Gate | None:
         """noeta's own guards: the budget, the risk ceiling, the repetition
@@ -513,7 +447,7 @@ class Permissions(Extension):
 
     def _switch(self, view: TaskView, mode: Any, seq: int) -> None:
         md.switch(view, mode, seq, current=self.mode_of(view),
-                  disable_bypass=self.disable_bypass, plans_dir=self._plans_dir(view))
+                  disable_bypass=self.disable_bypass, plans_dir=self.plans_dir)
 
     def _enter_plan_mode(self, ctx: ToolContext) -> bool:
         return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir)
@@ -550,12 +484,6 @@ class Permissions(Extension):
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         import msgspec
 
-        refused = self._tenant_refused(view)
-        if refused is not None:
-            raise TurnFailed(TENANT_NOT_ISOLATED, refused)
-        moved = await fc.cwd_refusal(self.fence, view)
-        if moved is not None:
-            raise TurnFailed(TENANT_CWD_REFUSED, moved)
         if self.budget.max_iterations is not None:
             view.record(NAME, "step")
         if self.allowed is not None or self.disallowed:
@@ -567,7 +495,7 @@ class Permissions(Extension):
         if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
             return request
         return a.auto_request(view, request, lambda: a.server_context(
-            self._check.scope(view), tenant=view.state.tenant, plans_dir=self.plans_dir,
+            self._check.scope(view), plans_dir=self.plans_dir,
             allow=self._check.rules(view),
             deny=self.deny_rules, ask=self.ask_rules, auto_mode=self.auto_mode))
 

@@ -46,7 +46,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import msgspec
@@ -87,7 +87,6 @@ Conn = psycopg.AsyncConnection[Any]
 log = logging.getLogger("noeta.backends.stores.postgres")
 
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
-_TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
 _HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree; claims share it
 _NAME = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
 _NOW = "EXTRACT(EPOCH FROM transaction_timestamp())::float8"
@@ -154,26 +153,9 @@ CREATE TABLE IF NOT EXISTS {s}.snapshots (
 );
 """
 
-#: Added after the tables were first created; existing rows take the
-#: default, nothing is ever dropped.
-_ADDED = """
-ALTER TABLE {s}.tasks ADD COLUMN IF NOT EXISTS tenant TEXT NOT NULL DEFAULT 'default';
-CREATE INDEX IF NOT EXISTS tasks_tenant ON {s}.tasks (tenant, status);
-"""
-
 #: The holding worker's queues; NULL from a hold that named none, or an
 #: older version's: not checked.
 _ADDED_HOLD_QUEUES = "ALTER TABLE {s}.tree_holds ADD COLUMN IF NOT EXISTS queues TEXT[]"
-
-_TABLES = """
-CREATE TABLE IF NOT EXISTS {s}.tenant_usage (
-    tenant   TEXT NOT NULL,
-    period   TEXT NOT NULL,
-    tokens   BIGINT NOT NULL DEFAULT 0,
-    cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-    PRIMARY KEY (tenant, period)
-);
-"""
 
 
 class _HeldNow(Exception):
@@ -184,14 +166,6 @@ class _ClaimInFlight(Exception):
     """A hold found a lapsed claim of its tree locked by a claim or renewal
     in flight: rolled back so that one can finish (and hold's lock not
     wait on a row a claim waiting on hold's lock has)."""
-
-
-class _TenantFull(Exception):
-    """A claim found its tenant at its running limit after all."""
-
-    def __init__(self, tenant: str) -> None:
-        super().__init__(tenant)
-        self.tenant = tenant
 
 
 class PostgresStore:
@@ -247,12 +221,6 @@ class PostgresStore:
             await conn.execute(self._q(_SCHEMA))
             cur = await conn.execute(
                 "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
-                " AND table_name = 'tasks' AND column_name = 'tenant'", (self.schema,))
-            if await cur.fetchone() is None:  # ALTER locks the table; only when needed
-                await conn.execute(self._q(_ADDED))
-            await conn.execute(self._q(_TABLES))
-            cur = await conn.execute(
-                "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
                 " AND table_name = 'tree_holds' AND column_name = 'queues'", (self.schema,))
             if await cur.fetchone() is None:
                 await conn.execute(self._q(_ADDED_HOLD_QUEUES))
@@ -267,6 +235,7 @@ class PostgresStore:
                 await conn.execute(self._q("UPDATE {s}.noeta_schema SET version = %s"),
                                    (SCHEMA_VERSION,))
             await self._drop_version_1_holds(conn)
+            await self._drop_tenants(conn)
 
     async def _drop_version_1_holds(self, conn: Conn) -> None:
         """Version 1 kept holds in ``holds``, which this version does not
@@ -285,6 +254,18 @@ class PostgresStore:
             await self._lost_posts(conn, str(root_id), str(worker), 0, changes)
         await self._notify(conn, changes)
         await conn.execute(self._q("DROP TABLE {s}.holds"))
+
+    async def _drop_tenants(self, conn: Conn) -> None:
+        """Version 3 kept a tenant per task and each tenant's usage; this
+        version has no tenants. The column is dropped only when present
+        (the ALTER locks the table)."""
+        await conn.execute(self._q("DROP TABLE IF EXISTS {s}.tenant_usage"))
+        cur = await conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
+            " AND table_name = 'tasks' AND column_name = 'tenant'", (self.schema,))
+        if await cur.fetchone() is not None:
+            await conn.execute(self._q("DROP INDEX IF EXISTS {s}.tasks_tenant"))
+            await conn.execute(self._q("ALTER TABLE {s}.tasks DROP COLUMN tenant"))
 
     async def _notify(self, conn: Conn, changes: Sequence[tuple[str, ChangeKind]]) -> None:
         """Queue the notifications in the current transaction."""
@@ -318,11 +299,11 @@ class PostgresStore:
         created = task.created
         cur = await conn.execute(self._q(
             "INSERT INTO {s}.tasks (task_id, parent_id, root_id, agent, queue, status, last_seq,"
-            " inbox_seq, dedupe_key, created_at, updated_at, tenant)"
-            f" VALUES (%s, %s, %s, %s, %s, 'ready', 1, %s, %s, {_NOW}, {_NOW}, %s)"
+            " inbox_seq, dedupe_key, created_at, updated_at)"
+            f" VALUES (%s, %s, %s, %s, %s, 'ready', 1, %s, %s, {_NOW}, {_NOW})"
             " ON CONFLICT DO NOTHING RETURNING task_id"),
             (task.task_id, created.parent_id, created.root_id or task.task_id, created.agent,
-             task.queue, len(task.inbox), task.dedupe_key, created.tenant))
+             task.queue, len(task.inbox), task.dedupe_key))
         if await cur.fetchone() is None:
             if task.dedupe_key is not None:
                 cur = await conn.execute(
@@ -541,7 +522,6 @@ class PostgresStore:
         parent_id: str | None = None,
         status: Status | None = None,
         limit: int = 100,
-        tenant: str | None = None,
         owner: str | None = None,
     ) -> list[TaskRow]:
         where: list[str] = []
@@ -549,9 +529,6 @@ class PostgresStore:
         if parent_id is not None:
             where.append("parent_id = %s")
             args.append(parent_id)
-        if tenant is not None:
-            where.append("tenant = %s")
-            args.append(tenant)
         if status is not None:
             where.append("status = %s")
             args.append(status)
@@ -572,30 +549,15 @@ class PostgresStore:
     async def claim(
         self, worker: str, queues: Sequence[str], lease_seconds: float,
         *, roots: Sequence[str] | None = None,
-        tenant_limits: Mapping[str, int] | None = None,
     ) -> Claim | None:
         if not queues or (roots is not None and not roots):
             return None
         in_roots = " AND root_id = ANY(%(r)s)" if roots is not None else ""
-        limits = dict(tenant_limits or {})
-
-        async def running(conn: Conn, tenant: str, besides: str = "") -> int:
-            cur = await conn.execute(self._q(
-                "SELECT count(*) FROM {s}.tasks WHERE tenant = %s AND status = 'running'"
-                f" AND lease_until >= {_NOW} AND task_id <> %s"), (tenant, besides))
-            row = await cur.fetchone()
-            return int(row[0]) if row else 0
-
-        #: Tenants a try found at their limit after all: the next try skips them.
-        found_full: set[str] = set()
 
         async def tx(conn: Conn) -> Claim | None:
-            full = [t for t, most in limits.items()
-                    if t in found_full or await running(conn, t) >= most]
             cur = await conn.execute(self._q(
                 "WITH c AS (SELECT task_id FROM {s}.tasks k"
                 " WHERE queue = ANY(%(q)s)" + in_roots
-                + (" AND tenant <> ALL(%(full)s)" if full else "")
                 + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
@@ -607,63 +569,30 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, t.root_id, t.queue"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.root_id, t.queue"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
-                 "r": list(roots or []), "full": full})
+                 "r": list(roots or [])})
             row = await cur.fetchone()
             if row is None:
                 return None
-            task_id, tenant = str(row[0]), str(row[3])
+            task_id = str(row[0])
             # A hold of this tree being taken now: wait for it, then look
             # again (a fresh statement sees what it committed).
             await conn.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
-                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[4]}"))
+                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[3]}"))
             cur = await conn.execute(self._q(
                 "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
-                (row[4], worker))
+                (row[3], worker))
             if await cur.fetchone() is not None:
                 raise _HeldNow
-            if tenant in limits:
-                # Workers claiming at once each counted before the others
-                # committed: one at a time per tenant, count again. A lapsed
-                # task taken back counts like any other claim.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
-                                   (_TENANT_LOCK_CLASS, f"{self.schema}:{tenant}"))
-                if await running(conn, tenant, besides=task_id) >= limits[tenant]:
-                    raise _TenantFull(tenant)
             return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
-                         lease_until=float(row[2]), queue=str(row[5]))
+                         lease_until=float(row[2]), queue=str(row[4]))
 
         while True:
             try:
                 return await self._conns.tx(tx)
             except _HeldNow:
                 continue  # rolled back; the committed hold now keeps the tree out
-            except _TenantFull as full:
-                # Rolled back: the task stays where it was. Another tenant
-                # may have work; try again without this one.
-                found_full.add(full.tenant)
-
-    async def add_tenant_usage(self, tenant: str, period: str, tokens: int,
-                               cost_usd: float) -> None:
-        async def tx(conn: Conn) -> None:
-            await conn.execute(self._q(
-                "INSERT INTO {s}.tenant_usage AS u (tenant, period, tokens, cost_usd)"
-                " VALUES (%s, %s, %s, %s) ON CONFLICT (tenant, period) DO UPDATE SET"
-                " tokens = u.tokens + excluded.tokens,"
-                " cost_usd = u.cost_usd + excluded.cost_usd"), (tenant, period, tokens, cost_usd))
-
-        await self._conns.tx(tx)
-
-    async def tenant_usage(self, tenant: str, period: str) -> tuple[int, float]:
-        async def q(conn: Conn) -> tuple[int, float]:
-            cur = await conn.execute(self._q(
-                "SELECT tokens, cost_usd FROM {s}.tenant_usage WHERE tenant = %s"
-                " AND period = %s"), (tenant, period))
-            row = await cur.fetchone()
-            return (int(row[0]), float(row[1])) if row else (0, 0.0)
-
-        return await self._conns.tx(q, write=False)
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         async def tx(conn: Conn) -> Claim | None:

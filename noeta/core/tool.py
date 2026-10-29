@@ -67,10 +67,10 @@ class ToolContext(CoreNotices):
     #: never makes a second child.
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
-    #: finishing), or with ``task_id=`` to any other task of its tenant (the
-    #: root once the spawner has ended; another conversation ``SendMessage``
-    #: writes to, as Claude Code messages its other open sessions); another
-    #: tenant's task raises ``UnknownTask``. Wakes the task if it is waiting;
+    #: finishing), or with ``task_id=`` to any other task (the root once the
+    #: spawner has ended; another conversation ``SendMessage`` writes to, as
+    #: Claude Code messages its other open sessions); an unknown task raises
+    #: ``UnknownTask``. Wakes the task if it is waiting;
     #: idempotent with a ``dedupe_key=``; ``forward_if_ended=True`` sends it
     #: to the root instead when the task has ended (``Post.forward_if_ended``).
     post: Callable[..., Awaitable[None]] | None = None
@@ -84,11 +84,11 @@ class ToolContext(CoreNotices):
     #: its tasks.
     hold: Callable[[], Awaitable[Release]] | None = None
     #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
-    #: store's task table (``Store.tasks``) of this task's tenant, e.g. to
+    #: store's task table (``Store.tasks``), e.g. to
     #: list other tasks a message could go to.
     tasks: Callable[..., Awaitable[list[Any]]] | None = None
-    #: ``await task(task_id)``: the store's row of one task of this task's
-    #: tenant, ``None`` when there is none.
+    #: ``await task(task_id)``: the store's row of one task, ``None`` when
+    #: there is none.
     task: Callable[[str], Awaitable[Any]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     #: The model made this call (the runner's calls), so what earlier calls

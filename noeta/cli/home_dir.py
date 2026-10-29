@@ -22,12 +22,20 @@ def ensure_home() -> Path:
     return HOME
 
 
+def _sqlite_file(url: str) -> str | None:
+    """The database file of a ``sqlite:///path`` store; ``None`` for
+    another store."""
+    path = url.removeprefix("sqlite:///") if url.startswith("sqlite:///") else ""
+    if not path or path == ":memory:":
+        return None
+    return os.path.abspath(os.path.expanduser(path))
+
+
 def loose_permissions(store_url: str) -> list[str]:
     """A notice for noeta's home and a sqlite store's database file when
     other users may read them; noeta never changes an existing mode."""
-    from noeta.toolkit.tenant_fence import store_files
-
-    places = [(HOME, "700")] + [(Path(p), "600") for p in store_files(store_url)[:1]]
+    db = _sqlite_file(store_url)
+    places = [(HOME, "700")] + ([(Path(db), "600")] if db else [])
     notices = []
     for path, wanted in places:
         try:

@@ -154,10 +154,6 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
         return await closing.fail_turn(run, texts.LLM_ERROR,
                                        "the model call kept being interrupted")
-    # Before the hooks: a compaction's summary is a model call too.
-    refusal = await run.rt.budget_refusal(run.state.tenant)
-    if refusal is not None:
-        return await closing.fail_turn(run, texts.BUDGET_SPENT, refusal)
     prepared = await _run_hooks(run, build_model_request(run, final=final))
     if isinstance(prepared, bool):
         return prepared
@@ -189,7 +185,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
             attempt=attempt, delay=delay, error=str(error)[: texts.ERROR_DETAIL_CHARS]))])))
 
     try:
-        provider = run.rt.provider(request.model, run.state.tenant)
+        provider = run.rt.provider_for(request.model)
         response = await complete_with_retries(provider, request, on_delta, sleep=run.rt.sleep,
                                                on_retry=on_retry)
     except ContextOverflow as exc:
@@ -200,10 +196,6 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         return await closing.fail_turn(run, texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
     run.partial, run.thinking = [], []
-    # Paid for whether or not the reply is kept (an empty one, or a claim
-    # lost before it is appended).
-    await run.rt.charge(run.state.tenant, request.model, response.usage)
-
     if final:
         response = _final_answer(run, response)
     message = response.message

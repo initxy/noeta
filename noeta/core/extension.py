@@ -132,13 +132,10 @@ class Command(Struct):
 @dataclass(frozen=True)
 class CommandContext:
     """Where a command is listed or run: the front end's task (``None``
-    before it has one), working directory and tenant. ``tenant`` has no
-    default: a command runs with its tenant's servers and files, so every
-    caller names it."""
+    before it has one) and working directory."""
 
     cwd: str
     task_id: str | None = None
-    tenant: str = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -268,11 +265,10 @@ class TaskView(records.CoreNotices):
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
     #: ``await read_log(task_id, after=0)``: a task's log after seq
     #: ``after``, oldest first — what a related task (a sub-agent, a
-    #: conversation this one continues) recorded. Read only; another
-    #: tenant's task reads as empty.
+    #: conversation this one continues) recorded. Read only; an unknown
+    #: task reads as empty.
     read_log: ReadLog | None = None
-    #: ``await child_tasks(task_id)``: the ids of a task's children of this
-    #: task's tenant.
+    #: ``await child_tasks(task_id)``: the ids of a task's children.
     child_tasks: Callable[[str], Awaitable[list[str]]] | None = None
     #: The task's extensions, in the agent's order (``residents``).
     extensions: Sequence[Extension] = ()
@@ -338,8 +334,8 @@ class TaskView(records.CoreNotices):
         records this hook leaves: input that must open a turn (a notice),
         made together with the record that decided it, so a crash keeps
         both or neither. Idempotent with a ``dedupe_key``. With ``task_id``
-        it goes to that task instead, when it is one of this task's tenant
-        (otherwise it is dropped): news another task asked to hear."""
+        it goes to that task instead, when it exists (otherwise it is
+        dropped): news another task asked to hear."""
         self.enqueued.append((body, dedupe_key, task_id))
 
     def spawn(self, agent: str, prompt: str | Message, *, config: Mapping[str, Any] | None = None,
@@ -429,7 +425,7 @@ def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], 
         child_config.update(ext.inherit(state))
     return TaskCreated(agent=agent, config=child_config, parent_id=task_id,
                        root_id=state.root_id or task_id, history_from=history_from,
-                       history_through=history_through, tenant=state.tenant)
+                       history_through=history_through)
 
 
 GatePhase = Literal["model", "user"]

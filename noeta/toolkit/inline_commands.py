@@ -22,7 +22,6 @@ from noeta.core.extension import Allow, Ask, Deny, Rewrite, TaskView
 from noeta.core.tool import ToolContext
 from noeta.core.types import ToolUse
 from noeta.toolkit import permission_rules as pr
-from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
 __all__ = [
     "DISABLED_MARKER",
@@ -152,7 +151,7 @@ async def _run(view: TaskView, command: str, call_id: str) -> str:
     if view.env is None:
         raise InlineCommandError("there is no environment to run it in")
     try:
-        result = await run_in_tenant_sandbox(view.env, ["bash", "-c", command], timeout=120)
+        result = await view.env.run(["bash", "-c", command], timeout=120)
     except OSError as exc:
         raise InlineCommandError(str(exc)) from exc
     parts = [result.stdout.decode("utf-8", "replace").strip()]

@@ -1,7 +1,7 @@
 """Small helpers the workspace-context extensions share (instructions,
 skills, memory, compaction): the task's ExecEnv, the messages a person added
-since a point, and reading a text file through the exec env or, behind the
-env's tenant fence, on this machine."""
+since a point, and reading a text file through the exec env or on this
+machine."""
 
 from __future__ import annotations
 
@@ -50,21 +50,9 @@ async def read_text(env: ExecEnv, path: str) -> str | None:
         return None
 
 
-def fence_refuses(env: ExecEnv, path: str, *, write: bool = False) -> bool:
-    """Whether the env's tenant fence (a non-default tenant's local env)
-    refuses reading (or ``write``) what ``path`` resolves to; ``False``
-    with no fence."""
-    fence = getattr(env, "fence", None)
-    return fence is not None and fence(os.path.realpath(path), write) is not None
-
-
 async def read_local_text(env: ExecEnv, path: str) -> str | None:
     """``path`` on this machine as UTF-8 text, or ``None`` on any read
-    fault. Behind a tenant fence (only a local env has one) it is read
-    through the env, which checks the file it opens: a link in the tenant's
-    files cannot reach a protected one."""
-    if getattr(env, "fence", None) is not None:
-        return await read_text(env, path)
+    fault."""
     try:
         return await asyncio.to_thread(Path(path).read_text, "utf-8")
     except (OSError, UnicodeDecodeError, ValueError):

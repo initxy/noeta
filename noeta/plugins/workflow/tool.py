@@ -14,7 +14,6 @@ from noeta.core.extension import TaskView
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message
 from noeta.plugins.workflow.engine import EngineMissing
-from noeta.toolkit.context import fence_refuses
 from noeta.toolkit.paths import noeta_home
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, spill_path
 
@@ -114,12 +113,9 @@ class WorkflowTool:
         names: list[str] = []
         project = f"{self.view.cwd}/{PROJECT_WORKFLOWS}"
         try:
-            # ``ls`` runs unfenced: a link to a place the fence refuses
-            # (another tenant's workspace) is not listed.
-            if not fence_refuses(ctx.env, project):
-                out = await ctx.env.run(["ls", "-1", project], timeout=5, output_cap=1 << 16)
-                if out.exit_code == 0:
-                    names += out.stdout.decode("utf-8", "replace").split("\n")
+            out = await ctx.env.run(["ls", "-1", project], timeout=5, output_cap=1 << 16)
+            if out.exit_code == 0:
+                names += out.stdout.decode("utf-8", "replace").split("\n")
         except (OSError, FileNotFoundError):
             pass
         try:
@@ -186,7 +182,7 @@ class WorkflowTool:
     @staticmethod
     async def _save(ctx: ToolContext, rid: str, script: str) -> str:
         """Keep the script beside the task's other spilled files (in its own
-        directory there: a tenant's task may read only that one)."""
+        directory there)."""
         if not ctx.spill_dir:
             return ""
         task_dir = posixpath.dirname(spill_path(ctx.spill_dir, ctx.task_id, "x"))

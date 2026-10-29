@@ -9,7 +9,7 @@ import os
 import socket
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -20,8 +20,7 @@ from noeta.core.execenv import ExecEnv
 from noeta.core.holds import Release, TreeHold
 from noeta.core.provider import Provider
 from noeta.core.store import Claim, Store
-from noeta.core.tenants import Tenant, charged, over_budget, period
-from noeta.core.types import Delta, ModelRequest, Usage
+from noeta.core.types import Delta, ModelRequest
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
@@ -103,9 +102,6 @@ class Runtime:
     #: Serve only the task trees whose root ids are in this set (a front end
     #: adds each task it creates or resumes); ``None`` serves every task.
     roots: set[str] | None = None
-    #: What each tenant is allowed (``noeta.core.tenants``), by name; a
-    #: tenant not named here has no limits and uses ``provider_for``.
-    tenants: Mapping[str, Tenant] = field(default_factory=dict)
     _wake: asyncio.Event | None = field(default=None, init=False, repr=False)
     #: This worker's holds, by tree root (:meth:`hold`).
     _holds: dict[str, TreeHold] = field(default_factory=dict, init=False, repr=False)
@@ -285,16 +281,10 @@ class Runtime:
         asked for (when its lease surely started)."""
         await self._reap()
         roots = sorted(self.roots) if self.roots is not None else None
-        limits = {name: t.max_running for name, t in self.tenants.items()
-                  if t.max_running is not None}
         sent = time.monotonic()
         try:
-            if limits:
-                claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
-                                               roots=roots, tenant_limits=limits)
-            else:
-                claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
-                                               roots=roots)
+            claim = await self.store.claim(self.worker, self.queues, self.lease_seconds,
+                                           roots=roots)
         except CommitUnknown as exc:
             log.warning("claim commit unknown, looking for what it took: %s", exc)
             claim = await self._adopt()
@@ -309,34 +299,6 @@ class Runtime:
                 return Claim(task_id=row.task_id, worker=self.worker, epoch=row.owner_epoch,
                              lease_until=row.lease_until or 0.0, queue=row.queue)
         return None
-
-    def provider(self, model: str, tenant: str) -> Provider:
-        """The provider for ``model`` in a task of ``tenant``."""
-        own = self.tenants.get(tenant)
-        return (own.provider_for if own is not None and own.provider_for is not None
-                else self.provider_for)(model)
-
-    async def budget_refusal(self, tenant: str) -> str | None:
-        """Why a task of ``tenant`` may make no model call now (its budget is
-        spent), or ``None``."""
-        own = self.tenants.get(tenant)
-        read = getattr(self.store, "tenant_usage", None)
-        if own is None or not own.budgeted or read is None:
-            return None
-        when = period()
-        return over_budget(tenant, own, await read(tenant, when), when)
-
-    async def charge(self, tenant: str, model: str, usage: Usage) -> None:
-        """Count a model call against ``tenant``'s budget (when it has one)."""
-        own = self.tenants.get(tenant)
-        add = getattr(self.store, "add_tenant_usage", None)
-        if own is None or not own.budgeted or add is None:
-            return
-        tokens, cost = charged(model, usage)
-        try:
-            await add(tenant, period(), tokens, cost)
-        except Exception as exc:  # noqa: BLE001 — the call happened; the count is best effort
-            log.warning("tenant %s: counting usage failed: %s", tenant, exc)
 
     async def run_claim(self, claim: Claim, *, sent: float | None = None) -> None:
         """Run one claim until the task waits or ends. Cancelled (a

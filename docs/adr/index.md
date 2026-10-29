@@ -23,8 +23,9 @@ and describe a different codebase.
 - [015](015-a-held-tree-runs-only-on-its-holder.md) A held tree's tasks run only on its holder
   (refined by 024)
 - [024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md) A hold takes back lapsed claims, and a held tree stays on its holder's queues
-  (refined by 027)
+  (refined by 027, 028)
 - [027](027-the-store-refuses-a-child-off-its-held-trees-queues-and-a-reclaim-counts-toward-the-limit.md) The store refuses a child off its held tree's queues, and a reclaim counts toward the limit
+  (refined by 028)
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
   (refined by 023)
 - [023](023-snapshots-per-fold-version-and-newer-logs-left-to-newer-workers.md) Snapshots are kept per fold version; a newer version's log is left to a newer worker
@@ -44,19 +45,21 @@ and describe a different codebase.
 
 ## Security and operation
 
-- [007](007-tenants.md) Tasks belong to a tenant; a server token selects it and nothing crosses it
-  (refined by 014, 019)
-- [014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md) Tenants are separated at the API; tools need an OS boundary
-  (refined by 018, 021)
-- [018](018-each-tenant-has-its-own-places-on-disk.md) Each tenant has its own places on disk, and a workspace it must be given
-  (refined by 021)
-- [021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md) A tenant reads all but a protected set and writes only its own places
-- [019](019-tenant-limits-are-enforced-by-the-kernel.md) Tenant limits and providers are enforced by the kernel
-  (refined by 022, 024, 025)
-- [022](022-the-model-catalog-is-kernel-data.md) The model catalog is kernel data: budgets and output ceilings are kernel scheduling
-- [025](025-every-model-call-checks-the-budget-before-it-is-made.md) Every model call checks the tenant's budget before it is made
+- [028](028-no-tenants-in-noeta.md) noeta has no tenants; a host that needs them builds them on the extension points;
+  the model catalog stays kernel data for output ceilings
 - [008](008-sandbox-protected-path-placeholders.md) The sandbox keeps code-running paths read-only and covers missing ones with placeholders
 - [009](009-serve-requires-a-token.md) The HTTP API always requires a bearer token
-  (refined by 013)
+  (refined by 013, 028)
 - [013](013-server-token-kept-as-a-digest.md) The server token is kept as a digest; clients bring it themselves
+  (refined by 028)
 - [010](010-nothing-uploaded-by-default.md) noeta sends nothing anywhere but to the configured model provider
+
+## Superseded
+
+- [007](007-tenants.md), [014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md),
+  [018](018-each-tenant-has-its-own-places-on-disk.md),
+  [019](019-tenant-limits-are-enforced-by-the-kernel.md),
+  [021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md),
+  [022](022-the-model-catalog-is-kernel-data.md),
+  [025](025-every-model-call-checks-the-budget-before-it-is-made.md) Tenants, their fence,
+  limits and budgets, and the catalog's place by way of the budget (superseded by 028)

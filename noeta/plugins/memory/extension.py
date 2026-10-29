@@ -26,11 +26,10 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core import records
-from noeta.core.events import DEFAULT_TENANT
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
-from noeta.toolkit.context import fence_refuses, read_local_text, task_env
+from noeta.toolkit.context import read_local_text, task_env
 from noeta.toolkit.memory_index import (
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
@@ -39,7 +38,6 @@ from noeta.toolkit.memory_index import (
     trim_memory_index,
 )
 from noeta.toolkit.paths import noeta_home, project_dir
-from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
@@ -99,8 +97,8 @@ def load_index(text: str) -> str:
     return trim_memory_index(text)
 
 
-def memory_dir_for(root: str, home: Path | None = None, tenant: str = DEFAULT_TENANT) -> str:
-    return str(project_dir(root, home or noeta_home(), tenant) / "memory") + "/"
+def memory_dir_for(root: str, home: Path | None = None) -> str:
+    return str(project_dir(root, home or noeta_home()) / "memory") + "/"
 
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
@@ -123,8 +121,7 @@ class Memory(Extension):
     """Constructor arguments:
 
     * ``home`` — noeta's home (default ``$NOETA_HOME`` or ``~/.noeta``); the
-      memory directory is ``<home>/projects/<workspace>/memory/`` (a tenant
-      other than the default one: ``<home>/projects/<tenant>/<workspace>/memory/``).
+      memory directory is ``<home>/projects/<workspace>/memory/``.
     * ``directory`` — use this directory instead.
     * ``recall_model`` — the model asked, on each user message, which memory
       files to attach (off when unset).
@@ -212,13 +209,8 @@ class Memory(Extension):
         if not directory:
             workspace = await self._workspace(view)
             directory = self._agent_dir(view, workspace) \
-                or memory_dir_for(workspace, self.home, view.state.tenant)
+                or memory_dir_for(workspace, self.home)
         try:
-            # Made by the worker: not where the task's tenant may not write
-            # (a link on the way, or a repository's shared directory outside
-            # the workspace).
-            if fence_refuses(task_env(view.env, view.state.config), directory, write=True):
-                raise OSError("the tenant fence refuses it")
             Path(directory).mkdir(parents=True, exist_ok=True)
         except OSError:
             log.warning("memory: could not create %s", directory)
@@ -290,11 +282,7 @@ class Memory(Extension):
         worktree keeps it."""
         if self.agent_scope is None or self.agent_name is None:
             return None
-        # "user" memory under noeta's home is shared by every tenant: a task
-        # of a tenant other than the default one keeps it in its working
-        # directory instead.
-        if self.agent_scope == "user" and getattr(view.state, "tenant",
-                                                  DEFAULT_TENANT) == DEFAULT_TENANT:
+        if self.agent_scope == "user":
             base = self.home or noeta_home()
             return str(base / "agent-memory" / self.agent_name) + "/"
         folder = "agent-memory-local" if self.agent_scope == "local" else "agent-memory"
@@ -306,20 +294,14 @@ class Memory(Extension):
         env = task_env(view.env, view.state.config)
         cwd = view.cwd or env.cwd
         try:
-            out = await run_in_tenant_sandbox(
-                env, ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                cwd=cwd, timeout=5, output_cap=4096)
+            out = await env.run(["git", "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"], cwd=cwd, timeout=5, output_cap=4096)
         except Exception:  # noqa: BLE001 — not a repository, or no git
             return cwd
         common = out.stdout.decode("utf-8", errors="replace").strip()
         if out.exit_code != 0 or not common or not common.rstrip("/").endswith("/.git"):
             return cwd
         main = posixpath.dirname(common.rstrip("/"))
-        # A ``.git`` file may name any repository; another tenant's task
-        # shares a main checkout's memory only from inside it.
-        if view.state.tenant != DEFAULT_TENANT and not (
-                cwd == main or cwd.startswith(main.rstrip("/") + "/")):
-            return cwd
         return main
 
     @staticmethod
@@ -334,10 +316,7 @@ class Memory(Extension):
     async def _manifest(env: ExecEnv, directory: str,
                         skip: set[str]) -> list[tuple[str, str]]:
         """``(file name, manifest line)`` for every memory file not yet
-        attached. Read on this machine, behind the task's tenant fence (an
-        agent's memory may be in the tenant's workspace)."""
-        if fence_refuses(env, directory):
-            return []
+        attached. Read on this machine."""
         out: list[tuple[str, float, str]] = []
         for path in Path(directory).glob("*.md"):
             if path.name == INDEX_FILE or str(path) in skip:

@@ -1,6 +1,6 @@
 # ADR-018: Each tenant has its own places on disk, and a workspace it must be given
 
-- Status: accepted
+- Status: superseded by ADR-028
 - Refined by: [ADR-021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md)
   (reads all but a protected set; writes only the tenant's own places)
 - Date: 2026-10-28

@@ -3,20 +3,14 @@ per-project directory under the home, and its places in the temp directory."""
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import stat
 import tempfile
 from pathlib import Path
 
-from noeta.core.events import DEFAULT_TENANT
-
 #: Longest project slug kept whole; a longer one is cut and given a hash.
 PROJECT_SLUG_MAX = 200
-#: Longest tenant name a tenant's temporary directory is named by; a longer
-#: one is cut and given a hash.
-TENANT_TEMP_NAME_MAX = 24
 
 
 def noeta_home() -> Path:
@@ -60,29 +54,17 @@ def project_slug(path: str) -> str:
     return f"{slug[:PROJECT_SLUG_MAX]}-{_base36(abs(_string_hash(path)))}"
 
 
-def project_dir(path: str, home: Path | None = None, tenant: str = DEFAULT_TENANT) -> Path:
+def project_dir(path: str, home: Path | None = None) -> Path:
     """The per-project directory for the workspace at ``path``:
-    ``<home>/projects/<slug>`` (transcripts, auto memory); a tenant other
-    than the default one has its own, ``<home>/projects/<tenant>/<slug>``
-    (a slug starts with ``-``, a tenant name never does)."""
-    projects = (home or noeta_home()) / "projects"
-    if tenant != DEFAULT_TENANT:
-        projects = projects / tenant_dir_name(tenant)
-    return projects / project_slug(path)
+    ``<home>/projects/<slug>`` (transcripts, auto memory)."""
+    return (home or noeta_home()) / "projects" / project_slug(path)
 
 
 def temp_root() -> str:
     """noeta's directory in the machine's temp directory, for this OS user:
     ``<temp>/noeta-temp-<uid>`` (each worker process's sandbox directory,
-    ``sandbox/``, and each tenant's own, ``tenants/<tenant>/``)."""
+    ``sandbox/``)."""
     return os.path.join(os.path.realpath(tempfile.gettempdir()), f"noeta-temp-{os.getuid()}")
-
-
-def tenant_temp_dir(tenant: str, root: str | None = None) -> str:
-    """A tenant's own temporary directory under :func:`temp_root` (or
-    ``root``): its sandboxed commands' ``$TMPDIR`` (``tmp/``) and its
-    background jobs' logs (``jobs/``)."""
-    return os.path.join(root or temp_root(), "tenants", tenant_dir_name(tenant))
 
 
 def file_name_part(text: str, default: str) -> str:
@@ -92,19 +74,6 @@ def file_name_part(text: str, default: str) -> str:
     client picked."""
     name = re.sub(r"[^A-Za-z0-9_.-]", "_", text)
     return default if name in ("", ".", "..") else name
-
-
-def tenant_dir_name(tenant: str) -> str:
-    """``tenant`` as one directory name: itself when it is a short name of
-    letters, digits, ``_``, ``.`` and ``-`` (as ``noeta token add`` takes),
-    else cut and given a hash. Short: a tenant's temporary directory holds
-    its commands' proxy sockets, whose paths are limited to about a hundred
-    bytes."""
-    name = re.sub(r"[^A-Za-z0-9_.-]", "_", tenant)
-    if name != tenant or name in ("", ".", "..") or name.startswith("-") \
-            or len(name) > TENANT_TEMP_NAME_MAX:
-        name = f"t{name[:15]}-{hashlib.sha256(tenant.encode()).hexdigest()[:8]}"
-    return name
 
 
 def job_log_roots() -> list[str]:
@@ -138,10 +107,3 @@ def private_dir(path: str, *, top: str | None = None) -> str:
             os.chmod(current, 0o700)
     return path
 
-
-def make_tenant_temp_dir(path: str) -> str:
-    """Make the :func:`tenant_temp_dir` ``path`` with its ``tmp/``, private
-    from its temp root down; returns ``path``."""
-    root = os.path.dirname(os.path.dirname(path))
-    private_dir(os.path.join(path, "tmp"), top=os.path.dirname(root))
-    return path

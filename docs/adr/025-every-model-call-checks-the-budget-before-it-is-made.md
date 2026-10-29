@@ -1,6 +1,6 @@
 # ADR-025: Every model call checks the tenant's budget before it is made
 
-- Status: accepted
+- Status: superseded by ADR-028
 - Date: 2026-10-29
 - Refines: [ADR-019](019-tenant-limits-are-enforced-by-the-kernel.md)
 

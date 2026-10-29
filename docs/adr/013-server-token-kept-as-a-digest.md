@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-28
+- Refined by: [ADR-028](028-no-tenants-in-noeta.md) (one token, no tenant tokens)
 - Refines: [ADR-009](009-serve-requires-a-token.md)
 
 ## Context

@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from typing import Any, Union
 
 from noeta.core.errors import HeldElsewhere
-from noeta.core.events import DEFAULT_TENANT, Answer, Recorded, TaskEnded, Waiting
+from noeta.core.events import Answer, Recorded, TaskEnded, Waiting
 from noeta.core.extension import (
     Command,
     CommandContext,
@@ -150,13 +150,10 @@ class Mcp(Extension):
 
     ``scope``: partitions shared connections (0.6's ``mcp_scope_resolver``):
     a string, or ``TaskView -> str | None``. Tasks naming the same server in
-    the same scope share one connection per worker process; give each tenant
-    its own scope so a stateful server (a browser, a login) never carries one
-    tenant's state into another's task. ``None`` = one shared partition.
-    A task whose tenant is not the default one is always in a partition of
-    its tenant's (``tenant:<name>/<scope>``), and gets no server that runs a
-    process on the worker (a ``command`` or a ``headers_helper``): those
-    run as the worker's OS user, outside any sandbox. They show as down.
+    the same scope share one connection per worker process; give each user
+    of a host its own scope so a stateful server (a browser, a login) never
+    carries one user's state into another's task. ``None`` = one shared
+    partition.
 
     ``pool``: the connection pool (default: one per worker process and event
     loop, idle connections closed after 30 minutes).
@@ -195,16 +192,14 @@ class Mcp(Extension):
         self._tools: dict[str, tuple[Any, list[Tool]]] = {}
         self._marks: dict[str, int] = {}
         #: (connection partition, command name) -> (server, prompt), as last
-        #: listed in that partition: a tenant's listing never names the
-        #: connection another tenant's command runs on.
+        #: listed in that partition: one partition's listing never names
+        #: the connection another partition's command runs on.
         self._prompts: dict[tuple[str | None, str], tuple[McpServer, McpPrompt]] = {}
         #: The partitions in ``_prompts``, least recently listed first; at
         #: most :data:`TASKS_KEEP` are kept.
         self._prompt_scopes: dict[str | None, None] = {}
         #: task id -> the workspace directories ``roots/list`` answers.
         self._roots: dict[str, list[str]] = {}
-        #: task id -> {alias: why not started} (a tenant's local servers).
-        self._refused: dict[str, dict[str, str]] = {}
         #: (task id, call id) -> a call waiting on the person's answer.
         self._parked: dict[tuple[str, str], _Parked] = {}
         self._sign_ins = SignIns(self.pool)
@@ -454,8 +449,7 @@ class Mcp(Extension):
             await self._refresh_once(view)
 
     def _forget(self, task_id: str) -> None:
-        for cache in (self._known, self._scopes, self._tools, self._marks, self._roots,
-                      self._refused):
+        for cache in (self._known, self._scopes, self._tools, self._marks, self._roots):
             cache.pop(task_id, None)
 
     def _forget_old_tasks(self) -> None:
@@ -491,19 +485,13 @@ class Mcp(Extension):
             self._scopes[view.task_id] = scope(view) if callable(scope) else scope
             self._roots[view.task_id] = [view.cwd] if view.cwd else []
             servers = [*self._agent_servers, *servers, *await self._from_files(view)]
-            tenant = view.state.tenant
-            self._scopes[view.task_id] = _tenant_scope(tenant, self._scopes[view.task_id])
-            if tenant != DEFAULT_TENANT:
-                self._refused[view.task_id] = {s.alias: _refusal(tenant)
-                                               for s in servers if _runs_here(s)}
-                servers = [s for s in servers if not _runs_here(s)]
         except Exception:
             # Keep the recorded tool set; its calls fail until a pick-up
             # resolves the servers again.
             log.exception("mcp: resolving the servers of task %s failed", view.task_id)
             if view.task_id not in self._known:
                 # Nothing else lets go of them: no task entry holds them.
-                for cache in (self._scopes, self._roots, self._refused):
+                for cache in (self._scopes, self._roots):
                     cache.pop(view.task_id, None)
             return False
         known: dict[str, McpServer] = {}
@@ -547,15 +535,13 @@ class Mcp(Extension):
         known: dict[str, McpServer] = {}
         for server in [*self._agent_servers, *given, *files]:
             known.setdefault(server.alias, server)
-        return [s for s in known.values()
-                if ctx.tenant == DEFAULT_TENANT or not _runs_here(s)]
+        return list(known.values())
 
     def _command_scope(self, ctx: CommandContext) -> str | None:
         """The connection partition a command of ``ctx`` lists and runs in."""
         if ctx.task_id:
-            return self._scopes[ctx.task_id] if ctx.task_id in self._scopes \
-                else _tenant_scope(ctx.tenant, None)
-        return _tenant_scope(ctx.tenant, self._scope if isinstance(self._scope, str) else None)
+            return self._scopes.get(ctx.task_id)
+        return self._scope if isinstance(self._scope, str) else None
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         """Each server prompt as ``/mcp__<alias>__<prompt>``; arguments are
@@ -604,7 +590,7 @@ class Mcp(Extension):
         listed = await asyncio.gather(*(self._list(s, scope, context) for s in servers))
         entries: list[dict[str, Any]] = []
         owner: dict[str, str] = {}
-        failures: dict[str, str] = dict(self._refused.get(view.task_id, {}))
+        failures: dict[str, str] = {}
         for server, (entry, error) in zip(servers, listed, strict=True):
             if entry is not None:
                 clash = next((t["name"] for t in entry["tools"] if t["name"] in owner), None)
@@ -641,23 +627,6 @@ class Mcp(Extension):
                     "tools": auth_stub_entries(server)}, None
         except (McpError, McpConfigError) as exc:
             return None, str(exc)
-
-
-def _runs_here(server: McpServer) -> bool:
-    """Does ``server`` run a process on the worker (as its OS user)?"""
-    return bool(server.command or server.headers_helper)
-
-
-def _refusal(tenant: str) -> str:
-    return f"MCP servers that run a process on the worker do not start for tenant {tenant!r}"
-
-
-def _tenant_scope(tenant: str, scope: str | None) -> str | None:
-    """``scope`` within ``tenant``'s own partition (the default tenant's is
-    ``scope`` itself)."""
-    if tenant == DEFAULT_TENANT:
-        return scope
-    return f"tenant:{tenant}" + (f"/{scope}" if scope else "")
 
 
 def _server_entry(server: McpServer, raw: list[dict[str, Any]]) -> dict[str, Any]:

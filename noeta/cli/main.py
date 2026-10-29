@@ -10,7 +10,6 @@
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
     noeta plugin ...           install (pinned), list and remove plugins
     noeta mcp ...              add, list, remove and sign in to MCP servers
-    noeta token ...            add, list and remove the server's tenant tokens
 
 Model and provider come from ``--model`` / ``--provider`` or the environment
 (``NOETA_MODEL``, ``NOETA_PROVIDER``, ``NOETA_BASE_URL``, ``NOETA_API_KEY``)
@@ -27,11 +26,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import home_dir, mcp_command, plugin_command, tenants
+from noeta.cli import home_dir, mcp_command, plugin_command
 from noeta.cli.config import MissingAPIKey, Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
-SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "token")
+SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
 
 #: Where an extra is installed from (README). noeta 1.0 is not on PyPI, and
 #: the bare name there may be someone else's package.
@@ -57,7 +56,7 @@ def _common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
     ap.add_argument("--cwd", default=None,
                     help="working directory (default: current); with --server, a directory "
-                         "on the server (default: the server's own, or the tenant's workspace)")
+                         "on the server (default: the server's own)")
     ap.add_argument("--system-prompt", help="replace the main agent's system prompt")
     ap.add_argument("--append-system-prompt",
                     help="add text after the main agent's system prompt")
@@ -84,9 +83,6 @@ def _parser() -> argparse.ArgumentParser:
     w.add_argument("--snapshot-every", type=int, default=None, metavar="EVENTS",
                    help="write a task's fold snapshot at most every this many events "
                         "(default 100; 0 never)")
-    w.add_argument("--server-dir", action="append", default=[], metavar="PATH",
-                   help="a directory of the server's to hide from other tenants' tasks, "
-                        "besides this one and [server] dirs (repeatable)")
     w.add_argument("--allow-bypass-permissions", action="store_true",
                    help="let tasks run in bypassPermissions")
     sv = sub.add_parser("serve", help="the client API over HTTP")
@@ -108,7 +104,6 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
     mcp_command.add_parser(sub)
-    tenants.add_parser(sub)
     return ap
 
 
@@ -189,57 +184,6 @@ def _app(s: Settings, **kw: Any) -> Any:
     return from_settings(s, **kw)
 
 
-def _tenants(s: Settings) -> dict[str, tenants.TenantPlace]:
-    try:
-        return tenants.load_tenants(s)
-    except (ValueError, OSError) as exc:
-        sys.exit(f"noeta: {exc}")
-
-
-def _workspaces(places: dict[str, tenants.TenantPlace]) -> dict[str, str]:
-    return {name: p.workspace for name, p in places.items() if p.workspace}
-
-
-def _server_dirs(s: Settings, cwd: str, extra: list[str]) -> list[str]:
-    """The server's own directories, hidden from other tenants' tasks:
-    ``cwd``, ``extra`` and ``[server] dirs`` in ``config.toml`` (for
-    workers started apart from ``noeta serve``)."""
-    dirs = s.server.get("dirs", [])
-    if not isinstance(dirs, list) or not all(
-            isinstance(d, str) and os.path.isabs(os.path.expanduser(d)) for d in dirs):
-        sys.exit("noeta: config.toml: [server] dirs is a list of absolute paths")
-    return list(dict.fromkeys([cwd, *(os.path.abspath(e) for e in extra),
-                               *(os.path.normpath(os.path.expanduser(d)) for d in dirs)]))
-
-
-def _check_server_dirs(dirs: list[str], places: dict[str, tenants.TenantPlace]) -> None:
-    """Exits when tenants other than the default one are configured and a
-    server directory cannot be hidden from their commands (it holds the
-    machine's programs or temporary directories)."""
-    from noeta.toolkit.tenant_fence import unhideable
-
-    others = tenants.other_tenants(places)
-    if others and (bad := unhideable(dirs)):
-        sys.exit(f"noeta: tenant(s) {', '.join(others)} configured, but the server "
-                 f"director{'ies' if len(bad) > 1 else 'y'} {', '.join(bad)} cannot be hidden "
-                 "from a tenant's commands (it holds the machine's programs or temporary "
-                 "directories); run noeta from, and list in [server] dirs or --allow-root, "
-                 "only directories of the server's own")
-
-
-def _check_isolation(s: Settings, cwd: str,
-                     places: dict[str, tenants.TenantPlace]) -> str | None:
-    """Why tools of tenants other than the default one may not run here, or
-    ``None``; exits when such tenants are configured and may not. A task of
-    another tenant such a worker still claims fails its turn with the reason
-    (the permissions plugin's ``tenant_refusal``)."""
-    problem = tenants.isolation_problem(s, cwd)
-    others = tenants.other_tenants(places)
-    if problem is not None and others:
-        sys.exit(f"noeta: tenant(s) {', '.join(others)} configured, but {problem}")
-    return problem
-
-
 def _allowed_hosts(args: argparse.Namespace) -> list[str] | None:
     """The ``Host`` names ``noeta serve`` answers: the loopback names on a
     loopback bind, plus ``--allow-host``; any on another bind without it."""
@@ -257,17 +201,6 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     from noeta.host.http import create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
-    places = _tenants(s)
-    if args.no_token:
-        # Every request would be the default tenant's: refuse rather than
-        # ignore the tenants' tokens.
-        known = sorted({str(e["tenant"]) for e in tenants.read_tokens()} | set(places))
-        if known:
-            sys.exit(f"noeta: --no-token serves every request as the default tenant, but "
-                     f"tenant(s) {', '.join(known)} are configured ({HOME / 'tokens.json'} "
-                     f"or {HOME / 'tenants'}); serve with a token")
-    if (unplaced := tenants.workspace_problem(places)) is not None:
-        sys.exit(f"noeta: {unplaced}")
     server = None if args.no_token else server_token_digest()
     if server is not None and server.shown is not None:
         print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "
@@ -278,30 +211,16 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
         "disable_bypass_mode": True}
-    # The default tenant's workspace: hidden from other tenants' tasks.
-    permissions["server_dirs"] = _server_dirs(s, cwd, args.allow_root)
-    _check_server_dirs(permissions["server_dirs"], places)
-    problem = _check_isolation(s, cwd, places) if with_worker else None
-    isolated = problem is None
-    if problem is not None:
-        permissions["tenant_refusal"] = problem
-    app = _app(s, cwd=cwd, with_channels=True,
-               tenants={name: p.allowed for name, p in places.items()},
-               tenant_workspaces=_workspaces(places), permissions=permissions)
+    app = _app(s, cwd=cwd, with_channels=True, permissions=permissions)
     await app.start(worker=with_worker)
     api = create_app(app.client, auth=server is not None,
-                     tokens=tenants.tenant_tokens(
-                         others=isolated, server_sha256=server.sha256 if server else None),
+                     token_sha256=server.sha256 if server else None,
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
                      allowed_hosts=_allowed_hosts(args),
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
-                     roots=[os.path.abspath(r) for r in args.allow_root],
-                     workspaces=_workspaces(places),
-                     queues={name: p.queues for name, p in places.items()
-                             if p.queues is not None},
-                     server_dirs=permissions["server_dirs"])
+                     roots=[os.path.abspath(r) for r in args.allow_root])
     config = uvicorn.Config(api, host=host, port=args.port)
     redact_token_logs()
     try:
@@ -312,23 +231,12 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 async def _worker(s: Settings, queues: list[str], concurrency: int,
                   lease: float | None = None, snapshot_every: int | None = None, *,
-                  server_dirs: list[str] | None = None, allow_bypass: bool = False) -> None:
+                  allow_bypass: bool = False) -> None:
     from noeta.host.channels import run_channels
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
-    places = _tenants(s)
-    cwd = os.getcwd()
-    problem = _check_isolation(s, cwd, places)
-    # As noeta serve: bypassPermissions refused in the plugin itself, and
-    # the server's directories hidden from other tenants' tasks.
-    permissions: dict[str, Any] = {} if allow_bypass else {"disable_bypass_mode": True}
-    permissions["server_dirs"] = _server_dirs(s, cwd, server_dirs or [])
-    _check_server_dirs(permissions["server_dirs"], places)
-    if problem is not None:
-        permissions["tenant_refusal"] = problem
-    kw["permissions"] = permissions
-    kw["tenants"] = {name: p.allowed for name, p in places.items()}
-    kw["tenant_workspaces"] = _workspaces(places)
+    # As noeta serve: bypassPermissions refused in the plugin itself.
+    kw["permissions"] = {} if allow_bypass else {"disable_bypass_mode": True}
     if snapshot_every is not None:
         kw["snapshot_every"] = snapshot_every
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
@@ -415,8 +323,6 @@ def _main(argv: list[str]) -> None:
         sys.exit(plugin_command.run(args, cwd))
     if args.command == "mcp":
         sys.exit(mcp_command.run(args, cwd))
-    if args.command == "token":
-        sys.exit(tenants.run(args))
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
         if args.server:
@@ -439,7 +345,7 @@ def _main(argv: list[str]) -> None:
         return
     if args.command == "worker":
         asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency,
-                            args.lease, args.snapshot_every, server_dirs=args.server_dir,
+                            args.lease, args.snapshot_every,
                             allow_bypass=args.allow_bypass_permissions))
         return
     if args.command == "serve":

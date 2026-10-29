@@ -1,6 +1,6 @@
 # ADR-014: Tenants are separated at the API; tools need an OS boundary
 
-- Status: accepted
+- Status: superseded by ADR-028
 - Refined by: [ADR-018](018-each-tenant-has-its-own-places-on-disk.md)
   (per-tenant project and temp directories; a workspace is required),
   [ADR-021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md)

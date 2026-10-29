@@ -275,24 +275,6 @@ async def test_a_dead_server_is_dropped_and_reported_once(
     assert "spawn failed" in downs[0].data["reason"]
 
 
-async def test_scopes_partition_connections(store: SqliteStore, pool: McpPool) -> None:
-    def make(scope: str) -> Agent:
-        return Agent(name=f"a-{scope}", model="m",
-                     extensions=[Mcp([server()], pool=pool,
-                                     scope=lambda v: v.state.config.get("tenant"))])
-
-    provider = ScriptedProvider([reply("", ("mcp__fake__pid", {})), reply("ok")] * 3)
-    rt = runtime(store, provider, make("x"))
-    client = Client(store)
-    pids = []
-    for tenant in ("t1", "t1", "t2"):
-        tid = await client.create("a-x", "go", config={"tenant": tenant})
-        await rt.run_until_idle()
-        result = finished(await events(client, tid))[0].result
-        pids.append(result.text)
-    assert pids[0] == pids[1] != pids[2]
-
-
 async def test_a_cross_server_name_clash_drops_the_second_server(
         store: SqliteStore, pool: McpPool) -> None:
     clash = json.dumps([{"name": "b__t", "inputSchema": {"type": "object"}}])
@@ -424,7 +406,7 @@ async def test_a_failed_resolution_leaves_no_entries(monkeypatch: pytest.MonkeyP
     for n in range(5):
         view = TaskView(state=TaskState(task_id=f"t{n}", config={"cwd": "/w"}))
         assert not await ext._resolve(view)
-    assert not ext._known and not ext._scopes and not ext._roots and not ext._refused
+    assert not ext._known and not ext._scopes and not ext._roots
 
 
 def test_the_resource_tools_run_again_after_a_crash() -> None:
@@ -438,3 +420,21 @@ def test_the_resource_tools_run_again_after_a_crash() -> None:
 
     for tool in (ListMcpResourcesTool, ReadMcpResourceTool, ReadMcpResourceDirTool):
         assert getattr(tool, "retry_safe", False) is True, tool
+
+
+async def test_scopes_partition_connections(store: SqliteStore, pool: McpPool) -> None:
+    def make(scope: str) -> Agent:
+        return Agent(name=f"a-{scope}", model="m",
+                     extensions=[Mcp([server()], pool=pool,
+                                     scope=lambda v: v.state.config.get("user"))])
+
+    provider = ScriptedProvider([reply("", ("mcp__fake__pid", {})), reply("ok")] * 3)
+    rt = runtime(store, provider, make("x"))
+    client = Client(store)
+    pids = []
+    for user in ("u1", "u1", "u2"):
+        tid = await client.create("a-x", "go", config={"user": user})
+        await rt.run_until_idle()
+        result = finished(await events(client, tid))[0].result
+        pids.append(result.text)
+    assert pids[0] == pids[1] != pids[2]

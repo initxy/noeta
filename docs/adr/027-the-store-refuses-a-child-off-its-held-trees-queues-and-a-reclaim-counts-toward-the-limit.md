@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-29
+- Refined by: [ADR-028](028-no-tenants-in-noeta.md) (no running limit)
 - Refines: [ADR-024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md)
 
 ## Context
