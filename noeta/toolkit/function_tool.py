@@ -58,6 +58,10 @@ def _schema(hint: Any) -> dict[str, Any]:
 
 
 def _is_context(param: inspect.Parameter, hint: Any) -> bool:
+    """``ToolContext``, ``ToolContext | None``, or an unannotated ``ctx``."""
+    if get_origin(hint) in (Union, types.UnionType):
+        rest = [a for a in get_args(hint) if a is not type(None)]
+        hint = rest[0] if len(rest) == 1 else hint
     return hint is ToolContext or (hint is inspect.Parameter.empty and param.name == "ctx")
 
 
@@ -74,6 +78,9 @@ class _FunctionTool:
         self._context: str | None = None
         properties: dict[str, Any] = {}
         required: list[str] = []
+        #: Positional-only parameters, in order, with their defaults: passed
+        #: by position.
+        self._positional: list[inspect.Parameter] = []
         for param in inspect.signature(fn).parameters.values():
             hint = hints.get(param.name, inspect.Parameter.empty)
             if _is_context(param, hint):
@@ -82,6 +89,8 @@ class _FunctionTool:
             if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
                 continue  # nothing the model names
             properties[param.name] = _schema(hint)
+            if param.kind is param.POSITIONAL_ONLY:
+                self._positional.append(param)
             if param.default is inspect.Parameter.empty:
                 required.append(param.name)
         self.input_schema: dict[str, Any] = {"type": "object", "properties": properties,
@@ -101,12 +110,13 @@ class _FunctionTool:
         kwargs = dict(input)
         if self._context is not None:
             kwargs[self._context] = ctx
+        args = [kwargs.pop(p.name, p.default) for p in self._positional]
         if inspect.iscoroutinefunction(self.fn):
-            result = await self.fn(**kwargs)
+            result = await self.fn(*args, **kwargs)
         else:
             # Off the event loop: a blocking function must not stall every
             # other task of the worker.
-            result = await asyncio.to_thread(self.fn, **kwargs)
+            result = await asyncio.to_thread(self.fn, *args, **kwargs)
             if inspect.isawaitable(result):
                 result = await result
         if isinstance(result, ToolOutput):
