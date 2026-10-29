@@ -811,6 +811,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A sandboxed command can no longer reach into the network relay it runs under.** The
+  relay inside the Linux sandbox (same user, same PID namespace, no system-call filter, and
+  holding the proxies' Unix sockets) was dumpable, so where `kernel.yama.ptrace_scope` is 0 a
+  command could trace it, and under any setting read its `/proc` files. The relay is now not
+  dumpable, and the command's filter refuses `ptrace`, `process_vm_readv`,
+  `process_vm_writev` and `pidfd_getfd` whatever the settings allow.
 - **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
   allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
   `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so
