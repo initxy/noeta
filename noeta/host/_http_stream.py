@@ -18,6 +18,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from noeta.core.errors import UnknownTask
 from noeta.core.types import Delta
+from noeta.host._errors import error_text
 from noeta.host._http_guard import Guard, Refused, scope
 
 _enc = msgspec.json.Encoder()
@@ -142,7 +143,7 @@ class StreamRoutes:
                 raise
             except Exception as exc:  # noqa: BLE001 — the stream must end, not hang
                 log.warning("watch %s failed: %s", task_id, exc)
-                end = {"error": f"{type(exc).__name__}: {exc}"}
+                end = {"error": error_text(exc)}
             queue.put_nowait(b"event: end\ndata: " + _enc.encode(end) + b"\n\n")
 
         async def stream() -> AsyncIterator[bytes]:

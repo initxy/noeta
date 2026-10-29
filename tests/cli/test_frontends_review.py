@@ -283,7 +283,7 @@ class BrokenWatchClient:
 
     async def watch(self, task_id: str, after: int = 0) -> Any:
         yield Recorded(seq=1, at=0, event=TaskCreated(agent="a"))
-        raise RuntimeError("store went away")
+        raise RuntimeError("store went away at /srv/private/t.db")
 
 
 async def test_server_ends_the_stream_when_the_follower_fails() -> None:
@@ -291,7 +291,10 @@ async def test_server_ends_the_stream_when_the_follower_fails() -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://x") as http:
         resp = await asyncio.wait_for(http.get("/tasks/t/watch"), 5)
-    assert b"event: end" in resp.content and b"store went away" in resp.content
+    # The stream ends with an error; a library's text (a server path) stays
+    # in the server's log.
+    assert b"event: end" in resp.content and b'"error"' in resp.content
+    assert b"/srv/private" not in resp.content
 
 
 def _sse(*recs: Recorded, end: bool) -> bytes:

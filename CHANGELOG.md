@@ -872,6 +872,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- The end of a `noeta serve` event stream (`/tasks/{id}/watch`) and stream-json's "lost the
+  task's events" result no longer carry an error's raw text: as for other requests, a client
+  gets the text only of an error noeta raised itself, else a generic message (the server logs
+  the error).
 - A non-default tenant's slash-command listing no longer follows its `.noeta/skills` (or
   `.agents/skills`) linked out of its workspace: it listed the names and descriptions of the
   skills it pointed at, such as another tenant's. A workspace skill directory must resolve
