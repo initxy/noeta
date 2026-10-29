@@ -439,6 +439,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **Without background jobs, `Bash` runs a long leading `sleep`.** `Shell(background=False)`
+  refused it with a message pointing at `Monitor` and `run_in_background`, which that host
+  does not offer; the refusal now applies only where background jobs are offered.
 - **An agent's worktree is not removed under its background command.** An isolated agent
   that ended while a background job it started still ran in its worktree had the
   worktree force-removed under the job (it looked unchanged); it is now kept, and the
