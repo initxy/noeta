@@ -70,6 +70,33 @@ async def test_a_repository_shares_one_memory_across_worktrees(
     assert Path(memory_dir_for(str(h.work), home)).is_dir()
 
 
+async def test_a_tenant_cannot_borrow_another_repositorys_memory(
+        h: Harness, tmp_path: Path) -> None:
+    other = tmp_path / "beta"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    home = tmp_path / "home"
+    theirs = Path(memory_dir_for(str(other), home))
+    theirs.mkdir(parents=True)
+    (theirs / INDEX_FILE).write_text("- [Secret](s.md) — beta's\n")
+    # A .git file naming the other repository makes it this directory's main checkout.
+    (h.work / ".git").write_text(f"gitdir: {other / '.git'}\n")
+    h.client = h.client.scoped("acme")
+    h.provider.add(reply("ok"))
+    await h.start(agent(home))
+    assert all("beta's" not in m.text for m in h.provider.requests[0].messages)
+    assert Path(memory_dir_for(str(h.work), home)).is_dir()
+
+
+async def test_a_tenants_user_scope_agent_memory_stays_in_its_workspace(
+        h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    h.client = h.client.scoped("acme")
+    h.provider.add(reply("ok"))
+    await h.start(agent(home, agent_scope="user", agent_name="rev"))
+    assert Path(f"{h.work}/.noeta/agent-memory/rev/").is_dir()
+    assert not (home / "agent-memory").exists()
+
+
 async def test_memory_md_is_loaded(h: Harness, tmp_path: Path) -> None:
     home = tmp_path / "home"
     directory = Path(memory_dir_for(str(h.work), home))

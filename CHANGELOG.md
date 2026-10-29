@@ -570,6 +570,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   actually opened for a read and the opened directory a write lands in, and `noeta serve` /
   `noeta worker` give every non-default tenant's task such an env, so a symlink swapped by a
   background command between the permission check and the read cannot redirect it.
+- A non-default tenant's task shares a repository's memory only with a main checkout that
+  holds its working directory, and keeps an agent's `user`-scope memory in
+  `.noeta/agent-memory/` of its working directory. Before, a `.git` file naming another
+  tenant's repository loaded that tenant's `MEMORY.md`, and `~/.noeta/agent-memory/` was
+  shared by every tenant.
 - `~/.noeta/server-token` keeps only the server token's SHA-256, like tenant tokens; the token
   is printed once, when made (`noeta serve` no longer prints it on every start). A file an
   older noeta left holding the token itself is rewritten to its digest on the next start,
