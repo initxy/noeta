@@ -445,6 +445,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - **`ExitWorktree` says when the branch was kept.** It reported the worktree's branch
   deleted even when `git branch -D` refused; it now says the worktree was removed and the
   branch kept, with git's reason.
+- **`ToolSearch`'s `+word` filters on tool names only.** It also kept tools whose
+  description held the word, which its description (and Claude Code's) rule out.
 - **Front ends attached to a server work without a local model.** `noeta --server URL`
   exited with "no model configured" unless this machine named one, and its new tasks (and
   `noeta acp --server`'s) carried this machine's directory, which the server refuses (403
