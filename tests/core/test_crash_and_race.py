@@ -235,6 +235,48 @@ async def test_a_claims_local_deadline_counts_from_before_it_was_asked_for(
         await store.close()
 
 
+class ClaimCommitUnknown(SqliteStore):
+    """The first claim commits, then its outcome is reported unknown (the
+    connection dropped during ``COMMIT``)."""
+
+    fail = 1
+
+    async def claim(self, *args: Any, **kw: Any) -> Claim | None:
+        claim = await super().claim(*args, **kw)
+        if self.fail:
+            self.fail -= 1
+            from noeta.core.errors import CommitUnknown
+
+            raise CommitUnknown("connection lost during COMMIT")
+        return claim
+
+
+async def test_a_claim_whose_commit_landed_unseen_is_adopted(tmp_path: Path) -> None:
+    """The task is this worker's in the store: it runs now, not after its
+    lease ran out. A task this worker already runs is not adopted twice."""
+    from noeta.testing import ScriptedProvider, reply
+
+    store = ClaimCommitUnknown(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("done")])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: provider, env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                 lease_seconds=60)
+    try:
+        client = Client(store)
+        tid = await client.create("a", "go")
+        assert await rt.run_once()
+        row = await client.get(tid)
+        assert row.status == "waiting" and provider.requests
+        rt._running.add("busy")
+        await store.create(NewTask(task_id="busy", created=TaskCreated(agent="a")))
+        claim = await SqliteStore.claim(store, rt.worker, ["default"], 60)
+        assert claim is not None and claim.task_id == "busy"
+        store.fail = 1
+        assert await rt._claim_once() is None
+    finally:
+        await store.close()
+
+
 async def test_a_task_whose_log_cannot_be_read_ends_failed_after_a_few_claims(
         tmp_path: Path) -> None:
     """A log no worker can read or fold is not claimed forever: after a few

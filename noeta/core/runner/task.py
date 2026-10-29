@@ -127,6 +127,9 @@ class TaskRun:
         #: An extension posted to this task's inbox with its records
         #: (``TaskView.enqueue``) since the input was last taken.
         self._enqueued = False
+        #: The timers due by the store's clock were fired in this claim
+        #: (``_woken_by_timer``).
+        self._timer_forced = False
         self.snapshots = SnapshotWriter(self)
 
     # ------------------------------------------------------------ lifecycle
@@ -659,7 +662,12 @@ class TaskRun:
             if self.state.turn_error:
                 detail = {"turn_failed": self.state.turn_error}
             due = timers.next_timer(self.state)
-            await self.append([Waiting(on="input", detail=detail, until=due)])
+            waiting = Waiting(on="input", detail=detail, until=due)
+            if await self._woken_by_timer(waiting):
+                assert due is not None
+                await timers.fire_timers(self, now=due)
+                return True
+            await self.append([waiting])
             return False
         if isinstance(action, decide.Interrupted):
             from noeta.core.runner.calls import recover_calls
@@ -692,6 +700,21 @@ class TaskRun:
         if isinstance(action, decide.RunCalls):
             return await self._guarded(run_calls(self, action.call_ids))
         return await self._guarded(call_model(self, final=isinstance(action, decide.FinalReport)))
+
+    async def _woken_by_timer(self, waiting: Waiting) -> bool:
+        """Whether the log ends with this very ``waiting`` (nothing happened
+        since), so the store woke the task for its ``until`` by the store's
+        clock, which this worker's may lag. Writing it again would leave
+        the task claimable at once, again and again; once per claim the
+        timers due by then fire instead."""
+        if (waiting.until is None or self._timer_forced or self.state.waiting != waiting
+                or self.state.last_seq < 1):
+            return False
+        last = await self.store.read(self.task_id, after=self.state.last_seq - 1)
+        if not last or last[-1].seq != self.state.last_seq or last[-1].event != waiting:
+            return False
+        self._timer_forced = True
+        return True
 
     async def _guarded(self, coro: Any) -> bool:
         """Run a step so a cancel posted mid-step (or a lost claim) can

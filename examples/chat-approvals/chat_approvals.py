@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from noeta import Extension, TaskView
-from noeta.core.channel import Channel
+from noeta.core.channel import Channel, current_task
 from noeta.core.client import ClientAPI
 from noeta.core.events import Recorded, Waiting
 
@@ -36,7 +36,10 @@ class ChatApprovals(Channel):
             return 400
         if body["sender"] not in self.allowed:
             return 403
-        task_id = "chat-" + hashlib.sha256(body["thread"].encode()).hexdigest()[:24]
+        task_id = await current_task(
+            client, "chat-" + hashlib.sha256(body["thread"].encode()).hexdigest()[:24])
+        if task_id is None:
+            return 404
         await client.answer(task_id, body["call_id"], body["verdict"])  # only chat tasks
         return 200
 

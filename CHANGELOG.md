@@ -467,6 +467,23 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A claim whose commit landed unseen runs at once.** When the connection dropped during
+  a claim's `COMMIT` (`CommitUnknown` on Postgres) the worker only logged it; if the claim had
+  landed, the task sat `running` until its lease ran out. The worker now asks the store for
+  the tasks it owns but does not run and takes one up. For store authors: `Store.tasks` takes
+  `owner=` (the worker holding the claim).
+- **A channel's thread outlives its task.** `deliver` posted every later message of a thread
+  into its task even after the task ended (failed, cancelled, or a one-shot agent's), where
+  nobody read it. Once the task ended, the next message starts a continuation (`<id>.2`,
+  `<id>.3`, ...) from the previous task's conversation; `deliver` returns the id it posted to,
+  and `noeta.core.channel.current_task` names the thread's task now (the `chat-approvals`
+  example answers there).
+- **A worker whose clock is behind the store's no longer spins on a timer.** The store
+  wakes a waiting task when its timer is due by the store's clock (the database's on
+  Postgres); a worker running behind found the timer not yet due and wrote the same
+  `Waiting` again, which left the task claimable at once, over and over until its own clock
+  caught up. A task whose log still ends with that exact `Waiting` now fires the timers due
+  by then.
 - **A blocked prompt never reaches memory recall.** With a `recall_model`, the memory plugin
   asked the recall model about a message when it arrived, before `UserPromptSubmit` checked
   it, and the recalled memory stayed in the conversation after the erase. Recall now runs

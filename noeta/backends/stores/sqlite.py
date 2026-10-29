@@ -547,6 +547,7 @@ class SqliteStore:
         status: Status | None = None,
         limit: int = 100,
         tenant: str | None = None,
+        owner: str | None = None,
     ) -> list[TaskRow]:
         where, args = [], []
         if parent_id is not None:
@@ -558,6 +559,9 @@ class SqliteStore:
         if status is not None:
             where.append("status = ?")
             args.append(status)
+        if owner is not None:
+            where.append("owner = ?")
+            args.append(owner)
         sql = f"SELECT {TASK_COLUMNS} FROM tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)

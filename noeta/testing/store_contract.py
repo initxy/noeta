@@ -62,6 +62,17 @@ async def test_a_task_row_carries_its_tenant_and_lists_filter_by_it(store: Store
     assert {r.task_id for r in await store.tasks()} == {"plain", "theirs"}
 
 
+async def test_lists_filter_by_the_claims_owner(store: Store) -> None:
+    await store.create(new("a"))
+    await store.create(new("b"))
+    first = await store.claim("w1", ["default"], 30)
+    second = await store.claim("w2", ["default"], 30)
+    assert first is not None and second is not None
+    [mine] = await store.tasks(owner="w1", status="running")
+    assert (mine.task_id, mine.owner_epoch) == (first.task_id, first.epoch)
+    assert await store.tasks(owner="w3") == []
+
+
 def _of(tenant: str, task_id: str) -> NewTask:
     return NewTask(task_id=task_id, created=TaskCreated(agent="a", tenant=tenant))
 

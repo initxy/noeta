@@ -541,6 +541,7 @@ class PostgresStore:
         status: Status | None = None,
         limit: int = 100,
         tenant: str | None = None,
+        owner: str | None = None,
     ) -> list[TaskRow]:
         where: list[str] = []
         args: list[Any] = []
@@ -553,6 +554,9 @@ class PostgresStore:
         if status is not None:
             where.append("status = %s")
             args.append(status)
+        if owner is not None:
+            where.append("owner = %s")
+            args.append(owner)
         sql = f"SELECT {TASK_COLUMNS} FROM {{s}}.tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)
