@@ -24,7 +24,8 @@ from noeta.core.types import ToolUse
 from noeta.testing import ScriptedProvider, reply
 
 HERE = Path(__file__).parents[1]
-REPLY_URL = "https://chat.example/reply"
+TOKEN = "hook-token-s3cret"
+REPLY_URL = f"https://chat.example/hooks/{TOKEN}"
 
 
 @function_tool
@@ -44,9 +45,8 @@ class AskFirst(Extension):
 async def test_a_chat_thread_runs_a_task_with_approvals_through_the_chat(tmp_path: Path) -> None:
     sent = respx.post(REPLY_URL).mock(return_value=httpx.Response(200))
     registry.load_plugin_files([HERE])
-    bridge = registry.load(registry.CHANNELS, "chat_bridge")(
-        allow_senders=["alice"], reply_url=REPLY_URL)
-    relay = registry.load(registry.PLUGINS, "chat_reply")()
+    bridge = registry.load(registry.CHANNELS, "chat_bridge")(allow_senders=["alice"])
+    relay = registry.load(registry.PLUGINS, "chat_reply")(url=REPLY_URL)
     agent = Agent(name="main", model="m", extensions=(relay, AskFirst(), ToolSet([Deploy])))
     provider = ScriptedProvider([reply("", ("Deploy", {"env": "prod"})), reply("done: prod")])
     store = SqliteStore(str(tmp_path / "t.db"))
@@ -75,6 +75,8 @@ async def test_a_chat_thread_runs_a_task_with_approvals_through_the_chat(tmp_pat
     assert [json.loads(c.request.content)["text"] for c in sent.calls][1:] == ["done: prod"]
     await rt.run_until_idle()
     assert len(sent.calls) == 2  # nothing relayed twice
+    log = [r.event for r in await replicas[0].events(row.task_id)]
+    assert TOKEN not in repr(log)  # the reply URL's token never enters the task log
     await store.close()
 
 

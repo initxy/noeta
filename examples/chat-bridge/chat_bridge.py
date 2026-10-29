@@ -24,14 +24,14 @@ VERDICT = re.compile(r"^\s*(yes|no)\s+(\S+)\s*$", re.I)
 
 
 class ChatBridge(Channel):
-    """``allow_senders``: sender ids let in (never room ids); ``reply_url``:
-    where the chat app takes replies; ``agent``, ``host``, ``port``."""
+    """``allow_senders``: sender ids let in (never room ids); ``agent``,
+    ``host``, ``port``."""
 
     name = "chat_bridge"
 
-    def __init__(self, allow_senders: Sequence[str] = (), reply_url: str = "",
-                 agent: str = "main", host: str = "127.0.0.1", port: int = 8788) -> None:
-        self.allowed, self.reply_url, self.agent = set(allow_senders), reply_url, agent
+    def __init__(self, allow_senders: Sequence[str] = (), agent: str = "main",
+                 host: str = "127.0.0.1", port: int = 8788) -> None:
+        self.allowed, self.agent = set(allow_senders), agent
         self.host, self.port = host, port
 
     async def receive(self, client: ClientAPI, body: dict[str, Any]) -> int:
@@ -46,7 +46,7 @@ class ChatBridge(Channel):
         await deliver(client, task_id=task_id, agent=self.agent,
                       message=framed("chat", body["sender"], body["text"]),
                       dedupe_key=f"chat:{body['delivery_id']}",
-                      config={"chat_reply": {"url": self.reply_url, "thread": body["thread"]}})
+                      config={"chat_reply": {"thread": body["thread"]}})
         return 200
 
     async def run(self, client: ClientAPI, stop: asyncio.Event) -> None:
@@ -69,10 +69,15 @@ class ChatBridge(Channel):
 
 class ChatReply(Extension):
     """In the task: post the answer, or an approval prompt, back to the
-    thread; what was relayed is recorded, so a resumed task never repeats it."""
+    thread; what was relayed is recorded, so a resumed task never repeats it.
+    ``url`` (where the chat app takes replies, often holding a token) is a
+    plugin argument, never task config: the task log keeps only the thread."""
 
     name = "chat_reply"
     add_to = ("main",)
+
+    def __init__(self, url: str = "") -> None:
+        self.url = url
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return data["seq"] if kind == "relayed" else state
@@ -91,5 +96,5 @@ class ChatReply(Extension):
         else:
             return
         async with httpx.AsyncClient(timeout=10) as http:
-            await http.post(target["url"], json={"thread": target["thread"], "text": text})
+            await http.post(self.url, json={"thread": target["thread"], "text": text})
         view.record(self.name, "relayed", {"seq": recorded.seq})
