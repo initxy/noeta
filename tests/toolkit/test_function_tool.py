@@ -72,7 +72,8 @@ async def test_the_model_calls_it(tmp_path: Path) -> None:
     tid = await client.create("a", "go", task_id="t1")
     await rt.run_until_idle()
     results = sorted((r.event.result for r in await client.events(tid)
-                      if isinstance(r.event, ToolFinished)), key=lambda r: r.call_id)
+                      if isinstance(r.event, ToolFinished)),
+                     key=lambda r: int(r.call_id.rsplit("_", 1)[1]))
     assert [r.text for r in results] == [
         "5", "add: missing a", '{"kind": "task", "id": "t1", "tags": []}']
     assert [r.is_error for r in results] == [False, True, False]
