@@ -37,6 +37,24 @@ and reported in the README.
 
 ## Decisions
 
+- **Instruction re-read trigger (B8).** CC: re-reads instruction files on `--continue`/resume
+  and puts the changed ones before the resumed prompt. pi: re-reads only on `/reload`. dsh:
+  announces updated nested files ("Updated instructions from:"). noeta: re-reads the files shown
+  so far with every new message and shows the changed ones after that message. Why: a durable
+  task has no resume moment (it sleeps between messages and may wake on another worker), and a
+  note for a message lands after it in the append-only log. Evidence: zero tokens when nothing
+  changed (digest compare); `parity/deviations.md` row; test
+  `test_a_changed_instruction_file_is_shown_again_with_the_next_message`.
+- **List-change notes (T2, B7) are a subset of CC's.** CC's deferred-tools delta also covers
+  restored/retracted tool definitions, a denied-tool lead and needs-auth servers, and compresses
+  long name lists; noeta tells joined, returned and removed names, and MCP server instructions
+  joined/changed/removed. Why: the rest belongs to CC features noeta does not have (definition
+  retraction, the auth-stub listing is already a tool), per "no features beyond CC's". The MCP
+  instructions cap of 2,048 characters is CC's truncation shape ("… [truncated]"); its exact
+  number was not read from the bundle (the constant is imported across modules), so it is the
+  value CC uses for MCP descriptions — check it when the next recording has a server with long
+  instructions.
+
 ## Plan
 
 ### Phase 0: baseline
