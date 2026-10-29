@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -97,7 +98,7 @@ async def test_background_launch_and_end_notice(h: Harness) -> None:
     assert not out.is_error
     job_id = out.meta["job_id"]
     assert re.fullmatch(r"[a-z0-9]{9}", job_id)
-    path = str(h.tmp.parent / "logs" / f"{job_id}.output")
+    path = str(h.tmp.parent / "logs" / f"w{os.getpid()}" / f"{job_id}.output")
     assert text(out).startswith(
         f"Started in the background with ID {job_id}; its output is written to {path}. "
         "You will be notified when it finishes")
@@ -274,14 +275,14 @@ async def test_a_foreground_command_ends_quietly_and_leaves_nothing(h: Harness) 
     assert failed.is_error and text(failed) == "Exit code 4\nno"
     await asyncio.sleep(0.05)
     assert h.posts == [] and h.registry.jobs == {}
-    assert list((h.tmp.parent / "logs").iterdir()) == []
+    assert list((h.tmp.parent / "logs" / f"w{os.getpid()}").iterdir()) == []
 
 
 async def test_a_timeout_moves_the_command_to_the_background(h: Harness) -> None:
     out = await h.call("Bash", command="echo started; sleep 2; echo done", timeout=1000)
     assert not out.is_error
     job_id = out.meta["job_id"]
-    path = str(h.tmp.parent / "logs" / f"{job_id}.output")
+    path = str(h.tmp.parent / "logs" / f"w{os.getpid()}" / f"{job_id}.output")
     first, _, rest = text(out).partition("\n")
     assert first == "started"
     assert rest.startswith(

@@ -205,10 +205,28 @@ async def test_logs_go_to_a_private_per_user_directory(
     assert isinstance(job, Job)
     await asyncio.wait_for(job.done.wait(), 10)
     logs = runtime / f"noeta-background-{os.getuid()}"
-    assert Path(job.out_path).parent == logs
+    # One directory per worker process inside it.
+    assert Path(job.out_path).parent == logs / f"w{os.getpid()}"
     assert stat.S_IMODE(logs.stat().st_mode) == 0o700
     assert stat.S_IMODE(Path(job.out_path).stat().st_mode) == 0o600
     assert Path(job.out_path).read_text() == "secret\n\n[exited with code 0]\n"
+
+
+async def test_a_new_worker_removes_the_logs_of_dead_workers(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    dead = await asyncio.create_subprocess_exec("true")
+    await dead.wait()
+    for pid in (dead.pid, os.getppid()):
+        (logs / f"w{pid}").mkdir(parents=True)
+        (logs / f"w{pid}" / "abc.output").write_text("old")
+    (logs / "unrelated").mkdir()
+    job = await _spawn(Registry(log_dir=str(logs)), tmp_path)
+    assert isinstance(job, Job)
+    await asyncio.wait_for(job.done.wait(), 10)
+    assert not (logs / f"w{dead.pid}").exists()
+    # A live worker's logs, and what noeta did not make, stay.
+    assert (logs / f"w{os.getppid()}" / "abc.output").exists() and (logs / "unrelated").exists()
+    assert Path(job.out_path).parent == logs / f"w{os.getpid()}"
 
 
 async def test_a_planted_log_directory_is_refused(

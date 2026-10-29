@@ -37,7 +37,9 @@ under the temp directory on disk (``$TMPDIR``, else ``/var/tmp``, else
 ``/tmp``; never the RAM-backed ``$XDG_RUNTIME_DIR``), in
 ``noeta-background-<uid>``, created 0700; a directory that already exists
 must be a real directory owned by the user (else launches are refused). Log
-files are created 0600. A job's output reaches its log through a pipe that
+files are created 0600, in a directory of the worker process's own
+(``w<pid>``); a worker on this machine removes those of workers that are
+gone when it first prepares the directory. A job's output reaches its log through a pipe that
 keeps the first ``log_max_bytes`` (:data:`DEFAULT_LOG_MAX_BYTES`), then a
 line saying the rest was not kept, and drains the rest, so the command runs
 on unharmed.
@@ -51,8 +53,10 @@ import contextlib
 import logging
 import os
 import posixpath
+import re
 import secrets
 import shlex
+import shutil
 import socket
 import string
 import weakref
@@ -146,7 +150,8 @@ JOB_ENDED = "shell_job_ended"
 
 #: Makes (or checks) the log directory: ``$1`` an explicit directory, else
 #: ``<temp>/noeta-background-<uid>``, ``<temp>`` the first usable of ``$2``,
-#: ``$TMPDIR``, ``/var/tmp`` and ``/tmp``. Prints the directory.
+#: ``$TMPDIR``, ``/var/tmp`` and ``/tmp``; in it, this worker's own directory
+#: ``$3``. Prints that one.
 _PREPARE_DIR = r"""
 d=$1
 if [ -z "$d" ]; then
@@ -161,7 +166,9 @@ if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then
   echo "refusing $d: not a directory owned by the current user" >&2; exit 4
 fi
 chmod 700 -- "$d" || exit 5
-printf '%s' "$d"
+if [ ! -e "$d/$3" ]; then mkdir -m 700 -- "$d/$3" || exit 6; fi
+if [ -L "$d/$3" ] || [ ! -d "$d/$3" ]; then echo "refusing $d/$3: not a directory" >&2; exit 4; fi
+printf '%s' "$d/$3"
 """
 
 
@@ -219,6 +226,34 @@ class Job:
     outbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
 
+_WORKER_DIR_NAME = re.compile(r"w([0-9]+)")
+
+
+def _worker_dir() -> str:
+    """This worker process's own directory inside the log directory (asked
+    each time: a forked worker is a process of its own)."""
+    return f"w{os.getpid()}"
+
+
+def _remove_dead_workers(logs: str) -> None:
+    """Remove the directories of worker processes on this machine that are
+    gone (``w<pid>`` inside ``logs``); a pid that answers is kept."""
+    with contextlib.suppress(OSError), os.scandir(logs) as entries:
+        for entry in entries:
+            found = _WORKER_DIR_NAME.fullmatch(entry.name)
+            if found is None or entry.name == _worker_dir() \
+                    or not entry.is_dir(follow_symlinks=False):
+                continue
+            try:
+                os.kill(int(found.group(1)), 0)
+                continue
+            except ProcessLookupError:
+                pass
+            except (OSError, OverflowError):
+                continue
+            shutil.rmtree(entry.path, ignore_errors=True)
+
+
 def _touch(paths: Sequence[str]) -> None:
     for path in paths:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
@@ -268,12 +303,15 @@ class Registry:
             return known
         # The env's own variables may be scrubbed: on this machine, ours.
         base = (os.environ.get("TMPDIR") or "") if is_local(env) else ""
-        result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", self.log_dir, base],
-                               timeout=10, output_cap=8192)
+        result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", self.log_dir, base,
+                                _worker_dir()], timeout=10, output_cap=8192)
         if result.exit_code != 0:
             raise OSError(result.stderr.decode("utf-8", "replace").strip()
                           or "could not prepare the background log directory")
         path = result.stdout.decode("utf-8", "replace")
+        if is_local(env):
+            # A worker that died left its jobs' logs: nobody reads them now.
+            await asyncio.to_thread(_remove_dead_workers, posixpath.dirname(path))
         with contextlib.suppress(TypeError):
             self._dirs[env] = path
         return path
