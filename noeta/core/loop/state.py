@@ -282,12 +282,8 @@ def _on_tool_finished(state: TaskState, ev: ToolFinished, seq: int) -> None:
         state.notes.append(ev.note)
     if state.calls and not state.open_calls:
         results = [c.result for c in state.calls if c.result is not None]
-        content: list[Any] = list(results)
-        if any(isinstance(b, ToolReference) for r in results for b in r.content):
-            content.append(Text(text=TOOL_LOADED_TEXT))
-        content += [Text(text=n) for n in dict.fromkeys(state.notes)]
+        state._add(_results_message(results, state.notes), seq)
         state.notes = []
-        state._add(Message(role="user", content=content), seq)
         state.calls = []
         state.held_unseen = state.held_unseen or bool(state.held)
         for m in state.held:
@@ -297,6 +293,16 @@ def _on_tool_finished(state: TaskState, ev: ToolFinished, seq: int) -> None:
             state.answer_parts = [state.end_turn]
             state.end_turn = None
             _close_turn(state, seq)
+
+
+def _results_message(results: Sequence[ToolResult], notes: Sequence[str] = ()) -> Message:
+    """The user message answering a batch of calls: their results, the
+    marker that follows a loaded tool, then each note once."""
+    content: list[Any] = list(results)
+    if any(isinstance(b, ToolReference) for r in results for b in r.content):
+        content.append(Text(text=TOOL_LOADED_TEXT))
+    content += [Text(text=n) for n in dict.fromkeys(notes)]
+    return Message(role="user", content=content)
 
 
 def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> None:
@@ -382,10 +388,7 @@ def continued(state: TaskState,
     if state.calls:
         results = [c.result or ToolResult(call_id=c.use.id, content=[Text(text=CONTINUED_CALL)],
                                           is_error=True) for c in state.calls]
-        content: list[Any] = list(results)
-        if any(isinstance(b, ToolReference) for r in results for b in r.content):
-            content.append(Text(text=TOOL_LOADED_TEXT))
-        out._add(Message(role="user", content=content), 0)
+        out._add(_results_message(results), 0)
     for m in state.held:
         out._add(m, 0)
     return out
