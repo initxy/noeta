@@ -404,6 +404,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **Crash recovery no longer removes another agent's worktree.** An isolated agent's
+  worktree was named after the last characters of the call id, which is unique only within
+  its task, so a crashed call's recovery could force-remove the worktree of another task or
+  session in the same repository. The name now comes from a hash of the task id and the call
+  id, and recovery keeps a worktree holding uncommitted files or commits.
 - **A sub-agent that cannot hand back reports with its final message.** In auto mode the
   caller expected `SubagentHandback` from every sub-agent, so one whose agent definition lacks
   the subtasks plugin, or whose tool list leaves the tool out, came back as "no report"

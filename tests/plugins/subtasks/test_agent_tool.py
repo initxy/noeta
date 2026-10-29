@@ -551,6 +551,49 @@ async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: P
     assert await tool.recover(args, ctx) is None
 
 
+def _repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    return repo
+
+
+async def test_recovery_leaves_another_tasks_worktree_with_the_same_call_id(
+        tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+
+    def tool_ctx(task_id: str) -> tuple[AgentTool, ToolContext]:
+        state = TaskState(task_id=task_id, agent="main", config={"cwd": str(repo)})
+        return (AgentTool(Subtasks(ROSTER), state, {s.name: s for s in ROSTER}),
+                ToolContext(task_id=task_id, call_id="call_3_0", env=LocalExecEnv(str(repo)),
+                            state={}, record=lambda *_: None))
+    args = {"description": "d", "prompt": "p", "isolation": "worktree"}
+    _, ctx_a = tool_ctx("task-a")
+    tool_b, ctx_b = tool_ctx("task-b")
+    tree = await make_agent_worktree(ctx_a, {"cwd": str(repo)})
+    assert isinstance(tree, dict)
+    other = await make_agent_worktree(ctx_b, {"cwd": str(repo)})
+    assert isinstance(other, dict) and other["path"] != tree["path"]
+    subprocess.run(["git", "worktree", "remove", other["path"]], cwd=repo, check=True)
+    await tool_b.recover(args, ctx_b)  # task b's crashed call left nothing behind
+    assert Path(tree["path"]).exists()
+
+
+async def test_recovery_keeps_a_worktree_with_unsaved_work(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    state = TaskState(task_id="t", agent="main", config={"cwd": str(repo)})
+    tool = AgentTool(Subtasks(ROSTER), state, {s.name: s for s in ROSTER})
+    ctx = ToolContext(task_id="t", call_id="toolu_crash2", env=LocalExecEnv(str(repo)),
+                      state={}, record=lambda *_: None)
+    tree = await make_agent_worktree(ctx, {"cwd": str(repo)})
+    assert isinstance(tree, dict)
+    (Path(tree["path"]) / "notes.txt").write_text("work")
+    await tool.recover({"description": "d", "prompt": "p", "isolation": "worktree"}, ctx)
+    assert (Path(tree["path"]) / "notes.txt").exists()
+
+
 async def test_resuming_a_worktree_agent_whose_worktree_is_gone(store: SqliteStore,
                                                                tmp_path: Path) -> None:
     repo = tmp_path / "repo"
