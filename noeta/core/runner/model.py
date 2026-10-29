@@ -13,7 +13,7 @@ from noeta.core.events import ModelCalled, ModelReplied
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
 from noeta.core.retry import complete_with_retries
-from noeta.core.runner import texts
+from noeta.core.runner import closing, texts
 from noeta.core.types import (
     Delta,
     Message,
@@ -105,7 +105,8 @@ def _final_answer(run: TaskRun, response: ModelResponse) -> ModelResponse:
 
 async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
-        return await run.fail_turn(texts.LLM_ERROR, "the model call kept being interrupted")
+        return await closing.fail_turn(run, texts.LLM_ERROR,
+                                       "the model call kept being interrupted")
     view = run.view()
     request = build_model_request(run, final=final)
     try:
@@ -118,7 +119,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         await run.flush(view)
     except TurnFailed as exc:
         await run.flush(view)
-        return await run.fail_turn(exc.reason, exc.detail)
+        return await closing.fail_turn(run, exc.reason, exc.detail)
     except TurnDone:
         await run.flush(view)
         await run.append([records.event(records.TurnDone())])
@@ -128,7 +129,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
         return True  # the next boundary builds the request from the new state
     refusal = await run.rt.budget_refusal(run.state.tenant)
     if refusal is not None:
-        return await run.fail_turn(texts.BUDGET_SPENT, refusal)
+        return await closing.fail_turn(run, texts.BUDGET_SPENT, refusal)
     await run.append([ModelCalled(model=request.model, request_hash=request_hash(request),
                                   attempt=run.state.model_attempts + 1)])
 
@@ -169,11 +170,11 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
                     return True  # room was made; the next boundary calls again
         except TurnFailed as failed:
             await run.flush(overflow_view)
-            return await run.fail_turn(failed.reason, failed.detail)
-        return await run.fail_turn(texts.CONTEXT_OVERFLOW, _detail(exc))
+            return await closing.fail_turn(run, failed.reason, failed.detail)
+        return await closing.fail_turn(run, texts.CONTEXT_OVERFLOW, _detail(exc))
     except ModelError as exc:
         await asyncio.gather(*pending, return_exceptions=True)
-        return await run.fail_turn(texts.LLM_ERROR, _detail(exc))
+        return await closing.fail_turn(run, texts.LLM_ERROR, _detail(exc))
     await asyncio.gather(*pending, return_exceptions=True)
     run.partial, run.thinking = [], []
 
@@ -183,9 +184,9 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if response.stop_reason == "max_tokens" and _empty(message):
         # Cut while still reasoning: nothing to record (an empty assistant
         # turn is a provider 400 on every later request).
-        return await run.continue_after_cap(thinking_only=True)
+        return await closing.continue_after_cap(run, thinking_only=True)
     if _empty(message):
-        return await run.fail_turn(texts.LLM_EMPTY_RESPONSE,
+        return await closing.fail_turn(run, texts.LLM_EMPTY_RESPONSE,
                                    f"the model returned no text and no tool call "
                                    f"(stop: {response.stop_reason})")
     response = unique_call_ids(run.state, response, run.state.last_seq + 1)

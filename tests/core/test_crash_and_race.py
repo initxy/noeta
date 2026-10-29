@@ -278,16 +278,17 @@ async def test_a_failure_after_the_log_loaded_is_not_an_unreadable_log(
     """Failing the turn can itself fail (a store hiccup, a bug in an end
     hook); the log read fine, so the task is not ended ``unreadable_log``
     however often that happens."""
+    from noeta.core.runner import closing
     from noeta.core.runner.task import LOAD_ATTEMPTS, TaskRun
 
     async def broken_step(self: TaskRun) -> bool:
         raise RuntimeError("a bug in a step")
 
-    async def broken_fail_turn(self: TaskRun, reason: str, detail: str = "") -> bool:
+    async def broken_fail_turn(run: TaskRun, reason: str, detail: str = "") -> bool:
         raise RuntimeError("failing the turn broke too")
 
     monkeypatch.setattr(TaskRun, "_step_once", broken_step)
-    monkeypatch.setattr(TaskRun, "fail_turn", broken_fail_turn)
+    monkeypatch.setattr(closing, "fail_turn", broken_fail_turn)
     store = SqliteStore(str(tmp_path / "t.db"))
     rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
                  provider_for=lambda _m: None, lease_seconds=0.1)  # type: ignore[arg-type,return-value]
