@@ -232,3 +232,11 @@ async def test_a_blocked_prompts_recall_is_dropped_whatever_the_plugin_order(
     await h.say(a, tid, "vault please")
     main = h.provider.requests[-1]
     assert [m for m in main.messages if m.origin == "memory" and "1234" in m.text]
+
+
+def test_the_selector_is_sparing_with_broad_memories() -> None:
+    from noeta.plugins.memory.extension import RECALL_PROMPT
+    # Claude Code's selector rule: match the subject, not shared words, and
+    # be most careful with the user-profile and project-overview memories.
+    assert "[user]" in RECALL_PROMPT and "[project]" in RECALL_PROMPT
+    assert "not by words it happens to share" in RECALL_PROMPT

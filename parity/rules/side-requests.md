@@ -101,3 +101,14 @@ Rows tagged **s1 only** were seen only for the OAuth subscriber and are not part
 | side.suggest.4 | Never suggest: evaluations or thanks, questions, assistant-voice phrases, new ideas the user did not raise, more than one sentence. Prefer specific over generic. |
 | side.suggest.5 | Stay silent when the next step is not obvious, after an error or misunderstanding, or when a suggestion could touch anything sensitive or unsafe (including security work). |
 | side.suggest.6 | Output: 2–12 words in the user's style, or nothing; the suggestion only, no quotes or explanation. |
+
+## Memory recall (`side.recall`) — bundle, not recorded
+
+The baseline's memory directory was empty, so no selector call appears in the recordings; these
+rows come from the 2.1.312 bundle. noeta's counterpart is `noeta/plugins/memory` (off unless a
+`recall_model` is set).
+
+| id | rule |
+|---|---|
+| side.recall.1 | Selector: a system prompt, the memory files listed one per line (type, name, date, description), `max_tokens` 512, a JSON schema `{selected_memories: [string]}`, at most five files; files already recalled are not offered again. noeta today: covered. |
+| side.recall.2 | The selector picks by what the message is about, not by shared words, and is most careful with the broad user-profile and project-overview memories. noeta today: covered (`memory/recall`, our words). |
