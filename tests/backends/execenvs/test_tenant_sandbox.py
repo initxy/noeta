@@ -502,9 +502,10 @@ async def test_a_tenants_command_cannot_open_a_unix_socket_the_operator_allows(
              "print(\"UNIX-OPENED\")'; echo PROBED; unshare -U true && echo USERNS-MADE")
     tenant = env_for(_state("acme", p.mine))
     assert isinstance(tenant, LocalExecEnv)
-    out = await _out(tenant, probe)
-    assert "PROBED" in out
-    assert "UNIX-OPENED" not in out and "USERNS-MADE" not in out
+    # Whole lines: a traceback quotes the probe's source, print() included.
+    lines = (await _out(tenant, probe)).splitlines()
+    assert "PROBED" in lines
+    assert "UNIX-OPENED" not in lines and "USERNS-MADE" not in lines
     default = env_for(_state("default", p.mine))
     assert isinstance(default, LocalExecEnv)
-    assert "UNIX-OPENED" in await _out(default, probe)
+    assert "UNIX-OPENED" in (await _out(default, probe)).splitlines()
