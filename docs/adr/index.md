@@ -39,8 +39,10 @@ and describe a different codebase.
 - [007](007-tenants.md) Tasks belong to a tenant; a server token selects it and nothing crosses it
   (refined by 014, 019)
 - [014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md) Tenants are separated at the API; tools need an OS boundary
-  (refined by 018)
+  (refined by 018, 021)
 - [018](018-each-tenant-has-its-own-places-on-disk.md) Each tenant has its own places on disk, and a workspace it must be given
+  (refined by 021)
+- [021](021-a-tenant-reads-all-but-a-protected-set-and-writes-only-its-own-places.md) A tenant reads all but a protected set and writes only its own places
 - [019](019-tenant-limits-are-enforced-by-the-kernel.md) Tenant limits and providers are enforced by the kernel
 - [008](008-sandbox-protected-path-placeholders.md) The sandbox keeps code-running paths read-only and covers missing ones with placeholders
 - [009](009-serve-requires-a-token.md) The HTTP API always requires a bearer token

@@ -105,7 +105,7 @@ servers and runs on many machines.
 - D15 The server token is kept as `sha256:<hex>` in `~/.noeta/server-token` and printed only
   when made (or when an older plain-text file is migrated, one last time); clients take it from
   `NOETA_SERVER_TOKEN`. This changes ADR-009's "read by `noeta --server`" consequence: a
-  refining ADR is due at wrap-up.
+  refining ADR is due at wrap-up (written: ADR-013 refines ADR-009).
 - D16 File tools of a task whose tenant is not `default` are fenced off from noeta's home,
   the sqlite store's files, `/etc/noeta`, `/proc` and other tenants' workspaces
   (`noeta/toolkit/tenant_fence.py`), whatever the deployment (this closes D14's file-tool
@@ -128,7 +128,7 @@ servers and runs on many machines.
   the permission layer allowed outright by its mode or an allow rule (`Allow.outright` ->
   `ToolContext.allowed_outright`), never on older Claude models (`ToolContext.model`); with no
   permission layer the check always holds.
-- D19 (`os-fix-tools`) Own words, checked: `scripts/parity/own_words.py` fails on any run of
+- D19 (`os-fix-tools`; partly superseded by D39) Own words, checked: `scripts/parity/own_words.py` fails on any run of
   45+ characters shared with Claude Code's recorded texts. It hashes 43-character windows at
   stride 3 in memory from the recordings outside the repository (`NOETA_PARITY_RECORDINGS`,
   default `~/cc-recordings`) and skips with a notice where there are none (CI). No index is
