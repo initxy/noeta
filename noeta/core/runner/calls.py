@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core import records as core_records
@@ -117,6 +117,19 @@ def _groups(runnable: list[tuple[ToolUse, Tool]]) -> list[list[tuple[ToolUse, To
     return groups
 
 
+async def _together(runs: list[Coroutine[Any, Any, None]]) -> None:
+    """Run a group's calls at once; when one fails (its result could not be
+    written), the others are cancelled before the failure goes up."""
+    started = [asyncio.ensure_future(r) for r in runs]
+    try:
+        await asyncio.gather(*started)
+    except BaseException:
+        for task in started:
+            task.cancel()
+        await asyncio.gather(*started, return_exceptions=True)
+        raise
+
+
 async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     view = run.view()
     offer = run.tool_offer(view)
@@ -167,8 +180,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     runnable.sort(key=lambda item: tool_flag(item[1], "run_last"))
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
-        await asyncio.gather(*(_run_one(run, u, t, outright=u.id in outright)
-                               for u, t in group))
+        await _together([_run_one(run, u, t, outright=u.id in outright) for u, t in group])
     if asks and run.state.config.get("unattended"):
         # One-shot: the task ends. Otherwise the turn closes and the loop
         # goes on to wait for input (and gives the task back).
@@ -329,7 +341,7 @@ async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         await run.append([run.error_result(use.id, texts.INTERRUPTED_CALL_ERROR)])
     for group in _groups(again):
         await run.append([ToolStarted(call=u) for u, _ in group])
-        await asyncio.gather(*(_run_one(run, u, t) for u, t in group))
+        await _together([_run_one(run, u, t) for u, t in group])
     return True
 
 

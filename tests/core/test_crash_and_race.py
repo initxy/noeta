@@ -438,3 +438,49 @@ async def test_an_inbox_item_this_version_cannot_read(
             assert len(events) == before + 1
     finally:
         await store.close()
+
+
+async def test_a_failing_read_only_call_cancels_its_siblings(tmp_path: Path) -> None:
+    """Concurrent read-only calls: when one's result cannot be written (the
+    claim is lost), the others are stopped instead of running on."""
+    from noeta.core.errors import Conflict
+    from noeta.testing import ScriptedProvider, reply
+
+    cancelled: list[str] = []
+
+    class Look:
+        description = "Look."
+        input_schema = {"type": "object"}
+        read_only = True
+        clearable = False
+
+        def __init__(self, name: str, wait: float) -> None:
+            self.name, self.wait = name, wait
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            try:
+                await asyncio.sleep(self.wait)
+            except asyncio.CancelledError:
+                cancelled.append(self.name)
+                raise
+            return text_output("seen")
+
+    class LosesFast(SqliteStore):
+        async def append(self, claim: Claim, events: Sequence[Event], **kw: Any) -> Appended:
+            if any(isinstance(e, ToolFinished) and e.result.call_id == "fast" for e in events):
+                raise Conflict("the claim was lost")
+            return await super().append(claim, events, **kw)
+
+    store = LosesFast(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([ModelResponse(message=Message(role="assistant", content=[
+        ToolUse(id="fast", name="Fast", input={}), ToolUse(id="slow", name="Slow", input={})]),
+        stop_reason="tool_use", usage=Usage(output=1)), reply("done")])
+    agent = Agent(name="a", model="m", tools=[Look("Fast", 0), Look("Slow", 30)])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
+    try:
+        await Client(store).create("a", "go")
+        await asyncio.wait_for(rt.run_once(), 5)
+        assert cancelled == ["Slow"]
+    finally:
+        await store.close()
