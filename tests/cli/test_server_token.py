@@ -82,3 +82,16 @@ def test_no_token_only_on_a_loopback_address(monkeypatch: pytest.MonkeyPatch) ->
 
 async def _done() -> None:
     return None
+
+
+def test_allowed_hosts_are_checked_on_any_bind_when_named() -> None:
+    from noeta.host.http import LOOPBACK_HOSTS
+
+    def hosts(*argv: str) -> list[str] | None:
+        return main._allowed_hosts(main._parser().parse_args(["serve", *argv]))
+
+    assert hosts() == list(LOOPBACK_HOSTS)
+    assert hosts("--host", "0.0.0.0") is None
+    assert hosts("--host", "0.0.0.0", "--allow-host", "noeta.example",
+                 "--allow-host", "10.0.0.5") == ["noeta.example", "10.0.0.5"]
+    assert hosts("--allow-host", "noeta.example") == [*LOOPBACK_HOSTS, "noeta.example"]

@@ -80,6 +80,9 @@ def _parser() -> argparse.ArgumentParser:
     sv.add_argument("--no-worker", action="store_true", help="API only; workers run elsewhere")
     sv.add_argument("--no-token", action="store_true",
                     help="serve a loopback address without a bearer token")
+    sv.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="a Host header name the server answers (repeatable); without "
+                         "it Host is checked only on a loopback bind")
     sv.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
                     help="a web origin (https://host:port) whose pages may call the API")
     sv.add_argument("--allow-bypass-permissions", action="store_true",
@@ -191,11 +194,20 @@ def _check_isolation(s: Settings, cwd: str,
     return problem
 
 
+def _allowed_hosts(args: argparse.Namespace) -> list[str] | None:
+    """The ``Host`` names ``noeta serve`` answers: the loopback names on a
+    loopback bind, plus ``--allow-host``; any on another bind without it."""
+    from noeta.host.http import LOOPBACK_HOSTS
+
+    base = list(LOOPBACK_HOSTS) if args.host in LOOPBACK_HOSTS else []
+    return [*base, *args.allow_host] if base or args.allow_host else None
+
+
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
     from noeta.cli.config import HOME, server_token_digest
-    from noeta.host.http import LOOPBACK_HOSTS, create_app, redact_token_logs
+    from noeta.host.http import create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
     server = None if args.no_token else server_token_digest()
@@ -222,7 +234,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                          others=isolated, server_sha256=server.sha256 if server else None),
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
-                     allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
+                     allowed_hosts=_allowed_hosts(args),
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],

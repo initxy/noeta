@@ -630,3 +630,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   (`noeta.host.http.redact_token_logs`, for host code serving `create_app`). Before, every
   WebSocket connection logged its path with the token at info level
   (`"WebSocket /stream-json?token=…" [accepted]`).
+- `noeta serve --allow-host NAME` (repeatable) names the `Host` headers the server answers
+  on any bind, added to the loopback names on a loopback bind. Without it a non-loopback
+  bind checks no `Host`, which SECURITY.md now says (it claimed unexpected `Host` headers
+  were always refused).

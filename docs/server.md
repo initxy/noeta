@@ -58,7 +58,9 @@ front ends on other machines should open those files).
 `noeta acp --server`) needs the token in its own `NOETA_SERVER_TOKEN`; delete the file and
 restart for a new one. A file an older noeta left holding the token itself is rewritten to
 its digest on the next start, which prints the token one last time. This token is the
-**default tenant's**; a single-tenant server needs nothing else.
+**default tenant's**; a single-tenant server needs nothing else. On a loopback bind only the
+loopback `Host` names are answered (DNS rebinding); on any other bind `Host` is checked only
+against the names given with `--allow-host NAME` (repeatable), so name them.
 
 For more tenants, give each its own tokens:
 
