@@ -173,7 +173,7 @@ class Hooks(Extension):
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """SessionStart (``compact``) after a compaction; UserPromptSubmit
-        before the first model call of a turn."""
+        before the model call that first carries the person's new messages."""
         out: list[Reminder] = []
         compaction = view.state.compaction
         st = self._d.state(view)
@@ -221,7 +221,9 @@ class Hooks(Extension):
                 for r in reads for t in (r.block, r.context) if t]
 
     async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
-        if "UserPromptSubmit" not in self.matchers or view.state.steps_in_turn:
+        # Before every model call, not only a turn's first: a message sent
+        # mid-turn is checked before the model sees it, and once only.
+        if "UserPromptSubmit" not in self.matchers:
             return []
         st = self._d.state(view)
         new = [(seq, m) for seq, m in zip(view.state.message_seqs, view.state.messages,
@@ -237,7 +239,12 @@ class Hooks(Extension):
             if r.block is not None:
                 # A blocked prompt is erased, as Claude Code does: the next
                 # turn's request never carries it.
-                view.erase_messages(sorted({seq for seq, _ in new}))
+                # What a command or skill expanded them into (``inline``
+                # text recorded after them) goes too.
+                first = new[0][0]
+                view.erase_messages(sorted({seq for seq, m in zip(
+                    view.state.message_seqs, view.state.messages, strict=False)
+                    if seq >= first and m.role == "user" and m.origin in ("human", "inline")}))
                 raise TurnFailed("blocked_by_hook", r.block)
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "

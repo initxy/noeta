@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.toolkit.worktrees import add_worktree, unsaved_work
+from noeta.toolkit.worktrees import (
+    add_worktree,
+    after_jobs,
+    job_runs_in,
+    job_runs_under,
+    unsaved_work,
+)
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -34,3 +41,49 @@ async def test_commits_left_on_the_worktree_branch_after_switching_away_count(
     _git(tree, "commit", "-q", "--allow-empty", "-m", "more")
     lost, _ = await unsaved_work(env, str(tree), base, "worktree-w")
     assert lost == "2 commit(s) the starting branch lacks"
+
+
+class _Remote:
+    """An env on another machine: its paths name its own filesystem."""
+
+    local = False
+
+    def __init__(self, container: str | None = None) -> None:
+        self.cwd = "/workspace"
+        if container is not None:
+            self.container = container
+
+
+async def test_a_job_counts_only_on_its_own_filesystem() -> None:
+    a, b = _Remote(), _Remote()
+    path = "/workspace/.noeta/worktrees/w"
+    ended = job_runs_in(a, path + "/sub")  # type: ignore[arg-type]
+    ran: list[str] = []
+
+    async def mark(name: str) -> None:
+        ran.append(name)
+
+    try:
+        assert job_runs_under(a, path)  # type: ignore[arg-type]
+        assert not job_runs_under(b, path)  # type: ignore[arg-type]
+        # Two envs' paths alike: one's queued removal does not replace the other's.
+        after_jobs(a, path, lambda: mark("a"))  # type: ignore[arg-type]
+        after_jobs(b, path, lambda: mark("b"))  # type: ignore[arg-type]
+        await asyncio.sleep(0)
+        assert ran == ["b"]
+    finally:
+        ended()
+    await asyncio.sleep(0)
+    assert ran == ["b", "a"]
+    # Two env objects of one container, and two local envs, are one filesystem.
+    ended = job_runs_in(_Remote("c1"), path)  # type: ignore[arg-type]
+    try:
+        assert job_runs_under(_Remote("c1"), path)  # type: ignore[arg-type]
+        assert not job_runs_under(_Remote("c2"), path)  # type: ignore[arg-type]
+    finally:
+        ended()
+    ended = job_runs_in(LocalExecEnv("/"), path)
+    try:
+        assert job_runs_under(LocalExecEnv("/tmp"), path)
+    finally:
+        ended()

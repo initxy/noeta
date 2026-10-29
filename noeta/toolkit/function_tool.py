@@ -14,7 +14,14 @@ docstring, and its input schema comes from the parameters' annotations:
 and a parameter with a default is optional. A parameter annotated
 ``ToolContext`` (or named ``ctx``) gets the call's context and is left out of
 the schema. The function may be sync (it runs in a worker thread) or async
-and returns ``str``, a ``ToolOutput``, or anything JSON can show.
+and returns ``str``, a ``ToolOutput``, or anything JSON can show. A sync
+function must not call the context's methods (``record``, ``post``,
+``hold``): they belong to the event loop; make it async to use them.
+
+A scalar argument (``str``, ``int``, ``float``, ``bool``, or one of them
+``| None``) is checked against its annotation before the call: a number or
+``true`` / ``false`` sent as text is taken as one, an ``int`` passes for a
+``float``, and anything else is an error the model sees.
 """
 
 from __future__ import annotations
@@ -57,6 +64,45 @@ def _schema(hint: Any) -> dict[str, Any]:
     raise TypeError(f"function_tool: no JSON schema for the annotation {hint!r}")
 
 
+_NAMED = {str: "a string", int: "an integer", float: "a number", bool: "a boolean"}
+
+
+def _scalar(hint: Any) -> tuple[type, bool] | None:
+    """The scalar type ``hint`` names and whether ``None`` is allowed, or
+    ``None`` for any other annotation."""
+    if get_origin(hint) is Annotated:
+        hint = get_args(hint)[0]
+    nullable = False
+    if get_origin(hint) in (Union, types.UnionType):
+        rest = [a for a in get_args(hint) if a is not type(None)]
+        if len(rest) != 1:
+            return None
+        nullable, hint = True, rest[0]
+    return (hint, nullable) if hint in _SCALARS else None
+
+
+def _coerce(kind: type, value: Any) -> Any:
+    """``value`` as ``kind``; raises ``ValueError`` when it is not one."""
+    if kind is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            return value.strip().lower() == "true"
+    elif kind is int:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return int(value.strip())
+    elif kind is float:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        if isinstance(value, str):
+            return float(value.strip())
+    elif isinstance(value, str):
+        return value
+    raise ValueError(value)
+
+
 def _is_context(param: inspect.Parameter, hint: Any) -> bool:
     """``ToolContext``, ``ToolContext | None``, or an unannotated ``ctx``."""
     if get_origin(hint) in (Union, types.UnionType):
@@ -81,6 +127,7 @@ class _FunctionTool:
         #: Positional-only parameters (the context too), in order, with their defaults: passed
         #: by position.
         self._positional: list[inspect.Parameter] = []
+        self._scalars: dict[str, tuple[type, bool]] = {}
         for param in inspect.signature(fn).parameters.values():
             hint = hints.get(param.name, inspect.Parameter.empty)
             if _is_context(param, hint):
@@ -91,6 +138,9 @@ class _FunctionTool:
             if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
                 continue  # nothing the model names
             properties[param.name] = _schema(hint)
+            scalar = _scalar(hint)
+            if scalar is not None:
+                self._scalars[param.name] = scalar
             if param.kind is param.POSITIONAL_ONLY:
                 self._positional.append(param)
             if param.default is inspect.Parameter.empty:
@@ -110,6 +160,14 @@ class _FunctionTool:
                        else f"unknown parameter(s) {', '.join(unknown)}")
             return text_output(f"{self.name}: {problem}", is_error=True)
         kwargs = dict(input)
+        for param, (kind, nullable) in self._scalars.items():
+            if param not in kwargs or (kwargs[param] is None and nullable):
+                continue
+            try:
+                kwargs[param] = _coerce(kind, kwargs[param])
+            except ValueError:
+                return text_output(f"{self.name}: {param} must be {_NAMED[kind]}",
+                                   is_error=True)
         if self._context is not None:
             kwargs[self._context] = ctx
         args = [kwargs.pop(p.name, p.default) for p in self._positional]

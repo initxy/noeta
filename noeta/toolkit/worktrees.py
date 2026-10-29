@@ -11,6 +11,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 
 from noeta.core.execenv import ExecEnv
+from noeta.toolkit.local_env import is_local
 from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
 __all__ = ["WORKTREES", "add_worktree", "after_jobs", "cancel_after_jobs", "git", "job_runs_in",
@@ -19,20 +20,34 @@ __all__ = ["WORKTREES", "add_worktree", "after_jobs", "cancel_after_jobs", "git"
 #: Where new worktrees go, under the directory that holds them.
 WORKTREES = ".noeta/worktrees"
 
-#: The working directories of this process's running shell jobs, counted (the
-#: shell plugin keeps it). A job holds its task tree with this worker, so the
-#: task that would remove a worktree one runs in runs here and sees it.
-_JOB_DIRS: Counter[str] = Counter()
-#: Worktree path -> what runs once no job works under it (:func:`after_jobs`).
-_AFTER_JOBS: dict[str, Callable[[], Awaitable[object]]] = {}
+#: The working directories of this process's running shell jobs, counted by
+#: (filesystem, path) (the shell plugin keeps it). A job holds its task tree
+#: with this worker, so the task that would remove a worktree one runs in
+#: runs here and sees it.
+_JOB_DIRS: Counter[tuple[object, str]] = Counter()
+#: (filesystem, worktree path) -> what runs once no job works under it
+#: (:func:`after_jobs`).
+_AFTER_JOBS: dict[tuple[object, str], Callable[[], Awaitable[object]]] = {}
 #: The ones running (a strong reference until they finish).
 _RUNNING: set[asyncio.Task[object]] = set()
 log = logging.getLogger(__name__)
 
 
-def job_runs_in(cwd: str) -> Callable[[], None]:
-    """Count a job working in ``cwd`` until the returned call (once)."""
-    _JOB_DIRS[cwd] += 1
+def _filesystem(env: ExecEnv) -> object:
+    """Which filesystem ``env``'s paths name: this machine's for every local
+    env (a task's env is made per run, so a parent and its agent hold
+    different objects), a container's by its name, else the env itself."""
+    if is_local(env):
+        return "local"
+    container = getattr(env, "container", None)
+    return ("container", container) if isinstance(container, str) else id(env)
+
+
+def job_runs_in(env: ExecEnv, cwd: str) -> Callable[[], None]:
+    """Count a job working in ``cwd`` of ``env`` until the returned call
+    (once)."""
+    key = (_filesystem(env), cwd)
+    _JOB_DIRS[key] += 1
     done = False
 
     def ended() -> None:
@@ -40,32 +55,32 @@ def job_runs_in(cwd: str) -> Callable[[], None]:
         if done:
             return
         done = True
-        _JOB_DIRS[cwd] -= 1
-        if _JOB_DIRS[cwd] <= 0:
-            del _JOB_DIRS[cwd]
+        _JOB_DIRS[key] -= 1
+        if _JOB_DIRS[key] <= 0:
+            del _JOB_DIRS[key]
         _run_due()
 
     return ended
 
 
-def after_jobs(path: str, then: Callable[[], Awaitable[object]]) -> None:
-    """Run ``then`` once no job of this process works in ``path`` or below
-    it (when the last one ends, or is killed with its root)."""
-    _AFTER_JOBS[path] = then
+def after_jobs(env: ExecEnv, path: str, then: Callable[[], Awaitable[object]]) -> None:
+    """Run ``then`` once no job of this process works in ``path`` of ``env``
+    or below it (when the last one ends, or is killed with its root)."""
+    _AFTER_JOBS[(_filesystem(env), path)] = then
     _run_due()
 
 
-def cancel_after_jobs(path: str) -> None:
-    """Drop what :func:`after_jobs` queued for ``path`` (someone works there
-    again)."""
-    _AFTER_JOBS.pop(path, None)
+def cancel_after_jobs(env: ExecEnv, path: str) -> None:
+    """Drop what :func:`after_jobs` queued for ``path`` of ``env`` (someone
+    works there again)."""
+    _AFTER_JOBS.pop((_filesystem(env), path), None)
 
 
 def _run_due() -> None:
-    for path in [p for p in _AFTER_JOBS if not job_runs_under(p)]:
-        then = _AFTER_JOBS.pop(path)
+    for key in [k for k in _AFTER_JOBS if not _runs_under(*k)]:
+        then = _AFTER_JOBS.pop(key)
         try:
-            task = asyncio.get_running_loop().create_task(_logged(path, then))
+            task = asyncio.get_running_loop().create_task(_logged(key[1], then))
         except RuntimeError:  # no loop: nothing can run it now
             continue
         _RUNNING.add(task)
@@ -80,10 +95,15 @@ async def _logged(path: str, then: Callable[[], Awaitable[object]]) -> object:
         return None
 
 
-def job_runs_under(path: str) -> bool:
-    """Whether a job of this process works in ``path`` or below it."""
+def job_runs_under(env: ExecEnv, path: str) -> bool:
+    """Whether a job of this process works in ``path`` of ``env`` or below
+    it."""
+    return _runs_under(_filesystem(env), path)
+
+
+def _runs_under(filesystem: object, path: str) -> bool:
     top = path.rstrip("/") + "/"
-    return any(d == path or d.startswith(top) for d in _JOB_DIRS)
+    return any(fs == filesystem and (d == path or d.startswith(top)) for fs, d in _JOB_DIRS)
 
 
 async def git(env: ExecEnv, args: Sequence[str], cwd: str) -> tuple[int, str]:

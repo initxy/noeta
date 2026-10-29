@@ -99,7 +99,7 @@ async def test_remove_refuses_while_a_background_job_runs_in_it(repo: Path) -> N
     s = Driver(repo)
     await s.call(EnterWorktreeTool(), {"name": "w"})
     tree = repo / ".noeta" / "worktrees" / "w"
-    ended = job_runs_in(str(tree / "sub"))
+    ended = job_runs_in(s.env, str(tree / "sub"))
     try:
         err, text = await s.call(ExitWorktreeTool(),
                                  {"action": "remove", "discard_changes": True})

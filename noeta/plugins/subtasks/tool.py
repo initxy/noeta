@@ -408,7 +408,7 @@ class SendMessageTool:
                 if "cwd" in state.config:
                     config["cwd"] = state.config["cwd"]
             elif tree:
-                reopen_worktree(tree)
+                reopen_worktree(ctx.env, tree)
             child = ctx.spawn(agent["agent"], message, config=config, background=True,
                               queue=agent.get("queue") or ext.queue, history_from=task)
             ctx.record(ext.name, "launched", {

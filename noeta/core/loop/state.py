@@ -495,7 +495,8 @@ def _erase(state: TaskState, seqs: set[int]) -> None:
     for messages, at in ((state.messages, state.message_seqs),
                          (state.history, state.history_seqs)):
         keep = [i for i, (m, s) in enumerate(zip(messages, at, strict=True))
-                if not (s in seqs and m.role == "user" and m.origin == "human")]
+                if not (s in seqs and m.role == "user" and m.origin in ("human", "inline")
+                        and not any(isinstance(b, ToolResult) for b in m.content))]
         messages[:] = [messages[i] for i in keep]
         at[:] = [at[i] for i in keep]
 
