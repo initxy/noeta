@@ -17,7 +17,7 @@ from noeta.core import models
 from noeta.core.agent import Agent
 from noeta.core.events import DEFAULT_TENANT, TaskCreated
 from noeta.core.extension import CommandContext
-from noeta.core.types import Message
+from noeta.core.types import Image, Message, Text
 from noeta.host._http_guard import REQUEST_CONFIG, scope
 from noeta.host._http_openapi import OPENAPI
 from noeta.host.app import AppAPI
@@ -33,9 +33,17 @@ def _json(value: Any, status: int = 200) -> Response:
 
 
 def _input(value: Any) -> Any:
+    """A client's input: text, or a user turn of text and images, always
+    the person's (no other role, origin or block: a client never writes
+    the conversation's other parts)."""
     if value is None or isinstance(value, str):
         return value
-    return msgspec.convert(value, Message)
+    message = msgspec.convert(value, Message)
+    if message.role != "user":
+        raise ValueError("an input message has the role 'user'")
+    if not all(isinstance(b, (Text, Image)) for b in message.content):
+        raise ValueError("an input message holds only text and image blocks")
+    return Message(role="user", content=message.content, origin="human")
 
 
 async def _command_place(request: Request, agent: str | None, task_id: str | None,

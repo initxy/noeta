@@ -872,6 +872,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- `noeta serve` takes a structured `input` (`POST /tasks`, `/tasks/{id}/messages`) only as a
+  user turn of text and images, and always as the person's (`origin` `human`). Before, a
+  client could send an assistant or system turn, tool calls and results, or a user turn
+  marked as another agent's or a system notice, forging the conversation and skipping the
+  `UserPromptSubmit` hooks (they look only at the person's turns). Anything else is a 400.
 - **A read-only `git` no longer runs the filters of a repository planted outside the
   workspace.** A command that only reads with git already ran with the repository's hooks,
   fsmonitor, pager, signature program and external diff turned off, and refused a git
