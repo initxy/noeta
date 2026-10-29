@@ -17,6 +17,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
+from noeta.core.loop.state import fold
 from noeta.core.runner import Runtime
 from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks, parse_hooks
@@ -76,6 +77,18 @@ async def test_user_prompt_submit_can_block_the_turn(tmp_path: Path) -> None:
     failed = [r.event for r in await client.events(tid)
               if isinstance(r.event, ExtensionRecorded) and r.event.kind == "turn_failed"]
     assert failed and failed[0].data["detail"] == "no secrets in prompts"
+
+
+async def test_a_blocked_prompt_is_erased_from_later_requests(tmp_path: Path) -> None:
+    hooks = {"UserPromptSubmit": _hook("grep -q SECRET && { echo blocked >&2; exit 2; }; exit 0")}
+    provider, client, tid = await _run(tmp_path, hooks, [reply("ok")],
+                                       prompts=("my SECRET is 42", "hello"))
+    assert len(provider.requests) == 1
+    texts = [m.text for m in provider.requests[0].messages]
+    assert any("hello" in t for t in texts)
+    assert not any("SECRET" in t for t in texts)
+    state = fold(await client.events(tid), {})
+    assert not any("SECRET" in m.text for m in state.history)
 
 
 async def test_pre_tool_use_blocks_matching_calls_only(tmp_path: Path) -> None:

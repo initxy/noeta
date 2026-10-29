@@ -328,6 +328,8 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
         state.plugins = core.pins
     elif isinstance(core, records.TurnDone):
         _end_turn(state, seq)
+    elif isinstance(core, records.Erased):
+        _erase(state, set(core.seqs))
     elif isinstance(core, records.TurnFailed):
         state.turn_error = core.error
         _end_turn(state, seq)
@@ -482,6 +484,15 @@ def _end_turn(state: TaskState, seq: int) -> None:
     if reopen and not state.turn_open:
         state.turn_open = True
         state.steps_in_turn = 0
+
+
+def _erase(state: TaskState, seqs: set[int]) -> None:
+    for messages, at in ((state.messages, state.message_seqs),
+                         (state.history, state.history_seqs)):
+        keep = [i for i, (m, s) in enumerate(zip(messages, at, strict=True))
+                if not (s in seqs and m.role == "user" and m.origin == "human")]
+        messages[:] = [messages[i] for i in keep]
+        at[:] = [at[i] for i in keep]
 
 
 def _close_turn(state: TaskState, seq: int) -> None:

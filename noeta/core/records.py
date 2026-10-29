@@ -142,6 +142,21 @@ class TurnDone(Struct):
         return cls()
 
 
+class Erased(Struct):
+    """The person's messages taken at these log ``seqs`` leave the
+    conversation the model sees (a ``UserPromptSubmit`` hook blocked them)."""
+
+    kind: ClassVar[str] = "erased"
+    seqs: list[int] = []
+
+    def data(self) -> dict[str, Any]:
+        return {"seqs": self.seqs}
+
+    @classmethod
+    def parse(cls, data: Any) -> Erased:
+        return cls(seqs=[s for s in _fields(data).get("seqs") or [] if isinstance(s, int)])
+
+
 class Parked(Struct):
     """A tool call waits: ``on`` what, for which ``keys``, and what to show."""
 
@@ -237,12 +252,12 @@ class Plugins(Struct):
         return cls(pins=[p for p in _fields(data).get("pins") or [] if isinstance(p, dict)])
 
 
-CoreRecord = Union[Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Parked,
-                   Spawned, Timer, TimerCleared, Prompts, Plugins]
+CoreRecord = Union[Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Erased,
+                   Parked, Spawned, Timer, TimerCleared, Prompts, Plugins]
 
 _KINDS: dict[str, Any] = {cls.kind: cls for cls in (
-    Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Parked, Spawned, Timer,
-    TimerCleared, Prompts, Plugins)}
+    Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Erased, Parked, Spawned,
+    Timer, TimerCleared, Prompts, Plugins)}
 
 
 def event(record: CoreRecord, *, message: Message | None = None) -> ExtensionRecorded:
@@ -282,6 +297,11 @@ class CoreNotices:
 
     def clear_timer(self, name: str) -> None:
         self._record_core(TimerCleared(name=name))
+
+    def erase_messages(self, seqs: list[int]) -> None:
+        """Take the person's messages taken at log ``seqs`` out of the
+        conversation (and its history): the model never sees them."""
+        self._record_core(Erased(seqs=seqs))
 
     def _record_core(self, entry: CoreRecord) -> None:
         self.record(CORE, entry.kind, entry.data())
