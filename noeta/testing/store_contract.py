@@ -430,6 +430,26 @@ async def test_a_hold_is_refused_while_a_task_of_the_tree_runs_on_another_worker
     assert await store.hold("other", "A", 30) is not None
 
 
+async def test_a_hold_revokes_another_workers_lapsed_claim_of_the_tree(store: Store) -> None:
+    """A worker that stalled past its lease (a pause, SIGSTOP) cannot renew
+    or write once another worker holds the tree: the hold took the lapsed
+    claim back, so only the holder runs the tree's tasks."""
+    await store.create(new("root"))
+    stalled = await store.claim("B", ["default"], 0.05)
+    assert stalled is not None
+    await asyncio.sleep(0.15)
+    epoch = await store.hold("root", "A", 30)
+    assert epoch is not None
+    assert await store.renew(stalled, 30) is None
+    with pytest.raises(Conflict):
+        await store.append(stalled, [Waiting(on="input")], expected_seq=1)
+    row = await store.get("root")
+    assert row is not None and row.status == "ready" and row.owner is None
+    assert await store.claim("B", ["default"], 30) is None
+    again = await store.claim("A", ["default"], 30)
+    assert again is not None and again.task_id == "root" and again.epoch > stalled.epoch
+
+
 async def test_workers_holding_one_tree_at_once_leave_one_holder(store: Store) -> None:
     await store.create(new("root"))
     got = await asyncio.gather(*(store.hold("root", f"w{i}", 30) for i in range(6)))

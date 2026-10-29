@@ -271,3 +271,33 @@ async def test_a_task_whose_log_cannot_be_read_ends_failed_after_a_few_claims(
         assert any(isinstance(i.body, Cancel) for i in await store.inbox("G"))
     finally:
         await store.close()
+
+
+async def test_a_failure_after_the_log_loaded_is_not_an_unreadable_log(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Failing the turn can itself fail (a store hiccup, a bug in an end
+    hook); the log read fine, so the task is not ended ``unreadable_log``
+    however often that happens."""
+    from noeta.core.runner.task import LOAD_ATTEMPTS, TaskRun
+
+    async def broken_step(self: TaskRun) -> bool:
+        raise RuntimeError("a bug in a step")
+
+    async def broken_fail_turn(self: TaskRun, reason: str, detail: str = "") -> bool:
+        raise RuntimeError("failing the turn broke too")
+
+    monkeypatch.setattr(TaskRun, "_step_once", broken_step)
+    monkeypatch.setattr(TaskRun, "fail_turn", broken_fail_turn)
+    store = SqliteStore(str(tmp_path / "t.db"))
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: None, lease_seconds=0.1)  # type: ignore[arg-type,return-value]
+    try:
+        await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
+        for attempt in range(LOAD_ATTEMPTS + 1):
+            await asyncio.sleep(0.15)  # the last claim's lease runs out
+            assert await rt.run_once(), attempt
+        row = await store.get("t")
+        assert row is not None and row.status != "ended"
+        assert "t" not in rt._unreadable
+    finally:
+        await store.close()

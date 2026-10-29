@@ -598,7 +598,10 @@ class SqliteStore:
 
     async def hold(self, root_id: str, worker: str, seconds: float,
                    *, epoch: int | None = None) -> int | None:
+        changes: list[tuple[str, ChangeKind]] = []
+
         def tx(conn: sqlite3.Connection) -> int | None:
+            changes.clear()
             now = time.time()
             until = now + seconds
             if epoch is not None:
@@ -609,6 +612,18 @@ class SqliteStore:
             if conn.execute("SELECT 1 FROM tree_holds WHERE root_id = ? AND worker <> ?",
                             (root_id, worker)).fetchone() is not None:
                 return None  # one holding worker per tree
+            # Other workers' lapsed claims of the tree are taken back (a new
+            # epoch), so one that stalled past its lease cannot renew or
+            # write once this worker holds the tree.
+            lapsed = [str(r[0]) for r in conn.execute(
+                "SELECT task_id FROM tasks WHERE root_id = ? AND status = 'running'"
+                " AND owner <> ? AND lease_until < ?", (root_id, worker, now)).fetchall()]
+            for task_id in lapsed:
+                conn.execute(
+                    "UPDATE tasks SET status = 'ready', owner = NULL, lease_until = NULL,"
+                    " owner_epoch = owner_epoch + 1, updated_at = ? WHERE task_id = ?",
+                    (now, task_id))
+                changes.append((task_id, "released"))
             if conn.execute(
                     "SELECT 1 FROM tasks WHERE root_id = ? AND status = 'running'"
                     " AND owner <> ? AND lease_until >= ? LIMIT 1",
@@ -624,7 +639,9 @@ class SqliteStore:
                                (root_id, worker, until))
             return int(cur.lastrowid or 0)
 
-        return await self._write(tx)
+        held = await self._write(tx)
+        self._notify(changes)
+        return held
 
     @staticmethod
     def _lost_posts(conn: sqlite3.Connection, root_id: str, worker: str, epoch: int,

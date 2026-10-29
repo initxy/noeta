@@ -13,7 +13,10 @@ All notable changes to Noeta are documented here. The format is based on
   store.** This release writes log entries an older worker cannot decode (messages with
   `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
   that picks up a task a newer one touched fails on it again and again. Logs written by
-  older versions still load.
+  older versions still load. A newer schema is now refused, but an older sqlite binary never
+  checked: left running, it keeps writing the upgraded sqlite store and holds trees in the
+  old `holds` table that newer workers do not read. Stop every old sqlite worker before
+  upgrading.
 - **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
   `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
   longer read, so the two tools never pick up each other's hooks, env or instructions.
@@ -193,7 +196,9 @@ All notable changes to Noeta are documented here. The format is based on
   an epoch are told lost). A hold is refused while another
   worker runs a task of the tree, and on Postgres a claim and a hold of one tree serialize, so a
   held tree's tasks run only on its holder; a background command refused for either reason
-  says so and points the model to the foreground or a later try.
+  says so and points the model to the foreground or a later try. A hold also takes back
+  another worker's lapsed claim of the tree (a new epoch, back to `ready`), so a worker that
+  stalled past its lease cannot renew it or write once the tree is held elsewhere.
 - **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
   a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
   each plugin comes from.
@@ -415,7 +420,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - **A task whose log cannot be read no longer loops forever.** A log no claim could read or
   fold left the task `running` to be claimed again on every lease; after three such claims in
   a row on a worker it now ends `failed` (`unreadable_log: ...` with the last error), its
-  parent gets `ChildEnded` and its children are cancelled.
+  parent gets `ChildEnded` and its children are cancelled. Only a failure to load counts: one
+  raised later (failing the turn failed too) is logged and the task claimed again.
 - **An interrupted reply keeps the thinking it finished.** Only the streamed text was kept;
   completed thinking blocks (signature included) now go back ahead of it
   (`TurnStopped.thinking`; older records fold as before).

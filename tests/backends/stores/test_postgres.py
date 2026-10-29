@@ -258,6 +258,36 @@ async def test_a_hold_waits_for_a_claim_of_its_tree_being_taken(pg: Any) -> None
     await store.close()
 
 
+async def test_a_hold_lets_a_claim_of_a_lapsed_task_in_flight_finish(pg: Any) -> None:
+    """A claim that locked a lapsed task of the tree, before it takes the
+    tree's lock, is not deadlocked by a hold taking the lapsed claim back:
+    the hold steps aside, the claim commits, and the hold sees its lease."""
+    import psycopg
+
+    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
+
+    store = pg.store()
+    await store.create(new("R"))
+    assert await store.claim("B", ["default"], -1) is not None  # lapsed at once
+    async with await psycopg.AsyncConnection.connect(pg.dsn) as claimer:
+        # What PostgresStore.claim does with C's claim before the tree's lock.
+        await claimer.execute(
+            f'UPDATE "{pg.schema}".tasks SET owner = \'C\', owner_epoch = owner_epoch + 1,'
+            " lease_until = extract(epoch from now()) + 60 WHERE task_id = 'R'")
+        hold = asyncio.create_task(store.hold("R", "A", 30))
+        await asyncio.sleep(0.3)
+        assert not hold.done()
+        # Well inside deadlock_timeout (1 s): no deadlock for Postgres to break.
+        await asyncio.wait_for(claimer.execute(
+            "SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
+            (_HOLD_LOCK_CLASS, f"{pg.schema}:R")), 0.5)
+        await claimer.commit()
+        assert await asyncio.wait_for(hold, 10) is None
+    row = await store.get("R")
+    assert row is not None and row.owner == "C" and row.status == "running"
+    await store.close()
+
+
 async def test_upgrading_a_version_1_schema_tells_its_held_trees(pg: Any) -> None:
     import psycopg
 
