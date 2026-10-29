@@ -58,6 +58,7 @@ __all__ = [
     "forget_plugin_files",
     "load",
     "load_plugin_files",
+    "missing_modules",
     "note_arguments",
     "pin",
     "provider",
@@ -89,6 +90,8 @@ _files: dict[str, tuple[str, Any]] = {}
 _channel_files: dict[str, tuple[str, Any]] = {}
 #: Plugin files that could not be used: path -> why.
 _broken: dict[str, str] = {}
+#: Of those, the ones that import a module nobody installed: path -> module.
+_missing: dict[str, str] = {}
 _loaded_paths: set[str] = set()
 _FILES_PACKAGE = "noeta_plugin_files"
 #: Where a plugin class came from: class -> (source, version).
@@ -119,6 +122,12 @@ def sources(group: str) -> dict[str, str]:
 def broken_plugin_files() -> dict[str, str]:
     """Plugin files that could not be used: path -> why."""
     return dict(_broken)
+
+
+def missing_modules() -> dict[str, str]:
+    """Broken plugin files that import a module not installed here: path ->
+    its top-level name. Not the plugin's own modules, nor noeta's."""
+    return dict(_missing)
 
 
 def added_by_files() -> dict[str, list[str]]:
@@ -221,6 +230,10 @@ def load_plugin_files(directories: Iterable[str | Path],
                 module = _import(path)
             except Exception as exc:  # noqa: BLE001 — a user's file must not stop noeta
                 _broken[shown] = f"{type(exc).__name__}: {exc}"
+                top = (exc.name or "").split(".", 1)[0] if isinstance(
+                    exc, ModuleNotFoundError) else ""
+                if top and top not in (_FILES_PACKAGE, "noeta"):
+                    _missing[shown] = top
                 log.warning("plugin file %s failed to import: %s", shown, exc)
                 continue
             found = [(PLUGINS if issubclass(cls, Extension) else CHANNELS, cls)
@@ -251,6 +264,7 @@ def forget_plugin_files() -> None:
     _files.clear()
     _channel_files.clear()
     _broken.clear()
+    _missing.clear()
     _loaded_paths.clear()
     for module in [m for m in sys.modules if m.startswith(f"{_FILES_PACKAGE}.")]:
         del sys.modules[module]

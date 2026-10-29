@@ -160,8 +160,8 @@ def _plugins(cwd: str) -> None:
     for plugin in found:
         print(f"{plugin.name}\t{plugin.root}\t(Claude Code plugin {plugin.version})".rstrip())
     notices += more
-    for path, why in registry.broken_plugin_files().items():
-        print(f"(failed) {path}: {why}", file=sys.stderr)
+    for line in broken_plugin_lines():
+        print(f"(failed) {line}", file=sys.stderr)
     for notice in notices:
         print(notice, file=sys.stderr)
 
@@ -353,6 +353,31 @@ def missing_extra(exc: BaseException) -> str | None:
                 return extra
         cur = cur.__cause__ or cur.__context__
     return None
+
+
+def broken_plugin_lines() -> list[str]:
+    """``path: why`` for each plugin file that failed, with how to install a
+    module it imports that is not installed here (plugins install nothing)."""
+    from noeta.core import registry
+
+    missing = registry.missing_modules()
+    return [f"{path}: {why}{_install_hint(missing[path]) if path in missing else ''}"
+            for path, why in registry.broken_plugin_files().items()]
+
+
+def _install_hint(module: str) -> str:
+    extra = EXTRA_MODULES.get(module)
+    if extra is not None:
+        wanted = ",".join(dict.fromkeys((*README_EXTRAS, extra)))
+        return (f"; it needs the {extra} extra: uv tool install --reinstall"
+                f" 'noeta[{wanted}] @ {SOURCE_URL}' (name every extra and --with you use:"
+                " a reinstall drops the rest; from a checkout, its path instead of the URL), or"
+                f" pip install 'noeta[{extra}] @ {SOURCE_URL}'")
+    return (f"; install it next to noeta: uv tool install --reinstall --with {module}"
+            f" 'noeta[{','.join(README_EXTRAS)}] @ {SOURCE_URL}' (name every extra and --with"
+            f" you use: a reinstall drops the rest; from a checkout, its path instead of the"
+            f" URL), or pip install {module} in noeta's"
+            " environment; the package's name may differ from the module's")
 
 
 def main(argv: list[str] | None = None) -> None:
