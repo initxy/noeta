@@ -272,6 +272,14 @@ class NewerRecord(ValueError):
     way to park or end a turn), so the task is left to a newer worker."""
 
 
+def check_writable(extension: str, kind: str) -> None:
+    """Refuse a plugin's record under ``core`` of a kind this version does
+    not know: folding it would leave the task to a newer worker for good."""
+    if extension == CORE and kind not in _KINDS:
+        raise ValueError(f"no core record of kind {kind!r}: a plugin records its own "
+                         "entries under its own extension name")
+
+
 def decode(ev: Event) -> CoreRecord | None:
     """``ev`` as a core record, or ``None`` when it is not one."""
     if not isinstance(ev, ExtensionRecorded) or ev.extension != CORE:

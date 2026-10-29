@@ -319,7 +319,9 @@ class TaskView(records.CoreNotices):
         self, extension: str, kind: str, data: Any = None, *, message: Message | None = None
     ) -> None:
         """Record an entry; with ``message`` the core also appends that
-        message to the conversation history."""
+        message to the conversation history. Raises ``ValueError`` for a
+        ``core`` record of a kind the core does not know."""
+        records.check_writable(extension, kind)
         self.pending.append(
             ExtensionRecorded(extension=extension, kind=kind, data=data, message=message)
         )

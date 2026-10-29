@@ -197,6 +197,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
 def _context(run: TaskRun, use: ToolUse, records: list[Event],
              creates: list[NewTask], *, outright: bool = False) -> ToolContext:
     def record(extension: str, kind: str, data: Any) -> None:
+        core_records.check_writable(extension, kind)
         records.append(ExtensionRecorded(extension=extension, kind=kind, data=data))
 
     def spawn(agent: str, prompt: str | Message, *, config: dict[str, Any] | None = None,
