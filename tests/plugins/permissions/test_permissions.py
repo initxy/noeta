@@ -137,9 +137,32 @@ async def test_protected_paths_ask_even_when_edits_are_accepted(
     client, tid, _ = await start(store, provider, Permissions(mode=mode), [write, bash],
                                  cwd=tmp_path)
     details = asked(await events(client, tid))
-    expected = 3 if mode == "acceptEdits" else 2  # bypass lets the .noeta command through
-    assert len(details) == expected
+    assert len(details) == 3
     assert [r["file_path"] for r in write.runs] == [".claude/skills/x/SKILL.md"]
+    assert not bash.runs
+
+
+@pytest.mark.parametrize("mode", ["bypassPermissions", "auto"])
+@pytest.mark.parametrize("call", [
+    ("Write", {"file_path": ".git/hooks/pre-commit"}),
+    ("Bash", {"command": "echo x > .git/hooks/pre-commit"}),
+    ("Bash", {"command": "echo {} > .noeta/settings.local.json"}),
+])
+async def test_a_write_to_a_protected_path_asks_in_bypass_and_goes_to_the_classifier_in_auto(
+        store: SqliteStore, tmp_path: Path, mode: str, call: tuple[str, dict[str, Any]]) -> None:
+    """As Claude Code's safety check: bypass mode does not skip it, and in
+    auto mode the classifier may approve it (``classifierApprovable``)."""
+    from noeta.plugins.permissions.decision import Decision, in_mode
+
+    tool = Fake(call[0])
+    perms = Permissions(mode="bypassPermissions" if mode == "bypassPermissions" else "default")
+    client, tid, _ = await start(store, ScriptedProvider([reply("", call)]), perms, [tool],
+                                 cwd=tmp_path)
+    if mode == "bypassPermissions":
+        assert len(asked(await events(client, tid))) == 1 and not tool.runs
+    protected = Decision("ask", "x", why="protected")
+    assert in_mode(mode, protected, call[0]).classify == (mode == "auto")
+    assert in_mode(mode, protected, call[0]).kind == "ask"
 
 
 @pytest.mark.parametrize("mode", ["acceptEdits", "bypassPermissions"])
@@ -160,10 +183,9 @@ async def test_a_symlink_into_a_protected_directory_still_asks(
     client, tid, _ = await start(store, provider, Permissions(mode=mode), [write, bash],
                                  cwd=tmp_path)
     details = asked(await events(client, tid))
-    # Bypass mode asks only for the file tools' protected paths.
-    assert len(details) == (3 if mode == "acceptEdits" else 2)
+    assert len(details) == 3
     assert [r["file_path"] for r in write.runs] == ["plain.txt"]
-    assert len(bash.runs) == (0 if mode == "acceptEdits" else 1)
+    assert not bash.runs
 
 
 @pytest.mark.parametrize("command", [

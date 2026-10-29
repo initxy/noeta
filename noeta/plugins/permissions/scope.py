@@ -128,6 +128,9 @@ class Part:
     argv: tuple[str, ...] = field(default=())
     #: The paths a read-only part reads (absolute, as written).
     reads: tuple[str, ...] = field(default=())
+    #: The files its output redirections name (absolute, as written; a
+    #: target bash expands is taken as it reads).
+    redirects: tuple[str, ...] = field(default=())
 
 
 def _path_ok(word: Word, scope: Scope, *, lead_glob: bool = False) -> bool:
@@ -412,6 +415,10 @@ def _next_cwds(cmd: Command, cwds: list[str] | None, scope: Scope) -> list[str] 
     return list(dict.fromkeys([*cwds, *(scope.at(c).absolute(target) for c in cwds)]))
 
 
+#: Redirection operators that write their target.
+_OUTPUT_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>"})
+
+
 def parts(command: str, scope: Scope) -> list[Part] | None:
     """``command``'s subcommands, judged; ``None`` when what runs cannot be
     read off the text."""
@@ -431,8 +438,11 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
         found = [_file_writes(cmd, s) for s in here]
         if found and all(f is not None for f in found):
             writes = tuple(dict.fromkeys(p for f in found for p in f or ()))
+        redirected = tuple(dict.fromkeys(
+            s.absolute(r.target.text) for s in here for r in cmd.redirects
+            if r.op in _OUTPUT_REDIRECTS and not harmless_redirect(r) and r.target.text))
         out.append(Part(cmd.text, ro, writes, tuple(cmd.argv),
-                        tuple(dict.fromkeys(seen)) if ro else ()))
+                        tuple(dict.fromkeys(seen)) if ro else (), redirected))
         cwds = _next_cwds(cmd, cwds, scope)
         if cwds is not None and not all(scope.contains(c) for c in cwds):
             cwds = None

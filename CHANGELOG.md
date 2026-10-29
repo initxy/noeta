@@ -1122,3 +1122,8 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   mode on a server started without `--allow-bypass-permissions`, and ran tools without
   asking. The stored mode now goes through the same check as a task's config, and a
   continued task's state drops bypassPermissions there.
+- **A shell command that writes a protected path asks in bypassPermissions.** A `Bash`
+  command writing `.git/hooks`, `.noeta/settings*.json` or another protected path (a file
+  command's target or an output redirection, as written or through a link) ran without
+  asking in bypassPermissions; it now asks there, as the file tools already did. In auto
+  mode the classifier still judges it, as Claude Code's safety check allows.
