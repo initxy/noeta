@@ -371,6 +371,8 @@ class SqliteStore:
                     (claim.task_id, seq, event_type(event), now, encode(event)),
                 )
             releasing = new_status != "running"
+            if new_status == "ended":
+                conn.execute("DELETE FROM snapshots WHERE task_id = ?", (claim.task_id,))
             conn.execute(
                 "UPDATE tasks SET last_seq = ?, status = ?, waiting_on = ?, ready_at = ?,"
                 " inbox_read_seq = ?, end_status = COALESCE(?, end_status), updated_at = ?"
@@ -642,6 +644,9 @@ class SqliteStore:
 
     async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
         def tx(conn: sqlite3.Connection) -> None:
+            if conn.execute("SELECT 1 FROM tasks WHERE task_id = ? AND status = 'ended'",
+                            (task_id,)).fetchone() is not None:
+                return  # its end deleted the last one; nothing claims it again
             conn.execute(
                 "INSERT INTO snapshots (task_id, seq, version, data) VALUES (?, ?, ?, ?)"
                 " ON CONFLICT (task_id) DO UPDATE SET seq = excluded.seq,"

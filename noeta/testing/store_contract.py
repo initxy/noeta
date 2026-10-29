@@ -485,3 +485,22 @@ async def test_snapshots_keep_the_latest_seq(store: Store) -> None:
     await put("t2", Snapshot(seq=1, version="v1", data=b"one"))
     assert await get("t1") == Snapshot(seq=9, version="v2", data=b"nine")
     assert (await get("t2") or Snapshot(seq=0, version="", data=b"")).seq == 1
+
+
+async def test_ending_a_task_deletes_its_snapshot(store: Store) -> None:
+    """The end deletes it in the same transaction, and none is kept after."""
+    get, put = getattr(store, "snapshot", None), getattr(store, "put_snapshot", None)
+    if get is None or put is None:
+        pytest.skip("the store keeps no snapshots")
+    await store.create(new())
+    await store.create(new("t2"))
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None and claim.task_id == "t1"
+    await put("t1", Snapshot(seq=1, version="v1", data=b"one"))
+    await put("t2", Snapshot(seq=1, version="v1", data=b"other"))
+    await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
+                       patch=Patch(status="ended", end_status="done"))
+    assert await get("t1") is None
+    await put("t1", Snapshot(seq=2, version="v1", data=b"late"))  # a write in flight
+    assert await get("t1") is None
+    assert await get("t2") == Snapshot(seq=1, version="v1", data=b"other")

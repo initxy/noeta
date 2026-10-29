@@ -149,8 +149,11 @@ class Snapshot(Struct):
 
     * ``async snapshot(task_id) -> Snapshot | None`` — the task's newest.
     * ``async put_snapshot(task_id, snapshot) -> None`` — keep it unless the
-      task's stored one is at a later seq. Needs no claim: a snapshot is a
-      fold of a log prefix, which never changes.
+      task's stored one is at a later seq, or the task has ended. Needs no
+      claim: a snapshot is a fold of a log prefix, which never changes.
+
+    The append that ends a task deletes its snapshot in the same
+    transaction: an ended task is never claimed again.
     """
 
     seq: int

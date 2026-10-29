@@ -634,6 +634,9 @@ class PostgresStore:
                     (claim.task_id, list(range(int(last_seq) + 1, seq + 1)),
                      [event_type(e) for e in events], [encode(e) for e in events]))
             releasing = new_status != "running"
+            if new_status == "ended":
+                await conn.execute(self._q("DELETE FROM {s}.snapshots WHERE task_id = %s"),
+                                   (claim.task_id,))
             cur = await conn.execute(self._q(
                 "UPDATE {s}.tasks SET last_seq = %s, status = %s, waiting_on = %s,"
                 " ready_at = %s, inbox_read_seq = %s, end_status = COALESCE(%s, end_status),"
@@ -926,6 +929,13 @@ class PostgresStore:
 
     async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
         async def tx(conn: Conn) -> None:
+            # The row lock orders this against the append that ends the task
+            # (and deletes its snapshot): a snapshot never outlives the end.
+            cur = await conn.execute(self._q(
+                "SELECT status FROM {s}.tasks WHERE task_id = %s FOR SHARE"), (task_id,))
+            row = await cur.fetchone()
+            if row is not None and row[0] == "ended":
+                return
             await conn.execute(self._q(
                 "INSERT INTO {s}.snapshots (task_id, seq, version, data) VALUES (%s, %s, %s, %s)"
                 " ON CONFLICT (task_id) DO UPDATE SET seq = excluded.seq,"
