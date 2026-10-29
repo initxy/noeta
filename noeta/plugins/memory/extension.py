@@ -82,6 +82,11 @@ RECALL_TASK_BYTES = 61_440
 ERASABLE_RECALLS = 8
 #: Erased prompt seqs remembered, for a recall recorded after the erase.
 ERASED_SEQS_KEEP = 64
+#: A recalled file shows at most its first lines and bytes, then
+#: :data:`RECALL_CUT_NOTE` (Claude Code's limits).
+RECALL_FILE_MAX_LINES = 200
+RECALL_FILE_MAX_BYTES = 4096
+RECALL_CUT_NOTE = "> Only {what} of this memory are shown; Read {path} for the whole file."
 RECALL_HEAD = ("Memories that may be relevant to this message; use one only if it really "
                "applies to what the user asked.")
 _RECALL_SCHEMA = {
@@ -107,6 +112,24 @@ _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
 def _field(head: str, key: str) -> str:
     m = re.search(rf"^\s*{key}:\s*(.+?)\s*$", head, re.M)
     return m.group(1).strip().strip("'\"") if m else ""
+
+
+def recalled_text(path: str, text: str) -> str:
+    """A recalled file's text within :data:`RECALL_FILE_MAX_LINES` lines and
+    :data:`RECALL_FILE_MAX_BYTES` bytes, with a note saying where the rest
+    is when it was cut."""
+    what = ""
+    lines = text.split("\n")
+    if len(lines) > RECALL_FILE_MAX_LINES:
+        text, what = "\n".join(lines[:RECALL_FILE_MAX_LINES]), \
+            f"the first {RECALL_FILE_MAX_LINES} lines"
+    encoded = text.encode("utf-8")
+    if len(encoded) > RECALL_FILE_MAX_BYTES:
+        kept = encoded[:RECALL_FILE_MAX_BYTES].decode("utf-8", errors="ignore")
+        newline = kept.rfind("\n")
+        text, what = (kept[:newline] if newline > 0 else kept), \
+            f"the first {RECALL_FILE_MAX_BYTES} bytes"
+    return f"{text}\n{RECALL_CUT_NOTE.format(what=what, path=path)}" if what else text
 
 
 def _instructions_show_index(view: TaskView, name: str) -> bool:
@@ -372,11 +395,12 @@ class Memory(Extension):
             body = await read_local_text(env, str(path))
             if body is None:
                 continue
-            size = len(body.encode("utf-8"))
+            shown = recalled_text(str(path), body.strip())
+            size = len(shown.encode("utf-8"))
             if used + size > budget:
                 break
             used += size
-            parts.append(f"Memory {path}:\n{body.strip()}")
+            parts.append(f"Memory {path}:\n{shown}")
             paths.append(str(path))
         if not parts:
             return None

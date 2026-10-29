@@ -112,3 +112,4 @@ rows come from the 2.1.312 bundle. noeta's counterpart is `noeta/plugins/memory`
 |---|---|
 | side.recall.1 | Selector: a system prompt, the memory files listed one per line (type, name, date, description), `max_tokens` 512, a JSON schema `{selected_memories: [string]}`, at most five files; files already recalled are not offered again. noeta today: covered. |
 | side.recall.2 | The selector picks by what the message is about, not by shared words, and is most careful with the broad user-profile and project-overview memories. noeta today: covered (`memory/recall`, our words). |
+| side.recall.3 | A recalled file shows its first 200 lines and at most 4,096 bytes; when cut, a closing line says so and names the path to `Read` for the rest. The shown text counts toward the 61,440-byte budget of the conversation. noeta today: covered. |

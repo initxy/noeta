@@ -240,3 +240,35 @@ def test_the_selector_is_sparing_with_broad_memories() -> None:
     # be most careful with the user-profile and project-overview memories.
     assert "[user]" in RECALL_PROMPT and "[project]" in RECALL_PROMPT
     assert "not by words it happens to share" in RECALL_PROMPT
+
+
+def test_a_recalled_file_shows_its_start_and_says_where_the_rest_is() -> None:
+    from noeta.plugins.memory.extension import (
+        RECALL_FILE_MAX_BYTES,
+        RECALL_FILE_MAX_LINES,
+        recalled_text,
+    )
+    assert recalled_text("/m/a.md", "short") == "short"
+    many = "\n".join(f"line {i}" for i in range(300))
+    cut = recalled_text("/m/a.md", many)
+    assert cut.split("\n")[RECALL_FILE_MAX_LINES - 1] == f"line {RECALL_FILE_MAX_LINES - 1}"
+    assert cut.endswith(f"> Only the first {RECALL_FILE_MAX_LINES} lines of this memory are "
+                        "shown; Read /m/a.md for the whole file.")
+    wide = "\n".join("x" * 100 for _ in range(100))
+    cut = recalled_text("/m/a.md", wide)
+    body, note = cut.rsplit("\n", 1)
+    assert len(body.encode()) <= RECALL_FILE_MAX_BYTES and body.endswith("x")
+    assert f"first {RECALL_FILE_MAX_BYTES} bytes" in note
+
+
+async def test_recall_attaches_a_long_memory_cut_to_its_start(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "big.md", "everything", "\n".join("y" * 80 for _ in range(400)))
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["big.md"]})), reply("ok"))
+    await h.start(a, goal="tell me everything")
+    [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
+    assert len(recalled.text.encode()) < 4096 + 800
+    assert f"Read {directory / 'big.md'} for the whole file." in recalled.text
