@@ -83,6 +83,8 @@ _NEWER_FORMAT = re.compile(r"Invalid (enum )?value '")
 
 
 def _newer_format(exc: Exception) -> bool:
+    if isinstance(exc, core_records.NewerRecord):
+        return True
     return isinstance(exc, msgspec.ValidationError) and bool(_NEWER_FORMAT.match(str(exc)))
 
 
