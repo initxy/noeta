@@ -241,7 +241,7 @@ async def test_a_notebook_reads_as_cells_with_outputs(h: Harness, ws: Path) -> N
     assert img.media_type == "image/png"
     assert img.data == _PNG_BYTES
     # Recorded like any read, so Edit / Write may follow.
-    assert h.fs.digest(str(ws / "nb.ipynb")) == hashlib.sha256(body).hexdigest()
+    assert h.fs.reads[str(ws / "nb.ipynb")].digest == hashlib.sha256(body).hexdigest()
 
 
 async def test_a_non_python_code_cell_names_its_language(h: Harness, ws: Path) -> None:

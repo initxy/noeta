@@ -26,8 +26,8 @@ from tests.plugins.conftest import Harness, text_of
 def test_reduce_from_nothing() -> None:
     state = reduce_fs(None, KIND_READ, {"path": "/a", "digest": "d1", "mtime": 1.5})
     assert state.reads == {"/a": FileRead(digest="d1", mtime=1.5)}
-    assert state.digest("/a") == "d1"
-    assert state.digest("/b") is None
+    assert state.reads["/a"].digest == "d1"
+    assert "/b" not in state.reads
 
 
 def test_reduce_never_mutates_its_input() -> None:

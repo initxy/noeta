@@ -157,9 +157,9 @@ def test_page_cache_expires_and_evicts() -> None:
     cache.put("a", "t", "m")
     cache.put("b", "t", "m")
     cache.put("c", "t", "m")
-    assert cache.get("a") is None and cache.get("c") == ("t", "m")
+    assert cache.entry("a") is None and cache.entry("c") == ("t", "m", False)
     now[0] = 901
-    assert cache.get("c") is None
+    assert cache.entry("c") is None
 
 
 async def test_http_transport_redirects_and_media() -> None:
