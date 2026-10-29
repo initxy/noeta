@@ -57,6 +57,8 @@ def test_the_recorded_text_check_finds_a_shared_run(tmp_path: Path) -> None:
         copied = "Note: " + said[start:start + own_words.SHARED].replace(" ", "\n  ") + " etc"
         assert own_words.matches(copied, indexed, []), start
     assert not own_words.matches("model text is never indexed, however long it is", indexed, [])
+    # A text copied from its first character on is one run too.
+    assert own_words.matches(said, indexed, []) == [(0, said[:own_words.SHARED + 20])]
     # An allowed literal is cut out first.
     head = said[:own_words.SHARED]
     assert not own_words.matches(head + " but then ours", indexed, [head])

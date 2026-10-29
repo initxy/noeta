@@ -196,7 +196,7 @@ def matches(text: str, indexed: set[bytes], allow: list[str]) -> list[tuple[int,
     for literal in allow:
         text = text.replace(literal, "\0" * len(literal))
     found: list[tuple[int, str]] = []
-    last = -WINDOW
+    last = -WINDOW - 1  # a run may start at offset 0
     for i in range(len(text) - WINDOW + 1):
         window = text[i:i + WINDOW]
         if "\0" in window or digest(window) not in indexed:
