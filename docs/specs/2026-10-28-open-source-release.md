@@ -74,6 +74,27 @@ servers and runs on many machines.
   load only from noeta's places, fetched at a pinned commit by `noeta plugin add`.
 - D9 Evaluation model: the `.env` live endpoint (gateway token gateway) or DeepSeek Flash;
   `make eval` must not drop below `evals/baseline.json`.
+- D10 What a request may set is an allow list, not a deny list: a new task's `config` takes
+  `model`, `effort`, `max_turns`, `cwd`, `permission_mode`, `output_schema`; a `config` signal
+  the kernel's `CHANGEABLE_CONFIG`; signals only `permission_mode`, `config`, `resumed`,
+  `restore_files`. Everything else (plugin keys such as `permission_rules`, plugin signals such
+  as `shell_job_ended`) is 403 naming it. A host plugin that wants a new request-settable key
+  or signal must be added to the list (`noeta/host/_http_guard.py`).
+- D11 Tenant queues: `queues = [...]` per tenant; without it `default` and the queue of the
+  tenant's own name; the default tenant (server token) may use any queue.
+- D12 (owner may revisit) Tenants and the OS user: `noeta serve` (with its worker) and
+  `noeta worker` refuse to start when tenants besides the default one are known (tokens file or
+  tenant directories), unless the sandbox confines every command (`enabled`,
+  `failIfUnavailable`, no `allowUnsandboxedCommands`) or `[server] shared_os_user_tenants =
+  true` accepts API-only separation; a tenant token added later is ignored by such a server.
+  Known limits: the sandbox confines `Bash` only (file tools run in-process, bounded by
+  permission rules the tenant answers itself; docs recommend `Read`/`Edit` deny rules for
+  `~/.noeta`); a remote exec env is reachable only from host code; `serve --no-worker` is not
+  checked and a worker without tenant directories or tokens file does not know of tenants.
+- D13 The server token is kept as `sha256:<hex>` in `~/.noeta/server-token` and printed only
+  when made (or when an older plain-text file is migrated, one last time); clients take it from
+  `NOETA_SERVER_TOKEN`. This changes ADR-009's "read by `noeta --server`" consequence: a
+  refining ADR is due at wrap-up.
 
 ## Plan
 
@@ -144,3 +165,4 @@ servers and runs on many machines.
 - 2026-10-28 Phase 5 on `os-docs` (from `os-structure` 633d24c2), one commit per piece, `make check` green after the docs commits, the pyproject commit and the ADR / gate commits: README rewritten (what noeta is, install from the repository since 1.0 is not on PyPI, Anthropic key or OpenAI-compatible endpoint with `NOETA_PROVIDER` / `NOETA_BASE_URL` and the per-provider `/v1` rule, the extras each command needs, embed, serve, extend, privacy; followed literally in a fresh tool environment: install from a checkout 11 s with a cold uv cache, `noeta -p` against the live gateway 3.4 s with `anthropic` and 3.1 s with `openai_compat`, both answered); `docs/architecture.md`; CONTRIBUTING, SECURITY (security model), issue/PR templates, `.env.example`; CHANGELOG Unreleased covers a244d2e..os-structure with one heading per type; pyproject PyPI metadata and a `keyring` extra (`uv build` + `twine check` pass; the sdist leaves out the local coding-tool settings directory); `docs/adr/` restored with ten records (001-010) and an index; `check-docs.sh` red on a live doc naming a missing `docs/` path or relative link (probe-tested, and red everywhere with `docs/adr` moved away); the CI ripgrep comment corrected. Left: the `git+https` install line is untested until the branch is pushed (the local-checkout form was tested); `noeta serve` / `acp` / a Postgres store without their extra still fail with a raw `ModuleNotFoundError` (code under `noeta/cli`, owned by the structure work); README's relative links will not resolve on a PyPI page.
 - 2026-10-28 `os-holdrace2` (from `os-structure` 78302249): the job-end leftover above is closed. `Post.forward_if_ended` has the store put an item for a task that has ended into its root's inbox instead, decided under the task's row lock with the same dedupe key; background jobs' ends and monitor events ask for it (`ToolContext.post`). With the end refused over an unread inbox, one runner reads the item: the sub-agent while live, else the root (one notice per job by its key). Deterministic test `tests/plugins/shell/test_end_after_sub_agent_end.py` (fails before: the job finishes between the sub-agent's end commit and the worker marking it ended); store contract test. make check 2051 passed; full suite with Postgres DSN 2093 passed; `make cluster` 12/12 three runs; parity 0.
 - 2026-10-28 Phase 4 open item on `os-parity2` (from `os-structure` d06c6cf6), one commit per behavior, a test failing before each, check green after each: the per-tool behavior pass, `SendMessage.notify_when_idle` and the sub-agent transcript `output_file`, ACP diffs / plan updates / model and mode switching, an interrupted reply keeping its finished thinking, `pip install 'noeta[<extra>]'` for extras-dependent commands (the os-docs leftover), and the TUI's "UI did not settle" flake (busy set after the send returned); details in the parity spec's progress log. make check 2157 passed (88.14%); `make parity` 0 (11 accepted deviations); make eval 1.000 vs 0.987; make e2e 7 passed; make cluster 12/12.
+- 2026-10-28 Host security review fixes on `os-fix-host` (from `os-structure` b8f21252), one commit each, a test failing before every behavior fix, check green after each: request `config` and `config` signals take only the allow-listed keys and signals only the front ends' four (D10; the repro `permission_rules: ["Bash"]` now 403); `/commands` and `/commands/run` check `cwd` and use a task's recorded one; stream-json resume/fork read the task through the scoped client before `adopt`; tenant queues (D11); serve/worker refuse tenants without an OS-level boundary unless opted in (D12); server token kept as a digest, printed once, plain-text file migrated (D13); `?token=` only on the WebSocket; `noeta plugin add` takes only git URLs, after `--`; one `token_digest`, `LOOPBACK_HOSTS` reused; SECURITY.md and docs/server.md say what is and is not a boundary; also the missing-extra message's `uv tool install --reinstall` form and the untrusted-skills warning once per process. make check 2173 passed. Not done: ADR-009 refinement (D13, at wrap-up); the sandbox does not confine file tools (D12).
