@@ -207,6 +207,25 @@ async def test_a_catalogued_model_gets_its_name_cutoff_and_the_attribution_note(
     assert "Co-Authored-By" not in text
 
 
+def test_the_co_author_address_comes_from_the_catalog() -> None:
+    from noeta.core import models
+    from noeta.plugins.environment import render_attribution
+
+    models.register_models({
+        "g1-test-other": models.ModelSpec(real_model_id="g1-test-other", context_window=1000,
+                                          max_output_tokens=100, display_name="Other 1"),
+        "g1-test-mailed": models.ModelSpec(real_model_id="g1-test-mailed",
+                                           context_window=1000, max_output_tokens=100,
+                                           display_name="Mailed 2",
+                                           coauthor_email="bot@example.com"),
+    })
+    assert render_attribution("g1-test-other") is None
+    note = render_attribution("g1-test-mailed")
+    assert note is not None and "Co-Authored-By: Mailed 2 <bot@example.com>" in note
+    claude = render_attribution("claude-opus-5-5")
+    assert claude is not None and "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" in claude
+
+
 async def _no_sleep(_: float) -> None:
     return None
 

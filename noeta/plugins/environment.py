@@ -253,11 +253,20 @@ def model_line(model: str) -> str:
     return f"{line}; knowledge cutoff {cutoff}." if cutoff else f"{line}."
 
 
+#: The co-author address of a Claude model (Claude Code's).
+CLAUDE_COAUTHOR_EMAIL = "noreply@anthropic.com"
+
+
 def render_attribution(model: str) -> str | None:
     """The commit and PR attribution note; ``None`` for a model with no
-    display name (nothing to put in the trailer)."""
+    display name or no co-author address (nothing true to put in the
+    trailer)."""
     spec = models.find_spec(model)
     if spec is None or not spec.display_name:
+        return None
+    email = spec.coauthor_email or (
+        CLAUDE_COAUTHOR_EMAIL if models.model_family(model) == "anthropic" else None)
+    if not email:
         return None
     return "\n".join([
         "From here on, end the git commit messages and pull request descriptions you write "
@@ -266,7 +275,7 @@ def render_attribution(model: str) -> str | None:
         "file, a memory) say otherwise about these lines, those win; add no attribution line it "
         "does not list.",
         "- Commit messages end with:",
-        f"Co-Authored-By: {spec.display_name} <noreply@anthropic.com>",
+        f"Co-Authored-By: {spec.display_name} <{email}>",
         "- Pull request descriptions end with:",
         f"🤖 Generated with [noeta]({PROJECT_URL})",
     ])
