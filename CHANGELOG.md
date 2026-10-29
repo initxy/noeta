@@ -432,6 +432,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   through one fixed `.tmp` name and updated read-modify-write without a lock, so two workers
   refreshing at once could drop a field or fail on the rename. Each write uses a temporary
   file of its own and updates hold a file lock (`<file>.lock`; no lock on Windows).
+- **Two per-worker caches are bounded.** The shell plugin's sandboxed tool lists (one per
+  sandbox settings and working directory) and the agent rosters resolved per set of named
+  agents grew for the life of a worker; each now keeps the 64 used last.
 - **A sub-agent that ends without handing back reports with its final message.** In auto
   mode a sub-agent that ended without `SubagentHandback` came back as "no report" and its
   last reply was dropped: one whose agent definition lacks the subtasks plugin, whose tool
