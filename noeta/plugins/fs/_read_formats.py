@@ -29,6 +29,7 @@ __all__ = [
     "PDF_MAX_BYTES",
     "PDF_MAX_PAGES_PER_READ",
     "PDF_MAX_PAGES_WHOLE",
+    "notebook_too_large",
     "read_notebook",
     "read_pdf",
     "read_size_tokens",
@@ -332,6 +333,12 @@ def _valid_cells(cells: Any) -> bool:
     return True
 
 
+def notebook_too_large(tool_name: str) -> ToolOutput:
+    """The refusal of a notebook over :data:`NOTEBOOK_MAX_BYTES`."""
+    return tool_error(tool_name, "Notebook file exceeds the maximum size this tool can read "
+                                 f"({format_size(NOTEBOOK_MAX_BYTES)}).")
+
+
 def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
     """Every cell of a notebook with its outputs, in Claude Code's form:
     ``<cell id="...">source</cell id="...">`` followed by each output's text,
@@ -341,10 +348,7 @@ def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
         return tool_error(tool_name, message)
 
     if len(raw) > NOTEBOOK_MAX_BYTES:
-        return err(
-            "Notebook file exceeds the maximum size this tool can read "
-            f"({format_size(NOTEBOOK_MAX_BYTES)})."
-        )
+        return notebook_too_large(tool_name)
     try:
         nb = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
