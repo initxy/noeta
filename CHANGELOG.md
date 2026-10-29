@@ -332,6 +332,8 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   (`ToolContext.post(forward_if_ended=True)`).
 - **`Claim.queue`.** A claim (and its renewal) names the queue of the task claimed; a store
   that leaves it out puts every child on `default`, as before.
+- **`claim(tenant_limits=)` counts live leases only.** A running task whose `lease_until`
+  has passed does not count toward its tenant's limit.
 - **`Store.hold(queues=)`.** Taking a hold with the holder's queues is refused (`None`) while
   an unended task of the tree is on a queue not among them, decided in the hold's
   transaction; `Runtime.hold` passes its queues.
@@ -463,7 +465,13 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **A sub-agent is not left unclaimed behind a background command.** While a worker holds the
   tree (a `run_in_background` command, a monitor), starting an agent on a queue that worker does
   not serve fails with a tool error naming the queue instead of creating a child no worker
-  would claim until the command ended.
+  would claim until the command ended. A plugin's `TaskView.spawn(queue=...)` on such a queue
+  raises `ValueError` the same way.
+- **A plugin can no longer write a `core` record of an unknown kind.** `ToolContext.record`
+  and `TaskView.record` raise `ValueError` for one; written, it left the task to a newer
+  worker for good.
+- **A tenant's running limit no longer counts a dead worker's task.** A running task whose
+  lease ran out holds no worker and no longer keeps the tenant's other tasks waiting.
 - **A worker missing a newly installed plugin no longer fails tasks during a rolling install**
   (see the pinned plugin set under Added), and a core log record of a kind this version does
   not know is left to a newer worker instead of being skipped.

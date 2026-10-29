@@ -55,7 +55,8 @@ class ToolContext(CoreNotices):
     #: Folded state of every extension, by extension name (read only).
     state: Mapping[str, Any]
     #: Record ``(extension, kind, data)``; the runner appends it as an
-    #: ``ExtensionRecorded`` just before the call's ``ToolFinished``.
+    #: ``ExtensionRecorded`` just before the call's ``ToolFinished``. Raises
+    #: ``ValueError`` for a ``core`` record of a kind the core does not know.
     record: Callable[[str, str, Any], None]
     #: Directory for full outputs too large to return inline, or ``None``.
     spill_dir: str | None = None

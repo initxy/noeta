@@ -163,6 +163,48 @@ async def test_a_child_on_a_queue_this_worker_does_not_serve_is_refused_while_it
     assert result.is_error and "kids" in result.text
 
 
+class SpawnOnQueue(Extension):
+    """Spawns a background child on ``queue`` before the first model call."""
+
+    name = "spawner"
+
+    def __init__(self, queue: str) -> None:
+        self.queue = queue
+        self.refused: list[str] = []
+
+    async def before_model(self, view: TaskView, request: Any) -> Any:
+        if not view.state.children and not self.refused:
+            try:
+                view.spawn("a", "go", queue=self.queue)
+            except ValueError as e:
+                self.refused.append(str(e))
+        return request
+
+
+@pytest.mark.parametrize("queue", ["kids", "default"])
+async def test_an_extension_spawn_on_a_queue_this_worker_does_not_serve_is_refused_while_it_holds(
+        store: SqliteStore, queue: str) -> None:
+    """``TaskView.spawn`` keeps the held tree's children on queues its
+    holder serves, as a tool call's spawn does."""
+    spawner = SpawnOnQueue(queue)
+    rt = runtime(store, ScriptedProvider([reply("ok")] * 3),
+                 Agent(name="a", model="m", extensions=[spawner]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    release = await rt.hold(tid)
+    try:
+        await rt.run_until_idle()
+    finally:
+        await release()
+    children = await client.tasks(parent_id=tid)
+    if queue == "default":
+        assert len(children) == 1 and spawner.refused == []
+        return
+    assert children == []
+    [refusal] = spawner.refused
+    assert "kids" in refusal
+
+
 @pytest.mark.parametrize("source_tenant", ["acme", "beta"])
 async def test_a_child_continues_only_its_own_tenants_conversation(
         store: SqliteStore, source_tenant: str) -> None:
