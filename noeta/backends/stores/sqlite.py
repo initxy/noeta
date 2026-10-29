@@ -18,6 +18,7 @@ from typing import TypeVar
 from msgspec.structs import replace
 
 from noeta.backends.stores._rows import (
+    SCHEMA_VERSION,
     TASK_COLUMNS,
     encode,
     event_decoder,
@@ -45,11 +46,6 @@ from noeta.core.store import (
 
 T = TypeVar("T")
 
-#: 2: holds moved to ``tree_holds`` (one holding worker per tree), and
-#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. 3:
-#: ``snapshots`` keyed by task and fold version. A store at a later version
-#: than this code knows is refused.
-SCHEMA_VERSION = 3
 _BUSY_TIMEOUT_MS = 10000
 _OPEN_ATTEMPTS = 5
 #: sqlite failures that mean "the store is not usable right now", not a bug

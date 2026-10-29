@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from noeta.backends.stores.sqlite import SCHEMA_VERSION, SqliteStore
+from noeta.backends.stores._rows import SCHEMA_VERSION
+from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.errors import StoreUnavailable
 from noeta.core.events import External, TaskCreated
 from noeta.core.store import HOLD_LOST, NewTask, Snapshot

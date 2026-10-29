@@ -54,6 +54,7 @@ import psycopg
 
 from noeta.backends.stores import postgres_snapshots as snapshots
 from noeta.backends.stores._rows import (
+    SCHEMA_VERSION,
     TASK_COLUMNS,
     encode,
     event_decoder,
@@ -85,11 +86,6 @@ Conn = psycopg.AsyncConnection[Any]
 
 log = logging.getLogger("noeta.backends.stores.postgres")
 
-#: 2: holds moved to ``tree_holds`` (one holding worker per tree), and
-#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. 3:
-#: ``snapshots`` keyed by task and fold version. A store at a later version
-#: than this code knows is refused.
-SCHEMA_VERSION = 3
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
 _TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
 _HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree; claims share it

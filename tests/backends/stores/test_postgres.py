@@ -178,7 +178,7 @@ async def test_concurrent_schema_setup_from_many_processes(pg: Any) -> None:
 async def test_a_schema_from_a_newer_noeta_is_refused(pg: Any) -> None:
     import psycopg
 
-    from noeta.backends.stores.postgres import SCHEMA_VERSION
+    from noeta.backends.stores._rows import SCHEMA_VERSION
 
     store = pg.store()
     await store.create(new())
@@ -195,7 +195,7 @@ async def test_a_schema_from_a_newer_noeta_is_refused(pg: Any) -> None:
 async def test_a_version_1_schema_is_upgraded_in_place(pg: Any) -> None:
     import psycopg
 
-    from noeta.backends.stores.postgres import SCHEMA_VERSION
+    from noeta.backends.stores._rows import SCHEMA_VERSION
 
     with psycopg.connect(pg.dsn, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{pg.schema}"')
