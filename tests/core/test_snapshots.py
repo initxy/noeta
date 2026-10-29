@@ -22,7 +22,8 @@ from noeta.core.events import Recorded
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState, fold, new_state
 from noeta.core.runner import Runtime
-from noeta.core.runner.task import SNAPSHOT_GROWTH, TaskRun
+from noeta.core.runner.snapshotting import SNAPSHOT_GROWTH
+from noeta.core.runner.task import TaskRun
 from noeta.core.store import Claim, Snapshot
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.plugins.shell.bash import ShellState

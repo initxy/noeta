@@ -14,7 +14,7 @@ wrote 216 snapshots, 699 MiB in all: 91 times the log. Ended tasks kept theirs f
 
 - A new snapshot is due once the log is at least `snapshot_every` events past the newest one
   and those events' encoded bytes are at least `SNAPSHOT_GROWTH` (0.1) of its size
-  (`noeta/core/runner/task.py`).
+  (`noeta/core/runner/snapshotting.py`).
 - The append that ends a task deletes its snapshot in the same transaction; `put_snapshot`
   keeps none for an ended task.
 

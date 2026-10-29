@@ -92,7 +92,7 @@ class Runtime:
     sleep: Callable[[float], Any] = asyncio.sleep
     #: Write a task's fold snapshot (``noeta.core.snapshots``) once its log
     #: is at least this many events past the newest one and those events
-    #: hold a share of its bytes (``noeta.core.runner.task.SNAPSHOT_GROWTH``);
+    #: hold a share of its bytes (``noeta.core.runner.snapshotting.SNAPSHOT_GROWTH``);
     #: ``0`` never reads or writes snapshots.
     snapshot_every: int = 100
     #: Serve only the task trees whose root ids are in this set (a front end

@@ -21,7 +21,6 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-import msgspec
 from msgspec.structs import replace
 
 from noeta.core import records as core_records
@@ -48,6 +47,7 @@ from noeta.core.prompts import load_overrides
 from noeta.core.records import CORE
 from noeta.core.runner import texts
 from noeta.core.runner.runtime import Runtime
+from noeta.core.runner.snapshotting import SnapshotWriter
 from noeta.core.store import Claim, NewTask, Post, Snapshot, patch_for, pin_history
 from noeta.core.tool import Tool
 from noeta.core.types import Text, Thinking, ToolResult, user
@@ -58,20 +58,6 @@ log = logging.getLogger("noeta.core.runner")
 #: Continued conversations followed back from a task (``history_from``)
 #: before the rest of the chain is ignored.
 MAX_HISTORY_DEPTH = 64
-
-#: A new snapshot is written once the events since the last one hold at
-#: least this share of its bytes (and ``Runtime.snapshot_every`` events).
-#: Each snapshot rewrites the whole state, so a fixed interval writes bytes
-#: growing with the square of the log; this keeps them within about
-#: ``1 + 1 / SNAPSHOT_GROWTH`` times the log's, and a claim folds events of
-#: at most this share of its snapshot's bytes.
-SNAPSHOT_GROWTH = 0.1
-
-
-def _event_bytes(events: Sequence[Event]) -> int:
-    """About what ``events`` add to a folded state, by their encoded size."""
-    return sum(len(msgspec.json.encode(e)) for e in events)
-
 
 class LostClaim(Exception):
     pass
@@ -102,12 +88,7 @@ class TaskRun:
         #: An extension posted to this task's inbox with its records
         #: (``TaskView.enqueue``) since the input was last taken.
         self._enqueued = False
-        #: The newest fold snapshot known, ``(seq, data)``: what the next one
-        #: is folded from (``None``: this run writes none).
-        self._snapshot: tuple[int, bytes] | None = None
-        self._snapshotting: asyncio.Task[None] | None = None
-        #: Bytes of the events folded or appended since the newest snapshot.
-        self._since_snapshot = 0
+        self.snapshots = SnapshotWriter(self)
 
     # ------------------------------------------------------------ lifecycle
 
@@ -116,7 +97,7 @@ class TaskRun:
         unsubscribe = self.store.on_change(self._on_change)
         try:
             await self.load()
-            self._snapshot_loaded()
+            self.snapshots.write_loaded()
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
                 # whose agent only some workers have must be routed by queue.
@@ -139,7 +120,7 @@ class TaskRun:
             keeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keeper
-            await self._snapshot_written()
+            await self.snapshots.finish()
 
     async def _steps(self) -> None:
         """Step until the task waits or ends. A bug (an extension hook, a
@@ -226,8 +207,8 @@ class TaskRun:
         base.task_id = self.task_id  # the log never names its own task
         if self._snapshots_on():
             data = snapshots.encode(base)
-            self._snapshot = (0, data) if data is not None else None
-            self._since_snapshot = _event_bytes([r.event for r in records])
+            if data is not None:
+                self.snapshots.known(0, data, records)
         self.state = fold(records, self.reducers, state=base)
 
     def _use_agent(self, name: str) -> None:
@@ -239,7 +220,8 @@ class TaskRun:
         return self.rt.snapshot_every > 0 and self.agent is not None \
             and getattr(self.store, "put_snapshot", None) is not None
 
-    def _version(self) -> str:
+    def fold_version(self) -> str:
+        """The snapshot version of this task's fold (``snapshots.version``)."""
         assert self.agent is not None
         return snapshots.version(self.agent.name, self.exts)
 
@@ -257,74 +239,12 @@ class TaskRun:
         except Exception:  # noqa: BLE001 — another fold's data: fold from the start
             return False
         self._use_agent(state.agent)
-        if self.agent is None or stored.version != self._version():
+        if self.agent is None or stored.version != self.fold_version():
             return False
         records = await self.store.read(self.task_id, after=stored.seq)
         self.state = fold(records, self.reducers, state=state)
-        self._snapshot = (stored.seq, stored.data)
-        self._since_snapshot = _event_bytes([r.event for r in records])
+        self.snapshots.known(stored.seq, stored.data, records)
         return True
-
-    def _snapshot_due(self) -> bool:
-        return self._snapshot is not None and self.state.ended is None \
-            and self.state.last_seq - self._snapshot[0] >= self.rt.snapshot_every \
-            and self._since_snapshot >= SNAPSHOT_GROWTH * len(self._snapshot[1]) \
-            and (self._snapshotting is None or self._snapshotting.done())
-
-    def _snapshot_loaded(self) -> None:
-        """Right after a load the state is a fold of stored events alone: a
-        due snapshot is written from it as it is."""
-        if not self._snapshot_due():
-            return
-        data = snapshots.encode(self.state)
-        if data is None:
-            self._snapshot = None
-            return
-        self._snapshot = (self.state.last_seq, data)
-        self._since_snapshot = 0
-        self._snapshotting = asyncio.ensure_future(self._put_snapshot(self.state.last_seq, data))
-
-    async def _snapshot_written(self) -> None:
-        """Let a snapshot being written finish (bounded) before the run
-        returns, unless the run itself is being cancelled."""
-        current = asyncio.current_task()
-        if self._snapshotting is None or self._snapshotting.done() \
-                or (current is not None and current.cancelling()):
-            return
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(asyncio.shield(self._snapshotting), self.rt.lease_seconds)
-
-    def _snapshot_later(self) -> None:
-        """After an append: write a snapshot in the background once due."""
-        if self._snapshot_due():
-            self._since_snapshot = 0
-            self._snapshotting = asyncio.ensure_future(self._write_snapshot())
-
-    async def _write_snapshot(self) -> None:
-        """Fold the stored events after the newest snapshot onto it (never
-        this runner's live state: the snapshot must be what a fold of the
-        stored log gives) and store the result."""
-        assert self._snapshot is not None
-        seq, data = self._snapshot
-        try:
-            state = fold(await self.store.read(self.task_id, after=seq), self.reducers,
-                         state=snapshots.decode(data))
-        except Exception:  # a snapshot is only ever an optimization
-            log.warning("task %s: could not fold a snapshot", self.task_id, exc_info=True)
-            return
-        new = snapshots.encode(state)
-        if new is None:
-            self._snapshot = None
-            return
-        self._snapshot = (state.last_seq, new)
-        await self._put_snapshot(state.last_seq, new)
-
-    async def _put_snapshot(self, seq: int, data: bytes) -> None:
-        try:
-            await self.store.put_snapshot(  # type: ignore[attr-defined]
-                self.task_id, Snapshot(seq=seq, version=self._version(), data=data))
-        except Exception as exc:  # noqa: BLE001 — the next one is written later
-            log.warning("task %s: could not store a snapshot: %s", self.task_id, exc)
 
     async def _history(self, first: Any, initial: dict[str, Any],
                        depth: int = 0) -> TaskState | None:
@@ -413,11 +333,10 @@ class TaskRun:
             recs = [Recorded(seq=base + i, at=at, event=e) for i, e in enumerate(events, 1)]
             for rec in recs:
                 apply(self.state, rec, self.reducers)
-            if self._snapshot is not None:
-                self._since_snapshot += _event_bytes(events)
+            self.snapshots.count(events)
             if cancelled:
                 raise asyncio.CancelledError()
-        self._snapshot_later()
+        self.snapshots.write_later()
         view = self.view()
         for rec in recs:
             for ext in self.exts:
