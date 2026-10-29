@@ -872,6 +872,14 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A sandboxed command can no longer point git at other config or hooks.** It could write
+  `.git/commondir` (git then takes config and hooks from the directory it names) or a
+  submodule's git directory under `.git/modules/`, and the next unsandboxed `git commit` or
+  `git worktree add` ran the planted hooks. `.git/modules/` and an existing `.git/commondir` are
+  now read-only (an empty placeholder covers a missing `.git/modules/`), as are each linked
+  worktree's `commondir` and `gitdir` seen from the main checkout. A missing `.git/commondir`
+  cannot be covered (git dies on an empty one, on the host too): on Linux one the command
+  creates is removed when the command ends; Seatbelt refuses creating it.
 - **A tenant's `Read` of a PDF no longer lets its commands swap the converters' input or
   output.** The copy and the rendered pages were in the tenant's own commands' `TMPDIR`, so a
   background command could replace them with links: `pdfinfo` and `pdftoppm`, run by the

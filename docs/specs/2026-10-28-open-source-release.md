@@ -518,6 +518,11 @@ servers and runs on many machines.
   (no temporary directory, for any env); a fenced task's PDF reaches `pdfinfo` and
   `pdftoppm` only as bytes on stdin (`-`). The converters still run unsandboxed as the
   worker, but open no path.
+- D161 (`os-fix-r10sec`, refines ADR-008) `.git/commondir` and `.git/modules/` are protected
+  sandbox paths. A missing `.git/modules/` gets a placeholder; a missing `.git/commondir`
+  cannot (git dies on an empty or directory `commondir`, also on the host while the mount
+  point exists), so on Linux the sandbox removes one the command made when the command ends.
+  A background command's planted `commondir` lives until it ends: a known gap.
 
 ## Plan
 

@@ -394,23 +394,23 @@ def test_the_protected_list_follows_the_permissions_and_git(tmp_path: Path, home
     ws = tmp_path / "ws"
     _repo_with_hooks_elsewhere(ws)
     plan = sb.plan_paths(SandboxSettings(enabled=True), str(ws), str(tmp_path / "t"))
-    module = ws / ".git" / "modules" / "lib"
     for path in (ws / ".envrc", ws / ".vscode", ws / ".husky", ws / "githooks",
-                 module / "config", module / "hooks", ws / ".git" / "config.worktree"):
+                 ws / ".git" / "modules", ws / ".git" / "commondir",
+                 ws / ".git" / "config.worktree"):
         assert str(path) in plan.deny_write, path
     held = dict(plan.placeholders)
     # Missing git config files are empty files; anything else an empty
     # directory, which git does not list.
     assert held[str(ws / ".git" / "config.worktree")] is True
-    assert held[str(module / "config.worktree")] is True
     assert held[str(ws / ".noeta")] is False
     # Other protected names are read-only when present, never placeheld: a
     # placeholder is a directory the person sees appear in the project.
     assert str(ws / ".pre-commit-config.yaml") not in held
-    assert set(held) <= {str(ws / n) for n in sb.PLACEHOLDERS} | {
-        str(module / "config.worktree"), str(module / "hooks")}, held
+    assert set(held) <= {str(ws / n) for n in sb.PLACEHOLDERS}, held
+    # Git dies on an empty commondir: a missing one is removed afterwards.
+    assert plan.remove_after == [str(ws / ".git" / "commondir")]
     # Every directory above a protected path is pinned: none can be renamed.
-    assert {str(ws / ".git"), str(ws / ".git" / "modules"), str(module)} <= set(plan.pinned)
+    assert str(ws / ".git") in plan.pinned
 
 
 def _linked_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -477,6 +477,39 @@ async def test_an_agent_commits_in_its_worktree_but_cannot_touch_git_code(
     assert not (gitdir / "config.worktree").exists()
     assert not (common / "hooks" / "pre-commit").exists()
     assert (gitdir / "commondir").read_text().strip() == "../.."
+
+
+@needs_bwrap
+async def test_git_cannot_be_pointed_at_other_config_or_hooks(tmp_path: Path,
+                                                              home: Path) -> None:
+    main, common, _ = _linked_worktree(tmp_path)
+    module = common / "modules" / "lib"
+    module.mkdir(parents=True)
+    (module / "HEAD").write_text("ref: refs/heads/main\n")
+    env = LocalExecEnv(str(main), sandbox={"enabled": True})
+    # commondir redirects config and hooks; a missing one written by the
+    # command is gone when it ends.
+    code, out, _ = await _run(env, "echo ../evil > .git/commondir && echo planted")
+    assert "planted" in out or code != 0
+    assert not (common / "commondir").exists()
+    gitdir = common / "worktrees" / "agent-x"
+    for command in ("mkdir -p .git/modules/new/hooks", "echo x > .git/modules/lib/config",
+                    "mv .git/modules .git/old-modules",
+                    f"echo {tmp_path} > {gitdir}/commondir", f"echo x > {gitdir}/gitdir"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert sorted(os.listdir(common / "modules")) == ["lib"]
+    assert not (module / "config").exists()
+    assert (gitdir / "commondir").read_text().strip() == "../.."
+    # Git still works in the sandbox, and the placeholders are gone.
+    git = "git -c user.name=t -c user.email=t@t"
+    code, out, _ = await _run(env, f"echo hi > f && {git} add f && {git} commit -qm x && "
+                                   f"{git} status --short && echo ok")
+    assert code == 0 and "ok" in out, out
+    shutil.rmtree(common / "modules")
+    code, out, _ = await _run(env, f"{git} status --short && echo ok")
+    assert code == 0 and "ok" in out, out
+    assert not (common / "modules").exists() and not (common / "commondir").exists()
 
 
 #: What a package manager or build tool runs on its next ordinary command.

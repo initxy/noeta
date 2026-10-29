@@ -6,6 +6,7 @@ macOS)."""
 
 from __future__ import annotations
 
+import contextlib
 import glob
 import os
 import subprocess
@@ -24,15 +25,22 @@ HOME_ALLOW_READ = ("tool-results", "projects")
 #: permissions plugin's protected directories and files (noeta's project
 #: directory, editor tasks, hook runners, shell and package-manager
 #: settings) and git's hooks and config — code that would later run outside
-#: the sandbox. ``.git`` itself stays writable (git works in the sandbox) but
-#: pinned. Only a missing :data:`PLACEHOLDERS` path is covered by an empty
-#: read-only placeholder, so it cannot be created either.
+#: the sandbox — with what points git at other ones: ``commondir`` (another
+#: directory's config and hooks) and the submodules' git directories.
+#: ``.git`` itself stays writable (git works in the sandbox) but pinned.
+#: Only a missing :data:`PLACEHOLDERS` path is covered by an empty read-only
+#: placeholder, so it cannot be created either.
 PROTECTED = (
     *(d for d in PROTECTED_DIRS if d != ".git"),
     *("/".join(n) for n in PROTECTED_NESTED),
     *sorted(PROTECTED_FILES),
-    ".git/hooks", ".git/config", ".git/config.worktree",
+    ".git/hooks", ".git/config", ".git/config.worktree", ".git/commondir", ".git/modules",
 )
+#: Protected git files a placeholder cannot stand in for (git dies on an
+#: empty ``commondir``, in the sandbox and on the host, which sees the
+#: mount point): a missing one is removed when the command ends instead.
+#: Seatbelt refuses creating it outright.
+REMOVED_AFTER = (".git/commondir",)
 #: The protected names a command must not create when missing: what is
 #: executed on the next ordinary command without a confirmation step —
 #: noeta's own directory, git's hooks and config, and the settings a
@@ -46,12 +54,13 @@ PROTECTED = (
 #: The configured hooks directory is always placeheld, and a hook runner's
 #: other configs (:data:`HOOK_RUNNER_CONFIGS`) once it is in use.
 PLACEHOLDERS = frozenset({
-    ".noeta", ".git/hooks", ".git/config", ".git/config.worktree",
+    ".noeta", ".git/hooks", ".git/config", ".git/config.worktree", ".git/modules",
     ".npmrc", ".yarnrc", ".yarnrc.yml", ".yarn", ".pnpmfile.cjs", ".pnp.cjs",
     ".pnp.loader.mjs", "bunfig.toml", ".bunfig.toml", ".cargo", ".mvn", ".bazelrc",
     ".bazelversion", ".bazeliskrc"})
 #: The :data:`PLACEHOLDERS` that are directories; the rest are files.
-_PLACEHELD_DIRS = frozenset({".noeta", ".git/hooks", ".yarn", ".cargo", ".mvn"})
+_PLACEHELD_DIRS = frozenset({".noeta", ".git/hooks", ".git/modules", ".yarn", ".cargo",
+                             ".mvn"})
 #: A hook runner's configs: when one is present the hooks run it, and a
 #: missing one (a ``-local`` override) is read on the next commit.
 HOOK_RUNNER_CONFIGS = ("lefthook.yml", ".lefthook.yml", "lefthook.yaml", ".lefthook.yaml",
@@ -110,6 +119,8 @@ class Plan:
     placeholders: list[tuple[str, bool]] = field(default_factory=list)
     #: Writable directories inside a hidden one, mounted again over it.
     rebound: list[str] = field(default_factory=list)
+    #: Missing paths the command must not leave behind (:data:`REMOVED_AFTER`).
+    remove_after: list[str] = field(default_factory=list)
 
 
 def _first_missing(path: str) -> str | None:
@@ -126,27 +137,6 @@ def _first_missing(path: str) -> str | None:
             real_dir = os.path.isdir(parent) and not os.path.islink(parent)
             return current if real_dir else None
         current = parent
-
-
-def _module_gitdirs(gitdir: str, limit: int = 256) -> list[str]:
-    """The submodules' git directories under ``gitdir/modules`` (a name may
-    hold slashes; a submodule may have its own)."""
-    found: list[str] = []
-    stack = [os.path.join(gitdir, "modules")]
-    while stack and len(found) < limit:
-        try:
-            entries = list(os.scandir(stack.pop()))
-        except OSError:
-            continue
-        for entry in entries:
-            if not entry.is_dir(follow_symlinks=False):
-                continue
-            if os.path.isfile(os.path.join(entry.path, "HEAD")):
-                found.append(entry.path)
-                stack.append(os.path.join(entry.path, "modules"))
-            else:
-                stack.append(entry.path)
-    return found
 
 
 def _hooks_dir(project: str) -> str | None:
@@ -166,12 +156,16 @@ def _hooks_dir(project: str) -> str | None:
 
 
 def _git_protected(project: str) -> list[str]:
-    """What git runs code from in ``project`` beyond :data:`PROTECTED`: each
-    submodule's config and hooks, and the configured hooks directory."""
+    """What git runs code from in ``project`` beyond :data:`PROTECTED`: in
+    each linked worktree's git directory what points git elsewhere (present
+    ones), and the configured hooks directory."""
     out: list[str] = []
-    for module in _module_gitdirs(os.path.join(project, ".git")):
-        out += [os.path.join(module, "hooks"),
-                *(os.path.join(module, name) for name in _GIT_CONFIGS)]
+    worktrees = os.path.join(project, ".git", "worktrees")
+    with contextlib.suppress(OSError):
+        for entry in os.scandir(worktrees):
+            if entry.is_dir(follow_symlinks=False):
+                out += [path for name in GIT_WORKTREE_PROTECTED
+                        if os.path.lexists(path := os.path.join(entry.path, name))]
     hooks = _hooks_dir(project)
     if hooks is not None:
         out.append(hooks)
@@ -356,9 +350,12 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
             placeholders.setdefault(missing, missing == path and (
                 names.get(path, False) or ("/.git/" in path
                                            and os.path.basename(path) in _GIT_CONFIGS)))
+    remove_after = [path for p in projects for n in REMOVED_AFTER
+                    if os.path.isdir(os.path.dirname(path := os.path.join(p, n)))
+                    and not os.path.lexists(path) and any(_within(path, w) for w in writes)]
     return Plan(writable=writes, deny_write=deny_write, deny_read=deny_read,
                 allow_read=allow_read, pinned=pinned, placeholders=list(placeholders.items()),
-                rebound=rebound)
+                rebound=rebound, remove_after=remove_after)
 
 
 def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
