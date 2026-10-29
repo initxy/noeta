@@ -257,6 +257,32 @@ async def test_a_blocked_prompt_leaves_what_the_model_already_saw(tmp_path: Path
     assert not any("SECRET" in t for t in texts)
 
 
+async def test_a_prompt_hook_added_later_checks_only_what_the_model_has_not_seen(
+        tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("noted"), reply("ok")])
+    client = Client(store)
+
+    def runtime(hooks: dict[str, Any]) -> Runtime:
+        agent = Agent(name="a", model="m", extensions=[Hooks(hooks=hooks)])
+        return Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                       env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+
+    tid = await client.create("a", "my SECRET is 42", config={"cwd": str(work)})
+    await runtime({}).run_until_idle()
+    seen = tmp_path / "seen.json"
+    blocking = {"UserPromptSubmit": _hook(f"tee {seen} | grep -q SECRET && "
+                                          "{ echo blocked >&2; exit 2; }; exit 0")}
+    await client.send(tid, "hello")
+    await runtime(blocking).run_until_idle()
+    assert json.loads(seen.read_text())["prompt"] == "hello"
+    assert len(provider.requests) == 2
+    assert [m.text for m in provider.requests[1].messages
+            if m.role == "user"][-2:] == ["my SECRET is 42", "hello"]
+
+
 async def test_pre_tool_use_blocks_matching_calls_only(tmp_path: Path) -> None:
     hooks = {"PreToolUse": _hook("echo 'reads are off today' >&2; exit 2", matcher="Read|Glob")}
     steps = [reply("", ("Read", {"file_path": "a.txt"}), ("Write", {"file_path": "b.txt", "content": "x"})),

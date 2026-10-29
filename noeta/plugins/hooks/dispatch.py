@@ -42,8 +42,9 @@ PERMISSIONS_PLUGIN = "permissions"
 
 @dataclass(frozen=True)
 class HookState:
-    #: Seq of the newest person's message the prompt hooks have seen.
-    prompted_through: int = 0
+    #: Seq of the newest person's message the prompt hooks have seen
+    #: (``None``: they have never looked at this task).
+    prompted_through: int | None = None
     #: Stop hooks that blocked since the person's message ``stop_since``.
     stop_blocks: int = 0
     stop_since: int = 0
