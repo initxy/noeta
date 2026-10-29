@@ -113,6 +113,9 @@ class Runtime:
     #: released); a new hold of the tree waits for it.
     _unholding: dict[str, asyncio.Future[None]] = field(default_factory=dict, init=False,
                                                         repr=False)
+    #: Per task: claims in a row whose log could not be read or folded here
+    #: (``TaskRun._unreadable``).
+    _unreadable: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # The snapshot version is of the code this process runs: hash it

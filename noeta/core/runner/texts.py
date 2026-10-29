@@ -69,6 +69,9 @@ MAX_TURNS = "max_turns"
 MAX_TURNS_DETAIL = "Reached maximum number of turns ({n})"
 #: A bug in the runner, an extension hook or a provider adapter.
 INTERNAL_ERROR = "internal_error"
+#: A task whose log no claim could read or fold (``LOAD_ATTEMPTS`` in a row).
+UNREADABLE_LOG = ("unreadable_log: the task's log could not be read on {attempts} claims in "
+                  "a row; last error: {error}")
 #: An unattended task (``config["unattended"]``, e.g. a background sub-agent)
 #: reached an approval or a question nobody can answer.
 NEEDS_HUMAN = "needs_human"
