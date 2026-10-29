@@ -229,6 +229,62 @@ All notable changes to Noeta are documented here. The format is based on
   `bypassPermissions` when that is disabled); the TUI and ACP offer what it lists. `noeta serve`
   turns on the plugin's own `bypassPermissions` refusal.
 
+- **Built-in tools answer as Claude Code 2.1.312's tools do.**
+  - `Read` without `limit` returns the whole file (within 256 KB and 25,000 tokens) instead of
+    its first 2,000 lines, and keeps long lines whole instead of cutting them at 2,000
+    characters. A whole-file read past the token cap returns the lines that fit and a note with
+    the next `offset` instead of being refused. Images and PDFs are recognised by extension
+    (content is sniffed only without one); empty, headerless or over-100 MB PDFs, known binary
+    types, devices and `/proc/<pid>` files are refused with a reason. An image comes back as the
+    image alone; a UTF-8 byte-order mark is hidden; a missing file names the working directory
+    and a likely intended path; an empty file or an offset past the end is a warning. The
+    "unchanged since last read" answer needs the same `offset` / `limit` and covers notebooks.
+  - `Edit` matches straight quotes against curly ones and `\uXXXX` escapes against the
+    characters they stand for, keeping the file's own spelling; deleting text takes the
+    following line break along; an empty `old_string` creates the file (or fills an empty one).
+    It refuses notebooks (use `NotebookEdit`) and files over 1 GB, its not-found error repeats
+    the string it looked for, and a file changed on disk since the read is still edited when
+    the write is allowed outright. `Edit` and `Write` skip the read-first check for a write no
+    one had to approve. `Write` keeps a file's UTF-8 byte-order mark and, given a directory,
+    asks for the file name.
+  - `NotebookEdit` takes `cell-<index>` for any cell, answers with the cell's new source, and
+    gives an inserted cell an id only in an nbformat 4.5+ notebook.
+  - `Bash`: exit status 1 of `grep`, `rg`, `find`, `diff` and `test` is an answer, not an
+    error; a command still running at its timeout moves to the background (with its job id and
+    output file) instead of being killed; output that is one `data:image` URI is an image.
+  - `WebFetch` refuses URLs over 2,000 characters or with credentials, waits 60 s and accepts
+    10 MB (was 10 s, 5 MB); an HTTP error status, an offset past the end and a cross-host
+    redirect (naming the status and the call to make) are ordinary results; `www.` redirects are
+    followed; a PDF or other binary body is saved to a file the model can `Read`. `WebSearch`
+    returns the query, the hits as JSON and a reminder to cite, and refuses `allowed_domains`
+    together with `blocked_domains`.
+  - An MCP result over the token budget is saved and pointed to, not cut inline;
+    `ReadMcpResourceTool` saves a binary resource and gives its path.
+  - `Agent` matches `subagent_type` ignoring case, spaces, dashes and underscores when exactly
+    one type fits, and a bad `Agent` call fails alone while the reply's other calls run.
+    `SendMessage` refuses `to: "*"`; `TaskStop` answers with Claude Code's result object.
+  - `AskUserQuestion` no longer refuses long or empty texts, refuses two questions with the
+    same text, steers a one-option question, and tells the model to read typed answers as
+    written. `Skill` accepts `/name`, follows a skill called again with its new arguments,
+    names a user-only skill as such and suggests a near match for an unknown name.
+    `ToolSearch` ranks keyword queries as Claude Code does and `select:` finds an MCP tool by
+    its own name. `ReportFindings` refuses values outside its schema; `Workflow` runs at least
+    two agents at once and lists the saved workflows for an unknown name; `ExitPlanMode`
+    outside plan mode says what to do next; `EnterWorktree` refuses `.` and `.git` segments.
+
+### Store contract
+
+Third-party `Store` implementations must add both; `noeta.testing.store_contract` checks them.
+
+- **Refuse to end a task over an unread inbox.** An append that ends a task while its inbox
+  holds items past the read seq raises `InboxUnread` (a `Conflict`), checked under the task's
+  row lock. The runner reads the input and decides again, so a sub-agent can no longer end
+  without reading a `hold_lost` and drop a background job silently.
+- **`Post.forward_if_ended`.** When set and the target task has ended, the item goes to the
+  root's inbox instead (same dedupe key), decided under the target's row lock; `post` returns
+  the seq of the inbox it went to. Background jobs' ends and monitor events use it
+  (`ToolContext.post(forward_if_ended=True)`).
+
 ### Added
 
 - **The rest of Claude Code's deferred tools and frontmatter.** `EnterPlanMode` (asks the
@@ -312,6 +368,14 @@ All notable changes to Noeta are documented here. The format is based on
 - **Channels** (`noeta.core.channel.Channel`, entry-point group `noeta.channels`,
   `config.toml` `[channels.<name>]`): long-running listeners run by `noeta worker` and
   `noeta serve`, posting idempotently through `deliver()` so replicas are safe.
+- **`SendMessage` `notify_when_idle`**: one notice when another open session next goes idle
+  or ends (expires after 12 hours); `message` is optional with it. A background agent keeps its
+  transcript in `<spill root>/<root>/tasks/<agent id>.output`, named by the launch result and
+  the completion notice. `TaskView.enqueue(task_id=)` posts to another task of the tenant.
+- **ACP**: `Edit`, `Write` and `NotebookEdit` changes are sent as diffs (old and new text);
+  plan mode's plan file is sent as the editor's plan; model and mode are session config
+  options, also advertised by a loaded session.
+- PyPI metadata in `pyproject.toml` and a `keyring` extra for `{keyring:}` secrets.
 - `function_tool(fn)`: a typed Python function becomes a `Tool` (exported from `noeta`).
   Secrets in plugin arguments as `{env:NAME}` / `{keyring:service/user}` (the optional
   `keyring` package), resolved only when the plugin is made. Machine policy:
@@ -334,6 +398,12 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Fixed
 
+- **An interrupted reply keeps the thinking it finished.** Only the streamed text was kept;
+  completed thinking blocks (signature included) now go back ahead of it
+  (`TurnStopped.thinking`; older records fold as before).
+- **A background job's end is no longer lost around a sub-agent's end.** A sub-agent could end
+  without reading `hold_lost`, and a job finishing just as its sub-agent ended posted its end
+  to an inbox no one reads; both now reach a reader (see Store contract).
 - **The terminal UI no longer stays "working" after a fast turn.** It marked itself busy only
   once the message was sent, so a turn that ended (and was shown ending) before the send
   returned left it busy until the next one; it is now busy from the moment it sends.
