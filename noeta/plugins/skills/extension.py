@@ -28,7 +28,7 @@ from noeta.core.extension import (
     TaskView,
 )
 from noeta.core.tool import Tool, ToolOutput, text_output
-from noeta.core.types import Message, ToolUse, user
+from noeta.core.types import Message, Origin, ToolUse, user
 from noeta.plugins.skills import _frontmatter
 from noeta.plugins.skills.gates import (
     Enforcement,
@@ -321,7 +321,7 @@ class Skills(Extension):
                 except InlineCommandError as exc:
                     _log.warning("skills: preload %r skipped: %s", name, exc)
                     continue
-                self._record_activation(view, data)
+                self._record_invocation(view, data, None, self.origin)
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The listing taken at start, in the environment's system turn
@@ -365,7 +365,8 @@ class Skills(Extension):
             desc = registry.get(typed[0]) if typed else None
             if desc is not None and desc.paths and desc.name not in unlocked_skills(state):
                 desc = None
-            if typed and desc is not None and desc.name not in state.get("active", {}):
+            if typed and desc is not None:
+                prior = (state.get("active") or {}).get(desc.name)
                 data = activation_data(desc, "user", typed[1], view.cwd)
                 # The body rides in the person's turn as plain text, after
                 # the command's tags (Claude Code's slash-command shape).
@@ -378,8 +379,7 @@ class Skills(Extension):
                                 message=user(f"The skill could not load: {exc}",
                                              origin="inline"))
                     continue
-                view.record(self.name, "activated", data,
-                            message=user(data["text"], origin="inline"))
+                self._record_invocation(view, data, prior, "inline")
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         if call.name in FILE_TOOLS and not output.is_error:
@@ -392,18 +392,7 @@ class Skills(Extension):
             data = await self._expand(view, data, call.id)
         except InlineCommandError as exc:
             return text_output(str(exc), is_error=True)
-        if prior is None:
-            self._record_activation(view, data)
-        elif (prior.get("args"), prior.get("rendered")) == (data.get("args"),
-                                                              data.get("rendered")):
-            # The same instructions are already in the conversation: a short
-            # note instead of the body again.
-            args = f" Arguments: {data['args']}" if data.get("args") else ""
-            view.record(self.name, "reinvoked", {"name": data["name"]}, message=user(
-                REINVOKED_SAME.format(name=data["name"]) + args, origin=self.origin))
-        else:
-            self._record_activation(view, {**data, "text": REINVOKED_CHANGED.format(
-                name=data["name"]) + "\n\n" + data["text"]})
+        self._record_invocation(view, data, prior, self.origin)
         meta = {k: v for k, v in output.meta.items() if k != "skill_activation"}
         meta["skill"] = data["name"]
         return msgspec.structs.replace(output, meta=meta)
@@ -520,9 +509,22 @@ class Skills(Extension):
         view.record(self.name, "listing", {"names": names, "lines": texts},
                     message=user(render_listing(first, texts), origin=self.origin))
 
-    def _record_activation(self, view: TaskView, data: dict[str, Any]) -> None:
-        view.record(self.name, "activated", data,
-                    message=user(data["text"], origin=self.origin))
+    def _record_invocation(self, view: TaskView, data: dict[str, Any],
+                           prior: Mapping[str, Any] | None, origin: Origin | None) -> None:
+        """A skill invoked, by the model or a typed ``/name``: its text the
+        first time; a short note when the same text is already in the
+        conversation; a note and the whole text when its arguments or
+        command output changed (Claude Code's)."""
+        if prior is not None and (prior.get("args"), prior.get("rendered")) == (
+                data.get("args"), data.get("rendered")):
+            args = f" Arguments: {data['args']}" if data.get("args") else ""
+            view.record(self.name, "reinvoked", {"name": data["name"]}, message=user(
+                REINVOKED_SAME.format(name=data["name"]) + args, origin=origin))
+            return
+        if prior is not None:
+            data = {**data, "text": REINVOKED_CHANGED.format(name=data["name"]) + "\n\n"
+                    + data["text"]}
+        view.record(self.name, "activated", data, message=user(data["text"], origin=origin))
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction, given again with the next request in its

@@ -102,6 +102,22 @@ async def test_a_slash_command_fills_the_skill_from_what_follows_it(h: Harness) 
         "Do it.\n\nARGUMENTS: fast please")
 
 
+async def test_a_slash_command_typed_again_follows_the_skill_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $0 since $1.\n")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a, "/notes v0.1 monday")
+    await h.say(a, tid, "/notes v0.2 friday")
+    changed = h.provider.requests[1].messages[-1].text
+    assert changed.startswith("(/notes called again") and changed.endswith(
+        "Notes for v0.2 since friday.\n")
+    await h.say(a, tid, "/notes v0.2 friday")
+    same = h.provider.requests[2].messages[-1].text
+    assert "notes" in same and "Arguments: v0.2 friday" in same and "Notes for" not in same
+    acts = await h.records(tid, "skills", "activated")
+    assert [x.data["args"] for x in acts] == ["v0.1 monday", "v0.2 friday"]
+
+
 async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     write_skill(skills_dir(h), "hidden", "User only.", **{"disable-model-invocation": "yes"})
