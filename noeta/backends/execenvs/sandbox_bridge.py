@@ -78,6 +78,9 @@ _ARCHES = {
     "x86_64": (0xC000003E, 41, 272, 56, 435, True, (101, 310, 311, 438)),
     "aarch64": (0xC00000B7, 198, 97, 220, 435, False, (117, 270, 271, 438)),
 }
+# io_uring_setup, io_uring_enter, io_uring_register: the same numbers on
+# every architecture (added after the tables were unified).
+_IO_URING = (425, 426, 427)
 _RET_ALLOW = 0x7FFF0000
 _RET_KILL_PROCESS = 0x80000000
 _EPERM, _ENOSYS = 1, 38
@@ -124,6 +127,9 @@ def _filter(allow_unix: bool, allow_userns: bool) -> bytes | None:
     for nr in refused:
         prog += [(jeq, 0, 1, nr), (ret, 0, 0, _errno(_EPERM))]
     if not allow_unix:
+        # io_uring creates sockets without socket(2) on recent kernels.
+        for nr in _IO_URING:
+            prog += [(jeq, 0, 1, nr), (ret, 0, 0, _errno(_EPERM))]
         flag_block(nr_socket, (jeq, 0, 1, socket.AF_UNIX))
     if not allow_userns:
         flag_block(nr_unshare, (jset, 0, 1, _CLONE_NEWUSER))

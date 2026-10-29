@@ -817,6 +817,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   command could trace it, and under any setting read its `/proc` files. The relay is now not
   dumpable, and the command's filter refuses `ptrace`, `process_vm_readv`,
   `process_vm_writev` and `pidfd_getfd` whatever the settings allow.
+- The sandbox's filter refused `socket(AF_UNIX)` but let a command set up io_uring, which
+  creates sockets without `socket(2)` on Linux 5.19 and later. `io_uring_setup`,
+  `io_uring_enter` and `io_uring_register` are now refused unless Unix sockets are allowed.
 - **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
   allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
   `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so

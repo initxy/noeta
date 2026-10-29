@@ -774,3 +774,26 @@ async def test_a_command_cannot_reach_into_the_relay(tmp_path: Path, home: Path)
         assert code == 0, out
         assert "relay closed" in out and "read relay" not in out, out
         assert "traceme -1 1" in out, out  # EPERM
+
+
+def test_seccomp_filter_refuses_io_uring_with_unix_sockets(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: "aarch64")
+    aarch64, eperm, allow = 0xC00000B7, 0x00050000 | 1, 0x7FFF0000
+    strict = bridge._filter(allow_unix=False, allow_userns=True)
+    loose = bridge._filter(allow_unix=True, allow_userns=True)
+    assert strict is not None and loose is not None
+    for nr in (425, 426, 427):  # io_uring_setup, _enter, _register
+        assert _run_bpf(strict, nr, aarch64) == eperm
+        assert _run_bpf(loose, nr, aarch64) == allow
+
+
+@needs_bwrap
+async def test_io_uring_cannot_be_set_up(tmp_path: Path, home: Path) -> None:
+    probe = ("import ctypes;l=ctypes.CDLL(None,use_errno=True);"
+             "p=ctypes.create_string_buffer(120);"
+             "print('setup',l.syscall(425,1,p),ctypes.get_errno())")
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, out, _ = await _run(env, f'python3 -c "{probe}"')
+    assert code == 0 and out.split()[:3] in (["setup", "-1", "1"], ["setup", "-1", "38"]), out
