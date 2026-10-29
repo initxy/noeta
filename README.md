@@ -32,7 +32,7 @@ the whole `…/v1/responses` URL:
 
 ```bash
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://llm.example.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...
+export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...       # or OPENAI_API_KEY
 ```
 
 The same settings are flags (`--model`, `--provider`, `--base-url`) or keys in

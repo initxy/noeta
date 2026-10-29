@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from noeta.cli import home_dir, mcp_command, plugin_command, tenants
-from noeta.cli.config import Settings, load_settings
+from noeta.cli.config import MissingAPIKey, Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "token")
@@ -357,6 +357,8 @@ def missing_extra(exc: BaseException) -> str | None:
 def main(argv: list[str] | None = None) -> None:
     try:
         _main(list(sys.argv[1:] if argv is None else argv))
+    except MissingAPIKey as exc:
+        sys.exit(f"noeta: {exc}")
     except ImportError as exc:
         extra = missing_extra(exc)
         if extra is None:
