@@ -51,6 +51,21 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_QUESTIONS = 4
 _MIN_OPTIONS = 2
 _MAX_OPTIONS = 4
+#: Longest text of each field the dialog takes. The schema asks for short
+#: headers and labels (as Claude Code's) without enforcing it; these bound
+#: only what no dialog could show.
+MAX_CHARS = {"question": 1000, "header": 100, "label": 200, "description": 2000,
+             "preview": 20_000}
+
+
+def _text_problem(field: str, value: str) -> str | None:
+    """Why ``value`` cannot be the ``field`` text, else ``None``."""
+    if field in ("question", "label") and not value.strip():
+        return "an option label is empty" if field == "label" else "a question is empty"
+    if len(value) > MAX_CHARS[field]:
+        return (f"a {field} is {len(value)} characters long; at most {MAX_CHARS[field]} are "
+                "allowed")
+    return None
 
 WITHDRAWN_ERROR = "Question withdrawn by user (no answer provided)."
 #: A question with one option (or none) has nothing to decide; the model is
@@ -196,17 +211,26 @@ def _options(raw: Any) -> tuple[list[dict[str, Any]], str | None]:
         label = item.get("label")
         if not isinstance(label, str):
             return [], "each option needs a label string"
+        problem = _text_problem("label", label)
+        if problem is not None:
+            return [], problem
         if label in seen:
             return [], f"duplicate option label: {label!r}"
         seen.add(label)
         description = item.get("description")
         if not isinstance(description, str):
             return [], "each option needs a description string"
+        problem = _text_problem("description", description)
+        if problem is not None:
+            return [], problem
         option = {"label": label, "description": description}
         preview = item.get("preview")
         if preview is not None:
             if not isinstance(preview, str):
                 return [], "option preview must be a string"
+            problem = _text_problem("preview", preview)
+            if problem is not None:
+                return [], problem
             option["preview"] = preview
         out.append(option)
     return out, None
@@ -232,11 +256,17 @@ def validate_questions(arguments: Any) -> list[dict[str, Any]] | str:
         question = item.get("question")
         if not isinstance(question, str):
             return "each question needs a question string"
+        problem = _text_problem("question", question)
+        if problem is not None:
+            return problem
         if any(q["question"] == question for q in questions):
             return f"two questions have the same text: {question!r}; each question must differ"
         header = item.get("header")
         if not isinstance(header, str):
             return "each question needs a header string"
+        problem = _text_problem("header", header)
+        if problem is not None:
+            return problem
         multi = item.get("multiSelect", False)
         if not isinstance(multi, bool):
             return "multiSelect must be a boolean"
