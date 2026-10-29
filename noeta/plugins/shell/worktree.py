@@ -38,6 +38,9 @@ KEPT = "Back in {root}. The worktree {path} (branch {branch}) is kept."
 REMOVED = "Back in {root}. The worktree {path} and its branch {branch} were removed."
 CHANGES = ("The worktree {path} was not removed: it has {what}. Confirm with the user, then "
            "call again with discard_changes: true to remove it anyway, or use action \"keep\".")
+UNCHECKED = ("The worktree {path} was not removed: git could not tell whether it holds unsaved "
+             "work ({error}). Confirm with the user, then call again with discard_changes: "
+             "true to remove it anyway, or use action \"keep\".")
 
 
 def name_problem(name: Any) -> str | None:
@@ -198,8 +201,11 @@ class ExitWorktreeTool:
         made = tree if tree.get("created") else tree.get("made")
         back = str(tree.get("back") or ctx.env.cwd)
         if action == "remove" and isinstance(made, dict):
-            what = await self._changes(ctx, made)
-            if what and input.get("discard_changes") is not True:
+            what, failed = await self._changes(ctx, made)
+            if (what or failed) and input.get("discard_changes") is not True:
+                if failed:
+                    return tool_error(self.name, UNCHECKED.format(path=made["path"],
+                                                                  error=failed))
                 return tool_error(self.name, CHANGES.format(path=made["path"], what=what))
             code, err = await _git(ctx, ["worktree", "remove", "--force", made["path"]],
                                    made["root"])
@@ -220,14 +226,19 @@ class ExitWorktreeTool:
         ctx.record(SHELL, "cwd", {"cwd": back})
 
     @staticmethod
-    async def _changes(ctx: ToolContext, tree: dict[str, Any]) -> str:
-        """What removing ``tree`` would lose, in words; empty when nothing."""
+    async def _changes(ctx: ToolContext, tree: dict[str, Any]) -> tuple[str, str]:
+        """What removing ``tree`` would lose, in words (empty when nothing),
+        and git's error when it could not tell (empty when it could)."""
         lost = []
         code, status = await _git(ctx, ["status", "--porcelain"], tree["path"])
-        if code == 0 and status:
+        if code != 0:
+            return "", f"git status: {status or 'failed'}"
+        if status:
             lost.append(f"{len(status.splitlines())} uncommitted file(s)")
         code, ahead = await _git(ctx, ["rev-list", "--count", f"{tree['base']}..HEAD"],
                                  tree["path"])
-        if code == 0 and ahead.isdigit() and int(ahead):
+        if code != 0 or not ahead.isdigit():
+            return "", f"git rev-list: {ahead or 'failed'}"
+        if int(ahead):
             lost.append(f"{ahead} commit(s) not on the original branch")
-        return " and ".join(lost)
+        return " and ".join(lost), ""

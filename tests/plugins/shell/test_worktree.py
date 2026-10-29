@@ -4,6 +4,7 @@ ever removed, and not with unsaved work unless told to."""
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,19 @@ async def test_remove_refuses_unsaved_work_unless_discarded(repo: Path) -> None:
     (tree / "new.txt").write_text("x")
     err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
     assert err and "1 uncommitted file" in text and tree.exists()
+    err, _ = await s.call(ExitWorktreeTool(), {"action": "remove", "discard_changes": True})
+    assert not err and not tree.exists()
+
+
+async def test_remove_refuses_when_git_cannot_say_what_would_be_lost(repo: Path) -> None:
+    s = Driver(repo)
+    await s.call(EnterWorktreeTool(), {"name": "w"})
+    tree = repo / ".noeta" / "worktrees" / "w"
+    assert s.state.worktree is not None
+    # A base git no longer knows: ``rev-list`` fails, so nothing is known.
+    s.state = dataclasses.replace(s.state, worktree={**s.state.worktree, "base": "0" * 40})
+    err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
+    assert err and "git" in text and tree.exists()
     err, _ = await s.call(ExitWorktreeTool(), {"action": "remove", "discard_changes": True})
     assert not err and not tree.exists()
 
