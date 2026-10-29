@@ -757,6 +757,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   in place; the turn now fails with `tenant_not_isolated` before any model call, as on a
   worker without a boundary. Workers read the tenant directories at start: restart every
   worker after adding a tenant (`docs/server.md`).
+- A tenant's file tools write only its commands' `TMPDIR` (`tmp/`) in the tenant's
+  temporary directory. Before, they could write anywhere in it, its background jobs' logs
+  and state files (`jobs/w<pid>/*.output`, `.alive`, `.cwd`) and its commands' sandbox files
+  included.
 - **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another

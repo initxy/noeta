@@ -202,8 +202,14 @@ def test_the_fence_keeps_tenants_out_of_shared_temp_places(
         assert s.fence.refusal(str(path), tenant="default", task_id="t1") is None
     own = s.mine / "jobs" / "w1" / "x.output"
     assert s.fence.refusal(str(own), tenant="acme", task_id="t1", cwd=str(p.mine)) is None
-    assert s.fence.refusal(str(own), tenant="acme", task_id="t1", cwd=str(p.mine),
-                           write=True) is None
+    # File tools write only its commands' TMPDIR there, never the job logs,
+    # their state files or a command's sandbox files.
+    for theirs in (own, s.mine / "jobs" / "w1" / "x.cwd", s.mine / "0123abcd" / "empty"):
+        why = s.fence.refusal(str(theirs), tenant="acme", task_id="t1", cwd=str(p.mine),
+                              write=True)
+        assert why is not None and "may not write" in why
+    assert s.fence.refusal(str(s.mine / "tmp" / "f"), tenant="acme", task_id="t1",
+                           cwd=str(p.mine), write=True) is None
 
 
 async def test_a_tenants_env_keeps_its_temp_files_and_job_logs_apart(

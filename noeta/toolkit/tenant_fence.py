@@ -8,9 +8,9 @@ temp directories but for its tenant's own, other tenants' workspaces, the
 server's own directories (the default tenant's workspace), the credential
 stores of every home directory (:data:`~noeta.toolkit.sandbox.DEFAULT_DENY_READ`
 under each of :func:`home_dirs`) and the operator's ``denyRead``. It may write
-only its tenant's workspace, its own corners and its tenant's own temporary
-directory (:meth:`TenantFence.temp_dir`: its commands' ``TMPDIR`` and its job
-logs). Its own corners are its spilled tool outputs and its tree's
+only its tenant's workspace, its own corners and its commands' ``TMPDIR`` in
+its tenant's own temporary directory (:meth:`TenantFence.temp_dir`, which
+also holds its job logs, readable only). Its own corners are its spilled tool outputs and its tree's
 transcripts, its tenant's plan files, in its tenant's project directory of
 its working directory the memory and, to read, its tree's compaction
 transcripts, and read access to the operator's skills and saved workflows.
@@ -187,6 +187,11 @@ class TenantFence:
         if not _within(path, own_temp) and any(
                 _within(path, p) or _within(path, _real(p)) for p in self.temp_places()):
             return head + "it holds other tasks' command output and temporary files"
+        # Of its own, file tools write only its commands' TMPDIR: not the job
+        # logs and their state files, nor a command's sandbox files.
+        own_tmp = posixpath.join(own_temp, "tmp")
+        if write and _within(path, own_temp) and not _within(path, own_tmp):
+            return head + "it holds the tenant's job logs and sandbox files"
         fenced = [p for p in (self.home or str(noeta_home()), self.spill_root, self.plans_dir)
                   if p]
         if any(_within(path, _real(p)) for p in fenced):
@@ -199,7 +204,7 @@ class TenantFence:
         why = self._protected(real, tenant)
         if why is not None:
             return head + why
-        if not write or self._workspace_owner(real) == tenant or _within(real, own_temp):
+        if not write or self._workspace_owner(real) == tenant or _within(real, own_tmp):
             return None
         return head + "it is outside the tenant's workspace and its own places in noeta"
 
