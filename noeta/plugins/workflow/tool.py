@@ -3,11 +3,11 @@ file), checks it, records the run and starts its first agents."""
 
 from __future__ import annotations
 
+import posixpath
 import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.extension import TaskView
@@ -157,7 +157,7 @@ class WorkflowTool:
                                "JavaScript that starts with the meta literal.", is_error=True)
         meta = checked["meta"]
         rid = f"wf_{secrets.token_hex(5)}"
-        path = self._save(ctx, rid, script)
+        path = await self._save(ctx, rid, script)
         run: dict[str, Any] = {
             "run_id": rid, "name": str(meta["name"]), "description": str(meta["description"]),
             "phases": meta.get("phases") or [], "script": script, "args": input.get("args"),
@@ -180,19 +180,18 @@ class WorkflowTool:
                                           saved=saved), run_id=rid, script_path=path)
 
     @staticmethod
-    def _save(ctx: ToolContext, rid: str, script: str) -> str:
+    async def _save(ctx: ToolContext, rid: str, script: str) -> str:
         """Keep the script beside the task's other spilled files (in its own
         directory there: a tenant's task may read only that one)."""
         if not ctx.spill_dir:
             return ""
-        task_dir = Path(spill_path(ctx.spill_dir, ctx.task_id, "x")).parent
-        path = task_dir / "workflows" / f"{rid}.js"
+        task_dir = posixpath.dirname(spill_path(ctx.spill_dir, ctx.task_id, "x"))
+        path = posixpath.join(task_dir, "workflows", f"{rid}.js")
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(script, encoding="utf-8")
+            await ctx.env.write_bytes(path, script.encode("utf-8"))
         except OSError:
             return ""
-        return str(path)
+        return path
 
 
 class _ToolView:

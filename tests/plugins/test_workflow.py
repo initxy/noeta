@@ -163,6 +163,44 @@ async def test_resume_reuses_finished_agents(store: SqliteStore) -> None:
         "count xyz", "sum 2,4,3"]
 
 
+class _RemoteEnv(LocalExecEnv):
+    """An env whose files are not on this machine (a container's)."""
+
+    def __init__(self, cwd: str) -> None:
+        super().__init__(cwd)
+        self.files: dict[str, bytes] = {}
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        self.files[path] = data
+
+    async def read_bytes(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+
+async def test_a_saved_script_is_written_where_script_path_reads_it(
+        store: SqliteStore, tmp_path: Path) -> None:
+    script = "export const meta = {name: 'one', description: 'd'}\nreturn 1\n"
+    model = Model(reply("", ("Workflow", {"script": script})), reply("started"), reply("ok"))
+    env = _RemoteEnv(str(tmp_path))
+    rt = runtime(store, model, Orchestration(engine=Engine()), env=env)
+    rt.spill_root = str(tmp_path / "spill")
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    started = next(e for e in (r.event for r in await client.events(tid))
+                   if isinstance(e, ToolFinished))
+    path = started.meta["script_path"]
+    assert env.files[path].decode() == script and not Path(path).exists()
+    model.main += [reply("", ("Workflow", {"scriptPath": path})), reply("again"), reply("ok")]
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    texts = [e.result.text for e in (r.event for r in await client.events(tid))
+             if isinstance(e, ToolFinished)]
+    assert texts[-1].startswith('Workflow "one" started')
+
+
 async def test_a_bad_meta_and_a_missing_engine_are_refused(
         store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
     bad = "const x = 1\nexport const meta = {name: 'a', description: 'b'}"
