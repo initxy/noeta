@@ -81,6 +81,8 @@ _warned_untrusted: dict[str, None] = {}
 WARNED_KEEP = 1024
 
 AGENT_TOOL = "Agent"
+#: Fork skills waiting for their commands to run, remembered at most.
+FORKS_DUE_KEEP = 256
 #: The agent a ``context: fork`` skill runs in when it names none.
 DEFAULT_FORK_AGENT = "general-purpose"
 #: The forked agent's ``description``.
@@ -207,6 +209,9 @@ class Skills(Extension):
         #: The registry a task's turn last loaded, by task: ``(turn key,
         #: registry)`` (see :meth:`turn_registry`).
         self._turn_registries: dict[str, tuple[tuple[Any, ...], SkillRegistry]] = {}
+        #: Fork skills whose commands wait until every check passed the
+        #: ``Skill`` call: ``(task, call id)`` -> ``(Agent input, activation)``.
+        self._forks_due: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
 
     # ------------------------------------------------------------ discovery
 
@@ -445,6 +450,10 @@ class Skills(Extension):
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
         if call.name == SKILL_TOOL:
             return await self._fork(view, call)
+        if call.name == AGENT_TOOL:
+            due = self._forks_due.pop((view.task_id, call.id), None)
+            if due is not None and due[0] == call.input:
+                return await self._expand_fork(view, call, due[1])
         state = view.ext_state(self.name) or {}
         active: dict[str, Any] = state.get("active") or {}
         if call.name == SKILL_SCRIPT_TOOL_NAME and self.scripts:
@@ -488,18 +497,36 @@ class Skills(Extension):
                 unlocked_skills(state)) or view.find_tool(AGENT_TOOL) is None:
             return None
         prompt = (state.get("forks") or {}).get(call.id)
+        due: dict[str, Any] | None = None
         if prompt is None:
             data = activation_data(desc, "model", args, view.cwd)
-            data["text"] = render_body(desc, args, view.cwd)
-            try:
+            data["text"] = prompt = render_body(desc, args, view.cwd)
+            if has_commands(prompt) and self.shell_commands:
+                # Run once the rewritten call is gated: a deny of this
+                # ``Skill`` call (any plugin's) has stopped it by then.
+                due = data
+            else:
                 prompt = (await self._expand(view, data, call.id))["text"]
-            except InlineCommandError as exc:
-                return Deny(reason=str(exc))
-            view.record(self.name, "forked", {"call_id": call.id, "name": name,
-                                              "prompt": prompt})
-        return Rewrite(name=AGENT_TOOL, input={
-            "description": FORK_DESCRIPTION.format(name=name), "prompt": prompt,
-            "subagent_type": desc.agent or DEFAULT_FORK_AGENT})
+                view.record(self.name, "forked", {"call_id": call.id, "name": name,
+                                                  "prompt": prompt})
+        agent_input = {"description": FORK_DESCRIPTION.format(name=name), "prompt": prompt,
+                       "subagent_type": desc.agent or DEFAULT_FORK_AGENT}
+        if due is not None:
+            if len(self._forks_due) >= FORKS_DUE_KEEP:
+                self._forks_due.pop(next(iter(self._forks_due)))
+            self._forks_due[(view.task_id, call.id)] = (agent_input, due)
+        return Rewrite(name=AGENT_TOOL, input=agent_input)
+
+    async def _expand_fork(self, view: TaskView, call: ToolUse,
+                           data: dict[str, Any]) -> Gate:
+        """A fork skill's commands, run now that its ``Skill`` call passed."""
+        try:
+            prompt = (await self._expand(view, data, call.id))["text"]
+        except InlineCommandError as exc:
+            return Deny(reason=str(exc))
+        view.record(self.name, "forked", {"call_id": call.id, "name": data["name"],
+                                          "prompt": prompt})
+        return Rewrite(name=AGENT_TOOL, input={**call.input, "prompt": prompt})
 
     async def _unlock(self, view: TaskView, call: ToolUse) -> None:
         """Offer the skills whose ``paths`` match the file this call touched,
