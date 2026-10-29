@@ -65,7 +65,11 @@ def _find(cells: list[Any], cell_id: str) -> int | str:
     if m is None:
         return f"no cell with id {cell_id!r}"
     index = int(m.group(1))
-    return index if index < len(cells) else f"no cell at index {index} in the notebook"
+    if index >= len(cells):
+        return f"no cell at index {index} in the notebook"
+    if not isinstance(cells[index], dict):
+        return f"the cell at index {index} is not a cell object"
+    return index
 
 
 def _source(text: str) -> list[str]:

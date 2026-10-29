@@ -439,6 +439,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **`NotebookEdit` refuses a `cell-N` that names no cell object.** On a notebook whose
+  N-th entry in `cells` is not an object, the call failed with an `AttributeError`; it
+  now returns a tool error.
 - **`ListAgents` says when its session list may be incomplete.** It lists the open
   sessions among the store's 200 most recently active tasks and said nothing of older
   ones; when that window is full it now says so, and that an older session can still be
