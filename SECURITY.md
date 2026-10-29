@@ -67,7 +67,9 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
 - **Plugins are code you install.** They run in-process with noeta's rights; installing one
   (`noeta plugin add`, a plugin file, a package) is trusting it. noeta runs nothing from a plugin
   while installing it, and a machine policy (`/etc/noeta/config.toml` `[policy]`) can allow or
-  block plugins by name.
+  block plugins by name. The policy matches the name a plugin declares, not the file, package or
+  repository it came from, so a blocked plugin under another name is not blocked (an allow list
+  is what admits only known plugins).
 - **Nothing is sent anywhere by default** except requests to your configured model provider.
 - **Secrets** in configuration are written as `{env:NAME}` or `{keyring:service/user}`
   references and resolved only when a plugin is made, so they stay out of files and task logs.
