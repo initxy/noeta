@@ -82,6 +82,8 @@ async def test_default_mode_reads_freely_and_asks_to_write(store: SqliteStore,
     await client.answer(tid, item.request_id, "allow", data={"mode": "acceptEdits"})
     await rt.run_until_idle()
     assert [r["file_path"] for r in write.runs] == ["x.md", "y.md"]
+    # A person allowed the first; the mode allowed the second outright.
+    assert write.allowed == [(True, False), (False, True)]
 
 
 async def test_read_only_commands_run_and_others_offer_a_rule(store: SqliteStore,

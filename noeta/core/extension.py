@@ -39,9 +39,13 @@ log = logging.getLogger("noeta.plugins")
 class Allow(Struct, tag="allow", tag_field="gate"):
     """No objection. With ``approve`` the extension also vouches for the
     call (a PreToolUse hook that allows it): other extensions' asks are
-    satisfied, except a ``firm`` one; a deny still wins."""
+    satisfied, except a ``firm`` one; a deny still wins. With ``outright``
+    a permission layer says it allows the call by its own settings (a mode,
+    a rule) with nobody asked; the call's tool sees it as
+    ``ToolContext.allowed_outright`` when no extension asked about it."""
 
     approve: bool = False
+    outright: bool = False
 
 
 class Deny(Struct, tag="deny", tag_field="gate"):

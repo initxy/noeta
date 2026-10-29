@@ -292,7 +292,7 @@ class Permissions(Extension):
             return guard
         decision = await self.decide(view, call)
         if decision.kind == "allow":
-            return None
+            return Allow(outright=True)
         if decision.kind == "deny":
             return Deny(reason=decision.reason)
         rules = list(decision.always)

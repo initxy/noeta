@@ -34,7 +34,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.Edit.3` | `old_string` must match exactly, indentation included, and must be unique; otherwise the edit fails. | covered |
 | `tool.Edit.4` | Strip `Read`'s line prefix (line number and tab) before matching. | covered |
 | `tool.Edit.5` | `replace_all: true` replaces every occurrence. | covered |
-| `tool.Edit.6` | Observed: an `Edit` succeeded on files the model had only seen through a Bash `cat` in the same conversation (`m1/0042`, `m1/0066`). The bundle's mechanism: the read-first check is skipped when the write is allowed outright by the permissions (mode or rule), for all but older Claude models. | covered (skipped for a call no person was asked about; no model gate, `deviations.md`) |
+| `tool.Edit.6` | Observed: an `Edit` succeeded on files the model had only seen through a Bash `cat` in the same conversation (`m1/0042`, `m1/0066`). The bundle's mechanism: the read-first check is skipped when the write is allowed outright by the permissions (mode or rule), for all but older Claude models. | covered (skipped when the permission layer allowed the call outright, `ToolContext.allowed_outright`; kept for older Claude models and without a permission layer; `deviations.md`) |
 | `tool.Edit.7` | The description says nothing about outside-workspace paths, diffs or snippets. | covered |
 
 ## Runtime behaviour (2.1.312 bundle)

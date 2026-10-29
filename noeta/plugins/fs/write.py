@@ -23,6 +23,7 @@ from noeta.plugins.fs._mutate import (
     mutation_result,
     read_precondition_error,
     record_written,
+    unread_write_allowed,
 )
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -133,7 +134,7 @@ class WriteTool:
                 return tool_error(self.name, f"read failed: {exc}")
             refused = read_precondition_error(
                 ctx, resolved, existing, tool_name=self.name, verb="overwriting",
-                unread_ok=not ctx.approved,
+                unread_ok=unread_write_allowed(ctx),
             )
             if refused is not None:
                 return refused
