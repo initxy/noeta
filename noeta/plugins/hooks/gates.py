@@ -9,7 +9,7 @@ from typing import Any
 
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
 from noeta.core.types import ToolUse
-from noeta.plugins.hooks.dispatch import KEEP, NAME, Dispatcher
+from noeta.plugins.hooks.dispatch import CONTEXT_LABEL, KEEP, NAME, Dispatcher
 
 #: The tool a sub-agent ends its run with (a model-visible name).
 HANDBACK_TOOL = "SubagentHandback"
@@ -64,7 +64,7 @@ class ToolGates:
             if isinstance(r.specific.get("updatedInput"), dict):
                 updated = dict(r.specific["updatedInput"])
             contexts.append(r.context)
-        self._d.context(view, "context", f"PreToolUse hook ({call.name})", contexts)
+        self._d.context(view, "context", f"PreToolUse:{call.name}{CONTEXT_LABEL}", contexts)
         verdict: Gate | None = None
         if decision == "ask":
             verdict = Ask(prompt=reason or f"A hook asks to confirm {call.name}", firm=True)

@@ -246,6 +246,15 @@ Not in the recordings; from the 2.1.312 bundle (`attachments` render map: `file`
 | rem.at-mention.5 | A PDF the model must read by pages is named instead (its page count and size): none of it is in the conversation; before anything else call `Read` with a few pages, read on a few pages a call, describe only pages read and say which ones an answer rests on. |
 | rem.at-mention.6 | A path a deny rule keeps from `Read` is left out without a word. A path that could not be read is named: the user @-mentioned it, it was not attached, read it with the file tools before answering; without access to the files (a session that does not attach them) every mention is named the same way. |
 
+## hook context
+
+Not in the recordings (no hooks configured); from the 2.1.312 bundle (`hook_additional_context`,
+`hook_blocking_error`).
+
+| id | rule |
+|---|---|
+| rem.hook-context.1 | Text a hook adds for the model (`additionalContext`, or a `UserPromptSubmit` / `SessionStart` hook's plain output) is meta user content led by `<hook name> hook additional context: `; the hook name is the event (`UserPromptSubmit`, `SessionStart`, `SubagentStart`, `PostToolBatch`), or `<event>:<tool>` for a tool's events (`PreToolUse:Read`). A tool hook's blocking feedback is led by `<hook name> hook blocking error`. |
+
 ## s1 only
 
 | id | rule |

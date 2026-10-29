@@ -201,7 +201,7 @@ async def test_pre_tool_use_rewrites_once_and_adds_context(tmp_path: Path) -> No
     assert not is_error and "other" in text  # b.txt ran, without asking
     assert len(s.runner.payloads("pre")) == 1  # not asked again about its own rewrite
     second = s.provider.requests[1].messages
-    assert second[-1].text == "PreToolUse hook (Read): Read b instead."
+    assert second[-1].text == "PreToolUse:Read hook additional context: Read b instead."
     assert second[-1].origin == "system"
 
 
@@ -306,7 +306,7 @@ async def test_post_tool_use_replaces_output_and_adds_context(tmp_path: Path) ->
     assert payload["tool_response"]["is_error"] is False and "hello" in \
         payload["tool_response"]["text"]
     assert s.provider.requests[1].messages[-1].text == \
-        "PostToolUse hook (Read): Treat as secret."
+        "PostToolUse:Read hook additional context: Treat as secret."
 
 
 async def test_post_tool_use_failure(tmp_path: Path) -> None:
@@ -319,7 +319,7 @@ async def test_post_tool_use_failure(tmp_path: Path) -> None:
     assert payload["hook_event_name"] == "PostToolUseFailure" and payload["error"]
     assert payload["is_interrupt"] is False and "tool_response" not in payload
     assert s.provider.requests[1].messages[-1].text == \
-        "PostToolUseFailure hook (Read): Check the path first."
+        "PostToolUseFailure:Read hook blocking error: Check the path first."
 
 
 async def test_updated_mcp_tool_output_only_for_mcp_tools(tmp_path: Path) -> None:
@@ -396,7 +396,7 @@ async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
     config = {"SessionStart": hook("start", "startup|resume")}
     s = await Setup(tmp_path, config, [reply("a"), reply("b"), reply("c"), reply("d")],
                     answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
-    assert s.system_texts(0) == ["SessionStart hook (startup): source was startup"]
+    assert s.system_texts(0) == ["SessionStart hook additional context: source was startup"]
     await s.send("again")  # the same process: no new SessionStart
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
     # Another worker (or a restart: a fresh plugin) picking the task up is
@@ -411,7 +411,7 @@ async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
     await s.send("after a resume")
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "resume"]
     assert s.provider.requests[3].messages[-2].text == \
-        "SessionStart hook (resume): source was resume"
+        "SessionStart hook additional context: source was resume"
 
 
 async def test_compaction_events(tmp_path: Path) -> None:
@@ -432,7 +432,7 @@ async def test_compaction_events(tmp_path: Path) -> None:
     assert "Compacted, all good." in await s.notices()
     await s.send("go on")
     assert [p["source"] for p in s.runner.payloads("start")] == ["compact"]
-    assert "SessionStart hook (compact): Re-read NOTES.md." in s.system_texts(2)
+    assert "SessionStart hook additional context: Re-read NOTES.md." in s.system_texts(2)
 
 
 async def test_compaction_context_survives_a_blocked_prompt(tmp_path: Path) -> None:
@@ -447,7 +447,7 @@ async def test_compaction_context_survives_a_blocked_prompt(tmp_path: Path) -> N
     await s.send("my SECRET")
     await s.send("go on")
     assert [p["source"] for p in s.runner.payloads("start")] == ["compact"]
-    assert "SessionStart hook (compact): Re-read NOTES.md." in s.system_texts(2)
+    assert "SessionStart hook additional context: Re-read NOTES.md." in s.system_texts(2)
 
 
 async def test_pre_compact_can_refuse(tmp_path: Path) -> None:
@@ -544,7 +544,7 @@ async def test_sub_agent_start_and_stop(tmp_path: Path) -> None:
     [start] = runner.payloads("start")
     assert (start["agent_id"], start["agent_type"]) == (child.task_id, "scout")
     assert start["session_id"] == tid
-    assert c.requests[0].messages[0].text == "SubagentStart hook: Be brief."
+    assert c.requests[0].messages[0].text == "SubagentStart hook additional context: Be brief."
     first, second = runner.payloads("stop")
     assert (first["last_assistant_message"], first["stop_hook_active"]) == ("draft", False)
     assert second["stop_hook_active"] is True and second["agent_type"] == "scout"
@@ -698,7 +698,7 @@ async def test_post_tool_batch_once_per_reply_with_every_result(tmp_path: Path) 
     calls = payload["tool_calls"]
     assert [c["tool_input"]["file_path"] for c in calls] == ["a.txt", "b.txt"]
     assert "hello" in calls[0]["tool_response"] and "other" in calls[1]["tool_response"]
-    assert "PostToolBatch hook: Both read." in s.system_texts(1)
+    assert "PostToolBatch hook additional context: Both read." in s.system_texts(1)
 
 
 async def test_stop_failure_on_a_failed_model_call_only(tmp_path: Path) -> None:
