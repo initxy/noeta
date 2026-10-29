@@ -428,6 +428,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   worker kept every ended background job of a root until the root ended; it now keeps the
   last 64 once their end is posted (older logs are removed with the root's), and the list of
   ended tasks forgets its oldest entry first instead of an arbitrary one.
+- **Two writers of one MCP sign-in no longer lose tokens.** The OAuth token file was written
+  through one fixed `.tmp` name and updated read-modify-write without a lock, so two workers
+  refreshing at once could drop a field or fail on the rename. Each write uses a temporary
+  file of its own and updates hold a file lock (`<file>.lock`; no lock on Windows).
 - **A sub-agent that ends without handing back reports with its final message.** In auto
   mode a sub-agent that ended without `SubagentHandback` came back as "no report" and its
   last reply was dropped: one whose agent definition lacks the subtasks plugin, whose tool
