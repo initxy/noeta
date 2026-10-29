@@ -134,7 +134,8 @@ def test_the_trust_and_plugins_commands(home: Path, tmp_path: Path,
     (project / ".noeta" / "plugins").mkdir(parents=True)
     _write(project / ".noeta" / "plugins" / "waver.py", "waver")
     main.main(["--cwd", str(project), "trust"])
-    assert "trusted" in capsys.readouterr().out
+    assert ("prompt overrides, skills and Claude-Code-format settings load"
+            in capsys.readouterr().out)
     main.main(["--cwd", str(project), "plugins"])
     out = capsys.readouterr().out
     assert "web\tpackage noeta" in out
