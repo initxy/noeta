@@ -36,7 +36,8 @@ from noeta.toolkit.local_env import scrub_env
 
 log = logging.getLogger("noeta.hooks")
 
-_OUTPUT_CAP = 64 * 1024
+#: Bytes of a hook's stdout (and of its stderr) that are kept.
+OUTPUT_CAP = 64 * 1024
 #: Exit code of a hook that could not run or did not answer in time.
 FAILED = -1
 
@@ -98,16 +99,43 @@ async def run_command(hook: HookCommand, payload: dict[str, Any], cwd: str | Non
         return HookResult(exit_code=FAILED, stderr=str(exc))
     try:
         out, err = await asyncio.wait_for(
-            proc.communicate(json.dumps(payload).encode()), hook.timeout)
+            _exchange(proc, json.dumps(payload).encode()), hook.timeout)
     except TimeoutError:
-        # The whole group: a shell's children hold the pipes open otherwise.
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        await proc.wait()
         return HookResult(exit_code=FAILED, stderr=f"timed out after {hook.timeout:g}s")
+    finally:
+        if proc.returncode is None:
+            # Timed out or cancelled. The whole group: a shell's children
+            # hold the pipes open otherwise.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
     return HookResult(exit_code=proc.returncode or 0,
-                      stdout=out[:_OUTPUT_CAP].decode("utf-8", "replace"),
-                      stderr=err[:_OUTPUT_CAP].decode("utf-8", "replace"))
+                      stdout=out.decode("utf-8", "replace"),
+                      stderr=err.decode("utf-8", "replace"))
+
+
+async def _exchange(proc: asyncio.subprocess.Process, data: bytes) -> tuple[bytes, bytes]:
+    """Write ``data`` to the process's stdin, read the head of its stdout
+    and stderr (the rest is read away), and wait for it to exit."""
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+    stdin = proc.stdin
+
+    async def feed() -> None:
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+            stdin.write(data)
+            await stdin.drain()
+        stdin.close()
+
+    out, err, _ = await asyncio.gather(_head(proc.stdout), _head(proc.stderr), feed())
+    await proc.wait()
+    return out, err
+
+
+async def _head(stream: asyncio.StreamReader) -> bytes:
+    kept = bytearray()
+    while chunk := await stream.read(65536):
+        if len(kept) < OUTPUT_CAP:
+            kept += chunk[:OUTPUT_CAP - len(kept)]
+    return bytes(kept)
 
 
 _ENV_REF = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -147,7 +175,7 @@ async def run_http(hook: HookCommand, payload: dict[str, Any],
         return HookResult(exit_code=FAILED, stderr=f"timed out after {hook.timeout:g}s")
     except httpx.HTTPError as exc:
         return HookResult(exit_code=FAILED, stderr=f"{type(exc).__name__}: {exc}")
-    body = response.text[:_OUTPUT_CAP]
+    body = response.text[:OUTPUT_CAP]
     if not 200 <= response.status_code < 300:
         return HookResult(exit_code=FAILED, stderr=f"HTTP {response.status_code}: {body[:500]}")
     text = body.strip() or "{}"
@@ -363,4 +391,4 @@ async def run_mcp_tool(hook: HookCommand, payload: dict[str, Any], tool: Tool | 
     text = "".join(b.text for b in out.content if isinstance(b, Text))
     if out.is_error:
         return HookResult(exit_code=FAILED, stderr=f"the MCP tool returned an error: {text}")
-    return HookResult(exit_code=0, stdout=text[:_OUTPUT_CAP])
+    return HookResult(exit_code=0, stdout=text[:OUTPUT_CAP])

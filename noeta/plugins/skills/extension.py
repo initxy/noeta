@@ -74,8 +74,10 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 #: Workspaces already warned about as untrusted: every agent's Skills reads
-#: the same directories, so the warning goes out once per process.
-_warned_untrusted: set[str] = set()
+#: the same directories, so the warning goes out once per process (for the
+#: newest :data:`WARNED_KEEP` workspaces; a server sees many).
+_warned_untrusted: dict[str, None] = {}
+WARNED_KEEP = 1024
 
 AGENT_TOOL = "Agent"
 #: The agent a ``context: fork`` skill runs in when it names none.
@@ -217,9 +219,13 @@ class Skills(Extension):
             if self.trusted is None or self.trusted(cwd):
                 out += [(gated[0], 3), (gated[1], 4)]
             elif cwd not in _warned_untrusted:
-                _warned_untrusted.add(cwd)
-                _log.warning("workspace %s is not trusted; skipping its skill directories: %s",
-                             cwd, ", ".join(gated))
+                skipped = [d for d in gated if os.path.isdir(d)]
+                if skipped:  # nothing is skipped where the directories do not exist
+                    if len(_warned_untrusted) >= WARNED_KEEP:
+                        del _warned_untrusted[next(iter(_warned_untrusted))]
+                    _warned_untrusted[cwd] = None
+                    _log.warning("workspace %s is not trusted; skipping its skill "
+                                 "directories: %s", cwd, ", ".join(skipped))
         return out
 
     async def registry(self, env: ExecEnv) -> SkillRegistry:

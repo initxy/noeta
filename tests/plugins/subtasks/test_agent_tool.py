@@ -20,18 +20,22 @@ from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import Recorded, TaskCreated, TaskEnded, ToolFinished
 from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
+from noeta.core.tool import ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, Usage
 from noeta.host.pending import pending_tree
 from noeta.host.usage import tree_usage
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.tool import (
     TRANSCRIPT_KEY,
+    AgentTool,
     SendMessageTool,
     agent_message,
     agent_schema,
     handback_sender,
 )
+from noeta.plugins.subtasks.worktree import make_agent_worktree
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.notices import NOTICE_GUARD
 from tests.plugins.subtasks.conftest import Probe, events, runtime
@@ -492,6 +496,57 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     cwd = (await events(client, child.task_id))[0].config["cwd"]
     assert cwd.startswith(str(repo / ".noeta" / "worktrees" / "agent-"))
     assert not Path(cwd).exists()  # unchanged, so removed again
+
+
+async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    state = TaskState(task_id="t", agent="main", config={"cwd": str(repo)})
+    tool = AgentTool(Subtasks(ROSTER), state, {s.name: s for s in ROSTER})
+    ctx = ToolContext(task_id="t", call_id="toolu_crash1", env=LocalExecEnv(str(repo)),
+                      state={}, record=lambda *_: None)
+    args = {"description": "d", "prompt": "p", "isolation": "worktree"}
+    # The worker died after making the worktree, before the launch was recorded.
+    tree = await make_agent_worktree(ctx, {"cwd": str(repo)})
+    assert isinstance(tree, dict) and Path(tree["path"]).exists()
+    assert await tool.recover(args, ctx) is None  # no agent ran: outcome unknown
+    assert not Path(tree["path"]).exists()
+    assert tree["branch"] not in subprocess.run(["git", "branch"], cwd=repo, check=True,
+                                                capture_output=True, text=True).stdout
+    # Nothing made: nothing to remove.
+    assert await tool.recover(args, ctx) is None
+
+
+async def test_resuming_a_worktree_agent_whose_worktree_is_gone(store: SqliteStore,
+                                                               tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
+                          reply("seen it")])
+    c = ScriptedProvider([handback("nothing changed"), handback("still nothing")])
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [first] = await client.tasks(parent_id=tid)
+    gone = (await events(client, first.task_id))[0].config["cwd"]
+    assert not Path(gone).exists()
+    p.add(reply("", ("SendMessage", {"to": first.task_id, "message": "look again"})),
+          reply("asked"), reply("done"))
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    second = next(r for r in await client.tasks(parent_id=tid) if r.task_id != first.task_id)
+    assert (await events(client, second.task_id))[0].config["cwd"] == str(repo)
+    sent = "".join(texts_of(p.requests[-1]))
+    assert "<status>completed</status>" in sent and gone not in sent
 
 
 async def test_send_message_is_deferred(store: SqliteStore) -> None:

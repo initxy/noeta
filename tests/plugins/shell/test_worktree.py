@@ -151,3 +151,19 @@ async def test_a_worktree_entered_from_a_subdirectory_is_usable(repo: Path) -> N
     assert await ws.resolve_write(str(tree / "pkg" / "c.txt")) == str(tree / "pkg" / "c.txt")
     err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
     assert not err and not tree.exists() and s.state.cwd == str(pkg)
+
+
+async def test_the_made_worktree_is_removed_after_two_switches(repo: Path) -> None:
+    s = Driver(repo)
+    await s.call(EnterWorktreeTool(), {"name": "made"})
+    made = repo / ".noeta" / "worktrees" / "made"
+    others = [repo / ".noeta" / "worktrees" / n for n in ("b", "c")]
+    for other in others:
+        _git(repo, "worktree", "add", "-q", "-b", other.name, str(other))
+    for other in others:
+        err, _ = await s.call(EnterWorktreeTool(), {"path": str(other)})
+        assert not err and s.state.cwd == str(other)
+    err, text = await s.call(ExitWorktreeTool(), {"action": "remove"})
+    assert not err and "removed" in text
+    assert not made.exists() and all(o.exists() for o in others)
+    assert s.state.cwd == str(repo)

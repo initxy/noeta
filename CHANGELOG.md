@@ -533,6 +533,28 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - MCP prompts and resources (`list_prompts`, `expand_prompt`, `list_resources`,
   `read_resource`) use the pool they are given even while it holds no connection; before, an
   empty pool was passed over for the process-wide one.
+- A worktree-isolated agent resumed with `SendMessage` after its unchanged worktree was
+  removed runs in its caller's directory; before, it was started in the deleted directory
+  and its end reported work "kept" at a path that no longer existed.
+- A foreground `Bash` command moved to the background is no longer killed after 30–60 s
+  when the worker's lease is longer than 90 s: its liveness file is re-created as often as
+  its guard checks it, not at the slower pace of the lease.
+- The output file a lost job's notice names still exists: a worker sweeps a dead worker's
+  log directory only a day after its last write, not as soon as it prepares its own.
+- `ExitWorktree` with `remove` removes the worktree `EnterWorktree` made even after the
+  shell switched between two other worktrees; the second switch forgot it.
+- An `Agent` call with `isolation: "worktree"` that a crash cut short, after its worktree
+  was made but before its agent launched, no longer leaves that worktree behind: the call's
+  recovery removes it.
+- A command hook whose run is cancelled (its turn stopped) is killed with its process
+  group, as a timed-out one was; its output is capped while it is read, not after.
+- Compaction's request estimate (and the files restored after it) and the MCP result budget
+  count a CJK character as one token, as the other budgets do; they counted four characters
+  a token, so Chinese, Japanese or Korean text was undercounted three- to four-fold.
+- MCP sign-ins that ended are let go three minutes after they started, instead of being
+  kept for the life of the worker.
+- `noeta -p` in an untrusted directory no longer warns that it skips `.agents/skills` and
+  `.noeta/skills` when neither exists; the warning names only the skill directories that do.
 
 ### Security
 

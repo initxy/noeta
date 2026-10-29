@@ -32,7 +32,7 @@ from noeta.core.tool import ToolContext
 from noeta.core.types import Text, user
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.bash import ShellState
-from noeta.plugins.shell.jobs import JOB_ENDED, Job
+from noeta.plugins.shell.jobs import DEAD_WORKER_LOGS_KEEP_S, JOB_ENDED, Job
 from noeta.toolkit.notices import NOTICE_GUARD
 
 OTHER = "some-other-host:4242"
@@ -216,14 +216,21 @@ async def test_a_new_worker_removes_the_logs_of_dead_workers(tmp_path: Path) -> 
     logs = tmp_path / "logs"
     dead = await asyncio.create_subprocess_exec("true")
     await dead.wait()
-    for pid in (dead.pid, os.getppid()):
+    lately = await asyncio.create_subprocess_exec("true")
+    await lately.wait()
+    for pid in (dead.pid, lately.pid, os.getppid()):
         (logs / f"w{pid}").mkdir(parents=True)
         (logs / f"w{pid}" / "abc.output").write_text("old")
+    day_ago = time.time() - DEAD_WORKER_LOGS_KEEP_S - 60
+    for path in (logs / f"w{dead.pid}" / "abc.output", logs / f"w{dead.pid}"):
+        os.utime(path, (day_ago, day_ago))
     (logs / "unrelated").mkdir()
     job = await _spawn(Registry(log_dir=str(logs)), tmp_path)
     assert isinstance(job, Job)
     await asyncio.wait_for(job.done.wait(), 10)
     assert not (logs / f"w{dead.pid}").exists()
+    # A worker that died lately keeps its logs: a lost job's notice names them.
+    assert (logs / f"w{lately.pid}" / "abc.output").exists()
     # A live worker's logs, and what noeta did not make, stay.
     assert (logs / f"w{os.getppid()}" / "abc.output").exists() and (logs / "unrelated").exists()
     assert Path(job.out_path).parent == logs / f"w{os.getpid()}"
@@ -378,3 +385,22 @@ async def test_a_foreground_job_in_a_container_dies_once_its_worker_stops(
     assert job.exit_code != 0
     await asyncio.sleep(1.0)
     assert not marker.exists()
+
+
+async def test_a_foreground_job_moved_to_the_background_outlives_its_guard_period(
+        tmp_path: Path) -> None:
+    # The guard keeps the foreground period; a long hold must not slow the
+    # re-creation of the file past it.
+    registry = Registry(log_dir=str(tmp_path / "logs"), foreground_alive_s=1.0)
+    job = await registry.spawn(
+        env=_ContainerEnv(str(tmp_path)), command="sleep 4; echo done",
+        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
+        description="", post=_posted, foreground=True)
+    assert isinstance(job, Job)
+    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=60.0)
+    assert registry.to_background(job, None)
+    registry.hold_with(job, tree)
+    while not job.done.is_set():
+        tree.renewed = time.monotonic()
+        await asyncio.sleep(0.1)
+    assert job.exit_code == 0

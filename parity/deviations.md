@@ -10,7 +10,7 @@ A row without an id is a difference the replay cannot see.
 | id | difference | reason |
 |---|---|---|
 | | Tools run after the assistant message is logged, not while it streams. | Log-first crash safety. |
-| | A tool started before a crash answers "result unknown" instead of re-running. | A call may have had effects; running it twice is worse than asking. |
+| | A tool started before a crash answers "result unknown", unless it can tell its own outcome (`Tool.recover`) or is safe to run again (`retry_safe`: it re-runs, a few times at most). | A call may have had effects; running it twice is worse than asking. |
 | | Waits (approval, sub-agent, timer) survive restarts and move between machines. | Durable tasks. |
 | `6c773c2c` | The results of one reply's calls go back in call order; Claude Code answered a `ToolSearch` ahead of the background `Bash` call made before it (r2 m5). | Results are logged per call and folded in call order; the order of a batch is the kernel's, not a model-visible rule noeta can see the reason for in the recording. |
 | `e9d39432` | After a compaction Claude Code sends an empty system turn carrying `output_config` (its effort); noeta sends none. | noeta puts the effort in the request's top-level `output_config` on every call, which the comparator already matches; the empty turn carries nothing the model reads. |
@@ -53,7 +53,7 @@ A row without an id is a difference the replay cannot see.
 | | `Edit` / `Write` refuse an unread file, or (`Edit`) one changed since the read, after a person approved the call rather than before the prompt (`tool.Edit.6`). The skip itself follows Claude Code: only for a write the permission layer allowed outright by its mode or an allow rule, never on older Claude models (Opus 4.6, Sonnet 4.5, Haiku 4.5 and before); a host without a permission layer always keeps the check. | The file tools run after the permission layer and see its verdict only as `ToolContext.approved` / `allowed_outright`; the refusal comes from the tool, once the call runs. |
 | | `AskUserQuestion` refuses an empty (or blank) question or option label, and a question over 1,000 characters, a header over 100, a label over 200, a description over 2,000 or a preview over 20,000; Claude Code's schema and checks set no length limit (`tool.AskUserQuestion.r.4`). The schema stays Claude Code's: the limits are checked when the call runs, with an error saying which text and limit. | An empty label leaves the person nothing to pick; the caps bound what one call can push into a dialog, the task log and every later request, far above anything the schema's guidance (a 12-character header, a 1-5 word label) produces. |
 | | A file counts as changed since the read when its bytes differ from what was read, not when its modification time moved (Claude Code refuses a `Write` / `NotebookEdit` over a file merely touched since). | The read record keeps a digest of the whole file; comparing content cannot refuse a write over unchanged bytes, and a restart cannot lose it. |
-| | A PDF of up to 10 pages read without `pages` comes back as page images, not as one PDF document block. | Not every provider noeta drives takes a document block; page images work everywhere. |
+| | A PDF of up to 10 pages read without `pages` comes back as page images, not as one PDF document block. | A tool result is logged once, provider-neutral, and later requests of the task resend it, possibly to another provider (`/model` switches mid-conversation); a document block would then have to become page images inside the provider adapter, which has no exec env to run `pdftoppm` in, so after a switch to a provider without document blocks (OpenAI-compatible endpoints) the PDF would be lost to the model. Page images read the same on every vision provider. |
 | | `Read`'s empty-file and offset-past-the-end warnings are plain text in the result; Claude Code wraps them in `<system-reminder>`. | A tool result never carries the reserved tag (the wire neutralizes it), so a result cannot pose as host context. |
 | | `Workflow`'s description carries a short script-API reference (`tool.Workflow.8`): there is no bundled `workflow-authoring` skill to load. | noeta ships no bundled skills yet; the reference returns to a skill when it does. |
 
@@ -101,10 +101,8 @@ Known differences that no kernel or product reason forces: follow-ups, not accep
 | difference | where |
 |---|---|
 | `AskUserQuestion` needs every question answered; Claude Code accepts unanswered questions and a note per question. | `noeta/plugins/ask_user` |
-| MCP connections have no idle timeout. | `noeta/plugins/mcp` |
-| MCP result sizes are estimated (four characters a token, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
+| MCP result sizes are estimated (four characters a token, a CJK character one, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
 | `WebFetch` has no raw-markdown answer for known documentation sites. | `noeta/plugins/web` |
 | `Bash` does not note that a command changed a file the model has read. | `noeta/plugins/shell`, `noeta/plugins/fs` |
 | The file tools refuse UTF-16 text files (Claude Code reads and writes them). | `noeta/plugins/fs` |
-| A background agent's transcript file is rewritten whole on each change, so the cost grows with the conversation. | `noeta/plugins/subtasks` |
 | Headless: SDK hook callbacks (`initialize.hooks`) are ignored with a warning; `--permission-prompt-tool` takes only `stdio`, not an MCP tool. | `noeta/host/_stream_json_control.py`, `noeta/cli/headless.py` |

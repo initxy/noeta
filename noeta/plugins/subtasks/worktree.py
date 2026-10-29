@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from noeta.core.execenv import ExecEnv
 from noeta.core.extension import TaskView
 from noeta.core.tool import ToolContext
 from noeta.plugins.subtasks import texts
@@ -32,19 +33,44 @@ async def make_agent_worktree(ctx: ToolContext,
     if root is None:
         return texts.WORKTREE_FAILED.format(reason=f"{cwd} is not in a git repository")
     _, base = await git(env, ["rev-parse", "HEAD"], root)
-    name = "agent-" + re.sub(r"[^A-Za-z0-9_-]", "", ctx.call_id)[-16:]
-    path, branch = posixpath.join(root, WORKTREES, name), f"worktree-{name}"
+    path, branch = _place(root, ctx.call_id)
     err = await add_worktree(env, root, path, branch, "HEAD")
     if err:
         return texts.WORKTREE_FAILED.format(reason=err)
     return {"path": path, "branch": branch, "base": base, "root": root}
 
 
+def _place(root: str, call_id: str) -> tuple[str, str]:
+    """The path and branch of the worktree the call ``call_id`` makes."""
+    name = "agent-" + re.sub(r"[^A-Za-z0-9_-]", "", call_id)[-16:]
+    return posixpath.join(root, WORKTREES, name), f"worktree-{name}"
+
+
+async def remove_unlaunched_worktree(ctx: ToolContext, config: Mapping[str, Any]) -> None:
+    """Remove the worktree this call made before a crash stopped it from
+    launching its agent (the launch and its record are one write, so no
+    agent ever worked in it)."""
+    env = ctx.env
+    if env is None:
+        return
+    root = await repository_top(env, str(config.get("cwd") or env.cwd))
+    if root is None:
+        return
+    path, branch = _place(root, ctx.call_id)
+    if await env.stat(path) is not None:
+        await remove_worktree(env, root, path, branch)
+
+
+async def worktree_exists(env: ExecEnv | None, tree: Mapping[str, str]) -> bool:
+    """Whether the agent's worktree directory is still there."""
+    return env is not None and await env.stat(tree["path"]) is not None
+
+
 async def close_worktree(view: TaskView, tree: Mapping[str, str]) -> str:
     """Remove an unchanged worktree; otherwise (or when git cannot tell)
-    say where the work is."""
+    say where the work is. A worktree already gone keeps nothing."""
     env = view.env
-    if env is None:
+    if env is None or not await worktree_exists(env, tree):
         return ""
     lost, failed = await unsaved_work(env, tree["path"], tree["base"])
     if not lost and not failed:

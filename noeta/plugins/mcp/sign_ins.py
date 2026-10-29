@@ -46,6 +46,7 @@ class SignIns:
     async def start(self, tool: McpAuthTool, server: McpServer,
                     scope: str | None) -> ToolOutput:
         """The ``authenticate`` tool: the URL the person opens."""
+        await self._let_go()
         key = self._pool().key(server, scope)
         complete = tool.name.removesuffix("authenticate") + "complete_authentication"
         run = self._runs.get(key)
@@ -75,6 +76,17 @@ class SignIns:
             "browser lands on afterwards fail to load, have them copy the whole address of "
             f"that page and pass it to `{complete}`.")
 
+    async def _let_go(self) -> None:
+        """Forget the sign-ins that ended (succeeded or failed) longer than
+        :data:`SIGN_IN_REUSE_S` ago, so one server's attempts do not pile up."""
+        now = time.monotonic()
+        for key, run in list(self._runs.items()):
+            if run.done.done() and now - run.started >= SIGN_IN_REUSE_S:
+                del self._runs[key]
+                if not run.done.cancelled():
+                    run.done.exception()  # retrieved: logged by _await already
+                await run.sign_in.close()
+
     async def _await(self, server: McpServer, scope: str | None, sign_in: SignIn) -> None:
         try:
             await sign_in.finish()
@@ -89,6 +101,7 @@ class SignIns:
         and wait for the sign-in. ``None`` once it succeeded; what to tell
         the model otherwise."""
         start = tool.name.removesuffix("complete_authentication") + "authenticate"
+        await self._let_go()
         run = self._runs.get(self._pool().key(server, scope))
         if run is None or (run.done.done() and run.done.exception() is not None):
             return text_output(f"No sign-in to {server.alias!r} is in progress. Call `{start}` "

@@ -1,6 +1,6 @@
 Leaves the worktree EnterWorktree moved this session into and returns the shell to where it was before.
 
-It acts only on that worktree: never on one made by hand with `git worktree add`, one from an earlier session, or the current directory when EnterWorktree was not used. Without an active worktree session it changes nothing and says so.
+The tool works from what EnterWorktree recorded in this session and nothing else, so a worktree added with `git worktree add` or left from an earlier session is out of its reach. When there is no such record, it reports that and leaves everything as it is.
 
 Use it only when the user asks to leave or exit the worktree or to go back; never on your own.
 

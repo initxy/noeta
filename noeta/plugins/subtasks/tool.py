@@ -23,7 +23,11 @@ from noeta.core.events import External, Say
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
-from noeta.plugins.subtasks.worktree import make_agent_worktree
+from noeta.plugins.subtasks.worktree import (
+    make_agent_worktree,
+    remove_unlaunched_worktree,
+    worktree_exists,
+)
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
@@ -233,14 +237,7 @@ class AgentTool:
         prompt = str(input["prompt"])
         description = str(input.get("description") or "")
         fork = kind == texts.FORK_TYPE
-        if fork:
-            agent, spec_config, queue = state.agent, {FORK_KEY: True}, ext.queue
-        else:
-            spec = self._roster[kind]
-            agent, spec_config = spec.agent or spec.name, dict(spec.config)
-            queue = spec.queue or ext.queue
-        isolation = input.get("isolation") or spec_config.pop(ISOLATION_KEY, None)
-        config = ext.child_config(state, ctx, agent, spec_config, kind, input, fork=fork)
+        agent, queue, isolation, config = self._plan(input, ctx, kind)
         config[HANDBACK_KEY] = self._handback
         transcripts = transcript_dir(ctx.spill_dir, ctx.root_id or state.task_id)
         if transcripts:
@@ -266,6 +263,32 @@ class AgentTool:
         # A one-block list, as Claude Code sends an Agent result.
         return ToolOutput(content=text_output(text).content, meta={"child_id": child},
                           block_list=True)
+
+    def _plan(self, input: Mapping[str, Any], ctx: ToolContext, kind: str
+              ) -> tuple[str, str | None, Any, dict[str, Any]]:
+        """``(agent, queue, isolation, child config)`` for a call naming ``kind``."""
+        ext, state = self._ext, self._state
+        fork = kind == texts.FORK_TYPE
+        if fork:
+            agent, spec_config, queue = state.agent, {FORK_KEY: True}, ext.queue
+        else:
+            spec = self._roster[kind]
+            agent, spec_config = spec.agent or spec.name, dict(spec.config)
+            queue = spec.queue or ext.queue
+        isolation = input.get("isolation") or spec_config.pop(ISOLATION_KEY, None)
+        config = ext.child_config(state, ctx, agent, spec_config, kind, input, fork=fork)
+        return agent, queue, isolation, config
+
+    async def recover(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput | None:
+        """A call a crash cut short launched no agent (the launch is written
+        with the call's result); only a worktree it made is left, and it goes."""
+        kind = agent_type(input, self._roster)
+        if kind != texts.FORK_TYPE and kind not in self._roster:
+            return None
+        _, _, isolation, config = self._plan(input, ctx, kind)
+        if isolation == "worktree":
+            await remove_unlaunched_worktree(ctx, config)
+        return None
 
 
 class HandbackTool:
@@ -359,10 +382,18 @@ class SendMessageTool:
                 return text_output(texts.SENT.format(to=to))
             assert ctx.spawn is not None
             config = {**agent["config"], AGENT_ID_KEY: to}
+            tree = agent.get("worktree")
+            if tree and not await worktree_exists(ctx.env, tree):
+                # Removed when it ended unchanged: resume where the caller works.
+                tree = None
+                config.pop("cwd", None)
+                if "cwd" in state.config:
+                    config["cwd"] = state.config["cwd"]
             child = ctx.spawn(agent["agent"], message, config=config, background=True,
                               queue=agent.get("queue") or ext.queue, history_from=task)
             ctx.record(ext.name, "launched", {
-                **agent, "task_id": child, "agent_id": to, "config": config, "at": time.time()})
+                **agent, "task_id": child, "agent_id": to, "config": config, "at": time.time(),
+                "worktree": tree})
             return text_output(texts.RESUMED.format(to=to), child_id=child)
         if not to or to in (state.task_id, me):
             return text_output(texts.UNKNOWN_RECIPIENT.format(to=to), is_error=True)
