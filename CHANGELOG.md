@@ -414,11 +414,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   file system`). The worktree's own git directory and the shared `objects`, `refs` and
   `logs` are now writable; hooks, config and the files that point git elsewhere stay
   read-only (`parity/deviations.md`).
-- **A sub-agent that cannot hand back reports with its final message.** In auto mode the
-  caller expected `SubagentHandback` from every sub-agent, so one whose agent definition lacks
-  the subtasks plugin, or whose tool list leaves the tool out, came back as "no report"
-  instead of its last reply. Such a sub-agent's final message is now its report, as in Claude
-  Code.
+- **A sub-agent that ends without handing back reports with its final message.** In auto
+  mode a sub-agent that ended without `SubagentHandback` came back as "no report" and its
+  last reply was dropped: one whose agent definition lacks the subtasks plugin, whose tool
+  list leaves the tool out, that runs on another worker's queue, or that simply answered in
+  plain text. Its final message is now its report, as in Claude Code.
 - **An unknown model is announced once.** The front end's notice now also says its cost
   counts as $0.00, and the catalog no longer logs a second "not in the catalog" warning about
   its price.

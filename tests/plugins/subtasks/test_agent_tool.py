@@ -169,16 +169,19 @@ async def test_launch_hand_back_and_notice(store: SqliteStore) -> None:
     assert f"<tool-use-id>{call_id}</tool-use-id>" in notice
 
 
-async def test_final_text_without_hand_back_is_dropped(store: SqliteStore) -> None:
+async def test_final_text_without_hand_back_is_the_report(store: SqliteStore) -> None:
+    # Offered SubagentHandback (or not known to be), it ended with a plain
+    # reply instead: that reply is its report rather than nothing.
     p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("hm")])
-    c = ScriptedProvider([reply("my secret final words")])
+    c = ScriptedProvider([reply("my final words")])
     rt = runtime(store, {"p": p, "c": c}, parent(), worker())
     client = Client(store)
     tid = await client.create("main", "go")
     await rt.run_until_idle()
+    assert "SubagentHandback" in [t.name for t in c.requests[0].tools]
     notice = p.requests[2].messages[-1]
-    assert notice.origin == "system" and texts.RESULT_NO_REPORT in notice.text
-    assert "my secret final words" not in "".join(texts_of(p.requests[2]))
+    assert notice.origin == "system" and "<result>my final words\n</result>" in notice.text
+    assert texts.RESULT_NO_REPORT not in notice.text
     assert (await client.get(tid)).waiting_on == "input"
 
 
@@ -474,7 +477,7 @@ async def test_a_notice_lost_to_a_crash_is_posted_on_the_next_run(store: SqliteS
     p.add(reply("hi"), reply("thanks for the result"))
     await client.send(tid, "hello")
     await runtime(store, {"p": p, "c": c}, parent(), worker()).run_until_idle()
-    assert texts.RESULT_NO_REPORT in "".join(texts_of(p.requests[-1]))
+    assert "<result>no report\n</result>" in "".join(texts_of(p.requests[-1]))
 
 
 async def test_agent_approvals_surface_at_the_root(store: SqliteStore) -> None:
