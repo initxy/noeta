@@ -23,7 +23,7 @@ from noeta.core.events import External, Say
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
-from noeta.plugins.subtasks.worktree import make_agent_worktree
+from noeta.plugins.subtasks.worktree import make_agent_worktree, worktree_exists
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
@@ -359,10 +359,18 @@ class SendMessageTool:
                 return text_output(texts.SENT.format(to=to))
             assert ctx.spawn is not None
             config = {**agent["config"], AGENT_ID_KEY: to}
+            tree = agent.get("worktree")
+            if tree and not await worktree_exists(ctx.env, tree):
+                # Removed when it ended unchanged: resume where the caller works.
+                tree = None
+                config.pop("cwd", None)
+                if "cwd" in state.config:
+                    config["cwd"] = state.config["cwd"]
             child = ctx.spawn(agent["agent"], message, config=config, background=True,
                               queue=agent.get("queue") or ext.queue, history_from=task)
             ctx.record(ext.name, "launched", {
-                **agent, "task_id": child, "agent_id": to, "config": config, "at": time.time()})
+                **agent, "task_id": child, "agent_id": to, "config": config, "at": time.time(),
+                "worktree": tree})
             return text_output(texts.RESUMED.format(to=to), child_id=child)
         if not to or to in (state.task_id, me):
             return text_output(texts.UNKNOWN_RECIPIENT.format(to=to), is_error=True)

@@ -494,6 +494,35 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     assert not Path(cwd).exists()  # unchanged, so removed again
 
 
+async def test_resuming_a_worktree_agent_whose_worktree_is_gone(store: SqliteStore,
+                                                               tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
+                          reply("seen it")])
+    c = ScriptedProvider([handback("nothing changed"), handback("still nothing")])
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker()},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [first] = await client.tasks(parent_id=tid)
+    gone = (await events(client, first.task_id))[0].config["cwd"]
+    assert not Path(gone).exists()
+    p.add(reply("", ("SendMessage", {"to": first.task_id, "message": "look again"})),
+          reply("asked"), reply("done"))
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    second = next(r for r in await client.tasks(parent_id=tid) if r.task_id != first.task_id)
+    assert (await events(client, second.task_id))[0].config["cwd"] == str(repo)
+    sent = "".join(texts_of(p.requests[-1]))
+    assert "<status>completed</status>" in sent and gone not in sent
+
+
 async def test_send_message_is_deferred(store: SqliteStore) -> None:
     SendMessageTool.deferred = True  # type: ignore[misc]
     p = ScriptedProvider([reply("hi")])

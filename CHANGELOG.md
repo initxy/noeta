@@ -530,6 +530,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - MCP prompts and resources (`list_prompts`, `expand_prompt`, `list_resources`,
   `read_resource`) use the pool they are given even while it holds no connection; before, an
   empty pool was passed over for the process-wide one.
+- A worktree-isolated agent resumed with `SendMessage` after its unchanged worktree was
+  removed runs in its caller's directory; before, it was started in the deleted directory
+  and its end reported work "kept" at a path that no longer existed.
 
 ### Security
 

@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from noeta.core.execenv import ExecEnv
 from noeta.core.extension import TaskView
 from noeta.core.tool import ToolContext
 from noeta.plugins.subtasks import texts
@@ -40,11 +41,16 @@ async def make_agent_worktree(ctx: ToolContext,
     return {"path": path, "branch": branch, "base": base, "root": root}
 
 
+async def worktree_exists(env: ExecEnv | None, tree: Mapping[str, str]) -> bool:
+    """Whether the agent's worktree directory is still there."""
+    return env is not None and await env.stat(tree["path"]) is not None
+
+
 async def close_worktree(view: TaskView, tree: Mapping[str, str]) -> str:
     """Remove an unchanged worktree; otherwise (or when git cannot tell)
-    say where the work is."""
+    say where the work is. A worktree already gone keeps nothing."""
     env = view.env
-    if env is None:
+    if env is None or not await worktree_exists(env, tree):
         return ""
     lost, failed = await unsaved_work(env, tree["path"], tree["base"])
     if not lost and not failed:
