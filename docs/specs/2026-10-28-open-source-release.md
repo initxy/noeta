@@ -527,6 +527,12 @@ servers and runs on many machines.
   -c core.fsmonitor=` (`noeta.toolkit.worktrees.GIT_NO_HOOKS`): a worktree's
   `post-checkout` hook no longer runs (Claude Code's does). The memory plugin's
   `rev-parse` (another branch's file) runs no hook or fsmonitor by itself and is left.
+- D163 (`os-fix-r10sec`) Read-only `git -C <dir>` / `--bare` stays read-only in the
+  permission check; the runtime `git` function is the defense (it already refused a planted
+  git directory under the workspace and turned fsmonitor and hooks off). Its guard now also
+  refuses, outside the workspace, a git directory that is not `.git` (nor named by a `.git`
+  file) and is not bare: a work tree is what runs a repository's filters, which no `-c` can
+  turn off by name. A bare repository elsewhere still reads.
 
 ## Plan
 

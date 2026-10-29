@@ -872,6 +872,14 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A read-only `git` no longer runs the filters of a repository planted outside the
+  workspace.** A command that only reads with git already ran with the repository's hooks,
+  fsmonitor, pager, signature program and external diff turned off, and refused a git
+  directory written as plain files inside the workspace (`git -C evil status`). In another
+  directory the model may write without asking (an additional working directory), such a
+  repository with `core.worktree` and a `filter.<name>.clean` still ran the filter on
+  `git status` or `git diff`, auto-allowed as read-only. A git directory that is not `.git`
+  (nor named by a `.git` file) is now refused anywhere unless it is bare.
 - The git noeta runs itself for worktrees (`EnterWorktree`, `isolation: "worktree"`) runs no
   hook and no `core.fsmonitor` command (`-c core.hooksPath=/dev/null -c core.fsmonitor=`), so
   what a command planted in the repository does not run as the worker; the sandbox's lookup of
