@@ -23,6 +23,8 @@ and describe a different codebase.
 - [015](015-a-held-tree-runs-only-on-its-holder.md) A held tree's tasks run only on its holder
   (refined by 024)
 - [024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md) A hold takes back lapsed claims, and a held tree stays on its holder's queues
+  (refined by 027)
+- [027](027-the-store-refuses-a-child-off-its-held-trees-queues-and-a-reclaim-counts-toward-the-limit.md) The store refuses a child off its held tree's queues, and a reclaim counts toward the limit
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
   (refined by 023)
 - [023](023-snapshots-per-fold-version-and-newer-logs-left-to-newer-workers.md) Snapshots are kept per fold version; a newer version's log is left to a newer worker
