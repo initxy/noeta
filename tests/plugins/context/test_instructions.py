@@ -317,3 +317,23 @@ async def test_a_long_nested_file_shows_its_start(h: Harness) -> None:
                 if m.text.startswith(str(pkg / "NOETA.md"))]
     assert len(nested) < 40_000 + 600
     assert nested.endswith(f"Read {pkg / 'NOETA.md'} from offset=3334 for the rest.")
+
+
+async def test_a_changed_instruction_file_is_shown_again_with_the_next_message(
+        h: Harness) -> None:
+    from noeta.plugins.instructions.extension import REREAD_HEAD
+    (h.work / "NOETA.md").write_text("Use tabs.\n")
+    (h.work / "NOETA.local.md").write_text("Mine.\n")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    await h.say(a, tid, "same files")
+    assert not [m for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]
+    (h.work / "NOETA.md").write_text("Use spaces.\n")
+    # Each message is taken by a new runtime (another worker, say): what
+    # was shown lives in the log.
+    await h.say(a, tid, "files changed")
+    reread = [m.text for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]
+    assert reread == [f"{REREAD_HEAD}\n\n{h.work / 'NOETA.md'} {PROJECT}:\n\nUse spaces."]
+    await h.say(a, tid, "unchanged since")
+    assert len([m for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]) == 1

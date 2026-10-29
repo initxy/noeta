@@ -230,6 +230,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 |---|---|
 | rem.instructions-reread.1 | Trigger: `--continue`/resume when an instruction file changed since it was last sent. Placement: `<system-reminder>` block at the start of the first new user message, before the prompt. |
 | rem.instructions-reread.2 | Content: instruction files were re-read when the session started; only files whose content changed are listed, and each listed text supersedes the version shown before; the earlier preamble (rem.instructions.2) still applies. Then per changed file the same path-and-kind line and full new text as rem.instructions.3. Unchanged files are not repeated. |
+| rem.instructions-reread.4 | noeta today: covered, with the trigger adapted to durable tasks: the files shown so far (start and nested) are read again with every new message from the person, and the changed ones are shown again, in our words; the note follows the person's message in the same turn (`parity/deviations.md`). The digests of what was shown live in the task log. |
 | rem.instructions-reread.3 | Observed defect, not to copy: the resumed prompt appears twice in that message (once with a trailing newline). |
 
 ## user answers through tools
