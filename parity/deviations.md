@@ -58,6 +58,12 @@ A row without an id is a difference the replay cannot see.
 | | `Read`'s empty-file and offset-past-the-end warnings are plain text in the result; Claude Code wraps them in `<system-reminder>`. | A tool result never carries the reserved tag (the wire neutralizes it), so a result cannot pose as host context. |
 | | `Workflow`'s description carries a short script-API reference (`tool.Workflow.8`): there is no bundled `workflow-authoring` skill to load. | noeta ships no bundled skills yet; the reference returns to a skill when it does. |
 
+## Hooks
+
+| id | difference | reason |
+|---|---|---|
+| | A `Stop` / `SubagentStop` hook that blocks the end of the turn 8 times in a row is let through (`MAX_STOP_CONTINUATIONS`); Claude Code sets no limit and leaves the loop to the hook (`stop_hook_active`). | A server runs unattended: a hook that always blocks would spend model calls until a budget or a person stopped it. `stop_hook_active` is still sent, so a hook written for Claude Code ends the loop itself first. |
+
 ## Request envelope
 
 | id | difference | reason |
