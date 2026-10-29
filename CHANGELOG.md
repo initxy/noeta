@@ -439,6 +439,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **An agent's worktree is not removed under its background command.** An isolated agent
+  that ended while a background job it started still ran in its worktree had the
+  worktree force-removed under the job (it looked unchanged); it is now kept, and the
+  completion notice says why.
 - **An isolated agent's worktree goes when its caller ends first.** A task that ended or
   was cancelled while its `isolation: "worktree"` agents ran never heard their ends, so
   their worktrees stayed; they are now closed when it ends (an unchanged one removed).

@@ -74,6 +74,7 @@ from noeta.plugins.shell.notices import (
 from noeta.plugins.shell.websocket import NORMAL_CLOSES, run_ws
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.notices import NOTICE_GUARD
+from noeta.toolkit.worktrees import job_runs_in
 
 log = logging.getLogger("noeta.plugins.shell")
 
@@ -203,6 +204,9 @@ class Job:
     task: asyncio.Task[None] | None = None
     sender: asyncio.Task[None] | None = None
     done: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Says the job no longer works in its directory (a worktree is not
+    #: removed under a running job).
+    left_dir: Callable[[], None] = lambda: None
     outbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
 
@@ -344,6 +348,7 @@ class Registry:
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
+        job.left_dir = job_runs_in(cwd)
         self.jobs[root_id] = self.jobs.pop(root_id, {})  # most recently used last
         self.jobs[root_id][job_id] = job
         self._let_go_of_roots()
@@ -447,12 +452,15 @@ class Registry:
                 tail.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await tail
-            if job.foreground:
-                # The call waiting for it reports the end itself.
-                job.outbox.put_nowait(None)
-                job.done.set()
-            else:
-                await self._end(job)
+            try:
+                if job.foreground:
+                    # The call waiting for it reports the end itself.
+                    job.outbox.put_nowait(None)
+                    job.done.set()
+                else:
+                    await self._end(job)
+            finally:
+                job.left_dir()
 
     async def _end(self, job: Job) -> None:
         notice: str | None = None

@@ -5,6 +5,7 @@ worktrees and the refusals."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from collections.abc import Iterator
@@ -26,6 +27,7 @@ from noeta.core.tool import ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, Usage
 from noeta.host.pending import pending_tree
 from noeta.host.usage import tree_usage
+from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.tool import (
     TRANSCRIPT_KEY,
@@ -554,6 +556,35 @@ async def test_a_cancelled_parent_closes_its_agents_worktrees(store: SqliteStore
     await client.cancel(tid)
     await rt.run_until_idle()
     assert not Path(cwd).exists()  # unchanged, so removed with its parent
+
+
+async def test_a_worktree_a_background_job_runs_in_is_kept(store: SqliteStore,
+                                                           tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
+                          reply("seen it")])
+    c = ScriptedProvider([reply("", ("Bash", {"command": "sleep 30",
+                                              "run_in_background": True})),
+                          handback("started it")])
+    child_agent = Agent(name="worker", model="c", tools=[],
+                        extensions=[Subtasks(()), Shell(registry=registry)])
+    rt = Runtime(store=store, agents={"main": parent(), "worker": child_agent},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    cwd = (await events(client, child.task_id))[0].config["cwd"]
+    assert (await client.get(child.task_id)).status == "ended"
+    assert Path(cwd).exists()  # not removed under the running job
+    told = [e.data["text"] for e in await events(client, tid)
+            if getattr(e, "kind", "") == "pending"]
+    assert told and texts.WORKTREE_IN_USE.format(path=cwd) in told[0]
+    [job] = registry.running(tid)
+    registry.retire(tid)
+    await asyncio.wait_for(job.done.wait(), 10)
 
 
 async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: Path) -> None:
