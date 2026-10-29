@@ -491,3 +491,6 @@ All notable changes to Noeta are documented here. The format is based on
   the token from `NOETA_SERVER_TOKEN`.
 - The bearer token is taken from `?token=` only on the `/stream-json` WebSocket; every other
   route needs the `Authorization` header, so tokens stay out of ordinary URLs and their logs.
+- `noeta plugin add` fetches only from git URLs (`https://`, `ssh://`, `git://`, `file://`,
+  `user@host:path`) and passes `--` before them, so a marketplace entry's `url` cannot be a
+  git option such as `--upload-pack=…`.
