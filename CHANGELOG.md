@@ -439,6 +439,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **The MCP plugin keeps a bounded number of tasks in memory.** Its per-task entries (the
+  resolved servers, their tools, roots and scope) were dropped only when the task waited or
+  ended here, so a task another worker took, or one left by a crash, stayed for the
+  process's life; past 256 tasks the least recently resolved are now forgotten.
 - **A skill's `allowed-tools` grant names any tool.** With `tool_enforcement` on, the grant
   kept only names from a fixed table that had drifted (it lacked `Glob`, `Grep`,
   `Workflow`, the worktree, schedule and plan tools, and every MCP tool), and a value in

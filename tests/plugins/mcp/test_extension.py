@@ -16,6 +16,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
 from noeta.core.types import Image, ModelRequest, ToolUse
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
@@ -399,3 +400,13 @@ async def test_permissions_ask_about_server_tools_not_toolsearch(
     await rt.run_until_idle()
     results = [f.result for f in finished(await events(client, tid))]
     assert texts(results[-1]) == ["echo: p"]
+
+
+async def test_tasks_that_never_come_back_are_forgotten(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A task the runner never lets go of here (taken by another worker, a
+    # crash) leaves no event: its entries go once newer tasks crowd it out.
+    monkeypatch.setattr("noeta.plugins.mcp.extension.TASKS_KEEP", 2)
+    ext = Mcp([McpServer(alias="s", command=["true"])])
+    for n in range(5):
+        assert await ext._resolve(TaskView(state=TaskState(task_id=f"t{n}", config={"cwd": "/w"})))
+    assert set(ext._known) == set(ext._scopes) == set(ext._roots) == {"t3", "t4"}
