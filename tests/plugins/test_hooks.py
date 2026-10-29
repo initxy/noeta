@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,8 @@ from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.runner import Runtime
 from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks, parse_hooks
+from noeta.plugins.hooks.config import HookCommand
+from noeta.plugins.hooks.runners import OUTPUT_CAP, run_command
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -141,3 +145,33 @@ def test_parse_and_settings_files(tmp_path: Path) -> None:
         parse_hooks({"Stop": [{"hooks": [{"type": "command"}]}]})
     [m] = parse_hooks({"PreToolUse": _hook("x", matcher="Edit|Write")})["PreToolUse"]
     assert m.matches("Edit") and m.matches("Write") and not m.matches("EditX")
+
+
+async def test_a_cancelled_command_hook_kills_its_process_group(tmp_path: Path) -> None:
+    pid_file = tmp_path / "pid"
+    hook = HookCommand(command=f"sleep 30 & echo $! > {pid_file}; wait", timeout=60)
+    run = asyncio.create_task(run_command(hook, {}, str(tmp_path)))
+    for _ in range(500):
+        if pid_file.exists() and pid_file.read_text().strip():
+            break
+        await asyncio.sleep(0.01)
+    pid = int(pid_file.read_text())
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    for _ in range(200):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        os.kill(pid, signal.SIGKILL)
+        pytest.fail("the hook's child outlived the cancelled hook")
+
+
+async def test_a_command_hook_keeps_only_the_head_of_a_flood(tmp_path: Path) -> None:
+    hook = HookCommand(command="head -c 3000000 /dev/zero | tr '\\0' x; echo oops >&2")
+    result = await run_command(hook, {"big": "x" * 200_000}, str(tmp_path))
+    assert result.exit_code == 0
+    assert result.stdout == "x" * OUTPUT_CAP and result.stderr == "oops\n"

@@ -543,6 +543,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - An `Agent` call with `isolation: "worktree"` that a crash cut short, after its worktree
   was made but before its agent launched, no longer leaves that worktree behind: the call's
   recovery removes it.
+- A command hook whose run is cancelled (its turn stopped) is killed with its process
+  group, as a timed-out one was; its output is capped while it is read, not after.
 
 ### Security
 
