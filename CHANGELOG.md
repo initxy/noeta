@@ -456,6 +456,33 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A prompt a `UserPromptSubmit` hook blocks is erased.** It stayed in the conversation, so
+  the next turn's request carried it to the model; Claude Code erases it. The hook records a
+  core `erased` entry and the fold drops those messages (`TaskView.erase_messages`).
+- **`Bash`: a command that opens fd 3 keeps its file, and the shell's directory.** The exit
+  trap wrote the final directory to fd 3, into the command's own file; it now uses a
+  descriptor out of the command's way (fd 254).
+- **`Bash`: a foreground command past the 64 MB log cap shows its real end.** Its log kept
+  only the head, so the result showed output from the middle; a foreground log now keeps its
+  start and a rolling tail.
+- **A resumed agent's worktree is no longer removed when an old job in it ends.** The note
+  about a worktree kept for a running job now says a worker restart leaves it in place.
+- **An agent's `project` / `local` memory survives `isolation: "worktree"`.** It lived in
+  the temporary worktree; it is now under the repository's main checkout.
+- **Typing `/skill args` again for an active skill sends it again** with the new arguments
+  (a short note when nothing changed), as the `Skill` tool does.
+- **Skill directories are scanned once a turn**, not after every `Read`, `Write`, `Edit` and
+  `NotebookEdit`.
+- **`Edit` and `Write` no longer stall the worker on huge files.** The diff for front ends is
+  worked out in a thread and skipped past a million characters.
+- **An MCP OAuth refresh that fails on the network keeps the sign-in.** Only `invalid_grant`
+  clears the saved tokens, and concurrent refreshes no longer spend a rotated refresh token
+  twice.
+- **`Read` refuses a notebook over 100 MB before reading it.**
+- **`Edit` matches a multi-line `old_string` with straight quotes in a CRLF file** whose text
+  has curly ones.
+- **`function_tool` accepts a positional-only `ToolContext` parameter.**
+
 - **An inbox item this version cannot read no longer fails a turn on every lease.** One a
   newer version posted lets the lease run out with nothing written (a newer worker takes the
   task); a malformed one ends the task `unreadable_log` after the usual claims.
