@@ -5,8 +5,8 @@ task and turn); names and summaries reach the model as a listing recorded
 once per task (``roster``), and skills that join later are announced once
 (``added-<k>``). Removals and edited summaries are not announced.
 
-Budget: every line is ``- name: summary``; each summary is capped at 384
-estimated tokens; over the total budget every skill first gets a short form
+Budget: every line is ``- name: summary``; each summary is capped at 1,536
+characters (Claude Code's cap); over the total budget every skill first gets a short form
 (its first sentence, at most 24 tokens), then, budget permitting, its full
 summary — in keep order (rank, then tier, then priority, then name). A name
 is never dropped.
@@ -27,7 +27,7 @@ from noeta.toolkit.tokens import estimate_tokens, prefix_within
 
 __all__ = [
     "ADDED_HEADER",
-    "MENU_DESCRIPTION_MAX_TOKENS",
+    "MENU_DESCRIPTION_MAX_CHARS",
     "MENU_SHORT_SUMMARY_MAX_TOKENS",
     "ROSTER_HEADER",
     "fit_menu_to_budget",
@@ -41,10 +41,10 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-#: Per-skill cap on a summary, in estimated tokens (Claude Code's 1,536
-#: characters for an ASCII summary).
-MENU_DESCRIPTION_MAX_TOKENS = 384
-_TRUNCATION_MARKER = "… (truncated)"
+#: Per-skill cap on a summary, in characters (Claude Code's), the last one
+#: the marker.
+MENU_DESCRIPTION_MAX_CHARS = 1536
+_TRUNCATION_MARKER = "…"
 
 #: The short form an over-budget roster gives every skill first.
 MENU_SHORT_SUMMARY_MAX_TOKENS = 24
@@ -87,9 +87,9 @@ def listing_summary(desc: SkillDescription) -> str:
 
 def _menu_description(text: str) -> str:
     text = strip_argument_placeholder(text)
-    if estimate_tokens(text) <= MENU_DESCRIPTION_MAX_TOKENS:
+    if len(text) <= MENU_DESCRIPTION_MAX_CHARS:
         return text
-    return _clip_to_tokens(text, MENU_DESCRIPTION_MAX_TOKENS, _TRUNCATION_MARKER)
+    return text[:MENU_DESCRIPTION_MAX_CHARS - 1] + _TRUNCATION_MARKER
 
 
 def menu_keep_order(

@@ -435,7 +435,12 @@ def test_over_budget_goes_short_then_name_only() -> None:
 
 def test_long_summary_is_capped_with_a_marker() -> None:
     [(_, line)] = listing_lines(_registry(a="word " * 1000), budget_tokens=100_000)
-    assert line.endswith("… (truncated)") and estimate_tokens(line) <= 386
+    assert line == "- a: " + ("word " * 1000)[:1535] + "…"
+    # Characters, not tokens: a CJK summary keeps as many as a Latin one.
+    [(_, line)] = listing_lines(_registry(a="技能" * 1000), budget_tokens=100_000)
+    assert line == "- a: " + ("技能" * 1000)[:1535] + "…"
+    [(_, line)] = listing_lines(_registry(a="技" * 1536), budget_tokens=100_000)
+    assert line == "- a: " + "技" * 1536
 
 
 def test_allowed_tools_parsing() -> None:

@@ -159,6 +159,7 @@ order:
 | `main.env.12` | A `<total_tokens>N tokens left</total_tokens>` line. | covered — the budget note (`order` 80) joins the first system turn. |
 | `main.env.13` | Last line: today's date as `YYYY-MM-DD`. | covered — last, `order` 90. |
 | `main.env.14` | The working-directory note of noeta ("paths resolve relative to the primary working directory") has no baseline counterpart. | covered — the extra line is gone. |
+| `main.env.15` | (bundle) A skill's listed text (description, then ` - ` and `when_to_use`) longer than 1,536 characters is cut to 1,535 and ends with `…`; the cap counts characters, so CJK text keeps as many as Latin. | covered — `noeta/plugins/skills/listing.py`. |
 
 ## Variants (not baseline)
 
