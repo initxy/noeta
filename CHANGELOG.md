@@ -748,7 +748,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   and settings, and hooks in those settings run unsandboxed). The sandbox now resolves the
   working directory for every command of a tenant's task and refuses the command unless it
   lies in the tenant's workspace and outside the places its commands may not read, instead
-  of making such a place writable.
+  of making such a place writable. The permissions plugin also resolves it before every
+  model call and fails the turn with `tenant_cwd_refused` and the reason, and `Bash`
+  resolves the directory a command left the shell in before starting the next one there
+  (one now leading out of the workspace starts back at the root).
 - **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another

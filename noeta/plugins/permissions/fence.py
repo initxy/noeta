@@ -21,6 +21,17 @@ from noeta.toolkit.tenant_fence import TenantFence
 PATH_KEYS = ("file_path", "notebook_path", "path", "scriptPath")
 
 
+async def cwd_refusal(fence: TenantFence, view: TaskView) -> str | None:
+    """Why the task may not work in its working directory as it resolves
+    now (:meth:`TenantFence.cwd_refusal`), or ``None``."""
+    if view.state.tenant == DEFAULT_TENANT:
+        return None
+    cwd = view.cwd or os.getcwd()
+    return fence.cwd_refusal(await real_path(view, cwd), tenant=view.state.tenant,
+                             task_id=view.task_id,
+                             root_id=view.state.root_id or view.task_id, cwd=cwd)
+
+
 def _paths(call: ToolUse) -> list[str]:
     return [v for k in PATH_KEYS if isinstance(v := call.input.get(k), str) and v]
 

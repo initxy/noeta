@@ -453,3 +453,19 @@ def test_a_tenants_writable_root_must_lie_in_its_workspace(tmp_path: Path) -> No
                               task_id="t1", cwd=str(p.mine))
     with pytest.raises(PermissionError, match="outside"):
         sb.plan_paths(unknown, str(p.mine), str(tmp_path / "tmp"))
+
+
+@pytest.mark.parametrize("where", ["theirs", "home"])
+async def test_a_file_tools_relative_path_follows_no_swapped_link(
+        tmp_path: Path, where: str) -> None:
+    p = Places(tmp_path)
+    sub = p.mine / "sub"
+    sub.mkdir()
+    tenant = local_env_for(None, p.fence)(_state("acme", sub))
+    target = p.theirs if where == "theirs" else p.home
+    _swap(sub, target)
+    with pytest.raises(PermissionError, match="may not read"):
+        await tenant.read_bytes("f.txt" if where == "theirs" else "tokens.json")
+    with pytest.raises(PermissionError, match="may not write"):
+        await tenant.write_bytes("settings.json", b"{}")
+    assert not (target / "settings.json").exists()

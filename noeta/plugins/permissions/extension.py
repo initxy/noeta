@@ -80,6 +80,9 @@ DENIED_BY_HUMAN = "denied by human"
 #: The reason a turn fails with on a worker that may not run the task's
 #: tenant (``tenant_refusal``).
 TENANT_NOT_ISOLATED = "tenant_not_isolated"
+#: The reason a tenant's turn fails with when its working directory now
+#: resolves outside its workspace or into a place it may not write.
+TENANT_CWD_REFUSED = "tenant_cwd_refused"
 
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
@@ -516,6 +519,9 @@ class Permissions(Extension):
         refused = self._tenant_refused(view)
         if refused is not None:
             raise TurnFailed(TENANT_NOT_ISOLATED, refused)
+        moved = await fc.cwd_refusal(self.fence, view)
+        if moved is not None:
+            raise TurnFailed(TENANT_CWD_REFUSED, moved)
         if self.budget.max_iterations is not None:
             view.record(NAME, "step")
         if self.allowed is not None or self.disallowed:

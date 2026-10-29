@@ -203,6 +203,24 @@ class TenantFence:
             return None
         return head + "it is outside the tenant's workspace and its own places in noeta"
 
+    def cwd_refusal(self, real: str, *, tenant: str, task_id: str, root_id: str = "",
+                    cwd: str = "") -> str | None:
+        """Why the task may not work in ``cwd``, which resolves to ``real``
+        now: outside its tenant's workspace, or in a place it may not write
+        (a directory on the way swapped for a link since the task was made).
+        ``None`` for the default tenant, or one whose workspace is not
+        known here."""
+        workspace = self.workspaces.get(tenant)
+        if tenant == DEFAULT_TENANT or workspace is None:
+            return None
+        real = posixpath.normpath(real)
+        head = f"the working directory {cwd or real} resolves to {real}"
+        if self._workspace_owner(real) != tenant:
+            return f"{head}, outside tenant {tenant!r}'s workspace {workspace}"
+        why = self.refusal(real, tenant=tenant, task_id=task_id, root_id=root_id, cwd=cwd,
+                           write=True)
+        return None if why is None else f"{head}; {why}"
+
     def _protected(self, real: str, tenant: str) -> str | None:
         """Why ``real`` is in the protected set beyond noeta's own places: the
         server's own directories, a home directory's credential stores or the
