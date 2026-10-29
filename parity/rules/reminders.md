@@ -193,6 +193,7 @@ Each note goes out with the next request after the change, as a `role: "system"`
 | id | rule |
 |---|---|
 | rem.deltas.1 | Deferred tools: names that join are listed under the deferred-tool lead-in (`main.env.6`); names announced earlier that return are named as available again (for MCP tools: their server reconnected), to be loaded with `ToolSearch` as before; names that leave are listed as no longer available (for MCP tools: their server disconnected), not to be searched for since `ToolSearch` will not find them. A note that names a removal closes with a line saying it is background context, not to be narrated to the user unless relevant. After a compaction the full list is sent again. noeta today: covered (`environment` plugin, our words; the last list named is in the task log). |
+| rem.deltas.2 | Agent types: types that join are listed under a lead-in saying new agent types are available, one line each in the agent list's format (`main.env.8`); types that leave are listed by name as no longer available, followed by the background-context line. A conversation that had no agent list gets the whole list once a type appears. noeta today: covered (`subtasks` plugin; the types last listed are in the task log). |
 
 ## plan mode
 

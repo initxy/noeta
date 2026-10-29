@@ -270,6 +270,9 @@ WORKTREE_IN_USE = ("Its worktree {path} is kept while a background command runs 
 
 # The agent list, recorded once when a task that can start agents begins.
 AGENT_LIST_HEAD = "Agent types the Agent tool can start:"
+#: Agent types that joined or left after the list went out.
+AGENT_LIST_ADDED = "New agent types the Agent tool can start:"
+AGENT_LIST_REMOVED = "These agent types are no longer available:"
 AGENT_LIST_TAIL = (
     "For independent pieces of work, start several agents in one message with several Agent "
     "calls so they run at the same time."
