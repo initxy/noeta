@@ -84,7 +84,9 @@ Digest = Callable[[str, str, str, str], Awaitable[str]]
 
 
 class PageCache:
-    """The 15-minute per-URL page cache (successes only) of one task."""
+    """The 15-minute per-URL page cache (successes only) of one task. A
+    binary body is cached as the note naming the file it was saved to
+    (``binary=True``), never as text."""
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic,
                  ttl_seconds: float = CACHE_TTL_SECONDS,
@@ -92,23 +94,28 @@ class PageCache:
         self.clock = clock
         self._ttl = ttl_seconds
         self._max = max_entries
-        self._pages: dict[str, tuple[float, str, str]] = {}
+        self._pages: dict[str, tuple[float, str, str, bool]] = {}
 
     def get(self, url: str) -> tuple[str, str] | None:
+        entry = self.entry(url)
+        return None if entry is None else (entry[0], entry[1])
+
+    def entry(self, url: str) -> tuple[str, str, bool] | None:
+        """``(title, markdown, binary)`` for ``url``, or ``None``."""
         entry = self._pages.get(url)
         if entry is None:
             return None
-        expires_at, title, markdown = entry
+        expires_at, title, markdown, binary = entry
         if self.clock() >= expires_at:
             del self._pages[url]
             return None
-        return title, markdown
+        return title, markdown, binary
 
-    def put(self, url: str, title: str, markdown: str) -> None:
+    def put(self, url: str, title: str, markdown: str, *, binary: bool = False) -> None:
         self._pages.pop(url, None)
         while len(self._pages) >= self._max:
             del self._pages[next(iter(self._pages))]
-        self._pages[url] = (self.clock() + self._ttl, title, markdown)
+        self._pages[url] = (self.clock() + self._ttl, title, markdown, binary)
 
 
 def _is_loopback_url(url: str) -> bool:
@@ -289,8 +296,7 @@ class HttpFetchTransport:
                         chunks.append(chunk)
                     body = b"".join(chunks)
                     if binary:
-                        return FetchedPage(body.decode("utf-8", errors="replace"),
-                                           content_type, raw=body)
+                        return FetchedPage("", content_type, raw=body)
                     return FetchedPage(decode_body(body, content_type), content_type)
             raise RuntimeError(f"too many redirects (>{_MAX_REDIRECT_HOPS}) fetching {url}")
         finally:
@@ -371,10 +377,11 @@ class WebFetchTool:
         if refusal is not None:
             return text_output(refusal, is_error=True)
         cache = self.cache_for(ctx)
-        cached = cache.get(url)
-        binary_note = ""
+        cached = cache.entry(url)
+        if cached is not None and cached[2]:
+            return text_output(cached[1], url=url)
         if cached is not None:
-            title, markdown = cached
+            title, markdown, _ = cached
         else:
             try:
                 fetched = await self.transport.fetch(url)
@@ -395,12 +402,13 @@ class WebFetchTool:
                         check_text_media(url, fetched.content_type)
                     except ValueError as exc:
                         return text_output(f"WebFetch failed: {exc}", is_error=True)
+                # Not text: neither rendered nor summarized, only named.
                 media = media_type_of(fetched.content_type)
-                binary_note = (f"\n[The response is binary ({media}, {format_size(len(raw))}); "
-                               f"it was saved to {saved}]")
+                note = (f"[The response is binary ({media}, {format_size(len(raw))}); "
+                        f"it was saved to {saved}]")
+                cache.put(url, "", note, binary=True)
+                return text_output(note, url=url)
             title, markdown = render(fetched)
-            if not markdown.strip() and binary_note:
-                return text_output(binary_note.strip(), url=url)
             if not markdown.strip():
                 return text_output(
                     f"WebFetch got no readable text from {truncate_bytes(url, 100)} — the page "
@@ -433,7 +441,7 @@ class WebFetchTool:
             else:
                 body = f"(Digest unavailable — raw page rendering follows.)\n{page}{more}"
         body = await limit_output(body, WEBFETCH_RESULT_LIMIT, ctx)
-        return text_output(body + binary_note, **meta)
+        return text_output(body, **meta)
 
 
 async def _save_binary(ctx: ToolContext, raw: bytes, content_type: str) -> str | None:
