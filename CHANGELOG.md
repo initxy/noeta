@@ -695,6 +695,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A child continues only its own tenant's conversation.** A tool's
+  `spawn(history_from=)` could name another tenant's task, and the child folded that
+  conversation in; the call now fails with `UnknownTask` and stages no child, as
+  `Client.create(history_from=)` already refused it.
 - **noeta's home and the sqlite store are owner-only when noeta creates them.** `~/.noeta`
   (`NOETA_HOME`) was made 0775 and the store's database with its `-wal` and `-shm` files
   0644 under the usual umask, though the store holds every conversation. noeta now makes its

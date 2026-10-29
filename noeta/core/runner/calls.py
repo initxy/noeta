@@ -229,8 +229,24 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
                        allowed_outright=outright, model=run.model)
 
 
+async def _foreign_history(run: TaskRun, creates: list[NewTask]) -> str | None:
+    """A ``history_from`` among the staged children that is not a task of
+    this task's tenant (``Client.create`` refuses it the same way)."""
+    for c in creates:
+        source = c.created.history_from
+        if source is not None:
+            row = await run.store.get(source)
+            if row is None or row.tenant != run.state.tenant:
+                return source
+    return None
+
+
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
                   creates: list[NewTask]) -> None:
+    foreign = await _foreign_history(run, creates)
+    if foreign is not None:
+        output = ToolOutput(content=[Text(text=f"UnknownTask: {foreign}")], is_error=True)
+        _drop_staged(records, creates)
     view = run.view()
     if output.park is not None:
         park = output.park
