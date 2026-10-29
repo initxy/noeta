@@ -18,7 +18,7 @@ from noeta.core.events import ExtensionRecorded
 from noeta.core.execenv import RunResult
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState
-from noeta.plugins.environment import Environment
+from noeta.plugins.environment import Environment, render_git
 
 
 def _view(cwd: str, env: Any, **config: Any) -> TaskView:
@@ -176,6 +176,15 @@ async def test_a_container_whose_platform_cannot_be_told_gets_no_platform_line()
 
     text = await _block(Environment(model="m"), _view("/workspace", Bare("/workspace")))
     assert " - Platform:" not in text and " - Is a git repository: true" in text
+
+
+def test_an_unset_git_user_and_no_commits_leave_no_placeholder() -> None:
+    text = render_git(branch="main", main="main", user="", status="", commits="")
+    assert "Git user" not in text and "(unset)" not in text and "(none)" not in text
+    assert "Main branch (where pull requests usually go): main\n\nStatus:\n(clean)" in text
+    assert "Recent commits:\n\n" in text
+    assert "Git user: ada\n\nStatus:" in render_git(branch="b", main="m", user="ada",
+                                                     status="", commits="abc x")
 
 
 async def test_the_model_line_prefers_the_task_config(tmp_path: Path) -> None:

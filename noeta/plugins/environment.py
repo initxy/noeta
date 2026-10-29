@@ -154,6 +154,9 @@ async def capture_git(env: ExecEnv, cwd: str) -> str:
 def render_git(*, branch: str, main: str, user: str, status: str | None,
                commits: str) -> str:
     shown = "(not captured)" if status is None else status or "(clean)"
+    # Like Claude Code: no user line when none is set, an empty commit list
+    # in a repository without commits.
+    who = [f"Git user: {user}", ""] if user else []
     return "\n".join([
         "Here is context from the workspace that may help you answer:",
         "# Git status",
@@ -163,11 +166,10 @@ def render_git(*, branch: str, main: str, user: str, status: str | None,
         "",
         f"Main branch (where pull requests usually go): {main or '(unknown)'}",
         "",
-        f"Git user: {user or '(unset)'}",
-        "",
+        *who,
         f"Status:\n{shown}",
         "",
-        f"Recent commits:\n{commits or '(none)'}",
+        f"Recent commits:\n{commits}",
         "",
         "noeta attached this on its own; the user did not write it. It is about the "
         "user's own checkout and account, so there is no need to tell it back to them.",

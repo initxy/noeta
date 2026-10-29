@@ -84,7 +84,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 |---|---|
 | rem.git-status.1 | Trigger: start of a conversation inside a git repository. Placement: second block of the first user message, after instructions, before attribution. |
 | rem.git-status.2 | Opens by offering the following as context, then a `# gitStatus` heading and a note that it is a snapshot from the start of the conversation that will not update. |
-| rem.git-status.3 | Fields in order, each separated by a blank line: current branch; main branch (labelled as the usual PR target); git user name; `Status:` with the short status or `(clean)`; `Recent commits:` as one-line `hash subject` entries. |
+| rem.git-status.3 | Fields in order, each separated by a blank line: current branch; main branch (labelled as the usual PR target); git user name; `Status:` with the short status or `(clean)`; `Recent commits:` as one-line `hash subject` entries. With no user name set the user line is left out; a repository without commits gets an empty list (2.1.312 bundle). |
 | rem.git-status.4 | Closes by saying the harness attached it automatically, the user did not write it, it is about the user's own account and checkout, and the model need not repeat it to them. |
 | rem.git-status.5 | Re-sent before the summary after compaction (see `compaction.md`). |
 
