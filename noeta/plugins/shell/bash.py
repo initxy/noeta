@@ -333,6 +333,17 @@ def guard_root(ws: Workspace, ctx: ToolContext) -> str:
     return "" if ctx.approved else ws.root
 
 
+def command_script(command: str, ws: Workspace, ctx: ToolContext,
+                   rules: Sequence[HardeningRule]) -> tuple[str, list[str] | None]:
+    """What runs for ``command``: the script (``command``, behind
+    :func:`git_prelude` when it only reads with git) and, when a hardening
+    rule rewrites it instead, that argv (``None`` otherwise). With no rules
+    neither applies."""
+    prelude = git_prelude(command, guard_root(ws, ctx)) if rules else ""
+    hardened = None if prelude else hardened_argv(command, rules)
+    return prelude + command, hardened
+
+
 def _track_cwd(command: str) -> str:
     """``command`` with an EXIT trap printing the shell's final directory, so
     it is reported however the command ends short of a kill (``exit N``
@@ -508,12 +519,11 @@ class BashTool:
         # tracked.
         # A command that only reads with git runs under the hardening git
         # function instead, wherever it reads.
-        prelude = git_prelude(command, guard_root(ws, ctx)) if self.hardening_rules else ""
-        hardened = None if prelude else hardened_argv(command, self.hardening_rules)
+        script, hardened = command_script(command, ws, ctx, self.hardening_rules)
         track = hardened is None
         description = input.get("description")
         ran = await self._execute(
-            ctx, command=command, script=prelude + command, hardened=hardened, cwd=cwd,
+            ctx, command=command, script=script, hardened=hardened, cwd=cwd,
             timeout_s=timeout_s, disable=input.get("dangerouslyDisableSandbox"),
             description=description if isinstance(description, str) else "")
         if isinstance(ran, ToolOutput):
