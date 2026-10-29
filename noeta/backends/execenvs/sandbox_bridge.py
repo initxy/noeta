@@ -81,6 +81,16 @@ _EPERM, _ENOSYS = 1, 38
 _CLONE_NEWUSER = 0x10000000
 
 
+def filter_unsupported(allow_unix: bool, allow_userns: bool) -> str | None:
+    """Why the filter cannot refuse what the settings do not allow on this
+    machine's architecture, or ``None``."""
+    machine = platform.machine()
+    if machine in _ARCHES or (allow_unix and allow_userns):
+        return None
+    return (f"the sandbox's system-call filter (refusing Unix sockets and new user "
+            f"namespaces) does not support the {machine or 'unknown'} architecture")
+
+
 def _errno(code: int) -> int:
     return 0x00050000 | code
 

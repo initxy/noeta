@@ -40,6 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from noeta.backends.execenvs.sandbox_bridge import filter_unsupported
 from noeta.backends.execenvs.sandbox_plan import (
     PLACEHOLDERS,
     PROTECTED,
@@ -149,6 +150,10 @@ class LocalSandbox:
 
     def unavailable(self) -> str | None:
         if self.platform.startswith("linux"):
+            unfiltered = filter_unsupported(self.settings.allow_all_unix_sockets,
+                                            self.settings.nested_user_namespaces)
+            if unfiltered is not None:
+                return unfiltered
             bwrap = self._bwrap()
             if bwrap is None:
                 return ("bubblewrap (bwrap) is not installed; install it (apt install "

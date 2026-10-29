@@ -123,7 +123,10 @@ api_key = "{env:ACME_API_KEY}"   # or "{keyring:service/user}"; never the secret
 - A model call past a budget fails its turn with `budget_spent` and a message that names the
   tenant, the month and the numbers; the conversation stays and continues next month or once
   the budget is raised. Usage is counted from when a budget is set (table `tenant_usage`).
-- A tenant with its own `provider` never borrows the server's key.
+- A tenant with its own `provider`, `base_url` or `extra_headers` (a table of headers sent
+  with its model calls) must set its own non-empty `api_key`: `noeta serve` and
+  `noeta worker` refuse to start otherwise. It never borrows the server's key, the worker's
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` or the server's `extra_headers`.
 
 ### What separates tenants
 
@@ -195,8 +198,10 @@ logs only; it is not fenced, so keep it inside noeta's home.
   the sandbox with the protected set above unreadable but for the tenant's workspace, its
   own corners and the Python running the sandbox's network bridge (`TenantFence.confine`;
   the rest of the machine stays readable as for any sandboxed command), always: the
-  settings' `excludedCommands`, `dangerouslyDisableSandbox`, `filesystem.disabled` and
-  `enableWeakerNestedSandbox` do not apply to them. On Linux each command has its own PID
+  settings' `excludedCommands`, `dangerouslyDisableSandbox`, `filesystem.disabled`,
+  `enableWeakerNestedSandbox`, `allowNestedUserNamespaces` and `network.allowUnixSockets` /
+  `network.allowAllUnixSockets` do not apply to them (a daemon's socket, such as the user's
+  D-Bus or Docker's, would run their commands outside the sandbox). On Linux each command has its own PID
   namespace, so no other process (`/proc/<pid>/environ`) is visible; writes go only to
   the command's working directory (in the tenant's workspace) and its tenant's temporary
   directory. A worktree under `.noeta/worktrees/` cannot be made from inside the

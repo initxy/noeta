@@ -256,8 +256,10 @@ class TenantFence:
         temporary directory and the Python that runs the sandbox's network
         bridge; no ``allowWrite`` / ``allowRead`` / ``additionalDirectories``
         of the operator's; every command inside the sandbox (no excluded
-        commands, no way out, filesystem confined) and a fresh ``/proc`` of
-        its own PID namespace. ``settings`` themselves for the default
+        commands, no way out, filesystem confined), no Unix sockets or user
+        namespaces of the operator's allowing (a host daemon's socket, such
+        as D-Bus or Docker's, would run commands outside it) and a fresh
+        ``/proc`` of its own PID namespace. ``settings`` themselves for the default
         tenant."""
         if tenant == DEFAULT_TENANT:
             return settings
@@ -285,7 +287,8 @@ class TenantFence:
             tenant_write_roots=(workspace,) if workspace else (),
             noeta_home_readable=(),
             excluded_commands=(), allow_unsandboxed=False, filesystem_disabled=False,
-            weaker_nested=False)
+            weaker_nested=False, allow_all_unix_sockets=False, allow_unix_sockets=(),
+            nested_user_namespaces=False)
 
     def _workspace_owner(self, path: str) -> str | None:
         """The tenant whose workspace most closely holds ``path``."""

@@ -475,3 +475,36 @@ async def test_a_file_tools_relative_path_follows_no_swapped_link(
     with pytest.raises(PermissionError, match="may not write"):
         await tenant.write_bytes("settings.json", b"{}")
     assert not (target / "settings.json").exists()
+
+
+def test_a_tenants_profile_drops_the_operators_socket_and_namespace_allowances(
+        tmp_path: Path) -> None:
+    p = Places(tmp_path)
+    loose = SandboxSettings(enabled=True, allow_all_unix_sockets=True,
+                            allow_unix_sockets=("/run/user/1000/bus",),
+                            nested_user_namespaces=True)
+    box = p.fence.confine(loose, tenant="acme", task_id="t1", cwd=str(p.mine))
+    assert not box.allow_all_unix_sockets and box.allow_unix_sockets == ()
+    assert not box.nested_user_namespaces
+    assert p.fence.confine(loose, tenant="default", task_id="t1") is loose
+
+
+@needs_bwrap
+async def test_a_tenants_command_cannot_open_a_unix_socket_the_operator_allows(
+        tmp_path: Path) -> None:
+    p = Places(tmp_path)
+    settings = SandboxSettings.from_json({
+        "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+        "network": {"allowAllUnixSockets": True}, "allowNestedUserNamespaces": True})
+    env_for = local_env_for(settings, p.fence)
+    python = os.path.realpath(sys.executable)
+    probe = (f"{python} -I -c 'import socket; socket.socket(socket.AF_UNIX); "
+             "print(\"UNIX-OPENED\")'; echo PROBED; unshare -U true && echo USERNS-MADE")
+    tenant = env_for(_state("acme", p.mine))
+    assert isinstance(tenant, LocalExecEnv)
+    out = await _out(tenant, probe)
+    assert "PROBED" in out
+    assert "UNIX-OPENED" not in out and "USERNS-MADE" not in out
+    default = env_for(_state("default", p.mine))
+    assert isinstance(default, LocalExecEnv)
+    assert "UNIX-OPENED" in await _out(default, probe)

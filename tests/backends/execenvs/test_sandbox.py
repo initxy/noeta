@@ -242,6 +242,27 @@ def test_bwrap_missing_from_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "not installed" in (linux.unavailable() or "")
 
 
+async def test_an_architecture_without_the_syscall_filter_is_unavailable(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import platform
+
+    from noeta.toolkit.sandbox import run_in_tenant_sandbox
+
+    monkeypatch.setattr(platform, "machine", lambda: "riscv64")
+    strict = SandboxSettings(enabled=True, fail_if_unavailable=True)
+    reason = sb.LocalSandbox(strict, str(tmp_path), platform="linux").unavailable()
+    assert reason is not None and "riscv64" in reason
+    # Nothing to refuse: the filter is not needed.
+    loose = SandboxSettings(enabled=True, allow_all_unix_sockets=True,
+                            nested_user_namespaces=True, bwrap_path="/nonexistent/bwrap")
+    assert "riscv64" not in (sb.LocalSandbox(loose, str(tmp_path), platform="linux")
+                             .unavailable() or "")
+    env = LocalExecEnv(str(tmp_path), sandbox=strict)
+    env.fence = object()  # type: ignore[assignment]  # a tenant's task
+    with pytest.raises(OSError, match="riscv64"):
+        await run_in_tenant_sandbox(env, ["true"])
+
+
 # ---------------------------------------------------------------- real commands
 
 
