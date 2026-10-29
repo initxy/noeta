@@ -86,6 +86,9 @@ class ToolContext(CoreNotices):
     #: store's task table (``Store.tasks``) of this task's tenant, e.g. to
     #: list other tasks a message could go to.
     tasks: Callable[..., Awaitable[list[Any]]] | None = None
+    #: ``await task(task_id)``: the store's row of one task of this task's
+    #: tenant, ``None`` when there is none.
+    task: Callable[[str], Awaitable[Any]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     #: The model made this call (the runner's calls), so what earlier calls
     #: returned is in its conversation; ``False`` when an extension runs a

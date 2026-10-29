@@ -439,6 +439,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **`SendMessage(notify_when_idle)` finds any open session.** It looked for the session
+  among the store's 200 newest tasks, so a session behind them was "unknown"; it is now
+  looked up by id (`ToolContext.task`, new, for plugin authors).
 - **`function_tool` leaves `*args` and `**kwargs` out of the schema.** They became
   parameters named `args` and `kwargs` the model was told to fill.
 - **A sync `function_tool` runs off the event loop.** It ran on the worker's event loop,

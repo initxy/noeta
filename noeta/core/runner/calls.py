@@ -218,12 +218,16 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     async def tasks(**kw: Any) -> list[Any]:
         return list(await run.store.tasks(**{**kw, "tenant": tenant}))
 
+    async def task(task_id: str) -> Any:
+        row = await run.store.get(task_id)
+        return row if row is not None and row.tenant == tenant else None
+
     root = run.state.root_id or run.task_id
     answer = run.state.answers.get(use.id)
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
-                       tasks=tasks, count_tokens=run.counter(run.model),
+                       tasks=tasks, task=task, count_tokens=run.counter(run.model),
                        hold=lambda: run.rt.hold(root), by_model=True,
                        approved=answer is not None and answer.decision == "allow",
                        allowed_outright=outright, model=run.model)

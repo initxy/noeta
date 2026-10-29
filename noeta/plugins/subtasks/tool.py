@@ -434,8 +434,7 @@ class SendMessageTool:
             return texts.IDLE_ROOT_TASKS_ONLY
         if to in (state.task_id, me, state.root_id):
             return texts.IDLE_SELF.format(to=to)
-        rows = await ctx.tasks(limit=200) if ctx.tasks is not None else []
-        row = next((r for r in rows if r.task_id == to), None)
+        row = await ctx.task(to) if ctx.task is not None else None
         if row is None:
             return texts.UNKNOWN_RECIPIENT.format(to=to)
         if row.parent_id is not None:
