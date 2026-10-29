@@ -67,7 +67,9 @@ class StreamRoutes:
 
         async def run() -> None:
             try:
-                await drive(StreamJson(scope(request).front, options, emit), lines=given())
+                await drive(StreamJson(scope(request).front, options, emit,
+                                       tenant=scope(request).tenant),
+                            lines=given())
             finally:
                 queue.put_nowait(None)
 
@@ -114,7 +116,7 @@ class StreamRoutes:
                         yield value
 
         try:
-            await drive(StreamJson(mine.front, options, emit), lines=lines())
+            await drive(StreamJson(mine.front, options, emit, tenant=who), lines=lines())
         except UnknownTask as exc:
             await ws.send_text(json.dumps({"type": "error", "error": f"unknown task {exc}"}))
         with contextlib.suppress(Exception):

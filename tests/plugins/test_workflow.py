@@ -369,3 +369,25 @@ def test_a_run_keeps_two_to_sixteen_agents_running(monkeypatch: pytest.MonkeyPat
     for cpus, want in [(1, 2), (3, 2), (8, 6), (64, 16)]:
         monkeypatch.setattr(workflow.os, "cpu_count", lambda c=cpus: c)
         assert workflow.default_max_running() == want
+
+
+async def test_saved_names_are_not_listed_through_a_link_the_fence_refuses(
+        store: SqliteStore, tmp_path: Path) -> None:
+    work, other = tmp_path / "work", tmp_path / "other"
+    (work / ".noeta").mkdir(parents=True)
+    other.mkdir()
+    (other / "their-secret.js").write_text("return 1\n")
+    (work / ".noeta" / "workflows").symlink_to(other)
+
+    def fence(path: str, write: bool) -> str | None:
+        return "another tenant's" if path.startswith(str(other)) else None
+
+    model = Model(reply("", ("Workflow", {"name": "nope"})), reply("ok"))
+    rt = runtime(store, model, Orchestration(engine=Engine(), home=str(tmp_path / "home")),
+                 env=LocalExecEnv(str(work), fence=fence))
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [result] = [e for e in (r.event for r in await client.events(tid))
+                if isinstance(e, ToolFinished)]
+    assert result.result.text.endswith("Saved workflows: (none).")

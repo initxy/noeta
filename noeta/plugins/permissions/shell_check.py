@@ -62,6 +62,12 @@ async def shell_decision(view: TaskView, args: Mapping[str, Any], mode: str,
         mode, scope, real, ctx, allow_rules)
     if not open_parts:
         return Decision("allow")
+    for part in open_parts:
+        for x in (*(part.writes or ()), *part.redirects):
+            if sc.is_protected(x) or sc.is_protected(await real_path(view, x)):
+                # Asked in bypass mode too, as the file tools' writes there.
+                return Decision("ask", w.ASK_PROTECTED.format(name="Bash", path=x),
+                                why="protected")
     if mode == "plan":
         return Decision("ask", w.ASK_PLAN.format(name="Bash"), why="plan")
     always, label = shell_always(open_parts, here)

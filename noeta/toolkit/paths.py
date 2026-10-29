@@ -85,6 +85,15 @@ def tenant_temp_dir(tenant: str, root: str | None = None) -> str:
     return os.path.join(root or temp_root(), "tenants", tenant_dir_name(tenant))
 
 
+def file_name_part(text: str, default: str) -> str:
+    """``text`` as one file name: characters other than letters, digits,
+    ``_``, ``.`` and ``-`` replaced by ``_``; ``default`` when that leaves
+    no name or ``.`` / ``..``. For names built from ids a provider or
+    client picked."""
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", text)
+    return default if name in ("", ".", "..") else name
+
+
 def tenant_dir_name(tenant: str) -> str:
     """``tenant`` as one directory name: itself when it is a short name of
     letters, digits, ``_``, ``.`` and ``-`` (as ``noeta token add`` takes),

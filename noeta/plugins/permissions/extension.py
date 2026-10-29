@@ -284,15 +284,25 @@ class Permissions(Extension):
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return fold(state, kind, data)
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a rewind) keeps the source's mode,
+        except bypassPermissions where it is disabled: the source may have
+        run where it was allowed."""
+        if not (self.disable_bypass and isinstance(state, PermState)):
+            return state
+        plan = state.plan
+        if plan is not None and plan.get("pre_mode") == "bypassPermissions":
+            plan = {**plan, "pre_mode": self.mode}
+        mode = None if state.mode == "bypassPermissions" else state.mode
+        return replace(state, mode=mode, plan=plan)
+
     def mode_of(self, view: TaskView) -> str:
         """The task's current permission mode."""
         st = state_of(view)
-        if st.mode is not None:
-            return st.mode
-        mode = view.state.config.get("permission_mode")
-        if isinstance(mode, str) and mode in p.PERMISSION_MODES and not (
-                mode == "bypassPermissions" and self.disable_bypass):
-            return mode
+        for mode in (st.mode, view.state.config.get("permission_mode")):
+            if isinstance(mode, str) and mode in p.PERMISSION_MODES and not (
+                    mode == "bypassPermissions" and self.disable_bypass):
+                return mode
         return self.mode
 
     # ------------------------------------------------------------ tools and commands
@@ -542,7 +552,8 @@ class Permissions(Extension):
         if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
             return request
         return a.auto_request(view, request, lambda: a.server_context(
-            self._check.scope(view), plans_dir=self.plans_dir, allow=self._check.rules(view),
+            self._check.scope(view), tenant=view.state.tenant, plans_dir=self.plans_dir,
+            allow=self._check.rules(view),
             deny=self.deny_rules, ask=self.ask_rules, auto_mode=self.auto_mode))
 
     def _offered(self, name: str) -> bool:

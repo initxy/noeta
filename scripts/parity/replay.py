@@ -372,6 +372,7 @@ class SessionReplay:
     async def drive(self, endpoint: Endpoint, task_id: str | None) -> str | None:
         from noeta.cli.config import Settings, from_settings
         from noeta.core.commands import expand_command
+        from noeta.core.events import DEFAULT_TENANT
         from noeta.core.extension import CommandContext
 
         # The session's environment knobs (Claude Code's compaction window
@@ -395,7 +396,8 @@ class SessionReplay:
                 self.replayer.current_step = i
                 text = step["say"]
                 if text.startswith("/"):
-                    ctx = CommandContext(cwd=str(self.proj), task_id=task_id)
+                    ctx = CommandContext(cwd=str(self.proj), task_id=task_id,
+                                         tenant=DEFAULT_TENANT)
                     expanded = await expand_command(main, ctx, text)
                     if expanded is None:
                         self.notes.append(f"step {step['name']}: noeta has no command "

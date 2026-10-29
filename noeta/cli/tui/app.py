@@ -27,7 +27,7 @@ from noeta.cli.tui.widgets import (
     UserMessage,
 )
 from noeta.core.commands import list_commands, run_typed
-from noeta.core.events import Waiting
+from noeta.core.events import DEFAULT_TENANT, Waiting
 from noeta.core.extension import CommandContext
 from noeta.core.types import Delta, Image
 from noeta.host.local import LocalApp, UnknownAgent
@@ -318,7 +318,7 @@ class NoetaApp(TranscriptView):
         return getattr(getattr(self.local, "runtime", None), "agents", {}).get(self.agent)
 
     def _command_context(self) -> CommandContext:
-        return CommandContext(cwd=self.cwd, task_id=self.task_id or None)
+        return CommandContext(cwd=self.cwd, task_id=self.task_id or None, tenant=DEFAULT_TENANT)
 
     async def _plugin_help(self) -> str:
         agent = self._agent()

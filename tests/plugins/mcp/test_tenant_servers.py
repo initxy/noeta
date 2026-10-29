@@ -5,8 +5,9 @@ connections and sign-ins are its tenant's own."""
 from __future__ import annotations
 
 import contextlib
+import json
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded
-from noeta.core.extension import CommandContext
+from noeta.core.extension import Command, CommandContext, Extension
 from noeta.core.runner import Runtime
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.testing import ScriptedProvider, reply
@@ -86,7 +87,7 @@ async def test_listing_commands_for_a_tenant_starts_no_local_server() -> None:
     pool = Recording()
     mcp = Mcp([McpServer(alias="local", command=[sys.executable, "-c", "pass"]),
                McpServer(alias="remote", url="http://127.0.0.1:9/mcp")], pool=pool)
-    await mcp.commands(CommandContext(cwd="/"))
+    await mcp.commands(CommandContext(cwd="/", tenant="default"))
     assert sorted(pool.used) == [("local", None), ("remote", None)]
     pool.used.clear()
     await mcp.commands(CommandContext(cwd="/", tenant="acme"))
@@ -147,7 +148,7 @@ async def test_a_prompt_runs_in_the_partition_of_the_tenant_that_runs_it() -> No
     assert await mcp.run_command(acme, names[0], "") == "from tenant:acme"
     assert pool.used == [("remote", "tenant:acme")]
     assert await mcp.run_command(beta, names[0], "") == "from tenant:beta"
-    assert await mcp.run_command(CommandContext(cwd="/"), names[0], "") == "from None"
+    assert await mcp.run_command(CommandContext(cwd="/", tenant="default"), names[0], "") == "from None"
 
 
 async def test_listed_prompts_are_kept_for_a_bounded_number_of_partitions(
@@ -162,3 +163,41 @@ async def test_listed_prompts_are_kept_for_a_bounded_number_of_partitions(
     # A partition let go lists its prompts again when it runs one.
     assert await mcp.run_command(CommandContext(cwd="/", tenant="a"),
                                  "mcp__remote__hello", "") == "from tenant:a"
+
+
+class _Who(Extension):
+    """A local command that answers with the tenant it ran for."""
+
+    name = "who"
+
+    async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        return (Command(name="who", description="", local=True),)
+
+    async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
+        return f"tenant={ctx.tenant}"
+
+
+async def test_a_tenant_over_stream_json_starts_no_local_server(tmp_path: Path) -> None:
+    pytest.importorskip("starlette")
+    httpx = pytest.importorskip("httpx")
+    from noeta.host.http import create_app
+
+    pool = PromptPool()
+    agent = Agent(name="main", model="m", extensions=[_Who(), Mcp(
+        [McpServer(alias="local", command=[sys.executable, "-c", "pass"])], pool=pool)])
+    store = SqliteStore(str(tmp_path / "h.db"))
+    (tmp_path / "ws").mkdir()
+    api = create_app(Client(store), token="tok-default", tokens={"tok-a": "acme"},
+                     agents={"main": agent}, cwd=str(tmp_path),
+                     workspaces={"acme": str(tmp_path / "ws")})
+    body = json.dumps({"type": "user", "message": {"role": "user", "content": "/who"}})
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                     base_url="http://localhost") as http:
+            got = await http.post("/stream-json", content=body + "\n",
+                                  headers={"authorization": "Bearer tok-a"})
+    finally:
+        await store.close()
+    lines = [json.loads(x) for x in got.text.splitlines()]
+    assert [x["result"] for x in lines if x["type"] == "result"] == ["tenant=acme"]
+    assert pool.used == []

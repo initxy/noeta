@@ -1146,3 +1146,44 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   `noeta serve --no-worker` and separate workers, serve's working directory and
   `--allow-root` paths were readable to other tenants' tasks (and a worker started in `/`
   hid no server directory), and a worker's tasks could be switched into bypassPermissions.
+- **A tenant's slash commands over `/stream-json` run as that tenant.** The stream-json
+  front (WebSocket and POST) listed and ran commands as the default tenant, so a tenant's
+  `/mcp__…` command started the server's local stdio MCP servers and used the default
+  tenant's connections; a scheduled `/loop` command expanded the same way. For plugin
+  authors: `CommandContext.tenant` is now required (keyword only), so every caller names it.
+- **A continued task no longer keeps bypassPermissions where bypass is disabled.** A fork,
+  rewind or resumed fork of a task that ran in bypassPermissions (on the CLI, say) kept that
+  mode on a server started without `--allow-bypass-permissions`, and ran tools without
+  asking. The stored mode now goes through the same check as a task's config, and a
+  continued task's state drops bypassPermissions there.
+- **A shell command that writes a protected path asks in bypassPermissions.** A `Bash`
+  command writing `.git/hooks`, `.noeta/settings*.json` or another protected path (a file
+  command's target or an output redirection, as written or through a link) ran without
+  asking in bypassPermissions; it now asks there, as the file tools already did. In auto
+  mode the classifier still judges it, as Claude Code's safety check allows.
+- A compaction's transcript file is named from the task id with anything but letters,
+  digits, `_`, `.` and `-` replaced, as spill files are. A sub-agent's id carries the
+  provider's tool-use id, so a gateway answering with `../` in it could have the transcript
+  written outside the project directory. A spill file of a task or call named `..` now
+  stays in its directory too.
+- `Workflow`'s list of saved workflows (named when a name is not found) no longer lists a
+  tenant's `.noeta/workflows` when it is a link to a place the tenant fence refuses, such as
+  another tenant's workspace: the listing ran `ls` outside the fence.
+- A tenant's memory directory is no longer created where the tenant fence refuses writes:
+  the worker made it with `mkdir -p` itself, following a link in the tenant's `.noeta/` (or
+  a repository's shared directory outside the workspace) to a place outside it.
+- The HTTP server and `/stream-json` control requests no longer send a client the text of an
+  error that a library or the system raised (it may name the server's paths); the client
+  gets a generic message and the server logs the error. Errors noeta raises for the caller
+  keep their text.
+- In auto mode, a tenant's tasks no longer send the server's home directory, OS user name or
+  permission rules (the operator's among them) to the tenant's model provider: the
+  server-side check's context leaves them out, and the classifier is told the tenant's name
+  as the user.
+- A tenant's `Read` of a PDF no longer always fails: its copy and pages were made in the
+  tenant's temporary directory itself, where the fence lets file tools write nothing; they
+  now go in its `tmp/`.
+- On macOS and Windows the tenant fence compares names without case, so `~/.SSH` or another
+  tenant's workspace spelled in other case is refused like the name it reaches. On Linux it
+  compares with case (documented in docs/server.md "Not a boundary" for case-insensitive
+  file systems mounted there).

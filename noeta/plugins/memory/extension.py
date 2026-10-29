@@ -182,6 +182,11 @@ class Memory(Extension):
             directory = self._agent_dir(view, workspace) \
                 or memory_dir_for(workspace, self.home, view.state.tenant)
         try:
+            # Made by the worker: not where the task's tenant may not write
+            # (a link on the way, or a repository's shared directory outside
+            # the workspace).
+            if fence_refuses(task_env(view.env, view.state.config), directory, write=True):
+                raise OSError("the tenant fence refuses it")
             Path(directory).mkdir(parents=True, exist_ok=True)
         except OSError:
             log.warning("memory: could not create %s", directory)

@@ -42,7 +42,7 @@ async def test_planning_end_to_end(store: SqliteStore, tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("planned")])
     rt = runtime(store, provider, ag)
     client = Client(store)
-    message = await expand_command(ag, CommandContext(cwd=str(tmp_path)), "/plan add logging")
+    message = await expand_command(ag, CommandContext(cwd=str(tmp_path), tenant="default"), "/plan add logging")
     assert message is not None and message.startswith("<command-name>/plan</command-name>")
     tid = await client.create("a", message, config={"cwd": str(tmp_path / "proj")})
     await rt.run_until_idle()

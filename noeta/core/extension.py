@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Union
 
 from noeta.core import records
 from noeta.core.events import (
-    DEFAULT_TENANT,
     Compacted,
     Event,
     ExtensionRecorded,
@@ -133,11 +132,13 @@ class Command(Struct):
 @dataclass(frozen=True)
 class CommandContext:
     """Where a command is listed or run: the front end's task (``None``
-    before it has one), working directory and tenant."""
+    before it has one), working directory and tenant. ``tenant`` has no
+    default: a command runs with its tenant's servers and files, so every
+    caller names it."""
 
     cwd: str
     task_id: str | None = None
-    tenant: str = DEFAULT_TENANT
+    tenant: str = field(kw_only=True)
 
 
 @dataclass(frozen=True)

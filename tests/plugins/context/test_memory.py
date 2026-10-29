@@ -258,6 +258,19 @@ async def test_a_tenants_agent_memory_cannot_link_to_a_protected_file(
     assert "TOP-SECRET" not in sent and "top secret" not in sent
 
 
+async def test_a_tenants_memory_directory_is_not_made_through_a_link_out(
+        h: Harness, tmp_path: Path) -> None:
+    home, server = tmp_path / "home", tmp_path / "server"
+    server.mkdir()
+    (h.work / ".noeta").mkdir()
+    (h.work / ".noeta" / "agent-memory").symlink_to(server)
+    _fenced(h, home, server)
+    h.provider.add(reply("ok"))
+    await h.start(Agent(name="a", model="m", extensions=[
+        Memory(home=str(home), agent_scope="project", agent_name="rev")]))
+    assert list(server.iterdir()) == []
+
+
 async def test_a_tenants_own_memory_is_still_read(h: Harness, tmp_path: Path) -> None:
     home, server = tmp_path / "home", tmp_path / "server"
     server.mkdir()

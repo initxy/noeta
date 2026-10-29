@@ -221,6 +221,9 @@ Not a boundary, even under the strict sandbox:
   known by their usual names in the home directories noeta finds; a token kept anywhere
   else (an app's own settings, a `.env` outside the server's directories) is readable
   unless `denyRead` names it.
+- Name case on Linux: the file tools' fence compares names with case there (without case
+  on macOS and Windows), so on a case-insensitive file system mounted on Linux, `~/.SSH`
+  reaches `~/.ssh` past it.
 - What the operator runs outside the sandbox: hooks (`settings.json` `hooks`, run as the OS
   user with the tool call on stdin), plugins (in-process code), the MCP servers of default
   tenant tasks. A hook starts in the task's working directory: one that runs `git` or a

@@ -38,7 +38,7 @@ from noeta.toolkit.commands import command_message
 async def test_a_markdown_command_fills_its_arguments(body: str, typed: str, out: str) -> None:
     ext = MarkdownCommands([{"name": "c", "body": body}])
     args = typed.partition(" ")[2]
-    assert await expand_with([ext], CommandContext(cwd="/"), typed) == command_message("c", args)
+    assert await expand_with([ext], CommandContext(cwd="/", tenant="default"), typed) == command_message("c", args)
     assert ext.render("c", args) == out
 
 
@@ -57,7 +57,7 @@ class Harness:
         agent = Agent(name="a", model="m", extensions=[
             FileTools(), Shell(), Permissions(mode="default", plans_dir=str(self.work / "p")),
             ext])
-        goal = await expand_with([ext], CommandContext(cwd=str(self.work)), typed)
+        goal = await expand_with([ext], CommandContext(cwd=str(self.work), tenant="default"), typed)
         assert goal
         tid = await self.client.create("a", goal)
         await Runtime(store=self.store, agents={"a": agent},

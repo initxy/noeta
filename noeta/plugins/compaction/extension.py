@@ -50,7 +50,7 @@ from noeta.plugins.compaction.window import (
     window_from_env,
 )
 from noeta.toolkit.local_env import is_local
-from noeta.toolkit.paths import noeta_home, project_dir
+from noeta.toolkit.paths import file_name_part, noeta_home, project_dir
 
 log = logging.getLogger("noeta.compaction")
 
@@ -398,7 +398,8 @@ class Compaction(Extension):
         if not self.transcripts or view.env is None or not is_local(view.env):
             return None
         cwd = str(state.config.get("cwd") or view.env.cwd)
-        path = project_dir(cwd, self.home or noeta_home(), state.tenant) / f"{view.task_id}.jsonl"
+        name = file_name_part(view.task_id, "task")
+        path = project_dir(cwd, self.home or noeta_home(), state.tenant) / f"{name}.jsonl"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"".join(msgspec.json.encode(m) + b"\n" for m in state.history))

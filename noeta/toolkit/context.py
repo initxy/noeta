@@ -50,11 +50,12 @@ async def read_text(env: ExecEnv, path: str) -> str | None:
         return None
 
 
-def fence_refuses(env: ExecEnv, path: str) -> bool:
+def fence_refuses(env: ExecEnv, path: str, *, write: bool = False) -> bool:
     """Whether the env's tenant fence (a non-default tenant's local env)
-    refuses reading what ``path`` resolves to; ``False`` with no fence."""
+    refuses reading (or ``write``) what ``path`` resolves to; ``False``
+    with no fence."""
     fence = getattr(env, "fence", None)
-    return fence is not None and fence(os.path.realpath(path), False) is not None
+    return fence is not None and fence(os.path.realpath(path), write) is not None
 
 
 async def read_local_text(env: ExecEnv, path: str) -> str | None:

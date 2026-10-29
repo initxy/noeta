@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from noeta.core import models
 from noeta.core.client import ClientAPI
 from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.host._errors import error_text
 from noeta.host.app import AppAPI
 from noeta.host.pending import Pending, card_title
 from noeta.host.questions import typed_answer
@@ -72,7 +73,7 @@ class ControlRequests:
                 raise ValueError(f"Unsupported control request subtype: {subtype}")
             self._reply(request_id, await handler(request))
         except Exception as exc:  # noqa: BLE001 — the client gets the error, the run goes on
-            self._reply(request_id, error=str(exc) or type(exc).__name__)
+            self._reply(request_id, error=error_text(exc))
 
     async def _on_initialize(self, request: dict[str, Any]) -> dict[str, Any]:
         if request.get("hooks"):
