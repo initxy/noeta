@@ -288,5 +288,3 @@ class Shell(Extension):
                 self.registry.kill_where(root, spawner_id=state.task_id)
         elif isinstance(event, Waiting) and event.on == "input" and self.ends_with_turn:
             self.registry.kill_where(root, spawner_id=state.task_id)
-        elif isinstance(records.decode(event), records.TurnStopped) and state.parent_id is None:
-            self.registry.kill_where(root)
