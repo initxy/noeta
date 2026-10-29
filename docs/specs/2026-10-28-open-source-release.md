@@ -232,6 +232,14 @@ servers and runs on many machines.
   lists its plugins without it would announce tools nothing can load. An `Agent` built in code
   adds `ToolSearch()` itself (CHANGELOG). Rejected: listing it in each built-in agent file
   (third-party agent files with their own plugin lists would break).
+- D40 (`os-fix-r4kernel`) The agent's allow and deny lists apply to `tool_changes`' added
+  tools too (deny wins), and an extension whose added tool they refuse has its whole change
+  set dropped: its withholds and entries were computed alongside that tool. The deferred
+  tools a dropped set withheld are sent plain (`ToolOffer.plain`: no `defer_loading`, not in
+  `deferred_tool_names`), since nothing can load them; Claude Code turns tool search off when
+  its search tool is not available. Kernel-generic, no tool named. Rejected: dropping only
+  the refused tool (its deferred tools would stay withheld, uncallable); a `loads_deferred`
+  tool flag (needs the plugin to set it, and every deferred tool goes plain until it does).
 
 ## Plan
 

@@ -164,6 +164,66 @@ class ToolChanges:
     entries: Sequence[ToolEntry] = ()
 
 
+@dataclass(frozen=True)
+class ToolOffer:
+    """A task's tools for one step (``offer_tools``)."""
+
+    #: The tools it offers: the ones a call runs.
+    tools: list[Tool]
+    #: Offered tools left out of the request: name -> the error a call to
+    #: one gets.
+    withheld: dict[str, str]
+    #: The request's entries that are no tool, by name.
+    entries: list[ToolEntry]
+    #: Deferred tools sent as plain tools (no ``defer_loading``, never
+    #: announced): the ones a refused change set withheld.
+    plain: frozenset[str] = frozenset()
+
+
+def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str] | None,
+                denied: Sequence[str]) -> ToolOffer:
+    """A task's tools for one step: every extension's (the first of a name
+    wins), then each extension's ``tool_changes`` to them, the agent's allow
+    and deny lists applied to both (deny wins). An extension whose added
+    tool the lists refuse has its whole change set dropped: its withholds
+    and entries were computed alongside that tool (a loader of deferred
+    tools), so the deferred tools it withheld are sent plain instead."""
+    refused = set(denied)
+
+    def offered_name(name: str) -> bool:
+        return (allowed is None or name in allowed) and name not in refused
+
+    tools: list[Tool] = []
+    seen: set[str] = set()
+    for ext in exts:
+        for t in ext.tools(view):
+            if offered_name(t.name) and t.name not in seen:
+                seen.add(t.name)
+                tools.append(t)
+    offered = tuple(tools)
+    deferred = {t.name for t in offered if tool_flag(t, "deferred")}
+    withheld: dict[str, str] = {}
+    entries: list[ToolEntry] = []
+    plain: set[str] = set()
+    for ext in exts:
+        changes = ext.tool_changes(view, offered)
+        if changes is None:
+            continue
+        if not all(offered_name(t.name) for t in changes.add):
+            plain.update(n for n in changes.withhold if n in deferred)
+            continue
+        for t in changes.add:
+            if t.name not in seen:
+                seen.add(t.name)
+                tools.append(t)
+        for name, error in changes.withhold.items():
+            withheld.setdefault(name, error)
+        entries.extend(changes.entries)
+    plain.difference_update(withheld)
+    return ToolOffer(tools=tools, withheld=withheld,
+                     entries=sorted(entries, key=lambda e: e.spec.name), plain=frozenset(plain))
+
+
 class StagedChild(Struct):
     """A child task ``TaskView.spawn`` staged; the runner creates it."""
 
@@ -309,10 +369,11 @@ class TaskView(records.CoreNotices):
 
     def deferred_tool_names(self) -> list[str]:
         """The names of the deferred tools this task offers, sorted (loaded
-        or not): the list a message announces so the model can load them."""
-        allowed = self.allowed_tools
-        return sorted({t.name for ext in self.extensions for t in ext.tools(self)
-                       if tool_flag(t, "deferred") and (allowed is None or t.name in allowed)})
+        or not): the list a message announces so the model can load them.
+        A deferred tool sent plain (``ToolOffer.plain``) is not one."""
+        offer = offer_tools(self.extensions, self, self.allowed_tools, self.denied_tools)
+        return sorted({t.name for t in offer.tools
+                       if tool_flag(t, "deferred") and t.name not in offer.plain})
 
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""
@@ -393,7 +454,9 @@ class Extension:
         extension is asked with the same ``offered``, so no answer depends
         on their order: added tools join after the offered ones (a name
         already offered or added stays the first), withheld names are the
-        union (the first extension's error stands), entries go in by name."""
+        union (the first extension's error stands), entries go in by name.
+        An added tool the agent's lists refuse drops the whole answer
+        (``offer_tools``)."""
         return None
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:

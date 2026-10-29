@@ -436,6 +436,13 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **An agent's `denied_tools` / `allowed_tools` also cover tools a plugin adds from the
+  others' (`Extension.tool_changes`).** An agent that denied `ToolSearch` was still offered
+  it and ran it. An added tool the lists refuse is now neither sent nor run, and the rest of
+  that plugin's changes go with it; the deferred tools it withheld are sent as plain tools
+  and not announced (an agent that denies `ToolSearch` gets its deferred tools up front, as
+  Claude Code does when its search tool is unavailable). `TaskView.deferred_tool_names` also
+  leaves out denied tools.
 - **Crash recovery no longer removes another agent's worktree.** An isolated agent's
   worktree was named after the last characters of the call id, which is unique only within
   its task, so a crashed call's recovery could force-remove the worktree of another task or

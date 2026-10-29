@@ -14,6 +14,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished, ToolStarted
 from noeta.core.extension import Deny, Extension, Gate, TaskView, ToolChanges, ToolEntry
+from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolSpec, ToolUse
@@ -91,8 +92,8 @@ async def store(tmp_path: Path) -> AsyncIterator[SqliteStore]:
 
 
 async def _run(store: SqliteStore, exts: list[Extension],
-               provider: ScriptedProvider) -> str:
-    agent = Agent(name="a", model="m", extensions=exts)
+               provider: ScriptedProvider, **lists: Any) -> str:
+    agent = Agent(name="a", model="m", extensions=exts, **lists)
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None)  # type: ignore[arg-type,return-value]
     tid = await Client(store).create("a", "go")
@@ -132,3 +133,70 @@ async def test_an_added_tool_runs(store: SqliteStore) -> None:
     [finished] = [r.event for r in await Client(store).events(tid)
                   if isinstance(r.event, ToolFinished)]
     assert finished.result.text == "Count ran"
+
+
+@pytest.mark.parametrize("lists", [{"denied_tools": ("Count",)},
+                                   {"allowed_tools": ("Read", "Hidden", "Count"),
+                                    "denied_tools": ("Count",)},
+                                   {"allowed_tools": ("Read", "Hidden")}])
+async def test_the_agent_lists_refuse_an_added_tool_and_its_whole_change_set(
+        store: SqliteStore, lists: dict[str, Any]) -> None:
+    """An added tool the agent's lists refuse (deny wins) is neither sent
+    nor run; the withholds and entries its extension computed alongside
+    it are dropped with it."""
+    provider = ScriptedProvider([reply("", ("Count", {})), reply("done")])
+    tid = await _run(store, [Offers([Fake("Read"), Fake("Hidden")]), Counter()], provider,
+                     **lists)
+    assert [t.name for t in provider.requests[0].tools] == ["Hidden", "Read"]
+    [finished] = [r.event for r in await Client(store).events(tid)
+                  if isinstance(r.event, ToolFinished)]
+    assert finished.result.is_error and "No tool named 'Count'" in finished.result.text
+
+
+class Deferred(Fake):
+    deferred = True
+
+
+class Loader(Extension):
+    """Defers: adds ``Load`` while a deferred tool is offered, withholds
+    every deferred tool and lists a placeholder entry."""
+
+    name = "loader"
+
+    def tool_changes(self, view: TaskView, offered: Sequence[Tool]) -> ToolChanges | None:
+        deferred = [t.name for t in offered if getattr(t, "deferred", False)]
+        if not deferred:
+            return None
+        return ToolChanges(add=[Fake("Load")], withhold={n: "not loaded" for n in deferred},
+                           entries=[ToolEntry(spec=ToolSpec(name="Slot", description="s",
+                                                            input_schema={},
+                                                            defer_loading=True))])
+
+
+@pytest.mark.parametrize("denied", [False, True])
+async def test_deferred_tools_are_sent_plain_when_their_loader_is_refused(
+        store: SqliteStore, denied: bool) -> None:
+    """With the loader refused nothing can load a deferred tool, so the
+    tools it withheld are sent as plain tools and announced nowhere."""
+    ext = Offers([Fake("Read"), Deferred("Mcp")])
+    lists = {"denied_tools": ("Load",)} if denied else {}
+    provider = ScriptedProvider([reply("", ("Mcp", {})), reply("done")])
+    tid = await _run(store, [ext, Loader()], provider, **lists)
+    sent = {t.name: t.defer_loading for t in provider.requests[0].tools}
+    view = TaskView(state=TaskState(), extensions=[ext, Loader()], **lists)
+    [finished] = [r.event for r in await Client(store).events(tid)
+                  if isinstance(r.event, ToolFinished)]
+    if denied:
+        assert sent == {"Mcp": False, "Read": False}
+        assert view.deferred_tool_names() == []
+        assert finished.result.text == "Mcp ran"
+    else:
+        assert sent == {"Load": False, "Read": False, "Slot": True}
+        assert view.deferred_tool_names() == ["Mcp"]
+        assert finished.result.text == "not loaded"
+
+
+def test_a_denied_deferred_tool_is_not_announced() -> None:
+    view = TaskView(state=TaskState(), extensions=[Offers([Deferred("Mcp"), Deferred("Web")])],
+                    denied_tools=("Web",))
+    assert view.deferred_tool_names() == ["Mcp"]
