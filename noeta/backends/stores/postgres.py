@@ -222,6 +222,10 @@ CREATE TABLE IF NOT EXISTS {s}.tenant_usage (
 class _TenantFull(Exception):
     """A claim found its tenant at its running limit after all."""
 
+    def __init__(self, tenant: str) -> None:
+        super().__init__(tenant)
+        self.tenant = tenant
+
 
 def _lost(conn: Conn | None, exc: BaseException) -> bool:
     """Whether ``exc`` means the connection is gone (not a query error)."""
@@ -764,8 +768,12 @@ class PostgresStore:
             row = await cur.fetchone()
             return int(row[0]) if row else 0
 
+        #: Tenants a try found at their limit after all: the next try skips them.
+        found_full: set[str] = set()
+
         async def tx(conn: Conn) -> Claim | None:
-            full = [t for t, most in limits.items() if await running(conn, t) >= most]
+            full = [t for t, most in limits.items()
+                    if t in found_full or await running(conn, t) >= most]
             cur = await conn.execute(self._q(
                 "WITH c AS (SELECT task_id, status AS was FROM {s}.tasks k"
                 " WHERE queue = ANY(%(q)s)" + in_roots
@@ -794,14 +802,17 @@ class PostgresStore:
                 await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
                                    (_TENANT_LOCK_CLASS, f"{self.schema}:{tenant}"))
                 if await running(conn, tenant, besides=task_id) >= limits[tenant]:
-                    raise _TenantFull
+                    raise _TenantFull(tenant)
             return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
                          lease_until=float(row[2]))
 
-        try:
-            return await self._tx(tx)
-        except _TenantFull:
-            return None  # rolled back: the task stays where it was
+        while True:
+            try:
+                return await self._tx(tx)
+            except _TenantFull as full:
+                # Rolled back: the task stays where it was. Another tenant
+                # may have work; try again without this one.
+                found_full.add(full.tenant)
 
     async def add_tenant_usage(self, tenant: str, period: str, tokens: int,
                                cost_usd: float) -> None:

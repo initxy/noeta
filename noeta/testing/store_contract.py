@@ -82,6 +82,19 @@ async def test_workers_claiming_at_once_keep_a_tenant_under_its_limit(store: Sto
     assert len(await store.tasks(tenant="acme", status="running")) == 2
 
 
+async def test_a_tenant_at_its_limit_leaves_racing_claims_to_the_others(store: Store) -> None:
+    """Claims racing for a limited tenant's tasks that find it full after
+    all take another tenant's task instead of coming back empty."""
+    for i in range(6):
+        await store.create(_of("acme", f"a{i}"))
+    for i in range(12):
+        await store.create(_of("beta", f"b{i:02d}"))
+    got = await asyncio.gather(*(store.claim(f"w{i}", ["default"], 30,
+                                             tenant_limits={"acme": 2}) for i in range(12)))
+    assert all(c is not None for c in got)
+    assert len(await store.tasks(tenant="acme", status="running")) == 2
+
+
 async def test_tenant_usage_adds_up_per_period(store: Store) -> None:
     add = getattr(store, "add_tenant_usage", None)
     if add is None:
