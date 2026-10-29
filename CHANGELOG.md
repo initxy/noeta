@@ -741,6 +741,14 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A tenant's commands no longer follow a working directory swapped for a link.** The
+  `cwd` was checked only when the task was created; the tenant could then replace a
+  directory on the way with a link to noeta's home or another tenant's workspace, and its
+  sandboxed commands got that place as their writable root (with noeta's home, its tokens
+  and settings, and hooks in those settings run unsandboxed). The sandbox now resolves the
+  working directory for every command of a tenant's task and refuses the command unless it
+  lies in the tenant's workspace and outside the places its commands may not read, instead
+  of making such a place writable.
 - **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another

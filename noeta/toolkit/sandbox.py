@@ -129,6 +129,12 @@ class SandboxSettings:
     #: The tenant's own temporary directory: its commands' ``TMPDIR`` and
     #: per-command files, instead of those this process's commands share.
     tenant_temp_dir: str | None = field(default=None, compare=False)
+    #: A tenant's task: where its commands' working directory must resolve
+    #: to (its workspace), checked when each command is planned, since the
+    #: tenant may have swapped a directory on the way for a link since.
+    #: Empty for a tenant whose workspace this worker does not know: its
+    #: commands run nowhere.
+    tenant_write_roots: tuple[str, ...] | None = field(default=None, compare=False)
     #: Where the working directory is, for relative paths.
     base_dir: str = field(default="", compare=False)
 

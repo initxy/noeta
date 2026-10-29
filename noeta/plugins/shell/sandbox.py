@@ -35,7 +35,10 @@ async def confine(env: Any, command: str, disable: Any, argv: list[str], cwd: st
         return sandbox_required(reason) if sandbox.settings.fail_if_unavailable else None
     if not belongs_in_sandbox(sandbox, command, disable):
         return None
-    return await sandbox.prepare(argv, cwd=cwd, writable=writable)
+    try:
+        return await sandbox.prepare(argv, cwd=cwd, writable=writable)
+    except PermissionError as exc:  # a tenant's working directory gone elsewhere
+        return f"{exc}. The command was not run."
 
 
 def _listing(paths: Sequence[str], limit: int = 8) -> str:

@@ -259,6 +259,7 @@ class TenantFence:
             settings, tenant_deny_read=tuple(dict.fromkeys(denied)),
             tenant_allow_read=tuple(own), allow_write=(), allow_read=(),
             tenant_temp_places=tuple(temps), tenant_temp_dir=self.temp_dir(tenant),
+            tenant_write_roots=(workspace,) if workspace else (),
             noeta_home_readable=(),
             excluded_commands=(), allow_unsandboxed=False, filesystem_disabled=False,
             weaker_nested=False)

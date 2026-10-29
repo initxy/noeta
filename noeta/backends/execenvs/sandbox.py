@@ -134,7 +134,9 @@ class LocalSandbox:
     def __init__(self, settings: SandboxSettings, root: str, *,
                  proxy: FilterProxy | None = None, platform: str | None = None) -> None:
         self.settings = settings
-        self.root = os.path.realpath(root)
+        # Resolved again for each command: a directory on the way may have
+        # become a link since.
+        self.root = os.path.abspath(root)
         self.proxy = proxy or default_proxy()
         self.platform = platform or sys.platform
         self.temp_dir = settings.tenant_temp_dir
