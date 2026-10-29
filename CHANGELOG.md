@@ -785,6 +785,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   tenant's endpoint), and every tenant provider carried the server's `extra_headers`. Such a
   tenant must now set a non-empty `api_key` (`noeta serve` and `noeta worker` refuse to start
   otherwise), and its provider gets only the `extra_headers` table of its own config.
+- On Linux machines other than x86_64 and aarch64 the sandbox's system-call filter (no Unix
+  sockets, no new user namespaces) was silently left out. The sandbox now reports itself
+  unavailable there unless the settings allow both, so `failIfUnavailable` refuses the
+  commands, a tenant's always (its settings never allow them).
 - **A tenant's commands no longer follow a working directory swapped for a link.** The
   `cwd` was checked only when the task was created; the tenant could then replace a
   directory on the way with a link to noeta's home or another tenant's workspace, and its
