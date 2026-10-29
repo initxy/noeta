@@ -375,6 +375,14 @@ async def test_append_skips_a_post_to_an_unknown_task(store: Store) -> None:
     assert len(await store.inbox("other")) == 1
 
 
+async def test_a_claim_names_the_tasks_queue(store: Store) -> None:
+    await store.create(new("t1", queue="gpu"))
+    claim = await store.claim("w", ["default", "gpu"], 30)
+    assert claim is not None and claim.queue == "gpu"
+    renewed = await store.renew(claim, 30)
+    assert renewed is not None and renewed.queue == "gpu"
+
+
 async def test_a_held_tree_is_claimed_only_by_its_holders(store: Store) -> None:
     await store.create(new("root"))
     await store.create(NewTask(task_id="root.child",

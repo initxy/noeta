@@ -103,7 +103,7 @@ class Subtasks(Extension):
     - ``inherit_config``: parent ``TaskCreated.config`` keys a child copies.
       ``model`` and ``effort`` are copied only when neither the call nor the
       agent's definition sets them.
-    - ``queue``: the queue children are created on.
+    - ``queue``: the queue children are created on (default: the caller's).
     - ``progress_labels``: a sub-agent asks the model once, beside its third
       call, for a 3-5 word label of what it is doing; front ends get it as a
       notice, the model never sees it.
@@ -121,7 +121,7 @@ class Subtasks(Extension):
         max_fanout: int = texts.MAX_FANOUT,
         exclusive_with: Collection[str] = (),
         inherit_config: Sequence[str] = ("cwd", "model", "effort"),
-        queue: str = "default",
+        queue: str | None = None,
         progress_labels: bool = True,
     ) -> None:
         self.roster = check_roster(roster)

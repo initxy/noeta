@@ -307,7 +307,7 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Store contract
 
-Third-party `Store` implementations must add both; `noeta.testing.store_contract` checks them.
+Third-party `Store` implementations must add these; `noeta.testing.store_contract` checks them.
 
 - **Refuse to end a task over an unread inbox.** An append that ends a task while its inbox
   holds items past the read seq raises `InboxUnread` (a `Conflict`), checked under the task's
@@ -317,6 +317,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   root's inbox instead (same dedupe key), decided under the target's row lock; `post` returns
   the seq of the inbox it went to. Background jobs' ends and monitor events use it
   (`ToolContext.post(forward_if_ended=True)`).
+- **`Claim.queue`.** A claim (and its renewal) names the queue of the task claimed; a store
+  that leaves it out puts every child on `default`, as before.
 
 ### Added
 
@@ -439,6 +441,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A sub-agent is created on its caller's queue.** Children went to `default` unless a
+  queue was named (`Subtasks(queue=)`, a roster entry's `queue`, `spawn(queue=)`), so a task
+  on its own queue (a tenant's, a GPU worker's) had children only other workers ran, and a
+  tree held by one of them waited for a worker that never came.
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.

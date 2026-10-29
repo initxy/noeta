@@ -280,6 +280,21 @@ async def test_send_message_resumes_a_finished_agent(store: SqliteStore) -> None
     assert handback_sender(p.requests[5].messages[-1]) == first.task_id
 
 
+@pytest.mark.parametrize(("kind", "lands"), [("scout", "tenant-a"), ("gpu-only", "kids")])
+async def test_a_sub_agent_inherits_its_callers_queue_unless_its_spec_names_one(
+        store: SqliteStore, kind: str, lands: str) -> None:
+    roster = [*ROSTER, SubagentSpec(name="gpu-only", description="x", agent="worker",
+                                    queue="kids")]
+    main = Agent(name="main", model="p", extensions=[Subtasks(roster)])
+    p = ScriptedProvider([reply("", agent("a", kind)), reply("launched")])
+    rt = runtime(store, {"p": p}, main, queues=("tenant-a",))
+    client = Client(store)
+    tid = await client.create("main", "go", queue="tenant-a")
+    await rt.run_once()
+    [child] = await client.tasks(parent_id=tid)
+    assert child.queue == lands
+
+
 async def test_send_message_reaches_a_running_agent_and_its_caller(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", agent("slow")), reply("launched")])
     rt = runtime(store, {"p": p}, parent(queue="kids"), worker())  # the child is not run here

@@ -188,7 +188,7 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         records.append(ExtensionRecorded(extension=extension, kind=kind, data=data))
 
     def spawn(agent: str, prompt: str | Message, *, config: dict[str, Any] | None = None,
-              background: bool = False, queue: str = "default",
+              background: bool = False, queue: str | None = None,
               history_from: str | None = None, history_through: int | None = None) -> str:
         child_id = f"{run.task_id}.{use.id}.{len(creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
@@ -196,7 +196,7 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
             task_id=child_id,
             created=child_task(run.task_id, run.state, run.exts, agent, config,
                                history_from=history_from, history_through=history_through),
-            queue=queue,
+            queue=queue or run.claim.queue,
             inbox=[Say(message=message)],
         ))
         records.append(core_records.event(core_records.Spawned(children=[

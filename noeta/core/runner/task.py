@@ -513,11 +513,11 @@ class TaskRun:
             posts.append(Post(task_id=target, body=body, dedupe_key=key))
         return posts
 
-    @staticmethod
-    def staged(view: TaskView) -> list[NewTask]:
+    def staged(self, view: TaskView) -> list[NewTask]:
         """The children ``view.spawn`` staged, taken out of the view."""
         staged, view.creates = list(view.creates), []
-        return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
+        return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue or self.claim.queue,
+                        inbox=[c.first])
                 for c in staged]
 
     def tool_offer(self, view: TaskView) -> ToolOffer:

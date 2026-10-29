@@ -47,7 +47,8 @@ class Delegate:
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         assert ctx.spawn is not None
-        child = ctx.spawn("worker", input["prompt"], queue=input.get("queue", "default"))
+        queue = {"queue": input["queue"]} if "queue" in input else {}
+        child = ctx.spawn("worker", input["prompt"], **queue)
         return ToolOutput(park=Park(on="children", keys=[child]))
 
     async def resume(self, input: dict[str, Any], ctx: ToolContext, outcome: Any) -> ToolOutput:
@@ -125,6 +126,21 @@ async def test_delegation_parks_until_the_child_ends(store: SqliteStore) -> None
                if isinstance(r.event, ToolFinished)]
     assert [r.text for r in results] == ["1 2 3"]
     assert (await client.get(tid)).waiting_on == "input"
+
+
+@pytest.mark.parametrize(("asked", "lands"), [({}, "gpu"), ({"queue": "kids"}, "kids")])
+async def test_a_child_is_created_on_its_parents_queue_unless_one_is_named(
+        store: SqliteStore, asked: dict[str, str], lands: str) -> None:
+    """A child the worker serving its parent's queue can run: on another
+    queue, a held tree would wait for a worker that may never come."""
+    provider = ScriptedProvider([reply("", ("Delegate", {"prompt": "go", **asked}))])
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Delegate()]))
+    rt.queues = ("gpu",)
+    client = Client(store)
+    tid = await client.create("a", "go", queue="gpu")
+    await rt.run_once()
+    [child] = await client.tasks(parent_id=tid)
+    assert child.queue == lands
 
 
 async def test_a_sub_agent_ends_after_its_turn_without_one_shot(store: SqliteStore) -> None:

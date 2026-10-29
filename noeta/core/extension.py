@@ -229,7 +229,8 @@ class StagedChild(Struct):
 
     task_id: str
     created: TaskCreated
-    queue: str
+    #: ``None``: the spawning task's queue.
+    queue: str | None
     first: Say
 
 
@@ -335,7 +336,7 @@ class TaskView(records.CoreNotices):
         self.enqueued.append((body, dedupe_key, task_id))
 
     def spawn(self, agent: str, prompt: str | Message, *, config: Mapping[str, Any] | None = None,
-              queue: str = "default", key: str = "") -> str:
+              queue: str | None = None, key: str = "") -> str:
         """Stage a child task outside a tool call (a background
         orchestration): created with the records this hook leaves, and
         tracked like any child (its ``ChildEnded`` arrives in the inbox).

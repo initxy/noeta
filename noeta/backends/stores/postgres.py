@@ -579,7 +579,8 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was, t.root_id"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was, t.root_id,"
+                " t.queue"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
                  "r": list(roots or []), "full": full})
             row = await cur.fetchone()
@@ -603,7 +604,7 @@ class PostgresStore:
                 if await running(conn, tenant, besides=task_id) >= limits[tenant]:
                     raise _TenantFull(tenant)
             return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
-                         lease_until=float(row[2]))
+                         lease_until=float(row[2]), queue=str(row[6]))
 
         while True:
             try:
@@ -646,7 +647,7 @@ class PostgresStore:
             if row is None:
                 return None
             return Claim(task_id=claim.task_id, worker=claim.worker, epoch=claim.epoch,
-                         lease_until=float(row[0]))
+                         lease_until=float(row[0]), queue=claim.queue)
 
         return await self._conns.tx(tx)
 

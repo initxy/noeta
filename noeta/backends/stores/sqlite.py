@@ -572,7 +572,8 @@ class SqliteStore:
             not_full = (f" AND (status = 'running' OR tenant NOT IN"
                         f" ({','.join('?' for _ in full)}))") if full else ""
             row = conn.execute(
-                f"SELECT task_id, owner_epoch FROM tasks WHERE queue IN ({marks}){in_roots} AND ("
+                "SELECT task_id, owner_epoch, queue FROM tasks"
+                f" WHERE queue IN ({marks}){in_roots} AND ("
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
                 " OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= ?)"
                 " OR (status = 'running' AND lease_until < ?))"
@@ -591,7 +592,8 @@ class SqliteStore:
                 " WHERE task_id = ?",
                 (worker, epoch, until, now, task_id),
             )
-            return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until)
+            return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until,
+                         queue=str(row[2]))
 
         return await self._write(tx)
 
@@ -625,7 +627,7 @@ class SqliteStore:
             if cur.rowcount == 0:
                 return None
             return Claim(task_id=claim.task_id, worker=claim.worker, epoch=claim.epoch,
-                         lease_until=until)
+                         lease_until=until, queue=claim.queue)
 
         return await self._write(tx)
 

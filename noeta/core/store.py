@@ -90,6 +90,9 @@ class Claim(Struct):
     worker: str
     epoch: int
     lease_until: float
+    #: The queue the task is on: a child it creates goes there unless one is
+    #: named, so the workers that serve the parent serve the child.
+    queue: str = "default"
 
 
 class Patch(Struct):
