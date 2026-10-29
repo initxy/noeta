@@ -23,18 +23,12 @@ class HardeningRule:
     """One rule of which commands run hardened. ``program`` matches ``argv[0]``
     exactly, ``subcommand`` (if set) ``argv[1]``; ``validate`` then inspects
     the remaining args. Matching is on the parsed argv only, never the raw
-    string."""
+    string. A matched argv runs as ``harden`` rewrites it."""
 
     program: str
     subcommand: str | None
     validate: _ArgValidator
-    label: str
-    #: The command runs code or config the WORKSPACE controls (a test runner
-    #: loading ``conftest.py``), so it should be honoured only in a trusted
-    #: workspace.
-    runs_workspace_code: bool = False
-    #: Rewrites a matched argv before it runs; ``None`` = run as parsed.
-    harden: Callable[[list[str]], list[str]] | None = None
+    harden: Callable[[list[str]], list[str]]
 
     def matches(self, argv: list[str]) -> bool:
         if not argv or argv[0] != self.program:
@@ -65,10 +59,10 @@ def matching_rule(command: str, rules: Sequence[HardeningRule]) -> HardeningRule
 
 def hardened_argv(command: str, rules: Sequence[HardeningRule]) -> list[str] | None:
     """``command``'s argv as the first matching rule rewrites it, or
-    ``None`` when no rule with a rewrite matches (it runs as written)."""
+    ``None`` when no rule matches (it runs as written)."""
     rule = matching_rule(command, rules)
-    argv = parse_argv(command) if rule is not None and rule.harden is not None else None
-    if rule is None or rule.harden is None or not argv:
+    argv = parse_argv(command) if rule is not None else None
+    if rule is None or not argv:
         return None
     return rule.harden(argv)
 
@@ -76,10 +70,6 @@ def hardened_argv(command: str, rules: Sequence[HardeningRule]) -> list[str] | N
 # ---------------------------------------------------------------------------
 # The curated default rules
 # ---------------------------------------------------------------------------
-
-
-def _trivial_validate(_: list[str]) -> bool:
-    return True
 
 
 def _is_safe_path_arg(arg: str) -> bool:
@@ -123,53 +113,8 @@ def _git_log_validate(tail: list[str]) -> bool:
     return True
 
 
-def _pytest_validate(tail: list[str]) -> bool:
-    # The interactive debugger prompt would hang the call.
-    return all(a not in {"--pdb", "--pdb-trace"} for a in tail)
-
-
-def _uv_run_pytest_validate(tail: list[str]) -> bool:
-    # ``tail`` starts AFTER ``["uv", "run"]``.
-    if not tail or tail[0] != "pytest":
-        return False
-    return _pytest_validate(tail[1:])
-
-
-def _rg_validate(tail: list[str]) -> bool:
-    # ripgrep is read-only except for the flags that run a program per file.
-    for arg in tail:
-        if arg == "--hostname-bin":
-            return False
-        if arg == "--pre" or arg.startswith("--pre="):
-            return False
-        if arg == "--pre-glob" or arg.startswith("--pre-glob="):
-            return False
-    return True
-
-
-def _find_validate(tail: list[str]) -> bool:
-    # find can run commands, delete or write files; keep it pure traversal.
-    forbidden = {
-        "-exec", "-execdir", "-ok", "-okdir", "-delete",
-        "-fprint", "-fprintf", "-fprint0", "-fls",
-    }
-    return all(a not in forbidden for a in tail)
-
-
 DEFAULT_SHELL_RULES: tuple[HardeningRule, ...] = (
-    HardeningRule("git", "status", _git_status_validate, "git_status", harden=harden_git),
-    HardeningRule("git", "diff", _git_diff_validate, "git_diff", harden=harden_git),
-    HardeningRule("git", "log", _git_log_validate, "git_log", harden=harden_git),
-    # Test runners execute repository code by design.
-    HardeningRule("pytest", None, _pytest_validate, "pytest", runs_workspace_code=True),
-    HardeningRule(
-        "uv", "run", _uv_run_pytest_validate, "uv_run_pytest", runs_workspace_code=True
-    ),
-    HardeningRule("npm", "test", _trivial_validate, "npm_test", runs_workspace_code=True),
-    HardeningRule("pnpm", "test", _trivial_validate, "pnpm_test", runs_workspace_code=True),
-    # Read-only search / listing.
-    HardeningRule("grep", None, _trivial_validate, "grep"),
-    HardeningRule("rg", None, _rg_validate, "rg"),
-    HardeningRule("find", None, _find_validate, "find"),
-    HardeningRule("ls", None, _trivial_validate, "ls"),
+    HardeningRule("git", "status", _git_status_validate, harden_git),
+    HardeningRule("git", "diff", _git_diff_validate, harden_git),
+    HardeningRule("git", "log", _git_log_validate, harden_git),
 )
