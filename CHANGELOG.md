@@ -467,6 +467,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A channel's thread outlives its task.** `deliver` posted every later message of a thread
+  into its task even after the task ended (failed, cancelled, or a one-shot agent's), where
+  nobody read it. Once the task ended, the next message starts a continuation (`<id>.2`,
+  `<id>.3`, ...) from the previous task's conversation; `deliver` returns the id it posted to,
+  and `noeta.core.channel.current_task` names the thread's task now (the `chat-approvals`
+  example answers there).
 - **A worker whose clock is behind the store's no longer spins on a timer.** The store
   wakes a waiting task when its timer is due by the store's clock (the database's on
   Postgres); a worker running behind found the timer not yet due and wrote the same

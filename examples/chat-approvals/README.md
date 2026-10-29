@@ -5,8 +5,8 @@ Goes with [`chat-bridge`](../chat-bridge): while one of its tasks waits on an ap
 (at least once, with an `Idempotency-Key` header `<task id>:<seq>`), and the chat app shows Allow
 and Deny buttons. A press comes back to `POST /approve` as `{thread, call_id, sender, verdict}`
 (`verdict` is `allow` or `deny`) with the shared `secret` in `X-Chat-Secret`: 401 without the
-secret, 400 for a malformed body, 403 for a sender not on the allowlist. The thread names the
-task, so a press can only answer a chat task's call, and the answer is posted once however many
+secret, 400 for a malformed body, 403 for a sender not on the allowlist, 404 for a thread with no
+task. The thread names the task (`current_task`), so a press can only answer a chat task's call, and the answer is posted once however many
 replicas receive it.
 
 Install: `cp chat_approvals.py ~/.noeta/plugins/` next to `chat_bridge.py`, then in

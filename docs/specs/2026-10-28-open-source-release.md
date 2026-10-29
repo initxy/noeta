@@ -557,6 +557,12 @@ servers and runs on many machines.
   would write is exactly the log's last event, nothing happened since and the store woke the
   task for its `until`, so the timers due by then fire (once per claim). No `Store` or
   `Claim` change; costs one read of the last record, only in that case.
+- D111 (`os-fix-r11kernel`) A channel thread maps to its tasks by id alone: `<id>`, then
+  `<id>.2`, `<id>.3`, ... each created (idempotently, `history_from` the previous) once the
+  one before ended, so the mapping lives in the store's rows, not in memory or a new table;
+  the newest is found in `O(log n)` reads. A message posted to a task that ended meanwhile is
+  found unread (a task never ends over an unread message) and moves on. Dedupe holds per
+  task: a delivery repeated after its task ended lands again in the continuation.
 
 ## Plan
 

@@ -1,7 +1,8 @@
 # chat_bridge — a channel plugin
 
 A chat app posts each message to `POST /chat` as `{delivery_id, thread, sender, text}`, with the
-shared `secret` in the `X-Chat-Secret` header; every thread is one durable task. A request without
+shared `secret` in the `X-Chat-Secret` header; every thread is one durable task (once that task
+ended, `deliver` continues the thread in a new task that remembers it). A request without
 the secret is refused (401) before its sender id is believed, a body without those four strings
 too (400); then only allowlisted senders (by sender id, never by room) get in. The `chat_reply`
 plugin, inside the task, posts each answer back to its `url` and records what it relayed: at
