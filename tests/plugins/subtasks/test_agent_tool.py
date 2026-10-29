@@ -425,6 +425,18 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     assert out[3:] == [(texts.TOO_MANY_BACKGROUND.format(limit=1), True)] * 2
 
 
+async def test_agent_calls_of_one_reply_count_once_against_the_cap(
+        store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("a"), agent("b")), reply("ok")])
+    rt = runtime(store, {"p": p}, parent(queue="kids", max_background=2), worker())
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    out = await results(client, tid)
+    assert [failed for _, failed in out] == [False, False]
+    assert len(await client.tasks(parent_id=tid)) == 2
+
+
 async def test_task_is_the_old_name_and_exclusive_tools(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", ("Task", {"description": "d", "prompt": "old name",
                                               "subagent_type": "scout"})), reply("ok")])

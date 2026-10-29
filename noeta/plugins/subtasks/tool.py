@@ -232,8 +232,9 @@ class AgentTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         ext, state = self._ext, self._state
         use = ToolUse(id=ctx.call_id, name=self.name, input=input)
-        batch = batch_refusal(ext, state, [c.use for c in state.calls] or [use])
-        refusal = call_refusal(ext, state, use, self._roster) or (batch[0] if batch else None)
+        # The reply's limits taken together are the gate's (``before_tool``):
+        # here the siblings started before this call already count as running.
+        refusal = call_refusal(ext, state, use, self._roster)
         if refusal is not None:  # normally denied at the gate already
             return text_output(refusal, is_error=True)
         assert ctx.spawn is not None
