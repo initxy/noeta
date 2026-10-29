@@ -103,6 +103,40 @@ async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
         assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
 
 
+async def test_shift_tab_before_the_mode_is_shown_steps_from_the_tasks_mode(
+        tmp_path: Path) -> None:
+    """Shift+Tab pressed before the follower has shown the plugin's ``mode``
+    and ``modes`` records (or before the task's start recorded them) steps
+    from the task's mode, not from a guess (from ``auto`` it would step into
+    ``bypassPermissions``)."""
+    import asyncio
+
+    from noeta.core.events import External
+    from noeta.plugins.permissions import Permissions
+
+    app = make_app(tmp_path, ScriptedProvider([]), Permissions(mode="default"))
+    client = app.local.client
+    watch, hold = client.watch, asyncio.Event()
+
+    async def held_watch(task_id: str, after: int = 0) -> Any:
+        await hold.wait()
+        async for rec in watch(task_id, after):
+            yield rec
+
+    client.watch = held_watch  # type: ignore[method-assign]
+    async with app.run_test(size=(140, 30)) as pilot:
+        await settle(pilot, app, lambda: app.task_id != "")
+        assert app.mode == ""
+        await pilot.press("shift+tab")
+        await pilot.pause(0.1)
+        hold.set()
+        await settle(pilot, app, lambda: app.mode == "acceptEdits")
+        await pilot.pause(0.5)
+        assert app.mode == "acceptEdits"
+        inbox = [i.body for i in await app.local.store.inbox(app.task_id)]
+        assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
+
+
 async def test_shift_tab_steps_only_through_the_modes_the_plugin_offers(
         tmp_path: Path) -> None:
     """A plugin that refuses bypassPermissions publishes a cycle without it,

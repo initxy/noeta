@@ -71,6 +71,7 @@ class TranscriptView(App[None]):
     permission_mode: str | None
     mode: str
     modes: Modes
+    modes_published: bool
     task_id: str
     calls: dict[str, ToolCall]
     stream: MarkdownStream | None
@@ -261,9 +262,7 @@ class TranscriptView(App[None]):
         mode = current_mode([rec])
         if mode:
             self.mode = mode
-        offered = published_modes([rec])
-        if offered is not None and offered.cycle:
-            self.modes = offered
+        self._take_modes(published_modes([rec]))
         # The core's own records by type: a plugin may record the same
         # kind names (the hooks plugin's "retry") for something else.
         core = records.decode(ev)
@@ -307,6 +306,10 @@ class TranscriptView(App[None]):
         elif ev.on == "input":
             self.busy = False
             self._set_question("", "", {})
+
+    def _take_modes(self, offered: Modes | None) -> None:
+        if offered is not None and offered.cycle:
+            self.modes, self.modes_published = offered, True
 
     def update_status(self) -> None:
         spec = models.find_spec(self.model)
