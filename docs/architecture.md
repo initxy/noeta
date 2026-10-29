@@ -58,6 +58,9 @@ every model call (the turn's and every plugin's) passes through the kernel, whic
 tenant's provider, refuses a call past its monthly budget and counts the usage. The count is a
 per-tenant total beside the logs, not task state: no fold reads it, and a refusal is written
 to the task's log. See [ADR-019](adr/019-tenant-limits-are-enforced-by-the-kernel.md).
+The model catalog (`noeta/core/models.py`: windows, output limits, prices) lives in the kernel
+for the same reason: the kernel prices each call against the budget and caps each call's
+output from it ([ADR-022](adr/022-the-model-catalog-is-kernel-data.md)).
 
 ## One step of a task
 
