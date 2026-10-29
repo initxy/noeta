@@ -26,7 +26,7 @@ from noeta.core.runner.snapshotting import SNAPSHOT_GROWTH
 from noeta.core.runner.task import TaskRun
 from noeta.core.store import Claim, Snapshot
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
-from noeta.plugins.shell.bash import ShellState
+from noeta.plugins.shell.state import ShellState
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -257,7 +257,7 @@ def test_the_version_stays_that_of_the_code_the_runtime_started_with(
 
 @pytest.mark.parametrize("extension, helper", [
     ("noeta.plugins.fs:FileTools", "noeta.plugins.fs.state"),
-    ("noeta.plugins.shell:Shell", "noeta.plugins.shell.bash"),
+    ("noeta.plugins.shell:Shell", "noeta.plugins.shell.state"),
     ("noeta.plugins.subtasks.extension:Subtasks", "noeta.plugins.subtasks.idle"),
 ])
 def test_the_version_follows_the_builtin_reducer_helpers(

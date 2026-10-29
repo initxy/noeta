@@ -17,14 +17,9 @@ import pytest
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
 from noeta.core.tool import ToolContext
-from noeta.plugins.shell.bash import (
-    SHELL,
-    BashTool,
-    ShellState,
-    git_prelude,
-    reduce_shell,
-    resolve_timeout,
-)
+from noeta.plugins.shell.bash import BashTool, resolve_timeout
+from noeta.plugins.shell.git_prelude import git_prelude
+from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell
 from tests.plugins.conftest import Harness, text_of
 
 

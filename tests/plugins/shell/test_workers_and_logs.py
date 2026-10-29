@@ -31,8 +31,8 @@ from noeta.core.store import HOLD_LOST
 from noeta.core.tool import ToolContext
 from noeta.core.types import Text, user
 from noeta.plugins.shell import Registry, Shell
-from noeta.plugins.shell.bash import ShellState
 from noeta.plugins.shell.jobs import DEAD_WORKER_LOGS_KEEP_S, JOB_ENDED, Job
+from noeta.plugins.shell.state import ShellState
 from noeta.toolkit.notices import NOTICE_GUARD
 
 OTHER = "some-other-host:4242"

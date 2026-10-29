@@ -15,7 +15,7 @@ from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Image, Text
 from noeta.plugins.fs.state import FS, FsState, reduce_fs
-from noeta.plugins.shell.bash import SHELL, ShellState, reduce_shell, shell_state
+from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell, shell_state
 
 
 @dataclass

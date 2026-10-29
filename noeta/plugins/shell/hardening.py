@@ -1,12 +1,16 @@
 """Which commands ``Bash`` runs hardened: a command matching one of the
 rules (structurally, on its parsed argv) runs as that rule's rewritten argv
-(the ``git`` flags that switch off a repository's own helper programs)."""
+(the ``git`` flags that switch off a repository's own helper programs);
+:func:`command_script` picks between that and the reading ``git``
+function (``git_prelude.py``)."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from noeta.core.tool import ToolContext
+from noeta.plugins.shell.git_prelude import git_prelude, guard_root
 from noeta.toolkit.shell import (
     SHELL_META_CHARS,
     harden_git,
@@ -14,6 +18,7 @@ from noeta.toolkit.shell import (
     has_unquoted_expansion,
     parse_argv,
 )
+from noeta.toolkit.tools import Workspace
 
 _ArgValidator = Callable[[list[str]], bool]
 
@@ -118,3 +123,15 @@ DEFAULT_SHELL_RULES: tuple[HardeningRule, ...] = (
     HardeningRule("git", "diff", _git_diff_validate, harden_git),
     HardeningRule("git", "log", _git_log_validate, harden_git),
 )
+
+
+def command_script(command: str, ws: Workspace, ctx: ToolContext,
+                   rules: Sequence[HardeningRule]) -> tuple[str, list[str] | None]:
+    """What runs for ``command``: the script (``command``, behind
+    :func:`git_prelude` when it only reads with git) and, when a hardening
+    rule rewrites it instead, that argv (``None`` otherwise). With no rules
+    neither applies."""
+    prelude = git_prelude(command, guard_root(ws, ctx)) if rules else ""
+    hardened = None if prelude else hardened_argv(command, rules)
+    return prelude + command, hardened
+
