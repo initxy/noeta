@@ -291,11 +291,16 @@ class Slow:
 
 async def test_a_renewal_that_keeps_failing_gives_the_task_up(store: SqliteStore) -> None:
     slow = Slow()
-    rt = runtime(FlakyStore(store, renew_fails=True), ScriptedProvider([reply("", ("Slow", {}))]),
+    flaky = FlakyStore(store)
+    rt = runtime(flaky, ScriptedProvider([reply("", ("Slow", {}))]),
                  Agent(name="a", model="m", tools=[slow]), lease_seconds=0.3)
     client = Client(store)
     await client.create("a", "go")
-    await asyncio.wait_for(rt.run_once(), 5)  # the keeper gave up and cancelled the step
+    running = asyncio.ensure_future(rt.run_once())
+    # Failing from the start, a loaded machine may give up before the tool runs.
+    await asyncio.wait_for(slow.started.wait(), 10)
+    flaky.renew_fails = True
+    await asyncio.wait_for(running, 5)  # the keeper gave up and cancelled the step
     assert slow.cancelled.is_set()
 
 
