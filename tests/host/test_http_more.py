@@ -143,6 +143,8 @@ async def test_stream_json_one_way_and_the_rest(served: tuple[str, ScriptedProvi
                                  json={"name": "config", "data": {"model": "opus"}})
         assert signal.status_code == 200
         assert (await http.get("/models", headers={"authorization": "x"})).status_code == 401
+        in_url = await http.get("/models?token=secret", headers={"authorization": ""})
+        assert in_url.status_code == 401  # a query token only on the WebSocket
 
 
 async def test_web_pages_and_rebound_names_are_refused(

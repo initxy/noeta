@@ -257,12 +257,15 @@ class Guard:
                                                  _GuardedFront(self._serving, guarded))
         return found
 
-    def tenant(self, headers: Any, query: Any) -> str | None:
-        """The request's tenant; ``None`` when its token is missing or wrong."""
+    def tenant(self, headers: Any, query: Any = None) -> str | None:
+        """The request's tenant; ``None`` when its token is missing or wrong.
+        ``query``: a WebSocket's query, whose ``token`` stands in for the
+        header a browser cannot set there (no other route takes it, so a
+        token never lands in an ordinary URL's logs or history)."""
         if not self._auth:
             return DEFAULT_TENANT
         got = headers.get("authorization", "").removeprefix("Bearer ").strip() \
-            or query.get("token", "")
+            or (query.get("token", "") if query is not None else "")
         return self._tenant_of(got) if got else None
 
     def same_site(self, headers: Any) -> bool:
@@ -283,7 +286,7 @@ class Guard:
         async def wrapped(request: Request) -> Response:
             if not self.same_site(request.headers):
                 return JSONResponse({"error": "cross-site request refused"}, status_code=403)
-            who = self.tenant(request.headers, request.query_params)
+            who = self.tenant(request.headers)
             if who is None:
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
             request.state.scope = self.scope_for(who)

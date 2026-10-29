@@ -489,3 +489,5 @@ All notable changes to Noeta are documented here. The format is based on
   older noeta left holding the token itself is rewritten to its digest on the next start,
   which prints the token one last time. Clients (`noeta --server`, `noeta acp --server`) read
   the token from `NOETA_SERVER_TOKEN`.
+- The bearer token is taken from `?token=` only on the `/stream-json` WebSocket; every other
+  route needs the `Authorization` header, so tokens stay out of ordinary URLs and their logs.
