@@ -15,6 +15,7 @@ from noeta.cli.config import from_settings, load_settings
 from noeta.cli.trust import trust_project
 from noeta.core.commands import expand_command
 from noeta.core.extension import CommandContext
+from noeta.toolkit.commands import command_message
 
 
 def make_plugin(root: Path, *, manifest: bool = True) -> Path:
@@ -28,7 +29,8 @@ def make_plugin(root: Path, *, manifest: bool = True) -> Path:
         "---\nname: deploy\ndescription: Deploy the app\n---\nRun the deploy.\n")
     (root / "commands").mkdir()
     (root / "commands" / "status.md").write_text(
-        "---\ndescription: Show the status\nargument-hint: '[env]'\n---\n"
+        "---\ndescription: Show the status\nargument-hint: '[env]'\n"
+        "allowed-tools: [Read, 'Bash(${CLAUDE_PLUGIN_ROOT}/bin/status:*)']\n---\n"
         "Show the deploy status of $ARGUMENTS using ${CLAUDE_PLUGIN_ROOT}/bin/status.\n")
     (root / "extra").mkdir()
     (root / "extra" / "about.md").write_text("Explain this plugin.\n")
@@ -77,8 +79,12 @@ async def test_a_claude_code_plugin_loads_through_noetas_plugins(home: Path,
     ctx = CommandContext(cwd=str(tmp_path))
     main_agent = app.runtime.agents["main"]
     assert await expand_command(main_agent, ctx, "/deploy-tools:status prod") == \
+        command_message("deploy-tools:status", "prod")
+    commands = ext(app, "main", "markdown_commands")
+    assert commands.render("deploy-tools:status", "prod") == \
         f"Show the deploy status of prod using {root}/bin/status."
-    assert await expand_command(main_agent, ctx, "/deploy-tools:about") == "Explain this plugin."
+    assert commands._allow["deploy-tools:status"] == ("Read", f"Bash({root}/bin/status:*)")
+    assert commands.render("deploy-tools:about", "") == "Explain this plugin."
     await app.store.close()
 
 

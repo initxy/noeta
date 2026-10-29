@@ -159,8 +159,9 @@ async def _run(view: TaskView, command: str, call_id: str) -> str:
 
 
 async def run_inline_commands(view: TaskView, text: str, *, skill: str, call_id: str,
-                              approve_rules: Sequence[str] = ()) -> str:
-    """``text`` with each command replaced by what it printed. Raises
+                              approve_rules: Sequence[str] = (), what: str = "skill") -> str:
+    """``text`` with each command replaced by what it printed (``skill``
+    names the ``what`` the text comes from in an error). Raises
     :class:`InlineCommandError` when one may not run; nothing runs then."""
     found = _find(text)
     if not found:
@@ -170,7 +171,7 @@ async def run_inline_commands(view: TaskView, text: str, *, skill: str, call_id:
         why = await _allowed(view, use, approve_rules)
         if why is not None:
             raise InlineCommandError(
-                f"the skill {skill!r} runs `{f.command.strip()}` while it loads, and that "
+                f"the {what} {skill!r} runs `{f.command.strip()}` while it loads, and that "
                 f"command may not run without asking: {why}")
     outputs = [await _run(view, f.command, f"{call_id}.cmd{i}") for i, f in enumerate(found)]
     for f, out in zip(reversed(found), reversed(outputs), strict=True):

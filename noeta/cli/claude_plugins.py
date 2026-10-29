@@ -107,6 +107,12 @@ def _frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return {}, text
 
 
+def _allowed(value: Any, names: Mapping[str, str]) -> str:
+    """A command's ``allowed-tools`` (a list or one string) as one string."""
+    text = ", ".join(map(str, value)) if isinstance(value, list) else str(value or "")
+    return str(_substitute(text, names))
+
+
 def _command_files(paths: Iterable[Path]) -> list[Path]:
     out: list[Path] = []
     for path in paths:
@@ -147,19 +153,23 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False) ->
         plugin.commands.append({"name": f"{name}:{file.stem}",
                                 "body": _substitute(body, names),
                                 "description": str(front.get("description") or ""),
-                                "argument_hint": str(front.get("argument-hint") or "")})
+                                "argument_hint": str(front.get("argument-hint") or ""),
+                                "allowed_tools": _allowed(front.get("allowed-tools"), names)})
     for key, entry in (commands or {}).items() if isinstance(commands, dict) else ():
         if not isinstance(entry, dict):
             continue
         content: Any = entry.get("content")
         files = _paths(root, entry.get("source"), "commands") if content is None else []
+        front = {}
         for path in files:
             if path.is_file():
-                content = _frontmatter(path.read_text("utf-8"))[1]
+                front, content = _frontmatter(path.read_text("utf-8"))
         if isinstance(content, str):
+            allowed = entry.get("allowedTools", front.get("allowed-tools"))
             plugin.commands.append({"name": f"{name}:{key}", "body": _substitute(content, names),
                                     "description": str(entry.get("description") or ""),
-                                    "argument_hint": str(entry.get("argumentHint") or "")})
+                                    "argument_hint": str(entry.get("argumentHint") or ""),
+                                    "allowed_tools": _allowed(allowed, names)})
     hook_sources: list[Any] = [root / "hooks" / "hooks.json"]
     declared = manifest.get("hooks")
     for item in declared if isinstance(declared, list) else [declared] if declared else []:
