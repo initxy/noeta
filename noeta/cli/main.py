@@ -268,7 +268,8 @@ def main(argv: list[str] | None = None) -> None:
         if extra is None:
             raise
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
-                 f"pip install 'noeta[{extra}]'")
+                 f"pip install 'noeta[{extra}]' (or, for a uv tool install, "
+                 f"uv tool install --reinstall 'noeta[{extra}]')")
 
 
 def _main(argv: list[str]) -> None:

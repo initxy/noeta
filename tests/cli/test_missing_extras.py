@@ -42,6 +42,7 @@ def test_a_command_names_its_missing_extra(argv: list[str], hidden: tuple[str, .
     _hide(monkeypatch, *hidden)
     message = _exit_message(["--model", "m", "--cwd", str(tmp_path), *argv])
     assert f"pip install 'noeta[{extra}]'" in message
+    assert f"uv tool install --reinstall 'noeta[{extra}]'" in message
     assert "Traceback" not in message
 
 
