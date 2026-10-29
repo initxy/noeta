@@ -1,4 +1,5 @@
-"""Shell commands written into a skill body, run when the skill loads.
+"""Shell commands written into a skill or markdown command body, run when it
+loads.
 
 Claude Code's syntax: ``!`command``` inline (after a line start or
 whitespace) and a fenced block opened with ```` ```! ````. Each command is
@@ -28,6 +29,7 @@ __all__ = [
     "InlineCommandError",
     "has_commands",
     "neutralise",
+    "rules_cover",
     "run_inline_commands",
     "strip_commands",
 ]
@@ -115,12 +117,14 @@ async def _allowed(view: TaskView, use: ToolUse, approve_rules: Sequence[str]) -
         return None
     if not any(a.firm for a in asks) and (
             any(isinstance(v, Allow) and v.approve for v in verdicts)
-            or _covered(view, use, approve_rules)):
+            or rules_cover(view, use, approve_rules)):
         return None
     return asks[0].prompt or "it needs approval"
 
 
-def _covered(view: TaskView, use: ToolUse, rules: Sequence[str]) -> bool:
+def rules_cover(view: TaskView, use: ToolUse, rules: Sequence[str]) -> bool:
+    """Whether one of the permission rule texts ``rules`` allows ``use``
+    (``*`` allows everything); a text that is no rule allows nothing."""
     if "*" in rules:
         return True
     cwd = view.cwd or os.getcwd()

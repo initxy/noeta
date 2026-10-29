@@ -18,9 +18,9 @@ from dataclasses import dataclass
 
 from noeta.core.execenv import ExecEnv
 from noeta.plugins.skills import _frontmatter
-from noeta.plugins.skills.inline_commands import has_commands, neutralise
 from noeta.toolkit.arguments import ARGUMENTS_PLACEHOLDER, substitute_arguments
 from noeta.toolkit.context import read_text
+from noeta.toolkit.inline_commands import has_commands, neutralise
 
 __all__ = [
     "ARGUMENTS_PLACEHOLDER",

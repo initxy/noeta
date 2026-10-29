@@ -19,8 +19,6 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills, UsageRank
-from noeta.plugins.skills.allowed_tools import allow_rule_texts, granted_tools
-from noeta.plugins.skills.inline_commands import DISABLED_MARKER
 from noeta.plugins.skills.listing import (
     ADDED_HEADER,
     ROSTER_HEADER,
@@ -31,6 +29,8 @@ from noeta.plugins.skills.listing import (
 from noeta.plugins.skills.registry import SkillDescription, SkillRegistry, path_patterns
 from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import reply
+from noeta.toolkit.allowed_tools import allow_rule_texts, granted_tools
+from noeta.toolkit.inline_commands import DISABLED_MARKER
 from noeta.toolkit.tokens import estimate_tokens
 from tests.plugins.context.conftest import Harness
 

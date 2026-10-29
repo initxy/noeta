@@ -6,13 +6,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.skills.allowed_tools import allow_rule_texts, granted_tools
 from noeta.plugins.skills.registry import (
     SkillDescription,
     render_activation,
     substitute_variables,
 )
 from noeta.plugins.skills.script import is_skill_script_resource
+from noeta.toolkit.allowed_tools import allow_rule_texts, granted_tools
 from noeta.toolkit.context import task_env
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
