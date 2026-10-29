@@ -354,3 +354,24 @@ def test_a_tenants_transcripts_go_to_its_own_project_directory(tmp_path: Path) -
     projects = tmp_path / "home" / "projects"
     assert written == {"default": str(projects / project_slug(str(work)) / "t1.jsonl"),
                        "acme": str(projects / "acme" / project_slug(str(work)) / "t1.jsonl")}
+
+
+@pytest.mark.parametrize("task_id", ["../../escaped", "a/../../b", "..", "/abs/x"])
+def test_a_transcript_stays_in_the_project_directory_whatever_the_task_id(
+        tmp_path: Path, task_id: str) -> None:
+    """A child's id carries the provider's tool-use id, which a gateway
+    picks."""
+    from types import SimpleNamespace
+
+    from noeta.core.loop.state import TaskState
+
+    work = tmp_path / "w"
+    work.mkdir()
+    ext = Compaction(home=str(tmp_path / "home"))
+    view = SimpleNamespace(env=LocalExecEnv(str(work)), task_id=task_id)
+    written = ext._transcript(view, TaskState(task_id=task_id))  # type: ignore[arg-type]
+    assert written is not None
+    from noeta.toolkit.paths import project_slug
+
+    project = tmp_path / "home" / "projects" / project_slug(str(work))
+    assert Path(written).parent == project and Path(written).resolve().parent == project

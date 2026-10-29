@@ -1127,3 +1127,8 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   command's target or an output redirection, as written or through a link) ran without
   asking in bypassPermissions; it now asks there, as the file tools already did. In auto
   mode the classifier still judges it, as Claude Code's safety check allows.
+- A compaction's transcript file is named from the task id with anything but letters,
+  digits, `_`, `.` and `-` replaced, as spill files are. A sub-agent's id carries the
+  provider's tool-use id, so a gateway answering with `../` in it could have the transcript
+  written outside the project directory. A spill file of a task or call named `..` now
+  stays in its directory too.
