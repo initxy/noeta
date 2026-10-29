@@ -538,6 +538,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   its guard checks it, not at the slower pace of the lease.
 - The output file a lost job's notice names still exists: a worker sweeps a dead worker's
   log directory only a day after its last write, not as soon as it prepares its own.
+- `ExitWorktree` with `remove` removes the worktree `EnterWorktree` made even after the
+  shell switched between two other worktrees; the second switch forgot it.
 
 ### Security
 

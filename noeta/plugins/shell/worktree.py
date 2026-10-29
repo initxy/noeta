@@ -158,7 +158,8 @@ class EnterWorktreeTool:
             return tool_error(self.name, "from a worktree, only another worktree under "
                                          f"{WORKTREES}/ can be entered")
         back = (current or {}).get("back") or ctx.env.cwd
-        tracked = current if current is not None and current.get("created") else None
+        tracked = None if current is None else (
+            current if current.get("created") else current.get("made"))
         ctx.record(SHELL, "worktree", {"worktree": {
             "path": target, "root": top, "created": False, "back": back,
             # The worktree this tool made stays the one an exit may remove.
