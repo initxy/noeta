@@ -338,8 +338,13 @@ class HandbackTool:
         sender = str(self._state.config.get(AGENT_ID_KEY) or self._state.task_id)
         if parent and ctx.post is not None:
             await ctx.post(Say(message=agent_message(sender, report), when="now"),
-                           task_id=parent)
+                           task_id=parent, dedupe_key=f"subtasks:handback:{ctx.idempotency_key}")
         return ToolOutput(content=text_output(texts.HANDBACK_DONE).content, end_turn=report)
+
+    async def recover(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput | None:
+        """A hand-back a crash cut short is made again: the caller drops the
+        repeated report (its key), and the run ends as it would have."""
+        return await self.run(input, ctx)
 
 
 class SendMessageTool:

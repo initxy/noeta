@@ -724,6 +724,25 @@ async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: P
     assert await tool.recover(args, ctx) is None
 
 
+async def test_a_hand_back_a_crash_cut_short_reports_once(tmp_path: Path) -> None:
+    from noeta.plugins.subtasks.tool import HandbackTool
+
+    posts: list[tuple[Any, dict[str, Any]]] = []
+
+    async def post(body: Any, **kw: Any) -> None:
+        posts.append((body, kw))
+
+    tool = HandbackTool(TaskState(task_id="p.c.1", agent="worker", parent_id="p"))
+    ctx = ToolContext(task_id="p.c.1", call_id="toolu_back", env=LocalExecEnv(str(tmp_path)),
+                      state={}, record=lambda *_: None, post=post)
+    first = await tool.run({"message": "1 2 3"}, ctx)
+    # The worker died after the report was posted, before the result was written.
+    again = await tool.recover({"message": "1 2 3"}, ctx)
+    assert again is not None and again.end_turn == first.end_turn == "1 2 3"
+    keys = [kw.get("dedupe_key") for _, kw in posts]
+    assert len(keys) == 2 and keys[0] is not None and keys[0] == keys[1]
+
+
 def _repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
