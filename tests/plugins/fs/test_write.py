@@ -50,7 +50,8 @@ async def test_write_existing_path_without_read_rejected(h: Harness, ws: Path) -
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
     assert out.is_error
     assert text_of(out) == (
-        "Write: File has not been read yet. Read it first before overwriting it."
+        "Write: Read the file first: overwriting a file this conversation has not "
+        "read is refused."
     )
     assert (ws / "exists.txt").read_text() == "old\n"
 
@@ -70,7 +71,7 @@ async def test_older_claude_models_keep_the_read_first_check(
     h.allowed_outright, h.model = True, model
     (ws / "exists.txt").write_text("old\n")
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
-    assert out.is_error and "has not been read yet" in text_of(out)
+    assert out.is_error and "this conversation has not read" in text_of(out)
     h.model = "claude-opus-4-7"
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
     assert not out.is_error
@@ -82,9 +83,9 @@ async def test_without_a_permission_layer_an_unread_file_is_never_overwritten(
     # tools without the permissions plugin): the read-first check holds.
     (ws / "exists.txt").write_text("old\n")
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
-    assert out.is_error and "has not been read yet" in text_of(out)
+    assert out.is_error and "this conversation has not read" in text_of(out)
     out = await h.call(EditTool(), file_path="exists.txt", old_string="old", new_string="x")
-    assert out.is_error and "has not been read yet" in text_of(out)
+    assert out.is_error and "this conversation has not read" in text_of(out)
     assert (ws / "exists.txt").read_text() == "old\n"
 
 
@@ -95,7 +96,7 @@ async def test_an_overwrite_after_a_cut_read_is_refused_even_when_allowed(
     (ws / "wide.txt").write_text("".join("y" * 150 + "\n" for _ in range(1700)))
     await _read(h, "wide.txt")
     out = await h.call(WriteTool(), file_path="wide.txt", content="new\n")
-    assert out.is_error and "has not been read yet" in text_of(out)
+    assert out.is_error and "this conversation has not read" in text_of(out)
 
 
 async def test_a_write_of_noeta_md_has_the_file_state_note(h: Harness, ws: Path) -> None:
@@ -294,7 +295,7 @@ async def test_restricted_write_guard_precedes_read_first_check(h: Harness, ws: 
     out = await h.call(tool, file_path="src/main.py", content="new\n")
     assert out.is_error
     assert "writable allow-list" in text_of(out)
-    assert "has not been read yet" not in text_of(out)
+    assert "this conversation has not read" not in text_of(out)
     assert target.read_text() == "old\n"
 
 
@@ -388,7 +389,7 @@ async def test_authorized_write_still_refuses_an_unread_overwrite(h: Harness, ws
     tool = WriteTool(write_roots=lambda ctx: ["/"])
     out = await h.call(tool, file_path=str(target), content="clobber")
     assert out.is_error
-    assert "has not been read yet" in text_of(out)
+    assert "this conversation has not read" in text_of(out)
     assert target.read_text() == "keep\n"
 
 

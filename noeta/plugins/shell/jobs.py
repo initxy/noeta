@@ -100,6 +100,10 @@ MONITOR_POLL_S = 0.1
 DEFAULT_LOG_DIR = ""
 #: Tasks remembered as ended (their notices go to the root) at most.
 ENDED_KEEP = 4096
+#: Background jobs of a root kept in memory once their end is posted (for
+#: ``TaskStop`` / ``TaskOutput`` on them) at most; older ones are let go,
+#: their logs removed with the root's.
+ENDED_JOBS_KEEP = 64
 #: How long the logs of a worker that is gone stay after their last write:
 #: the notice of a job it lost names its output file.
 DEAD_WORKER_LOGS_KEEP_S = 24 * 3600
@@ -288,22 +292,32 @@ def _label(text: str) -> str:
     return " ".join(text.split())
 
 
+def _files(job: Job) -> list[str]:
+    """The job's files in its env."""
+    return [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path) if p]
+
+
 class Registry:
     """Background jobs of this process, by root task."""
 
     def __init__(self, *, max_jobs: int = DEFAULT_MAX_JOBS,
                  log_dir: str = DEFAULT_LOG_DIR,
                  log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
-                 foreground_alive_s: float = FOREGROUND_ALIVE_S) -> None:
+                 foreground_alive_s: float = FOREGROUND_ALIVE_S,
+                 ended_jobs_keep: int = ENDED_JOBS_KEEP) -> None:
         self.max_jobs = max_jobs
+        self.ended_jobs_keep = ended_jobs_keep
         self.foreground_alive_s = foreground_alive_s
         self.log_dir = log_dir
         self.log_max_bytes = log_max_bytes
         self.worker = WORKER_ID
         self.jobs: dict[str, dict[str, Job]] = {}
         #: Tasks known (in this process) to have ended with jobs of their
-        #: tree still here: their notices go to the root instead.
-        self.ended: set[str] = set()
+        #: tree still here: their notices go to the root instead. Ordered,
+        #: oldest first.
+        self.ended: dict[str, None] = {}
+        #: Log files of ended jobs let go of, by root: removed with its logs.
+        self._let_go: dict[str, list[tuple[ExecEnv, list[str]]]] = {}
         self._retiring: set[asyncio.Task[None]] = set()
         self._dirs: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
         self._keeper: asyncio.Task[None] | None = None
@@ -313,9 +327,10 @@ class Registry:
         (and at most :data:`ENDED_KEEP` tasks)."""
         if not self.jobs.get(root_id):
             return
-        if len(self.ended) >= ENDED_KEEP:
-            self.ended.pop()
-        self.ended.add(task_id)
+        self.ended.pop(task_id, None)
+        while len(self.ended) >= ENDED_KEEP:
+            del self.ended[next(iter(self.ended))]
+        self.ended[task_id] = None
 
     async def _log_dir(self, env: ExecEnv) -> str:
         """The env's private log directory, made or checked once per env."""
@@ -551,6 +566,19 @@ class Registry:
                 if job.release is not None:
                     with contextlib.suppress(Exception):
                         await job.release()
+                self._let_go_of_ended(job.root_id)
+
+    def _let_go_of_ended(self, root_id: str) -> None:
+        """Keep at most :attr:`ended_jobs_keep` of the root's background jobs
+        whose end is posted, dropping the oldest (their logs stay until the
+        root's go)."""
+        jobs = self.jobs.get(root_id)
+        if not jobs:
+            return
+        ended = [j for j in jobs.values() if j.done.is_set() and not j.foreground]
+        for job in ended[:max(0, len(ended) - self.ended_jobs_keep)]:
+            del jobs[job.job_id]
+            self._let_go.setdefault(root_id, []).append((job.env, _files(job)))
 
     async def _post_end(self, job: Job, notice: str | None) -> None:
         if job.fenced:
@@ -639,7 +667,7 @@ class Registry:
         logs once they are gone."""
         self.kill_where(root_id)
         jobs = list(self.jobs.get(root_id, {}).values())
-        if not jobs:
+        if not jobs and root_id not in self._let_go:
             self.jobs.pop(root_id, None)
             return
         task = asyncio.create_task(self._drop(root_id, jobs))
@@ -649,13 +677,15 @@ class Registry:
     async def _drop(self, root_id: str, jobs: list[Job]) -> None:
         for job in jobs:
             await job.done.wait()
-        for job in jobs:
-            paths = [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path)
-                     if p]
+        # A job let go of while they ended is in ``jobs`` too.
+        files = [*self._let_go.pop(root_id, []), *((job.env, _files(job)) for job in jobs)]
+        for env, paths in files:
             with contextlib.suppress(Exception):
-                await job.env.run(["rm", "-f", *paths], timeout=10)
-            self.ended.discard(job.spawner_id)
-        self.ended.discard(root_id)
+                await env.run(["rm", "-f", *paths], timeout=10)
+        for job in jobs:
+            self.ended.pop(job.spawner_id, None)
+        self._let_go.pop(root_id, None)
+        self.ended.pop(root_id, None)
         if self.jobs.get(root_id) and all(j in jobs for j in self.jobs[root_id].values()):
             self.jobs.pop(root_id, None)
 

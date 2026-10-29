@@ -222,7 +222,7 @@ async def test_monitor_needs_command_and_description(h: Harness) -> None:
 async def test_a_finished_spawners_notices_go_to_the_root(h: Harness) -> None:
     out = await h.call("Bash", task_id="child", root_id="root", command="sleep 0.2",
                        run_in_background=True)
-    h.registry.ended.add("child")
+    h.registry.ended["child"] = None
     await h.settle(out.meta["job_id"])
     assert [t for t, _ in h.posts] == ["root"]
 

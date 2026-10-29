@@ -14,6 +14,8 @@ from noeta.plugins.subtasks import texts
 
 #: ``agents=["*"]``: every agent of the worker that has a description.
 ALL_AGENTS = "*"
+#: Rosters resolved (one per set of named agents a worker saw) kept at most.
+RESOLVED_KEEP = 64
 
 
 @dataclass(frozen=True)
@@ -69,12 +71,14 @@ class Roster:
         named = tuple((n, view.agents[n].description, _tools_column(view.agents[n]),
                        _freeze(_definition_config(view.agents[n])))
                       for n in names if view.agents[n].description.strip())
-        roster = self._resolved.get(named)
+        roster = self._resolved.pop(named, None)
         if roster is None:
             roster = check_roster([*self.specs.values(),
                                    *(SubagentSpec(name=n, description=d, tools=t, config=dict(c))
                                      for n, d, t, c in named if n not in self.specs)])
-            self._resolved[named] = roster
+            while len(self._resolved) >= RESOLVED_KEEP:
+                del self._resolved[next(iter(self._resolved))]
+        self._resolved[named] = roster  # newest last
         return roster
 
 

@@ -404,3 +404,35 @@ async def test_a_foreground_job_moved_to_the_background_outlives_its_guard_perio
         tree.renewed = time.monotonic()
         await asyncio.sleep(0.1)
     assert job.exit_code == 0
+
+
+async def test_ended_jobs_are_kept_only_up_to_a_bound(tmp_path: Path) -> None:
+    reg = Registry(log_dir=str(tmp_path / "logs"), ended_jobs_keep=3)
+    env = LocalExecEnv(str(tmp_path))
+    posted: list[Any] = []
+
+    async def post(body: Any, **kw: Any) -> None:
+        posted.append(body)
+
+    jobs = []
+    for n in range(5):
+        job = await reg.spawn(env=env, command="true", cwd=str(tmp_path), env_vars={},
+                              root_id="r", spawner_id="r", tool_use_id=f"toolu_{n}",
+                              description="d", post=post)
+        assert isinstance(job, Job)
+        await job.done.wait()
+        jobs.append(job)
+    assert len(posted) == 5  # every end was told before it was let go
+    assert list(reg.jobs["r"]) == [j.job_id for j in jobs[2:]]
+    reg.retire("r")
+    await asyncio.gather(*reg._retiring)
+    assert not any(Path(j.out_path).exists() for j in jobs)  # dropped ones too
+
+
+def test_the_oldest_ended_task_is_forgotten_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("noeta.plugins.shell.jobs.ENDED_KEEP", 3)
+    reg = Registry()
+    reg.jobs["r"] = {"x": object()}  # type: ignore[dict-item]
+    for task in ("a", "b", "c", "d"):
+        reg.mark_ended(task, "r")
+    assert list(reg.ended) == ["b", "c", "d"]

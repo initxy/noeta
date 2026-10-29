@@ -37,9 +37,10 @@ import os
 import random
 import secrets
 import socket
+import tempfile
 import time
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -100,20 +101,47 @@ class TokenStore:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def save(self, data: Mapping[str, Any]) -> None:
+    def _dir(self) -> Path:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
             self.path.parent.chmod(0o700)
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(dict(data), fh)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        return self.path.parent
+
+    def save(self, data: Mapping[str, Any]) -> None:
+        """Replace the file at once (a temporary file of its own, renamed)."""
+        fd, tmp = tempfile.mkstemp(dir=self._dir(), prefix=f".{self.path.name}.",
+                                   suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(dict(data), fh)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+
+    @contextlib.contextmanager
+    def locked(self) -> Iterator[None]:
+        """Hold the file's lock (a sibling ``.lock`` file) for a
+        read-modify-write, across threads and processes. Without ``fcntl``
+        (Windows) there is no lock."""
+        try:
+            import fcntl
+        except ImportError:
+            yield
+            return
+        fd = os.open(self._dir() / f"{self.path.name}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
 
     def update(self, **fields: Any) -> dict[str, Any]:
-        data = {**self.load(), **fields}
-        self.save(data)
+        with self.locked():
+            data = {**self.load(), **fields}
+            self.save(data)
         return data
 
     def clear(self) -> bool:

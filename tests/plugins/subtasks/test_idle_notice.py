@@ -175,3 +175,18 @@ async def test_a_subscription_nobody_answers_expires(store: SqliteStore,
     assert notice.startswith("[Cross-session idle notice] 12 hours went by with no report "
                              f'from session "{peer}"')
     assert texts.IDLE_SOURCE_OWN in notice
+
+
+def test_the_resolved_rosters_kept_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.subtasks import roster as roster_module
+
+    monkeypatch.setattr(roster_module, "RESOLVED_KEEP", 2)
+    roster = roster_module.Roster({}, ["helper"])
+    for n in range(3):
+        view = TaskView(state=TaskState(task_id="t", agent="main"),
+                        agents={"helper": Agent(name="helper", model="m",
+                                                description=f"version {n}")})
+        assert roster.for_view(view)["helper"].description == f"version {n}"
+    assert len(roster._resolved) == 2

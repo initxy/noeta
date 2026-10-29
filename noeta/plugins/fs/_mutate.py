@@ -102,7 +102,8 @@ def read_precondition_error(
     if not seen:
         if not unread_ok or (entry is not None and not partial_ok):
             return tool_error(
-                tool_name, f"File has not been read yet. Read it first before {verb} it."
+                tool_name,
+                f"Read the file first: {verb} a file this conversation has not read is refused."
             )
         if entry is None:
             return None

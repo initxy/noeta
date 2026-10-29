@@ -414,10 +414,8 @@ class Subtasks(Extension):
             status, summary = "completed", texts.SUMMARY_FINISHED.format(description=description)
             if handed_back:
                 result = texts.RESULT_POINTER.format(id=agent_id)
-            elif (agent.get("config") or {}).get(HANDBACK_KEY, True):
-                result = texts.RESULT_NO_REPORT
-            else:  # no SubagentHandback offered: its last reply is the report
-                result = ended.answer
+            else:  # no hand-back (offered or not): its last reply is the report
+                result = ended.answer or texts.RESULT_NO_REPORT
         elif ended.status == "failed":
             error = ended.error or texts.SUBAGENT_FAILED
             status = "failed"

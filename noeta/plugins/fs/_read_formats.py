@@ -69,10 +69,9 @@ def read_size_tokens(text: str, suffix: str) -> int:
 
 def too_many_tokens(tokens: int, limit: int = MAX_READ_TOKENS) -> str:
     return (
-        f"File content ({tokens} tokens) exceeds maximum allowed tokens "
-        f"({limit}). Use offset and limit parameters to read "
-        "specific portions of the file, search for specific content "
-        "instead of reading the whole file, or set allow_large when you need all of it."
+        f"At {tokens} tokens the file is over the {limit}-token limit for one read. "
+        "Read a part with offset and limit, search the file for what you need, or set "
+        "allow_large when you need all of it."
     )
 
 
@@ -178,10 +177,9 @@ def _page_span(pages: Any, total: int | None) -> tuple[int, int | None] | str:
     if pages is None:
         if total is not None and total > PDF_MAX_PAGES_WHOLE:
             return (
-                f"This PDF has {total} pages, which is too many to read at "
-                "once. Use the pages parameter to read specific page ranges "
-                '(e.g., pages: "1-5"). Maximum '
-                f"{PDF_MAX_PAGES_PER_READ} pages per request."
+                f"The PDF has {total} pages, more than one read takes. Pass pages "
+                'to read a range (such as pages: "1-5"), at most '
+                f"{PDF_MAX_PAGES_PER_READ} pages per read."
             )
         first, last = 1, total
     else:
@@ -197,9 +195,9 @@ def _page_span(pages: Any, total: int | None) -> tuple[int, int | None] | str:
         span = PDF_MAX_PAGES_PER_READ + 1 if last is None else last - first + 1
         if span > PDF_MAX_PAGES_PER_READ:
             return (
-                f'Page range "{spec}" exceeds maximum of '
-                f"{PDF_MAX_PAGES_PER_READ} pages per request. Please use a "
-                "smaller range."
+                f'The page range "{spec}" covers more than '
+                f"{PDF_MAX_PAGES_PER_READ} pages, the most one read takes. Ask for a "
+                "shorter range."
             )
         if total is not None and first > total:
             return (
@@ -240,17 +238,14 @@ async def _render_pages(env: ExecEnv, path: str, first: int,
         outcome = await _run(env, argv, cwd)
         if outcome is None or outcome.exit_code == 127:
             return (
-                "pdftoppm is not installed. Install poppler-utils (e.g. `brew "
-                "install poppler` or `apt-get install poppler-utils`) to "
-                "enable PDF page rendering."
+                "PDF pages cannot be rendered: pdftoppm is missing. It comes with "
+                "poppler (`brew install poppler`, or `apt-get install poppler-utils`)."
             )
         if outcome.exit_code != 0:
             stderr = outcome.stderr.decode("utf-8", "replace").strip()
             if "Incorrect password" in stderr:
-                return (
-                    "PDF is password-protected. Please provide an unprotected "
-                    "version."
-                )
+                return ("The PDF is password-protected and cannot be opened; ask for "
+                        "a copy without the password.")
             return f"Could not render PDF: {stderr or 'pdftoppm failed'}"
         listing = await _run(env, ["ls", "-1", out_dir], cwd)
         names = (
@@ -263,7 +258,7 @@ async def _render_pages(env: ExecEnv, path: str, first: int,
             else []
         )
         if not names:
-            return "pdftoppm produced no output pages. The PDF may be invalid."
+            return "pdftoppm rendered no pages; the PDF is probably damaged."
         return [
             Image(
                 media_type="image/jpeg",
@@ -389,8 +384,8 @@ def read_notebook(tool_name: str, raw: bytes, display: str) -> ToolOutput:
             weight += len(text) + (len(image[1]) if image else 0)
         if weight > _NOTEBOOK_OUTPUTS_MAX_CHARS:
             parts.append(
-                "\nOutputs are too large to include. Use Bash with: cat "
-                f"<notebook_path> | jq '.cells[{index}].outputs'"
+                "\nThese outputs are too large to show here. To see them, run in "
+                f"Bash: cat <notebook_path> | jq '.cells[{index}].outputs'"
             )
             continue
         for text, image in outputs:

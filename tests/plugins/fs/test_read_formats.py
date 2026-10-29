@@ -99,9 +99,8 @@ async def test_a_long_pdf_needs_pages(h: Harness, ws: Path) -> None:
     out = await h.call(ReadTool(), file_path="doc.pdf")
     assert out.is_error
     assert text_of(out) == (
-        "Read: This PDF has 12 pages, which is too many to read at once. Use "
-        'the pages parameter to read specific page ranges (e.g., pages: "1-5"). '
-        "Maximum 20 pages per request."
+        'Read: The PDF has 12 pages, more than one read takes. Pass pages to read '
+        'a range (such as pages: "1-5"), at most 20 pages per read.'
     )
 
 
@@ -123,11 +122,11 @@ async def test_bad_or_too_wide_pages_are_refused(h: Harness, ws: Path) -> None:
     )
     wide = await h.call(ReadTool(), file_path="doc.pdf", pages="1-21")
     assert text_of(wide) == (
-        'Read: Page range "1-21" exceeds maximum of 20 pages per request. '
-        "Please use a smaller range."
+        'Read: The page range "1-21" covers more than 20 pages, the most one read '
+        "takes. Ask for a shorter range."
     )
     open_ended = await h.call(ReadTool(), file_path="doc.pdf", pages="3-")
-    assert "exceeds maximum" in text_of(open_ended)
+    assert "covers more than 20 pages" in text_of(open_ended)
 
 
 class _NoPoppler(LocalExecEnv):
@@ -153,9 +152,8 @@ async def test_missing_pdftoppm_says_how_to_install_it(ws: Path) -> None:
     (ws / "doc.pdf").write_bytes(_pdf(1))
     out = await h.call(ReadTool(), file_path="doc.pdf")
     assert text_of(out) == (
-        "Read: pdftoppm is not installed. Install poppler-utils (e.g. `brew "
-        "install poppler` or `apt-get install poppler-utils`) to enable PDF "
-        "page rendering."
+        "Read: PDF pages cannot be rendered: pdftoppm is missing. It comes with "
+        "poppler (`brew install poppler`, or `apt-get install poppler-utils`)."
     )
 
 
@@ -268,8 +266,8 @@ async def test_large_cell_outputs_point_at_jq(h: Harness, ws: Path) -> None:
     )
     out = await h.call(ReadTool(), file_path="nb.ipynb")
     assert text_of(out).endswith(
-        "\nOutputs are too large to include. Use Bash with: cat "
-        "<notebook_path> | jq '.cells[0].outputs'"
+        "\nThese outputs are too large to show here. To see them, run in Bash: "
+        "cat <notebook_path> | jq '.cells[0].outputs'"
     )
 
 
@@ -288,4 +286,4 @@ async def test_an_over_large_notebook_is_refused_by_tokens(h: Harness, ws: Path)
         _notebook([{"cell_type": "markdown", "source": "z" * 120_000}])
     )
     out = await h.call(ReadTool(), file_path="nb.ipynb")
-    assert "exceeds maximum allowed tokens (25000)" in text_of(out)
+    assert "over the 25000-token limit" in text_of(out)

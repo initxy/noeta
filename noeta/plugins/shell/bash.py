@@ -216,12 +216,12 @@ def output_image(body: str) -> Image | None:
 
 
 def _blocked_sleep(described: str) -> str:
-    """Claude Code's refusal of a long leading ``sleep``."""
+    """The refusal of a long leading ``sleep`` (Claude Code's meaning)."""
     return (
-        f"Blocked: {described}. To wait for a condition, use Monitor with an "
-        "until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a "
-        "command you started, use run_in_background: true. Do not chain "
-        "shorter sleeps to work around this block."
+        f"Blocked: {described}. To wait until something is true, run an "
+        "until-loop under Monitor (`until <check>; do sleep 2; done`); to wait "
+        "for a command of yours, start it with run_in_background: true. Do not "
+        "get around this with a chain of shorter sleeps."
     )
 
 

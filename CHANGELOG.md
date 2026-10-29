@@ -286,6 +286,12 @@ All notable changes to Noeta are documented here. The format is based on
     its own name. `ReportFindings` refuses values outside its schema; `Workflow` runs at least
     two agents at once and lists the saved workflows for an unknown name; `ExitPlanMode`
     outside plan mode says what to do next; `EnterWorktree` refuses `.` and `.git` segments.
+- **More tool messages in noeta's own words.** The errors and notes the recordings never show
+  still repeated Claude Code's sentences; they now say the same in noeta's words, with the
+  same numbers: `Edit` on several matches, the read-before-write refusal, `Read`'s size and
+  token ceilings, the PDF page limits, a missing `pdftoppm`, a password-protected or
+  unrenderable PDF, a notebook's oversized outputs, the note about a file changed since it
+  was read, and `Bash`'s refusal of a long leading `sleep`.
 
 ### Store contract
 
@@ -414,11 +420,36 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
-- **A sub-agent that cannot hand back reports with its final message.** In auto mode the
-  caller expected `SubagentHandback` from every sub-agent, so one whose agent definition lacks
-  the subtasks plugin, or whose tool list leaves the tool out, came back as "no report"
-  instead of its last reply. Such a sub-agent's final message is now its report, as in Claude
-  Code.
+- **Crash recovery no longer removes another agent's worktree.** An isolated agent's
+  worktree was named after the last characters of the call id, which is unique only within
+  its task, so a crashed call's recovery could force-remove the worktree of another task or
+  session in the same repository. The name now comes from a hash of the task id and the call
+  id, and recovery keeps a worktree holding uncommitted files or commits.
+- **A worktree-isolated agent can commit with the sandbox on.** Its worktree's git data
+  lives in the main repository, which the sandbox kept read-only (`index.lock: Read-only
+  file system`). The worktree's own git directory and the shared `objects`, `refs` and
+  `logs` are now writable; hooks, config and the files that point git elsewhere stay
+  read-only (`parity/deviations.md`).
+- **Removing a worktree no longer drops commits left on its branch.** The unsaved-work check
+  (`ExitWorktree remove`, an isolated agent's end) counted only commits on the worktree's
+  current `HEAD`, so after a switch to another branch the commits on the `worktree-*` branch
+  were lost with `branch -D`. It now counts both.
+- **A long-lived conversation no longer piles up ended background jobs in memory.** The
+  worker kept every ended background job of a root until the root ended; it now keeps the
+  last 64 once their end is posted (older logs are removed with the root's), and the list of
+  ended tasks forgets its oldest entry first instead of an arbitrary one.
+- **Two writers of one MCP sign-in no longer lose tokens.** The OAuth token file was written
+  through one fixed `.tmp` name and updated read-modify-write without a lock, so two workers
+  refreshing at once could drop a field or fail on the rename. Each write uses a temporary
+  file of its own and updates hold a file lock (`<file>.lock`; no lock on Windows).
+- **Two per-worker caches are bounded.** The shell plugin's sandboxed tool lists (one per
+  sandbox settings and working directory) and the agent rosters resolved per set of named
+  agents grew for the life of a worker; each now keeps the 64 used last.
+- **A sub-agent that ends without handing back reports with its final message.** In auto
+  mode a sub-agent that ended without `SubagentHandback` came back as "no report" and its
+  last reply was dropped: one whose agent definition lacks the subtasks plugin, whose tool
+  list leaves the tool out, that runs on another worker's queue, or that simply answered in
+  plain text. Its final message is now its report, as in Claude Code.
 - **An unknown model is announced once.** The front end's notice now also says its cost
   counts as $0.00, and the catalog no longer logs a second "not in the catalog" warning about
   its price.

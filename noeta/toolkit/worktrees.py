@@ -38,17 +38,19 @@ async def add_worktree(env: ExecEnv, top: str, path: str, branch: str, base: str
     return "" if code == 0 else err or "git worktree add failed"
 
 
-async def unsaved_work(env: ExecEnv, path: str, base: str) -> tuple[str, str]:
-    """What removing the worktree at ``path`` would lose, in words (empty
-    when nothing), and git's error when it could not tell (empty when it
-    could): uncommitted files, and commits since ``base``."""
+async def unsaved_work(env: ExecEnv, path: str, base: str, branch: str) -> tuple[str, str]:
+    """What removing the worktree at ``path`` and its ``branch`` would lose,
+    in words (empty when nothing), and git's error when it could not tell
+    (empty when it could): uncommitted files, and commits since ``base`` on
+    ``HEAD`` or on ``branch`` (the worktree may have switched away from it)."""
     lost = []
     code, status = await git(env, ["status", "--porcelain"], path)
     if code != 0:
         return "", f"git status: {status or 'failed'}"
     if status:
         lost.append(f"{len(status.splitlines())} uncommitted file(s)")
-    code, ahead = await git(env, ["rev-list", "--count", f"{base}..HEAD"], path)
+    code, ahead = await git(env, ["rev-list", "--count", "HEAD", f"refs/heads/{branch}",
+                                  "--not", base, "--"], path)
     if code != 0 or not ahead.isdigit():
         return "", f"git rev-list: {ahead or 'failed'}"
     if int(ahead):

@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import stat
+import threading
 import time
 import urllib.parse
 from collections.abc import AsyncIterator
@@ -31,6 +32,7 @@ from noeta.plugins.mcp.oauth import (
     CALLBACK_PORT_ENV,
     OAuth,
     SignIn,
+    TokenStore,
     callback_port,
     parse_challenge,
     store_for,
@@ -311,3 +313,26 @@ async def test_the_model_signs_in_through_the_stub_tools(home: Path,
         assert real_texts[2] == "the secret"
     finally:
         await pool.close()
+
+
+def test_concurrent_updates_of_one_token_file_lose_nothing(tmp_path: Path) -> None:
+    path = tmp_path / "oauth" / "server.json"
+    errors: list[BaseException] = []
+
+    def writer(n: int) -> None:
+        store = TokenStore(path)  # one store per writer, as two processes have
+        try:
+            for i in range(25):
+                store.update(**{f"w{n}_{i}": i})
+        except BaseException as exc:  # noqa: BLE001 - collected for the assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(TokenStore(path).load()) == 8 * 25
+    assert sorted(p.name for p in path.parent.iterdir()
+                  if not p.name.endswith(".lock")) == ["server.json"]

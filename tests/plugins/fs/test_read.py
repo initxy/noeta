@@ -72,7 +72,7 @@ async def test_read_refuses_a_window_past_the_token_ceiling(h: Harness, ws: Path
     (ws / "big.txt").write_text(("x" * 1999 + "\n") * 1500)
     out = await h.call(ReadTool(), file_path="big.txt", limit=1500)
     assert out.is_error
-    assert "exceeds maximum allowed tokens (25000)" in text_of(out)
+    assert "over the 25000-token limit" in text_of(out)
     assert h.records == []  # a refused read records nothing
 
 
@@ -349,10 +349,9 @@ async def test_read_refuses_a_whole_file_over_256kb(h: Harness, ws: Path) -> Non
     out = await h.call(ReadTool(), file_path="wide.txt")
     assert out.is_error
     assert text_of(out) == (
-        "Read: File content (442.4KB) exceeds maximum allowed size (256KB). "
-        "Use offset and limit parameters to read specific portions of the "
-        "file, or search for specific content instead of reading the whole "
-        "file."
+        "Read: At 442.4KB the file is over the 256KB limit for a read of the "
+        "whole file. Read a part with offset and limit, or search the file for "
+        "what you need."
     )
     big = await h.call(ReadTool(), file_path="wide.txt", allow_large=True)
     assert not big.is_error and text_of(big).startswith("1\t" + "y" * 150)
@@ -363,10 +362,9 @@ async def test_read_refuses_more_than_25000_tokens(h: Harness, ws: Path) -> None
     out = await h.call(ReadTool(), file_path="wide.txt", limit=1000)
     assert out.is_error
     assert text_of(out) == (
-        "Read: File content (37750 tokens) exceeds maximum allowed tokens "
-        "(25000). Use offset and limit parameters to read specific portions "
-        "of the file, search for specific content instead of reading the "
-        "whole file, or set allow_large when you need all of it."
+        "Read: At 37750 tokens the file is over the 25000-token limit for one "
+        "read. Read a part with offset and limit, search the file for what you "
+        "need, or set allow_large when you need all of it."
     )
     ok = await h.call(ReadTool(), file_path="wide.txt", limit=500)
     assert not ok.is_error
@@ -413,7 +411,7 @@ async def test_a_cut_read_does_not_count_as_read_for_an_edit(h: Harness, ws: Pat
     await h.call(ReadTool(), file_path="wide.txt")
     out = await h.call(EditTool(), file_path="wide.txt", old_string="y\n", new_string="z\n",
                        replace_all=True)
-    assert out.is_error and "has not been read yet" in text_of(out)
+    assert out.is_error and "this conversation has not read" in text_of(out)
 
 
 async def test_read_checks_a_large_window_with_the_exact_count(h: Harness, ws: Path) -> None:
@@ -439,7 +437,7 @@ async def test_read_json_counts_two_chars_per_token(h: Harness, ws: Path) -> Non
     (ws / "d.json").write_text(("y" * 150 + "\n") * 600)
     out = await h.call(ReadTool(), file_path="d.json", limit=600)
     assert out.is_error
-    assert "exceeds maximum allowed tokens" in text_of(out)
+    assert "-token limit for one read" in text_of(out)
     (ws / "d.txt").write_text(("y" * 150 + "\n") * 600)
     assert not (await h.call(ReadTool(), file_path="d.txt", limit=600)).is_error
 
@@ -449,7 +447,7 @@ async def test_read_refuses_a_huge_single_line_without_buffering_it(ws: Path) ->
     (ws / "min.js").write_bytes(b"x" * (8 * 1024 * 1024) + b"\nnext\n")
     out = await h.call(ReadTool(), file_path="min.js", limit=2)
     assert out.is_error
-    assert "exceeds maximum allowed tokens" in text_of(out)
+    assert "-token limit for one read" in text_of(out)
     ok = await h.call(ReadTool(), file_path="min.js", offset=2, limit=1)
     assert text_of(ok) == "2\tnext"
 

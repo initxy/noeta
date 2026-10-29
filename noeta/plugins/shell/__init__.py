@@ -72,6 +72,9 @@ def lost_notice(job_id: str, job: Mapping[str, Any]) -> str:
 #: prompt files, the plugin pins): how far back a pickup looks for the take
 #: its last runner may have died after.
 _START_RECORDS = 4
+#: Sandboxed tool lists (one per sandbox settings and working directory) kept
+#: at most.
+SANDBOXED_KEEP = 64
 
 
 def _ran_under(job: Mapping[str, Any], lost: Sequence[tuple[Any, Any]]) -> bool:
@@ -120,7 +123,7 @@ class Shell(Extension):
         self.registry = registry if registry is not None else REGISTRY
         self.ends_with_turn = background_ends_with_turn
         #: The tool list with ``Bash`` describing the sandbox, per settings
-        #: and working directory.
+        #: and working directory; the :data:`SANDBOXED_KEEP` used last.
         self._sandboxed: dict[tuple[Any, str], list[Tool]] = {}
         if not background:
             self._tools: list[Tool] = [BashTool(**(bash or {})), *_worktree_tools()]
@@ -152,11 +155,15 @@ class Shell(Extension):
             return self._tools
         root = str(getattr(view.env, "cwd", "") or "")
         key = (sandbox.settings, root)
-        if key not in self._sandboxed:
+        tools = self._sandboxed.pop(key, None)
+        if tools is None:
             bash = copy.copy(self._tools[0])
             bash.description = sandbox_description(bash.description, sandbox, root)
-            self._sandboxed[key] = [bash, *self._tools[1:]]
-        return self._sandboxed[key]
+            tools = [bash, *self._tools[1:]]
+            while len(self._sandboxed) >= SANDBOXED_KEEP:
+                del self._sandboxed[next(iter(self._sandboxed))]
+        self._sandboxed[key] = tools  # newest last
+        return tools
 
     # ------------------------------------------------------------ lifecycle
 

@@ -208,10 +208,10 @@ class EditTool:
         if count > 1 and not replace_all:
             return tool_error(
                 self.name,
-                f"Found {count} matches of the string to replace, but "
-                "replace_all is false. To replace all occurrences, set "
-                "replace_all to true. To replace only one, provide more "
-                "surrounding context to uniquely identify the instance.",
+                f"old_string occurs {count} times in the file and replace_all is "
+                f"false, so nothing was changed. Set replace_all to true to change "
+                f"all {count}, or add nearby lines to old_string until it matches "
+                "only one.",
             )
         # Deleting whole lines without their line break would leave a blank
         # line behind; Claude Code takes the break along.

@@ -392,6 +392,72 @@ def test_the_protected_list_follows_the_permissions_and_git(tmp_path: Path, home
     assert {str(ws / ".git"), str(ws / ".git" / "modules"), str(module)} <= set(plan.pinned)
 
 
+def _linked_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """``(main repository, its git directory, a linked worktree)``, the
+    worktree where an isolated agent's goes."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q")
+    (main / "a.txt").write_text("a\n")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "init")
+    tree = main / ".noeta" / "worktrees" / "agent-x"
+    _git(main, "worktree", "add", "-q", "-b", "worktree-agent-x", str(tree))
+    return main, main / ".git", tree
+
+
+def test_a_linked_worktree_may_write_the_git_data_it_commits_to(tmp_path: Path,
+                                                                home: Path) -> None:
+    main, common, tree = _linked_worktree(tmp_path)
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(tree), str(tmp_path / "t"))
+    gitdir = common / "worktrees" / "agent-x"
+    for path in (gitdir, common / "objects", common / "refs", common / "logs"):
+        assert str(path) in plan.writable, path
+    for path in (common, common / "hooks", common / "config", main):
+        assert str(path) not in plan.writable, path
+    for path in (gitdir / "commondir", gitdir / "gitdir", gitdir / "config.worktree"):
+        assert str(path) in plan.deny_write, path
+    assert dict(plan.placeholders)[str(gitdir / "config.worktree")] is True
+    profile = sb.seatbelt_profile(SandboxSettings(enabled=True), plan, ())
+    assert f'(allow file-write* (subpath "{common}/objects"))' in profile
+    assert f'(deny file-write* (subpath "{gitdir}/commondir"))' in profile
+    assert f'(allow file-write* (subpath "{common}"))' not in profile
+
+
+def test_a_git_file_not_pointing_back_opens_nothing(tmp_path: Path, home: Path) -> None:
+    _, common, _ = _linked_worktree(tmp_path)
+    elsewhere = tmp_path / "ws"
+    elsewhere.mkdir()
+    (elsewhere / ".git").write_text(f"gitdir: {common / 'worktrees' / 'agent-x'}\n")
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(elsewhere), str(tmp_path / "t"))
+    assert plan.writable == [str(elsewhere)]
+    (elsewhere / ".git").write_text(f"gitdir: {tmp_path}\n")  # not a linked worktree
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(elsewhere), str(tmp_path / "t"))
+    assert plan.writable == [str(elsewhere)]
+
+
+@needs_bwrap
+async def test_an_agent_commits_in_its_worktree_but_cannot_touch_git_code(
+        tmp_path: Path, home: Path) -> None:
+    main, common, tree = _linked_worktree(tmp_path)
+    env = LocalExecEnv(str(tree), sandbox={"enabled": True})
+    git = "git -c user.name=t -c user.email=t@t"
+    code, out, _ = await _run(env, f"echo hi > f && {git} add f && {git} commit -qm x && "
+                                   f"{git} log --oneline | wc -l")
+    assert code == 0, out
+    assert out.split() == ["2"]
+    gitdir = common / "worktrees" / "agent-x"
+    for command in (f"echo x >> {common}/config", f"echo x > {common}/hooks/pre-commit",
+                    f"echo x > {gitdir}/config.worktree", f"echo {tmp_path} > {gitdir}/commondir",
+                    f"mv {gitdir} {common}/worktrees/old", f"echo x > {common}/HEAD",
+                    f"echo x > {main}/b.txt"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert not (gitdir / "config.worktree").exists()
+    assert not (common / "hooks" / "pre-commit").exists()
+    assert (gitdir / "commondir").read_text().strip() == "../.."
+
+
 #: What a package manager or build tool runs on its next ordinary command.
 _RUN_ON_NEXT_COMMAND = (".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", ".pnp.cjs",
                         ".pnp.loader.mjs", "bunfig.toml", ".bunfig.toml", ".bazelrc",
