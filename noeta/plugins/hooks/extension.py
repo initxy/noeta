@@ -226,9 +226,17 @@ class Hooks(Extension):
         if "UserPromptSubmit" not in self.matchers:
             return []
         st = self._d.state(view)
+        after = st.prompted_through
+        if after is None:
+            # First look at this task (the hook was added since, or the task
+            # predates the record): what the model already answered stays.
+            replied = [seq for seq, m in zip(view.state.message_seqs, view.state.messages,
+                                             strict=False) if m.role == "assistant"]
+            compaction = view.state.compaction
+            after = max([0, *replied[-1:], *([compaction.through] if compaction else [])])
         new = [(seq, m) for seq, m in zip(view.state.message_seqs, view.state.messages,
                                            strict=False)
-               if m.role == "user" and m.origin == "human" and seq > st.prompted_through]
+               if m.role == "user" and m.origin == "human" and seq > after]
         if not new:
             return []
         through = new[-1][0]

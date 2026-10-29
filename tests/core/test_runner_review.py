@@ -245,9 +245,10 @@ async def test_an_extension_bug_ends_a_one_shot_task(store: SqliteStore) -> None
 
 
 class FlakyStore:
-    """A store whose ``renew`` / ``claim`` raise what no adapter maps."""
+    """A store whose ``renew`` / ``claim`` raise what no adapter maps
+    (``renew_fails``: always, or once that event is set)."""
 
-    def __init__(self, inner: SqliteStore, *, renew_fails: bool = False,
+    def __init__(self, inner: SqliteStore, *, renew_fails: bool | asyncio.Event = False,
                  claim_fails: int = 0) -> None:
         self.inner = inner
         self.renew_fails = renew_fails
@@ -257,7 +258,8 @@ class FlakyStore:
         return getattr(self.inner, name)
 
     async def renew(self, claim: Any, lease_seconds: float) -> Any:
-        if self.renew_fails:
+        failing = self.renew_fails
+        if failing is True or (isinstance(failing, asyncio.Event) and failing.is_set()):
             raise RuntimeError("driver bug")
         return await self.inner.renew(claim, lease_seconds)
 
@@ -291,7 +293,10 @@ class Slow:
 
 async def test_a_renewal_that_keeps_failing_gives_the_task_up(store: SqliteStore) -> None:
     slow = Slow()
-    rt = runtime(FlakyStore(store, renew_fails=True), ScriptedProvider([reply("", ("Slow", {}))]),
+    # Renewals fail once the tool runs: a slow machine reaching the tool
+    # after the lease ran out would otherwise give up before it starts.
+    rt = runtime(FlakyStore(store, renew_fails=slow.started),
+                 ScriptedProvider([reply("", ("Slow", {}))]),
                  Agent(name="a", model="m", tools=[slow]), lease_seconds=0.3)
     client = Client(store)
     await client.create("a", "go")

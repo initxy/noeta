@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import msgspec
 
+from noeta.core import records
 from noeta.core.events import DEFAULT_TENANT, Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
@@ -273,8 +274,24 @@ class Skills(Extension):
             return {**state, "listings": [{k: v for k, v in listing.items() if k != "held"}
                                           for listing in state["listings"]]}
         if kind == "activated":
-            entry = {k: v for k, v in data.items() if k != "text"}
-            return {**state, "active": {**state["active"], data["name"]: entry}}
+            entry = {k: v for k, v in data.items() if k not in ("text", "input")}
+            name, active = data["name"], state["active"]
+            if data.get("input") is not None:
+                # What a typed /name replaced, given back if a hook blocks it.
+                typed, at = dict(state.get("typed") or {}), str(data["input"])
+                typed[at] = [*typed.get(at, ()), [name, active.get(name)]]
+                state = {**state, "typed": typed}
+            return {**state, "active": {**active, name: entry}}
+        if kind == records.ERASED_KIND:
+            typed = dict(state.get("typed") or {})
+            active = dict(state["active"])
+            for seq in data["seqs"]:
+                for name, prior in reversed(typed.pop(str(seq), ())):
+                    if prior is None:
+                        active.pop(name, None)
+                    else:
+                        active[name] = prior
+            return {**state, "active": active, "typed": typed}
         if kind == "forked":
             return {**state, "forks": {**(state.get("forks") or {}),
                                        data["call_id"]: data["prompt"]}}
@@ -406,7 +423,8 @@ class Skills(Extension):
                                 message=user(f"The skill could not load: {exc}",
                                              origin="inline"))
                     continue
-                self._record_invocation(view, data, prior, "inline")
+                self._record_invocation(view, {**data, "input": recorded.seq}, prior,
+                                        "inline")
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         if call.name in FILE_TOOLS and not output.is_error:

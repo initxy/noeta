@@ -368,6 +368,19 @@ async def test_a_timeout_kills_the_command_while_another_worker_holds_the_tree(
     assert h.records == [] and h.registry.jobs == {}
 
 
+async def test_a_timeout_kills_the_command_when_taking_the_hold_fails(h: Harness) -> None:
+    async def broken_store() -> Release:
+        raise OSError("the store is unreachable")
+
+    ctx = _ctx_holding(h, broken_store)
+    out = await h.tool("Bash").run({"command": "echo started; sleep 3; echo late",
+                                    "timeout": 1000}, ctx)
+    assert out.is_error and text(out).startswith("Command timed out after 1s")
+    assert "late" not in text(out)
+    await asyncio.sleep(0.05)
+    assert h.records == [] and h.registry.jobs == {}
+
+
 async def test_a_hold_taken_for_a_command_that_ended_meanwhile_is_given_back(
         h: Harness) -> None:
     released: list[str] = []

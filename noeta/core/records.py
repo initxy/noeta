@@ -21,6 +21,11 @@ from noeta.core.types import Message, Struct, Thinking
 #: The extension name the core records its own entries under.
 CORE = "core"
 
+#: The kind every plugin reducer that holds state is also folded with when
+#: messages are erased (data: ``{"seqs": [...]}``, as :class:`Erased`), so
+#: it can drop what it recorded for those messages.
+ERASED_KIND = "core.erased"
+
 
 def _fields(data: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
@@ -145,7 +150,8 @@ class TurnDone(Struct):
 class Erased(Struct):
     """The person's messages taken at these log ``seqs``, and what a plugin
     expanded them into (``inline`` text), leave the conversation the model
-    sees (a ``UserPromptSubmit`` hook blocked them)."""
+    sees (a ``UserPromptSubmit`` hook blocked them). Every plugin reducer
+    with state is folded with it too, as :data:`ERASED_KIND`."""
 
     kind: ClassVar[str] = "erased"
     seqs: list[int] = []
