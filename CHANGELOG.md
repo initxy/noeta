@@ -752,6 +752,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   model call and fails the turn with `tenant_cwd_refused` and the reason, and `Bash`
   resolves the directory a command left the shell in before starting the next one there
   (one now leading out of the workspace starts back at the root).
+- **A worker runs no tools of a tenant whose workspace it does not know.** Such a worker
+  (one with an older copy of the tenant directories) still ran the task with the sandbox
+  in place; the turn now fails with `tenant_not_isolated` before any model call, as on a
+  worker without a boundary. Workers read the tenant directories at start: restart every
+  worker after adding a tenant (`docs/server.md`).
 - **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another

@@ -437,3 +437,18 @@ async def test_a_working_directory_swapped_mid_turn_fails_it_at_the_next_step(
     failed = [d for e in await events(client, tid)
               if isinstance(d := records.decode(e), records.TurnFailed)]
     assert failed and failed[0].reason == "tenant_cwd_refused"
+
+
+async def test_a_tenant_whose_workspace_this_worker_does_not_know_fails_its_turns(
+        store: SqliteStore, places: dict[str, Path]) -> None:
+    read = Fake("Read")
+    provider = ScriptedProvider([reply("", ("Read", {"file_path": "README"})), reply("done")])
+    rt = runtime(store, provider, agent([perms(places)], [read]))
+    client = Client(store).scoped("gamma")
+    tid = await client.create("a", "go", config={"cwd": str(places["acme"])})
+    await rt.run_until_idle()
+    assert not provider.requests and not read.runs
+    failed = [d for e in await events(client, tid)
+              if isinstance(d := records.decode(e), records.TurnFailed)]
+    assert failed and failed[0].reason == "tenant_not_isolated"
+    assert "tenant 'gamma'" in failed[0].detail and "workspace" in failed[0].detail
