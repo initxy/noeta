@@ -459,6 +459,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   counting, so a newer worker claims it. A corrupt or misshapen log still ends failed after
   three claims. Workers from this release on do this; 0.x workers still fail such a task
   (see Changed).
+- **A tenant's budget counts every model call it paid for.** Usage was counted after the
+  reply was appended, so a reply whose claim was lost meanwhile, or an empty one, was not
+  counted; it is counted as soon as the call returns.
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.
