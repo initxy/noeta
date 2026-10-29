@@ -299,9 +299,14 @@ def score_memory_save(t: Trace, judge: Judge) -> Result:
         shaped = all(re.search(rf"^\s*{k}:\s*\S", head, re.M) for k in ("name", "description", "type"))
         index = (mem / "MEMORY.md").read_text(encoding="utf-8") if mem and (mem / "MEMORY.md").is_file() else ""
         linked = re.search(rf"^- \[[^\]]+\]\({re.escape(fact[0].name)}\)", index, re.M) is not None
+    # The memory directory is outside the write fence, so a Write there is
+    # refused and the model has to fall back on the shell (a noeta gap the
+    # score still follows: what counts is the memory on disk).
+    refused = [path_arg(c) for c in t.named("Write", "Edit")
+               if mem is not None and path_arg(c).startswith(str(mem)) and t.failed(c)]
     return 0.3 * bool(fact) + 0.3 * shaped + 0.4 * linked, {
         "memory_files": [p.name for p in files], "fact_saved": bool(fact),
-        "frontmatter": shaped, "index_line": linked}
+        "frontmatter": shaped, "index_line": linked, "writes_refused": len(refused)}
 
 
 # --------------------------------------------------------------------------- #
