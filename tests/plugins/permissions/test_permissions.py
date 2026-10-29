@@ -316,6 +316,25 @@ async def test_disabled_bypass_mode_holds_against_a_task_config(store: SqliteSto
     assert modes == ["default"]
 
 
+async def test_a_fork_of_a_bypass_task_does_not_bypass_where_bypass_is_disabled(
+        store: SqliteStore, tmp_path: Path) -> None:
+    client = Client(store)
+    # The source ran in bypass where it is allowed (the CLI).
+    allowed = runtime(store, ScriptedProvider([reply("ok")]),
+                      agent([Permissions(mode="default")], [Fake("Write")]))
+    src = await client.create("a", "go", config={
+        "cwd": str(tmp_path), "permission_mode": "bypassPermissions"})
+    await allowed.run_until_idle()
+    # A server with bypass disabled forks it.
+    write = Fake("Write")
+    server = runtime(store, ScriptedProvider([reply("", ("Write", {"file_path": "x"})),
+                                              reply("ok")]),
+                     agent([Permissions(mode="default", disable_bypass_mode=True)], [write]))
+    fork = await client.create("a", "write", config={"cwd": str(tmp_path)}, history_from=src)
+    await server.run_until_idle()
+    assert asked(await events(client, fork)) and not write.runs
+
+
 def test_settings_files_can_disable_bypass_mode(tmp_path: Path) -> None:
     from noeta.cli.settings_files import load, permission_arguments
 

@@ -1117,3 +1117,8 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   `/mcp__…` command started the server's local stdio MCP servers and used the default
   tenant's connections; a scheduled `/loop` command expanded the same way. For plugin
   authors: `CommandContext.tenant` is now required (keyword only), so every caller names it.
+- **A continued task no longer keeps bypassPermissions where bypass is disabled.** A fork,
+  rewind or resumed fork of a task that ran in bypassPermissions (on the CLI, say) kept that
+  mode on a server started without `--allow-bypass-permissions`, and ran tools without
+  asking. The stored mode now goes through the same check as a task's config, and a
+  continued task's state drops bypassPermissions there.
