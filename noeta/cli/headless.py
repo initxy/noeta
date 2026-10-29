@@ -284,9 +284,7 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str) -> i
     mode = args.permission_mode
     if args.dangerously_skip_permissions:
         mode = "bypassPermissions"
-    async with app:
-        for notice in app.notices:
-            print(f"noeta: {notice}", file=sys.stderr)
+    async with app:  # app.notices were logged to stderr when the app was made
         resume = args.resume or None
         if args.continue_last and not resume:
             resume = await find_latest_task(app.client, cwd, args.agent)

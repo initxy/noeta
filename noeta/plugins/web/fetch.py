@@ -249,7 +249,7 @@ class HttpFetchTransport:
     streamed and refused past ``max_bytes``."""
 
     def __init__(self, *, timeout: float = 60.0,
-                 user_agent: str = "noeta-webfetch/0.1 (+https://github.com/noeta)",
+                 user_agent: str = "noeta-webfetch/0.1 (+https://github.com/initxy/noeta)",
                  client: httpx.AsyncClient | None = None,
                  max_bytes: int = 10 * 1024 * 1024) -> None:
         self.timeout = timeout

@@ -48,7 +48,8 @@ The three examples are each one file, a short README and a test `make check` run
 - [`examples/run-tests`](../examples/run-tests) — a tool: runs the test command where the task's
   commands run, folds the last result from the log, reminds the model once after an edit.
 - [`examples/chat-bridge`](../examples/chat-bridge) — a channel: a chat thread becomes a task,
-  senders are allowlisted, approvals are answered from the chat, replies relayed from the task.
+  requests carry a shared secret, senders are allowlisted, approvals are answered from the chat,
+  replies relayed from the task.
 - [`examples/house-style`](../examples/house-style) — prompt and reminder text: an output style
   captured when the task starts, so a resumed task sends identical bytes.
 
@@ -80,7 +81,9 @@ noeta plugin remove your-plugin
 ```
 
 Installing runs nothing from the plugin: no install scripts, git hooks or dependency installs.
-A marketplace is only read, to find where a plugin comes from; its entry must pin a `sha`.
+A marketplace is only read, to find where a plugin comes from; an entry fetched from a
+repository installs at its `sha`, or at `--commit <sha>` when it pins none (a marketplace that
+is itself a repository needs `<url>@<commit>`).
 
 ## Durable and multi-machine
 
@@ -116,8 +119,8 @@ Sources: pi-mono 9ae3d88 (coding-agent 1.4.0), deepseek-harness f3803c96, Claude
 Where noeta is not strictly ahead, and why:
 
 - **UI contributions** (pi, dsh, Claude Code mods draw panels). noeta is a server-side harness and
-  front ends import no plugin; a plugin sends structured `notify(kind, data)` and a front end
-  renders it.
+  front ends import no plugin; a plugin sends `notify(text, kind=..., data=...)` (structured data with a
+  plain-text fallback) and a front end renders it.
 - **Hot reload granularity.** pi and dsh swap code inside a running turn; noeta reloads between
   turns because a request must stay a pure function of the task log.
 - **Isolation.** No one sandboxes in-process plugin code; Claude Code's mods at least mediate
@@ -134,7 +137,7 @@ Where noeta is not strictly ahead, and why:
 | A sandbox for in-process plugin code | Not achievable in CPython; isolation exists where it is real — the exec env, MCP servers, command hooks, the machine policy. |
 | Swapping code inside a running turn | Breaks "the request is a pure function of the log"; a reload between turns gives the same loop. |
 | Hooks on the raw provider request | Makes requests unreproducible from the log; `before_model` works on the `ModelRequest`, providers are pluggable for wire changes. |
-| UI drawn by plugins | Front ends import no plugin; `notify(kind, data)` carries what a front end may render. |
+| UI drawn by plugins | Front ends import no plugin; `notify(text, kind=..., data=...)` carries what a front end may render. |
 | A hosted marketplace, gallery or auto-update | An operations product and a supply-chain liability; packages, pinned git and Claude Code marketplaces suffice. |
 | Agents installing plugins into their own harness | Model output would install code into the harness; writes to `.noeta/` ask the person. |
 | Any default upload of logs or telemetry | Never. An opt-in exporter can be an `on_event` plugin the operator installs. |

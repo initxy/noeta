@@ -105,7 +105,8 @@ watch. Every front end is a translation of it ([Ways in](../CONTEXT.md#ways-in))
 
 - **In process**: `noeta.Client` on a store, or `noeta.LocalApp` (store, worker and client).
 - **HTTP / WebSocket**: `noeta serve` (`noeta/host/http.py`) puts the client on the wire;
-  `noeta.RemoteClient` and `noeta --server URL` use it. A bearer token is always required.
+  `noeta.RemoteClient` and `noeta --server URL` use it. A bearer token is required unless
+  `--no-token` is given, which serves a loopback address only.
 - **ACP**: `noeta acp` (`noeta/host/acp.py`) for editors, locally or against a server.
 - **Claude Code's headless protocol**: `noeta -p` and `--input-format stream-json`
   (`noeta/host/stream_json.py`), also served as `/stream-json`, so a program written for Claude

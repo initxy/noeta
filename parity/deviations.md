@@ -1,7 +1,7 @@
 # Accepted deviations from Claude Code
 
 A model-visible difference from the baseline is allowed only when noeta's kernel or product
-forces it (`docs/specs/2026-10-28-claude-code-parity.md`, Decisions). Each row names the reason;
+forces it ([ADR 003](../docs/adr/003-claude-code-is-the-model-visible-contract.md)). Each row names the reason;
 a backticked id is the `make parity` mismatch it accepts (the comparator does not count it).
 A row without an id is a difference the replay cannot see.
 
@@ -91,3 +91,18 @@ file names. Each row is a name the model sees; the files themselves are product 
 | id | difference | reason |
 |---|---|---|
 | | An `@path` import from a repository file that leaves the repository directory and the working directory is skipped, not asked about (`rem.instructions.7`). | No noeta front end has Claude Code's approval dialog for external imports; skipping is the safe side of it. |
+
+## Not yet matched
+
+Known differences that no kernel or product reason forces: follow-ups, not accepted deviations.
+
+| difference | where |
+|---|---|
+| `AskUserQuestion` needs every question answered; Claude Code accepts unanswered questions and a note per question. | `noeta/plugins/ask_user` |
+| MCP connections have no idle timeout. | `noeta/plugins/mcp` |
+| MCP result sizes are estimated (four characters a token, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
+| `WebFetch` has no raw-markdown answer for known documentation sites. | `noeta/plugins/web` |
+| `Bash` does not note that a command changed a file the model has read. | `noeta/plugins/shell`, `noeta/plugins/fs` |
+| The file tools refuse UTF-16 text files (Claude Code reads and writes them). | `noeta/plugins/fs` |
+| A background agent's transcript file is rewritten whole on each change, so the cost grows with the conversation. | `noeta/plugins/subtasks` |
+| Headless: SDK hook callbacks (`initialize.hooks`) are ignored with a warning; `--permission-prompt-tool` takes only `stdio`, not an MCP tool. | `noeta/host/_stream_json_control.py`, `noeta/cli/headless.py` |

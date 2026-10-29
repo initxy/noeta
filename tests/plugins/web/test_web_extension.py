@@ -462,3 +462,7 @@ def test_per_task_bindings_are_bounded() -> None:
                           state={}, record=lambda *_: None)
         web._cache_for(ctx)
     assert len(web._caches) == TASKS_KEPT and "t0" not in web._caches
+
+
+def test_the_user_agent_points_at_the_project() -> None:
+    assert HttpFetchTransport().user_agent.endswith("(+https://github.com/initxy/noeta)")

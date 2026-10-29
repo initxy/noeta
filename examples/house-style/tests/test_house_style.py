@@ -54,3 +54,19 @@ async def test_the_style_is_pinned_at_task_start(tmp_path: Path) -> None:
     assert "Long sentences." in str(provider.requests[-1].system)
     assert other != tid
     await store.close()
+
+
+async def test_a_rule_in_the_body_is_kept(tmp_path: Path) -> None:
+    style = tmp_path / "house.md"
+    style.write_text("---\nname: house\n---\nIntro.\n\n---\n\nOutro.\n")
+    registry.load_plugin_files([HERE])
+    plugin = registry.load(registry.PLUGINS, "house_style")(file=str(style))
+    agent = Agent(name="main", model="m", extensions=(plugin,))
+    provider = ScriptedProvider([reply("ok")])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    await Client(store).create("main", "hi")
+    await Runtime(store=store, agents={"main": agent}, provider_for=lambda _m: provider,
+                  env_for=lambda _s: None).run_until_idle()  # type: ignore[arg-type,return-value]
+    system = "".join(part.text for part in provider.requests[0].system)
+    assert "Intro.\n\n---\n\nOutro." in system and "name: house" not in system
+    await store.close()

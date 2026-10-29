@@ -496,9 +496,11 @@ def model_limits(model: str) -> tuple[int, int]:
 def unknown_model_notice(model: str) -> str | None:
     """What to tell the person when ``model`` is not in the catalog (the
     limits it then runs under, and how to give the real ones), else ``None``.
-    Front ends show it where the person sees it, not only in the log."""
+    Front ends show it where the person sees it, not only in the log, so
+    asking counts as telling: :func:`model_limits` does not log it again."""
     if not model or find_spec(model) is not None:
         return None
+    _WARNED.add(("limits", resolve_alias(model)))
     return (f"noeta doesn't recognize the model {resolve_alias(model)!r}, so it assumes a "
             f"context window of {UNKNOWN_MODEL_CONTEXT_WINDOW:,} tokens and an output cap of "
             f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,}; describe it in a models file "
