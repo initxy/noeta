@@ -399,6 +399,26 @@ async def test_a_held_tree_is_claimed_only_by_its_holders(store: Store) -> None:
     assert got == {"root", "root.child"}
 
 
+async def test_a_hold_is_refused_to_a_worker_not_serving_every_queue_of_the_tree(
+        store: Store) -> None:
+    """Other workers skip a held tree, so its holder must be able to claim
+    each of its unended tasks: else a task on a queue it does not serve
+    waits for as long as the hold is renewed."""
+    await store.create(new("root"))
+    await store.create(NewTask(task_id="root.gpu", queue="gpu",
+                               created=TaskCreated(agent="a", parent_id="root", root_id="root")))
+    assert await store.hold("root", "B", 30, queues=["gpu"]) is None
+    epoch = await store.hold("root", "A", 30, queues=["default", "gpu"])
+    assert epoch is not None
+    assert await store.hold("root", "A", 30, queues=["gpu"], epoch=epoch) == epoch  # renewing
+    await store.unhold("root", "A", epoch)
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None and claim.task_id == "root"
+    await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
+                       patch=Patch(status="ended", end_status="done"))
+    assert await store.hold("root", "B", 30, queues=["gpu"]) is not None  # ended: not counted
+
+
 async def test_a_tree_has_at_most_one_holding_worker(store: Store) -> None:
     """A second worker's hold is refused, so the held tree's tasks always
     have a worker that may claim them; once released, another may hold."""

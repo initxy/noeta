@@ -652,7 +652,8 @@ class PostgresStore:
         return await self._conns.tx(tx)
 
     async def hold(self, root_id: str, worker: str, seconds: float,
-                   *, epoch: int | None = None) -> int | None:
+                   *, epoch: int | None = None,
+                   queues: Sequence[str] | None = None) -> int | None:
         changes: list[tuple[str, ChangeKind]] = []
 
         async def tx(conn: Conn) -> int | None:
@@ -672,6 +673,12 @@ class PostgresStore:
                     (root_id, worker))
                 if await cur.fetchone() is not None:
                     return None
+                if queues is not None:
+                    cur = await conn.execute(self._q(
+                        "SELECT 1 FROM {s}.tasks WHERE root_id = %s AND status <> 'ended'"
+                        " AND queue <> ALL(%s) LIMIT 1"), (root_id, list(queues)))
+                    if await cur.fetchone() is not None:
+                        return None  # a task of the tree this worker could not claim
                 await self._revoke_lapsed(conn, root_id, worker, changes)
                 # A claim of the tree takes the same lock (shared), so one
                 # that committed before this lock is seen here, and one

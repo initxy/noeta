@@ -319,6 +319,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   (`ToolContext.post(forward_if_ended=True)`).
 - **`Claim.queue`.** A claim (and its renewal) names the queue of the task claimed; a store
   that leaves it out puts every child on `default`, as before.
+- **`Store.hold(queues=)`.** Taking a hold with the holder's queues is refused (`None`) while
+  an unended task of the tree is on a queue not among them, decided in the hold's
+  transaction; `Runtime.hold` passes its queues.
 
 ### Added
 
@@ -445,6 +448,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   queue was named (`Subtasks(queue=)`, a roster entry's `queue`, `spawn(queue=)`), so a task
   on its own queue (a tenant's, a GPU worker's) had children only other workers ran, and a
   tree held by one of them waited for a worker that never came.
+- **A tree is held only by a worker that can run all of it.** A worker serving one queue
+  could hold a tree (for a background job) whose root was on another; other workers skip a
+  held tree, so a `Cancel` or message to the root waited as long as the job ran.
+  `Runtime.hold` now raises `HeldElsewhere` while an unended task of the tree is on a queue
+  it does not serve.
 - **A long session keeps a bounded number of background logs on disk.** An ended
   background job let go of (beyond the 64 most recent of a root task) kept its log files,
   up to 64 MiB each, until the root task ended; they are now removed when it is let go.
