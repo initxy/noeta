@@ -193,6 +193,13 @@ def test_own_spill_and_project_directories_stay_open(places: dict[str, Path]) ->
     # The default tenant's and another tenant's project directory of that cwd.
     for theirs in (home / "projects" / slug, home / "projects" / "beta" / slug):
         assert fence.refusal(str(theirs / "memory" / "MEMORY.md"), **kw) is not None
+    # Of its project directory, only its tree's transcripts, to read.
+    assert fence.refusal(str(project / "t1.jsonl"), **kw) is None
+    assert fence.refusal(str(project / "r1.jsonl"), **kw) is None
+    assert fence.refusal(str(project / "t1.jsonl"), write=True, **kw) is not None
+    for other in ("other-task.jsonl", "x"):
+        assert fence.refusal(str(project / other), **kw) is not None
+    assert fence.refusal(str(home / "projects" / slug / "default-task.jsonl"), **kw) is not None
     assert fence.refusal(str(home / "projects" / "-elsewhere" / "x"), **kw) is not None
     assert fence.refusal(str(home / "tokens.json"), **{**kw, "tenant": "default"}) is None
 

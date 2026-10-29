@@ -9,10 +9,11 @@ Tenants share the worker's OS user, so this is the only boundary between a
 tenant's file tools and those files; a tenant answers its own approval
 prompts, so nothing it can approve may lift it. Inside the fenced places a
 task keeps its own corners: its spilled tool outputs and its tree's
-transcripts, its tenant's plan files, the project directory (memory) of its
-working directory, and read access to the operator's skills and saved
-workflows; outside them, its tenant's own temporary directory
-(:meth:`TenantFence.temp_dir`: its commands' ``TMPDIR`` and its job logs).
+transcripts, its tenant's plan files, in its tenant's project directory of its
+working directory the memory and (to read) its tree's compaction transcripts,
+and read access to the operator's skills and saved workflows; outside them,
+its tenant's own temporary directory (:meth:`TenantFence.temp_dir`: its
+commands' ``TMPDIR`` and its job logs).
 
 :meth:`TenantFence.refusal` is the check for in-process file access;
 :meth:`TenantFence.confine` makes the same places unreadable to the task's
@@ -172,7 +173,14 @@ class TenantFence:
                     for t in dict.fromkeys(x for x in (task_id, root_id) if x)]
         if self.plans_dir:
             out.append(posixpath.join(_real(self.plans_dir), tenant))
-        out += [str(project_dir(d, Path(home), tenant)) for d in self._project_roots(tenant, cwd)]
+        tree = list(dict.fromkeys(x for x in (task_id, root_id) if x))
+        for d in self._project_roots(tenant, cwd):
+            project = str(project_dir(d, Path(home), tenant))
+            # Its memory, and to read, its tree's transcripts: not other
+            # tasks' of the same directory.
+            out.append(posixpath.join(project, "memory"))
+            if not write:
+                out += [posixpath.join(project, f"{t}.jsonl") for t in tree]
         if not write:
             out += [posixpath.join(home, p) for p in _HOME_READABLE]
         return out
