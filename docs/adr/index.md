@@ -14,7 +14,9 @@ and describe a different codebase.
 
 - [001](001-task-is-an-event-log-with-one-writer.md) A task is an append-only event log with one writer and an inbox
 - [005](005-holds-with-epochs-and-hold-lost.md) Process-bound work holds its task tree, with epochs and a hold_lost notice
+  (refined by 011)
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
+  (refined by 012)
 - [011](011-one-holding-worker-per-tree.md) A task tree has at most one holding worker
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
 
@@ -27,6 +29,8 @@ and describe a different codebase.
 ## Security and operation
 
 - [007](007-tenants.md) Tasks belong to a tenant; a server token selects it and nothing crosses it
+  (refined by 014)
+- [014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md) Tenants are separated at the API; tools need an OS boundary
 - [008](008-sandbox-protected-path-placeholders.md) The sandbox keeps code-running paths read-only and covers missing ones with placeholders
 - [009](009-serve-requires-a-token.md) The HTTP API always requires a bearer token
   (refined by 013)

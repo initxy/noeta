@@ -495,17 +495,19 @@ def model_limits(model: str) -> tuple[int, int]:
 
 def unknown_model_notice(model: str) -> str | None:
     """What to tell the person when ``model`` is not in the catalog (the
-    limits it then runs under, and how to give the real ones), else ``None``.
-    Front ends show it where the person sees it, not only in the log, so
-    asking counts as telling: :func:`model_limits` does not log it again."""
+    limits and price it then runs under, and how to give the real ones), else
+    ``None``. Front ends show it where the person sees it, not only in the
+    log, so asking counts as telling: :func:`model_limits` and :func:`price`
+    do not log it again."""
     if not model or find_spec(model) is not None:
         return None
-    _WARNED.add(("limits", resolve_alias(model)))
-    return (f"noeta doesn't recognize the model {resolve_alias(model)!r}, so it assumes a "
+    real = resolve_alias(model)
+    _WARNED.update({("limits", real), ("pricing", real)})
+    return (f"noeta doesn't recognize the model {real!r}, so it assumes a "
             f"context window of {UNKNOWN_MODEL_CONTEXT_WINDOW:,} tokens and an output cap of "
-            f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,}; describe it in a models file "
-            "(NOETA_MODELS_FILE / models_file) or with register_models to use its real "
-            "limits")
+            f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,} and counts its cost as $0.00 (a cost budget "
+            "will under-report); describe it in a models file (NOETA_MODELS_FILE / "
+            "models_file) or with register_models to use its real limits and prices")
 
 
 def price(model_id: str, usage: Usage) -> float:

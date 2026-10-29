@@ -1,21 +1,27 @@
 """noeta's model-visible texts are its own words: none repeats a run of
 Claude Code's text.
 
-    python -m scripts.parity.own_words                      # check (make check)
-    python -m scripts.parity.own_words index ~/cc-recordings/2.1.312 \\
-        ~/cc-recordings/2.1.312-r2 --out parity/2.1.312/cc-windows.bin
+    python -m scripts.parity.own_words          # check (make parity; a test in make check)
 
-``index`` reads recordings (``<recording>/<session>/*.json``) and keeps, of
-every text Claude Code wrote into a request (system blocks, tool
+The check reads Claude Code's recordings from outside the repository:
+``$NOETA_PARITY_RECORDINGS`` (default ``~/cc-recordings``), one directory per
+recording named after the Claude Code version under ``parity/`` (``2.1.312``,
+and re-recordings such as ``2.1.312-r2``), each ``<session>/*.json``. With no
+recordings there (CI, a fresh clone) it skips with a one-line notice. Nothing
+derived from Claude Code's wording is written anywhere: even unkeyed hashes of
+short overlapping windows can be reversed from a known opening, a few
+characters at a time.
+
+From every text Claude Code wrote into a request (system blocks, tool
 descriptions and schemas, tagged user parts such as reminders, short tool
-results), only hashes: a 5-byte BLAKE2b digest of each :data:`WINDOW`-
+results) it takes, in memory, a 5-byte BLAKE2b digest of each :data:`WINDOW`-
 character window starting at every :data:`STRIDE`-th character, whitespace
-collapsed. No text of Claude Code's enters the repository.
+collapsed.
 
-The check reads every text in ``noeta/`` the model can see — string literals
+It then reads every text in ``noeta/`` the model can see — string literals
 of the Python modules (docstrings and comments left out) and the ``.md`` /
 ``.js`` resources — collapses whitespace the same way, and fails on any of
-its windows found in an index. A run of :data:`SHARED` or more characters in
+its windows found in the index. A run of :data:`SHARED` or more characters in
 common always contains an indexed window (``SHARED - WINDOW >= STRIDE - 1``);
 a shorter shared run is caught only when it happens to hold one. Literals in
 :data:`ALLOWED` (tool and parameter names, protocol strings) are cut out
@@ -28,6 +34,7 @@ import argparse
 import ast
 import hashlib
 import json
+import os
 import re
 import sys
 from collections.abc import Iterable, Iterator
@@ -41,7 +48,8 @@ SHARED = 45
 #: Characters per indexed window, and how far apart indexed windows start.
 WINDOW, STRIDE = 43, 3
 DIGEST = 5
-INDEX_NAME = "cc-windows.bin"
+#: Where Claude Code's recordings live, outside the repository.
+RECORDINGS_ENV = "NOETA_PARITY_RECORDINGS"
 ALLOWED = ROOT / "parity" / "own-words-allowed.txt"
 #: Tool results longer than this are file contents or command output, not
 #: Claude Code's wording.
@@ -112,12 +120,24 @@ def index(recordings: Iterable[Path]) -> bytes:
     return b"".join(sorted(digests))
 
 
-def load_indexes(root: Path = ROOT / "parity") -> set[bytes]:
-    out: set[bytes] = set()
-    for path in sorted(root.glob(f"*/{INDEX_NAME}")):
-        raw = path.read_bytes()
-        out.update(raw[i:i + DIGEST] for i in range(0, len(raw), DIGEST))
-    return out
+def recordings_root() -> Path:
+    return Path(os.environ.get(RECORDINGS_ENV) or Path.home() / "cc-recordings").expanduser()
+
+
+def recordings(root: Path | None = None, parity: Path = ROOT / "parity") -> list[Path]:
+    """The recording directories of every Claude Code version under ``parity/``."""
+    root = recordings_root() if root is None else root
+    if not root.is_dir():
+        return []
+    versions = [p.name for p in parity.iterdir() if p.is_dir() and p.name[:1].isdigit()]
+    found = [p for p in sorted(root.iterdir()) if p.is_dir() and any(
+        re.fullmatch(re.escape(v) + r"(-r\d+)?", p.name) for v in versions)]
+    return [p for p in found if any(p.glob("*/*.json"))]
+
+
+def load_index(paths: Iterable[Path]) -> set[bytes]:
+    raw = index(paths)
+    return {raw[i:i + DIGEST] for i in range(0, len(raw), DIGEST)}
 
 
 # ---------------------------------------------------------------- noeta's texts
@@ -187,8 +207,7 @@ def matches(text: str, indexed: set[bytes], allow: list[str]) -> list[tuple[int,
     return found
 
 
-def check(indexed: set[bytes] | None = None, root: Path = ROOT / "noeta") -> list[str]:
-    indexed = load_indexes() if indexed is None else indexed
+def check(indexed: set[bytes], root: Path = ROOT / "noeta") -> list[str]:
     allow = allowed()
     problems = []
     for rel, line, text in noeta_texts(root):
@@ -202,28 +221,21 @@ def check(indexed: set[bytes] | None = None, root: Path = ROOT / "noeta") -> lis
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    sub = parser.add_subparsers(dest="command")
-    make = sub.add_parser("index", help="hash a recording's Claude Code texts")
-    make.add_argument("recordings", nargs="+", type=Path)
-    make.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args(argv)
-    if args.command == "index":
-        args.out.write_bytes(index(args.recordings))
-        print(f"{args.out}: {args.out.stat().st_size // DIGEST} windows")
+    parser.parse_args(argv)
+    found = recordings()
+    if not found:
+        print(f"own-words: skipped, no Claude Code recordings under {recordings_root()} "
+              f"(set {RECORDINGS_ENV})")
         return 0
-    if not load_indexes():
-        print("own-words: no index under parity/", file=sys.stderr)
-        return 2
-    problems = check()
+    problems = check(load_index(found))
     for problem in problems:
         print(problem)
     if problems:
         print(f"own-words: {len(problems)} text(s) repeat Claude Code; reword them "
               f"(or, for a tool name or protocol literal, list it in {ALLOWED.name})")
         return 1
-    print("own-words: green")
+    print(f"own-words: green ({', '.join(p.name for p in found)})")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

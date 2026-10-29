@@ -131,3 +131,23 @@ def test_an_unknown_model_is_announced_once(home: Path, tmp_path: Path,
     said = [*capsys.readouterr().err.splitlines(), *(r.getMessage() for r in caplog.records)]
     limits = [line for line in said if "gateway-model-x1" in line and "context window" in line]
     assert len(limits) == 1  # once, not from the loader, the front end and the catalog each
+    # ... and its price is in that one notice, not announced again.
+    assert [line for line in said if "gateway-model-x1" in line] == limits
+
+
+def test_an_unknown_model_from_the_settings_file_is_announced_once(
+        home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.testing import ScriptedProvider, reply
+
+    (home / "config.toml").write_text(
+        f'api_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+    (home / "settings.json").write_text(json.dumps({"model": "gateway-model-y2"}))
+    monkeypatch.setattr(config.Settings, "make_provider",
+                        lambda self: ScriptedProvider([reply("ok")]))
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "go", "--cwd", str(tmp_path)])
+    assert done.value.code == 0
+    said = [*capsys.readouterr().err.splitlines(), *(r.getMessage() for r in caplog.records)]
+    named = [line for line in said if "gateway-model-y2" in line]
+    assert len(named) == 1 and "doesn't recognize" in named[0], named

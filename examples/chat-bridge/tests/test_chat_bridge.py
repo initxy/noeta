@@ -1,6 +1,6 @@
 """The chat bridge example: a thread becomes a task, only allowlisted senders
 get in, an approval is asked and answered through the chat, replies go back
-once, and a delivery reaching two replicas lands once."""
+(each with an idempotency key), and a delivery reaching two replicas lands once."""
 
 from __future__ import annotations
 
@@ -60,6 +60,11 @@ async def test_a_chat_thread_runs_a_task_with_approvals_through_the_chat(tmp_pat
     assert await bridge.receive(replicas[0], first, "") == 401  # no secret
     assert await bridge.receive(replicas[0], first, SECRET + "x") == 401  # wrong secret
     assert await bridge.receive(replicas[0], {**first, "sender": "mallory"}, SECRET) == 403
+    for missing in ("thread", "text", "delivery_id", "sender"):
+        partial = {k: v for k, v in first.items() if k != missing}
+        assert await bridge.receive(replicas[0], partial, SECRET) == 400, missing
+    assert await bridge.receive(replicas[0], ["not", "an", "object"], SECRET) == 400
+    assert await bridge.receive(replicas[0], {**first, "thread": 7}, SECRET) == 400
     assert [await bridge.receive(c, first, SECRET) for c in replicas] == [200, 200]
     [row] = await replicas[0].tasks()
     assert [i.body.message.text for i in await store.inbox(row.task_id)
@@ -80,6 +85,8 @@ async def test_a_chat_thread_runs_a_task_with_approvals_through_the_chat(tmp_pat
     assert [json.loads(c.request.content)["text"] for c in sent.calls][1:] == ["done: prod"]
     await rt.run_until_idle()
     assert len(sent.calls) == 2  # nothing relayed twice
+    keys = [c.request.headers["idempotency-key"] for c in sent.calls]
+    assert len(set(keys)) == 2 and all(k.startswith(row.task_id + ":") for k in keys)
     log = [r.event for r in await replicas[0].events(row.task_id)]
     assert TOKEN not in repr(log)  # the reply URL's token never enters the task log
     await store.close()
@@ -106,7 +113,11 @@ async def test_the_bridge_listens_over_http(tmp_path: Path) -> None:
                 await asyncio.sleep(0.05)
         wrong = await http.post(url, json=body, headers={"X-Chat-Secret": "guess"})
         signed = await http.post(url, json=body, headers={"X-Chat-Secret": SECRET})
+        garbled = await http.post(url, content=b"{not json", headers={"X-Chat-Secret": SECRET})
+        partial = await http.post(url, json={"sender": "alice"},
+                                  headers={"X-Chat-Secret": SECRET})
     assert (unsigned.status_code, wrong.status_code, signed.status_code) == (401, 401, 403)
+    assert (garbled.status_code, partial.status_code) == (400, 400)
     stop.set()
     await asyncio.wait_for(running, 5)
     await store.close()
