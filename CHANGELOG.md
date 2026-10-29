@@ -193,7 +193,9 @@ All notable changes to Noeta are documented here. The format is based on
   an epoch are told lost). A hold is refused while another
   worker runs a task of the tree, and on Postgres a claim and a hold of one tree serialize, so a
   held tree's tasks run only on its holder; a background command refused for either reason
-  says so and points the model to the foreground or a later try.
+  says so and points the model to the foreground or a later try. A hold also takes back
+  another worker's lapsed claim of the tree (a new epoch, back to `ready`), so a worker that
+  stalled past its lease cannot renew it or write once the tree is held elsewhere.
 - **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
   a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
   each plugin comes from.

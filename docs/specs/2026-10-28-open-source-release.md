@@ -175,6 +175,16 @@ servers and runs on many machines.
   a row on one worker, written from the row. Upgrading a version 1 store posts `hold_lost`
   (epoch 0) for its old `holds` rows and keeps the table. Rejected: counting failed claims in
   the store (a schema change for a rare case), dropping `holds` (data deletion: maintainer).
+- D25 (`os-fix-r3kernel`) A hold takes back other workers' lapsed claims of the tree (refines
+  D24): in the hold's transaction, before the live-lease check, every task of the tree
+  `running` on another worker with its lease run out gets `owner_epoch + 1` and goes back to
+  `ready` (announced `released`), so the stalled worker's next `renew` or `append` fails on
+  the epoch. The lease only says a worker may be dead; the epoch decides who writes. On
+  Postgres the hold locks those rows `NOWAIT` and, if a claim or renewal in flight has one,
+  rolls back and tries again, so it never waits on a row while holding the tree's lock a
+  claim then waits for. Rejected: `renew` refusing while another worker holds the tree (the
+  stalled worker could still `append` until its next renewal, and every renewal would read
+  `tree_holds`).
 
 ## Plan
 

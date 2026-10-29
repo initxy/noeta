@@ -186,6 +186,12 @@ class _HeldNow(Exception):
     """A claim's tree was held by another worker after all."""
 
 
+class _ClaimInFlight(Exception):
+    """A hold found a lapsed claim of its tree locked by a claim or renewal
+    in flight: rolled back so that one can finish (and hold's lock not
+    wait on a row a claim waiting on hold's lock has)."""
+
+
 class _TenantFull(Exception):
     """A claim found its tenant at its running limit after all."""
 
@@ -726,7 +732,10 @@ class PostgresStore:
 
     async def hold(self, root_id: str, worker: str, seconds: float,
                    *, epoch: int | None = None) -> int | None:
+        changes: list[tuple[str, ChangeKind]] = []
+
         async def tx(conn: Conn) -> int | None:
+            changes.clear()  # a re-run starts over
             if epoch is not None:
                 cur = await conn.execute(self._q(
                     f"UPDATE {{s}}.tree_holds SET until = {_NOW} + %s WHERE epoch = %s"
@@ -742,6 +751,7 @@ class PostgresStore:
                     (root_id, worker))
                 if await cur.fetchone() is not None:
                     return None
+                await self._revoke_lapsed(conn, root_id, worker, changes)
                 # A claim of the tree takes the same lock (shared), so one
                 # that committed before this lock is seen here, and one
                 # after sees this hold.
@@ -756,9 +766,38 @@ class PostgresStore:
                     " DO UPDATE SET until = excluded.until RETURNING epoch"),
                     (root_id, worker, seconds))
             row = await cur.fetchone()
+            await self._notify(conn, changes)
             return int(row[0]) if row else None
 
-        return await self._tx(tx)
+        while True:
+            try:
+                held = await self._tx(tx)
+            except _ClaimInFlight:
+                await asyncio.sleep(0.005)
+                continue
+            self._deliver(changes)
+            return held
+
+    async def _revoke_lapsed(self, conn: Conn, root_id: str, worker: str,
+                             changes: list[tuple[str, ChangeKind]]) -> None:
+        """Take back other workers' lapsed claims of the tree (a new epoch,
+        back to ``ready``), so a worker that stalled past its lease cannot
+        renew or write once this one holds the tree."""
+        try:
+            cur = await conn.execute(self._q(
+                "SELECT task_id FROM {s}.tasks WHERE root_id = %s AND status = 'running'"
+                f" AND owner <> %s AND lease_until < {_NOW} FOR UPDATE NOWAIT"),
+                (root_id, worker))
+        except psycopg.errors.LockNotAvailable as e:
+            raise _ClaimInFlight from e
+        lapsed = [str(r[0]) for r in await cur.fetchall()]
+        if not lapsed:
+            return
+        await conn.execute(self._q(
+            "UPDATE {s}.tasks SET status = 'ready', owner = NULL, lease_until = NULL,"
+            f" owner_epoch = owner_epoch + 1, updated_at = {_NOW}"
+            " WHERE task_id = ANY(%s)"), (lapsed,))
+        changes.extend((t, "released") for t in lapsed)
 
     async def _lost_posts(self, conn: Conn, root_id: str, worker: str, epoch: int,
                           changes: list[tuple[str, ChangeKind]], *, wake: bool = True) -> None:
