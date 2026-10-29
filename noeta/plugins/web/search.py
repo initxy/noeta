@@ -13,7 +13,6 @@ import inspect
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from importlib import resources
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -21,7 +20,7 @@ import httpx
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.web.render import collapse_whitespace
-from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, truncate_bytes
+from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, load_description, truncate_bytes
 
 __all__ = ["HttpSearchTransport", "SearchResult", "SearchTransport", "WebSearchTool"]
 
@@ -144,8 +143,7 @@ class WebSearchTool:
 
     def __init__(self, transport: SearchTransport) -> None:
         self.transport = transport
-        self.description = (resources.files(__package__) / "web_search.md").read_text(
-            "utf-8").rstrip("\n")
+        self.description = load_description("noeta.plugins.web", "web_search")
         self.input_schema: dict[str, Any] = {
             "$schema": SCHEMA_DIALECT,
             "type": "object",

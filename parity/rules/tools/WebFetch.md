@@ -18,7 +18,7 @@ placed alphabetically among the built-in tools (between `ToolSearch` and `Workfl
 loaded for the rest of the conversation, across compaction (`m1/0059`) and `--continue`
 (`m4/0001`).
 
-noeta equivalent: `noeta/plugins/web/fetch.py`, description `noeta/plugins/web/webfetch.md`.
+noeta equivalent: `noeta/plugins/web/fetch.py`, description `noeta/plugins/web/descriptions/webfetch.md`.
 noeta defers it the same way.
 
 ## Parameters

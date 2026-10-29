@@ -8,7 +8,11 @@ tenant's task) keeps them in its ``jobs/`` instead, out of other tenants'
 reach. Log files are created 0600, in a directory of the worker process's
 own (``w<pid>``); a worker on this machine removes those of workers that are
 gone, a day after their last write, when it first prepares the directory (a
-lost job's notice names its output file).
+lost job's notice names its output file). In an env that is not this
+machine (a container) those are left: workers on other machines may share
+that env, so a ``w<pid>`` there cannot be told gone; they go with the env.
+A live worker removes a job's files when it lets go of the job
+(``Registry.ended_jobs_keep``) or its root ends.
 """
 
 from __future__ import annotations

@@ -2,6 +2,8 @@
 
 - Status: accepted
 - Date: 2026-10-28
+- Refined by: [ADR-020](020-claude-code-wording-is-allowed-where-it-serves-parity.md)
+  (Claude Code's wording is allowed where it serves parity; the own-words check is advisory)
 
 ## Context
 

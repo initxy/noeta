@@ -58,11 +58,13 @@ async def unsaved_work(env: ExecEnv, path: str, base: str, branch: str) -> tuple
     return " and ".join(lost), ""
 
 
-async def remove_worktree(env: ExecEnv, top: str, path: str, branch: str) -> str:
-    """Remove the worktree at ``path`` and then its ``branch``; ``""`` when
-    the worktree is gone, else why not."""
+async def remove_worktree(env: ExecEnv, top: str, path: str,
+                          branch: str) -> tuple[str, str]:
+    """Remove the worktree at ``path`` and then its ``branch``: why the
+    worktree is still there (``""`` when it is gone) and why the branch is
+    (``""`` when it was deleted, or when the worktree stayed)."""
     code, err = await git(env, ["worktree", "remove", "--force", path], top)
     if code != 0:
-        return err or "git worktree remove failed"
-    await git(env, ["branch", "-D", branch], top)
-    return ""
+        return err or "git worktree remove failed", ""
+    code, err = await git(env, ["branch", "-D", branch], top)
+    return "", "" if code == 0 else err or "git branch -D failed"

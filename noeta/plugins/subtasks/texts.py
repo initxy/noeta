@@ -3,10 +3,6 @@
 
 from __future__ import annotations
 
-from functools import cache
-
-from noeta.toolkit import tools
-
 #: The delegation tool's model-visible name, and the one it had before.
 AGENT_TOOL = "Agent"
 LEGACY_AGENT_TOOL = "Task"
@@ -19,12 +15,6 @@ DEFAULT_TYPE = "general-purpose"
 FORK_TYPE = "fork"
 #: ``SendMessage`` to a background sub-agent's caller.
 MAIN_ADDRESS = "main"
-
-
-@cache
-def load_description(name: str) -> str:
-    """``descriptions/<name>.md`` without its trailing newline."""
-    return tools.load_description("noeta.plugins.subtasks", name)
 
 
 # ``Agent`` schema property texts.

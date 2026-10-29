@@ -28,7 +28,7 @@ from noeta.plugins.subtasks.worktree import (
     remove_unlaunched_worktree,
     worktree_exists,
 )
-from noeta.toolkit.tools import SCHEMA_DIALECT
+from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -211,7 +211,7 @@ class AgentTool:
     """``Agent``: start one background agent of the roster (or a fork)."""
 
     name = texts.AGENT_TOOL
-    description = texts.load_description("agent")
+    description = load_description("noeta.plugins.subtasks", "agent")
     read_only = False
     clearable = False
     #: Spawns after the reply's ordinary calls have run.
@@ -312,7 +312,7 @@ class HandbackTool:
     """``SubagentHandback``: deliver the final report and end the run."""
 
     name = texts.HANDBACK_TOOL
-    description = texts.load_description("subagent_handback")
+    description = load_description("noeta.plugins.subtasks", "subagent_handback")
     read_only = False
     clearable = False
     #: Last in the sub-agent's tool list, after the deferred-tool placeholder.
@@ -341,7 +341,7 @@ class SendMessageTool:
     caller, or to another task of the store."""
 
     name = texts.SEND_TOOL
-    description = texts.load_description("send_message")
+    description = load_description("noeta.plugins.subtasks", "send_message")
     read_only = False
     clearable = False
     #: Claude Code lists it among the tools loaded on demand.
@@ -464,7 +464,7 @@ class ListAgentsTool:
     open root tasks."""
 
     name = texts.LIST_TOOL
-    description = texts.load_description("list_agents")
+    description = load_description("noeta.plugins.subtasks", "list_agents")
     read_only = True
     retry_safe = True
     clearable = True

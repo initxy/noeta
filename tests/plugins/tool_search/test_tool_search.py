@@ -112,9 +112,9 @@ def test_keyword_ranking() -> None:
     assert search.search("webfetch") == ["WebFetch"]
     # An mcp__ prefix loads that server's tools.
     assert search.search("mcp__slack") == ["mcp__slack__send_message", "mcp__slack__list"]
-    # +word may match the description (as a whole word), not only the name.
-    assert search.search("+slack send") == [
-        "mcp__slack__send_message", "mcp__mail__send", "mcp__slack__list"]
+    # +word must be in the name: a description that says it does not count.
+    assert search.search("+slack send") == ["mcp__slack__send_message", "mcp__slack__list"]
+    assert search.search("+inbox send") == []
     # Name words outrank description words.
     assert search.search("web fetch", max_results=2) == ["WebFetch", "WebSearch"]
     assert search.search("jupyter", max_results=0) == []
@@ -122,6 +122,16 @@ def test_keyword_ranking() -> None:
     assert schema["required"] == ["query", "max_results"]
     assert schema["additionalProperties"] is False
     assert schema["properties"]["max_results"]["default"] == 5
+
+
+@pytest.mark.parametrize("limit", [float("inf"), float("-inf"), float("nan"), "5", None])
+async def test_an_unusable_max_results_means_the_default(limit: Any) -> None:
+    # JSON's 1e400 arrives as float("inf"), which int() cannot take.
+    search = ToolSearchTool({f"Tool{n}": Fake(f"Tool{n}") for n in range(7)})
+    ctx = ToolContext(task_id="t", call_id="c", env=None, state={}, record=lambda *_: None)
+    out = await search.run({"query": "tool", "max_results": limit}, ctx)
+    assert not out.is_error
+    assert len(out.content) == 5
 
 
 def test_select_takes_an_mcp_tool_by_its_own_name() -> None:

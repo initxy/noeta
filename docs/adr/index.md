@@ -30,6 +30,8 @@ and describe a different codebase.
 - [016](016-deferred-tool-loading-stays-in-the-kernel-for-now.md) Deferred tool loading stays in the kernel for now
   (superseded by 017)
 - [003](003-claude-code-is-the-model-visible-contract.md) Claude Code's model-visible behavior is the contract; prompt text is our own words
+  (refined by 020)
+- [020](020-claude-code-wording-is-allowed-where-it-serves-parity.md) Claude Code's wording is allowed in prompt text where it serves parity
 - [004](004-noeta-reads-only-its-own-config-places.md) noeta reads only its own configuration places, in Claude Code's formats
 
 ## Security and operation

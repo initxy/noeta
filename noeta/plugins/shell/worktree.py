@@ -42,6 +42,8 @@ SWITCHED = ("Now working in the worktree {path}: Bash commands start there. Give
 NOT_ACTIVE = "No worktree session is active: nothing was changed."
 KEPT = "Back in {root}. The worktree {path} (branch {branch}) is kept."
 REMOVED = "Back in {root}. The worktree {path} and its branch {branch} were removed."
+BRANCH_KEPT = ("Back in {root}. The worktree {path} was removed; its branch {branch} was kept: "
+               "{reason}")
 CHANGES = ("The worktree {path} was not removed: it has {what}. Confirm with the user, then "
            "call again with discard_changes: true to remove it anyway, or use action \"keep\".")
 UNCHECKED = ("The worktree {path} was not removed: git could not tell whether it holds unsaved "
@@ -210,12 +212,15 @@ class ExitWorktreeTool:
                     return tool_error(self.name, UNCHECKED.format(path=made["path"],
                                                                   error=failed))
                 return tool_error(self.name, CHANGES.format(path=made["path"], what=what))
-            err = await remove_worktree(ctx.env, made["root"], made["path"], made["branch"])
+            err, branch_err = await remove_worktree(ctx.env, made["root"], made["path"],
+                                                    made["branch"])
             if err:
                 return tool_error(self.name, err)
             self._leave(ctx, back)
-            return text_output(REMOVED.format(root=back, path=made["path"],
-                                              branch=made["branch"]), cwd=back)
+            text = (BRANCH_KEPT.format(root=back, path=made["path"], branch=made["branch"],
+                                       reason=branch_err) if branch_err
+                    else REMOVED.format(root=back, path=made["path"], branch=made["branch"]))
+            return text_output(text, cwd=back)
         self._leave(ctx, back)
         kept = made if isinstance(made, dict) else tree
         return text_output(KEPT.format(root=back, path=kept["path"],

@@ -26,7 +26,7 @@ recording: `<version>/` and re-recordings `<version>-r<n>/`, each holding
 | `compare.py` | contract vs noeta's capture → `parity/report.md` |
 | `facts.py`, `wire.py` | what a request is reduced to; SSE and request kinds |
 | `names.json` | our names for text kinds (Claude Code's by hash, noeta's by pattern) |
-| `own_words.py` | the check that no noeta text repeats a run of 45+ characters of Claude Code's recorded texts (`make parity`, and a test in `check`); it hashes the recordings in memory and skips with a notice when there are none (CI); `parity/own-words-allowed.txt` lists the protocol literals it skips |
+| `own_words.py` | an advisory report of where noeta's texts repeat a run of 45+ characters of Claude Code's recorded texts (`make parity`; always exits 0, ADR-020); it hashes the recordings in memory and skips with a notice when there are none (CI); `parity/own-words-allowed.txt` lists the protocol literals it skips |
 
 ## Run
 
@@ -70,7 +70,7 @@ Mac with Claude Code and tmux, reachable over ssh, records through a gateway:
 Unnamed kinds show as `p:<hash>` in the contract; name the ones that matter
 in `names.json` (our words) and distill again.
 
-The own-words check picks the new recording up by its directory name once
+The own-words report picks the new recording up by its directory name once
 `parity/<ver>/` exists; nothing of it is hashed into the repository.
 
 ## Committed derived data

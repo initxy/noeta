@@ -66,8 +66,8 @@ eval-baseline:
 
 ## noeta replayed through Claude Code's recorded scenarios (scripts/parity/README.md),
 ## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check).
-## First, no model-visible text may repeat a run of Claude Code's recorded text
-## (scripts/parity/own_words.py; check runs it too, as a test)
+## First, an advisory report of model-visible texts that repeat Claude Code's
+## recorded text (scripts/parity/own_words.py; never fails, ADR-020)
 parity:
 	uv run python -m scripts.parity.own_words
 	uv run python -m scripts.parity.replay

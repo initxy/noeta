@@ -163,7 +163,7 @@ async def test_background_jobs_run_sandboxed(tmp_path: Path) -> None:
                       record=lambda *_: None, post=post, root_id="t")
     out = await shell._tools[0].run({"command": PROBE, "run_in_background": True}, ctx)
     job_id = out.meta["job_id"]
-    job = registry.get(job_id)
+    job = registry.find("t", job_id)
     assert job is not None
     await asyncio.wait_for(job.done.wait(), 10)
     assert job.sender is not None

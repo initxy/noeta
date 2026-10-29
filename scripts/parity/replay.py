@@ -506,7 +506,7 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
     # Claude Code offers WebSearch through its API; noeta needs a search key
     # to offer it. No scenario searches, so a placeholder only lists it.
     os.environ.setdefault("NOETA_WEB_SEARCH_API_KEY", "parity-placeholder")
-    (scratch_root / "noeta-home").mkdir()
+    (scratch_root / "noeta-home").mkdir(mode=0o700)  # an open home draws a notice
     write_models_file(scratch_root / "models.json")
     from noeta.cli.config import register_models_file
     register_models_file(str(scratch_root / "models.json"))
