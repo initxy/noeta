@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import statistics
 import subprocess
 import sys
@@ -167,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     if baseline and baseline.get("model") != model:
         print(f"evals: warning — baseline was recorded on {baseline.get('model')!r}, running {model!r}")
 
+    home = engine.isolate_home()
     judge = engine.Judge(cfg)
     jobs = [(s, i) for i in range(args.trials) for s in chosen]
     started = time.monotonic()
@@ -181,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {r['scenario']:<30} #{r['trial']}  {r['score']:.2f}  {r['seconds']:>6.1f}s"
                   + (f"  [{r['error'][:80]}]" if r.get("error") else ""), flush=True)
     wall = round(time.monotonic() - started, 1)
+    shutil.rmtree(home, ignore_errors=True)
 
     summary = _summarize(records)
     overall = round(statistics.fmean(s["mean"] for s in summary.values()), 4)
