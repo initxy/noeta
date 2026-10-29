@@ -79,6 +79,11 @@ def _parser() -> argparse.ArgumentParser:
     w.add_argument("--snapshot-every", type=int, default=None, metavar="EVENTS",
                    help="write a task's fold snapshot at most every this many events "
                         "(default 100; 0 never)")
+    w.add_argument("--server-dir", action="append", default=[], metavar="PATH",
+                   help="a directory of the server's to hide from other tenants' tasks, "
+                        "besides this one and [server] dirs (repeatable)")
+    w.add_argument("--allow-bypass-permissions", action="store_true",
+                   help="let tasks run in bypassPermissions")
     sv = sub.add_parser("serve", help="the client API over HTTP")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8642)
@@ -190,6 +195,18 @@ def _workspaces(places: dict[str, tenants.TenantPlace]) -> dict[str, str]:
     return {name: p.workspace for name, p in places.items() if p.workspace}
 
 
+def _server_dirs(s: Settings, cwd: str, extra: list[str]) -> list[str]:
+    """The server's own directories, hidden from other tenants' tasks:
+    ``cwd``, ``extra`` and ``[server] dirs`` in ``config.toml`` (for
+    workers started apart from ``noeta serve``)."""
+    dirs = s.server.get("dirs", [])
+    if not isinstance(dirs, list) or not all(
+            isinstance(d, str) and os.path.isabs(os.path.expanduser(d)) for d in dirs):
+        sys.exit("noeta: config.toml: [server] dirs is a list of absolute paths")
+    return list(dict.fromkeys([cwd, *(os.path.abspath(e) for e in extra),
+                               *(os.path.normpath(os.path.expanduser(d)) for d in dirs)]))
+
+
 def _check_isolation(s: Settings, cwd: str,
                      places: dict[str, tenants.TenantPlace]) -> str | None:
     """Why tools of tenants other than the default one may not run here, or
@@ -242,7 +259,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
         "disable_bypass_mode": True}
     # The default tenant's workspace: hidden from other tenants' tasks.
-    permissions["server_dirs"] = [cwd, *(os.path.abspath(r) for r in args.allow_root)]
+    permissions["server_dirs"] = _server_dirs(s, cwd, args.allow_root)
     problem = _check_isolation(s, cwd, places) if with_worker else None
     isolated = problem is None
     if problem is not None:
@@ -272,14 +289,21 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 
 async def _worker(s: Settings, queues: list[str], concurrency: int,
-                  lease: float | None = None, snapshot_every: int | None = None) -> None:
+                  lease: float | None = None, snapshot_every: int | None = None, *,
+                  server_dirs: list[str] | None = None, allow_bypass: bool = False) -> None:
     from noeta.host.channels import run_channels
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
     places = _tenants(s)
-    problem = _check_isolation(s, os.getcwd(), places)
+    cwd = os.getcwd()
+    problem = _check_isolation(s, cwd, places)
+    # As noeta serve: bypassPermissions refused in the plugin itself, and
+    # the server's directories hidden from other tenants' tasks.
+    permissions: dict[str, Any] = {} if allow_bypass else {"disable_bypass_mode": True}
+    permissions["server_dirs"] = _server_dirs(s, cwd, server_dirs or [])
     if problem is not None:
-        kw["permissions"] = {"tenant_refusal": problem}
+        permissions["tenant_refusal"] = problem
+    kw["permissions"] = permissions
     kw["tenants"] = {name: p.allowed for name, p in places.items()}
     kw["tenant_workspaces"] = _workspaces(places)
     if snapshot_every is not None:
@@ -360,7 +384,8 @@ def _main(argv: list[str]) -> None:
         return
     if args.command == "worker":
         asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency,
-                            args.lease, args.snapshot_every))
+                            args.lease, args.snapshot_every, server_dirs=args.server_dir,
+                            allow_bypass=args.allow_bypass_permissions))
         return
     if args.command == "serve":
         from noeta.host.http import LOOPBACK_HOSTS

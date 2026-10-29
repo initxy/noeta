@@ -851,3 +851,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - `noeta serve` keeps a query-string token out of uvicorn's logs whatever way its key is
   spelled: `?%74oken=` (which the server decodes to `token` and accepts) is redacted too.
   Before, only a literal `token=` was.
+- `noeta worker` hides `noeta serve`'s directories from other tenants' tasks when told
+  where they are: `[server] dirs = [...]` in `config.toml` (read by both) or
+  `noeta worker --server-dir PATH` (repeatable). A worker also refuses `bypassPermissions`
+  unless started with `--allow-bypass-permissions`, as `noeta serve` does. Before, with
+  `noeta serve --no-worker` and separate workers, serve's working directory and
+  `--allow-root` paths were readable to other tenants' tasks (and a worker started in `/`
+  hid no server directory), and a worker's tasks could be switched into bypassPermissions.

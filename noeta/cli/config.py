@@ -95,7 +95,7 @@ class Settings:
     #: Per channel name: its arguments (``enabled = false`` turns it off).
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: ``[server]``: ``noeta serve`` / ``noeta worker`` switches
-    #: (``shared_os_user_tenants``).
+    #: (``shared_os_user_tenants``, ``dirs``).
     server: dict[str, Any] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:

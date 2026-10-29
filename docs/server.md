@@ -30,6 +30,13 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   plugins, `config.toml`, tenant directories. Ship the same copy to every machine; a worker
   missing a plugin a task was started with fails that task with `plugin_missing` instead of
   running it without.
+- **Server directories and bypass mode.** A worker hides from other tenants' tasks the
+  directory it started in, but knows nothing of where `noeta serve` started or its
+  `--allow-root` paths: list them as `dirs = ["/srv/app", ...]` under `[server]` in
+  `config.toml` (both read it) or pass `noeta worker --server-dir PATH`. A directory holding
+  the machine's programs or `/tmp` is never hidden, so a worker started in `/` hides only
+  these. Like `noeta serve`, a worker refuses `bypassPermissions` unless started with
+  `--allow-bypass-permissions`.
 - **Upgrades:** stop every worker (and `noeta serve`) before upgrading; workers of different
   versions must not share a store. The first process of the new version moves the store's
   schema forward in place; a process older than the store's schema refuses to open it
@@ -155,8 +162,8 @@ protected set:
   logs and its commands' `TMPDIR`);
 - other tenants' workspaces;
 - the server's own directories (the default tenant's workspace: the directory `noeta serve`
-  or `noeta worker` started in, and `--allow-root` paths, with the server's `.env`), but a
-  tenant's workspace inside one;
+  or `noeta worker` started in, `--allow-root` and `--server-dir` paths and `[server] dirs`,
+  with the server's `.env`), but a tenant's workspace inside one;
 - the sandbox's credential stores in every home directory (the worker's `~`, each
   account's, each directory in `/home` and `/Users`): `.ssh`, `.aws`, `.config/gh`,
   `.netrc` and the rest of `DEFAULT_DENY_READ` in `noeta/toolkit/sandbox.py`;
