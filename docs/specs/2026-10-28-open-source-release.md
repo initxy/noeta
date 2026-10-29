@@ -211,6 +211,27 @@ servers and runs on many machines.
   tenant name never does); the default tenant's stay `projects/<slug>/`. In it a task's own
   corners are `memory/` and, to read, `<task id>.jsonl` and `<root id>.jsonl`; a root does
   not read its sub-agents' compaction transcripts (the fence does not know the tree's ids).
+- D29 (`os-kernel-struct`) Extensions change a task's tool list through
+  `Extension.tool_changes(view, offered) -> ToolChanges` (ADR-017): asked after every
+  extension's `tools` with the tools they offer, never another extension's changes, so a tool
+  computed from the others' tools does not recurse; it adds tools, withholds offered ones from
+  the request (a call to one is answered with the given error before any gate) and adds
+  `ToolEntry`s (request entries that are no tool, placed before a named tool, else after the
+  tools that are not `listed_last`). Every extension gets the same `offered`; withheld names
+  are a union and entries go in by name, so the request does not depend on plugin order.
+  Rejected: filtering in `before_model` (order-dependent), one extension owning the tool list
+  (a single-owner slot), the placeholder as a callable tool (a call to it would run).
+- D30 (`os-kernel-struct`) The loaded deferred tools are read from the fold, not recorded:
+  every `ToolReference` in a tool result of `TaskState.history` (never compacted, carried into
+  a continued task) and of the open batch. `TaskState.loaded_tools` is gone. Rejected: a
+  `tool_search` record folded in `reduce` (a second copy of a logged fact; logs written before
+  it would lose their loaded tools).
+- D31 (`os-kernel-struct`) Every agent built from agent files runs `tool_search`
+  (`ALWAYS_PLUGINS` in `noeta/agents/agent_files.py`, inserted before `compaction`; a host's
+  `enabled = false` turns it off): any plugin's tool may be deferred, and an agent file that
+  lists its plugins without it would announce tools nothing can load. An `Agent` built in code
+  adds `ToolSearch()` itself (CHANGELOG). Rejected: listing it in each built-in agent file
+  (third-party agent files with their own plugin lists would break).
 
 ## Plan
 
@@ -249,8 +270,9 @@ servers and runs on many machines.
 - [ ] Final independent review on code only: no P0/P1.
 
 ### Follow-ups (after this release; each moves to a spec of its own before this one is `done`)
-- [ ] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
-- [ ] The file splits S22–S40 left undone: `core/runner/task.py` (timers; stopping and ending a turn), `core/runner/model.py` `call_model` (reminders and hooks; overflow), `plugins/shell/bash.py` (`ShellState`, the sandbox helpers, `BashTool.run`); structure only, once no other branch is changing those files.
+- [x] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
+- [x] The file splits S22–S40 left undone in the kernel: `core/runner/task.py` (timers; stopping and ending a turn), `core/runner/model.py` `call_model` (reminders and hooks; overflow), and `backends/stores/postgres.py`'s connection handling; structure only.
+- [ ] The last S22–S40 split: `plugins/shell/bash.py` (`ShellState`, the sandbox helpers, `BashTool.run`); structure only, once no other branch is changing it.
 
 ## Acceptance criteria
 
@@ -305,3 +327,4 @@ servers and runs on many machines.
 - 2026-10-28 `os-fix-r3docs` (from `os-structure` 1f93291b), the final review's docs findings, one commit each, make check green after each (2266 passed, 52 skipped, 88.26%; `make example` 13 passed): Progress entries for `os-cluster-test`, `os-split-plugins`, `os-split-host` and the S22–S40 mapping above; chat-bridge cut to about 60 lines of code, approving tool calls from the chat moved to `examples/chat-approvals` (its own listener on `POST /approve`, the thread naming the task); `docs/extending.md` gives reasons for LSP servers, output styles and themes; ADR-016 (deferred tool loading stays in the kernel for now, refines ADR-002) with its follow-up; ADR-015 (D24, refines ADR-011); CHANGELOG notes schema version 2; `scripts/parity/README.md` lists every committed parity file; `noeta trust` wording; run-tests tests for a failing run and a timeout. Left: the Follow-ups above.
 - 2026-10-28 `os-fix-r3tenant` (from `os-structure` 1f93291b, rebased on 03570c0c), the final security review's two tenant P1s and the docs P3, one commit each with a test failing before it, make check green after each (at the end 2278 passed, 54 skipped, 88.29%): tenants' job logs, sandbox `TMPDIR` and temp places (D26); a tenant needs a workspace and never reaches into another's (D27); projects by tenant and only the task's own transcripts (D28); workflow scripts per task; PDF scratch in the tenant's temp directory; docs. Audit of the other places noeta writes for tasks in the branch report. WebFetch stays unrestricted for tenants (owner), listed under "Not a boundary".
 - 2026-10-28 `os-fix-r3tools` (from `os-structure` 1f93291b), the final review's tool findings, one commit per fix, a test failing before each, make check green after each (2277 passed, 52 skipped at the end): an isolated agent's worktree is named from a hash of task id and call id, and crash recovery keeps one holding work; a sandboxed command in a linked worktree may write its own git directory and the shared `objects`, `refs`, `logs` (hooks, config, `packed-refs`, `commondir`, `gitdir`, `config.worktree` stay read-only; real bwrap test; `parity/deviations.md`); any sub-agent ending without a hand-back reports its last reply (the `os-fix-r2rest` line above corrected); failure-path tool texts reworded (Edit's several matches, read-before-write, Read's size and token ceilings, PDF page limits, missing `pdftoppm`, locked or unrenderable PDF, notebook outputs, the changed-file note, Bash's long-sleep refusal); unsaved work counts commits on the worktree branch as well as `HEAD`; ended background jobs kept per root bounded (64) and the ended-task list drops its oldest first; the MCP token file written through a unique temporary file, updates under an flock; the sandboxed Bash tool lists and resolved rosters bounded (64, least recently used out). `make parity` 0 (11 accepted), own-words green (one run showed the m1/web WebFetch digest request missing, the rerun 0); `make eval` 1.000 vs 0.987 (`delegate_parallel_review` timing out at 240 s as before). Left: `EnterWorktree`'s worktree is still read-only in the sandbox (`.noeta`); a `PytestUnraisableExceptionWarning` from a garbage-collected subprocess transport in `tests/plugins/test_hooks_events.py` appeared in 2 of about 14 full runs (not on the one baseline run; not reproduced in isolation).
+- 2026-10-28 `os-kernel-struct` (from `os-structure` 03570c0c), one commit each, structural commits apart, make check green after each (2273 passed, 54 skipped, 88.23% at the end): S29 `core/runner/timers.py` and `core/runner/closing.py` out of `task.py` (733 -> 614 lines) 7f77dbf8; S30 `call_model`'s `_run_hooks` / `_on_overflow` 2afb4a0a; S32 `backends/stores/postgres_conn.py` (pool, opening, transaction retry; `postgres.py` 884 -> 798) 92523059; deferred tool loading out of the kernel into the `tool_search` plugin through the new `Extension.tool_changes` (D29–D31, ADR-017 supersedes ADR-016) 3181ce34. Full suite with Postgres DSN 2327 passed; `make cluster` 13/13; `make parity` 0 (11 accepted deviations), own-words green; `make e2e` 7 passed; `make eval` 1.000 vs 0.987 (`delegate_parallel_review` scored 1.00 with its three trials hitting the 240 s timeout). Left: `plugins/mcp/tools.py` and `plugins/mcp/config.py` docstrings still name `noeta.core.deferred` (the mcp plugin was being changed elsewhere); the `shell/bash.py` split.

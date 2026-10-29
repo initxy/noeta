@@ -68,13 +68,13 @@ folded from the start, so a snapshot can be missing but never wrong.
 ## Plugins
 
 Every capability — the file tools, the shell, permissions, hooks, skills, sub-agents, MCP,
-memory, compaction, the environment and instructions — is a plugin implementing parts of one
-interface, `Extension` (`noeta/core/extension.py`). Plugins never add event types; they record
-`ExtensionRecorded` entries and fold them in their own `reduce`, so their state is durable and
-machine-independent like the kernel's. Plugins are found by name through entry points; the
-built-ins register in `pyproject.toml` exactly as a third-party package does, and a plugin can
-also be a single file. A task records which plugins it runs with, and a worker missing one fails
-the task rather than running it differently.
+memory, compaction, the environment and instructions, loading deferred tools — is a plugin
+implementing parts of one interface, `Extension` (`noeta/core/extension.py`). Plugins never add
+event types; they record `ExtensionRecorded` entries and fold them in their own `reduce`, so
+their state is durable and machine-independent like the kernel's. Plugins are found by name
+through entry points; the built-ins register in `pyproject.toml` exactly as a third-party
+package does, and a plugin can also be a single file. A task records which plugins it runs with,
+and a worker missing one fails the task rather than running it differently.
 See [Extension](../CONTEXT.md#extension), [Registry](../CONTEXT.md#registry),
 [Plugin pin](../CONTEXT.md#plugin-pin), and [docs/extending.md](extending.md) for writing one.
 

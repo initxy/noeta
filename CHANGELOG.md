@@ -9,6 +9,17 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Deferred tool loading is the `tool_search` plugin; the kernel holds no capability.**
+  `ToolSearch`, its search, the not-loaded error and `DeferredToolPlaceholder` moved from
+  `noeta.core.deferred` (removed) to `noeta/plugins/tool_search`; the requests the model gets
+  are unchanged. For plugin authors: a tool still defers with `deferred = True` and is still
+  announced through `TaskView.deferred_tool_names`; `TaskState.loaded_tools` is gone (the
+  loaded names are the `ToolReference`s in the task's history and open batch). Every agent
+  built from agent files runs `tool_search` whether it lists it or not (`[plugins.tool_search]`
+  `enabled = false` turns it off); an `Agent` built in code that offers deferred tools adds
+  `ToolSearch()` from `noeta.plugins.tool_search` itself, or its deferred tools cannot be
+  loaded. A snapshot written before this change is not used (the fold changed): its task folds
+  from the log once.
 - **Stop every worker before upgrading; workers of different versions must not share a
   store.** This release writes log entries an older worker cannot decode (messages with
   `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
@@ -308,6 +319,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Added
 
+- **`Extension.tool_changes(view, offered)`.** A plugin changes the task's tool list from the
+  tools the other plugins offer, without asking them itself: `ToolChanges` adds tools,
+  withholds offered ones from the request (a call to one gets the given error before any gate)
+  and adds `ToolEntry`s (request entries that are no tool, placed before a named tool).
+  Every extension gets the same `offered`, so the outcome does not depend on plugin order.
 - **The rest of Claude Code's deferred tools and frontmatter.** `EnterPlanMode` (asks the
   person outside auto mode), `EnterWorktree` / `ExitWorktree` (the shell moves into a worktree
   under `.noeta/worktrees/`), `ReadMcpResourceDirTool`; `WebSearch` takes `allowed_domains`,

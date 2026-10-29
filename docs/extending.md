@@ -12,6 +12,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | You want to… | Write | Where it lives |
 |---|---|---|
 | give the model a tool | `Extension.tools()` returning a `Tool`, or `function_tool(fn)` on a typed function | `noeta/core/tool.py`, `noeta/toolkit/function_tool.py` |
+| add a tool built from the other plugins' tools, or keep some out of a request | `Extension.tool_changes(view, offered)` → `ToolChanges` (as `noeta/plugins/tool_search` does for deferred tools) | `noeta/core/extension.py` |
 | add system prompt text | `Extension.context()` → `ContextPart` (inside the one cached block) | `noeta/core/extension.py` |
 | tell the model something each turn | `Extension.reminders()` → `Reminder` (recorded, so a resumed task resends it) | `noeta/core/extension.py` |
 | allow, deny, rewrite or ask about a tool call | `before_tool` → `Allow` / `Deny` / `Rewrite` / `Ask`; `resolve_ask` answers an ask; `after_tool` changes the result | `noeta/core/extension.py` |

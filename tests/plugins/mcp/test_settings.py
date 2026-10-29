@@ -23,6 +23,7 @@ from noeta.plugins.mcp.config import (
     tool_timeout_s,
 )
 from noeta.plugins.mcp.settings import alias_for, read_servers
+from noeta.plugins.tool_search import ToolSearch
 from noeta.testing import ScriptedProvider, reply
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
@@ -170,7 +171,7 @@ async def test_a_task_gets_the_settings_servers(store: SqliteStore, tmp_path: Pa
     provider = ScriptedProvider([reply("done")])
     given = McpServer(alias="fake", command=[sys.executable, FAKE], env={"GIVEN": "1"})
     agent = Agent(name="a", model="m", extensions=[
-        Mcp([given], settings_files=[settings, local], project=True, pool=pool)])
+        Mcp([given], settings_files=[settings, local], project=True, pool=pool), ToolSearch()])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None)  # type: ignore[arg-type,return-value]
     try:

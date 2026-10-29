@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core import records as core_records
-from noeta.core.deferred import is_deferred
 from noeta.core.errors import UnknownTask
 from noeta.core.events import (
     Event,
@@ -20,7 +19,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, child_task
-from noeta.core.runner import texts
+from noeta.core.runner import closing, texts
 from noeta.core.store import NewTask, Post
 from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
@@ -120,16 +119,16 @@ def _groups(runnable: list[tuple[ToolUse, Tool]]) -> list[list[tuple[ToolUse, To
 
 async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     view = run.view()
-    tools = {t.name: t for t in run.tools(view)}
+    offer = run.tool_offer(view)
+    tools = {t.name: t for t in offer.tools}
     runnable: list[tuple[ToolUse, Tool]] = []
     asks: dict[str, Ask] = {}
     outright: set[str] = set()
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
-        wanted = tools.get(c.use.name)
-        if wanted is not None and is_deferred(wanted) \
-                and c.use.name not in run.state.loaded_tools:
-            await run.append([run.error_result(
-                c.use.id, texts.DEFERRED_NOT_LOADED.format(name=c.use.name))])
+        withheld = offer.withheld.get(c.use.name)
+        if withheld is not None:
+            # Not in the request the model saw: refused before any gate.
+            await run.append([run.error_result(c.use.id, withheld)])
             continue
         answer = run.state.answers.get(c.use.id)
         if answer is not None and answer.decision == "deny" and isinstance(answer.data, dict) \
@@ -173,7 +172,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     if asks and run.state.config.get("unattended"):
         # One-shot: the task ends. Otherwise the turn closes and the loop
         # goes on to wait for input (and gives the task back).
-        return await run.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
+        return await closing.fail_turn(run, texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
     if asks:
         await run.append(
             [Waiting(on="approval", ids=list(asks),

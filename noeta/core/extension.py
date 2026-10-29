@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Union
 
 from noeta.core import records
-from noeta.core.deferred import deferred_names
 from noeta.core.events import (
     DEFAULT_TENANT,
     Compacted,
@@ -27,8 +26,16 @@ from noeta.core.events import (
     TaskCreated,
 )
 from noeta.core.execenv import ExecEnv
-from noeta.core.tool import Tool, ToolOutput
-from noeta.core.types import Message, ModelRequest, ModelResponse, Struct, ToolUse, user
+from noeta.core.tool import Tool, ToolOutput, tool_flag
+from noeta.core.types import (
+    Message,
+    ModelRequest,
+    ModelResponse,
+    Struct,
+    ToolSpec,
+    ToolUse,
+    user,
+)
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -131,6 +138,30 @@ class CommandContext:
     cwd: str
     task_id: str | None = None
     tenant: str = DEFAULT_TENANT
+
+
+@dataclass(frozen=True)
+class ToolEntry:
+    """An entry of a request's tool list that is no tool: sent, never
+    called (a vendor's mode switch). It goes right before the sent tool
+    named ``before``; with ``before`` empty or not sent, after the tools
+    that are not ``listed_last``."""
+
+    spec: ToolSpec
+    before: str = ""
+
+
+@dataclass(frozen=True)
+class ToolChanges:
+    """What ``Extension.tool_changes`` changes in a task's tool list."""
+
+    #: Tools offered besides the extensions' own (one computed from them).
+    add: Sequence[Tool] = ()
+    #: Offered tools left out of the request, by name, each with the error
+    #: a call to it gets (answered before any gate).
+    withhold: Mapping[str, str] = field(default_factory=dict)
+    #: Entries the request lists that are no tool.
+    entries: Sequence[ToolEntry] = ()
 
 
 class StagedChild(Struct):
@@ -278,11 +309,10 @@ class TaskView(records.CoreNotices):
 
     def deferred_tool_names(self) -> list[str]:
         """The names of the deferred tools this task offers, sorted (loaded
-        or not): the list a message announces so the model can load them
-        with ``ToolSearch`` (``noeta.core.deferred``)."""
+        or not): the list a message announces so the model can load them."""
         allowed = self.allowed_tools
-        return deferred_names(t for ext in self.extensions for t in ext.tools(self)
-                              if allowed is None or t.name in allowed)
+        return sorted({t.name for ext in self.extensions for t in ext.tools(self)
+                       if tool_flag(t, "deferred") and (allowed is None or t.name in allowed)})
 
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""
@@ -355,6 +385,16 @@ class Extension:
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return ()
+
+    def tool_changes(self, view: TaskView, offered: Sequence[Tool]) -> ToolChanges | None:
+        """Changes to the task's tool list computed from the tools every
+        extension offers (``offered``: their ``tools`` after the agent's
+        allow and deny lists, never another extension's changes). Every
+        extension is asked with the same ``offered``, so no answer depends
+        on their order: added tools join after the offered ones (a name
+        already offered or added stays the first), withheld names are the
+        union (the first extension's error stands), entries go in by name."""
+        return None
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """Reminders to record now. Called before every model call, after

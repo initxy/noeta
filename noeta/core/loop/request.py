@@ -5,14 +5,13 @@ keeps hitting)."""
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from noeta.core.deferred import request_tools
-from noeta.core.extension import ContextPart
+from noeta.core.extension import ContextPart, ToolEntry
 from noeta.core.loop.state import TaskState
-from noeta.core.tool import Tool
-from noeta.core.types import ModelRequest, SystemPart, dumps
+from noeta.core.tool import Tool, tool_flag
+from noeta.core.types import ModelRequest, SystemPart, ToolSpec, dumps
 
 
 def build_request(
@@ -22,6 +21,8 @@ def build_request(
     system_prompt: str,
     parts: Sequence[ContextPart],
     tools: Sequence[Tool],
+    withheld: Mapping[str, str] | None = None,
+    entries: Sequence[ToolEntry] = (),
     identity: str = "",
     effort: str | None = None,
     max_tokens: int | None = None,
@@ -40,7 +41,7 @@ def build_request(
         model=model,
         system=system,
         messages=messages,
-        tools=request_tools(tools, state.loaded_tools,
+        tools=request_tools(tools, withheld or {}, entries,
                             lambda t: state.prompt(f"tool/{t.name}", t.description)),
         max_tokens=max_tokens,
         effort=effort,  # type: ignore[arg-type]
@@ -48,6 +49,33 @@ def build_request(
         cache_after=cache_breakpoints(state),
         root_id=state.root_id or state.task_id or None,
     )
+
+
+def request_tools(tools: Sequence[Tool], withheld: Mapping[str, str],
+                  entries: Sequence[ToolEntry], describe: Callable[[Tool], str]) -> list[ToolSpec]:
+    """The tool list of a request: every tool not ``withheld``, sorted by
+    name, then the ones that declare ``listed_last`` (server tools) sorted by
+    name; a deferred tool is sent with ``defer_loading``. Each entry goes
+    where it says (:class:`~noeta.core.extension.ToolEntry`). ``describe``
+    gives a tool's (possibly overridden) description."""
+    sent = [t for t in tools if t.name not in withheld]
+
+    def spec(t: Tool) -> ToolSpec:
+        return ToolSpec(name=t.name, description=describe(t), input_schema=t.input_schema,
+                        defer_loading=tool_flag(t, "deferred"))
+
+    head = [spec(t) for t in sorted((t for t in sent if not tool_flag(t, "listed_last")),
+                                    key=lambda t: t.name)]
+    tail = [spec(t) for t in sorted((t for t in sent if tool_flag(t, "listed_last")),
+                                    key=lambda t: t.name)]
+    for entry in entries:
+        group = next((g for g in (head, tail) if any(s.name == entry.before for s in g)), None)
+        if entry.before and group is not None:
+            group.insert(next(i for i, s in enumerate(group) if s.name == entry.before),
+                         entry.spec)
+        else:
+            head.append(entry.spec)
+    return head + tail
 
 
 def _place(text: str, part: ContextPart) -> str:

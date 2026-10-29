@@ -19,6 +19,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from msgspec.structs import replace
@@ -26,7 +27,6 @@ from msgspec.structs import replace
 from noeta.core import records as core_records
 from noeta.core import registry, snapshots
 from noeta.core.agent import Agent
-from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, InboxUnread, StoreUnavailable
 from noeta.core.events import (
     Cancel,
@@ -36,21 +36,20 @@ from noeta.core.events import (
     Recorded,
     TaskCreated,
     TaskEnded,
-    TimerFired,
     ToolFinished,
     Waiting,
 )
-from noeta.core.extension import Extension, TaskView, task_cwd
+from noeta.core.extension import Extension, TaskView, ToolEntry, task_cwd
 from noeta.core.loop import decide
 from noeta.core.loop.state import TaskState, apply, continued, fold, new_state
 from noeta.core.prompts import load_overrides
 from noeta.core.records import CORE
-from noeta.core.runner import texts
+from noeta.core.runner import closing, texts, timers
 from noeta.core.runner.runtime import Runtime
 from noeta.core.runner.snapshotting import SnapshotWriter
 from noeta.core.store import Claim, NewTask, Patch, Post, Snapshot, patch_for, pin_history
 from noeta.core.tool import Tool
-from noeta.core.types import Text, Thinking, ToolResult, user
+from noeta.core.types import Text, Thinking, ToolResult
 
 log = logging.getLogger("noeta.core.runner")
 
@@ -64,6 +63,19 @@ LOAD_ATTEMPTS = 3
 
 class LostClaim(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class ToolOffer:
+    """A task's tools for one step (``TaskRun.tool_offer``)."""
+
+    #: The tools it offers: the ones a call runs.
+    tools: list[Tool]
+    #: Offered tools left out of the request: name -> the error a call to
+    #: one gets.
+    withheld: dict[str, str]
+    #: The request's entries that are no tool, by name.
+    entries: list[ToolEntry]
 
 
 class TaskRun:
@@ -118,7 +130,7 @@ class TaskRun:
                 # Releasing would hand it straight back to this worker; a task
                 # whose agent only some workers have must be routed by queue.
                 # Ending it the ordinary way tells a parent that waits on it.
-                await self.end("failed", error=f"no agent named {self.state.agent!r} is "
+                await closing.end(self, "failed", error=f"no agent named {self.state.agent!r} is "
                                                f"registered in the worker that claimed this task")
                 return
             await self._steps()
@@ -200,10 +212,10 @@ class TaskRun:
                 failures += 1
                 started = True
                 if failures > 1:
-                    await self.end("failed", self.state.last_answer,
+                    await closing.end(self, "failed", self.state.last_answer,
                                    f"{texts.INTERNAL_ERROR}: {exc!r}")
                     return
-                if not await self.fail_turn(texts.INTERNAL_ERROR, repr(exc)):
+                if not await closing.fail_turn(self, texts.INTERNAL_ERROR, repr(exc)):
                     return
 
     async def _record_prompt_files(self, view: TaskView) -> None:
@@ -233,7 +245,7 @@ class TaskRun:
                              - {p["name"] for p in current})
             if missing:
                 await self.flush(view)
-                await self.end("failed", self.state.last_answer,
+                await closing.end(self, "failed", self.state.last_answer,
                                texts.PLUGIN_MISSING.format(names=", ".join(missing)))
                 return False
             if pinned != current:
@@ -506,7 +518,10 @@ class TaskRun:
         return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
                 for c in staged]
 
-    def tools(self, view: TaskView) -> list[Tool]:
+    def tool_offer(self, view: TaskView) -> ToolOffer:
+        """The task's tools for this step: every extension's (the first of
+        a name wins, the agent's allow and deny lists applied), then each
+        extension's ``tool_changes`` to them."""
         allowed = self.agent.allowed_tools if self.agent is not None else None
         denied = set(self.agent.denied_tools if self.agent is not None else ())
         tools: list[Tool] = []
@@ -518,7 +533,26 @@ class TaskRun:
                 if t.name not in seen:
                     seen.add(t.name)
                     tools.append(t)
-        return with_tool_search(tools)
+        offered = tuple(tools)
+        withheld: dict[str, str] = {}
+        entries: list[ToolEntry] = []
+        for ext in self.exts:
+            changes = ext.tool_changes(view, offered)
+            if changes is None:
+                continue
+            for t in changes.add:
+                if t.name not in seen:
+                    seen.add(t.name)
+                    tools.append(t)
+            for name, error in changes.withhold.items():
+                withheld.setdefault(name, error)
+            entries.extend(changes.entries)
+        return ToolOffer(tools=tools, withheld=withheld,
+                         entries=sorted(entries, key=lambda e: e.spec.name))
+
+    def tools(self, view: TaskView) -> list[Tool]:
+        """The tools the task offers (``tool_offer``'s): the ones a call runs."""
+        return self.tool_offer(view).tools
 
     @staticmethod
     def error_result(call_id: str, text: str) -> ToolFinished:
@@ -533,20 +567,20 @@ class TaskRun:
         from noeta.core.runner.calls import run_calls
         from noeta.core.runner.model import call_model
 
-        await self._take_input()
+        await self.take_input()
         assert self.agent is not None
         action = decide.next_action(self.state, one_shot=self.one_shot,
                                     max_steps=self.agent.step_budget)
         if isinstance(action, decide.Idle):
             return False
         if isinstance(action, decide.End):
-            return not await self.end(action.status, action.answer, action.error,
+            return not await closing.end(self, action.status, action.answer, action.error,
                                       decide_again=True)
         if isinstance(action, decide.WaitInput):
             detail: dict[str, Any] = {"answer": self.state.last_answer}
             if self.state.turn_error:
                 detail = {"turn_failed": self.state.turn_error}
-            due = self.next_timer()
+            due = timers.next_timer(self.state)
             await self.append([Waiting(on="input", detail=detail, until=due)])
             return False
         if isinstance(action, decide.Interrupted):
@@ -554,14 +588,14 @@ class TaskRun:
 
             return await self._guarded(recover_calls(self, action.call_ids))
         if isinstance(action, decide.MaxTurns):
-            return await self.fail_turn(texts.MAX_TURNS,
+            return await closing.fail_turn(self, texts.MAX_TURNS,
                                         texts.MAX_TURNS_DETAIL.format(n=action.limit))
         if isinstance(action, decide.StopTurn):
-            await self._stop_turn(action.call_ids)
+            await closing.stop_turn(self, action.call_ids)
             return True
         if isinstance(action, decide.WaitParked):
             if action.on == "question" and self.state.config.get("unattended"):
-                return await self.fail_turn(texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
+                return await closing.fail_turn(self, texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
             # Each parked call's detail (a question's text and options), keyed
             # by call id like an approval's, so front ends can show it.
             parked = {c.use.id: {**((c.parked or {}).get("detail") or {}),
@@ -576,7 +610,7 @@ class TaskRun:
             await self._guarded(resume_calls(self, action.call_ids))
             return True
         if isinstance(action, decide.Continue):
-            return await self.continue_after_cap()
+            return await closing.continue_after_cap(self)
         if isinstance(action, decide.RunCalls):
             return await self._guarded(run_calls(self, action.call_ids))
         return await self._guarded(call_model(self, final=isinstance(action, decide.FinalReport)))
@@ -600,11 +634,11 @@ class TaskRun:
             watcher.cancel()
             self._step = None
 
-    async def _take_input(self) -> None:
+    async def take_input(self) -> None:
         """Take the inbox. What extensions enqueue while handling it (a
         notice decided from a signal) is taken in the same step, so it
         reaches the same model call."""
-        await self._fire_timers()
+        await timers.fire_timers(self)
         for _ in range(3):
             self._enqueued = False
             items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
@@ -613,121 +647,3 @@ class TaskRun:
             await self.append([InputTaken(items=items, through=items[-1].seq)])
             if not self._enqueued:
                 return
-
-    async def _fire_timers(self) -> None:
-        """Post the due timers to the inbox while the task is idle. A turn
-        in progress keeps them for later, also while it is parked on an
-        approval, a question or children: Claude Code fires a scheduled
-        prompt only once it is idle, so a timer due meanwhile fires (once)
-        when the turn ends. The dedupe key, the record that
-        set the timer, makes a crash between post and take harmless and
-        lets a timer set again for the same name and time fire again."""
-        st = self.state
-        if st.turn_open or st.calls or st.ended is not None or not st.timers:
-            return
-        now = time.time()
-        for name, timer in sorted(st.timers.items(), key=lambda kv: kv[1]["at"]):
-            if timer["at"] <= now:
-                await self.store.post(Post(task_id=self.task_id, body=TimerFired(name=name),
-                                           dedupe_key=f"timer:{name}:{timer['seq']}"))
-
-    def next_timer(self) -> float | None:
-        """When the earliest timer is due, or ``None`` without timers."""
-        return min((t["at"] for t in self.state.timers.values()), default=None)
-
-    async def _stop_turn(self, call_ids: Sequence[str]) -> None:
-        stopped = core_records.TurnStopped()
-        if not call_ids and self.state.model_attempts:
-            # Stopped while the reply streamed: the streamed text and the
-            # reasoning finished before it stay in the conversation, and the
-            # marker opens the person's next turn.
-            stopped = core_records.TurnStopped(
-                partial="".join(self.partial), marker=texts.INTERRUPTED_MARKER,
-                thinking=list(self.thinking) or None)
-        self.partial, self.thinking = [], []
-        await self._close_calls(call_ids, texts.STOPPED_CALL_ERROR, core_records.event(stopped),
-                                "the parent's turn was stopped")
-
-    async def _close_calls(self, call_ids: Sequence[str], error: str, closing: Event,
-                           cancel_reason: str, *, started_error: str | None = None) -> None:
-        """Answer the open calls (parked ones are withdrawn), cancel the
-        children they wait on, and append ``closing`` with the last results,
-        so the conversation never keeps a call without a result. A call that
-        started gets ``started_error`` when given (its outcome is unknown)."""
-        from noeta.core.runner.calls import resume_calls
-
-        parked = [c for c in self.state.calls if c.use.id in call_ids and c.parked]
-        children = [k for c in parked if (c.parked or {}).get("on") == "children"
-                    for k in (c.parked or {}).get("keys") or []]
-        if parked:
-            await resume_calls(self, [c.use.id for c in parked], withdrawn=True)
-        rest = [c for c in self.state.calls if c.use.id in call_ids and not c.parked
-                and c.result is None]
-        events: list[Event] = [
-            self.error_result(c.use.id, started_error if c.started and started_error else error)
-            for c in rest]
-        events.append(closing)
-        await self.append(events, posts=[
-            Post(task_id=k, body=Cancel(reason=cancel_reason))
-            for k in children if self.state.children.get(k) is None])
-
-    async def end(self, status: str, answer: str = "", error: str = "",
-                  *, decide_again: bool = False) -> bool:
-        """End the task, unless its inbox got something it has not taken:
-        the end never lands over an unread message (a ``hold_lost`` there
-        would otherwise be heard by no one). The input is taken first; with
-        ``decide_again`` that returns ``False`` so the caller decides anew,
-        otherwise (an end that stands whatever arrived) it ends after it."""
-        while True:
-            # Children die with their parent.
-            posts: list[Post] = [Post(task_id=c, body=Cancel(reason=f"parent task {status}"))
-                                 for c in self.state.live_children()]
-            if self.state.parent_id:
-                posts.append(Post(
-                    task_id=self.state.parent_id,
-                    body=ChildEnded(child_id=self.task_id, status=status,  # type: ignore[arg-type]
-                                    answer=answer, error=error,
-                                    last_usage=self.state.last_usage,
-                                    tool_calls=self.state.tool_calls),
-                    dedupe_key=f"child:{self.task_id}",
-                ))
-            try:
-                await self.append([TaskEnded(status=status, answer=answer, error=error)],  # type: ignore[arg-type]
-                                  posts=posts)
-                return True
-            except InboxUnread:
-                await self._take_input()
-                if decide_again:
-                    return False
-
-    async def fail_turn(self, reason: str, detail: str = "") -> bool:
-        """A turn that cannot go on. A one-shot task ends failed; an
-        interactive one keeps its conversation and waits for the next
-        message (0.6's ``turn_failed``)."""
-        assert self.agent is not None
-        if self.one_shot:
-            error = f"{reason}: {detail}" if detail else reason
-            await self.end("failed", self.state.last_answer, error)
-            return False
-        await self._close_calls(
-            [c.use.id for c in self.state.open_calls], f"{texts.TURN_FAILED_CALL_ERROR}{reason}",
-            core_records.event(core_records.TurnFailed(reason=reason, detail=detail)),
-            "the parent's turn failed", started_error=texts.INTERRUPTED_CALL_ERROR)
-        return True
-
-    async def continue_after_cap(self, *, thinking_only: bool = False) -> bool:
-        recoveries = 0
-        for m in reversed(self.state.messages):
-            if m.role == "user" and m.origin == "system" and m.text in (
-                    texts.OUTPUT_LIMIT_RESUME_NUDGE, texts.OUTPUT_LIMIT_THINKING_NUDGE):
-                recoveries += 1
-            elif m.role == "user":
-                break
-        if recoveries >= texts.MAX_OUTPUT_TOKENS_RECOVERY:
-            return await self.fail_turn(texts.LLM_TRUNCATED,
-                                        "the response kept hitting the output token limit")
-        nudge = texts.OUTPUT_LIMIT_THINKING_NUDGE if thinking_only \
-            else texts.OUTPUT_LIMIT_RESUME_NUDGE
-        await self.append([core_records.event(core_records.Continue(),
-                                         message=user(nudge, origin="system"))])
-        return True

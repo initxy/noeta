@@ -21,6 +21,7 @@ from noeta.core.types import Image, ModelRequest, ToolUse
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.plugins.mcp.config import describe_tool, make_tool_name, map_server_names
 from noeta.plugins.mcp.tools import McpTool
+from noeta.plugins.tool_search import ToolSearch
 from noeta.testing import ScriptedProvider, reply
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
@@ -85,7 +86,7 @@ async def test_server_tools_are_offered_called_and_recorded_once(
         reply("done"),
         reply("again"),
     ])
-    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool)])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server()], pool=pool), ToolSearch()])
     rt = runtime(store, provider, agent)
     client = Client(store)
     tid = await client.create("a", "go")
@@ -182,7 +183,8 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
               ("ReadMcpResourceDirTool", {"server": "fake", "uri": "file:///notes.md"})),
         reply("done"),
     ])
-    agent = Agent(name="a", model="m", extensions=[Mcp([server(deferred=True)], pool=pool)])
+    agent = Agent(name="a", model="m", extensions=[Mcp([server(deferred=True)], pool=pool),
+                                                   ToolSearch()])
     client = Client(store)
     tid = await client.create("a", "go")
     await runtime(store, provider, agent).run_until_idle()
@@ -253,7 +255,8 @@ async def test_a_dead_server_is_dropped_and_reported_once(
         store: SqliteStore, pool: McpPool) -> None:
     dead = McpServer(alias="dead", command=["/no/such/binary"], deferred=True)
     provider = ScriptedProvider([reply("one"), reply("two")])
-    agent = Agent(name="a", model="m", extensions=[Mcp([dead, server()], pool=pool)])
+    agent = Agent(name="a", model="m", extensions=[Mcp([dead, server()], pool=pool),
+                                                   ToolSearch()])
     client = Client(store)
     tid = await client.create("a", "go")
     rt = runtime(store, provider, agent)
