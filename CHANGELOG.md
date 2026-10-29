@@ -346,6 +346,8 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **`ToolContext.serves_queue(queue)`**: whether a child staged on `queue` could run now (the
+  runner drops one that could not, with the call's result); `None` takes every queue.
 - **`Extension.tool_changes(view, offered)`.** A plugin changes the task's tool list from the
   tools the other plugins offer, without asking them itself: `ToolChanges` adds tools,
   withholds offered ones from the request (a call to one gets the given error before any gate)
@@ -464,6 +466,33 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   `docs/server.md`, `docs/architecture.md`, `docs/adr/`.
 
 ### Fixed
+
+- **A blocked prompt never reaches memory recall.** With a `recall_model`, the memory plugin
+  asked the recall model about a message when it arrived, before `UserPromptSubmit` checked
+  it, and the recalled memory stayed in the conversation after the erase. Recall now runs
+  just before the model call that first carries the message; with `hooks` listed before
+  `memory` (as in the built-in agents), a blocked prompt is never sent to it.
+- **Several `Agent` calls in one reply count once against `max_background`.** The second of
+  two calls with a cap of two was refused: the tool checked the reply's limits again with
+  its sibling already running.
+- **A timed-out command's backgrounded grandchildren are killed even after the command
+  exited.** `LocalExecEnv` signals the process group by the child's pid; looking the group up
+  failed once the child was reaped, and `sh -c "sleep 77 & exit 0"` left `sleep` running.
+- **A `context: fork` skill's `` !`command` `` lines run only after its `Skill` call passed
+  every check.** A `Skill(name)` deny rule came too late: the commands had already run.
+- **`SessionStart` (`compact`) context survives a `UserPromptSubmit` block in the same call**,
+  and a `SubagentStop` prompt or agent hook judges a transcript without the pending hand-back
+  call (the model refused the request, so the hook could never block).
+- **An `Agent` call refused for its queue makes no worktree**, and a sub-agent's hand-back that
+  a crash cut short reports to its caller once (the post carries the call's idempotency key;
+  the tool recovers by handing back again).
+- **An MCP sign-in no longer hangs the worker while a token refresh holds the token file's
+  lock**: `SignIn` writes the file with `TokenStore.update_async`.
+- **Tenant fence:** the "did you mean" guess for a missing file no longer lists a directory
+  the fence refuses. **WebFetch** refuses a redirect whose target (not the URL being left)
+  carries credentials.
+- The per-input state skills and markdown commands keep for an erase, and fork skill prompts,
+  keep the newest 32 entries; a failed MCP server resolution leaves no per-task entries.
 
 - **A command being started no longer hangs the event loop's shutdown.** `LocalExecEnv` starts
   its commands synchronously and reaps each with a thread of its own instead of using asyncio
