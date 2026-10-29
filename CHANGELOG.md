@@ -471,3 +471,6 @@ All notable changes to Noeta are documented here. The format is based on
   directories or the tenant's workspace: 403) and, given a `task_id`, use the directory that
   task was created in. Before, any `cwd` was scanned for skills and could start a trusted
   directory's MCP servers.
+- Resuming or forking over `/stream-json` looks the task up through the tenant's client
+  first. Before, resuming another tenant's task had this server serve its tree and could
+  name its agent in the error.

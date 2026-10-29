@@ -223,6 +223,10 @@ class StreamJson(ControlRequests):
             config["max_turns"] = o.max_turns
         if o.output_schema is not None:
             config["output_schema"] = o.output_schema
+        if o.resume:
+            # Through the (tenant-scoped) client first: another tenant's
+            # task is unknown before the app serves or names anything of it.
+            await self.client.get(o.resume)
         if o.resume and not o.fork:
             await self.app.adopt(o.resume)
             self.task_id = o.resume
