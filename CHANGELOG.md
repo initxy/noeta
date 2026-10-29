@@ -439,6 +439,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **`ListAgents` says when its session list may be incomplete.** It lists the open
+  sessions among the store's 200 most recently active tasks and said nothing of older
+  ones; when that window is full it now says so, and that an older session can still be
+  messaged by its id.
 - **`SendMessage(notify_when_idle)` finds any open session.** It looked for the session
   among the store's 200 newest tasks, so a session behind them was "unknown"; it is now
   looked up by id (`ToolContext.task`, new, for plugin authors).

@@ -30,6 +30,7 @@ from noeta.host.usage import tree_usage
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
 from noeta.plugins.subtasks.tool import (
+    LIST_WINDOW,
     TRANSCRIPT_KEY,
     AgentTool,
     SendMessageTool,
@@ -333,6 +334,20 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
     assert out[5][0].startswith(texts.LIST_HEAD) and f"- {other} — session" in out[5][0]
     got = other_p.requests[-1].messages[-1]
     assert got.origin == "agent" and '<cross-session-message from="' in got.text
+
+
+async def test_list_agents_says_when_it_looked_at_the_newest_tasks_only(
+        store: SqliteStore) -> None:
+    client = Client(store)
+    for _ in range(LIST_WINDOW + 1):  # sessions no worker here runs
+        await client.create("worker", "later", queue="elsewhere")
+    p = ScriptedProvider([reply("", ("ListAgents", {})), reply("listed")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [(listed, _)] = await results(client, tid)
+    assert listed.count("— session") == LIST_WINDOW - 1
+    assert listed.endswith("\n" + texts.LIST_WINDOW_FULL.format(n=LIST_WINDOW))
 
 
 async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
