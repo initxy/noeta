@@ -2,6 +2,8 @@
 
 - Status: accepted
 - Date: 2026-10-28
+- Refined by: [ADR-013](013-server-token-kept-as-a-digest.md) (the token is kept as a
+  digest; clients take it from `NOETA_SERVER_TOKEN`)
 
 ## Context
 

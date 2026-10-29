@@ -27,4 +27,6 @@ and describe a different codebase.
 - [007](007-tenants.md) Tasks belong to a tenant; a server token selects it and nothing crosses it
 - [008](008-sandbox-protected-path-placeholders.md) The sandbox keeps code-running paths read-only and covers missing ones with placeholders
 - [009](009-serve-requires-a-token.md) The HTTP API always requires a bearer token
+  (refined by 013)
+- [013](013-server-token-kept-as-a-digest.md) The server token is kept as a digest; clients bring it themselves
 - [010](010-nothing-uploaded-by-default.md) noeta sends nothing anywhere but to the configured model provider
