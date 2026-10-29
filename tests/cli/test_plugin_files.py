@@ -54,7 +54,8 @@ def clean_registry() -> Iterator[None]:
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
-    (home / "plugins").mkdir(parents=True)
+    home.mkdir(mode=0o700)  # as noeta makes it (an open one is a notice)
+    (home / "plugins").mkdir()
     monkeypatch.setattr(config, "HOME", home)
     (home / "config.toml").write_text(
         f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'

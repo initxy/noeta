@@ -31,7 +31,7 @@ You obey the repository.
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(mode=0o700)  # as noeta makes it (an open one is a notice)
     monkeypatch.setattr(config, "HOME", home)
     (home / "config.toml").write_text(
         f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')

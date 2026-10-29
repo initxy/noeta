@@ -113,7 +113,7 @@ def _records() -> dict[str, Any]:
 
 
 def _save(records: dict[str, Any]) -> None:
-    config.HOME.mkdir(parents=True, exist_ok=True)
+    config.ensure_home()
     (config.HOME / SOURCES_FILE).write_text(json.dumps(records, indent=2, sort_keys=True) + "\n",
                                             "utf-8")
 

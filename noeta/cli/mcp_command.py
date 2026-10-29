@@ -117,6 +117,8 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def _write(path: Path, data: dict[str, Any]) -> None:
+    if path.parent == config.HOME:
+        config.ensure_home()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
 

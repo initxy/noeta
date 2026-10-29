@@ -63,7 +63,7 @@ def read_tokens() -> list[dict[str, Any]]:
 
 def _write_tokens(entries: list[dict[str, Any]]) -> None:
     path = _tokens_path()
-    config.HOME.mkdir(parents=True, exist_ok=True)
+    config.ensure_home()
     fresh = path.with_name(f".tokens-{os.getpid()}.json")
     fd = os.open(fresh, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:

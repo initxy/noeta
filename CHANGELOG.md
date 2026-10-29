@@ -639,6 +639,12 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Security
 
+- **noeta's home and the sqlite store are owner-only when noeta creates them.** `~/.noeta`
+  (`NOETA_HOME`) was made 0775 and the store's database with its `-wal` and `-shm` files
+  0644 under the usual umask, though the store holds every conversation. noeta now makes its
+  home 0700 and a new database 0600 (SQLite gives the side files the same mode). Existing
+  ones keep their mode; a front end, worker or server whose home or store is open to other
+  users says so at start, with the `chmod` to run.
 - An extension's `TaskView.read_log` reads another tenant's task as empty and
   `TaskView.child_tasks` lists only children of its own tenant, as `ToolContext.post` and
   `ToolContext.tasks` already did. Before, a plugin given another tenant's task id could read

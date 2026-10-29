@@ -109,6 +109,34 @@ class Settings:
         return self.store or f"sqlite:///{HOME / 'tasks.db'}"
 
 
+def ensure_home() -> Path:
+    """noeta's home, made owner-only (0700) when noeta creates it: it holds
+    the store, tokens and every setting. An existing one keeps its mode
+    (:func:`loose_permissions` says when it is open to others)."""
+    HOME.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileExistsError):
+        HOME.mkdir(mode=0o700)
+    return HOME
+
+
+def loose_permissions(store_url: str) -> list[str]:
+    """A notice for noeta's home and a sqlite store's database file when
+    other users may read them; noeta never changes an existing mode."""
+    from noeta.toolkit.tenant_fence import store_files
+
+    places = [(HOME, "700")] + [(Path(p), "600") for p in store_files(store_url)[:1]]
+    notices = []
+    for path, wanted in places:
+        try:
+            mode = path.stat().st_mode & 0o777
+        except OSError:
+            continue
+        if mode & 0o077:
+            notices.append(f"{path} is open to other users (mode {mode:o}) and holds your "
+                           f"conversations and settings: chmod {wanted} {path}")
+    return notices
+
+
 def device_id() -> str | None:
     """This machine's random id, made on first use (``~/.noeta/device_id``):
     the stable device id Claude Code sends in ``metadata.user_id``. ``None``
@@ -122,7 +150,7 @@ def device_id() -> str | None:
         pass
     value = secrets.token_hex(32)
     try:
-        HOME.mkdir(parents=True, exist_ok=True)
+        ensure_home()
         path.write_text(value + "\n", "utf-8")
     except OSError:
         return None
@@ -172,7 +200,7 @@ def server_token_digest() -> ServerToken:
     if text.startswith(_DIGEST_PREFIX):
         return ServerToken(text.removeprefix(_DIGEST_PREFIX))
     value = text or secrets.token_urlsafe(32)
-    HOME.mkdir(parents=True, exist_ok=True)
+    ensure_home()
     fresh = path.with_name(f".server-token-{os.getpid()}")
     with contextlib.suppress(FileNotFoundError):
         fresh.unlink()
@@ -366,7 +394,7 @@ def trust_project(directory: str) -> str:
     projects = trusted_projects()
     if resolved not in projects:
         projects.append(resolved)
-        HOME.mkdir(parents=True, exist_ok=True)
+        ensure_home()
         (HOME / TRUST_FILE).write_text(json.dumps({"projects": projects}, indent=2) + "\n",
                                        "utf-8")
     return resolved
@@ -547,7 +575,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     from noeta.agents.agent_files import read_agent_dir
     from noeta.host.local import LocalApp
 
-    notices = load_plugin_files(cwd)
+    ensure_home()
+    notices = loose_permissions(settings.store_url)
+    notices += load_plugin_files(cwd)
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
                 if (n := _untrusted_notice(cwd, sub)) is not None]
     if (unknown := models.unknown_model_notice(settings.model)) is not None:
