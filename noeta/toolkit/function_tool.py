@@ -78,13 +78,15 @@ class _FunctionTool:
         self._context: str | None = None
         properties: dict[str, Any] = {}
         required: list[str] = []
-        #: Positional-only parameters, in order, with their defaults: passed
+        #: Positional-only parameters (the context too), in order, with their defaults: passed
         #: by position.
         self._positional: list[inspect.Parameter] = []
         for param in inspect.signature(fn).parameters.values():
             hint = hints.get(param.name, inspect.Parameter.empty)
             if _is_context(param, hint):
                 self._context = param.name
+                if param.kind is param.POSITIONAL_ONLY:
+                    self._positional.append(param)
                 continue
             if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
                 continue  # nothing the model names
