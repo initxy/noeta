@@ -442,15 +442,22 @@ def _refuse(fence: Fence, path: str, write: bool) -> None:
 
 def _open_read(target: str, fence: Fence | None) -> BinaryIO:
     """``target`` open for reading, refused once open when the file it
-    turned out to be is fenced."""
-    fh = open(target, "rb")
-    if fence is not None:
-        try:
-            _refuse(fence, _opened_path(fh.fileno(), target), False)
-        except BaseException:
-            fh.close()
-            raise
-    return fh
+    turned out to be is fenced, or is not a regular file: opened without
+    blocking, so a FIFO cannot hold the thread waiting for a writer."""
+    fd = os.open(target, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if fence is not None:
+            _refuse(fence, _opened_path(fd, target), False)
+        mode = os.fstat(fd).st_mode
+        if _st.S_ISDIR(mode):
+            raise IsADirectoryError(f"{target} is a directory")
+        if not _st.S_ISREG(mode):
+            raise OSError(f"{target} is not a regular file")
+        os.set_blocking(fd, True)
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _fenced_write(target: str, data: bytes, fence: Fence) -> None:

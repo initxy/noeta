@@ -74,3 +74,16 @@ def test_the_cli_fences_only_other_tenants_tasks(tmp_path: Path) -> None:
     assert getattr(env_for(mine), "fence", None) is None
     fence = getattr(env_for(theirs), "fence", None)
     assert fence is not None and fence(str(tmp_path / "home" / "tokens.json"), False)
+
+
+async def test_a_fifo_is_refused_rather_than_waited_on(tmp_path: Path) -> None:
+    import asyncio
+
+    env, ws, _ = _env(tmp_path)
+    os.mkfifo(ws / "pipe")
+    for read in (env.read_bytes("pipe"), env.read_range("pipe", 0, 3),
+                 LocalExecEnv(str(ws)).read_bytes("pipe")):
+        with pytest.raises(OSError, match="not a regular file"):
+            await asyncio.wait_for(read, 5)
+    with pytest.raises(IsADirectoryError):
+        await env.read_bytes(".")

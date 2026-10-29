@@ -872,6 +872,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- `LocalExecEnv.read_bytes` / `read_range` open without blocking and refuse anything but a
+  regular file (a directory still raises `IsADirectoryError`). Before, reading a FIFO a
+  command had made held a worker thread until something wrote to it.
 - A non-default tenant's sandbox profile drops the operator's `allowLocalBinding` too, as it
   drops the Unix-socket and namespace allowances: on macOS it lets a command reach every
   localhost port, the server's own included.
