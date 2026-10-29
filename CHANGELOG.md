@@ -766,6 +766,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   for a plugin and for a marketplace and its entries. Before, a 7-character prefix (which a
   commit pushed later could share) and `http://` or `git://` (which anyone on the way could
   answer with other code) were accepted.
+- An instruction file's `@import` is read only when it resolves inside the importing
+  file's directory or the working directory. Before, the check used the path as written, so
+  a repository's link (`docs/x.md` -> `~/.ssh/id_rsa`) put the target's text into the
+  model's context.
 - **A tenant's task may not run in a server directory inside its workspace.** Its `cwd`
   would be its sandboxed commands' writable root, so they could read and change the
   server's files there; the HTTP guard now refuses such a `cwd` as it refuses another

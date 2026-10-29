@@ -139,6 +139,22 @@ async def test_imports_follow_the_file_naming_them(h: Harness, tmp_path: Path) -
     assert "<!--" not in text and "never" not in text and "outside\n" not in text
 
 
+async def test_an_import_through_a_link_out_of_the_repository_is_not_read(
+        h: Harness, tmp_path: Path) -> None:
+    secret = tmp_path / "secret.md"
+    secret.write_text("SECRET\n")
+    (h.work / "docs").mkdir()
+    (h.work / "docs" / "link.md").symlink_to(secret)
+    (h.work / "docs" / "inside.md").write_text("inside\n")
+    (h.work / "docs" / "near.md").symlink_to(h.work / "docs" / "inside.md")
+    (h.work / "NOETA.md").write_text("See @docs/link.md and @docs/near.md\n")
+    h.provider.add(reply("ok"))
+    tid = await h.start(agent())
+    [rec] = await h.records(tid, "instructions")
+    assert [Path(f["path"]).name for f in rec.data["files"]] == ["NOETA.md", "near.md"]
+    assert "SECRET" not in h.provider.requests[0].messages[0].text
+
+
 async def test_the_memory_index_ends_the_instructions_message(h: Harness, tmp_path: Path) -> None:
     (h.work / "NOETA.md").write_text("Use tabs.\n")
     home = tmp_path / "home"
