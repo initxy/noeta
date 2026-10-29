@@ -577,6 +577,30 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     assert not Path(cwd).exists()  # unchanged, so removed again
 
 
+async def test_an_agent_refused_for_its_queue_leaves_no_worktree(
+        store: SqliteStore, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("ok")])
+    rt = Runtime(store=store, agents={"main": parent(queue="kids"), "worker": worker()},
+                 provider_for=lambda m: {"p": p}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    release = await rt.hold(tid)  # as a background job does
+    try:
+        await rt.run_until_idle()
+    finally:
+        await release()
+    assert await client.tasks(parent_id=tid) == []
+    [(text, failed)] = await results(client, tid)
+    assert failed and "kids" in text
+    assert not (repo / ".noeta" / "worktrees").exists() \
+        or not list((repo / ".noeta" / "worktrees").iterdir())
+    branches = subprocess.run(["git", "branch", "--list", "worktree-*"], cwd=repo,
+                              capture_output=True, text=True, check=True).stdout
+    assert branches.strip() == ""
+
+
 async def test_a_cancelled_parent_closes_its_agents_worktrees(store: SqliteStore,
                                                               tmp_path: Path) -> None:
     repo = tmp_path / "repo"
