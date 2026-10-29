@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.metadata
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -53,7 +54,10 @@ PROTOCOL_VERSION = "2025-11-25"
 #: Pages one list call follows: a server that keeps handing back a cursor
 #: must not loop forever.
 MAX_LIST_PAGES = 100
-_CLIENT_INFO = {"name": "noeta", "version": "1"}
+try:
+    _CLIENT_INFO = {"name": "noeta", "version": importlib.metadata.version("noeta")}
+except importlib.metadata.PackageNotFoundError:
+    _CLIENT_INFO = {"name": "noeta", "version": "0.0.0"}
 _METHOD_NOT_FOUND = -32601
 
 Request = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]

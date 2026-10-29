@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from noeta.host.stream_json import noeta_version
+
 
 def _op(summary: str, *, body: dict[str, Any] | None = None, params: tuple[str, ...] = (),
         query: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -33,7 +35,7 @@ _TASK = ("task_id",)
 #: The API of ``noeta.host.http`` as an OpenAPI 3.1 document (``GET /openapi.json``).
 OPENAPI: dict[str, Any] = {
     "openapi": "3.1.0",
-    "info": {"title": "noeta", "version": "1",
+    "info": {"title": "noeta", "version": noeta_version(),
              "description": "Durable AI agents: every task is an append-only event log."},
     "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}},
     "security": [{"bearer": []}],
