@@ -409,6 +409,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   its task, so a crashed call's recovery could force-remove the worktree of another task or
   session in the same repository. The name now comes from a hash of the task id and the call
   id, and recovery keeps a worktree holding uncommitted files or commits.
+- **A worktree-isolated agent can commit with the sandbox on.** Its worktree's git data
+  lives in the main repository, which the sandbox kept read-only (`index.lock: Read-only
+  file system`). The worktree's own git directory and the shared `objects`, `refs` and
+  `logs` are now writable; hooks, config and the files that point git elsewhere stay
+  read-only (`parity/deviations.md`).
 - **A sub-agent that cannot hand back reports with its final message.** In auto mode the
   caller expected `SubagentHandback` from every sub-agent, so one whose agent definition lacks
   the subtasks plugin, or whose tool list leaves the tool out, came back as "no report"

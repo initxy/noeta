@@ -77,6 +77,14 @@ PINNED = (".git",)
 #: does not list; a placeholder file at a repository's top is listed in the
 #: command's view of ``.git/info/exclude``, so git does not list it either.
 _GIT_CONFIGS = ("config", "config.worktree")
+#: What a commit in a linked worktree writes in the repository's shared git
+#: directory (its hooks, config and the rest stay read-only).
+GIT_COMMON_WRITABLE = ("objects", "refs", "logs")
+#: In a linked worktree's own git directory, what git reads to find the
+#: shared one and its settings: redirected, they would run code later.
+GIT_WORKTREE_PROTECTED = ("commondir", "gitdir", "config.worktree")
+
+
 def _expand(settings: SandboxSettings, paths: Sequence[str], base: str) -> list[str]:
     out: list[str] = []
     for raw in paths:
@@ -176,6 +184,41 @@ def _git_protected(project: str) -> list[str]:
     return out
 
 
+def _read_line(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.readline().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _linked_git_dirs(project: str) -> tuple[list[str], list[str]]:
+    """``(writable, protected)`` git paths outside ``project`` when it is a
+    linked worktree (``.git`` a file): its own git directory and the shared
+    directories a commit writes; and in its own git directory what points
+    git elsewhere. Only a git directory that is listed under the shared
+    one's ``worktrees/`` and names ``project`` back counts, so a ``.git``
+    file cannot open an arbitrary directory. Read as files: no git runs."""
+    dotgit = os.path.join(project, ".git")
+    if not os.path.isfile(dotgit) or os.path.islink(dotgit):
+        return [], []
+    line = _read_line(dotgit)
+    if not line or not line.startswith("gitdir:"):
+        return [], []
+    gitdir = os.path.realpath(os.path.join(project, line[len("gitdir:"):].strip()))
+    common_rel = _read_line(os.path.join(gitdir, "commondir"))
+    back = _read_line(os.path.join(gitdir, "gitdir"))
+    if not common_rel or not back:
+        return [], []
+    common = os.path.realpath(os.path.join(gitdir, common_rel))
+    if os.path.dirname(gitdir) != os.path.join(common, "worktrees") \
+            or os.path.realpath(os.path.join(gitdir, back)) != os.path.realpath(dotgit):
+        return [], []
+    shared = [os.path.join(common, n) for n in GIT_COMMON_WRITABLE]
+    writable = [gitdir, *(p for p in shared if os.path.isdir(p) and not os.path.islink(p))]
+    return writable, [os.path.join(gitdir, n) for n in GIT_WORKTREE_PROTECTED]
+
+
 def _hook_runner_configs(project: str) -> tuple[str, ...]:
     """:data:`HOOK_RUNNER_CONFIGS` when one of them is in ``project``."""
     present = any(os.path.lexists(os.path.join(project, n)) for n in HOOK_RUNNER_CONFIGS)
@@ -221,15 +264,26 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     """The paths of :class:`Plan` for a command whose working directory is
     ``root``."""
     base = root
-    writes = [root, *_expand(settings, settings.allow_write, base), tmpdir, *writable]
+    home = str(noeta_home())
+    deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read,
+                                   *settings.tenant_deny_read], base)
+    projects = [os.path.realpath(p) for p in (root, *writable)]
+    # A linked worktree's git data (git commits there), unless it lies in a
+    # directory the command may not read.
+    linked = [_linked_git_dirs(p) for p in projects]
+    linked_writes = [w for ws, _ in linked for w in ws
+                     if not any(_within(w, d) for d in deny_read)]
+    writes = [root, *_expand(settings, settings.allow_write, base), tmpdir, *writable,
+              *linked_writes]
     writes = [w for w in dict.fromkeys(os.path.realpath(w) for w in writes) if os.path.exists(w)]
     user_deny = [os.path.realpath(p) for p in _expand(settings, settings.deny_write, base)]
     # Placeholders go where a missing path matters: the denyWrite settings
     # and the protected paths of the working directories (not of TMPDIR or
     # allowWrite, which no one trusts as a project).
-    projects = [os.path.realpath(p) for p in (root, *writable)]
     git_protected = [path for p in projects for path in _git_protected(p)
                      if any(_within(path, w) for w in writes)]
+    git_protected += [path for _, ps in linked for path in ps
+                      if any(_within(path, w) for w in writes)]
     protected = [*(os.path.join(p, n) for p in projects for n in PROTECTED), *git_protected]
     deny_write = [*user_deny, *protected]
     pinned: list[str] = []
@@ -241,9 +295,6 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
             elif os.path.lexists(path):
                 deny_write.append(path)  # a worktree's ``.git`` file
         deny_write += [os.path.join(w, p) for p in PROTECTED]
-    home = str(noeta_home())
-    deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read,
-                                   *settings.tenant_deny_read], base)
     readable = HOME_ALLOW_READ if settings.noeta_home_readable is None \
         else settings.noeta_home_readable
     allow_read = _expand(settings, [*(os.path.join(home, p) for p in readable),
@@ -263,6 +314,8 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     placeholders: dict[str, bool] = {}
     names = {os.path.join(p, n): n not in _PLACEHELD_DIRS
              for p in projects for n in (*PLACEHOLDERS, *_hook_runner_configs(p))}
+    # A linked worktree's missing files are files git reads.
+    names.update({path: True for _, ps in linked for path in ps})
     guarded = [*names, *git_protected]
     for path in [*user_deny, *guarded]:
         missing = _first_missing(path)
