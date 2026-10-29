@@ -30,7 +30,7 @@ noeta's is `TaskStopTool` (`noeta/plugins/shell/tools.py`).
 | `tool.TaskStop.1` | Stops a running background task (a background `Bash` command or a `Monitor`) given its id; for terminating long-running work the model no longer needs. | covered |
 | `tool.TaskStop.2` | An agent-team teammate is stopped by its agent id or bare teammate name, and a background agent spawned with a name by that name. | n/a — noeta has no agent teams, and its sub-agents are stopped through the task tree (`cancel`), not through this tool |
 | `tool.TaskStop.3` | The result reports success or failure. | covered — an unknown id, a foreground job or one no longer running is a tool error saying which |
-| `tool.TaskStop.4` | A task stopped with this tool sends no completion notification afterwards (`.r.2`). | contradicts — noeta posts a `<task-notification>` with `status` `killed` and a "was stopped" summary (`Registry._end_notice` in `noeta/plugins/shell/jobs.py`) |
+| `tool.TaskStop.4` | A task stopped with this tool sends no completion notification afterwards (`.r.2`). | covered — the job is stopped quietly (`Registry.kill(quiet=True)`); a job killed for another reason still sends its notification |
 
 ## Result shape
 
