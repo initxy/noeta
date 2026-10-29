@@ -16,7 +16,7 @@ from noeta.core.events import (
     TaskCreated,
 )
 from noeta.core.loop.state import fold
-from noeta.core.records import CORE
+from noeta.core.records import CORE, ERASED_KIND
 from noeta.core.types import user
 
 
@@ -53,3 +53,19 @@ def test_an_erased_conversation_survives_a_snapshot() -> None:
     assert resumed.messages == fold(records, {}).messages
     again = snapshots.decode(snapshots.encode(resumed) or b"")
     assert [m.text for m in again.messages] == ["from another agent"]
+
+
+def test_every_plugin_with_state_folds_the_erase() -> None:
+    seen: list[tuple[str, str, Any]] = []
+
+    def reducer(name: str) -> Any:
+        def reduce(state: Any, kind: str, data: Any) -> Any:
+            seen.append((name, kind, data))
+            return {"last": kind}
+        return reduce
+
+    state = fold(_records(), {"commands": reducer("commands"), "quiet": reducer("quiet")})
+    assert ("commands", ERASED_KIND, {"seqs": [2, 3, 4]}) in seen
+    # A plugin that never recorded anything is not woken by it.
+    assert not any(name == "quiet" for name, _k, _d in seen)
+    assert state.ext["commands"] == {"last": ERASED_KIND}

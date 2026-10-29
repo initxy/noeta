@@ -237,6 +237,11 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         core = records.decode(ev)
         if core is not None:
             _on_core_record(state, core, rec.seq)
+            if isinstance(core, records.Erased):
+                for name, reduce in reducers.items():
+                    if name in state.ext:
+                        state.ext[name] = reduce(state.ext[name], records.ERASED_KIND,
+                                                 core.data())
         elif ev.extension == records.CORE:
             raise records.NewerRecord(f"core record of an unknown kind {ev.kind!r}")
         reducer = reducers.get(ev.extension)

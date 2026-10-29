@@ -13,6 +13,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from noeta.core import records
 from noeta.core.events import Recorded
 from noeta.core.extension import Allow, Command, CommandContext, Extension, Gate, TaskView
 from noeta.core.types import ToolUse, user
@@ -69,8 +70,17 @@ class MarkdownCommands(Extension):
         state = state or self.initial_state()
         if kind == "ran":
             have = list(state["allow_rules"])
-            return {**state, "allow_rules": have + [r for r in data["allow_rules"]
-                                                    if r not in have]}
+            added = [r for r in data["allow_rules"] if r not in have]
+            state = {**state, "allow_rules": have + added}
+            if added and data.get("input") is not None:
+                # Taken back if a hook blocks the command.
+                state["added"] = {**(state.get("added") or {}), str(data["input"]): added}
+            return state
+        if kind == records.ERASED_KIND:
+            by_input = dict(state.get("added") or {})
+            gone = {r for seq in data["seqs"] for r in by_input.pop(str(seq), ())}
+            return {**state, "added": by_input,
+                    "allow_rules": [r for r in state["allow_rules"] if r not in gone]}
         return state
 
     def _typed(self, text: str) -> tuple[str, str] | None:
@@ -96,7 +106,8 @@ class MarkdownCommands(Extension):
                 view.record(self.name, "load_failed", {"name": name}, message=user(
                     f"The command could not run: {exc}", origin="inline"))
                 continue
-            view.record(self.name, "ran", {"name": name, "allow_rules": list(rules)},
+            view.record(self.name, "ran", {"name": name, "allow_rules": list(rules),
+                                           "input": recorded.seq},
                         message=user(text, origin="inline"))
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:

@@ -446,7 +446,9 @@ class Extension:
         return None
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
-        """Fold one of this extension's own records into its state."""
+        """Fold one of this extension's own records into its state; also
+        ``records.ERASED_KIND`` when the person's messages are erased (a
+        blocked prompt), so what was recorded for them can go too."""
         return state
 
     def continue_state(self, state: Any) -> Any:
