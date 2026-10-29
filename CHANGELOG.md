@@ -493,6 +493,25 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **`Edit` matches a multi-line `old_string` with straight quotes in a CRLF file** whose text
   has curly ones.
 - **`function_tool` accepts a positional-only `ToolContext` parameter.**
+- **A blocked prompt's `/command` or `/skill` expansion is erased with it.** The expanded
+  body (arguments and `` !`command` `` output filled in) stayed in the conversation and
+  reached the next request; the `erased` record now also drops the `inline` text recorded
+  from the blocked input on.
+- **`UserPromptSubmit` checks a message sent mid-turn before the model sees it, once.** It
+  ran only at a turn's first model call, so a `when="now"` message (or one held behind open
+  calls) reached the model unchecked, and a block at the next turn erased it after the model
+  had answered it. It now runs before any model call that carries new messages.
+- **`Bash`: a fast foreground command's output is kept about 3x to 5x faster.** The log
+  keeper checked the file's size after every 64 KB read (two processes each); it now takes up
+  to 16 reads per check while reads come back full.
+- **`Bash`: a foreground command moves to the background past its timeout even with the
+  root's job slots full**, instead of being killed.
+- **`function_tool` checks scalar arguments** (`str`, `int`, `float`, `bool`, optionally
+  `| None`): numbers and `true` / `false` sent as text are converted, and anything else is a
+  tool error naming the parameter.
+- **Two envs with the same worktree path no longer see each other's jobs.** The jobs working
+  under a worktree, and the removals waiting for them, are keyed by the filesystem the path
+  names (this machine, or a container) as well as the path.
 
 - **An inbox item this version cannot read no longer fails a turn on every lease.** One a
   newer version posted lets the lease run out with nothing written (a newer worker takes the
@@ -811,6 +830,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **An agent hook's tool calls go through the task's permission checks.** It ran every
+  read-only tool (`Read`, `WebFetch`, `WebSearch`, read-only MCP tools) with no check; now a
+  deny refuses the call and so does anything that would ask, as Claude Code runs an agent
+  hook in `dontAsk` mode.
 - **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
   allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
   `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so
