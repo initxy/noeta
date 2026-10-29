@@ -286,7 +286,9 @@ def run(args: argparse.Namespace) -> int:
                                  "only in its own)")
             token = add_token(args.tenant, args.name)
             print(token)
-            print(f"noeta: a token for tenant {args.tenant!r}; it is shown only now",
+            print(f"noeta: a token for tenant {args.tenant!r}; it is shown only now. A "
+                  "noeta serve started with --no-token never reads it (every request is "
+                  "the default tenant's): restart that one with a token",
                   file=sys.stderr)
         elif args.token_command == "list":
             for e in read_tokens():

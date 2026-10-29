@@ -290,7 +290,8 @@ async def test_a_rewind_creates_its_task_as_a_request_would(tmp_path: Path) -> N
 
 
 def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
-                                               monkeypatch: pytest.MonkeyPatch) -> None:
+                                               monkeypatch: pytest.MonkeyPatch,
+                                               capsys: pytest.CaptureFixture[str]) -> None:
     import stat
 
     from noeta.cli import home_dir, main, tenants
@@ -317,3 +318,5 @@ def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
     with pytest.raises(SystemExit) as done:
         main.main(["token", "add", "--tenant", "beta"])
     assert done.value.code == 0 and [e["tenant"] for e in tenants.read_tokens()] == ["beta"]
+    # A server started with --no-token never reads the tokens file.
+    assert "--no-token" in capsys.readouterr().err
