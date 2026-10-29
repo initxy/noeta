@@ -52,3 +52,35 @@ async def test_run_tests_runs_the_command_and_nudges_once_after_an_edit(tmp_path
     await rt.run_until_idle()
     assert nudges(provider.requests[-1]) == 1  # recorded once, never repeated
     await store.close()
+
+
+async def _one_run(tmp_path: Path, **config: Any) -> Any:
+    """The result of one RunTests call made with the plugin's ``config``."""
+    registry.load_plugin_files([HERE])
+    plugin = registry.load(registry.PLUGINS, "run_tests")(**config)
+    agent = Agent(name="main", model="m", extensions=(plugin,))
+    provider = ScriptedProvider([reply("", ("RunTests", {})), reply("done")])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    rt = Runtime(store=store, agents={"main": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: LocalExecEnv(str(tmp_path)))
+    client = Client(store)
+    tid = await client.create("main", "test it")
+    await rt.run_until_idle()
+    [result] = [r.event.result for r in await client.events(tid)
+                if isinstance(r.event, ToolFinished)]
+    await store.close()
+    return result
+
+
+async def test_failing_tests_are_an_error_result(tmp_path: Path) -> None:
+    result = await _one_run(
+        tmp_path, command=f"{sys.executable} -c \"print('1 failed'); raise SystemExit(1)\"")
+    assert result.is_error
+    assert "exit 1" in result.text and "1 failed" in result.text
+
+
+async def test_a_run_past_its_timeout_is_an_error_result(tmp_path: Path) -> None:
+    result = await _one_run(
+        tmp_path, command=f"{sys.executable} -c \"import time; time.sleep(30)\"", timeout=0.5)
+    assert result.is_error
+    assert "timed out" in result.text

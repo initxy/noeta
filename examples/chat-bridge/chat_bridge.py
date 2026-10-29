@@ -5,8 +5,6 @@ Safe on several replicas: a delivery lands once, and only the task's writer rela
 import asyncio
 import hashlib
 import hmac
-import json
-import re
 from typing import Any
 
 import httpx
@@ -16,7 +14,7 @@ from noeta.core.channel import Channel, deliver, framed
 from noeta.core.client import ClientAPI
 from noeta.core.events import Recorded, Waiting
 
-VERDICT = re.compile(r"^\s*(yes|no)\s+(\S+)\s*$", re.I)  # `yes <id>` answers an approval
+FIELDS = ("delivery_id", "thread", "sender", "text")
 
 
 class ChatBridge(Channel):
@@ -33,19 +31,15 @@ class ChatBridge(Channel):
     async def receive(self, client: ClientAPI, body: Any, secret: str) -> int:
         if not self.secret or not hmac.compare_digest(secret.encode(), self.secret):
             return 401
-        fields = ("delivery_id", "thread", "sender", "text")
-        if not isinstance(body, dict) or not all(isinstance(body.get(k), str) for k in fields):
+        if not isinstance(body, dict) or not all(isinstance(body.get(k), str) for k in FIELDS):
             return 400
         if body["sender"] not in self.allowed:
             return 403
-        task_id = "chat-" + hashlib.sha256(body["thread"].encode()).hexdigest()[:24]
-        if verdict := VERDICT.match(body["text"]):
-            await client.answer(task_id, verdict[2], ("deny", "allow")[verdict[1].lower() == "yes"])
-        else:
-            await deliver(client, task_id=task_id, agent=self.agent,
-                          message=framed("chat", body["sender"], body["text"]),
-                          dedupe_key=f"chat:{body['delivery_id']}",
-                          config={"chat_reply": {"thread": body["thread"]}})
+        await deliver(client, agent=self.agent,
+                      task_id="chat-" + hashlib.sha256(body["thread"].encode()).hexdigest()[:24],
+                      message=framed("chat", body["sender"], body["text"]),
+                      dedupe_key=f"chat:{body['delivery_id']}",
+                      config={"chat_reply": {"thread": body["thread"]}})
         return 200
 
     async def run(self, client: ClientAPI, stop: asyncio.Event) -> None:
@@ -56,11 +50,11 @@ class ChatBridge(Channel):
 
         async def chat(request: Any) -> Response:
             try:
-                body = json.loads(await request.body())
+                body = await request.json()
             except ValueError:
                 body = None
-            secret = request.headers.get("x-chat-secret", "")
-            return Response(status_code=await self.receive(client, body, secret))
+            code = await self.receive(client, body, request.headers.get("x-chat-secret", ""))
+            return Response(status_code=code)
         app = Starlette(routes=[Route("/chat", chat, methods=["POST"])])
         server = uvicorn.Server(uvicorn.Config(app, host=self.host, port=self.port))
         serving = asyncio.create_task(server.serve())
@@ -70,8 +64,8 @@ class ChatBridge(Channel):
 
 
 class ChatReply(Extension):
-    """Posts each answer or approval prompt to the thread, at least once (after a crash, again
-    with the same ``Idempotency-Key``). ``url`` may hold a token: it never enters the log."""
+    """Posts each answer to the thread, at least once (after a crash, again with the same
+    ``Idempotency-Key``). ``url`` may hold a token: it never enters the log."""
 
     name, add_to = "chat_reply", ("main",)
 
@@ -83,13 +77,11 @@ class ChatReply(Extension):
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         target, event = view.state.config.get("chat_reply"), recorded.event
-        if not target or not isinstance(event, Waiting) or event.on not in ("input", "approval") \
+        if not target or not isinstance(event, Waiting) or event.on != "input" \
                 or recorded.seq <= (view.ext_state(self.name) or 0):
             return
-        text = view.state.last_answer if event.on == "input" else "\n".join(
-            f"Allow {c.use.name} {json.dumps(c.use.input)}? Reply `yes {c.use.id}` or "
-            f"`no {c.use.id}`." for c in view.state.open_calls if c.use.id in event.ids)
         async with httpx.AsyncClient(timeout=10) as http:
-            await http.post(self.url, json={"thread": target["thread"], "text": text},
+            await http.post(self.url, json={"thread": target["thread"],
+                                            "text": view.state.last_answer},
                             headers={"Idempotency-Key": f"{view.task_id}:{recorded.seq}"})
         view.record(self.name, "relayed", {"seq": recorded.seq})

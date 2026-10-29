@@ -148,7 +148,10 @@ something with `notify`; neither reaches the model as the user.
 
 A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
 sent only once the model loads it with `ToolSearch`, which the runner adds while any is offered
-(`noeta/core/deferred.py`). MCP tools are deferred by default.
+(`noeta/core/deferred.py`). MCP tools are deferred by default. It is the one capability left in
+the kernel: a plugin cannot yet offer a tool computed from the other plugins' tools, nor
+withhold tools from a request without order-dependent `before_model` rewrites (ADR-016, with
+the plan to move `ToolSearch` into a plugin).
 
 ## Agent file
 

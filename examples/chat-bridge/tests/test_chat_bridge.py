@@ -1,6 +1,6 @@
-"""The chat bridge example: a thread becomes a task, only allowlisted senders
-get in, an approval is asked and answered through the chat, replies go back
-(each with an idempotency key), and a delivery reaching two replicas lands once."""
+"""The chat bridge example: a thread becomes a task, only senders holding the
+secret and on the allowlist get in, answers go back (each with an idempotency
+key), and a delivery reaching two replicas lands once."""
 
 from __future__ import annotations
 
@@ -14,13 +14,11 @@ import httpx
 import pytest
 import respx
 
-from noeta import Agent, Extension, Runtime, TaskView, function_tool
+from noeta import Agent, Runtime
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core import registry
 from noeta.core.client import Client
-from noeta.core.events import Say, ToolFinished
-from noeta.core.extension import Ask, Gate, ToolSet
-from noeta.core.types import ToolUse
+from noeta.core.events import Say
 from noeta.testing import ScriptedProvider, reply
 
 HERE = Path(__file__).parents[1]
@@ -29,34 +27,21 @@ SECRET = "bridge-s3cret"
 REPLY_URL = f"https://chat.example/hooks/{TOKEN}"
 
 
-@function_tool
-def Deploy(env: str) -> str:
-    """Deploy to an environment."""
-    return f"deployed to {env}"
-
-
-class AskFirst(Extension):
-    name = "ask_first"
-
-    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        return Ask(prompt="deploy?")
-
-
 @respx.mock
-async def test_a_chat_thread_runs_a_task_with_approvals_through_the_chat(tmp_path: Path) -> None:
+async def test_a_chat_thread_runs_a_task_and_gets_its_answers(tmp_path: Path) -> None:
     sent = respx.post(REPLY_URL).mock(return_value=httpx.Response(200))
     registry.load_plugin_files([HERE])
     bridge = registry.load(registry.CHANNELS, "chat_bridge")(
         secret=SECRET, allow_senders=["alice"])
     relay = registry.load(registry.PLUGINS, "chat_reply")(url=REPLY_URL)
-    agent = Agent(name="main", model="m", extensions=(relay, AskFirst(), ToolSet([Deploy])))
-    provider = ScriptedProvider([reply("", ("Deploy", {"env": "prod"})), reply("done: prod")])
+    agent = Agent(name="main", model="m", extensions=(relay,))
+    provider = ScriptedProvider([reply("hello alice"), reply("deployed")])
     store = SqliteStore(str(tmp_path / "t.db"))
     rt = Runtime(store=store, agents={"main": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None)  # type: ignore[arg-type,return-value]
     replicas = [Client(store), Client(store)]
     first: dict[str, Any] = {"delivery_id": "d1", "thread": "T", "sender": "alice",
-                             "text": "deploy prod"}
+                             "text": "hi"}
     assert await bridge.receive(replicas[0], first, "") == 401  # no secret
     assert await bridge.receive(replicas[0], first, SECRET + "x") == 401  # wrong secret
     assert await bridge.receive(replicas[0], {**first, "sender": "mallory"}, SECRET) == 403
@@ -69,22 +54,14 @@ async def test_a_chat_thread_runs_a_task_with_approvals_through_the_chat(tmp_pat
     [row] = await replicas[0].tasks()
     assert [i.body.message.text for i in await store.inbox(row.task_id)
             if isinstance(i.body, Say)] == ['<channel source="chat" sender="alice">\n'
-                                             "deploy prod\n</channel>"]
+                                             "hi\n</channel>"]
     await rt.run_until_idle()
-    [asked] = [json.loads(c.request.content) for c in sent.calls]
-    call_id = asked["text"].rsplit("`no ", 1)[1].rstrip("`.")
-    assert asked == {"thread": "T", "text": f'Allow Deploy {{"env": "prod"}}? '
-                                            f"Reply `yes {call_id}` or `no {call_id}`."}
-    assert await bridge.receive(replicas[1], {"delivery_id": "d2", "thread": "T",
-                                              "sender": "alice", "text": f"yes {call_id}"},
-                                SECRET) == 200
+    assert await bridge.receive(replicas[1], {**first, "delivery_id": "d2",
+                                              "text": "deploy"}, SECRET) == 200
     await rt.run_until_idle()
-    finished = [r.event.result.text for r in await replicas[0].events(row.task_id)
-                if isinstance(r.event, ToolFinished)]
-    assert finished == ["deployed to prod"]
-    assert [json.loads(c.request.content)["text"] for c in sent.calls][1:] == ["done: prod"]
     await rt.run_until_idle()
-    assert len(sent.calls) == 2  # nothing relayed twice
+    assert [json.loads(c.request.content) for c in sent.calls] == [
+        {"thread": "T", "text": "hello alice"}, {"thread": "T", "text": "deployed"}]
     keys = [c.request.headers["idempotency-key"] for c in sent.calls]
     assert len(set(keys)) == 2 and all(k.startswith(row.task_id + ":") for k in keys)
     log = [r.event for r in await replicas[0].events(row.task_id)]

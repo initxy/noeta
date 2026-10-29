@@ -13,10 +13,15 @@ All notable changes to Noeta are documented here. The format is based on
   store.** This release writes log entries an older worker cannot decode (messages with
   `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
   that picks up a task a newer one touched fails on it again and again. Logs written by
-  older versions still load. A newer schema is now refused, but an older sqlite binary never
-  checked: left running, it keeps writing the upgraded sqlite store and holds trees in the
-  old `holds` table that newer workers do not read. Stop every old sqlite worker before
-  upgrading.
+  older versions still load.
+- **Stores are at schema version 2 and refuse a newer store.** Holds moved to `tree_holds`,
+  and `tasks.tenant`, `tenant_usage` and `snapshots` were added. The first process of this
+  version moves a version 1 store (sqlite or Postgres) forward in place, posting `hold_lost`
+  for the old `holds` rows and keeping that table unused; a store at a later version than the
+  code knows is refused with `StoreUnavailable` before anything is written to it (sqlite never
+  checked before). Upgrading: stop every worker first; an older sqlite binary does not refuse
+  the upgraded store and keeps holding trees in the old `holds` table that newer workers do
+  not read.
 - **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
   `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
   longer read, so the two tools never pick up each other's hooks, env or instructions.
@@ -403,8 +408,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - `noeta worker --lease` and `--snapshot-every`; one worker id `host:pid:random`.
 - `make cluster`: worker processes on Postgres under random SIGKILL / SIGSTOP with a scripted
   provider (tool calls, background jobs, sub-agents, timers, Cron, mid-run messages); a CI job
-  runs it. Example plugins `examples/run-tests`, `examples/chat-bridge` and
-  `examples/house-style`, run by `make example`. Docs: `docs/extending.md`,
+  runs it. Example plugins `examples/run-tests`, `examples/chat-bridge`,
+  `examples/chat-approvals` and `examples/house-style`, run by `make example`. Docs: `docs/extending.md`,
   `docs/server.md`, `docs/architecture.md`, `docs/adr/`.
 
 ### Fixed

@@ -18,11 +18,15 @@ and describe a different codebase.
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
   (refined by 012)
 - [011](011-one-holding-worker-per-tree.md) A task tree has at most one holding worker
+  (refined by 015)
+- [015](015-a-held-tree-runs-only-on-its-holder.md) A held tree's tasks run only on its holder
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
 
 ## Extensibility and behavior
 
 - [002](002-one-extension-interface-and-entry-points.md) Every capability is a plugin behind one Extension interface, found through entry points
+  (refined by 016)
+- [016](016-deferred-tool-loading-stays-in-the-kernel-for-now.md) Deferred tool loading stays in the kernel for now
 - [003](003-claude-code-is-the-model-visible-contract.md) Claude Code's model-visible behavior is the contract; prompt text is our own words
 - [004](004-noeta-reads-only-its-own-config-places.md) noeta reads only its own configuration places, in Claude Code's formats
 

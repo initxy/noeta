@@ -318,8 +318,8 @@ def _main(argv: list[str]) -> None:
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.command == "trust":
         from noeta.cli.config import trust_project
-        print(f"trusted {trust_project(cwd)}: its plugins, agent files, prompt overrides "
-              "skills and Claude Code settings load from now on")
+        print(f"trusted {trust_project(cwd)}: its plugins, agent files, prompt overrides, "
+              "skills and Claude-Code-format settings load from now on")
         return
     if args.command == "plugins":
         _plugins(cwd)
