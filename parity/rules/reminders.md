@@ -232,6 +232,20 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.answers.1 | `AskUserQuestion` answers come back as its `tool_result` text, not as a user message: each question quoted, `=`, the chosen label quoted, the chosen option's preview when it had one, and a closing line inviting the model to proceed using them. Details in `tools/AskUserQuestion.md`. |
 | rem.answers.2 | Approvals in default mode (`m2`) add no reminder; an approved call simply returns its normal result. |
 
+## at-mention (file attachments)
+
+Not in the recordings; from the 2.1.312 bundle (`attachments` render map: `file`,
+`directory`, `at_mention_reference`, `pdf_reference`; the reader that builds them).
+
+| id | rule |
+|---|---|
+| rem.at-mention.1 | Trigger: the person's prompt names a path with `@path` (also `@"path with spaces"` and `@path#L<start>-<end>` for those lines). Each existing file or directory becomes meta user content (`<system-reminder>` blocks) in the person's turn; a path that does not exist adds nothing. |
+| rem.at-mention.2 | A file is read through `Read` itself, so the file counts as read (a later `Edit` needs no new `Read`) and `Read`'s formats apply (image, notebook, PDF). Two blocks: `Called the Read tool with the following input: <the input as compact JSON>`, then `Result of calling the Read tool:` and the result text on the next line; an image result follows the first block as the image itself. |
+| rem.at-mention.3 | A text file over `Read`'s limit is attached by its first 2,000 lines (the input carries that limit), followed by a note that it was cut, needs no mention, and the rest is there for `Read`. One too large even for that is named instead: the user @-mentioned it (with its size), it was not attached, read it in parts with offset and limit or search it, and only if every line is needed read it whole. |
+| rem.at-mention.4 | A directory is shown as a `Bash` call, `{"command": "ls <path>", "description": "Lists files in <path>"}`, and its result, the entry names one per line. |
+| rem.at-mention.5 | A PDF the model must read by pages is named instead (its page count and size): none of it is in the conversation; before anything else call `Read` with a few pages, read on a few pages a call, describe only pages read and say which ones an answer rests on. |
+| rem.at-mention.6 | A path a deny rule keeps from `Read` is left out without a word. A path that could not be read is named: the user @-mentioned it, it was not attached, read it with the file tools before answering; without access to the files (a session that does not attach them) every mention is named the same way. |
+
 ## s1 only
 
 | id | rule |

@@ -108,7 +108,7 @@ async def _run(env: ExecEnv, argv: list[str], cwd: str,
         return None
 
 
-async def _page_count(env: ExecEnv, path: str, cwd: str) -> int | None:
+async def page_count(env: ExecEnv, path: str, cwd: str) -> int | None:
     outcome = await _run(env, ["pdfinfo", path], cwd)
     if outcome is None or outcome.exit_code != 0:
         return None
@@ -144,7 +144,7 @@ async def read_pdf(
     if head != b"%PDF-":
         return tool_error(tool_name,
                           f"{display} does not start with a %PDF- header, so it is not a PDF.")
-    total = await _page_count(env, path, cwd)
+    total = await page_count(env, path, cwd)
     span = _page_span(pages, total)
     if isinstance(span, str):
         return tool_error(tool_name, span)

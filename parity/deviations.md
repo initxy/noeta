@@ -103,6 +103,13 @@ file names. Each row is a name the model sees; the files themselves are product 
 |---|---|---|
 | | An `@path` import from a repository file that leaves the repository directory and the working directory is skipped, not asked about (`rem.instructions.7`). | No noeta front end has Claude Code's approval dialog for external imports; skipping is the safe side of it. |
 
+## Attachments
+
+| id | difference | reason |
+|---|---|---|
+| | A file the person @-mentions is attached after their text in the same turn; Claude Code moves its attachments ahead of the text (`rem.at-mention.1`). | The attachment is read inside the task once the message is in its log; the log is append-only, so it follows the message it answers (the same turn on the wire). |
+| | A mentioned directory lists at most 1,000 entries, then how many more. | The listing stays in the task's history for good; Claude Code lists every entry. |
+
 ## Not yet matched
 
 Known differences that no kernel or product reason forces: follow-ups, not accepted deviations.

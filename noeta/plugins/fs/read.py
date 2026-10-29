@@ -405,6 +405,7 @@ class ReadTool:
                 f"{format_size(_READ_MAX_FILE_BYTES)} limit for a read of the whole "
                 "file. Read a part with offset and limit, or search the file for "
                 "what you need.",
+                too_large=True,
             )
 
         start = w.offset - 1
@@ -432,7 +433,7 @@ class ReadTool:
         if not scan.capped and tokens > max_tokens and w.offset <= 1 and w.explicit_limit is None:
             return self._first_page(ctx, w, scan, text, tokens, max_tokens)
         if scan.capped or tokens > max_tokens:
-            return tool_error(self.name, too_many_tokens(tokens, max_tokens))
+            return tool_error(self.name, too_many_tokens(tokens, max_tokens), too_large=True)
 
         # Keyed by the canonical path and digesting the raw bytes of the whole
         # file, so a later mutation check compares like with like.

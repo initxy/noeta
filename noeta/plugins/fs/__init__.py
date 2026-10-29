@@ -10,7 +10,8 @@ told once (the prompt ``reminder/file_changed``; ``{path}`` is the file).
 
 A tool's own note for the model (``notice``: the paging hint of a read cut
 to fit the token ceiling) is sent as a reminder right after that call's
-result, as Claude Code does."""
+result, as Claude Code does. Files the person mentions with ``@path`` are
+attached through ``Read`` (:mod:`noeta.plugins.fs.mentions`)."""
 
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from noeta.core.events import Compacted, Recorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
 from noeta.plugins.fs.edit import EditTool
+from noeta.plugins.fs.mentions import attach_mentions
 from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import (
@@ -60,18 +62,20 @@ class FileTools(Extension):
     (default: all four, in the order Read, Write, Edit, NotebookEdit).
     ``write_roots``: directories outside the working directory the named
     tools may write (Claude Code's ``additionalDirectories``); plan mode's
-    plan directory is always one."""
+    plan directory is always one. ``mentions``: attach the files the person
+    names with ``@path`` (default on)."""
 
     name = FS
 
     def __init__(self, tools: Sequence[str | Tool] | None = None, *,
-                 write_roots: Sequence[str] = ()) -> None:
+                 write_roots: Sequence[str] = (), mentions: bool = True) -> None:
         if tools is None:
             tools = list(_BY_NAME)
         unknown = [t for t in tools if isinstance(t, str) and t not in _BY_NAME]
         if unknown:
             raise ValueError(f"FileTools: unknown tools {unknown}; known: {list(_BY_NAME)}")
         extra = tuple(os.path.expanduser(d) for d in write_roots)
+        self.mentions = mentions
 
         def roots(_ctx: Any) -> list[str]:
             return [*extra, str(plans_dir())]
@@ -92,6 +96,8 @@ class FileTools(Extension):
             view.record(self.name, KIND_FORGET_RANGES, {})
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        if self.mentions:
+            await attach_mentions(view)
         st = view.ext_state(self.name)
         if not isinstance(st, FsState):
             return ()

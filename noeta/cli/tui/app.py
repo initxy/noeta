@@ -244,12 +244,7 @@ class NoetaApp(TranscriptView):
             await self.answer_question(text)
             return
         images, self.images = self.images, []
-        if self.on_server and mentions.MENTION.search(text):
-            await self.say_notice("attached to a server: @ files on this machine are not "
-                                  "attached; the task reads the server's files itself")
-        files = None if self.on_server else self.cwd
-        message = mentions.attach(text, files, images) \
-            if images or (files and mentions.mentioned(text, files)) else text
+        message = mentions.attach(text, images) if images else text
         # Busy before the send: the turn may run, and its end be shown,
         # before the send returns.
         self.busy = True
