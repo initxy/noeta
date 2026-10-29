@@ -59,6 +59,8 @@ its own spec before work starts.
 - [ ] `jobs.py`: empty job logs are never pruned by the byte cap, and a log writer that outlives its wait can recreate a log after cleanup. Follow-up spec.
 - [ ] Channel continuation ids use a `.N` suffix, which can collide with a thread id that itself ends in `.<digits>`; every continuation copies its history (`history_from`). Follow-up spec.
 - [ ] Memory: voiding a recall already compacted away finds "the first memory message after the prompt", which could be a later, valid recall. Follow-up spec.
+- [ ] With memory listed before hooks, the memory recall selector still sees a blocked prompt's text (D104: the main model does not, and the recall is voided after the erase). Run the selector after the prompt hooks whatever the plugin order. Follow-up spec.
+- [ ] `tests/plugins/test_hooks_events.py` sometimes (2 of about 14 runs) warns `PytestUnraisableExceptionWarning` from a garbage-collected asyncio subprocess transport; likely the same cause as the hooks runner's asyncio subprocesses above. Follow-up spec, with that item.
 - [ ] The `delegate_parallel_review` eval scenario runs into its 240 s trial timeout in every trial (it still scores); raise the timeout or shorten the scenario. Follow-up spec.
 
 ### Decided not to do (kept for the record)
@@ -78,3 +80,4 @@ Each item above is done, moved to its own spec, or dropped with the owner's agre
 
 ## Progress log
 - 2026-10-29 Created from the open-source release spec's open Follow-ups, its Phase 6 owner sign-off items and the final confirmation review's P2/P3 notes (`e947884a..9d6030f6`).
+- 2026-10-29 Gates rerun on local main `59a9dc9e`: Python 3.11 / 3.12 / 3.13 each 2616 passed against Postgres 16, examples 4 + 9; `make parity` 0 mismatches (11 accepted deviations); `make cluster` 13/13; `make e2e` 7 passed; `make eval --trials 9` 1.000 against the 0.987 baseline (`evals/results/2026-10-29T155843Z.json`; an earlier 9-trial run scored 0.979, its one zero an HTTP 429 from the gateway); the README's five-minute start in a clean HOME against a real model (`-p`, `-c -p`, stream-json). A review of the ledger (`9d6030f6..59a9dc9e`) found two open items missing from it: the recall selector seeing a blocked prompt (D104) and a hooks-test warning; both added above.

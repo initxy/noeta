@@ -629,7 +629,7 @@ servers and runs on many machines.
 - [x] Postgres contract tests and the 3.11 / 3.12 / 3.13 matrix run locally green.
 - [x] Final independent review on code only: no P0/P1.
 - [x] Run make check, make parity, make cluster, make e2e and make eval on the final head and record the numbers.
-### Follow-ups (after this release; each moves to a spec of its own before this one is `done`)
+### Follow-ups (after this release; moved to `docs/specs/2026-10-29-open-source-follow-ups.md`, where each gets a spec of its own before work starts)
 - [x] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
 - [x] The file splits S22–S40 left undone in the kernel: `core/runner/task.py` (timers; stopping and ending a turn), `core/runner/model.py` `call_model` (reminders and hooks; overflow), and `backends/stores/postgres.py`'s connection handling; structure only.
 - [x] The last S22–S40 split: `plugins/shell/bash.py` (`ShellState`, the sandbox helpers, `BashTool.run`); structure only, once no other branch is changing it.
