@@ -109,7 +109,8 @@ api_key = "{env:ACME_API_KEY}"   # or "{keyring:service/user}"; never the secret
 - `queues` is checked on `POST /tasks`: a queue not listed answers 403. Without it a tenant
   may use `default` and the queue of its own name, so a pool started with
   `noeta worker --queue acme` takes only acme's tasks (and the default tenant's, which may
-  use any queue).
+  use any queue). A task's sub-agents go to its queue (host code may route them
+  elsewhere with `Subtasks(queue=)`).
 - `max_running` is enforced by the claim, exactly, across all workers; other tenants are not
   held up behind it.
 - A model call past a budget fails its turn with `budget_spent` and a message that names the
