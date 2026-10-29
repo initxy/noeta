@@ -415,6 +415,18 @@ async def test_tasks_that_never_come_back_are_forgotten(monkeypatch: pytest.Monk
     assert set(ext._known) == set(ext._scopes) == set(ext._roots) == {"t3", "t4"}
 
 
+async def test_a_failed_resolution_leaves_no_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_a: object) -> list[McpServer]:
+        raise OSError("unreadable settings")
+
+    monkeypatch.setattr("noeta.plugins.mcp.extension.read_servers", broken)
+    ext = Mcp([McpServer(alias="s", command=["true"])], settings_files=["/nowhere.json"])
+    for n in range(5):
+        view = TaskView(state=TaskState(task_id=f"t{n}", config={"cwd": "/w"}))
+        assert not await ext._resolve(view)
+    assert not ext._known and not ext._scopes and not ext._roots and not ext._refused
+
+
 def test_the_resource_tools_run_again_after_a_crash() -> None:
     """Reading resources changes nothing: each is retried, not answered
     "outcome unknown", when a crash cut it off."""

@@ -501,6 +501,10 @@ class Mcp(Extension):
             # Keep the recorded tool set; its calls fail until a pick-up
             # resolves the servers again.
             log.exception("mcp: resolving the servers of task %s failed", view.task_id)
+            if view.task_id not in self._known:
+                # Nothing else lets go of them: no task entry holds them.
+                for cache in (self._scopes, self._roots, self._refused):
+                    cache.pop(view.task_id, None)
             return False
         known: dict[str, McpServer] = {}
         for s in servers:
