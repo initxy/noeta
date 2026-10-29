@@ -217,7 +217,8 @@ class Subtasks(Extension):
         roster = self.roster_for(view)
         out: list[Tool] = []
         if roster:
-            out.append(AgentTool(self, state, roster, handback=_auto_mode(self, view)))
+            out.append(AgentTool(self, state, roster, handback=_auto_mode(self, view),
+                                 agents=view.agents))
             if not state.parent_id:
                 out.append(ListAgentsTool(self, state))
         if roster or state.parent_id:

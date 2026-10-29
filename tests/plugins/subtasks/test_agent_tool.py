@@ -205,6 +205,37 @@ async def test_outside_auto_mode_the_last_reply_is_the_report(store: SqliteStore
     assert "<result>made the file\n</result>" in notice
 
 
+async def test_a_child_without_the_handback_tool_reports_its_last_reply(
+        store: SqliteStore) -> None:
+    # In auto mode, but the child's agent definition has no subtasks plugin:
+    # it cannot hand back, so its final message is its report (Claude Code's).
+    p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply("made the file")])
+    bare = Agent(name="worker", model="c", tools=[Probe()])
+    rt = runtime(store, {"p": p, "c": c}, parent(), bare)
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    assert "SubagentHandback" not in [t.name for t in c.requests[0].tools]
+    notice = p.requests[2].messages[-1].text
+    assert "<result>made the file\n</result>" in notice
+    assert texts.RESULT_NO_REPORT not in notice
+
+
+async def test_a_child_whose_tools_leave_out_the_handback_reports_its_last_reply(
+        store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply("made the file")])
+    narrow = Agent(name="worker", model="c", tools=[Probe()], extensions=[Subtasks(())],
+                   allowed_tools=["Probe"])
+    rt = runtime(store, {"p": p, "c": c}, parent(), narrow)
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    assert not any("SubagentHandback" in t for t in texts_of(c.requests[0]))
+    assert "<result>made the file\n</result>" in p.requests[2].messages[-1].text
+
+
 async def test_failed_agent_notice_wakes_the_parent(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", agent("x")), reply("launched"), reply("sorry")])
     c = ScriptedProvider([Fatal("boom")])

@@ -404,6 +404,11 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A sub-agent that cannot hand back reports with its final message.** In auto mode the
+  caller expected `SubagentHandback` from every sub-agent, so one whose agent definition lacks
+  the subtasks plugin, or whose tool list leaves the tool out, came back as "no report"
+  instead of its last reply. Such a sub-agent's final message is now its report, as in Claude
+  Code.
 - **An unknown model is announced once.** The front end's notice now also says its cost
   counts as $0.00, and the catalog no longer logs a second "not in the catalog" warning about
   its price.
