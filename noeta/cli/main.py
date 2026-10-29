@@ -33,6 +33,9 @@ from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "token")
 
+#: Where an extra is installed from (README). noeta 1.0 is not on PyPI, and
+#: the bare name there may be someone else's package.
+SOURCE_URL = "git+https://github.com/initxy/noeta"
 #: The top-level modules each optional extra installs (``pyproject.toml``).
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
@@ -80,6 +83,9 @@ def _parser() -> argparse.ArgumentParser:
     sv.add_argument("--no-worker", action="store_true", help="API only; workers run elsewhere")
     sv.add_argument("--no-token", action="store_true",
                     help="serve a loopback address without a bearer token")
+    sv.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="a Host header name the server answers (repeatable); without "
+                         "it Host is checked only on a loopback bind")
     sv.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
                     help="a web origin (https://host:port) whose pages may call the API")
     sv.add_argument("--allow-bypass-permissions", action="store_true",
@@ -191,13 +197,31 @@ def _check_isolation(s: Settings, cwd: str,
     return problem
 
 
+def _allowed_hosts(args: argparse.Namespace) -> list[str] | None:
+    """The ``Host`` names ``noeta serve`` answers: the loopback names on a
+    loopback bind, plus ``--allow-host``; any on another bind without it."""
+    from noeta.host.http import LOOPBACK_HOSTS
+
+    base = list(LOOPBACK_HOSTS) if args.host in LOOPBACK_HOSTS else []
+    return [*base, *args.allow_host] if base or args.allow_host else None
+
+
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
     from noeta.cli.config import HOME, server_token_digest
-    from noeta.host.http import LOOPBACK_HOSTS, create_app
+    from noeta.host.http import create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
+    places = _tenants(s)
+    if args.no_token:
+        # Every request would be the default tenant's: refuse rather than
+        # ignore the tenants' tokens.
+        known = sorted({str(e["tenant"]) for e in tenants.read_tokens()} | set(places))
+        if known:
+            sys.exit(f"noeta: --no-token serves every request as the default tenant, but "
+                     f"tenant(s) {', '.join(known)} are configured ({HOME / 'tokens.json'} "
+                     f"or {HOME / 'tenants'}); serve with a token")
     server = None if args.no_token else server_token_digest()
     if server is not None and server.shown is not None:
         print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "
@@ -208,7 +232,6 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
         "disable_bypass_mode": True}
-    places = _tenants(s)
     problem = _check_isolation(s, cwd, places) if with_worker else None
     isolated = problem is None
     if problem is not None:
@@ -222,16 +245,17 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                          others=isolated, server_sha256=server.sha256 if server else None),
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
-                     allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
+                     allowed_hosts=_allowed_hosts(args),
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
                      workspaces=_workspaces(places),
                      queues={name: p.queues for name, p in places.items()
                              if p.queues is not None})
-    port = args.port
+    config = uvicorn.Config(api, host=host, port=args.port)
+    redact_token_logs()
     try:
-        await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
+        await uvicorn.Server(config).serve()
     finally:
         await app.stop()
 
@@ -280,9 +304,10 @@ def main(argv: list[str] | None = None) -> None:
         extra = missing_extra(exc)
         if extra is None:
             raise
+        source = f"'noeta[{extra}] @ {SOURCE_URL}'"
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
-                 f"pip install 'noeta[{extra}]' (or, for a uv tool install, "
-                 f"uv tool install --reinstall 'noeta[{extra}]')")
+                 f"pip install {source} (or, for a uv tool install, "
+                 f"uv tool install --reinstall {source})")
 
 
 def _main(argv: list[str]) -> None:

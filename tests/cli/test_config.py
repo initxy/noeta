@@ -257,7 +257,7 @@ def test_serve_refuses_bypass_in_the_plugin_itself(
     for allow in (False, True):
         args = types.SimpleNamespace(host="127.0.0.1", no_worker=True, no_token=True,
                                      allow_origin=[], allow_bypass_permissions=allow,
-                                     allow_root=[], port=0)
+                                     allow_root=[], allow_host=[], port=0)
         asyncio.run(main._serve(load_settings(cwd=str(home)), args, str(home)))
         exts = {e.name: e for e in apps[-1].runtime.agents["main"].extensions}
         perms = exts["permissions"]

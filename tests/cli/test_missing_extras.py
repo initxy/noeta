@@ -41,8 +41,10 @@ def test_a_command_names_its_missing_extra(argv: list[str], hidden: tuple[str, .
     monkeypatch.setenv("NOETA_HOME", str(tmp_path / "home"))
     _hide(monkeypatch, *hidden)
     message = _exit_message(["--model", "m", "--cwd", str(tmp_path), *argv])
-    assert f"pip install 'noeta[{extra}]'" in message
-    assert f"uv tool install --reinstall 'noeta[{extra}]'" in message
+    source = f"'noeta[{extra}] @ {cli.SOURCE_URL}'"
+    assert f"pip install {source}" in message
+    assert f"uv tool install --reinstall {source}" in message
+    assert f"'noeta[{extra}]'" not in message  # not on PyPI: the name may be anyone's
     assert "Traceback" not in message
 
 
@@ -52,7 +54,7 @@ def test_a_postgres_store_names_the_postgres_extra(tmp_path: Path,
     _hide(monkeypatch, "psycopg", "psycopg_pool")
     message = _exit_message(["--model", "m", "--cwd", str(tmp_path),
                              "--store", "postgres://u@127.0.0.1:1/db", "worker"])
-    assert "pip install 'noeta[postgres]'" in message
+    assert f"pip install 'noeta[postgres] @ {cli.SOURCE_URL}'" in message
 
 
 def test_another_missing_module_is_not_hidden(monkeypatch: pytest.MonkeyPatch) -> None:

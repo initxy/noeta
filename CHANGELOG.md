@@ -620,3 +620,26 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - `noeta plugin add` fetches only from git URLs (`https://`, `ssh://`, `git://`, `file://`,
   `user@host:path`) and passes `--` before them, so a marketplace entry's `url` cannot be a
   git option such as `--upload-pack=…`.
+- The git snapshot of the first user turn and the memory plugin's repository lookup run
+  inside the sandbox for a non-default tenant's task. Before, they ran as the worker's OS
+  user in the tenant's repository, so a `gpg.program` the tenant set in its own
+  `.git/config` (with `log.showSignature` and a signed commit) ran outside the sandbox and
+  could read the tokens file.
+- The first user turn's git snapshot runs no signature program (`-c log.showSignature=false`)
+  and does not look inside submodules (`--ignore-submodules=dirty`), so a cloned
+  repository's `gpg.program` or a submodule's filter driver no longer runs when a task
+  starts; a submodule with changed files but no new commit is no longer listed.
+- `noeta serve` logs a `?token=` value as `REDACTED` in uvicorn's access and error logs
+  (`noeta.host.http.redact_token_logs`, for host code serving `create_app`). Before, every
+  WebSocket connection logged its path with the token at info level
+  (`"WebSocket /stream-json?token=…" [accepted]`).
+- `noeta serve --allow-host NAME` (repeatable) names the `Host` headers the server answers
+  on any bind, added to the loopback names on a loopback bind. Without it a non-loopback
+  bind checks no `Host`, which SECURITY.md now says (it claimed unexpected `Host` headers
+  were always refused).
+- `noeta serve --no-token` refuses to start when a tenant token or tenant directory exists.
+  Before, it served every request as the default tenant and ignored the tenants' tokens.
+- A command missing an optional extra names the install from this repository
+  (`pip install 'noeta[server] @ git+https://github.com/initxy/noeta'`, and the same for
+  `uv tool install --reinstall`). Before, it named `noeta[server]` on PyPI, where noeta 1.0
+  is not published and the name may install someone else's package.

@@ -82,3 +82,36 @@ def test_no_token_only_on_a_loopback_address(monkeypatch: pytest.MonkeyPatch) ->
 
 async def _done() -> None:
     return None
+
+
+def test_allowed_hosts_are_checked_on_any_bind_when_named() -> None:
+    from noeta.host.http import LOOPBACK_HOSTS
+
+    def hosts(*argv: str) -> list[str] | None:
+        return main._allowed_hosts(main._parser().parse_args(["serve", *argv]))
+
+    assert hosts() == list(LOOPBACK_HOSTS)
+    assert hosts("--host", "0.0.0.0") is None
+    assert hosts("--host", "0.0.0.0", "--allow-host", "noeta.example",
+                 "--allow-host", "10.0.0.5") == ["noeta.example", "10.0.0.5"]
+    assert hosts("--allow-host", "noeta.example") == [*LOOPBACK_HOSTS, "noeta.example"]
+
+
+@pytest.mark.parametrize("known", ["token", "directory"])
+def test_no_token_is_refused_when_tenants_are_known(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, known: str) -> None:
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    if known == "token":
+        tenants.add_token("acme")
+    else:
+        (tmp_path / "home" / "tenants" / "acme").mkdir(parents=True)
+        (tmp_path / "home" / "tenants" / "acme" / "config.toml").write_text("")
+
+    def started(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("started")
+
+    monkeypatch.setattr(main, "_app", started)
+    with pytest.raises(SystemExit, match=r"--no-token.*acme"):
+        main.main(["--model", "m", "--store", f"sqlite:///{tmp_path}/t.db", "serve",
+                   "--no-token", "--no-worker"])

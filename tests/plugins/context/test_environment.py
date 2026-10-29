@@ -82,6 +82,55 @@ async def test_a_repository_clean_filter_never_runs(tmp_path: Path) -> None:
     assert "Status:\n(not captured)" in text
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_repository_signature_program_never_runs(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pwned = tmp_path / "PWNED"
+    program = tmp_path / "verify.sh"
+    program.write_text(f"#!/bin/sh\ntouch {pwned}\n")
+    program.chmod(0o755)
+
+    def git(*argv: str, stdin: bytes | None = None) -> str:
+        return subprocess.run(["git", "-C", str(repo), *argv], input=stdin, check=True,
+                              capture_output=True).stdout.decode().strip()
+
+    git("init", "-q", "-b", "trunk")
+    body = (f"tree {git('write-tree')}\nauthor a <a@b> 1 +0000\n"
+            "committer a <a@b> 1 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n x\n"
+            " -----END PGP SIGNATURE-----\n\nsigned\n")
+    git("update-ref", "HEAD", git("hash-object", "-t", "commit", "-w", "--stdin",
+                                  stdin=body.encode()))
+    git("config", "log.showSignature", "true")
+    git("config", "gpg.program", str(program))
+    text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
+    assert not pwned.exists()
+    assert "signed" in text
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_submodule_clean_filter_never_runs(tmp_path: Path) -> None:
+    sub, repo = tmp_path / "sub", tmp_path / "repo"
+    pwned = tmp_path / "PWNED"
+    who = ["-c", "user.name=t", "-c", "user.email=t@t"]
+    for path in (sub, repo):
+        subprocess.run(["git", "init", "-q", "-b", "trunk", str(path)], check=True)
+    (sub / "a.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(sub), "add", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(sub), *who, "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "protocol.file.allow=always", "submodule",
+                    "add", "-q", str(sub), "sub"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), *who, "commit", "-q", "-m", "sub"], check=True)
+    inner = repo / "sub"
+    subprocess.run(["git", "-C", str(inner), "config", "filter.x.clean",
+                    f"touch {pwned}; cat"], check=True)
+    (inner / ".gitattributes").write_text("*.txt filter=x\n")
+    (inner / "a.txt").write_text("b\n")
+    text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
+    assert not pwned.exists()
+    assert "Current branch: trunk" in text
+
+
 class FakeContainer:
     """An ExecEnv that is not the local one; records what it runs."""
 

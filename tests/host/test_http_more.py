@@ -282,3 +282,43 @@ async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
             got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}})
             assert got.status_code == 403 and "--allow-root" in got.json()["error"], cwd
     await store.close()
+
+
+async def test_the_query_token_never_reaches_uvicorns_logs(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from noeta.host.http import redact_token_logs
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    local = LocalApp(store, [Agent(name="main", model=MODEL)], ScriptedProvider(),
+                     env_for=lambda _s: None)
+    await local.start()
+    api = create_app(local.client, token="secret-xyz", app=local, cwd=str(tmp_path))
+    # noeta serve's own configuration: uvicorn's default logging, at info.
+    server = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=0))
+    redact_token_logs()
+    loggers = [logging.getLogger(n) for n in ("uvicorn.error", "uvicorn.access")]
+    for logger in loggers:
+        logger.addHandler(caplog.handler)
+    serving = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        host = f"127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
+        with caplog.at_level(logging.INFO):
+            async with websockets.connect(
+                    f"ws://{host}/stream-json?token=secret-xyz&model={MODEL}") as ws:
+                await ws.recv()
+            async with httpx.AsyncClient(base_url=f"http://{host}") as http:
+                await http.get("/models?token=secret-xyz")
+    finally:
+        for logger in loggers:
+            logger.removeHandler(caplog.handler)
+        server.should_exit = True
+        await serving
+        await local.stop()
+    logged = "\n".join(r.getMessage() for r in caplog.records
+                       if r.name.startswith("uvicorn"))
+    assert "/stream-json?token=" in logged and "/models?token=" in logged
+    assert "secret-xyz" not in logged

@@ -53,6 +53,8 @@ the ``roots`` (a relative ``cwd`` is taken from ``cwd``). Needs the ``server`` e
 from __future__ import annotations
 
 import dataclasses
+import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -69,7 +71,7 @@ from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command
 
-__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "Refused", "create_app"]
+__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "Refused", "create_app", "redact_token_logs"]
 
 
 @dataclasses.dataclass
@@ -107,6 +109,36 @@ class _Front:
         return None
 
 
+#: A bearer token in a query string (the WebSocket's ``?token=``).
+_QUERY_TOKEN = re.compile(r"(?i)([?&]token=)[^&\s\"']*")
+#: The loggers uvicorn names a request's path in.
+_UVICORN_LOGGERS = ("uvicorn.access", "uvicorn.error")
+
+
+class _RedactQueryToken(logging.Filter):
+    """Replaces a ``token=`` query value in a record's message and string
+    arguments (uvicorn's access formatter reads the arguments one by one)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _QUERY_TOKEN.sub(r"\1REDACTED", record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(_QUERY_TOKEN.sub(r"\1REDACTED", a) if isinstance(a, str)
+                                else a for a in record.args)
+        return True
+
+
+def redact_token_logs() -> None:
+    """Keep ``?token=`` values out of uvicorn's access and error logs (it logs
+    a WebSocket's path with its query at info). Call it after making the
+    ``uvicorn.Config`` that serves :func:`create_app`; calling it again adds
+    nothing."""
+    for name in _UVICORN_LOGGERS:
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, _RedactQueryToken) for f in logger.filters):
+            logger.addFilter(_RedactQueryToken())
+
+
 def create_app(client: Client, *, token: str | None = None,
                tokens: Mapping[str, str] | Callable[[str], str | None] | None = None,
                auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
@@ -125,7 +157,8 @@ def create_app(client: Client, *, token: str | None = None,
     tenant). A request reaches only its tenant's tasks (``Client.scoped``);
     another tenant's task answers 404. Serving without a token takes
     ``auth=False`` (a loopback-only development server; the default
-    tenant).
+    tenant). Serve it after :func:`redact_token_logs`, or uvicorn logs the
+    WebSocket's ``?token=``.
 
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the

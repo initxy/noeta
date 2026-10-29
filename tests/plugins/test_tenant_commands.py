@@ -19,6 +19,7 @@ from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.cli.config import local_env_for
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import ToolContext
+from noeta.plugins.environment import capture_git
 from noeta.plugins.skills.script import RunSkillScriptTool
 from noeta.toolkit.sandbox import SandboxSettings, run_in_tenant_sandbox
 from noeta.toolkit.tenant_fence import TenantFence
@@ -93,3 +94,33 @@ async def test_a_skill_script_runs_in_the_tenants_sandbox(tmp_path: Path) -> Non
     assert "TOKENS" in await output(default)
     assert "TOKENS" not in await output(tenant)
     assert os.path.exists(skill / "show.sh")
+
+
+def _signed_head(ws: Path) -> None:
+    """A repository at ``ws`` whose HEAD carries a signature, so a
+    ``git log`` with ``log.showSignature`` runs ``gpg.program``."""
+    def run(*argv: str, stdin: bytes | None = None) -> str:
+        done = subprocess.run(["git", *argv], cwd=ws, input=stdin, check=True,
+                              capture_output=True)
+        return done.stdout.decode().strip()
+
+    run("init", "-q")
+    body = (f"tree {run('write-tree')}\nauthor a <a@b> 1 +0000\n"
+            "committer a <a@b> 1 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n x\n"
+            " -----END PGP SIGNATURE-----\n\nsigned\n")
+    run("update-ref", "HEAD", run("hash-object", "-t", "commit", "-w", "--stdin",
+                                  stdin=body.encode()))
+
+
+async def test_the_environment_git_snapshot_runs_in_the_tenants_sandbox(
+        tmp_path: Path) -> None:
+    _, tenant, home, ws = _envs(tmp_path)
+    _signed_head(ws)
+    script = ws / "verify.sh"
+    script.write_text(f"#!/bin/sh\ncat {home / 'tokens.json'} > {ws / 'seen.txt'} 2>&1\n")
+    script.chmod(0o755)
+    subprocess.run(["git", "config", "log.showSignature", "true"], cwd=ws, check=True)
+    subprocess.run(["git", "config", "gpg.program", str(script)], cwd=ws, check=True)
+    assert "Recent commits" in await capture_git(tenant, str(ws))
+    seen = ws / "seen.txt"
+    assert not seen.exists() or "TOKENS" not in seen.read_text()
