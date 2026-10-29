@@ -439,6 +439,10 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A plugin's markdown command fills its arguments as a skill does.** It replaced only
+  `$ARGUMENTS` and otherwise appended what was typed after a blank line; `$0`,
+  `$ARGUMENTS[0]` and `\$` now work as in Claude Code, and arguments no placeholder took
+  follow the body on an `ARGUMENTS:` line.
 - **A long-lived worker keeps a bounded number of task trees' background jobs.** A tree's
   ended jobs and their logs stayed in the worker's table until its root ended here, so a
   server's idle sessions and trees taken by other workers piled up. A tree whose hold this
