@@ -484,10 +484,11 @@ async def test_ended_jobs_are_kept_only_up_to_a_bound(tmp_path: Path) -> None:
     assert not any(Path(j.out_path).exists() for j in jobs)  # dropped ones too
 
 
-async def test_a_long_root_keeps_a_bounded_number_of_log_files(tmp_path: Path) -> None:
-    # A long session's root never retires: a job let go of takes its log
-    # with it, so the files on disk stay bounded.
-    reg = Registry(log_dir=str(tmp_path / "logs"), ended_jobs_keep=3)
+async def test_a_job_let_go_of_keeps_its_log_until_its_root_ends(tmp_path: Path) -> None:
+    # Its end notice told the model to read the file: a long session's root
+    # forgets old jobs but keeps their output logs, within a byte bound.
+    reg = Registry(log_dir=str(tmp_path / "logs"), ended_jobs_keep=3,
+                   let_go_logs_max_bytes=60)
     env = LocalExecEnv(str(tmp_path))
 
     async def post(body: Any, **kw: Any) -> None:
@@ -500,10 +501,15 @@ async def test_a_long_root_keeps_a_bounded_number_of_log_files(tmp_path: Path) -
                               description="d", post=post)
         assert isinstance(job, Job)
         await job.done.wait()
+        await asyncio.gather(*reg._retiring)
         jobs.append(job)
-    await asyncio.gather(*reg._retiring)
+    assert list(reg.jobs["r"]) == [j.job_id for j in jobs[-3:]]
+    # Each log is 25 bytes: the two newest of the five let go fit in 60.
     on_disk = [p for p in (tmp_path / "logs").rglob("*") if p.is_file()]
-    assert sorted(map(str, on_disk)) == sorted(j.out_path for j in jobs[-3:])
+    assert sorted(map(str, on_disk)) == sorted(j.out_path for j in jobs[-5:])
+    reg.retire("r")
+    await asyncio.gather(*reg._retiring)
+    assert [p for p in (tmp_path / "logs").rglob("*") if p.is_file()] == []
 
 
 def test_the_oldest_ended_task_is_forgotten_first(monkeypatch: pytest.MonkeyPatch) -> None:
