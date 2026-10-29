@@ -212,6 +212,21 @@ def _server_dirs(s: Settings, cwd: str, extra: list[str]) -> list[str]:
                                *(os.path.normpath(os.path.expanduser(d)) for d in dirs)]))
 
 
+def _check_server_dirs(dirs: list[str], places: dict[str, tenants.TenantPlace]) -> None:
+    """Exits when tenants other than the default one are configured and a
+    server directory cannot be hidden from their commands (it holds the
+    machine's programs or temporary directories)."""
+    from noeta.toolkit.tenant_fence import unhideable
+
+    others = tenants.other_tenants(places)
+    if others and (bad := unhideable(dirs)):
+        sys.exit(f"noeta: tenant(s) {', '.join(others)} configured, but the server "
+                 f"director{'ies' if len(bad) > 1 else 'y'} {', '.join(bad)} cannot be hidden "
+                 "from a tenant's commands (it holds the machine's programs or temporary "
+                 "directories); run noeta from, and list in [server] dirs or --allow-root, "
+                 "only directories of the server's own")
+
+
 def _check_isolation(s: Settings, cwd: str,
                      places: dict[str, tenants.TenantPlace]) -> str | None:
     """Why tools of tenants other than the default one may not run here, or
@@ -265,6 +280,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
         "disable_bypass_mode": True}
     # The default tenant's workspace: hidden from other tenants' tasks.
     permissions["server_dirs"] = _server_dirs(s, cwd, args.allow_root)
+    _check_server_dirs(permissions["server_dirs"], places)
     problem = _check_isolation(s, cwd, places) if with_worker else None
     isolated = problem is None
     if problem is not None:
@@ -306,6 +322,7 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     # the server's directories hidden from other tenants' tasks.
     permissions: dict[str, Any] = {} if allow_bypass else {"disable_bypass_mode": True}
     permissions["server_dirs"] = _server_dirs(s, cwd, server_dirs or [])
+    _check_server_dirs(permissions["server_dirs"], places)
     if problem is not None:
         permissions["tenant_refusal"] = problem
     kw["permissions"] = permissions

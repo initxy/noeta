@@ -831,6 +831,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   fence refuses (their contents already were read through the fence), and the skill
   commands a front end lists for a non-default tenant skip a `SKILL.md` that resolves out
   of its skill directory, read with no task env to fence it.
+- `noeta serve` and `noeta worker` with tenants besides the default one refuse to start
+  when a server directory (where they started, `--allow-root`, `--server-dir`,
+  `[server] dirs`) holds the machine's programs or temporary directories (`/`, `/var`,
+  `/opt`, ...): it cannot be hidden from a tenant's commands, and was silently left
+  visible.
 - **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
   allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
   `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so
