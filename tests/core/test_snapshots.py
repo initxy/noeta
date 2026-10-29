@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import msgspec
 import pytest
 
 from noeta.backends.stores.sqlite import SqliteStore
@@ -21,7 +22,7 @@ from noeta.core.events import Recorded
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState, fold, new_state
 from noeta.core.runner import Runtime
-from noeta.core.runner.task import TaskRun
+from noeta.core.runner.task import SNAPSHOT_GROWTH, TaskRun
 from noeta.core.store import Claim, Snapshot
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.plugins.shell.bash import ShellState
@@ -244,3 +245,43 @@ def test_the_version_follows_the_builtin_reducer_helpers(
         assert snapshots._code_digest(cls.__module__) != before
     finally:
         _forget_code()
+
+
+class Sized(Counting):
+    """Adds up the bytes of every snapshot written."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(path)
+        self.written: list[int] = []
+
+    async def put_snapshot(self, task_id: str, snapshot: Snapshot) -> None:
+        self.written.append(len(snapshot.data))
+        await super().put_snapshot(task_id, snapshot)
+
+
+async def test_snapshot_bytes_written_stay_within_a_few_times_the_logs(
+        tmp_path: Path) -> None:
+    """Each snapshot rewrites the whole state: written at a fixed interval
+    their bytes grow with the square of the log. The next one waits until
+    the events since the last hold a share of its bytes."""
+    store = Sized(str(tmp_path / "s.db"))
+    try:
+        provider = ScriptedProvider([reply("", ("Echo", {}))] * 300 + [reply("done")])
+        agent = Agent(name="a", model="m", extensions=[Note()])
+        rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                     env_for=lambda _s: None, sleep=_no_sleep,  # type: ignore[arg-type,return-value]
+                     snapshot_every=4)
+        tid = await Client(store).create("a", "go")
+        await rt.run_until_idle()
+        log = sum(len(msgspec.json.encode(r.event))
+                  for r in await SqliteStore.read(store, tid))
+        assert len(store.written) > 3
+        bound = (1 + 1 / SNAPSHOT_GROWTH) * log
+        assert sum(store.written) <= bound, (sum(store.written), log)
+        stored = await store.snapshot(tid)
+        assert stored is not None
+        after = sum(len(msgspec.json.encode(r.event))
+                    for r in await SqliteStore.read(store, tid, after=stored.seq))
+        assert after <= SNAPSHOT_GROWTH * len(stored.data) + log / 100
+    finally:
+        await store.close()

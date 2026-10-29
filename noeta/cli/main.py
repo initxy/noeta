@@ -72,8 +72,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="how long a claim lasts without renewal (default 30); a dead "
                         "worker's tasks wait about this long before another takes them")
     w.add_argument("--snapshot-every", type=int, default=None, metavar="EVENTS",
-                   help="write a task's fold snapshot every this many events (default 100; "
-                        "0 never)")
+                   help="write a task's fold snapshot at most every this many events "
+                        "(default 100; 0 never)")
     sv = sub.add_parser("serve", help="the client API over HTTP")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8642)

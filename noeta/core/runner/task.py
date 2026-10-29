@@ -21,6 +21,7 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
+import msgspec
 from msgspec.structs import replace
 
 from noeta.core import records as core_records
@@ -58,6 +59,19 @@ log = logging.getLogger("noeta.core.runner")
 #: before the rest of the chain is ignored.
 MAX_HISTORY_DEPTH = 64
 
+#: A new snapshot is written once the events since the last one hold at
+#: least this share of its bytes (and ``Runtime.snapshot_every`` events).
+#: Each snapshot rewrites the whole state, so a fixed interval writes bytes
+#: growing with the square of the log; this keeps them within about
+#: ``1 + 1 / SNAPSHOT_GROWTH`` times the log's, and a claim folds events of
+#: at most this share of its snapshot's bytes.
+SNAPSHOT_GROWTH = 0.1
+
+
+def _event_bytes(events: Sequence[Event]) -> int:
+    """About what ``events`` add to a folded state, by their encoded size."""
+    return sum(len(msgspec.json.encode(e)) for e in events)
+
 
 class LostClaim(Exception):
     pass
@@ -88,6 +102,8 @@ class TaskRun:
         #: is folded from (``None``: this run writes none).
         self._snapshot: tuple[int, bytes] | None = None
         self._snapshotting: asyncio.Task[None] | None = None
+        #: Bytes of the events folded or appended since the newest snapshot.
+        self._since_snapshot = 0
 
     # ------------------------------------------------------------ lifecycle
 
@@ -207,6 +223,7 @@ class TaskRun:
         if self._snapshots_on():
             data = snapshots.encode(base)
             self._snapshot = (0, data) if data is not None else None
+            self._since_snapshot = _event_bytes([r.event for r in records])
         self.state = fold(records, self.reducers, state=base)
 
     def _use_agent(self, name: str) -> None:
@@ -238,14 +255,16 @@ class TaskRun:
         self._use_agent(state.agent)
         if self.agent is None or stored.version != self._version():
             return False
-        self.state = fold(await self.store.read(self.task_id, after=stored.seq),
-                          self.reducers, state=state)
+        records = await self.store.read(self.task_id, after=stored.seq)
+        self.state = fold(records, self.reducers, state=state)
         self._snapshot = (stored.seq, stored.data)
+        self._since_snapshot = _event_bytes([r.event for r in records])
         return True
 
     def _snapshot_due(self) -> bool:
         return self._snapshot is not None and self.state.ended is None \
             and self.state.last_seq - self._snapshot[0] >= self.rt.snapshot_every \
+            and self._since_snapshot >= SNAPSHOT_GROWTH * len(self._snapshot[1]) \
             and (self._snapshotting is None or self._snapshotting.done())
 
     def _snapshot_loaded(self) -> None:
@@ -258,6 +277,7 @@ class TaskRun:
             self._snapshot = None
             return
         self._snapshot = (self.state.last_seq, data)
+        self._since_snapshot = 0
         self._snapshotting = asyncio.ensure_future(self._put_snapshot(self.state.last_seq, data))
 
     async def _snapshot_written(self) -> None:
@@ -273,6 +293,7 @@ class TaskRun:
     def _snapshot_later(self) -> None:
         """After an append: write a snapshot in the background once due."""
         if self._snapshot_due():
+            self._since_snapshot = 0
             self._snapshotting = asyncio.ensure_future(self._write_snapshot())
 
     async def _write_snapshot(self) -> None:
@@ -386,6 +407,8 @@ class TaskRun:
             recs = [Recorded(seq=base + i, at=at, event=e) for i, e in enumerate(events, 1)]
             for rec in recs:
                 apply(self.state, rec, self.reducers)
+            if self._snapshot is not None:
+                self._since_snapshot += _event_bytes(events)
             if cancelled:
                 raise asyncio.CancelledError()
         self._snapshot_later()

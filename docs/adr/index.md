@@ -16,6 +16,7 @@ and describe a different codebase.
 - [005](005-holds-with-epochs-and-hold-lost.md) Process-bound work holds its task tree, with epochs and a hold_lost notice
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
 - [011](011-one-holding-worker-per-tree.md) A task tree has at most one holding worker
+- [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
 
 ## Extensibility and behavior
 

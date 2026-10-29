@@ -79,6 +79,9 @@ servers and runs on many machines.
   instead of moved to the background, an MCP question is declined. Rejected: "any current
   holder may claim" (the root could run where its jobs are not, so ending it or `TaskStop`
   would miss the other worker's jobs).
+- D11 Snapshot writes follow the state's size (refines D7, ADR-012): due after
+  `snapshot_every` events whose bytes are at least `SNAPSHOT_GROWTH` = 0.1 of the newest
+  snapshot's; the ending append deletes the task's snapshot.
 - D9 Evaluation model: the `.env` live endpoint (gateway token gateway) or DeepSeek Flash;
   `make eval` must not drop below `evals/baseline.json`.
 
