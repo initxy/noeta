@@ -52,6 +52,16 @@ FALLBACK_FILES = ("AGENTS.md",)
 #: An imported file at this depth is not read (the file a directory names is
 #: depth 0), as in Claude Code.
 IMPORT_DEPTH_MAX = 5
+#: An import whose extension is not one of these is skipped (Claude Code's
+#: list of text extensions); a name with no extension is read.
+TEXT_EXTENSIONS = frozenset((
+    ".md .txt .text .json .yaml .yml .toml .xml .csv .html .htm .css .scss .sass .less .js "
+    ".ts .tsx .jsx .mjs .cjs .mts .cts .py .pyi .pyw .rb .erb .rake .go .rs .java .kt .kts "
+    ".scala .c .cpp .cc .cxx .h .hpp .hxx .cs .swift .sh .bash .zsh .fish .ps1 .bat .cmd .env "
+    ".ini .cfg .conf .config .properties .sql .graphql .gql .proto .vue .svelte .astro .ejs "
+    ".hbs .pug .jade .php .pl .pm .lua .r .dart .ex .exs .erl .hrl .clj .cljs .cljc .edn .hs "
+    ".lhs .elm .ml .mli .f .f90 .f95 .for .cmake .make .makefile .gradle .sbt .rst .adoc "
+    ".asciidoc .org .tex .latex .lock .log .diff .patch").split())
 #: Bound on one ``find`` listing of a rules directory.
 _LIST_OUTPUT_CAP = 4 * 1024 * 1024
 
@@ -100,6 +110,10 @@ class Reader:
         """``path`` and the files it imports, depth first; ``[]`` when it is
         missing, blank, already read or too deep."""
         if depth >= IMPORT_DEPTH_MAX:
+            return []
+        extension = posixpath.splitext(path)[1].lower()
+        if parent is not None and extension and extension not in TEXT_EXTENSIONS:
+            log.info("instructions: %s imports %s, not a text file; skipped", parent, path)
             return []
         env = self.env_for(kind)
         real = await self._canonical(env, path)

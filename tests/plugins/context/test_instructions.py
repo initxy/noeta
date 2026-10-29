@@ -273,3 +273,19 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     assert "\n\nBase directory for this skill: " in texts[2] and "Activated" not in texts[2]
     assert texts[3].startswith("The following skills are available")
     assert len(texts) == 4
+
+
+async def test_an_import_of_a_non_text_file_is_skipped(h: Harness) -> None:
+    (h.work / "NOETA.md").write_text("Logo @logo.png data @data.bin notes @notes.txt "
+                                     "make @Makefile R @stats.R\n")
+    (h.work / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    (h.work / "data.bin").write_text("binary-ish\n")
+    (h.work / "notes.txt").write_text("notes\n")
+    (h.work / "Makefile").write_text("all:\n")
+    (h.work / "stats.R").write_text("x <- 1\n")
+    h.provider.add(reply("ok"))
+    tid = await h.start(agent())
+    [rec] = await h.records(tid, "instructions")
+    # Claude Code's text extensions only; a name without one is read.
+    assert [Path(f["path"]).name for f in rec.data["files"]] == [
+        "NOETA.md", "notes.txt", "Makefile", "stats.R"]
