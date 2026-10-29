@@ -64,7 +64,7 @@ from noeta.backends.stores._rows import (
 )
 from noeta.backends.stores.postgres_conn import Connections
 from noeta.backends.stores.postgres_feed import ChangeFeed
-from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
+from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask, UnservedQueue
 from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
     Appended,
@@ -161,6 +161,9 @@ ALTER TABLE {s}.tasks ADD COLUMN IF NOT EXISTS tenant TEXT NOT NULL DEFAULT 'def
 CREATE INDEX IF NOT EXISTS tasks_tenant ON {s}.tasks (tenant, status);
 """
 
+#: The holding worker's queues; NULL from a hold that named none, or an
+#: older version's: not checked.
+_ADDED_HOLD_QUEUES = "ALTER TABLE {s}.tree_holds ADD COLUMN IF NOT EXISTS queues TEXT[]"
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS {s}.tenant_usage (
@@ -248,6 +251,11 @@ class PostgresStore:
             if await cur.fetchone() is None:  # ALTER locks the table; only when needed
                 await conn.execute(self._q(_ADDED))
             await conn.execute(self._q(_TABLES))
+            cur = await conn.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
+                " AND table_name = 'tree_holds' AND column_name = 'queues'", (self.schema,))
+            if await cur.fetchone() is None:
+                await conn.execute(self._q(_ADDED_HOLD_QUEUES))
             if version is None:
                 await conn.execute(self._q("INSERT INTO {s}.noeta_schema VALUES (%s)"),
                                    (SCHEMA_VERSION,))
@@ -336,6 +344,24 @@ class PostgresStore:
                  [inbox_kind(b) for b in task.inbox], [encode(b) for b in task.inbox]))
         return task.task_id, True
 
+    async def _check_served(self, conn: Conn, creates: Sequence[NewTask]) -> None:
+        """Raise ``UnservedQueue`` for a child on a queue its tree's holding
+        worker does not serve (it could never be claimed while held). Takes
+        the tree's hold lock shared, as a claim does: a hold being taken now
+        is waited for and seen, and one taken later sees the child."""
+        roots = sorted({t.created.root_id for t in creates
+                        if t.created.root_id is not None and t.created.root_id != t.task_id})
+        for root in roots:
+            await conn.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
+                               (_HOLD_LOCK_CLASS, f"{self.schema}:{root}"))
+            cur = await conn.execute(self._q(
+                "SELECT queues FROM {s}.tree_holds WHERE root_id = %s AND queues IS NOT NULL"),
+                (root,))
+            held = [list(r[0]) for r in await cur.fetchall()]
+            for task in creates:
+                if task.created.root_id == root and any(task.queue not in q for q in held):
+                    raise UnservedQueue(task.queue)
+
     async def _exists(self, conn: Conn, task_id: str) -> bool:
         cur = await conn.execute(self._q("SELECT 1 FROM {s}.tasks WHERE task_id = %s"),
                                  (task_id,))
@@ -422,6 +448,7 @@ class PostgresStore:
             if last_seq != expected_seq:
                 raise Conflict(
                     f"{claim.task_id}: expected seq {expected_seq}, log is at {last_seq}")
+            await self._check_served(conn, creates)
             new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
                                                                         read_seq)
             seq = int(last_seq) + len(events)
@@ -561,9 +588,9 @@ class PostgresStore:
             full = [t for t, most in limits.items()
                     if t in found_full or await running(conn, t) >= most]
             cur = await conn.execute(self._q(
-                "WITH c AS (SELECT task_id, status AS was FROM {s}.tasks k"
+                "WITH c AS (SELECT task_id FROM {s}.tasks k"
                 " WHERE queue = ANY(%(q)s)" + in_roots
-                + (" AND (status = 'running' OR tenant <> ALL(%(full)s))" if full else "")
+                + (" AND tenant <> ALL(%(full)s)" if full else "")
                 + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
                 f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
@@ -575,8 +602,7 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was, t.root_id,"
-                " t.queue"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, t.root_id, t.queue"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
                  "r": list(roots or []), "full": full})
             row = await cur.fetchone()
@@ -586,21 +612,22 @@ class PostgresStore:
             # A hold of this tree being taken now: wait for it, then look
             # again (a fresh statement sees what it committed).
             await conn.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
-                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[5]}"))
+                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[4]}"))
             cur = await conn.execute(self._q(
                 "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
-                (row[5], worker))
+                (row[4], worker))
             if await cur.fetchone() is not None:
                 raise _HeldNow
-            if tenant in limits and row[4] != "running":
+            if tenant in limits:
                 # Workers claiming at once each counted before the others
-                # committed: one at a time per tenant, count again.
+                # committed: one at a time per tenant, count again. A lapsed
+                # task taken back counts like any other claim.
                 await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
                                    (_TENANT_LOCK_CLASS, f"{self.schema}:{tenant}"))
                 if await running(conn, tenant, besides=task_id) >= limits[tenant]:
                     raise _TenantFull(tenant)
             return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
-                         lease_until=float(row[2]), queue=str(row[6]))
+                         lease_until=float(row[2]), queue=str(row[5]))
 
         while True:
             try:
@@ -685,10 +712,11 @@ class PostgresStore:
                 if await cur.fetchone() is not None:
                     return None
                 cur = await conn.execute(self._q(
-                    "INSERT INTO {s}.tree_holds (root_id, worker, until)"
-                    f" VALUES (%s, %s, {_NOW} + %s) ON CONFLICT (root_id, worker)"
-                    " DO UPDATE SET until = excluded.until RETURNING epoch"),
-                    (root_id, worker, seconds))
+                    "INSERT INTO {s}.tree_holds (root_id, worker, until, queues)"
+                    f" VALUES (%s, %s, {_NOW} + %s, %s) ON CONFLICT (root_id, worker)"
+                    " DO UPDATE SET until = excluded.until, queues = excluded.queues"
+                    " RETURNING epoch"),
+                    (root_id, worker, seconds, list(queues) if queues is not None else None))
             row = await cur.fetchone()
             await self._notify(conn, changes)
             return int(row[0]) if row else None

@@ -41,6 +41,16 @@ class HeldElsewhere(NoetaError):
     this process."""
 
 
+class UnservedQueue(NoetaError):
+    """An append would create a child on a queue its tree's holding worker
+    does not serve (``Store.append``): a held tree's tasks run only on its
+    holder, so nobody would claim the child. Nothing was written."""
+
+    def __init__(self, queue: str) -> None:
+        super().__init__(f"queue {queue!r} is not served by the task tree's holding worker")
+        self.queue = queue
+
+
 class ModelError(NoetaError):
     def __init__(self, message: str, *, status: int | None = None, body: str = "") -> None:
         super().__init__(message)

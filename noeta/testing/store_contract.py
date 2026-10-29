@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from noeta.core.errors import Conflict, InboxUnread, UnknownTask
+from noeta.core.errors import Conflict, InboxUnread, UnknownTask, UnservedQueue
 from noeta.core.events import DEFAULT_TENANT, Cancel, External, Say, TaskCreated, TaskEnded, Waiting
 from noeta.core.store import (
     HOLD_LOST,
@@ -93,6 +93,23 @@ async def test_a_task_whose_lease_ran_out_does_not_count_toward_its_tenants_limi
     assert lapsed is not None and lapsed.task_id == "a1"
     second = await store.claim("w2", ["default"], 30, tenant_limits=limits)
     assert second is not None and second.task_id == "a2"
+
+
+async def test_reclaiming_a_lapsed_task_counts_toward_its_tenants_limit(
+        store: Store) -> None:
+    """Taking back a task whose lease ran out starts it running again like
+    any claim: with its tenant at the limit it stays where it is."""
+    for task in (_of("acme", "a1"), _of("acme", "a2")):
+        await store.create(task)
+    limits = {"acme": 1}
+    lapsed = await store.claim("w1", ["default"], -60, tenant_limits=limits)
+    assert lapsed is not None and lapsed.task_id == "a1"
+    second = await store.claim("w2", ["default"], 30, tenant_limits=limits)
+    assert second is not None and second.task_id == "a2"
+    assert await store.claim("w2", ["default"], 30, tenant_limits=limits) is None
+    running = [r.task_id for r in await store.tasks(status="running")
+               if r.owner == "w2"]
+    assert running == ["a2"]
 
 
 async def test_workers_claiming_at_once_keep_a_tenant_under_its_limit(store: Store) -> None:
@@ -431,6 +448,35 @@ async def test_a_hold_is_refused_to_a_worker_not_serving_every_queue_of_the_tree
     await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
                        patch=Patch(status="ended", end_status="done"))
     assert await store.hold("root", "B", 30, queues=["gpu"]) is not None  # ended: not counted
+
+
+async def test_an_append_refuses_a_child_on_a_queue_the_trees_holder_does_not_serve(
+        store: Store) -> None:
+    """Checked when the child is written, not only when it is staged: the
+    tree may have been held since (by this worker, for another of its
+    tasks), and its holder could never claim the child."""
+    await store.create(new("root"))
+    claim = await store.claim("A", ["default"], 30)
+    assert claim is not None
+
+    def child(task_id: str, queue: str) -> NewTask:
+        return NewTask(task_id=task_id, queue=queue, inbox=[say("go")],
+                       created=TaskCreated(agent="a", parent_id="root", root_id="root"))
+
+    epoch = await store.hold("root", "A", 30, queues=["default"])
+    assert epoch is not None
+    with pytest.raises(UnservedQueue) as refused:
+        await store.append(claim, [Waiting(on="children", ids=["root.ok", "root.gpu"])],
+                           expected_seq=1,
+                           creates=[child("root.ok", "default"), child("root.gpu", "gpu")])
+    assert refused.value.queue == "gpu"
+    assert await store.get("root.gpu") is None and await store.get("root.ok") is None
+    assert [r.seq for r in await store.read("root")] == [1]  # nothing was written
+    await store.append(claim, [], expected_seq=1, creates=[child("root.ok", "default")])
+    assert await store.get("root.ok") is not None
+    await store.unhold("root", "A", epoch)
+    await store.append(claim, [], expected_seq=1, creates=[child("root.gpu", "gpu")])
+    assert await store.get("root.gpu") is not None  # no hold: any queue
 
 
 async def test_a_tree_has_at_most_one_holding_worker(store: Store) -> None:

@@ -8,7 +8,7 @@ from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core import records as core_records
-from noeta.core.errors import UnknownTask
+from noeta.core.errors import UnknownTask, UnservedQueue
 from noeta.core.events import (
     Event,
     ExtensionRecorded,
@@ -272,17 +272,19 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
         _drop_staged(records, creates)
     unserved = _unserved_queue(run, creates)
     if unserved is not None:
-        output = ToolOutput(content=[Text(text=texts.UNSERVED_QUEUE_ERROR.format(
-            queue=unserved))], is_error=True)
+        output = _unserved_output(unserved)
         _drop_staged(records, creates)
     view = run.view()
     if output.park is not None:
         park = output.park
         keys = park.keys or [use.id]
-        records.append(core_records.event(core_records.Parked(
-            call_id=use.id, on=park.on, keys=keys, detail=park.detail)))
-        await run.append(records, creates=creates)
-        return
+        try:
+            await run.append([*records, core_records.event(core_records.Parked(
+                call_id=use.id, on=park.on, keys=keys, detail=park.detail))], creates=creates)
+            return
+        except UnservedQueue as exc:  # held since the check above
+            output = _unserved_output(exc.queue)
+            _drop_staged(records, creates)
     for ext in run.exts:
         try:
             output = await ext.after_tool(view, use, output)
@@ -295,8 +297,19 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
                                               is_error=output.is_error,
                                               block_list=output.block_list), meta=meta,
                             end_turn=output.end_turn)
-    await run.append([*records, *view.pending, finished],
-                     creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
+    try:
+        await run.append([*records, *view.pending, finished],
+                         creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
+    except UnservedQueue as exc:
+        # The tree was held since the check above (a hook may take seconds):
+        # the call fails and stages nothing, its hooks' records included.
+        await run.append([run.error_result(
+            use.id, texts.UNSERVED_QUEUE_ERROR.format(queue=exc.queue))])
+
+
+def _unserved_output(queue: str) -> ToolOutput:
+    return ToolOutput(content=[Text(text=texts.UNSERVED_QUEUE_ERROR.format(queue=queue))],
+                      is_error=True)
 
 
 def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:

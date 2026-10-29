@@ -28,7 +28,13 @@ from msgspec.structs import replace
 from noeta.core import records as core_records
 from noeta.core import registry, snapshots
 from noeta.core.agent import Agent
-from noeta.core.errors import BudgetSpent, Conflict, InboxUnread, StoreUnavailable
+from noeta.core.errors import (
+    BudgetSpent,
+    Conflict,
+    InboxUnread,
+    StoreUnavailable,
+    UnservedQueue,
+)
 from noeta.core.events import (
     Cancel,
     ChildEnded,
@@ -582,8 +588,14 @@ class TaskRun:
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates or view.enqueued:
             events, view.pending = list(view.pending), []
-            await self.append(events, creates=self.staged(view),
-                              posts=await self.enqueued(view))
+            try:
+                await self.append(events, creates=self.staged(view),
+                                  posts=await self.enqueued(view))
+            except UnservedQueue as exc:
+                # The tree was held since the spawn was checked: nothing of
+                # this flush is written, as if the hook had not run.
+                log.warning("task %s: records dropped, a child on queue %r could not run"
+                            " while this worker holds the tree", self.task_id, exc.queue)
 
     async def enqueued(self, view: TaskView) -> list[Post]:
         """The posts ``view.enqueue`` staged, taken out of the view; one to a

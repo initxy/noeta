@@ -77,11 +77,13 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     _record_reminders(view, due)
     if not view.pending:
         return request
-    n = len(run.state.messages)
+    unrecorded = request.messages[len(run.state.messages):]
     await run.flush(view)
-    added = run.state.messages[n:]
+    # The recorded messages are taken again from the folded log, not the
+    # old ones plus what was added: a record among the reminders' may
+    # also have taken messages out (an erase).
     return msgspec.structs.replace(
-        request, messages=[*request.messages[:n], *added, *request.messages[n:]],
+        request, messages=[*run.state.messages, *unrecorded],
         cache_after=cache_breakpoints(run.state))
 
 

@@ -333,10 +333,16 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **`Claim.queue`.** A claim (and its renewal) names the queue of the task claimed; a store
   that leaves it out puts every child on `default`, as before.
 - **`claim(tenant_limits=)` counts live leases only.** A running task whose `lease_until`
-  has passed does not count toward its tenant's limit.
+  has passed does not count toward its tenant's limit, and taking one back is limited like
+  any claim.
 - **`Store.hold(queues=)`.** Taking a hold with the holder's queues is refused (`None`) while
   an unended task of the tree is on a queue not among them, decided in the hold's
   transaction; `Runtime.hold` passes its queues.
+- **`append(creates=)` refuses a child its tree's holder cannot claim.** A hold keeps the
+  `queues` it was taken with; an append creating a child of a held tree on a queue not among
+  them raises `UnservedQueue` and writes nothing, decided against a hold being taken at the
+  same time. The SQL stores add `tree_holds.queues` in place (an older hold's is empty and
+  not checked).
 
 ### Added
 
@@ -471,7 +477,17 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   and `TaskView.record` raise `ValueError` for one; written, it left the task to a newer
   worker for good.
 - **A tenant's running limit no longer counts a dead worker's task.** A running task whose
-  lease ran out holds no worker and no longer keeps the tenant's other tasks waiting.
+  lease ran out holds no worker and no longer keeps the tenant's other tasks waiting. Taking
+  such a task back now counts toward the limit; before, a worker could reclaim it while the
+  tenant's next task ran, two running at a limit of one.
+- **A child is not stranded by a hold taken while its call finished.** The queue check above
+  ran before the call's `PostToolUse` hooks and an extension's spawn was checked when staged;
+  another task of the tree taking the hold meanwhile left the child unclaimed. The store now
+  refuses such a child as it is written: the call fails with the same tool error, and an
+  extension's refused spawn drops what its hook staged with a warning.
+- **A reminder that erases messages no longer misaligns the request.** The request after a
+  round of reminders takes its messages from the log; an erase recorded among them left the
+  erased message in and the reminder out.
 - **A worker missing a newly installed plugin no longer fails tasks during a rolling install**
   (see the pinned plugin set under Added), and a core log record of a kind this version does
   not know is left to a newer worker instead of being skipped.

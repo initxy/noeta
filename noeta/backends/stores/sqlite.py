@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import sqlite3
 import threading
@@ -26,7 +27,7 @@ from noeta.backends.stores._rows import (
     inbox_kind,
     task_row,
 )
-from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
+from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask, UnservedQueue
 from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
     SNAPSHOT_VERSIONS,
@@ -121,6 +122,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
 #: Existing rows take the definition's default; nothing is ever dropped.
 _ADDED_COLUMNS = (
     ("tasks", "tenant", "TEXT NOT NULL DEFAULT 'default'"),
+    # The holding worker's queues (a JSON list); NULL from a hold that
+    # named none, or an older version's: not checked.
+    ("tree_holds", "queues", "TEXT"),
 )
 _ADDED_TABLES = """
 CREATE INDEX IF NOT EXISTS tasks_tenant ON tasks (tenant, status);
@@ -357,6 +361,20 @@ class SqliteStore:
         return task.task_id, True
 
     @staticmethod
+    def _check_served(conn: sqlite3.Connection, creates: Sequence[NewTask]) -> None:
+        """Raise ``UnservedQueue`` for a child on a queue its tree's holding
+        worker does not serve (it could never be claimed while held)."""
+        for task in creates:
+            root = task.created.root_id
+            if root is None or root == task.task_id:
+                continue
+            for (queues,) in conn.execute(
+                    "SELECT queues FROM tree_holds WHERE root_id = ? AND queues IS NOT NULL",
+                    (root,)).fetchall():
+                if task.queue not in json.loads(queues):
+                    raise UnservedQueue(task.queue)
+
+    @staticmethod
     def _forwarded(conn: sqlite3.Connection, post: Post) -> Post:
         """``post``, or the same post to its task's root when it asks to be
         forwarded and the task has ended (see ``Post.forward_if_ended``)."""
@@ -435,6 +453,7 @@ class SqliteStore:
                 raise Conflict(
                     f"{claim.task_id}: expected seq {expected_seq}, log is at {last_seq}"
                 )
+            self._check_served(conn, creates)
             new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
                                                                         read_seq)
             seq = int(last_seq)
@@ -566,8 +585,8 @@ class SqliteStore:
                     if conn.execute("SELECT count(*) FROM tasks WHERE tenant = ? AND"
                                     " status = 'running' AND lease_until >= ?",
                                     (t, now)).fetchone()[0] >= most]
-            not_full = (f" AND (status = 'running' OR tenant NOT IN"
-                        f" ({','.join('?' for _ in full)}))") if full else ""
+            not_full = (f" AND tenant NOT IN ({','.join('?' for _ in full)})"
+                        if full else "")
             row = conn.execute(
                 "SELECT task_id, owner_epoch, queue FROM tasks"
                 f" WHERE queue IN ({marks}){in_roots} AND ("
@@ -670,11 +689,13 @@ class SqliteStore:
             row = conn.execute(
                 "SELECT epoch FROM tree_holds WHERE root_id = ? AND worker = ?",
                 (root_id, worker)).fetchone()
+            served = json.dumps(list(queues)) if queues is not None else None
             if row is not None:
-                conn.execute("UPDATE tree_holds SET until = ? WHERE epoch = ?", (until, row[0]))
+                conn.execute("UPDATE tree_holds SET until = ?, queues = ? WHERE epoch = ?",
+                             (until, served, row[0]))
                 return int(row[0])
-            cur = conn.execute("INSERT INTO tree_holds (root_id, worker, until) VALUES (?, ?, ?)",
-                               (root_id, worker, until))
+            cur = conn.execute("INSERT INTO tree_holds (root_id, worker, until, queues)"
+                               " VALUES (?, ?, ?, ?)", (root_id, worker, until, served))
             return int(cur.lastrowid or 0)
 
         held = await self._write(tx)
