@@ -78,6 +78,8 @@ plugins:
   - shell
   - cluster_effect:
       journal: {journal}
+  - subtasks:
+      agents: []
 ---
 The cluster test's scripted sub-agent.
 """
