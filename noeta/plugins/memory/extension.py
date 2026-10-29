@@ -25,7 +25,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from noeta.core.events import Recorded
+from noeta.core.events import DEFAULT_TENANT, Recorded
 from noeta.core.extension import ContextPart, Extension, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, user
 from noeta.toolkit.context import new_user_messages, task_env
@@ -204,11 +204,15 @@ class Memory(Extension):
     def _agent_dir(self, view: TaskView) -> str | None:
         if self.agent_scope is None or self.agent_name is None:
             return None
-        if self.agent_scope == "user":
+        # "user" memory under noeta's home is shared by every tenant: a task
+        # of a tenant other than the default one keeps it in its working
+        # directory instead.
+        if self.agent_scope == "user" and getattr(view.state, "tenant",
+                                                  DEFAULT_TENANT) == DEFAULT_TENANT:
             base = self.home or noeta_home()
             return str(base / "agent-memory" / self.agent_name) + "/"
         cwd = view.cwd or task_env(view.env, view.state.config).cwd
-        folder = "agent-memory" if self.agent_scope == "project" else "agent-memory-local"
+        folder = "agent-memory-local" if self.agent_scope == "local" else "agent-memory"
         return posixpath.join(cwd, ".noeta", folder, self.agent_name) + "/"
 
     async def _workspace(self, view: TaskView) -> str:
@@ -222,10 +226,15 @@ class Memory(Extension):
         except Exception:  # noqa: BLE001 — not a repository, or no git
             return cwd
         common = out.stdout.decode("utf-8", errors="replace").strip()
-        if out.exit_code != 0 or not common:
+        if out.exit_code != 0 or not common or not common.rstrip("/").endswith("/.git"):
             return cwd
-        return posixpath.dirname(common.rstrip("/")) if common.rstrip("/").endswith("/.git") \
-            else cwd
+        main = posixpath.dirname(common.rstrip("/"))
+        # A ``.git`` file may name any repository; another tenant's task
+        # shares a main checkout's memory only from inside it.
+        if view.state.tenant != DEFAULT_TENANT and not (
+                cwd == main or cwd.startswith(main.rstrip("/") + "/")):
+            return cwd
+        return main
 
     @staticmethod
     def _index(directory: str) -> str | None:

@@ -11,7 +11,10 @@ A spawned process can do anything the host user can, unless the env was given
 sandbox settings (``sandbox=``, Claude Code's ``sandbox`` object): then
 ``env.sandbox`` is a :class:`~noeta.backends.execenvs.sandbox.LocalSandbox`
 the ``Bash`` tool runs its commands through (:mod:`noeta.toolkit.sandbox`).
-File operations run in ``asyncio.to_thread``.
+File operations run in ``asyncio.to_thread``. With ``fence=`` (a task of a
+tenant other than the default one), a file is read or written only after
+the file actually opened (or the directory a write lands in) is checked, so
+a symlink swapped after a permission check cannot redirect it.
 """
 
 from __future__ import annotations
@@ -19,17 +22,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import secrets
 import signal
 import stat as _st
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import BinaryIO
 
 from noeta.backends.execenvs.sandbox import LocalSandbox
 from noeta.core.execenv import FileStat, RunResult
 from noeta.toolkit.local_env import scrub_env
 from noeta.toolkit.sandbox import SandboxSettings, sandbox_settings
 
-__all__ = ["LocalExecEnv", "send_group_signal"]
+__all__ = ["Fence", "LocalExecEnv", "send_group_signal"]
+
+#: ``(resolved path, write) -> why not``, or ``None`` when allowed.
+Fence = Callable[[str, bool], "str | None"]
 
 
 
@@ -166,8 +174,10 @@ class LocalExecEnv:
         inherit_env: Sequence[str] = (),
         kill_grace: float = KILL_GRACE_S,
         sandbox: SandboxSettings | Mapping[str, object] | None = None,
+        fence: Fence | None = None,
     ) -> None:
         self.cwd = os.path.abspath(cwd)
+        self.fence = fence
         self.inherit_env = tuple(inherit_env)
         self.kill_grace = kill_grace
         settings = sandbox_settings(sandbox, base_dir=self.cwd)
@@ -254,7 +264,7 @@ class LocalExecEnv:
         target = self._abs(path)
 
         def _read() -> bytes:
-            with open(target, "rb") as fh:
+            with _open_read(target, self.fence) as fh:
                 return fh.read()
 
         return await asyncio.to_thread(_read)
@@ -263,7 +273,7 @@ class LocalExecEnv:
         target = self._abs(path)
 
         def _read() -> bytes:
-            with open(target, "rb") as fh:
+            with _open_read(target, self.fence) as fh:
                 fh.seek(max(0, offset))
                 return fh.read(max(0, length))
 
@@ -271,7 +281,10 @@ class LocalExecEnv:
 
     async def write_bytes(self, path: str, data: bytes) -> None:
         target = self._abs(path)
-        await asyncio.to_thread(_atomic_write, target, data)
+        if self.fence is None:
+            await asyncio.to_thread(_atomic_write, target, data)
+        else:
+            await asyncio.to_thread(_fenced_write, target, data, self.fence)
 
     async def stat(self, path: str) -> FileStat | None:
         target = self._abs(path)
@@ -313,6 +326,73 @@ def _stat(target: str) -> FileStat | None:
         is_dir=_st.S_ISDIR(st.st_mode),
         is_symlink=is_symlink,
     )
+
+
+def _opened_path(fd: int, fallback: str) -> str:
+    """The path of the file ``fd`` has open (Linux ``/proc``, macOS
+    ``F_GETPATH``); ``fallback`` resolved where neither says."""
+    with contextlib.suppress(OSError):
+        return os.readlink(f"/proc/self/fd/{fd}").removesuffix(" (deleted)")
+    import fcntl
+
+    getpath = getattr(fcntl, "F_GETPATH", None)
+    if getpath is not None:
+        with contextlib.suppress(OSError):
+            raw = fcntl.fcntl(fd, getpath, bytes(1024))
+            return os.fsdecode(raw.split(b"\0", 1)[0])
+    return os.path.realpath(fallback)
+
+
+def _refuse(fence: Fence, path: str, write: bool) -> None:
+    why = fence(path, write)
+    if why is not None:
+        raise PermissionError(why)
+
+
+def _open_read(target: str, fence: Fence | None) -> BinaryIO:
+    """``target`` open for reading, refused once open when the file it
+    turned out to be is fenced."""
+    fh = open(target, "rb")
+    if fence is not None:
+        try:
+            _refuse(fence, _opened_path(fh.fileno(), target), False)
+        except BaseException:
+            fh.close()
+            raise
+    return fh
+
+
+def _fenced_write(target: str, data: bytes, fence: Fence) -> None:
+    """:func:`_atomic_write` through the directory the file lands in,
+    opened and checked first: the temp file is made and renamed relative to
+    that open directory, so a link swapped in meanwhile cannot move it."""
+    real = os.path.realpath(target)
+    _refuse(fence, real, True)
+    parent, name = os.path.dirname(real) or ".", os.path.basename(real)
+    os.makedirs(parent, exist_ok=True)
+    dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        _refuse(fence, os.path.join(_opened_path(dfd, parent), name), True)
+        try:
+            mode = os.stat(name, dir_fd=dfd).st_mode & 0o7777
+        except FileNotFoundError:
+            mode = 0o666 & ~_UMASK
+        tmp = f".noeta-{secrets.token_hex(8)}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                     dir_fd=dfd)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fchmod(fh.fileno(), mode)
+                os.fsync(fh.fileno())
+            os.replace(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp, dir_fd=dfd)
+            raise
+    finally:
+        os.close(dfd)
 
 
 def _atomic_write(target: str, data: bytes) -> None:

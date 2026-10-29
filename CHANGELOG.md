@@ -556,6 +556,31 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   separated at the API only; a tenant token added later is not accepted by such a server.
   Before, every tenant's tools ran as the server's OS user and could read `~/.noeta`, the
   store and the process environment.
+- A task of a tenant other than the default one is denied any file tool call (`Read`,
+  `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) that reaches noeta's home, the
+  sqlite store's files, `/etc/noeta`, `/proc` or another tenant's workspace, after symlinks
+  and `..` are resolved; no rule, mode (`bypassPermissions` included) or approval lifts it
+  (`noeta.toolkit.tenant_fence`; `Permissions(tenant_workspaces=, store_files=,
+  spill_root=)`). Such a task keeps its own spilled outputs, its plan files (now under
+  `plans/<tenant>/`) and its project memory. Before, file tools ran in the worker process
+  bounded only by permission rules the tenant answered itself, so even under the strict
+  sandbox a tenant could approve reading the tokens file, the store or other tenants'
+  settings.
+- The same fence holds when the file is opened: `LocalExecEnv(fence=)` checks the file it
+  actually opened for a read and the opened directory a write lands in, and `noeta serve` /
+  `noeta worker` give every non-default tenant's task such an env, so a symlink swapped by a
+  background command between the permission check and the read cannot redirect it.
+- A worker with no OS-level boundary for tenants (no strict sandbox, no `[server]
+  shared_os_user_tenants = true`) that claims a task of a tenant other than the default one
+  runs none of its tools: the turn fails with `tenant_not_isolated` and the reason before any
+  model call (`Permissions(tenant_refusal=)`, set by `noeta serve` and `noeta worker`).
+  Before, a worker that knew no tenants (no tokens file or tenant directories, e.g. on
+  another machine) started and ran such tasks unconfined.
+- A non-default tenant's task shares a repository's memory only with a main checkout that
+  holds its working directory, and keeps an agent's `user`-scope memory in
+  `.noeta/agent-memory/` of its working directory. Before, a `.git` file naming another
+  tenant's repository loaded that tenant's `MEMORY.md`, and `~/.noeta/agent-memory/` was
+  shared by every tenant.
 - `~/.noeta/server-token` keeps only the server token's SHA-256, like tenant tokens; the token
   is printed once, when made (`noeta serve` no longer prints it on every start). A file an
   older noeta left holding the token itself is rewritten to its digest on the next start,
