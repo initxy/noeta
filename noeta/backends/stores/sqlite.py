@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS tasks_claimable ON tasks (queue, status, ready_at);
 CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent_id);
+CREATE INDEX IF NOT EXISTS tasks_root ON tasks (root_id);
 CREATE TABLE IF NOT EXISTS events (
     task_id TEXT NOT NULL,
     seq     INTEGER NOT NULL,
@@ -585,7 +586,8 @@ class SqliteStore:
     async def hold(self, root_id: str, worker: str, seconds: float,
                    *, epoch: int | None = None) -> int | None:
         def tx(conn: sqlite3.Connection) -> int | None:
-            until = time.time() + seconds
+            now = time.time()
+            until = now + seconds
             if epoch is not None:
                 cur = conn.execute(
                     "UPDATE tree_holds SET until = ? WHERE epoch = ? AND root_id = ?"
@@ -594,6 +596,11 @@ class SqliteStore:
             if conn.execute("SELECT 1 FROM tree_holds WHERE root_id = ? AND worker <> ?",
                             (root_id, worker)).fetchone() is not None:
                 return None  # one holding worker per tree
+            if conn.execute(
+                    "SELECT 1 FROM tasks WHERE root_id = ? AND status = 'running'"
+                    " AND owner <> ? AND lease_until >= ? LIMIT 1",
+                    (root_id, worker, now)).fetchone() is not None:
+                return None  # a task of the tree runs on another worker
             row = conn.execute(
                 "SELECT epoch FROM tree_holds WHERE root_id = ? AND worker = ?",
                 (root_id, worker)).fetchone()

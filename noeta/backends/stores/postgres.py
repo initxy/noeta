@@ -95,7 +95,7 @@ log = logging.getLogger("noeta.backends.stores.postgres")
 SCHEMA_VERSION = 2
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
 _TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
-_HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree
+_HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree; claims share it
 _RETRY_SQLSTATES = frozenset({"40001", "40P01"})  # serialization failure, deadlock
 _LOST_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
 _DEADLOCK_RETRIES = 5
@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS {s}.tasks (
 CREATE INDEX IF NOT EXISTS tasks_claimable ON {s}.tasks (queue, updated_at)
     WHERE status <> 'ended';
 CREATE INDEX IF NOT EXISTS tasks_parent ON {s}.tasks (parent_id);
+CREATE INDEX IF NOT EXISTS tasks_root ON {s}.tasks (root_id);
 CREATE TABLE IF NOT EXISTS {s}.events (
     task_id TEXT NOT NULL,
     seq     BIGINT NOT NULL,
@@ -179,6 +180,10 @@ CREATE TABLE IF NOT EXISTS {s}.tenant_usage (
     PRIMARY KEY (tenant, period)
 );
 """
+
+
+class _HeldNow(Exception):
+    """A claim's tree was held by another worker after all."""
 
 
 class _TenantFull(Exception):
@@ -631,13 +636,22 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.tenant, c.was, t.root_id"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
                  "r": list(roots or []), "full": full})
             row = await cur.fetchone()
             if row is None:
                 return None
             task_id, tenant = str(row[0]), str(row[3])
+            # A hold of this tree being taken now: wait for it, then look
+            # again (a fresh statement sees what it committed).
+            await conn.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
+                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[5]}"))
+            cur = await conn.execute(self._q(
+                "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
+                (row[5], worker))
+            if await cur.fetchone() is not None:
+                raise _HeldNow
             if tenant in limits and row[4] != "running":
                 # Workers claiming at once each counted before the others
                 # committed: one at a time per tenant, count again.
@@ -651,6 +665,8 @@ class PostgresStore:
         while True:
             try:
                 return await self._tx(tx)
+            except _HeldNow:
+                continue  # rolled back; the committed hold now keeps the tree out
             except _TenantFull as full:
                 # Rolled back: the task stays where it was. Another tenant
                 # may have work; try again without this one.
@@ -707,6 +723,14 @@ class PostgresStore:
                 cur = await conn.execute(self._q(
                     "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
                     (root_id, worker))
+                if await cur.fetchone() is not None:
+                    return None
+                # A claim of the tree takes the same lock (shared), so one
+                # that committed before this lock is seen here, and one
+                # after sees this hold.
+                cur = await conn.execute(self._q(
+                    "SELECT 1 FROM {s}.tasks WHERE root_id = %s AND status = 'running'"
+                    f" AND owner <> %s AND lease_until >= {_NOW} LIMIT 1"), (root_id, worker))
                 if await cur.fetchone() is not None:
                     return None
                 cur = await conn.execute(self._q(

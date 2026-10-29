@@ -127,7 +127,7 @@ class Runtime:
         ``release.tree.on_lost`` to stop when the hold is gone (reaped after
         this worker was silent too long, or this runtime stopping).
         Raises ``HeldElsewhere`` while another worker holds the tree (one
-        whose hold ran out is reaped first)."""
+        whose hold ran out is reaped first) or runs one of its tasks."""
         async with self._tree_lock(root_id):
             tree = self._holds.get(root_id)
             if tree is None or tree.lost:
@@ -139,7 +139,8 @@ class Runtime:
                     await self._reap()
                     epoch = await self.store.hold(root_id, self.worker, self.hold_seconds)
                 if epoch is None:
-                    raise HeldElsewhere(f"task tree {root_id} is held by another worker")
+                    raise HeldElsewhere(f"task tree {root_id} is held by another worker, or "
+                                       "another worker runs one of its tasks")
                 tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
                                 seconds=self.hold_seconds)
                 self._holds[root_id] = tree

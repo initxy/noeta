@@ -207,3 +207,52 @@ async def test_a_version_1_schema_is_upgraded_in_place(pg: Any) -> None:
     with psycopg.connect(pg.dsn, autocommit=True) as conn:
         rows = conn.execute(f'SELECT version FROM "{pg.schema}".noeta_schema').fetchall()
     assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 2
+
+
+async def test_a_claim_waits_for_a_hold_of_its_tree_being_taken(pg: Any) -> None:
+    """A hold being taken (its transaction not committed yet) and a claim of
+    the same tree serialize: the claim does not take a task of a tree that
+    another worker's hold, once committed, keeps."""
+    import psycopg
+
+    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
+
+    store = pg.store()
+    await store.create(new("R"))
+    async with await psycopg.AsyncConnection.connect(pg.dsn) as holder:
+        # What PostgresStore.hold does, held open before its commit.
+        await holder.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                             (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
+        await holder.execute(
+            f'INSERT INTO "{pg.schema}".tree_holds (root_id, worker, until)'
+            " VALUES ('R', 'A', extract(epoch from now()) + 60)")
+        claim = asyncio.create_task(store.claim("B", ["default"], 30))
+        await asyncio.sleep(0.3)
+        await holder.commit()
+        assert await asyncio.wait_for(claim, 10) is None
+    row = await store.get("R")
+    assert row is not None and row.owner is None
+    await store.close()
+
+
+async def test_a_hold_waits_for_a_claim_of_its_tree_being_taken(pg: Any) -> None:
+    import psycopg
+
+    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
+
+    store = pg.store()
+    await store.create(new("R"))
+    async with await psycopg.AsyncConnection.connect(pg.dsn) as claimer:
+        # What PostgresStore.claim does, held open before its commit.
+        await claimer.execute(
+            f'UPDATE "{pg.schema}".tasks SET status = \'running\', owner = \'B\','
+            " owner_epoch = owner_epoch + 1, lease_until = extract(epoch from now()) + 60"
+            " WHERE task_id = 'R'")
+        await claimer.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
+                              (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
+        hold = asyncio.create_task(store.hold("R", "A", 30))
+        await asyncio.sleep(0.3)
+        assert not hold.done()
+        await claimer.commit()
+        assert await asyncio.wait_for(hold, 10) is None
+    await store.close()

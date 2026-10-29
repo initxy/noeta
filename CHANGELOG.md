@@ -188,7 +188,9 @@ All notable changes to Noeta are documented here. The format is based on
   and settled once by the task's runner. A worker stopping on purpose (closing the TUI) posts
   `hold_lost` without waking the task (`Post.wake`): it hears with its next message. Third-party
   stores implement `hold`, `unhold` and `reap_holds` (a store an earlier
-  development build opened keeps an unused `holds` table).
+  development build opened keeps an unused `holds` table). A hold is refused while another
+  worker runs a task of the tree, and on Postgres a claim and a hold of one tree serialize, so a
+  held tree's tasks run only on its holder.
 - **Plugins as files.** `~/.noeta/plugins/*.py` (or a directory) is a plugin without packaging;
   a project's `.noeta/plugins/` loads once trusted (`noeta trust`). `noeta plugins` lists where
   each plugin comes from.

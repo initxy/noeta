@@ -16,8 +16,10 @@ claimed by someone else. A wrong guess costs a retry, never a double write.
 
 Holds (:meth:`Store.hold`) keep a task tree with the worker that runs
 something only it has (a background job). A tree has at most one holding
-worker, so a held tree's tasks always have a worker that may claim them and
-that worker has every job of the tree. A hold carries an epoch: renewing
+worker, and a hold is refused while another worker runs a task of the tree
+(an unexpired lease), checked in the hold's transaction; a claim and a hold
+of one tree serialize. So a held tree's tasks run only on its holder, which
+has every job of the tree. A hold carries an epoch: renewing
 needs it, so a hold that was reaped stays lost to its old holder. A hold's
 time running out only makes it reapable; :meth:`Store.reap_holds` releases
 it and tells the tree's tasks (``hold_lost``) in one transaction, so no task

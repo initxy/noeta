@@ -395,11 +395,39 @@ async def test_a_tree_has_at_most_one_holding_worker(store: Store) -> None:
     assert await store.hold("root", "A", 30) == epoch
     assert await store.claim("B", ["default"], 30) is None
     assert await store.claim("C", ["default"], 30) is None
-    got = {c.task_id for c in [await store.claim("A", ["default"], 30) for _ in range(2)] if c}
-    assert got == {"root", "root.child"}
+    claims = [c for c in [await store.claim("A", ["default"], 30) for _ in range(2)] if c]
+    assert {c.task_id for c in claims} == {"root", "root.child"}
     await store.unhold("root", "A", epoch)
+    assert await store.hold("root", "B", 30) is None  # its tasks still run on A
+    for claim in claims:
+        await store.release(claim)
     other = await store.hold("root", "B", 30)
     assert other is not None and other != epoch
+
+
+async def test_a_hold_is_refused_while_a_task_of_the_tree_runs_on_another_worker(
+        store: Store) -> None:
+    """A worker running one task of a tree cannot hold it while another
+    worker runs another of its tasks: the root could then run where the
+    tree's jobs are not. An expired lease does not count."""
+    await store.create(new("root"))
+    await store.create(NewTask(task_id="root.child",
+                               created=TaskCreated(agent="a", parent_id="root", root_id="root")))
+    on_b = await store.claim("B", ["default"], 30)
+    on_a = await store.claim("A", ["default"], 30)
+    assert on_b is not None and on_b.task_id == "root"
+    assert on_a is not None and on_a.task_id == "root.child"
+    assert await store.hold("root", "A", 30) is None
+    assert await store.hold("root", "B", 30) is None
+    await store.release(on_b)
+    epoch = await store.hold("root", "A", 30)
+    assert epoch is not None
+    assert await store.claim("B", ["default"], 30) is None
+    await store.create(new("other"))
+    stale = await store.claim("B", ["default"], 0.05)
+    assert stale is not None and stale.task_id == "other"
+    await asyncio.sleep(0.15)
+    assert await store.hold("other", "A", 30) is not None
 
 
 async def test_workers_holding_one_tree_at_once_leave_one_holder(store: Store) -> None:
@@ -434,8 +462,10 @@ async def test_an_expired_hold_blocks_claims_until_it_is_reaped(store: Store) ->
     assert [i.body for i in await store.inbox("root.child")] == [lost]
     row = await store.get("root")
     assert row is not None and row.status == "ready"
-    got = {c.task_id for c in [await store.claim("w2", ["default"], 30) for _ in range(2)] if c}
-    assert got == {"root", "root.child"}
+    claims = [c for c in [await store.claim("w2", ["default"], 30) for _ in range(2)] if c]
+    assert {c.task_id for c in claims} == {"root", "root.child"}
+    for claim in claims:
+        await store.release(claim)
     again = await store.hold("root", "w1", 30)
     assert again is not None and again != epoch
 
