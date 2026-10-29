@@ -622,3 +622,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   user in the tenant's repository, so a `gpg.program` the tenant set in its own
   `.git/config` (with `log.showSignature` and a signed commit) ran outside the sandbox and
   could read the tokens file.
+- The first user turn's git snapshot runs no signature program (`-c log.showSignature=false`)
+  and does not look inside submodules (`--ignore-submodules=dirty`), so a cloned
+  repository's `gpg.program` or a submodule's filter driver no longer runs when a task
+  starts; a submodule with changed files but no new commit is no longer listed.

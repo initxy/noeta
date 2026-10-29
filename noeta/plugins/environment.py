@@ -12,7 +12,8 @@ task of a tenant other than the default one, git runs inside that task's
 sandbox (the tenant writes the repository's config; hardening flags cannot
 cover every config key that runs a program). git also runs with the
 hardening the Bash tool's ``git status`` rule applies (``-c
-core.fsmonitor=``, no hooks). A ``filter.<driver>.clean`` program has no off
+core.fsmonitor=``, no hooks), no signature program and no look inside
+submodules. A ``filter.<driver>.clean`` program has no off
 switch, so when the repository's own config (local or worktree scope)
 defines any filter driver the status is skipped. The capture is recorded
 once, when the task first starts, and never changes under the prompt cache.
@@ -42,9 +43,10 @@ from noeta.toolkit.shell import harden_git
 GIT_STATUS_MAX_BYTES = 2048
 #: Commits listed in the git snapshot.
 RECENT_COMMITS = 5
-#: Global flags every capture git runs with: no fsmonitor hook, no index
-#: refresh written back.
-_GIT_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null", "--no-optional-locks")
+#: Global flags every capture git runs with: no fsmonitor hook, no signature
+#: program, no index refresh written back.
+_GIT_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
+              "-c", "log.showSignature=false", "--no-optional-locks")
 #: Config scopes a person set up themselves (a filter there is trusted).
 _TRUSTED_SCOPES = ("system", "global")
 #: The budget a turn starts with (Claude Code's ``<total_tokens>``).
@@ -102,7 +104,9 @@ async def _git_status(env: ExecEnv, cwd: str) -> str | None:
     """The short status (``""`` when clean), ``None`` when not captured."""
     if await _repo_defines_filters(env, cwd):
         return None
-    status = (await _git(env, cwd, "status", "--short")).rstrip("\n")
+    # Not inside submodules: their own config's filters are not checked.
+    status = (await _git(env, cwd, "status", "--short",
+                         "--ignore-submodules=dirty")).rstrip("\n")
     encoded = status.encode("utf-8")
     if len(encoded) <= GIT_STATUS_MAX_BYTES:
         return status
