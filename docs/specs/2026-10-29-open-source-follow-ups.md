@@ -27,13 +27,13 @@ its own spec before work starts.
 ## Plan
 
 ### Owner sign-offs (before any push or release)
-- [ ] Owner signs off on publishing the committed Claude Code interface data (scripts/parity/README.md) and the remaining owner decisions before any push.
+- [x] The committed Claude Code interface data (scripts/parity/README.md) is published with the repository (owner, 2026-10-29).
 - [x] Private company, product and gateway names are out of every committed file (owner, 2026-10-29: they are private and are not published).
 - [ ] Push `main` and publish: the owner signs off (no push, no release, no host data touched until then).
 - [ ] A skill's `allowed-tools` plus `acceptEdits` writing `.noeta/skills` widens a trusted project's permissions, as in Claude Code. Owner decision (likely moot: `.noeta` is a protected path, so `acceptEdits` asks before writing `.noeta/skills`).
 - [x] The recording file that could rebuild Claude Code's texts is gone from the unpushed history too (owner, 2026-10-29); that history no longer names private companies, products or gateways either, apart from files already public, byte for byte, in the pushed history.
 - [x] The old `holds` table is dropped when a store is opened, after its trees are told the hold is gone (owner, 2026-10-29: old data may be deleted).
-- [ ] `noeta plugin add` installs no pip dependencies. Owner decision (it would run a package's build code on install).
+- [x] `noeta plugin add` installs no pip dependencies (it would run a package's build code; every worker would need them anyway); a plugin missing one names the install line (owner, 2026-10-29).
 - [ ] Tenant directories are per-machine copies read at worker start (D47; `docs/server.md`). Owner decision on a shared source.
 - [ ] The README's `git+https` install line is untested until the branch is pushed, and its relative links will not resolve on a PyPI page. Owner decision, with the push and the first release.
 
@@ -83,3 +83,4 @@ Each item above is done, moved to its own spec, or dropped with the owner's agre
 - 2026-10-29 Created from the open-source release spec's open Follow-ups, its Phase 6 owner sign-off items and the final confirmation review's P2/P3 notes (`e947884a..9d6030f6`).
 - 2026-10-29 Gates rerun on local main `59a9dc9e`: Python 3.11 / 3.12 / 3.13 each 2616 passed against Postgres 16, examples 4 + 9; `make parity` 0 mismatches (11 accepted deviations); `make cluster` 13/13; `make e2e` 7 passed; `make eval --trials 9` 1.000 against the 0.987 baseline (local, git-ignored `evals/results/2026-10-29T155843Z.json`; an earlier 9-trial run scored 0.979, its one zero an HTTP 429 from the gateway); the README's five-minute start in a clean HOME against a real model (`-p`, `-c -p`, stream-json). A review of the ledger (`9d6030f6..59a9dc9e`) found two open items missing from it: the recall selector seeing a blocked prompt (D104) and a hooks-test warning; both added above.
 - 2026-10-29 Owner sign-offs: private names out of the tree, the old `holds` table told and dropped on open, and main's unpushed history rewritten (`git filter-repo` on `origin/main..main`: the recording file removed, private names replaced in files and messages); the tip's tree is unchanged.
+- 2026-10-29 Owner: tenants stay (off unless configured); the parity data is published; plugins install no dependencies, a missing one names its install line.
