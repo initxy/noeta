@@ -107,7 +107,7 @@ servers and runs on many machines.
   when made (or when an older plain-text file is migrated, one last time); clients take it from
   `NOETA_SERVER_TOKEN`. This changes ADR-009's "read by `noeta --server`" consequence: a
   refining ADR is due at wrap-up (written: ADR-013 refines ADR-009).
-- D16 (the fenced places refined by D38) File tools of a task whose tenant is not `default` are fenced off from noeta's home,
+- D16 (refines D14; the fenced places refined by D36 and D38) File tools of a task whose tenant is not `default` are fenced off from noeta's home,
   the sqlite store's files, `/etc/noeta`, `/proc` and other tenants' workspaces
   (`noeta/toolkit/tenant_fence.py`), whatever the deployment (this closes D14's file-tool
   limit). Checked twice: a permissions-gate `Deny` ahead of every rule, mode and answer on
@@ -254,7 +254,7 @@ servers and runs on many machines.
   its search tool is not available. Kernel-generic, no tool named. Rejected: dropping only
   the refused tool (its deferred tools would stay withheld, uncallable); a `loads_deferred`
   tool flag (needs the plugin to set it, and every deferred tool goes plain until it does).
-- D35 (`os-fix-r4kernel`; written: ADR-023) Snapshots are kept per task and fold version, at most
+- D35 (`os-fix-r4kernel`; refines D7; written: ADR-023) Snapshots are kept per task and fold version, at most
   `SNAPSHOT_VERSIONS` (2) per task; a write replaces only its own version's at a lower seq,
   and past the cap the one at the lowest seq goes. `snapshot(task_id, version=None)` reads one
   version's, or the newest; the runner reads the newest and asks for its own version only
@@ -285,7 +285,7 @@ servers and runs on many machines.
   `/`). bwrap and Seatbelt read rules are applied outermost first. Rejected: hiding every
   account's home including service accounts (uid < 500: `/var/lib/...`, `/bin`).
 - D38 (`os-tenant-relax`; supersedes D36, D37: too strict, the goal is reasonable
-  protection; extended by D40 and D71) A non-default tenant's file tools and sandboxed commands may read what the OS
+  protection; refines D14, D16; extended by D40 and D71) A non-default tenant's file tools and sandboxed commands may read what the OS
   user can but a protected set: noeta's home but its own corners (D16, D26, D28), the
   store's files, `/etc/noeta`, `/proc` (a command has its own), noeta's temp places but
   its tenant's own, other tenants' workspaces, the server's own directories (worker cwd,
@@ -379,7 +379,7 @@ servers and runs on many machines.
 - D53 (`os-fix-r6core`; refined by D64) An agent's worktree kept for a running job is removed, if git finds no
   changes, once no job of the worker works under it (`toolkit.worktrees.after_jobs`);
   `ExitWorktree` refuses removal while one does.
-- D54 (`os-fix-r7kernel`; extended by D72) While a worker holds a tree, a call that would create a child on a
+- D54 (`os-fix-r7kernel`; extended by D72; refined by D80) While a worker holds a tree, a call that would create a child on a
   queue the worker does not serve fails with a tool error naming the queue, staging nothing
   (checked as the call finishes, where `_foreign_history` is). Rejected: letting a claim take a
   held tree's task on a queue the holder does not serve (it would run off the holder, against
@@ -413,13 +413,13 @@ servers and runs on many machines.
   descriptor, not the cwd file's path: the wrapper moves the job's fd 3 to fd 254 and closes
   fd 3 before the command runs. A path would have to be writable inside the sandbox; a
   descriptor passes through it.
-- D62 (`os-fix-r7tools`) A foreground job's log past `log_max_bytes` keeps its first and last
+- D62 (`os-fix-r7tools`; refines D20) A foreground job's log past `log_max_bytes` keeps its first and last
   quarter around a line saying the middle was not kept (cut again each time it reaches the
   cap), so the result's last 256 KB is the real end. Background jobs keep their head.
 - D63 (`os-fix-r7tools`) The skills plugin loads the skill registry once per task and input
   taken (`TaskState.inbox_read`) for the person's message, `context: fork` and the path
   unlock; the `Skill` tool loads fresh.
-- D64 (`os-fix-r7tools`) A worktree removal queued for a running job stays in the worker's
+- D64 (`os-fix-r7tools`; refines D53) A worktree removal queued for a running job stays in the worker's
   memory; the caller's note says a restart leaves the worktree. No sweep of clean agent
   worktrees at start: one may belong to an agent running on another worker. Resuming the
   agent cancels the queued removal.
@@ -447,7 +447,7 @@ servers and runs on many machines.
 - D71 (`os-fix-r8sec`) With tenants besides the default one, `noeta serve` / `noeta worker`
   refuse to start when a server directory cannot be hidden (D38's reasonable protection: a
   refusal, not a warning); without them nothing changes.
-- D72 (`os-fix-r8kernel`) D54 covers an extension's `TaskView.spawn(queue=...)`: the spawn
+- D72 (`os-fix-r8kernel`; refined by D80) D54 covers an extension's `TaskView.spawn(queue=...)`: the spawn
   raises `ValueError` naming the queue, staging nothing, through the same
   `TaskRun.serves_queue` a tool call's spawn is checked with. Rejected: checking in
   `TaskRun.staged` at append (the hook's `spawned` record is already pending; dropping the
@@ -456,7 +456,7 @@ servers and runs on many machines.
   a kind the core does not know with `ValueError` (`records.check_writable`); in a tool call
   it fails the call with that error. Since D56 folding one would leave the task to a newer
   worker for good.
-- D74 (`os-fix-r8kernel`) A tenant's running limit counts only running tasks with a live
+- D74 (`os-fix-r8kernel`; refined by D79) A tenant's running limit counts only running tasks with a live
   lease (`lease_until >= now`) on both stores (store contract). A task whose lease ran out
   may then be reclaimed while the tenant's next task runs, briefly one over the limit, as a
   dead worker's task was before.
