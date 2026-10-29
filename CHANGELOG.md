@@ -1142,3 +1142,7 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   error that a library or the system raised (it may name the server's paths); the client
   gets a generic message and the server logs the error. Errors noeta raises for the caller
   keep their text.
+- In auto mode, a tenant's tasks no longer send the server's home directory, OS user name or
+  permission rules (the operator's among them) to the tenant's model provider: the
+  server-side check's context leaves them out, and the classifier is told the tenant's name
+  as the user.

@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from noeta.core.events import DEFAULT_TENANT
 from noeta.core.extension import Allow, Ask, Deny, Gate, TaskView
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import classifier as c
@@ -104,6 +105,7 @@ class Classifier:
             assert view.complete is not None
             request = c.classifier_request(model=model, prompt=prompt, instructions=instructions,
                                            transcript=transcript, stage=n, fast=fast,
+                                           user_name=user_name(view.state.tenant),
                                            trusted=self.trusted)
             try:
                 response = await view.complete(request)
@@ -114,7 +116,8 @@ class Classifier:
                 model, fast, demoted = main, False, True
                 response = await view.complete(c.classifier_request(
                     model=model, prompt=prompt, instructions=instructions,
-                    transcript=transcript, stage=n, fast=False, trusted=self.trusted))
+                    transcript=transcript, stage=n, fast=False,
+                    user_name=user_name(view.state.tenant), trusted=self.trusted))
             return response.message.text
 
         first = c.parse_stage1(await stage(1))
@@ -168,29 +171,40 @@ def auto_request(view: TaskView, request: ModelRequest,
     return msgspec.structs.replace(request, betas=betas, vendor_fields=fields)
 
 
-def server_context(scope: sc.Scope, *, plans_dir: str, allow: Sequence[r.Rule],
+def user_name(tenant: str) -> str | None:
+    """The user the classifier is told of: the tenant's name for a tenant
+    other than the default one (never the server's OS user), else ``None``
+    (the OS user)."""
+    return None if tenant == DEFAULT_TENANT else tenant
+
+
+def server_context(scope: sc.Scope, *, tenant: str, plans_dir: str, allow: Sequence[r.Rule],
                    deny: Sequence[r.Rule], ask: Sequence[r.Rule],
                    auto_mode: Mapping[str, Sequence[str]]) -> dict[str, Any]:
     """What Claude Code tells the API about its permission state on the
     first auto-mode request (the server answers an API-key session that
-    it does not classify, and the classifier runs here)."""
+    it does not classify, and the classifier runs here). For a tenant
+    other than the default one, nothing of the server's own: its home
+    directory, OS user and the rules (the operator's among them; a call
+    they allow never reaches a classifier)."""
+    mine = tenant == DEFAULT_TENANT
     return {
         "v": 1, "permission_mode": "auto", "platform": _platform(), "live_cwd": scope.cwd,
-        "home_dir": scope.home,
-        "rule_roots": {"userSettings": str(Path(plans_dir).parent),
+        "home_dir": scope.home if mine else "",
+        "rule_roots": {"userSettings": str(Path(plans_dir).parent) if mine else "",
                        "projectSettings": scope.cwd, "localSettings": scope.cwd},
         "trusted_directories": {
             "primary": {"path": scope.cwd, "resolved": [scope.cwd]},
             "additional": list(scope.dirs[1:]), "network": [],
             "block_reads_outside_working_directories": False},
-        "rules": {"allow": [x.text for x in allow],
-                  "deny": [x.text for x in deny],
-                  "ask": [x.text for x in ask]},
+        "rules": {"allow": [x.text for x in allow] if mine else [],
+                  "deny": [x.text for x in deny] if mine else [],
+                  "ask": [x.text for x in ask] if mine else []},
         "auto_mode": {k: list(v) for k, v in auto_mode.items()},
         "artifact_consent_holdback": False, "case_insensitive_paths":
             sys.platform == "darwin",
         "restricted": False, "is_remote_mode": False, "classify_all_shell": False,
-        "user_identity": c._user_name(),
+        "user_identity": user_name(tenant) or c._user_name(),
         "git_state": {"cwd": scope.cwd, "root": scope.cwd, "branch": None,
                       "default_branch": None, "status": None, "visibility": None},
     }

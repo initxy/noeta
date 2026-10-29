@@ -552,7 +552,8 @@ class Permissions(Extension):
         if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
             return request
         return a.auto_request(view, request, lambda: a.server_context(
-            self._check.scope(view), plans_dir=self.plans_dir, allow=self._check.rules(view),
+            self._check.scope(view), tenant=view.state.tenant, plans_dir=self.plans_dir,
+            allow=self._check.rules(view),
             deny=self.deny_rules, ask=self.ask_rules, auto_mode=self.auto_mode))
 
     def _offered(self, name: str) -> bool:
