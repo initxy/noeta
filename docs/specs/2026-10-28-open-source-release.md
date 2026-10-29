@@ -556,6 +556,10 @@ servers and runs on many machines.
   `isolation_problem` refuses non-default tenants there whatever the sandbox settings,
   unless `shared_os_user_tenants`. Seatbelt starts from `(allow default)`, and closing
   `mach-lookup` / Apple Events cannot be tested here; refusing is the honest default.
+- D100 (`os-fix-r11sec`) The permissions plugin's workspace trust is per task:
+  `trusted_workspace` takes a `(cwd) -> bool`, asked with the task's `view.cwd` (a failing
+  check or no cwd is untrusted); the `noeta` command passes `project_trusted`, as it does to
+  the MCP and skills plugins. A plain bool keeps its old meaning for host code.
 
 ## Plan
 

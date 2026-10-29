@@ -80,3 +80,18 @@ async def test_a_trusted_project_loads_them(home: Path, project: Path) -> None:
     assert str(project / ".noeta/skills") in tiers
     assert app.notices == []
     await app.store.close()
+
+
+async def test_permissions_trust_each_tasks_directory_not_the_servers(
+        home: Path, project: Path, tmp_path: Path) -> None:
+    """A server started in a trusted project still treats a task elsewhere
+    (an --allow-root directory, a tenant's workspace) as untrusted."""
+    trust_project(str(project))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    app = from_settings(load_settings(), cwd=str(project))
+    perms = next(e for e in app.runtime.agents["main"].extensions if e.name == "permissions")
+    trusted = perms.trusted  # type: ignore[attr-defined]
+    assert callable(trusted)
+    assert trusted(str(project)) and not trusted(str(elsewhere))
+    await app.store.close()

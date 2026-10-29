@@ -35,7 +35,7 @@ class Classifier:
     turns its verdict on a call into a gate (once per call, recorded)."""
 
     def __init__(self, *, model: str | None, auto_mode: Mapping[str, Sequence[str]],
-                 deny_rules: Sequence[r.Rule], trusted: bool) -> None:
+                 deny_rules: Sequence[r.Rule], trusted: Callable[[TaskView], bool]) -> None:
         self.model = model
         self.auto_mode = auto_mode
         self.deny_rules = deny_rules
@@ -99,6 +99,7 @@ class Classifier:
         prompt = c.render_prompt(self._prompt(view), self.auto_mode, self._deny_texts(view))
         model, fast = self._model(view, st)
         demoted = False
+        trusted = self.trusted(view)
 
         async def stage(n: int) -> str:
             nonlocal model, fast, demoted
@@ -106,7 +107,7 @@ class Classifier:
             request = c.classifier_request(model=model, prompt=prompt, instructions=instructions,
                                            transcript=transcript, stage=n, fast=fast,
                                            user_name=user_name(view.state.tenant),
-                                           trusted=self.trusted)
+                                           trusted=trusted)
             try:
                 response = await view.complete(request)
             except Exception:
@@ -117,7 +118,7 @@ class Classifier:
                 response = await view.complete(c.classifier_request(
                     model=model, prompt=prompt, instructions=instructions,
                     transcript=transcript, stage=n, fast=False,
-                    user_name=user_name(view.state.tenant), trusted=self.trusted))
+                    user_name=user_name(view.state.tenant), trusted=trusted))
             return response.message.text
 
         first = c.parse_stage1(await stage(1))

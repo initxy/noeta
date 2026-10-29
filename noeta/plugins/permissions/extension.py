@@ -132,7 +132,8 @@ class Permissions(Extension):
     * ``trusted_workspace`` / ``remember_to_project`` — "always" answers are
       also written to the project's ``.noeta/settings.local.json`` (trusted
       workspaces only). Only in a trusted workspace do the instruction files
-      count as the person's intent to the auto-mode classifier.
+      count as the person's intent to the auto-mode classifier. A callable
+      ``(cwd) -> bool`` decides it for each task's working directory.
     * ``shell_allowlist`` (``{"rule": "git push *"}`` specs) and
       ``webfetch_allowed_hosts`` (``example.com`` / ``*.example.com``) —
       shorthands for ``Bash(...)`` and ``WebFetch(domain:...)`` allow rules.
@@ -185,7 +186,7 @@ class Permissions(Extension):
         allowed_tools: Iterable[str] | None = None,
         disallowed_tools: Iterable[str] = (),
         shell_allowlist: Sequence[Mapping[str, Any]] = (),
-        trusted_workspace: bool = False,
+        trusted_workspace: bool | Callable[[str], bool] = False,
         remember_to_project: bool = True,
         webfetch_allowed_hosts: Iterable[str] = (),
         budget: g.Budget | None = None,
@@ -258,10 +259,24 @@ class Permissions(Extension):
             additional_directories=self.additional_directories, risk=self.risk,
             default_risk=self.default_risk, plans_dir=self.plans_dir)
         self._classifier = a.Classifier(model=classifier_model, auto_mode=self.auto_mode,
-                                        deny_rules=self.deny_rules, trusted=self.trusted)
+                                        deny_rules=self.deny_rules, trusted=self.trusts)
         self._exit_plan = pl.ExitPlanModeTool()
         self._enter_plan = pl.EnterPlanModeTool(self._enter_plan_mode)
         self._background: set[asyncio.Future[Any]] = set()
+
+    def trusts(self, view: TaskView) -> bool:
+        """Whether this task's working directory is a trusted workspace."""
+        trusted = self.trusted
+        if not callable(trusted):
+            return bool(trusted)
+        cwd = view.cwd
+        if not cwd:
+            return False
+        try:
+            return bool(trusted(cwd))
+        except Exception:
+            log.warning("permissions: the trust check for %s failed", cwd, exc_info=True)
+            return False
 
     # ------------------------------------------------------------ state
 
@@ -524,7 +539,7 @@ class Permissions(Extension):
         if not rules:
             return
         view.record(NAME, "rule", {"rules": rules})
-        if self.trusted and self.remember_to_project:
+        if self.remember_to_project and self.trusts(view):
             try:
                 await _append_project(view, rules)
             except Exception:
