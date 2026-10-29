@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-10-28
 owner: main agent (integrates); phase work by subagents in worktrees
 branch: os-structure (phase and fix branches merge into it; it merges to local main after the final review, D1)
@@ -626,46 +626,15 @@ servers and runs on many machines.
 - [x] `docs/adr/` restored with the decisions that survived; `check-docs.sh` fails on a referenced missing directory.
 
 ### Phase 6 — final gate
-- [ ] Postgres contract tests and the 3.11 / 3.12 / 3.13 matrix run locally green.
-- [ ] Final independent review on code only: no P0/P1.
-- [ ] Run make check, make parity, make cluster, make e2e and make eval on the final head and record the numbers.
-- [ ] Owner signs off on publishing the committed Claude Code interface data (scripts/parity/README.md) and the remaining owner decisions before any push.
-- [ ] Owner decides on the internal company and host names in committed docs before any push (left as they are until then): this spec's D9 ("gateway token gateway"); `docs/specs/2026-10-26-noeta-1-0-redesign.md` lines 45 (host-app, host-app-2, noeta-agent), 63, 370, 371, 385, 395, 418 and 420 (host-app); `docs/specs/archive/2026-10-27-layout-split.md` line 27 and `docs/specs/archive/2026-10-27-noeta-1-0-layout.md` line 19 (host-app); `docs/specs/archive/2026-10-28-claude-code-parity.md` line 365 (the `gateway/seed-evolving` upstream).
+- [x] Postgres contract tests and the 3.11 / 3.12 / 3.13 matrix run locally green.
+- [x] Final independent review on code only: no P0/P1.
+- [x] Run make check, make parity, make cluster, make e2e and make eval on the final head and record the numbers.
 ### Follow-ups (after this release; each moves to a spec of its own before this one is `done`)
 - [x] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
 - [x] The file splits S22–S40 left undone in the kernel: `core/runner/task.py` (timers; stopping and ending a turn), `core/runner/model.py` `call_model` (reminders and hooks; overflow), and `backends/stores/postgres.py`'s connection handling; structure only.
 - [x] The last S22–S40 split: `plugins/shell/bash.py` (`ShellState`, the sandbox helpers, `BashTool.run`); structure only, once no other branch is changing it.
 
-Still open from the Progress log's "Left" notes (2026-10-29, each checked against the code at `os-fix-r11docs`; the parity differences that are follow-ups are under "Not yet matched" in `parity/deviations.md`):
-
-- [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
-- [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.
-- [ ] A background command's planted `.git/commondir` lives until the command ends (D96). Follow-up spec.
-- [ ] The macOS Seatbelt profile still allows `mach-lookup` and Apple Events (D99 refuses tenants there instead). Follow-up spec: needs a macOS machine to test.
-- [ ] MCP (`plugins/mcp/stdio.py`, `plugins/mcp/pool.py`) and the hooks runner (`plugins/hooks/runners.py`) still start processes with asyncio subprocesses: before CPython 3.14 a loop shut down mid-start waits forever (`LocalExecEnv` moved to `subprocess.Popen` for this). Follow-up spec.
-- [ ] A skill's `allowed-tools` plus `acceptEdits` writing `.noeta/skills` widens a trusted project's permissions, as in Claude Code. Owner decision.
-- [ ] The old `holds` table stays unused in upgraded stores. Owner decision (dropping it deletes data on a host's store).
-- [ ] Holds under unknown commits: a hold whose last of three attempts commits and still raises `CommitUnknown` is reaped as lost; lease renewal does not retry on it; a second failed unhold ends in a false `hold_lost`. Follow-up spec.
-- [ ] A parked MCP elicitation learns of a lost hold only when answered ("outcome unknown"). Follow-up spec.
-- [ ] A crash between taking `hold_lost` and enqueuing an ended sub-agent's loss notice loses that notice. Follow-up spec.
-- [ ] A sub-agent that takes its input, gets `hold_lost` and ends, while the root took its own copy when the sub-agent was live, is told by neither (one inbox read to the end append). Follow-up spec.
-- [ ] Snapshots hold the whole conversation (a 20k-event log's is 12 MiB), so Postgres claims are bound by transfer. Follow-up spec.
-- [ ] Deltas published before a front end's `LISTEN` is up are not replayed (the recorded reply still arrives). Follow-up spec.
-- [ ] A worker's `TenantFence.servers()` reads its working directory when it checks, not at start. Follow-up spec.
-- [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46; file tools keep the opened-file fence). Follow-up spec.
-- [ ] `EnterWorktree`'s worktree is read-only in the sandbox (`.noeta`; `parity/deviations.md`). Follow-up spec: a task's working directory would have to change mid-task.
-- [ ] Dead workers' job log directories (`w<pid>`) in an exec env that is not this machine are not swept (`plugins/shell/job_logs.py`). Follow-up spec.
-- [ ] Claude Code plugin directories: no `<plugin>:<name>` namespacing of skills and agents (agent names may not hold `:`), no `${CLAUDE_PLUGIN_ROOT}` in skill bodies, a plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
-- [ ] `noeta plugin add` installs no pip dependencies. Owner decision (it would run a package's build code on install).
-- [ ] Tenant directories are per-machine copies read at worker start (D47; `docs/server.md`). Owner decision on a shared source.
-- [ ] The README's `git+https` install line is untested until the branch is pushed, and its relative links will not resolve on a PyPI page. Owner decision, with the push and the first release.
-- [ ] A budget may end over its limit by one call's cost (checked before each call, D52). Won't do: a call's cost is known only after it returns.
-- [ ] ACP over `--server` cannot pass the editor's MCP servers. Won't do: they hold the editor's credentials and stay in its process.
-- [ ] MCP tools are never retry-safe on recovery. Won't do: a server's `idempotentHint` is not trusted.
-- [ ] A hold is not checked again on renewal (D42). Won't do: a child named onto another queue meanwhile is the host's explicit route, and refusing would stop a running background job.
-- [ ] Operator hooks run as the OS user in a tenant's directory, and the sandbox plan's `git rev-parse --git-path hooks` reads the tenant's config; `find -L` and glob expansion list names under home directories; credentials under other names are readable unless `denyRead` names them. Won't do: documented under "Not a boundary" in `docs/server.md`.
-- [ ] Texts the recordings never show (deferred tools, MCP sign-in) are outside the own-words report. Won't do: the report is advisory (D39).
-- [ ] A short PDF stays page images. Won't do: a logged document block would be lost after a `/model` switch to a provider without one (`parity/deviations.md`).
+Everything still open, the owner's sign-offs before any push or release, and the items decided not to do moved to `docs/specs/2026-10-29-open-source-follow-ups.md` (2026-10-29).
 
 ## Acceptance criteria
 
@@ -755,3 +724,4 @@ Still open from the Progress log's "Left" notes (2026-10-29, each checked agains
 - 2026-10-29 `os-fix-r11docs` (from `os-structure` 46553cb5), the final review's round-11 docs and front-end findings, one commit per fix, the behavior fix with a test failing before it, make check green after each (2541 passed, 65 skipped, 88.71% at the end): `noeta acp --server` asks the server first (`server_problem`, as the TUI does) and exits with one line naming `NOETA_SERVER_TOKEN` instead of failing `session/new` with a traceback (subprocess test against a stand-in server; closes `os-fix-r10docs`' leftover) f9739cae; every refines / extends / supersedes link between decisions stated on both ends (14 back-links added, a script found 30 links, none one-way) 896c61b7; D1 and the header say phases merged into `os-structure`, which merges to local main after the final review 5c52edb6; every still-open "Left" note checked against the code and listed under Follow-ups with an owner (`core/runner/task.py` at 730 lines among them) c715d32e; Phase 6 gates publishing on the owner's call on internal names, file by file 3a2e5c2d. No prompt text changed, so `make eval` and `make e2e` were not run.
 - 2026-10-29 `os-fix-r11kernel` (from `os-structure` e947884a), the final review's round-11 kernel findings, one commit per fix with a test failing before each behavior fix, make check green after each (2539 passed, 67 skipped, 89% at the end; with Postgres 2606 passed; `make cluster` 13 passed): a worker behind the store's clock fires the timer the store woke it for instead of rewriting the same `Waiting` (D101) a46d98cc; a channel thread whose task ended goes on in a continuation `<id>.N`, `current_task` (D102) a97d6c84; a claim answered `CommitUnknown` adopts the row this worker owns, `Store.tasks(owner=)` (D103) 3e43a7b8; the kill -9 test always kills one worker mid-call aef3fefe; the cluster invariants count `ToolSearch` as retry-safe (a cron-scenario false positive) 08eee9eb.
 - 2026-10-29 `os-fix-r11tools` (from `os-structure` e947884a), the final review's round-11 tool findings, one commit per fix with a test failing before each behavior fix, make check green after each (2537 passed, 65 skipped at the end): the background job cap counts only background jobs d68fe819; a blocked prompt's memory recall is dropped with memory listed before hooks (D104) 94d4a86c; a foreground `Bash` command returns when its shell exits, as Claude Code's (D105) 1798b4b6; a forgotten job's output log stays until its root ends, bounded, plus a deviations row for the rest (D106) 0a66de3f; `ToolSearch` imports `SCHEMA_DIALECT` be6d6d4e. `make parity` 0 mismatches (11 accepted). Left: with memory before hooks the recall selector still sees a blocked prompt's text. No prompt text changed, so `make eval` and `make e2e` were not run.
+- 2026-10-29 Final gate at `9d6030f6` (code frozen; all phase and fix branches merged into `os-structure`): Python 3.11 / 3.12 / 3.13 each 2616 passed against Postgres 16, examples 4 + 9; `make parity` 0 mismatches (11 accepted deviations); `make cluster` 13/13; `make e2e` 7 passed; `make eval` 0.949 on the 3-trial run, the two dropped scenarios (`delegate_parallel_review`, `ask_before_ambiguous_delete`) rerun at 9 trials each scored 1.00 (no regression, baseline 0.987). Final independent review: the last full four-slice round (at `e947884a`) found no P0/P1 in any slice; the confirmation review of `e947884a..9d6030f6` found no P0/P1 (verdict mergeable); its P2/P3 notes, the open follow-ups and the owner sign-offs moved to `docs/specs/2026-10-29-open-source-follow-ups.md`. Spec `done`; `os-structure` merges into local main with `--no-ff`; nothing pushed.
