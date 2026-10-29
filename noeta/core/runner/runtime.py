@@ -206,10 +206,16 @@ class Runtime:
         raise AssertionError("unreachable")
 
     async def _unhold(self, tree: TreeHold) -> None:
+        # Asked twice: a hold left behind runs out and is reaped, telling the
+        # tree (``hold_lost``) that what ended normally was lost.
         try:
-            await self.store.unhold(tree.root_id, self.worker, tree.epoch)
-        except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
-            log.warning("tree %s: unhold failed: %s", tree.root_id, exc)
+            for attempt in range(2):
+                try:
+                    await self.store.unhold(tree.root_id, self.worker, tree.epoch)
+                    return
+                except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
+                    log.warning("tree %s: unhold failed%s: %s", tree.root_id,
+                                ", asking again" if not attempt else "", exc)
         finally:
             if self._unholding.get(tree.root_id) is asyncio.current_task():
                 self._unholding.pop(tree.root_id, None)

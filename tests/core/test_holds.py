@@ -15,7 +15,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.errors import CommitUnknown, HeldElsewhere
+from noeta.core.errors import CommitUnknown, HeldElsewhere, StoreUnavailable
 from noeta.core.events import External, InputTaken
 from noeta.core.runner import Runtime
 from noeta.core.store import HOLD_LOST
@@ -214,6 +214,34 @@ class LostCommit(SqliteStore):
                 await super().hold(root_id, worker, seconds, queues=queues)
             raise CommitUnknown("connection lost during COMMIT")
         return await super().hold(root_id, worker, seconds, epoch=epoch, queues=queues)
+
+
+class FlakyUnhold(SqliteStore):
+    """The first unhold fails as a dropped connection would."""
+
+    fail = 1
+
+    async def unhold(self, root_id: str, worker: str, epoch: int,
+                     *, lost: bool = False) -> None:
+        if self.fail:
+            self.fail -= 1
+            raise StoreUnavailable("connection lost")
+        await super().unhold(root_id, worker, epoch, lost=lost)
+
+
+async def test_a_release_whose_unhold_fails_once_still_gives_the_hold_back(
+        tmp_path: Path) -> None:
+    """Left in the store, the hold would run out and be reaped, telling the
+    tree a job that ended normally was lost (``hold_lost``)."""
+    store = FlakyUnhold(str(tmp_path / "t.db"))
+    rt = _runtime(store, ScriptedProvider([]))
+    try:
+        release = await rt.hold("root")
+        await release()
+        assert await _hold_rows(store) == []
+    finally:
+        await rt._drop_holds()
+        await store.close()
 
 
 async def _hold_rows(store: SqliteStore) -> list[tuple[Any, ...]]:
