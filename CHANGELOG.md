@@ -1132,3 +1132,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   provider's tool-use id, so a gateway answering with `../` in it could have the transcript
   written outside the project directory. A spill file of a task or call named `..` now
   stays in its directory too.
+- `Workflow`'s list of saved workflows (named when a name is not found) no longer lists a
+  tenant's `.noeta/workflows` when it is a link to a place the tenant fence refuses, such as
+  another tenant's workspace: the listing ran `ls` outside the fence.

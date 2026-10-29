@@ -14,6 +14,7 @@ from noeta.core.extension import TaskView
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message
 from noeta.plugins.workflow.engine import EngineMissing
+from noeta.toolkit.context import fence_refuses
 from noeta.toolkit.paths import noeta_home
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, spill_path
 
@@ -111,11 +112,14 @@ class WorkflowTool:
     async def _saved_names(self, ctx: ToolContext) -> list[str]:
         """The saved workflows' names, the project's then the user's."""
         names: list[str] = []
+        project = f"{self.view.cwd}/{PROJECT_WORKFLOWS}"
         try:
-            out = await ctx.env.run(["ls", "-1", f"{self.view.cwd}/{PROJECT_WORKFLOWS}"],
-                                    timeout=5, output_cap=1 << 16)
-            if out.exit_code == 0:
-                names += out.stdout.decode("utf-8", "replace").split("\n")
+            # ``ls`` runs unfenced: a link to a place the fence refuses
+            # (another tenant's workspace) is not listed.
+            if not fence_refuses(ctx.env, project):
+                out = await ctx.env.run(["ls", "-1", project], timeout=5, output_cap=1 << 16)
+                if out.exit_code == 0:
+                    names += out.stdout.decode("utf-8", "replace").split("\n")
         except (OSError, FileNotFoundError):
             pass
         try:
