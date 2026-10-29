@@ -482,7 +482,7 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   `Read`'s image file ceiling is now 128 MB (`IMAGE_MAX_BYTES`); `noeta.plugins.mcp.results`
   no longer exports `IMAGE_MAX_BYTES`.
 - **Long tool output is saved, as the tools promise.** No built-in host set
-  `Runtime.spill_root`, so Bash, Grep, WebFetch and MCP output past the inline limit was cut
+  `Runtime.spill_root`, so Bash, WebFetch and MCP output past the inline limit was cut
   instead of saved to a file. `LocalApp` now defaults it to `<tmp>/noeta-<uid>/tool-results`
   (`noeta.host.local.default_spill_root`) and the `noeta` command (TUI, `-p`, ACP, `serve`,
   `worker`) to `~/.noeta/tool-results`; one directory per task below it.
