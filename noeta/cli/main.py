@@ -36,6 +36,8 @@ SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp", "t
 #: Where an extra is installed from (README). noeta 1.0 is not on PyPI, and
 #: the bare name there may be someone else's package.
 SOURCE_URL = "git+https://github.com/initxy/noeta"
+#: The extras the README's install line names.
+README_EXTRAS = ("tui", "images")
 #: The top-level modules each optional extra installs (``pyproject.toml``).
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
@@ -342,10 +344,12 @@ def main(argv: list[str] | None = None) -> None:
         extra = missing_extra(exc)
         if extra is None:
             raise
-        source = f"'noeta[{extra}] @ {SOURCE_URL}'"
+        # A uv tool reinstall keeps only the extras it names.
+        wanted = ",".join(dict.fromkeys((*README_EXTRAS, extra)))
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
-                 f"pip install {source} (or, for a uv tool install, "
-                 f"uv tool install --reinstall {source})")
+                 f"pip install 'noeta[{extra}] @ {SOURCE_URL}' (or, for a uv tool install, "
+                 f"uv tool install --reinstall 'noeta[{wanted}] @ {SOURCE_URL}', "
+                 "listing every extra you want: a reinstall drops the ones it does not name)")
 
 
 def _main(argv: list[str]) -> None:
