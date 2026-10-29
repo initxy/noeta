@@ -872,6 +872,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- The Linux sandbox's filter refused `socket(AF_UNIX)` but not `socketpair(AF_UNIX, ...)`,
+  whose datagram sockets send to any Unix socket by address (the host's journald). It is
+  refused under the same rule, unless Unix sockets are allowed.
 - `noeta serve` takes a structured `input` (`POST /tasks`, `/tasks/{id}/messages`) only as a
   user turn of text and images, and always as the person's (`origin` `human`). Before, a
   client could send an assistant or system turn, tool calls and results, or a user turn

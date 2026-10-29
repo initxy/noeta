@@ -822,6 +822,29 @@ def test_seccomp_filter_refuses_io_uring_with_unix_sockets(
         assert _run_bpf(loose, nr, aarch64) == allow
 
 
+@pytest.mark.parametrize(("machine", "audit", "nr"),
+                         [("x86_64", 0xC000003E, 53), ("aarch64", 0xC00000B7, 199)])
+def test_seccomp_filter_refuses_a_unix_socketpair(monkeypatch: pytest.MonkeyPatch,
+                                                  machine: str, audit: int, nr: int) -> None:
+    from noeta.backends.execenvs import sandbox_bridge as bridge
+    monkeypatch.setattr(bridge.platform, "machine", lambda: machine)
+    eperm, allow = 0x00050000 | 1, 0x7FFF0000
+    strict = bridge._filter(allow_unix=False, allow_userns=False)
+    loose = bridge._filter(allow_unix=True, allow_userns=False)
+    assert strict is not None and loose is not None
+    assert _run_bpf(strict, nr, audit, 1) == eperm  # socketpair(AF_UNIX, ...)
+    assert _run_bpf(strict, nr, audit, 2) == allow
+    assert _run_bpf(loose, nr, audit, 1) == allow
+
+
+@needs_bwrap
+async def test_a_unix_socketpair_cannot_be_made(tmp_path: Path, home: Path) -> None:
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, out, _ = await _run(
+        env, "python3 -c 'import socket; socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)'")
+    assert code != 0 and "Operation not permitted" in out
+
+
 @needs_bwrap
 async def test_io_uring_cannot_be_set_up(tmp_path: Path, home: Path) -> None:
     probe = ("import ctypes;l=ctypes.CDLL(None,use_errno=True);"

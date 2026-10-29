@@ -6,7 +6,7 @@ command reaches the outside solely through the proxies the host serves on
 Unix sockets bound into the sandbox. This script listens on loopback TCP
 ports inside the namespace (the ones the proxy variables name) and relays each
 connection to those sockets, then starts the command with a seccomp filter
-that refuses to create Unix sockets (so the command cannot reach a host
+that refuses to create Unix sockets, alone or in pairs (so the command cannot reach a host
 daemon's socket, such as Docker's) and new user namespaces (which would let
 it undo the mounts), unless the settings allow them, and always refuses
 tracing or reading into another process. The relay itself is not dumpable,
@@ -78,6 +78,9 @@ _ARCHES = {
     "x86_64": (0xC000003E, 41, 272, 56, 435, True, (101, 310, 311, 438)),
     "aarch64": (0xC00000B7, 198, 97, 220, 435, False, (117, 270, 271, 438)),
 }
+#: socketpair: a connected pair, but a datagram one sends to any Unix
+#: socket by address (``sendto``), such as the host's journald.
+_SOCKETPAIR = {"x86_64": 53, "aarch64": 199}
 # io_uring_setup, io_uring_enter, io_uring_register: the same numbers on
 # every architecture (added after the tables were unified).
 _IO_URING = (425, 426, 427)
@@ -131,6 +134,7 @@ def _filter(allow_unix: bool, allow_userns: bool) -> bytes | None:
         for nr in _IO_URING:
             prog += [(jeq, 0, 1, nr), (ret, 0, 0, _errno(_EPERM))]
         flag_block(nr_socket, (jeq, 0, 1, socket.AF_UNIX))
+        flag_block(_SOCKETPAIR[platform.machine()], (jeq, 0, 1, socket.AF_UNIX))
     if not allow_userns:
         flag_block(nr_unshare, (jset, 0, 1, _CLONE_NEWUSER))
         flag_block(nr_clone, (jset, 0, 1, _CLONE_NEWUSER))
