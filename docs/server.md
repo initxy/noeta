@@ -140,21 +140,34 @@ of these holds:
    `shared_os_user_tenants = true` under `[server]` in `~/.noeta/config.toml`. Tenants then must trust each
    other and the operator with everything the OS user can reach.
 
-A task of a tenant other than the default one is fenced off from these places: noeta's
-home (`NOETA_HOME`: tokens, settings, tenant directories, other tasks' files), the spill
-directory wherever it is, the sqlite store and its `-wal` / `-shm` files wherever they are,
-`/etc/noeta`, `/proc`, noeta's places in the temp directories (`noeta-background-<uid>`:
-background job logs; `noeta-temp-<uid>`: each worker's sandbox `TMPDIR`, each tenant's own
-directory) and every other tenant's workspace. Inside them such a task keeps its own spilled
-tool outputs (its task's and its root's), its tenant's plan files (`plans/<tenant>/`), in
-its tenant's project directory of its working directory (`projects/<tenant>/<slug>/`) the
-memory and, to read, its own and its root's compaction transcripts, read access to
-`skills/` and `workflows/`, and its tenant's temporary directory
-(`noeta-temp-<uid>/tenants/<tenant>/`: its job logs and its commands' `TMPDIR`). No allow
-rule, permission mode (`bypassPermissions` included) or approval lifts the fence. The
-default tenant's tasks are not fenced, their sandbox is the settings' own, and their
-project directories stay `projects/<slug>/`. A `log_dir` given to the shell plugin holds
-the default tenant's job logs only; it is not fenced, so keep it inside noeta's home.
+What a task of a tenant other than the default one may reach is an allow list:
+
+- its tenant's workspace (read and write);
+- its own corners of noeta's places: its spilled tool outputs (its task's and its root's),
+  its tenant's plan files (`plans/<tenant>/`), in its tenant's project directory of its
+  working directory (`projects/<tenant>/<slug>/`) the memory and, to read, its own and its
+  root's compaction transcripts, read access to `skills/` and `workflows/`, and its
+  tenant's temporary directory (`noeta-temp-<uid>/tenants/<tenant>/`: its job logs and its
+  commands' `TMPDIR`);
+- to read, the machine's programs, libraries and settings: `/usr`, `/bin`, `/sbin`,
+  `/lib`, `/lib32`, `/lib64`, `/libx32`, `/etc` (macOS `/private/etc`) and `/nix/store`,
+  but not `/etc/noeta`, a home directory or the server's own directories inside them.
+
+Everything else is refused, notably noeta's home (`NOETA_HOME`: tokens, settings, tenant
+directories, other tasks' files) and the spill directory wherever they are, the sqlite store
+and its `-wal` / `-shm` files, `/proc`, noeta's places in the temp directories
+(`noeta-background-<uid>`, `noeta-temp-<uid>`), other tenants' workspaces, every home
+directory (`/home`, `/root`, `/Users`, the worker's `~` and each login account's: the
+operator's SSH keys, cloud credentials and `gh` sign-in), the server's own directories (the
+default tenant's workspace: the directory `noeta serve` or `noeta worker` started in, and
+`--allow-root` paths, with the server's `.env`), the rest of `/tmp`, `/opt`, `/srv`, `/var`
+and `/mnt`. The operator's `additionalDirectories` (and the sandbox's `allowWrite` /
+`allowRead`) are the default tenant's only. A tenant whose workspace this worker does not
+know (no tenant directory here) reaches none. No allow rule, permission mode
+(`bypassPermissions` included) or approval lifts it. The default tenant's tasks are not
+fenced, their sandbox is the settings' own, and their project directories stay
+`projects/<slug>/`. A `log_dir` given to the shell plugin holds the default tenant's job
+logs only; it is not fenced, so keep it inside noeta's home.
 
 - **File tools** (`Read`, `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) run in
   the worker process whatever the deployment. The fence is checked at the permission gate after symlinks and `..` are
@@ -165,7 +178,9 @@ the default tenant's job logs only; it is not fenced, so keep it inside noeta's 
   script, an inline skill command and every `git` noeta runs in the tenant's checkout (for
   a worktree, the first turn's git snapshot, memory's repository lookup; with the hooks and
   config programs such as `gpg.program` or filter drivers the tenant set there) run inside
-  the sandbox with the same places unreadable (`TenantFence.confine`), always: the
+  the sandbox with the refused places above unreadable but for the tenant's workspace, its
+  own corners and the Python running the sandbox's network bridge (`TenantFence.confine`;
+  the rest of the machine stays readable as for any sandboxed command), always: the
   settings' `excludedCommands`, `dangerouslyDisableSandbox`, `filesystem.disabled` and
   `enableWeakerNestedSandbox` do not apply to them. On Linux each command has its own PID
   namespace, so no other process (`/proc/<pid>/environ`) is visible; writes go only where

@@ -236,3 +236,105 @@ def test_a_started_workflows_script_is_kept_where_its_task_may_read_it(
     fence = TenantFence(home=str(tmp_path / "home"), spill_root=str(spill))
     assert fence.refusal(path, tenant="acme", task_id="t1") is None
     assert fence.refusal(path, tenant="acme", task_id="t2") is not None
+
+
+@pytest.fixture
+def operator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    """The operator's credentials in a home directory, the server's own
+    directory (its working directory, with a ``.env``), an additional
+    directory of the operator's settings and a shared file elsewhere."""
+    home = tmp_path / "userhome"
+    for path in (home / ".ssh" / "id_rsa", home / ".aws" / "credentials",
+                 tmp_path / "server" / ".env", tmp_path / "extra" / "f",
+                 tmp_path / "shared" / "f.txt"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("secret")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path / "server")
+    return {"home": home, "server": tmp_path / "server", "extra": tmp_path / "extra",
+            "shared": tmp_path / "shared"}
+
+
+def _reach(places: dict[str, Path],
+           operator: dict[str, Path]) -> list[tuple[str, dict[str, Any]]]:
+    from noeta.toolkit.paths import tenant_temp_dir
+
+    return [
+        ("Read", {"file_path": "~/.ssh/id_rsa"}),
+        ("Read", {"file_path": str(operator["home"] / ".aws" / "credentials")}),
+        ("Read", {"file_path": str(operator["server"] / ".env")}),
+        ("Read", {"file_path": str(operator["extra"] / "f")}),
+        ("Write", {"file_path": str(operator["extra"] / "g")}),
+        ("Read", {"file_path": str(operator["shared"] / "f.txt")}),
+        ("Edit", {"file_path": "/usr/bin/env"}),
+        ("Write", {"file_path": "/etc/hosts"}),
+        # What stays open: the machine's programs and settings to read, the
+        # workspace, the tenant's own temporary directory.
+        ("Read", {"file_path": "/usr/bin/env"}),
+        ("Read", {"file_path": "/etc/hosts"}),
+        ("Read", {"file_path": "README"}),
+        ("Write", {"file_path": str(places["acme"] / "new.txt")}),
+        ("Read", {"file_path": str(Path(tenant_temp_dir("acme")) / "tmp" / "x")}),
+    ]
+
+
+@pytest.mark.parametrize("how", ["bypass", "approved"])
+async def test_a_tenant_reaches_only_its_workspace_own_places_and_system_files(
+        store: SqliteStore, places: dict[str, Path], operator: dict[str, Path],
+        how: str) -> None:
+    async def yes(_name: str, _input: dict[str, Any]) -> bool:
+        return True
+
+    kw: dict[str, Any] = {"mode": "bypassPermissions", "allow": ["Read(//**)", "Edit(//**)"]} \
+        if how == "bypass" else {"mode": "default", "can_use_tool": yes}
+    calls = _reach(places, operator)
+    evs, tools = await run(store, places, calls,
+                           additional_directories=[str(operator["extra"])], **kw)
+    results = outcomes(evs)
+    assert sorted(err for _, err in results) == [False] * 5 + [True] * 8, results
+    assert all("tenant 'acme' may not" in text for text, err in results if err)
+    ran = [r["file_path"] for t in ("Read", "Write", "Edit") for r in tools[t].runs]
+    assert sorted(ran) == sorted(str(c[1]["file_path"]) for c in calls[8:])
+
+
+async def test_the_default_tenant_still_reaches_the_operators_files(
+        store: SqliteStore, places: dict[str, Path], operator: dict[str, Path]) -> None:
+    calls = _reach(places, operator)[:6]
+    evs, _tools = await run(store, places, calls, tenant="default", mode="bypassPermissions",
+                            additional_directories=[str(operator["extra"])])
+    assert [err for _, err in outcomes(evs)] == [False] * 6, outcomes(evs)
+
+
+async def test_the_operators_additional_directories_are_not_a_tenants(
+        store: SqliteStore, places: dict[str, Path], operator: dict[str, Path]) -> None:
+    # A read-only command in a working directory runs without asking; the
+    # additional directory is one for the default tenant only.
+    asked = {}
+    for tenant in ("default", "acme"):
+        bash = Fake("Bash")
+        provider = ScriptedProvider([reply("", ("Bash", {"command": f"cat {operator['extra']}/f"})),
+                                     reply("done")])
+        rt = runtime(store, provider, agent(
+            [perms(places, mode="default", additional_directories=[str(operator["extra"])])],
+            [bash]))
+        client = Client(store).scoped(tenant)
+        tid = await client.create("a", "go", config={"cwd": str(places["acme"])})
+        await rt.run_until_idle()
+        asked[tenant] = any(isinstance(e, Waiting) and e.on == "approval"
+                            for e in await events(client, tid))
+    assert asked == {"default": False, "acme": True}
+
+
+def test_the_server_directories_and_homes_are_not_system_files(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fence = TenantFence(home=str(tmp_path / "h"), server_dirs=("/usr/share/doc",))
+    kw: dict[str, Any] = {"tenant": "acme", "task_id": "t"}
+    assert fence.refusal("/usr/bin/env", **kw) is None
+    assert fence.refusal("/usr/share/doc/README", **kw) is not None
+    monkeypatch.setenv("HOME", "/usr/local/someone")
+    assert fence.refusal("/usr/local/someone/.ssh/id_rsa", **kw) is not None
+    assert fence.refusal("/usr/local/bin/tool", **kw) is None
+    for elsewhere in ("/opt/tool/config", "/srv/data", "/var/log/syslog", "/tmp/f"):
+        assert fence.refusal(elsewhere, **kw) is not None
+    # A tenant whose workspace this worker does not know reaches none.
+    assert fence.refusal(str(tmp_path / "anywhere"), **kw) is not None

@@ -308,6 +308,13 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
     deny_read += [d for d in tenant_deny if d not in deny_read and d not in writes]
     hidden = [d for d in deny_read if os.path.isdir(d)]
     rebound = [w for w in writes if any(_within(w, d) for d in hidden)]
+    # A denied path inside a hidden directory is hidden already, unless a
+    # directory shown again inside that one holds it.
+    shown = [*(a for a in allow_read if any(_within(a, d) for d in hidden)), *rebound]
+    deny_read = [d for d in deny_read if not any(
+        d != h and _within(d, h) and not any(_within(d, s) and s != h and _within(s, h)
+                                             for s in shown) for h in hidden)]
+    hidden = [d for d in deny_read if os.path.isdir(d)]
     # Inside a hidden directory a path is unreadable and read-only already;
     # binding it would show it again (unless it is in a writable one shown
     # again).
@@ -350,23 +357,30 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
         args += ["--ro-bind", "/", "/"]
     args += ["--dev", "/dev"]
     args += ["--ro-bind", "/proc", "/proc"] if settings.weaker_nested else ["--proc", "/proc"]
+    own = [a for path, _port in relays for a in ("--ro-bind", path, path)]
+    own += ["--ro-bind", bridge, bridge]
     if not settings.filesystem_disabled:
         for path in plan.writable:
             args += ["--bind", path, path]
         hidden = [p for p in plan.deny_read if os.path.isdir(p)]
+        # Outermost first, so a path denied inside a directory shown again
+        # inside a hidden one is hidden after it is shown. Re-opened paths
+        # are mounted while the empty directories over the denied ones are
+        # still writable (their mount points), then those turn read-only.
+        steps: list[tuple[str, int, list[str]]] = []
         for path in plan.deny_read:
             if path in hidden:
-                args += ["--tmpfs", path]
+                steps.append((path, 0, ["--tmpfs", path]))
             elif os.path.exists(path):
-                args += ["--ro-bind", "/dev/null", path]
-        # Re-opened paths are mounted while the empty directories over the
-        # denied ones are still writable (their mount points), then those
-        # turn read-only.
-        for path in plan.allow_read:
-            if os.path.exists(path) and any(_within(path, d) for d in hidden):
-                args += ["--ro-bind", path, path]
-        for path in sorted(plan.rebound, key=lambda p: p.count("/")):
-            args += ["--bind", path, path]
+                steps.append((path, 0, ["--ro-bind", "/dev/null", path]))
+        steps += [(path, 1, ["--ro-bind", path, path]) for path in plan.allow_read
+                  if os.path.exists(path) and any(_within(path, d) for d in hidden)]
+        steps += [(path, 2, ["--bind", path, path]) for path in plan.rebound]
+        for _path, _kind, step in sorted(steps, key=lambda s: (s[0].count("/"), s[1])):
+            args += step
+        # The bridge may lie in a hidden directory (a tenant's task hides
+        # every home directory): mounted before those turn read-only.
+        args += own
         for path in hidden:
             args += ["--remount-ro", path]
         for path in plan.pinned:
@@ -381,13 +395,15 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
                 args += ["--tmpfs", path, "--remount-ro", path]
         for source, path in overlays:
             args += ["--ro-bind", source, path]
-    for path, _port in relays:
-        args += ["--ro-bind", path, path]
-    args += ["--ro-bind", bridge, bridge]
+    if settings.filesystem_disabled:
+        args += own
     for name in settings.deny_env:
         args += ["--unsetenv", name]
     args += ["--chdir", cwd, "--"]
-    inner = [sys.executable, "-I", "-S", bridge]
+    # A tenant's task hides the home directories a virtual environment's
+    # link to its Python may pass through: the Python itself is shown.
+    python = os.path.realpath(sys.executable) if settings.tenant_deny_read else sys.executable
+    inner = [python, "-I", "-S", bridge]
     for kind, (path, port) in zip(("--http", "--socks"), relays, strict=False):
         inner += [kind, path, str(port)]
     if settings.allow_all_unix_sockets:
@@ -411,11 +427,12 @@ def seatbelt_profile(settings: SandboxSettings, plan: Plan,
                   for p in plan.writable]
         lines.append('(allow file-write* (literal "/dev/null") (literal "/dev/zero") '
                      '(regex #"^/dev/tty") (regex #"^/dev/fd/"))')
-        lines += [f"(deny file-read* (subpath {_sb_quote(os.path.realpath(p))}))"
-                  for p in plan.deny_read]
-        lines += [f"(allow file-read* (subpath {_sb_quote(os.path.realpath(p))}))"
-                  for p in (*plan.allow_read, *plan.rebound)
+        reads = [(p, 0, "deny") for p in plan.deny_read]
+        reads += [(p, 1, "allow") for p in (*plan.allow_read, *plan.rebound)
                   if any(_within(p, d) for d in plan.deny_read)]
+        # Later rules win: outermost first, as for bwrap.
+        lines += [f"({verb} file-read* (subpath {_sb_quote(os.path.realpath(p))}))"
+                  for p, _kind, verb in sorted(reads, key=lambda r: (r[0].count("/"), r[1]))]
         lines += [f"(deny file-write* (subpath {_sb_quote(os.path.realpath(p))}))"
                   for p in plan.deny_write]
         # A subpath rule does not stop renaming a directory above it.
