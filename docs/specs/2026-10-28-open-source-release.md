@@ -601,11 +601,41 @@ servers and runs on many machines.
 - [ ] Final independent review on code only: no P0/P1.
 - [ ] Run make check, make parity, make cluster, make e2e and make eval on the final head and record the numbers.
 - [ ] Owner signs off on publishing the committed Claude Code interface data (scripts/parity/README.md) and the remaining owner decisions before any push.
-
 ### Follow-ups (after this release; each moves to a spec of its own before this one is `done`)
 - [x] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
 - [x] The file splits S22–S40 left undone in the kernel: `core/runner/task.py` (timers; stopping and ending a turn), `core/runner/model.py` `call_model` (reminders and hooks; overflow), and `backends/stores/postgres.py`'s connection handling; structure only.
 - [x] The last S22–S40 split: `plugins/shell/bash.py` (`ShellState`, the sandbox helpers, `BashTool.run`); structure only, once no other branch is changing it.
+
+Still open from the Progress log's "Left" notes (2026-10-29, each checked against the code at `os-fix-r11docs`; the parity differences that are follow-ups are under "Not yet matched" in `parity/deviations.md`):
+
+- [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
+- [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.
+- [ ] A background command's planted `.git/commondir` lives until the command ends (D96). Follow-up spec.
+- [ ] The macOS Seatbelt profile still allows `mach-lookup` and Apple Events (D99 refuses tenants there instead). Follow-up spec: needs a macOS machine to test.
+- [ ] MCP (`plugins/mcp/stdio.py`, `plugins/mcp/pool.py`) and the hooks runner (`plugins/hooks/runners.py`) still start processes with asyncio subprocesses: before CPython 3.14 a loop shut down mid-start waits forever (`LocalExecEnv` moved to `subprocess.Popen` for this). Follow-up spec.
+- [ ] A skill's `allowed-tools` plus `acceptEdits` writing `.noeta/skills` widens a trusted project's permissions, as in Claude Code. Owner decision.
+- [ ] The old `holds` table stays unused in upgraded stores. Owner decision (dropping it deletes data on a host's store).
+- [ ] Holds under unknown commits: a hold whose last of three attempts commits and still raises `CommitUnknown` is reaped as lost; lease renewal does not retry on it; a second failed unhold ends in a false `hold_lost`. Follow-up spec.
+- [ ] A parked MCP elicitation learns of a lost hold only when answered ("outcome unknown"). Follow-up spec.
+- [ ] A crash between taking `hold_lost` and enqueuing an ended sub-agent's loss notice loses that notice. Follow-up spec.
+- [ ] A sub-agent that takes its input, gets `hold_lost` and ends, while the root took its own copy when the sub-agent was live, is told by neither (one inbox read to the end append). Follow-up spec.
+- [ ] Snapshots hold the whole conversation (a 20k-event log's is 12 MiB), so Postgres claims are bound by transfer. Follow-up spec.
+- [ ] Deltas published before a front end's `LISTEN` is up are not replayed (the recorded reply still arrives). Follow-up spec.
+- [ ] A worker's `TenantFence.servers()` reads its working directory when it checks, not at start. Follow-up spec.
+- [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46; file tools keep the opened-file fence). Follow-up spec.
+- [ ] `EnterWorktree`'s worktree is read-only in the sandbox (`.noeta`; `parity/deviations.md`). Follow-up spec: a task's working directory would have to change mid-task.
+- [ ] Dead workers' job log directories (`w<pid>`) in an exec env that is not this machine are not swept (`plugins/shell/job_logs.py`). Follow-up spec.
+- [ ] Claude Code plugin directories: no `<plugin>:<name>` namespacing of skills and agents (agent names may not hold `:`), no `${CLAUDE_PLUGIN_ROOT}` in skill bodies, a plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
+- [ ] `noeta plugin add` installs no pip dependencies. Owner decision (it would run a package's build code on install).
+- [ ] Tenant directories are per-machine copies read at worker start (D47; `docs/server.md`). Owner decision on a shared source.
+- [ ] The README's `git+https` install line is untested until the branch is pushed, and its relative links will not resolve on a PyPI page. Owner decision, with the push and the first release.
+- [ ] A budget may end over its limit by one call's cost (checked before each call, D52). Won't do: a call's cost is known only after it returns.
+- [ ] ACP over `--server` cannot pass the editor's MCP servers. Won't do: they hold the editor's credentials and stay in its process.
+- [ ] MCP tools are never retry-safe on recovery. Won't do: a server's `idempotentHint` is not trusted.
+- [ ] A hold is not checked again on renewal (D42). Won't do: a child named onto another queue meanwhile is the host's explicit route, and refusing would stop a running background job.
+- [ ] Operator hooks run as the OS user in a tenant's directory, and the sandbox plan's `git rev-parse --git-path hooks` reads the tenant's config; `find -L` and glob expansion list names under home directories; credentials under other names are readable unless `denyRead` names them. Won't do: documented under "Not a boundary" in `docs/server.md`.
+- [ ] Texts the recordings never show (deferred tools, MCP sign-in) are outside the own-words report. Won't do: the report is advisory (D39).
+- [ ] A short PDF stays page images. Won't do: a logged document block would be lost after a `/model` switch to a provider without one (`parity/deviations.md`).
 
 ## Acceptance criteria
 
