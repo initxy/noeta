@@ -8,7 +8,7 @@ once per task (``roster``), and skills that join later are announced once
 Budget: every line is ``- name: summary``; each summary is capped at 1,536
 characters (Claude Code's cap); over the total budget every skill first gets a short form
 (its first sentence, at most 24 tokens), then, budget permitting, its full
-summary — in keep order (rank, then tier, then priority, then name). A name
+summary — in keep order (rank, then tier, then name). A name
 is never dropped.
 """
 
@@ -95,14 +95,11 @@ def _menu_description(text: str) -> str:
 def menu_keep_order(
     registry: SkillRegistry, names: Sequence[str], rank: Mapping[str, float] | None = None
 ) -> tuple[str, ...]:
-    """Highest first: rank score, merge tier, then ``priority`` ascending,
-    then name."""
+    """Highest first: rank score, merge tier, then name."""
     scores = rank or {}
 
-    def key(name: str) -> tuple[float, int, int, str]:
-        desc = registry.get(name)
-        return (-float(scores.get(name, 0.0)), -registry.tier_of(name),
-                desc.priority if desc is not None else 0, name)
+    def key(name: str) -> tuple[float, int, str]:
+        return (-float(scores.get(name, 0.0)), -registry.tier_of(name), name)
 
     return tuple(sorted(names, key=key))
 

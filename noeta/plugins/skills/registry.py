@@ -24,7 +24,6 @@ from noeta.toolkit.inline_commands import has_commands, neutralise
 
 __all__ = [
     "ARGUMENTS_PLACEHOLDER",
-    "DEFAULT_SKILL_PRIORITY",
     "SkillDescription",
     "SkillRegistry",
     "argument_names",
@@ -42,9 +41,6 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-
-#: Render-order default when ``priority:`` is absent or unreadable.
-DEFAULT_SKILL_PRIORITY = 100
 
 #: Bound on one ``find`` listing of a skill directory.
 _LIST_OUTPUT_CAP = 8 * 1024 * 1024
@@ -66,7 +62,6 @@ class SkillDescription:
     description: str
     body: str
     version: str = "1"
-    priority: int = DEFAULT_SKILL_PRIORITY
     model_invocable: bool = True
     source_path: str | None = None
     metadata: tuple[tuple[str, str], ...] = ()
@@ -166,19 +161,11 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = ()) -> SkillDe
     if description is None:
         _log.warning("skill: %s: missing required key 'description'; skipped", path)
         return None
-    priority_raw = fields.get("priority", str(DEFAULT_SKILL_PRIORITY))
-    try:
-        priority = int(priority_raw)
-    except ValueError:
-        _log.warning("skill: %s: invalid 'priority' value %r (must be an integer); "
-                     "using the default %d", path, priority_raw, DEFAULT_SKILL_PRIORITY)
-        priority = DEFAULT_SKILL_PRIORITY
     return SkillDescription(
         name=name,
         description=description,
         body=body,
         version=fields.get("version", "1"),
-        priority=priority,
         model_invocable=not _parse_disabled_flag(fields.get("disable-model-invocation"), path),
         source_path=path,
         metadata=tuple(sorted((k, v) for k, v in fields.items()

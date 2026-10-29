@@ -294,8 +294,8 @@ async def test_an_old_recalled_memory_says_how_old_it_is(h: Harness, tmp_path: P
     await h.start(a, goal="where is the parser")
     [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
     text = recalled.text
-    assert f"This memory was last changed 7 days ago. A memory records what was true when " \
-        f"it was written" in text
+    assert "This memory was last changed 7 days ago. A memory records what was true when " \
+        "it was written" in text
     assert "Check against the current code before stating it as fact.\n" \
         f"Memory {directory / 'old.md'}:" in text
     # A day old or less carries no note (Claude Code's threshold).

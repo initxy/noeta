@@ -720,3 +720,15 @@ def test_the_typed_and_forked_entries_kept_are_bounded() -> None:
         state = skills.reduce(state, "forked", {"call_id": f"c{seq}", "prompt": "p"})
     assert len(state["typed"]) <= 64 and "499" in state["typed"]
     assert len(state["forks"]) <= 64 and "c499" in state["forks"]
+
+
+def test_priority_is_no_skill_key() -> None:
+    from noeta.plugins.skills.listing import menu_keep_order
+    from noeta.plugins.skills.registry import parse_skill
+    # Claude Code has no ``priority:``; it is kept as plain metadata and
+    # orders nothing.
+    desc = parse_skill("/s/zed/SKILL.md", "---\nname: zed\ndescription: Z.\npriority: 1\n---\n")
+    assert desc is not None and desc.meta("priority") == "1"
+    other = SkillDescription(name="alpha", description="A.", body="")
+    registry = SkillRegistry({"zed": desc, "alpha": other})
+    assert menu_keep_order(registry, ["zed", "alpha"]) == ("alpha", "zed")

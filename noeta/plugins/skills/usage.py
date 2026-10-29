@@ -11,7 +11,7 @@ the host's client (what it may read is what the client shows):
 ``Skills(rank=UsageRank(app.client))``. The ranker answers from its last
 snapshot at once and refreshes in the background when the snapshot is
 older than ``ttl``, so a task start never waits on the scan; until the first
-scan lands the ranking is empty (tier and priority order).
+scan lands the ranking is empty (tier and name order).
 """
 
 from __future__ import annotations
