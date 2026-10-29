@@ -5,13 +5,15 @@ it would lose, and removing it with its branch. A git error is never read as
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from noeta.core.execenv import ExecEnv
 from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
-__all__ = ["WORKTREES", "add_worktree", "git", "job_runs_in", "job_runs_under",
+__all__ = ["WORKTREES", "add_worktree", "after_jobs", "git", "job_runs_in", "job_runs_under",
            "remove_worktree", "repository_top", "unsaved_work"]
 
 #: Where new worktrees go, under the directory that holds them.
@@ -21,6 +23,11 @@ WORKTREES = ".noeta/worktrees"
 #: shell plugin keeps it). A job holds its task tree with this worker, so the
 #: task that would remove a worktree one runs in runs here and sees it.
 _JOB_DIRS: Counter[str] = Counter()
+#: Worktree path -> what runs once no job works under it (:func:`after_jobs`).
+_AFTER_JOBS: dict[str, Callable[[], Awaitable[object]]] = {}
+#: The ones running (a strong reference until they finish).
+_RUNNING: set[asyncio.Task[object]] = set()
+log = logging.getLogger(__name__)
 
 
 def job_runs_in(cwd: str) -> Callable[[], None]:
@@ -36,8 +43,35 @@ def job_runs_in(cwd: str) -> Callable[[], None]:
         _JOB_DIRS[cwd] -= 1
         if _JOB_DIRS[cwd] <= 0:
             del _JOB_DIRS[cwd]
+        _run_due()
 
     return ended
+
+
+def after_jobs(path: str, then: Callable[[], Awaitable[object]]) -> None:
+    """Run ``then`` once no job of this process works in ``path`` or below
+    it (when the last one ends, or is killed with its root)."""
+    _AFTER_JOBS[path] = then
+    _run_due()
+
+
+def _run_due() -> None:
+    for path in [p for p in _AFTER_JOBS if not job_runs_under(p)]:
+        then = _AFTER_JOBS.pop(path)
+        try:
+            task = asyncio.get_running_loop().create_task(_logged(path, then))
+        except RuntimeError:  # no loop: nothing can run it now
+            continue
+        _RUNNING.add(task)
+        task.add_done_callback(_RUNNING.discard)
+
+
+async def _logged(path: str, then: Callable[[], Awaitable[object]]) -> object:
+    try:
+        return await then()
+    except Exception:
+        log.exception("worktree %s: what was to follow its jobs failed", path)
+        return None
 
 
 def job_runs_under(path: str) -> bool:
