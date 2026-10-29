@@ -185,6 +185,18 @@ async def test_the_job_cap_refuses_a_ninth_job(tmp_path: Path) -> None:
         await h.settle(out.meta["job_id"])
 
 
+async def test_a_timeout_moves_the_command_to_the_background_past_the_job_cap(
+        tmp_path: Path) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"), max_jobs=1)
+    h = Harness(tmp_path, registry, Shell(registry=registry))
+    first = await h.call("Bash", command="sleep 5", run_in_background=True)
+    out = await h.call("Bash", command="echo started; sleep 2; echo done", timeout=1000)
+    assert not out.is_error and "moved to the background" in text(out)
+    await stop(h, first.meta["job_id"])
+    for job in (first, out):
+        await h.settle(job.meta["job_id"])
+
+
 async def test_monitor_streams_lines_then_reports_the_end(h: Harness) -> None:
     out = await h.call("Monitor", command="echo a; echo b; sleep 0.6; echo oops >&2",
                        description="watch", timeout_ms=60_000)

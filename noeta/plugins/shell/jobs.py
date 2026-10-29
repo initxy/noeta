@@ -360,7 +360,9 @@ class Registry:
                      ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
                      foreground: bool = False) -> Job | str:
         running = len(self.running(root_id))
-        if running >= self.max_jobs:
+        # A foreground command is not held to the cap: past its timeout it
+        # moves to the background rather than being killed.
+        if running >= self.max_jobs and not foreground:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
                     f"TaskStop first")
         job_id = "".join(secrets.choice(_ID_CHARS) for _ in range(9))
