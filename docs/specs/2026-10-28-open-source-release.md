@@ -65,10 +65,10 @@ servers and runs on many machines.
   context; tools declare `retry_safe` (re-run on recovery) or offer `recover` (look up the
   outcome); the rest keep "outcome unknown". Exactly-once for retry-safe and recoverable tools,
   at-most-once for the rest.
-- D6 Process-bound work: holds carry the holder's epoch; a reaper releases holds of dead
+- D6 (refined by D10) Process-bound work: holds carry the holder's epoch; a reaper releases holds of dead
   workers and posts a `hold_lost` notice to the task's inbox so a parked task wakes and the
   model is told; local background processes die with their worker.
-- D7 Snapshots: a versioned fold snapshot per task, written by the runner after N events;
+- D7 (refined by D11 and D35) Snapshots: a versioned fold snapshot per task, written by the runner after N events;
   claim = snapshot + tail; a test folds both ways and compares.
 - D8 Extensibility per `research-extensibility.md` B1–B9 with its recommended answers: a worker
   missing a task's pinned plugin fails the task with `plugin_missing` (no silent run); `add_to`
@@ -76,7 +76,7 @@ servers and runs on many machines.
   load only from noeta's places, fetched at a pinned commit by `noeta plugin add`.
 - D9 Evaluation model: the `.env` live endpoint (gateway token gateway) or DeepSeek Flash;
   `make eval` must not drop below `evals/baseline.json`.
-- D10 A task tree has at most one holding worker (refines D6, ADR-011): a hold by another
+- D10 (refined by D24) A task tree has at most one holding worker (refines D6, ADR-011): a hold by another
   worker while one exists (expired but unreaped included) is refused in the store's
   transaction; `Runtime.hold` reaps once, then raises `HeldElsewhere`; a background `Bash` /
   `Monitor` is refused with a tool error, a foreground command past its timeout is killed
@@ -94,7 +94,7 @@ servers and runs on many machines.
   or signal must be added to the list (`noeta/host/_http_guard.py`).
 - D13 Tenant queues: `queues = [...]` per tenant; without it `default` and the queue of the
   tenant's own name; the default tenant (server token) may use any queue.
-- D14 (owner may revisit; the file-tool known limit refined by D16 and D38) Tenants and the OS user: `noeta serve` (with its worker) and
+- D14 (owner may revisit; the file-tool known limit refined by D16 and D38; extended per task by D17) Tenants and the OS user: `noeta serve` (with its worker) and
   `noeta worker` refuse to start when tenants besides the default one are known (tokens file or
   tenant directories), unless the sandbox confines every command (`enabled`,
   `failIfUnavailable`, no `allowUnsandboxedCommands`) or `[server] shared_os_user_tenants =
@@ -138,7 +138,7 @@ servers and runs on many machines.
   derived parity data is committed, and why: `scripts/parity/README.md`. Protocol literals go
   in `parity/own-words-allowed.txt`. Texts the recordings never show (deferred tools, MCP
   sign-in) stay a review matter.
-- D20 (`os-fix-tools`) Background and foreground job logs: the temp directory on disk, one
+- D20 (`os-fix-tools`; a foreground log's cap refined by D62) Background and foreground job logs: the temp directory on disk, one
   directory per worker process (`w<pid>`, a dead one's removed on this machine a day after its last write), each stream kept
   to its first 64 MB; a foreground command's guard kills it 30 s after its worker stops.
 - D21 (`os-fix-tenant2`) MCP for tenants: a task whose tenant is not `default` gets no server
@@ -149,7 +149,7 @@ servers and runs on many machines.
   connection or OAuth sign-in is shared across tenants. Rejected: running stdio servers in
   the task's sandbox profile (the pool shares one process per server and scope across tasks,
   and a long-lived process would outlive the per-task profile it was started under).
-- D22 (`os-fix-tenant2`) Commands of tenants: under the sandbox, a non-default tenant's task
+- D22 (`os-fix-tenant2`; extended by D23) Commands of tenants: under the sandbox, a non-default tenant's task
   gets `TenantFence.confine` of the settings: D16's places unreadable but its own corners,
   no `excludedCommands`, no way out, the filesystem confined, a fresh `/proc`. Every program a
   tool runs that can run the tenant's code (a skill's script, an inline skill command without
@@ -168,7 +168,7 @@ servers and runs on many machines.
   `shared_os_user_tenants`) git runs as the OS user, as that tenant's `Bash` already does.
   `sandbox_plan`'s `git rev-parse --git-path hooks` stays a host call: it reads config but
   runs nothing from it.
-- D24 (`os-fix-r2kernel`) A held tree's tasks run only on its holder (refines D10): a hold
+- D24 (`os-fix-r2kernel`; refined by D25) A held tree's tasks run only on its holder (refines D10): a hold
   is also refused while another worker has an unexpired lease on a task of the tree, in the
   hold's transaction; on Postgres a claim takes the per-tree hold lock shared after picking
   its row and looks at `tree_holds` again, a hold takes it exclusive. A log no claim can read
@@ -176,7 +176,7 @@ servers and runs on many machines.
   a row on one worker, written from the row. Upgrading a version 1 store posts `hold_lost`
   (epoch 0) for its old `holds` rows and keeps the table. Rejected: counting failed claims in
   the store (a schema change for a rare case), dropping `holds` (data deletion: maintainer).
-- D25 (`os-fix-r3kernel`) A hold takes back other workers' lapsed claims of the tree (refines
+- D25 (`os-fix-r3kernel`; written: ADR-024) A hold takes back other workers' lapsed claims of the tree (refines
   D24): in the hold's transaction, before the live-lease check, every task of the tree
   `running` on another worker with its lease run out gets `owner_epoch + 1` and goes back to
   `ready` (announced `released`), so the stalled worker's next `renew` or `append` fails on
@@ -240,7 +240,7 @@ servers and runs on many machines.
   into its config, so every worker runs it in the same place. `noeta -p --server` is refused
   rather than implemented (headless drives a local app). Rejected: sending the local path
   when it happens to exist on the server (a coincidence, and still another machine's path).
-- D33 (`os-fix-r4docs`) Tenant running limits, budgets and providers stay in the kernel as
+- D33 (`os-fix-r4docs`; budget charging and checks extended by D44 and D52) Tenant running limits, budgets and providers stay in the kernel as
   scheduling (ADR-019, refines ADR-007): the limit is part of the claim, and every model call,
   the turn's and each extension's `TaskRun.complete`, passes through the kernel, which picks
   the tenant's provider, refuses past the budget and counts usage. `tenant_usage` is a
@@ -254,7 +254,7 @@ servers and runs on many machines.
   its search tool is not available. Kernel-generic, no tool named. Rejected: dropping only
   the refused tool (its deferred tools would stay withheld, uncallable); a `loads_deferred`
   tool flag (needs the plugin to set it, and every deferred tool goes plain until it does).
-- D35 (`os-fix-r4kernel`) Snapshots are kept per task and fold version, at most
+- D35 (`os-fix-r4kernel`; written: ADR-023) Snapshots are kept per task and fold version, at most
   `SNAPSHOT_VERSIONS` (2) per task; a write replaces only its own version's at a lower seq,
   and past the cap the one at the lowest seq goes. `snapshot(task_id, version=None)` reads one
   version's, or the newest; the runner reads the newest and asks for its own version only
@@ -285,7 +285,7 @@ servers and runs on many machines.
   `/`). bwrap and Seatbelt read rules are applied outermost first. Rejected: hiding every
   account's home including service accounts (uid < 500: `/var/lib/...`, `/bin`).
 - D38 (`os-tenant-relax`; supersedes D36, D37: too strict, the goal is reasonable
-  protection) A non-default tenant's file tools and sandboxed commands may read what the OS
+  protection; extended by D40 and D71) A non-default tenant's file tools and sandboxed commands may read what the OS
   user can but a protected set: noeta's home but its own corners (D16, D26, D28), the
   store's files, `/etc/noeta`, `/proc` (a command has its own), noeta's temp places but
   its tenant's own, other tenants' workspaces, the server's own directories (worker cwd,
@@ -329,7 +329,7 @@ servers and runs on many machines.
   task of the tree is on a queue the holder does not serve; renewal does not check (a
   child named onto another queue meanwhile is the host's explicit route). Rejected:
   checking on renewal, which would stop a running background job.
-- D43 (`os-fix-r5kernel`) A load error msgspec words "Invalid value '...'" or "Invalid enum
+- D43 (`os-fix-r5kernel`; extended by D51, D55 and D56) A load error msgspec words "Invalid value '...'" or "Invalid enum
   value '...'" (an unknown tag or literal) is a newer version's log: the worker lets the
   lease run out without counting it toward `unreadable_log`, so it backs off by the lease
   instead of releasing into a busy loop. Malformed JSON and wrong shapes still count.
@@ -376,10 +376,10 @@ servers and runs on many machines.
 - D52 (`os-fix-r6core`) The budget is checked before a step's request hooks and in
   `TaskRun.complete`, which raises `BudgetSpent` (a `Fatal`) without calling: no model call of
   a tenant past its budget is made, compaction's and extensions' included.
-- D53 (`os-fix-r6core`) An agent's worktree kept for a running job is removed, if git finds no
+- D53 (`os-fix-r6core`; refined by D64) An agent's worktree kept for a running job is removed, if git finds no
   changes, once no job of the worker works under it (`toolkit.worktrees.after_jobs`);
   `ExitWorktree` refuses removal while one does.
-- D54 (`os-fix-r7kernel`) While a worker holds a tree, a call that would create a child on a
+- D54 (`os-fix-r7kernel`; extended by D72) While a worker holds a tree, a call that would create a child on a
   queue the worker does not serve fails with a tool error naming the queue, staging nothing
   (checked as the call finishes, where `_foreign_history` is). Rejected: letting a claim take a
   held tree's task on a queue the holder does not serve (it would run off the holder, against
@@ -388,7 +388,7 @@ servers and runs on many machines.
   runs out with nothing written, and after `LOAD_ATTEMPTS` such claims in a row on one worker
   with the log's last seq unchanged it ends the task failed with `plugin_missing` as before
   (a rolling install, `docs/extending.md`). Rejected: a time bound (one more clock to set).
-- D56 (`os-fix-r7kernel`) Folding a core record of a kind this version does not know raises
+- D56 (`os-fix-r7kernel`; extended by D73) Folding a core record of a kind this version does not know raises
   `records.NewerRecord`, treated as a newer version's log (D43); `records.decode` still returns
   `None` for it, so front ends that only display records skip it.
 - D57 (`os-fix-r7sec`) A non-default tenant's sandbox drops the operator's
@@ -406,7 +406,7 @@ servers and runs on many machines.
   filter is needed); tenants' commands are then refused through `failIfUnavailable`, which
   a multi-tenant server needs anyway (or the operator chose `shared_os_user_tenants`).
 
-- D60 (`os-fix-r7tools`) A prompt a `UserPromptSubmit` hook blocks is erased as Claude Code
+- D60 (`os-fix-r7tools`; extended by D75 and D76) A prompt a `UserPromptSubmit` hook blocks is erased as Claude Code
   does: the hook records a core `erased` entry with the log seqs of the person's messages it
   blocked, and the fold drops them from `messages` and `history` (the log keeps them).
 - D61 (`os-fix-r7tools`) A foreground `Bash` command's final directory still goes through a
