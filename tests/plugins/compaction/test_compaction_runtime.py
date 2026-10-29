@@ -334,3 +334,23 @@ async def test_an_extension_can_refuse_a_compaction(store: SqliteStore) -> None:
     notices = [e.data["text"] for e in await events(client, tid)
                if isinstance(e, ExtensionRecorded) and e.kind == "notice"]
     assert notices[-1] == "Compaction skipped: not now"
+
+
+def test_a_tenants_transcripts_go_to_its_own_project_directory(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from noeta.core.loop.state import TaskState
+    from noeta.toolkit.paths import project_slug
+
+    work = tmp_path / "w"
+    work.mkdir()
+    ext = Compaction(home=str(tmp_path / "home"))
+    view = SimpleNamespace(env=LocalExecEnv(str(work)), task_id="t1")
+    written = {}
+    for tenant in ("default", "acme"):
+        state = TaskState(task_id="t1")
+        state.tenant = tenant
+        written[tenant] = ext._transcript(view, state)  # type: ignore[arg-type]
+    projects = tmp_path / "home" / "projects"
+    assert written == {"default": str(projects / project_slug(str(work)) / "t1.jsonl"),
+                       "acme": str(projects / "acme" / project_slug(str(work)) / "t1.jsonl")}

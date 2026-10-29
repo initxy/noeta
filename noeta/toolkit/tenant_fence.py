@@ -28,12 +28,13 @@ import os
 import posixpath
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from noeta.core.events import DEFAULT_TENANT
 from noeta.toolkit.paths import (
     job_log_roots,
     noeta_home,
-    project_slug,
+    project_dir,
     temp_root,
     tenant_temp_dir,
 )
@@ -171,8 +172,7 @@ class TenantFence:
                     for t in dict.fromkeys(x for x in (task_id, root_id) if x)]
         if self.plans_dir:
             out.append(posixpath.join(_real(self.plans_dir), tenant))
-        out += [posixpath.join(home, "projects", project_slug(d))
-                for d in self._project_roots(tenant, cwd)]
+        out += [str(project_dir(d, Path(home), tenant)) for d in self._project_roots(tenant, cwd)]
         if not write:
             out += [posixpath.join(home, p) for p in _HOME_READABLE]
         return out

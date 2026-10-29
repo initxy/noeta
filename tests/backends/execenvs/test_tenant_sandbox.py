@@ -43,15 +43,15 @@ class Places:
         self.theirs = tmp / "ws" / "globex"
         for d in (self.home / "skills", self.home / "plans" / "acme", self.home / "plans" / "globex",
                   self.spill / "t1", self.spill / "other", self.store.parent, self.mine,
-                  self.theirs, self.home / "projects" / project_slug(str(self.mine)),
-                  self.home / "projects" / "elsewhere"):
+                  self.theirs, self.home / "projects" / "acme" / project_slug(str(self.mine)),
+                  self.home / "projects" / project_slug(str(self.mine))):
             d.mkdir(parents=True, exist_ok=True)
         files = {
             self.home / "tokens.json": "TOKENS", self.home / "skills" / "s.md": "SKILL",
             self.home / "plans" / "acme" / "p.md": "MYPLAN",
             self.home / "plans" / "globex" / "p.md": "THEIRPLAN",
-            self.home / "projects" / project_slug(str(self.mine)) / "m.md": "MYMEMORY",
-            self.home / "projects" / "elsewhere" / "m.md": "THEIRMEMORY",
+            self.home / "projects" / "acme" / project_slug(str(self.mine)) / "m.md": "MYMEMORY",
+            self.home / "projects" / project_slug(str(self.mine)) / "m.md": "THEIRMEMORY",
             self.spill / "t1" / "a.txt": "MYSPILL", self.spill / "other" / "a.txt": "THEIRSPILL",
             self.store: "STORE", self.mine / "f.txt": "MYFILE", self.theirs / "f.txt": "THEIRFILE",
         }
@@ -87,7 +87,7 @@ def test_the_profile_of_a_tenants_task(tmp_path: Path) -> None:
         assert real(str(denied)) in plan.deny_read
     assert real(str(p.mine)) not in plan.deny_read
     for own in (p.spill / "t1", p.home / "skills", p.home / "plans" / "acme",
-                p.home / "projects" / project_slug(str(p.mine))):
+                p.home / "projects" / "acme" / project_slug(str(p.mine))):
         assert real(str(own)) in plan.allow_read
     assert real(str(p.home / "tool-results")) not in plan.allow_read
     assert real(str(p.home / "projects")) not in plan.allow_read
@@ -131,8 +131,8 @@ async def test_a_tenants_command_cannot_read_the_fenced_places(tmp_path: Path) -
     show = " ".join(f"cat {f};" for f in (
         p.home / "tokens.json", p.home / "skills" / "s.md", p.home / "plans" / "acme" / "p.md",
         p.home / "plans" / "globex" / "p.md",
-        p.home / "projects" / project_slug(str(p.mine)) / "m.md",
-        p.home / "projects" / "elsewhere" / "m.md", p.spill / "t1" / "a.txt",
+        p.home / "projects" / "acme" / project_slug(str(p.mine)) / "m.md",
+        p.home / "projects" / project_slug(str(p.mine)) / "m.md", p.spill / "t1" / "a.txt",
         p.spill / "other" / "a.txt", p.store, p.mine / "f.txt", p.theirs / "f.txt"))
     show += f" cat /proc/{os.getpid()}/environ; echo PIDS=$(ls /proc | grep -c '^[0-9]')"
     tenant = env_for(_state("acme", p.mine))

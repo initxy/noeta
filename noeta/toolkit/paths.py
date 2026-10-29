@@ -10,6 +10,8 @@ import stat
 import tempfile
 from pathlib import Path
 
+from noeta.core.events import DEFAULT_TENANT
+
 #: Longest project slug kept whole; a longer one is cut and given a hash.
 PROJECT_SLUG_MAX = 200
 #: Longest tenant name a tenant's temporary directory is named by; a longer
@@ -58,10 +60,15 @@ def project_slug(path: str) -> str:
     return f"{slug[:PROJECT_SLUG_MAX]}-{_base36(abs(_string_hash(path)))}"
 
 
-def project_dir(path: str, home: Path | None = None) -> Path:
+def project_dir(path: str, home: Path | None = None, tenant: str = DEFAULT_TENANT) -> Path:
     """The per-project directory for the workspace at ``path``:
-    ``<home>/projects/<slug>`` (transcripts, auto memory)."""
-    return (home or noeta_home()) / "projects" / project_slug(path)
+    ``<home>/projects/<slug>`` (transcripts, auto memory); a tenant other
+    than the default one has its own, ``<home>/projects/<tenant>/<slug>``
+    (a slug starts with ``-``, a tenant name never does)."""
+    projects = (home or noeta_home()) / "projects"
+    if tenant != DEFAULT_TENANT:
+        projects = projects / tenant_dir_name(tenant)
+    return projects / project_slug(path)
 
 
 def temp_root() -> str:
@@ -75,12 +82,20 @@ def tenant_temp_dir(tenant: str, root: str | None = None) -> str:
     """A tenant's own temporary directory under :func:`temp_root` (or
     ``root``): its sandboxed commands' ``$TMPDIR`` (``tmp/``) and its
     background jobs' logs (``jobs/``)."""
+    return os.path.join(root or temp_root(), "tenants", tenant_dir_name(tenant))
+
+
+def tenant_dir_name(tenant: str) -> str:
+    """``tenant`` as one directory name: itself when it is a short name of
+    letters, digits, ``_``, ``.`` and ``-`` (as ``noeta token add`` takes),
+    else cut and given a hash. Short: a tenant's temporary directory holds
+    its commands' proxy sockets, whose paths are limited to about a hundred
+    bytes."""
     name = re.sub(r"[^A-Za-z0-9_.-]", "_", tenant)
-    # Short: a command's proxy sockets live in it, and a socket's path is
-    # limited to about a hundred bytes.
-    if name != tenant or name in ("", ".", "..") or len(name) > TENANT_TEMP_NAME_MAX:
-        name = f"{name[:15]}-{hashlib.sha256(tenant.encode()).hexdigest()[:8]}"
-    return os.path.join(root or temp_root(), "tenants", name)
+    if name != tenant or name in ("", ".", "..") or name.startswith("-") \
+            or len(name) > TENANT_TEMP_NAME_MAX:
+        name = f"t{name[:15]}-{hashlib.sha256(tenant.encode()).hexdigest()[:8]}"
+    return name
 
 
 def job_log_roots() -> list[str]:

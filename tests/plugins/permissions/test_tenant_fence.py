@@ -183,12 +183,16 @@ def test_own_spill_and_project_directories_stay_open(places: dict[str, Path]) ->
                         workspaces={"acme": str(places["acme"])})
     own = spill_path(str(home / "tool-results"), "t1", "c")
     root = spill_path(str(home / "tool-results"), "r1", "c")
-    project = home / "projects" / project_slug(str(places["acme"]))
+    slug = project_slug(str(places["acme"]))
+    project = home / "projects" / "acme" / slug
     kw: dict[str, Any] = {"tenant": "acme", "task_id": "t1", "root_id": "r1",
                           "cwd": str(places["acme"])}
     assert fence.refusal(own, **kw) is None
     assert fence.refusal(root, **kw) is None
     assert fence.refusal(str(project / "memory" / "MEMORY.md"), write=True, **kw) is None
+    # The default tenant's and another tenant's project directory of that cwd.
+    for theirs in (home / "projects" / slug, home / "projects" / "beta" / slug):
+        assert fence.refusal(str(theirs / "memory" / "MEMORY.md"), **kw) is not None
     assert fence.refusal(str(home / "projects" / "-elsewhere" / "x"), **kw) is not None
     assert fence.refusal(str(home / "tokens.json"), **{**kw, "tenant": "default"}) is None
 

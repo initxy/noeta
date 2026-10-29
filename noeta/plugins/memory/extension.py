@@ -92,8 +92,8 @@ def load_index(text: str) -> str:
     return trim_memory_index(text)
 
 
-def memory_dir_for(root: str, home: Path | None = None) -> str:
-    return str(project_dir(root, home or noeta_home()) / "memory") + "/"
+def memory_dir_for(root: str, home: Path | None = None, tenant: str = DEFAULT_TENANT) -> str:
+    return str(project_dir(root, home or noeta_home(), tenant) / "memory") + "/"
 
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
@@ -116,7 +116,8 @@ class Memory(Extension):
     """Constructor arguments:
 
     * ``home`` — noeta's home (default ``$NOETA_HOME`` or ``~/.noeta``); the
-      memory directory is ``<home>/projects/<workspace>/memory/``.
+      memory directory is ``<home>/projects/<workspace>/memory/`` (a tenant
+      other than the default one: ``<home>/projects/<tenant>/<workspace>/memory/``).
     * ``directory`` — use this directory instead.
     * ``recall_model`` — the model asked, on each user message, which memory
       files to attach (off when unset).
@@ -175,7 +176,7 @@ class Memory(Extension):
         if self._dir(view) is not None:
             return
         directory = self.directory or self._agent_dir(view) \
-            or memory_dir_for(await self._workspace(view), self.home)
+            or memory_dir_for(await self._workspace(view), self.home, view.state.tenant)
         try:
             Path(directory).mkdir(parents=True, exist_ok=True)
         except OSError:

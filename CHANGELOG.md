@@ -710,3 +710,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   refused even where that lies inside the requester's own. Before, a tenant with only a
   token could start tasks anywhere under the server's directory and `--allow-root` paths,
   another tenant's workspace and the default tenant's included.
+- A tenant other than the default one keeps its auto memory and compaction transcripts in
+  a project directory of its own, `~/.noeta/projects/<tenant>/<slug>/`; the default
+  tenant's stay in `projects/<slug>/`. Before, every tenant working in one directory shared
+  its `projects/<slug>/` (memory read into the prompt and writable by each, transcripts of
+  each other's tasks).
