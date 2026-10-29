@@ -40,6 +40,9 @@ log = logging.getLogger("noeta.hooks")
 OUTPUT_CAP = 64 * 1024
 #: Exit code of a hook that could not run or did not answer in time.
 FAILED = -1
+#: How long a killed command hook is waited for (a process that left its
+#: group can hold the pipes open).
+_REAP_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,10 @@ async def run_command(hook: HookCommand, payload: dict[str, Any], cwd: str | Non
             # hold the pipes open otherwise.
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(proc.pid, signal.SIGKILL)
+            # Reaped here: a process left behind is closed by the garbage
+            # collector, after its event loop may have closed.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(proc.wait(), _REAP_S)
     return HookResult(exit_code=proc.returncode or 0,
                       stdout=out.decode("utf-8", "replace"),
                       stderr=err.decode("utf-8", "replace"))

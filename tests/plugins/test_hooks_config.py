@@ -3,8 +3,12 @@ matchers, ``if``, the HTTP and prompt runners, the command's exec form."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import gc
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +138,30 @@ async def test_a_command_that_cannot_start_or_overruns_fails() -> None:
     assert missing.failed and missing.exit_code == -1
     slow = await run_command(HookCommand(command="sleep 5; echo late", timeout=0.1), {}, None)
     assert slow.failed and "timed out" in slow.stderr
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_a_killed_command_is_reaped_before_the_call_returns(cancelled: bool) -> None:
+    """Left unreaped, the killed process is closed by the garbage collector
+    once its event loop has closed ("Event loop is closed")."""
+    ignored: list[Any] = []
+    hook = sys.unraisablehook
+    sys.unraisablehook = ignored.append
+    loop = asyncio.new_event_loop()
+    try:
+        task = loop.create_task(run_command(
+            HookCommand(command="sleep 5", timeout=30 if cancelled else 0.2), {}, None))
+        if cancelled:
+            loop.run_until_complete(asyncio.sleep(0.3))
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            loop.run_until_complete(task)
+        loop.close()
+        del task
+        gc.collect()
+    finally:
+        sys.unraisablehook = hook
+    assert not ignored, [str(u.exc_value) for u in ignored]
 
 
 # ---------------------------------------------------------------- http
