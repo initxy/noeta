@@ -20,7 +20,6 @@ from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills, UsageRank
 from noeta.plugins.skills.listing import (
-    ADDED_HEADER,
     ROSTER_HEADER,
     fit_menu_to_budget,
     listing_lines,
@@ -200,7 +199,7 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
     await h.say(a, tid, "next")
     msgs = h.last_messages()
     assert msgs[-2].text == "next"
-    assert msgs[-1].text == f"{ADDED_HEADER}\n\n- review: Review code."
+    assert msgs[-1].text == f"{ROSTER_HEADER}\n\n- review: Review code."
     assert len(await h.records(tid, "skills", "listing")) == 2
 
 
@@ -589,7 +588,7 @@ async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
     [unlocked] = await h.records(tid, "skills", "unlocked")
     assert unlocked.data == {"names": ["pyfix"]}
     texts = [m.text for m in h.provider.requests[3].messages]
-    assert f"{ADDED_HEADER}\n\n- pyfix: Python fixes." in texts
+    assert f"{ROSTER_HEADER}\n\n- pyfix: Python fixes." in texts
 
 
 async def test_the_skill_directories_are_scanned_once_a_turn_not_after_every_read(
@@ -740,3 +739,21 @@ def test_the_loaded_text_has_one_blank_line_before_the_body() -> None:
                        "---\nname: notes\ndescription: N.\n---\n\nRun it.\n")
     assert desc is not None
     assert render_command_body(desc) == "Base directory for this skill: /s/notes\n\nRun it.\n"
+
+
+async def test_a_skill_whose_description_changed_is_listed_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "review", "Review code.")
+    a = agent()
+    h.provider.add(reply("ok"), reply("again"), reply("more"))
+    tid = await h.start(a)
+    write_skill(skills_dir(h), "deploy", "Ship to production, then tag.")
+    await h.say(a, tid, "next")
+    assert h.last_messages()[-1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship to production, then tag.")
+    # Unchanged since: nothing more; the state lives in the log, so a
+    # fresh runtime (another worker) agrees.
+    await h.say(a, tid, "and again")
+    assert h.last_messages()[-1].text == "and again"
+    listings = await h.records(tid, "skills", "listing")
+    assert [x.data["names"] for x in listings] == [["deploy", "review"], ["deploy"]]

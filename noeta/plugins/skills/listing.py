@@ -2,8 +2,9 @@
 
 The ``skill`` tool's schema carries no roster (it is the same bytes for every
 task and turn); names and summaries reach the model as a listing recorded
-once per task (``roster``), and skills that join later are announced once
-(``added-<k>``). Removals and edited summaries are not announced.
+once per task (``roster``); a skill that joins later, or whose description
+changed since it was listed (its digest), is listed again under the same
+header, as Claude Code does. Removals are not announced.
 
 Budget: every line is ``- name: summary``; each summary is capped at 1,536
 characters (Claude Code's cap); over the total budget every skill first gets a short form
@@ -14,6 +15,7 @@ is never dropped.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Collection, Mapping, Sequence
@@ -26,7 +28,6 @@ from noeta.plugins.skills.registry import (
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
 
 __all__ = [
-    "ADDED_HEADER",
     "MENU_DESCRIPTION_MAX_CHARS",
     "MENU_SHORT_SUMMARY_MAX_TOKENS",
     "ROSTER_HEADER",
@@ -37,6 +38,7 @@ __all__ = [
     "render_listing",
     "roster_line",
     "short_summary",
+    "skill_digest",
 ]
 
 _log = logging.getLogger(__name__)
@@ -55,7 +57,6 @@ _SHORT_MARKER = "…"
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s|(?<=[。！？；])")  # noqa: RUF001
 
 ROSTER_HEADER = "The following skills are available via the `Skill` tool:"
-ADDED_HEADER = "New skills are available via the `Skill` tool:"
 
 
 def _clip_to_tokens(text: str, max_tokens: int, marker: str) -> str:
@@ -75,6 +76,13 @@ def short_summary(text: str) -> str:
 
 def roster_line(name: str, summary: str) -> str:
     return "- " + name + (": " + summary if summary else "")
+
+
+def skill_digest(desc: SkillDescription) -> str:
+    """What a listing remembers of a skill to see that it changed: a short
+    hash of its name and listed text (Claude Code's digest)."""
+    raw = desc.name + "\0" + listing_summary(desc)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def listing_summary(desc: SkillDescription) -> str:
@@ -185,7 +193,7 @@ def listing_lines(
     return tuple((n, roster_line(n, fitted[n])) for n in names)
 
 
-def render_listing(first: bool, lines: Sequence[str]) -> str:
-    """The text of one recorded listing: a header, a blank line, then one
-    line per skill."""
-    return "\n".join((ROSTER_HEADER if first else ADDED_HEADER, "", *lines))
+def render_listing(lines: Sequence[str]) -> str:
+    """The text of one recorded listing, the first or a later one: a header,
+    a blank line, then one line per skill."""
+    return "\n".join((ROSTER_HEADER, "", *lines))

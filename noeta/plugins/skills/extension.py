@@ -37,7 +37,7 @@ from noeta.plugins.skills.gates import (
     pre_approved,
     script_gate,
 )
-from noeta.plugins.skills.listing import listing_lines, render_listing
+from noeta.plugins.skills.listing import listing_lines, render_listing, skill_digest
 from noeta.plugins.skills.registry import (
     SkillRegistry,
     load_registry,
@@ -131,6 +131,15 @@ def _typed_command(text: str) -> tuple[str, str] | None:
         return tagged[0], tagged[1].strip()
     m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
     return (m.group(1), m.group(2).strip()) if m else None
+
+
+def _digests(registry: SkillRegistry, lines: Sequence[tuple[str, str]]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for name, _line in lines:
+        desc = registry.get(name)
+        if desc is not None:
+            out[name] = skill_digest(desc)
+    return out
 
 
 class Skills(Extension):
@@ -315,6 +324,15 @@ class Skills(Extension):
     def announced(state: Any) -> set[str]:
         return {n for listing in (state or {}).get("listings", []) for n in listing["names"]}
 
+    @staticmethod
+    def digests(state: Any) -> dict[str, str]:
+        """The digest each skill was last listed with (a listing recorded
+        before digests were kept has none)."""
+        out: dict[str, str] = {}
+        for listing in (state or {}).get("listings", []):
+            out.update(listing.get("digests") or {})
+        return out
+
     # ------------------------------------------------------------ hooks
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
@@ -356,6 +374,7 @@ class Skills(Extension):
                 # Held for the first request's system turn, after the prompt.
                 view.record(self.name, "listing", {"names": [n for n, _ in lines],
                                                    "lines": [t for _, t in lines],
+                                                   "digests": _digests(registry, lines),
                                                    "held": True})
         pending = [n for n in self.preload if n not in state.get("active", {})]
         if pending:
@@ -384,7 +403,7 @@ class Skills(Extension):
         held = [line for listing in state.get("listings", []) if listing.get("held")
                 for line in listing["lines"]]
         if held:
-            out.append(Reminder(text=render_listing(True, held), kind="listing_sent", data={},
+            out.append(Reminder(text=render_listing(held), kind="listing_sent", data={},
                                 role="system", order=LISTING_ORDER))
         return out
 
@@ -394,21 +413,23 @@ class Skills(Extension):
             return
         state = view.ext_state(self.name) or {}
         registry = await self.turn_registry(view)
-        # Skills installed since the last listing are announced with the
-        # person's next message (the first listing, and with it the
-        # ``skill`` tool, when the task started with none).
+        # Skills installed since the last listing, or whose description
+        # changed, are listed with the person's next message (the first
+        # listing when the task started with none).
         if state.get("listings"):
-            announced = self.announced(state)
+            announced, digests = self.announced(state), self.digests(state)
             lines = listing_lines(registry, budget_tokens=self._budget(view),
                                   unlocked=unlocked_skills(state))
-            added = [(n, line) for n, line in lines if n not in announced]
+            current = _digests(registry, lines)
+            added = [(n, line) for n, line in lines if n not in announced
+                     or digests.get(n, current[n]) != current[n]]
             if added:
-                self._record_listing(view, added, first=False)
+                self._record_listing(view, added, registry)
         else:
             lines = listing_lines(registry, budget_tokens=self._budget(view),
                                   rank=await self._rank(view), unlocked=unlocked_skills(state))
             if lines:
-                self._record_listing(view, lines, first=True)
+                self._record_listing(view, lines, registry)
         for message in messages:
             typed = _typed_command(message.text)
             desc = registry.get(typed[0]) if typed else None
@@ -556,7 +577,7 @@ class Skills(Extension):
                               unlocked={*unlocked, *names})
         fresh = [(n, line) for n, line in lines if n in names and n not in self.announced(state)]
         if fresh:
-            self._record_listing(view, fresh, first=not state.get("listings"))
+            self._record_listing(view, fresh, registry)
 
     async def _expand(self, view: TaskView, data: dict[str, Any], call_id: str
                       ) -> dict[str, Any]:
@@ -575,11 +596,12 @@ class Skills(Extension):
         return {**data, "text": text, "rendered": text}
 
     def _record_listing(self, view: TaskView, lines: Sequence[tuple[str, str]],
-                        *, first: bool) -> None:
+                        registry: SkillRegistry) -> None:
         names = [n for n, _ in lines]
         texts = [line for _, line in lines]
-        view.record(self.name, "listing", {"names": names, "lines": texts},
-                    message=user(render_listing(first, texts), origin=self.origin))
+        view.record(self.name, "listing", {"names": names, "lines": texts,
+                                           "digests": _digests(registry, lines)},
+                    message=user(render_listing(texts), origin=self.origin))
 
     def _record_invocation(self, view: TaskView, data: dict[str, Any],
                            prior: Mapping[str, Any] | None, origin: Origin | None) -> None:

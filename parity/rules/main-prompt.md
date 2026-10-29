@@ -160,6 +160,7 @@ order:
 | `main.env.13` | Last line: today's date as `YYYY-MM-DD`. | covered — last, `order` 90. |
 | `main.env.14` | The working-directory note of noeta ("paths resolve relative to the primary working directory") has no baseline counterpart. | covered — the extra line is gone. |
 | `main.env.15` | (bundle) A skill's listed text (description, then ` - ` and `when_to_use`) longer than 1,536 characters is cut to 1,535 and ends with `…`; the cap counts characters, so CJK text keeps as many as Latin. | covered — `noeta/plugins/skills/listing.py`. |
+| `main.env.16` | (bundle) Later in the conversation, a skill that appears, or whose listed text changed since it was listed (a digest of name and text), is listed again with the next prompt, under the same lead-in as the first listing; a removed skill is not announced. After a compaction the whole listing is sent again. | covered — the `skills` plugin records each listing's digests in the task log. |
 
 ## Variants (not baseline)
 
