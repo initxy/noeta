@@ -634,3 +634,5 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   on any bind, added to the loopback names on a loopback bind. Without it a non-loopback
   bind checks no `Host`, which SECURITY.md now says (it claimed unexpected `Host` headers
   were always refused).
+- `noeta serve --no-token` refuses to start when a tenant token or tenant directory exists.
+  Before, it served every request as the default tenant and ignored the tenants' tokens.
