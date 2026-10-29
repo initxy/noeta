@@ -93,7 +93,8 @@ match to speak the same protocol to the model, not prose:
 - `parity/<version>/script/`: the model's side of each scenario (replies of
   the upstream model, with the steps we typed), not Claude Code's text.
 - `parity/rules/*.md` and `parity/rules/tools/*.md` (one file per tool the
-  baseline sends, 19 files): Claude Code's rules restated in our words, with
+  recorded sessions send, the MCP server's tools sharing one, 21 files):
+  Claude Code's rules restated in our words, with
   sha256 hashes of the source texts (no-copy rule in `parity/rules/README.md`,
   which also indexes them). `parity/rules/source_hash.py` computes those
   hashes from the recordings; it holds no recorded text.

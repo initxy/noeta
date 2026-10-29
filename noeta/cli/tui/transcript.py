@@ -34,6 +34,7 @@ from noeta.core.events import (
     ModelReplied,
     Recorded,
     Say,
+    TaskCreated,
     TaskEnded,
     ToolFinished,
     ToolStarted,
@@ -55,6 +56,9 @@ from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
 log = logging.getLogger("noeta.cli.tui")
 
 
+SERVER_DIRECTORY = "the server's directory"
+
+
 def _short_path(path: str, width: int) -> str:
     home = str(Path.home())
     if path.startswith(home):
@@ -68,6 +72,9 @@ class TranscriptView(App[None]):
     local: Any
     model: str
     cwd: str
+    #: The directory the task runs in, as its ``TaskCreated`` recorded it
+    #: ("" when it named none: a server's own).
+    task_cwd: str
     permission_mode: str | None
     mode: str
     modes: Modes
@@ -225,7 +232,9 @@ class TranscriptView(App[None]):
     async def render_event(self, rec: Recorded) -> None:
         ev = rec.event
         transcript = self.query_one("#transcript")
-        if isinstance(ev, InputTaken):
+        if isinstance(ev, TaskCreated):
+            self.task_cwd = str(ev.config.get("cwd") or self.task_cwd)
+        elif isinstance(ev, InputTaken):
             for item in ev.items:
                 if isinstance(item.body, Say) and item.body.message.origin in (None, "human"):
                     await transcript.mount(UserMessage(item.body.message.text))
@@ -336,7 +345,8 @@ class TranscriptView(App[None]):
         width = max(self.size.width - len(self.model) - len(state) - 30, 12)
         self.query_one("#status", Static).update(RichText(
             f"{state} · {self.model} · {self.mode or self.permission_mode or 'auto'} mode "
-            f"(shift+tab) · context {used}{cost} · {_short_path(self.cwd, width)}"))
+            f"(shift+tab) · context {used}{cost} · "
+            f"{_short_path(self.task_cwd or SERVER_DIRECTORY, width)}"))
 
     @work(exclusive=True, group="cost", exit_on_error=False)
     async def _refresh_cost(self, task_id: str) -> None:

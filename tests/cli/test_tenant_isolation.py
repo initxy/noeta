@@ -87,6 +87,9 @@ def test_a_sandbox_that_confines_every_command_is_a_boundary(home: Path,
     problem = tenants.isolation_problem(settings, str(tmp_path))
     assert problem is not None and "allowUnsandboxedCommands: false" in problem
     assert "sandbox.enabled" not in problem
+    # The noeta command cannot set up a remote exec env; the way out it
+    # names is one an operator can take.
+    assert "run the workers with a remote exec env" not in problem
     box["allowUnsandboxedCommands"] = False
     (home / "settings.json").write_text(json.dumps({"sandbox": box}))
     assert tenants.isolation_problem(settings, str(tmp_path)) is None

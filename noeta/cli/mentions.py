@@ -69,11 +69,12 @@ def _attachment(path: Path) -> Text | Image:
                      f"{_numbered(path)}")
 
 
-def attach(text: str, cwd: str, images: list[Image] | None = None) -> Message:
+def attach(text: str, cwd: str | None, images: list[Image] | None = None) -> Message:
     """The message for a typed prompt: its text, each mentioned file or
-    directory, then the pasted images."""
+    directory (none when ``cwd`` is ``None``: the task runs elsewhere),
+    then the pasted images."""
     content: list[Text | Image] = [Text(text=text)]
-    for path in mentioned(text, cwd):
+    for path in mentioned(text, cwd) if cwd is not None else ():
         try:
             content.append(_attachment(path))
         except OSError:
