@@ -527,6 +527,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   reach the model as one block each with the next prompt joined to them, as Claude Code sends
   them.
 - Workflow end notices keep their dedupe key.
+- MCP prompts and resources (`list_prompts`, `expand_prompt`, `list_resources`,
+  `read_resource`) use the pool they are given even while it holds no connection; before, an
+  empty pool was passed over for the process-wide one.
 
 ### Security
 
@@ -581,6 +584,29 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   `.noeta/agent-memory/` of its working directory. Before, a `.git` file naming another
   tenant's repository loaded that tenant's `MEMORY.md`, and `~/.noeta/agent-memory/` was
   shared by every tenant.
+- Under the sandbox, a non-default tenant's commands may not read noeta's home (but the
+  task's own spill directories, its tenant's plans, its working directory's project memory,
+  `skills/` and `workflows/`), the spill directory wherever it is (but the task's own), the
+  sqlite store's files wherever they are, `/etc/noeta` or another tenant's workspace; they
+  always run inside it (no `excludedCommands`, no `dangerouslyDisableSandbox`, no
+  `filesystem.disabled`, no `enableWeakerNestedSandbox`), with `/proc` of their own PID
+  namespace (`TenantFence.confine`). Before, the sandbox hid only noeta's home, minus every
+  task's spilled outputs and every project's memory.
+- A non-default tenant's skill scripts (`run_skill_script`), inline skill commands run
+  without `Bash`, `git` for worktrees (with its hooks) and a rewind's deletes run inside its
+  sandbox (`noeta.toolkit.sandbox.run_in_tenant_sandbox`). Before, they ran as the worker's
+  OS user, so a hook the tenant wrote into its own repository could read the tokens file.
+- Read of a PDF by a non-default tenant's task reads the file once through the fence and
+  hands the page converters a copy. Before, `pdfinfo` and `pdftoppm` opened the path
+  themselves after only its first bytes were checked.
+- A non-default tenant's task gets no MCP server that runs a process on the worker (a stdio
+  server, a `headersHelper`); they show as down with the reason, also when its slash commands
+  are listed (`CommandContext.tenant`). Remote servers connect in a partition of the tenant's
+  own (`tenant:<name>/<scope>`), so connections and OAuth sign-ins are never shared across
+  tenants. Before, such servers ran as the worker's OS user and tenants shared the default
+  tenant's connections unless the host scoped them.
+- The tenant fence lets a tenant read the operator's saved workflows (`~/.noeta/workflows`,
+  which the `Workflow` tool reads by name) as it reads `skills/`.
 - `~/.noeta/server-token` keeps only the server token's SHA-256, like tenant tokens; the token
   is printed once, when made (`noeta serve` no longer prints it on every start). A file an
   older noeta left holding the token itself is rewritten to its digest on the next start,
