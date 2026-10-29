@@ -96,6 +96,10 @@ REINVOKED_CHANGED = ("(/{name} called again: its instructions were loaded earlie
                      "arguments or command output below are new.)")
 #: Tasks whose turn's registry is kept (:meth:`Skills.turn_registry`).
 TURN_REGISTRIES_KEEP = 256
+#: Typed ``/skill`` inputs kept for an erase, and fork prompts kept for
+#: their calls, newest last.
+ERASABLE_KEEP = 32
+FORKS_KEEP = 32
 #: Calls whose file makes a skill with matching ``paths`` available.
 FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
@@ -285,7 +289,9 @@ class Skills(Extension):
                 # What a typed /name replaced, given back if a hook blocks it.
                 typed, at = dict(state.get("typed") or {}), str(data["input"])
                 typed[at] = [*typed.get(at, ()), [name, active.get(name)]]
-                state = {**state, "typed": typed}
+                # Only a message the model has not seen yet is blocked: the
+                # newest few are kept.
+                state = {**state, "typed": dict(list(typed.items())[-ERASABLE_KEEP:])}
             return {**state, "active": {**active, name: entry}}
         if kind == records.ERASED_KIND:
             typed = dict(state.get("typed") or {})
@@ -298,8 +304,9 @@ class Skills(Extension):
                         active[name] = prior
             return {**state, "active": active, "typed": typed}
         if kind == "forked":
-            return {**state, "forks": {**(state.get("forks") or {}),
-                                       data["call_id"]: data["prompt"]}}
+            forks = {**(state.get("forks") or {}), data["call_id"]: data["prompt"]}
+            # Needed until the call runs: the reply's calls, at most.
+            return {**state, "forks": dict(list(forks.items())[-FORKS_KEEP:])}
         if kind == "unlocked":
             have = list(state.get("unlocked") or [])
             return {**state, "unlocked": have + [n for n in data["names"] if n not in have]}

@@ -104,3 +104,12 @@ async def test_allowed_tools_pre_approve_the_models_calls(run: Harness) -> None:
     events = [r.event for r in await run.client.events(tid)]
     assert len([e for e in events if isinstance(e, ToolFinished)]) == 1
     assert isinstance(events[-1], Waiting) and events[-1].on == "approval"
+
+
+def test_the_rules_kept_for_an_erase_are_bounded() -> None:
+    commands = MarkdownCommands([{"name": "t", "body": "x", "allowed_tools": "Read"}])
+    state = commands.initial_state()
+    for seq in range(1, 500):
+        state = commands.reduce(state, "ran", {"allow_rules": [f"Bash(r{seq})"], "input": seq})
+    assert len(state["added"]) <= 64
+    assert "499" in state["added"]

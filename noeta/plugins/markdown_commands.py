@@ -29,6 +29,9 @@ from noeta.toolkit.inline_commands import (
     run_inline_commands,
 )
 
+#: Typed commands whose added rules are kept for an erase, newest last.
+ERASABLE_KEEP = 32
+
 
 class MarkdownCommands(Extension):
     """``commands``: one mapping per command — ``name``, ``body`` (the
@@ -73,8 +76,10 @@ class MarkdownCommands(Extension):
             added = [r for r in data["allow_rules"] if r not in have]
             state = {**state, "allow_rules": have + added}
             if added and data.get("input") is not None:
-                # Taken back if a hook blocks the command.
-                state["added"] = {**(state.get("added") or {}), str(data["input"]): added}
+                # Taken back if a hook blocks the command (only a message
+                # the model has not seen yet is blocked: the newest few).
+                by_input = {**(state.get("added") or {}), str(data["input"]): added}
+                state["added"] = dict(list(by_input.items())[-ERASABLE_KEEP:])
             return state
         if kind == records.ERASED_KIND:
             by_input = dict(state.get("added") or {})

@@ -741,3 +741,13 @@ async def test_a_tenants_skill_lists_no_resource_behind_the_fence(
     found = await index_dir(env, str(skills_dir(h)))
     assert list(found) == ["mine"]
     assert found["mine"].resources == ("notes.md",)
+
+
+def test_the_typed_and_forked_entries_kept_are_bounded() -> None:
+    skills = Skills()
+    state = skills.initial_state()
+    for seq in range(1, 500):
+        state = skills.reduce(state, "activated", {"name": f"s{seq % 3}", "input": seq})
+        state = skills.reduce(state, "forked", {"call_id": f"c{seq}", "prompt": "p"})
+    assert len(state["typed"]) <= 64 and "499" in state["typed"]
+    assert len(state["forks"]) <= 64 and "c499" in state["forks"]
