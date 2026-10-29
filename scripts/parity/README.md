@@ -91,7 +91,9 @@ match to speak the same protocol to the model, not prose:
   A whole-text hash is reversible only by guessing the whole text, so it
   discloses only short texts such as a bare tag.
 - `parity/<version>/script/`: the model's side of each scenario (replies of
-  the upstream model, with the steps we typed), not Claude Code's text.
+  the upstream model, with the steps we typed), not Claude Code's text. A
+  thinking block keeps its place but its text is replaced by a placeholder,
+  since the upstream model's thinking can quote Claude Code's prompts.
 - `parity/rules/*.md` and `parity/rules/tools/*.md` (one file per tool the
   recorded sessions send, the MCP server's tools sharing one, 21 files):
   Claude Code's rules restated in our words, with

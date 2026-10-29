@@ -79,13 +79,19 @@ def parse_response(raw: str) -> dict[str, Any] | None:
     return {"content": [blocks[i] for i in sorted(blocks)], "stop_reason": stop}
 
 
+#: What a replay script keeps of a recorded thinking block's text.
+THINKING_PLACEHOLDER = "(thinking not kept)"
+
+
 def script_turn(message: Mapping[str, Any]) -> dict[str, Any]:
     """What the model said, as a replay script turn: thinking, text and tool
-    calls (a thinking block's signature is the upstream model's, not kept)."""
+    calls. A thinking block keeps its place but not its text, which can quote
+    Claude Code's prompts (a layout compares only the block's presence), nor
+    its signature, which is the upstream model's."""
     content: list[dict[str, Any]] = []
     for b in message.get("content") or []:
         if b.get("type") == "thinking" and b.get("thinking"):
-            content.append({"type": "thinking", "thinking": b["thinking"]})
+            content.append({"type": "thinking", "thinking": THINKING_PLACEHOLDER})
         elif b.get("type") == "text" and b.get("text"):
             content.append({"type": "text", "text": b["text"]})
         elif b.get("type") == "tool_use":
