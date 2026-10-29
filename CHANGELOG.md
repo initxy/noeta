@@ -503,6 +503,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   (`opus` / `sonnet` / `haiku` -> the 5.5 family, new `fable` -> Fable 5.1). An uncatalogued
   model is now a notice the `noeta` command shows (`noeta.core.models.unknown_model_notice`),
   not only a log line.
+- `noeta -p` announced an uncatalogued model three times (the loader's log, the front end and
+  the catalog's own warning); it says it once.
 - `make example` ran a build uv had cached; it now installs the example plugin editable.
 - A second `registry.provider()` call for a family failed once that family's adapter module
   had been imported (the entry point named a package attribute the submodule rebound).

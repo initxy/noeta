@@ -115,3 +115,19 @@ def test_the_command_line_passes_the_flags_on(home: Path, tmp_path: Path,
     with pytest.raises(SystemExit) as bad:
         cli.main(["-p", "go", "--agents", "[]", "--cwd", str(tmp_path)])
     assert "--agents" in str(bad.value.code)
+
+
+def test_an_unknown_model_is_announced_once(home: Path, tmp_path: Path,
+                                            monkeypatch: pytest.MonkeyPatch,
+                                            capsys: pytest.CaptureFixture[str],
+                                            caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.testing import ScriptedProvider, reply
+
+    monkeypatch.setattr(config.Settings, "make_provider",
+                        lambda self: ScriptedProvider([reply("ok")]))
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "go", "--model", "gateway-model-x1", "--cwd", str(tmp_path)])
+    assert done.value.code == 0
+    said = [*capsys.readouterr().err.splitlines(), *(r.getMessage() for r in caplog.records)]
+    limits = [line for line in said if "gateway-model-x1" in line and "context window" in line]
+    assert len(limits) == 1  # once, not from the loader, the front end and the catalog each
