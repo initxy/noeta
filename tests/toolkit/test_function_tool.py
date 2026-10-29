@@ -130,3 +130,23 @@ async def test_a_positional_only_context_is_passed_by_position() -> None:
     ctx = ToolContext(task_id="t", call_id="c", env=None, state={}, record=lambda *_: None)
     out = await where.run({"x": 3}, ctx)
     assert not out.is_error and out.content[0].text == "3 in t"  # type: ignore[union-attr]
+
+
+async def test_scalar_arguments_are_checked_and_coerced() -> None:
+    @function_tool
+    def pick(n: int, ratio: float = 1.0, loud: bool = False, label: str | None = None) -> str:
+        """Pick something."""
+        return f"{n!r} {ratio!r} {loud!r} {label!r}"
+
+    ctx = ToolContext(task_id="t", call_id="c", env=None, state={}, record=lambda *_: None)
+    out = await pick.run({"n": "3", "ratio": 2, "loud": "true", "label": None}, ctx)
+    assert not out.is_error
+    assert out.content[0].text == "3 2.0 True None"  # type: ignore[union-attr]
+    for bad, problem in (({"n": "three"}, "n must be an integer"),
+                         ({"n": 1.5}, "n must be an integer"),
+                         ({"n": True}, "n must be an integer"),
+                         ({"n": 1, "loud": "maybe"}, "loud must be a boolean"),
+                         ({"n": 1, "label": 7}, "label must be a string")):
+        out = await pick.run(bad, ctx)
+        assert out.is_error
+        assert out.content[0].text == f"pick: {problem}"  # type: ignore[union-attr]
