@@ -115,3 +115,28 @@ async def test_a_silent_workers_hold_is_reaped_before_holding(store: SqliteStore
     release = await rt.hold("root")
     assert release.tree.worker == rt.worker
     await release()
+
+
+async def test_holds_taken_at_once_share_one_tree_hold(store: SqliteStore) -> None:
+    """Two jobs of one tree start at once: one ``TreeHold``, renewed while
+    either runs, and the store's hold stays until both are given back."""
+    rt = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
+    a, b = await asyncio.gather(rt.hold("r"), rt.hold("r"))
+    assert a.tree is b.tree and a.tree.count == 2
+    await asyncio.sleep(rt.hold_seconds + 0.1)
+    assert a.tree.fresh()
+    await a()
+    assert await store.hold("r", rt.worker, 30, epoch=b.tree.epoch) == b.tree.epoch
+    await b()
+    assert await store.hold("r", rt.worker, 30, epoch=b.tree.epoch) is None
+    assert rt._hold_locks == {}
+
+
+async def test_a_hold_taken_while_the_last_share_is_given_back_is_kept(
+        store: SqliteStore) -> None:
+    rt = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
+    first = await rt.hold("r")
+    _, again = await asyncio.gather(first(), rt.hold("r"))
+    assert not again.tree.lost and rt._holds["r"] is again.tree
+    assert await store.hold("r", rt.worker, 30, epoch=again.tree.epoch) == again.tree.epoch
+    await again()
