@@ -205,6 +205,9 @@ def test_own_spill_and_project_directories_stay_open(places: dict[str, Path]) ->
     assert fence.refusal(str(home / "projects" / slug / "default-task.jsonl"), **kw) is not None
     assert fence.refusal(str(home / "projects" / "-elsewhere" / "x"), **kw) is not None
     assert fence.refusal(str(home / "tokens.json"), **{**kw, "tenant": "default"}) is None
+    # A transcript is named from the id as compaction names it.
+    odd = {**kw, "task_id": "r1.call:1/x"}
+    assert fence.refusal(str(project / "r1.call_1_x.jsonl"), **odd) is None
 
 
 async def test_the_default_tenant_is_not_fenced(store: SqliteStore,

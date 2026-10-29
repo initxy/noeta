@@ -40,6 +40,7 @@ from pathlib import Path
 
 from noeta.core.events import DEFAULT_TENANT
 from noeta.toolkit.paths import (
+    file_name_part,
     job_log_roots,
     noeta_home,
     project_dir,
@@ -324,7 +325,8 @@ class TenantFence:
             # tasks' of the same directory.
             out.append(posixpath.join(project, "memory"))
             if not write:
-                out += [posixpath.join(project, f"{t}.jsonl") for t in tree]
+                out += [posixpath.join(project, f"{file_name_part(t, 'task')}.jsonl")
+                        for t in tree]
         if not write:
             out += [posixpath.join(home, p) for p in _HOME_READABLE]
         return out
