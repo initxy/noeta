@@ -174,6 +174,16 @@ def _tenants(s: Settings) -> dict[str, tenants.TenantPlace]:
         sys.exit(f"noeta: {exc}")
 
 
+def _check_isolation(s: Settings, cwd: str, places: dict[str, tenants.TenantPlace]) -> bool:
+    """Whether tools of tenants other than the default one may run here;
+    exits when such tenants exist and may not."""
+    problem = tenants.isolation_problem(s, cwd)
+    others = tenants.other_tenants(places)
+    if problem is not None and others:
+        sys.exit(f"noeta: tenant(s) {', '.join(others)} configured, but {problem}")
+    return problem is None
+
+
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
@@ -188,11 +198,12 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     refuse = {} if args.allow_bypass_permissions else {
         "permissions": {"disable_bypass_mode": True}}
     places = _tenants(s)
+    isolated = not with_worker or _check_isolation(s, cwd, places)
     app = _app(s, cwd=cwd, with_channels=True,
                tenants={name: p.allowed for name, p in places.items()}, **refuse)
     await app.start(worker=with_worker)
     api = create_app(app.client, token=token, auth=token is not None,
-                     tokens=tenants.tenant_tokens(),
+                     tokens=tenants.tenant_tokens(others=isolated),
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
@@ -215,7 +226,9 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     from noeta.host.channels import run_channels
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
-    kw["tenants"] = {name: p.allowed for name, p in _tenants(s).items()}
+    places = _tenants(s)
+    _check_isolation(s, os.getcwd(), places)
+    kw["tenants"] = {name: p.allowed for name, p in places.items()}
     if snapshot_every is not None:
         kw["snapshot_every"] = snapshot_every
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)

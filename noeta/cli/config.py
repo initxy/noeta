@@ -86,6 +86,9 @@ class Settings:
     add_plugins: dict[str, tuple[PluginEntry, ...]] = field(default_factory=dict)
     #: Per channel name: its arguments (``enabled = false`` turns it off).
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: ``[server]``: ``noeta serve`` / ``noeta worker`` switches
+    #: (``shared_os_user_tenants``).
+    server: dict[str, Any] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
         kw: dict[str, Any] = {}
@@ -185,6 +188,8 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
     data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
+    if not isinstance(data.get("server", {}), dict):
+        raise ValueError("config.toml: [server] is a table of switches")
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
     if settings.models_file:

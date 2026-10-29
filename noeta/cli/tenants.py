@@ -37,7 +37,9 @@ from typing import Any
 
 from noeta.agents.agent_files import resolve_secrets
 from noeta.cli import config
+from noeta.core.events import DEFAULT_TENANT
 from noeta.core.tenants import Tenant
+from noeta.toolkit.sandbox import SandboxSettings
 
 #: A tenant name: what a token, a tenant directory and the task rows use.
 TENANT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
@@ -99,9 +101,11 @@ def remove_tokens(prefix: str) -> int:
     return len(entries) - len(kept)
 
 
-def tenant_tokens() -> Callable[[str], str | None]:
+def tenant_tokens(*, others: bool = True) -> Callable[[str], str | None]:
     """``token -> tenant`` from the tokens file, read again whenever the
-    file changes (a token added or removed works without a restart)."""
+    file changes (a token added or removed works without a restart).
+    ``others=False``: a token of a tenant other than the default one finds
+    nothing (tenants are not isolated here; :func:`isolation_problem`)."""
     seen: dict[str, Any] = {"stamp": None, "table": {}}
 
     def lookup(token: str) -> str | None:
@@ -112,11 +116,44 @@ def tenant_tokens() -> Callable[[str], str | None]:
             stamp = None
         if stamp != seen["stamp"]:
             seen["stamp"] = stamp
-            seen["table"] = {str(e["sha256"]): str(e["tenant"]) for e in read_tokens()}
+            seen["table"] = {str(e["sha256"]): str(e["tenant"]) for e in read_tokens()
+                             if others or e["tenant"] == DEFAULT_TENANT}
         found: str | None = seen["table"].get(_digest(token))
         return found
 
     return lookup
+
+
+def other_tenants(places: dict[str, Any]) -> list[str]:
+    """The tenants besides the default one that this machine knows of: in
+    the tokens file or with a tenant directory."""
+    named = {str(e["tenant"]) for e in read_tokens()} | set(places)
+    return sorted(named - {DEFAULT_TENANT})
+
+
+def isolation_problem(settings: config.Settings, cwd: str) -> str | None:
+    """Why tenants' tools here would run with no boundary between them and
+    this server, or ``None`` when they would not: the settings' sandbox
+    confines every command (``enabled``, ``failIfUnavailable``, no
+    ``allowUnsandboxedCommands``), or the operator accepted tenants
+    separated at the API only (``[server] shared_os_user_tenants = true``)."""
+    if settings.server.get("shared_os_user_tenants") is True:
+        return None
+    found = config.file_settings(cwd)
+    box = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
+                                        base_dir=cwd)
+    missing = [what for what, ok in (("sandbox.enabled: true", box.enabled),
+                                     ("sandbox.failIfUnavailable: true",
+                                      box.fail_if_unavailable),
+                                     ("sandbox.allowUnsandboxedCommands: false",
+                                      not box.allow_unsandboxed)) if not ok]
+    if not missing:
+        return None
+    return ("tenants' tools would run as this OS user with no boundary: they could read "
+            f"{config.HOME} (tokens, the store) and this process's environment. Set "
+            f"{', '.join(missing)} in settings.json, run the workers with a remote exec env, "
+            "or accept tenants separated at the API only with [server] "
+            f"shared_os_user_tenants = true in {config.HOME / 'config.toml'}")
 
 
 @dataclass(frozen=True)

@@ -478,3 +478,9 @@ All notable changes to Noeta are documented here. The format is based on
   `~/.noeta/tenants/<name>/config.toml`, by default `default` and the queue of its own name
   (`create_app(queues=)`). Before, any tenant could push tasks onto another tenant's dedicated
   worker pool.
+- `noeta serve` and `noeta worker` refuse to start with tenants besides the default one
+  unless the sandbox confines every command (`enabled`, `failIfUnavailable`, no
+  `allowUnsandboxedCommands`) or `[server] shared_os_user_tenants = true` accepts tenants
+  separated at the API only; a tenant token added later is not accepted by such a server.
+  Before, every tenant's tools ran as the server's OS user and could read `~/.noeta`, the
+  store and the process environment.

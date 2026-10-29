@@ -94,5 +94,37 @@ api_key = "{env:ACME_API_KEY}"   # or "{keyring:service/user}"; never the secret
   the budget is raised. Usage is counted from when a budget is set (table `tenant_usage`).
 - A tenant with its own `provider` never borrows the server's key.
 
+### What separates tenants
+
+The API is a boundary: a tenant's token reaches only its own tasks, sets only the task config
+a client may (`model`, `effort`, `max_turns`, `cwd`, `permission_mode`, `output_schema`),
+posts only the signals front ends send, and creates tasks only in its workspace and on its
+queues. Tools are another matter: they run where the worker runs, as the worker's OS user.
+Without something in between, a tenant whose task runs `Bash` (approved by that same tenant)
+can read `~/.noeta` (the tokens file, the sqlite store, other tenants' settings), the
+worker's environment (`/proc/<pid>/environ`: provider keys) and any file that user can.
+
+So `noeta serve` (with its worker) and `noeta worker` refuse to start when this machine knows
+tenants besides the default one (a token in `tokens.json` or a tenant directory), unless one
+of these holds:
+
+1. **The sandbox confines every command**: `sandbox.enabled: true`,
+   `sandbox.failIfUnavailable: true` and `sandbox.allowUnsandboxedCommands: false` in
+   `~/.noeta/settings.json`. `Bash` then runs inside bubblewrap or Seatbelt. File tools
+   (`Read`, `Edit`, `Write`, `Grep`, `Glob`) still run in the worker process, gated only by
+   permission rules the tenant answers itself; add deny rules such as
+   `Read(~/.noeta/**)` and `Edit(~/.noeta/**)` (deny rules feed the sandbox too) for paths no
+   tenant may touch.
+2. **A remote exec env**: tools run in a container per task (`Runtime(env_for=…)`, from host
+   code embedding noeta; the `noeta` command does not set one up).
+3. **The operator accepts tenants separated at the API only**:
+   `shared_os_user_tenants = true` under `[server]` in `~/.noeta/config.toml`. Tenants then must trust each
+   other and the operator with everything the OS user can reach.
+
+A token for another tenant added while a non-isolated server runs is not accepted (401) until
+it is restarted with one of the above. `noeta serve --no-worker` runs no tools and is not
+checked; the workers check themselves, against their own settings and tenant directories (a
+worker with neither does not know of the tenants: give every worker the same `~/.noeta`).
+
 For hard isolation (separate machines or databases per tenant), run a worker pool per queue
 (`noeta worker --queue acme`) or a store schema per tenant.
