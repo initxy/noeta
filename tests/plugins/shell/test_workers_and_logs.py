@@ -198,7 +198,9 @@ async def test_logs_go_to_a_private_per_user_directory(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = tmp_path / "run"
     runtime.mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    # The temp directory on disk, never the small RAM-backed runtime one.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(runtime))
     job = await _spawn(Registry(), tmp_path)
     assert isinstance(job, Job)
     await asyncio.wait_for(job.done.wait(), 10)
@@ -213,13 +215,32 @@ async def test_a_planted_log_directory_is_refused(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = tmp_path / "run"
     runtime.mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("TMPDIR", str(runtime))
     elsewhere = tmp_path / "attacker"
     elsewhere.mkdir()
     (runtime / f"noeta-background-{os.getuid()}").symlink_to(elsewhere)
     refused = await _spawn(Registry(), tmp_path)
     assert isinstance(refused, str) and "not a directory owned by the current user" in refused
     assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize("monitor", [False, True])
+async def test_a_log_stops_growing_at_its_cap_and_says_so(tmp_path: Path, monitor: bool) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"), log_max_bytes=1000)
+    command = "head -c 300000 /dev/zero | tr '\\0' x; echo; echo late >&2; echo end"
+    job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command=command,
+                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               tool_use_id="c", description="", post=_posted,
+                               monitor_timeout_ms=60_000 if monitor else None)
+    assert isinstance(job, Job)
+    await asyncio.wait_for(job.done.wait(), 10)
+    # The command ran to its end (nothing killed it for writing on).
+    assert job.exit_code == 0
+    text = Path(job.out_path).read_text()
+    # The cap, past it one read at most (64 KB), then the note.
+    kept, note = text.split("\n[output past 1000 bytes was not kept]\n")
+    assert 1000 <= len(kept) <= 1000 + 65536 and set(kept) == {"x"}
+    assert note == "\n[exited with code 0]\n" or (monitor and note == "")
 
 
 async def test_a_job_counts_as_running_until_its_end_is_posted(tmp_path: Path) -> None:

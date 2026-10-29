@@ -32,10 +32,14 @@ on this machine, once the worker's process is gone. The guard needs only
 ``sh`` tools, so it works the same in a container or a sandbox.
 
 Job logs live in a private directory per user inside the env: by default
-``$XDG_RUNTIME_DIR`` (local env) or the temp directory, under
+under the temp directory on disk (``$TMPDIR``, else ``/var/tmp``, else
+``/tmp``; never the RAM-backed ``$XDG_RUNTIME_DIR``), in
 ``noeta-background-<uid>``, created 0700; a directory that already exists
 must be a real directory owned by the user (else launches are refused). Log
-files are created 0600.
+files are created 0600. A job's output reaches its log through a pipe that
+keeps the first ``log_max_bytes`` (:data:`DEFAULT_LOG_MAX_BYTES`), then a
+line saying the rest was not kept, and drains the rest, so the command runs
+on unharmed.
 """
 
 from __future__ import annotations
@@ -50,7 +54,6 @@ import secrets
 import shlex
 import socket
 import string
-import tempfile
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -91,6 +94,27 @@ DEFAULT_LOG_DIR = ""
 ENDED_KEEP = 4096
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
+#: Bytes of a job's output (and, for a monitor, of its stderr) its log keeps.
+DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
+
+#: Appends its stdin to the file ``$2`` as it comes (one read at a time, so
+#: a monitor sees each line at once) until the file holds ``$1`` bytes (one
+#: read more at most), then a line saying the rest was not kept, and reads
+#: the rest away: the writer never gets a broken pipe. Only ``sh`` tools.
+_KEEP_HEAD = r"""keep_head() {
+  s=0
+  while [ "$s" -lt "$1" ]; do
+    dd bs=65536 count=1 2>/dev/null >>"$2"
+    t=$(wc -c <"$2")
+    [ "$t" -gt "$s" ] || return 0
+    s=$t
+  done
+  if [ "$(dd bs=1 count=1 2>/dev/null | wc -c)" -gt 0 ]; then
+    printf '\n[output past %s bytes was not kept]\n' "$1" >>"$2"
+    cat >/dev/null
+  fi
+}
+"""
 
 #: Runs beside a job, in its process group: exits with the job, kills the
 #: group once the worker is gone. ``$1`` the job's shell (its pid), ``$2``
@@ -117,10 +141,17 @@ WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 JOB_ENDED = "shell_job_ended"
 
 #: Makes (or checks) the log directory: ``$1`` an explicit directory, else
-#: ``${2:-/tmp}/noeta-background-<uid>``. Prints the directory.
+#: ``<temp>/noeta-background-<uid>``, ``<temp>`` the first usable of ``$2``,
+#: ``$TMPDIR``, ``/var/tmp`` and ``/tmp``. Prints the directory.
 _PREPARE_DIR = r"""
 d=$1
-[ -n "$d" ] || d="${2:-/tmp}/noeta-background-$(id -u)"
+if [ -z "$d" ]; then
+  b=/tmp
+  for c in "$2" "${TMPDIR:-}" /var/tmp; do
+    if [ -n "$c" ] && [ -d "$c" ] && [ -w "$c" ]; then b=$c; break; fi
+  done
+  d="$b/noeta-background-$(id -u)"
+fi
 if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -p -m 700 -- "$d" || exit 3; fi
 if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then
   echo "refusing $d: not a directory owned by the current user" >&2; exit 4
@@ -198,9 +229,11 @@ class Registry:
     """Background jobs of this process, by root task."""
 
     def __init__(self, *, max_jobs: int = DEFAULT_MAX_JOBS,
-                 log_dir: str = DEFAULT_LOG_DIR) -> None:
+                 log_dir: str = DEFAULT_LOG_DIR,
+                 log_max_bytes: int = DEFAULT_LOG_MAX_BYTES) -> None:
         self.max_jobs = max_jobs
         self.log_dir = log_dir
+        self.log_max_bytes = log_max_bytes
         self.worker = WORKER_ID
         self.jobs: dict[str, dict[str, Job]] = {}
         #: Tasks known (in this process) to have ended with jobs of their
@@ -227,10 +260,8 @@ class Registry:
             known = None
         if known is not None:
             return known
-        base = "/tmp"
-        if is_local(env):
-            runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
-            base = runtime if runtime and os.path.isdir(runtime) else tempfile.gettempdir()
+        # The env's own variables may be scrubbed: on this machine, ours.
+        base = (os.environ.get("TMPDIR") or "") if is_local(env) else ""
         result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", self.log_dir, base],
                                timeout=10, output_cap=8192)
         if result.exit_code != 0:
@@ -327,14 +358,22 @@ class Registry:
             job.proc = asyncio.ensure_future(run_ws(*ws, lambda text: stream.feed(text + "\n"),
                                                     resolve=ws_resolve))
         else:
-            redirect = f"2>{shlex.quote(err)}" if err is not None else "2>&1"
-            if cwd_file:
-                redirect += f" 3>{shlex.quote(cwd_file)}"
-            # The command runs as the shell's own process (``exec``), so the
-            # guard is no job of its: a ``wait`` in it never waits for that.
-            script = (f"exec >{shlex.quote(out)} {redirect}\n"
+            cap = str(self.log_max_bytes)
+            keep_out = f"keep_head {cap} {shlex.quote(out)}"
+            if err is not None:
+                # stdout and stderr each through their own pipe: both are
+                # members of the pipeline, so both are written out before
+                # the shell exits.
+                pipeline = (f'{{ "$@" 2>&1 1>&4 4>&- | keep_head {cap} {shlex.quote(err)}; '
+                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | {keep_out}')
+            else:
+                pipeline = f'"$@" 2>&1 | {keep_out}'
+            fd3 = f"exec 3>{shlex.quote(cwd_file)}\n" if cwd_file else ""
+            # The command runs in the pipeline, the guard beside it: a
+            # ``wait`` in the command never waits for the guard.
+            script = (f"{fd3}{_KEEP_HEAD}"
                       f"{self._guard(job)} </dev/null >/dev/null 2>&1 3>&- &\n"
-                      'exec "$@"')
+                      f'{pipeline}\nexit "${{PIPESTATUS[0]}}"')
             run = ["bash", "-c", script, "bash", *(argv or ["bash", "-c", command])]
             job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
                                                      env=dict(env_vars), timeout=None,
