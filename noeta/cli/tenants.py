@@ -8,6 +8,7 @@ What a tenant is allowed lives in ``~/.noeta/tenants/<name>/config.toml``
 (every worker and server reads its own copy; keep them the same)::
 
     workspace = "/srv/acme"      # its tasks run here or below (and here by default)
+    queues = ["acme"]            # the queues its requests may use (default: "default", "acme")
     max_running = 4              # its tasks running at once; the rest wait their turn
     budget_tokens = 5_000_000    # per calendar month (UTC); past it a turn fails
     budget_usd = 50.0            #   with budget_spent
@@ -120,16 +121,19 @@ def tenant_tokens() -> Callable[[str], str | None]:
 
 @dataclass(frozen=True)
 class TenantPlace:
-    """One tenant directory read: its workspace (for the HTTP host) and its
-    limits and provider (for the workers)."""
+    """One tenant directory read: its workspace and queues (for the HTTP
+    host) and its limits and provider (for the workers)."""
 
     name: str
     workspace: str | None
     allowed: Tenant
+    #: The queues its requests may create tasks on; ``None``: the default
+    #: (``noeta.host.http.create_app``'s ``queues``).
+    queues: tuple[str, ...] | None = None
 
 
-_KEYS = {"workspace", "max_running", "budget_tokens", "budget_usd", "provider", "base_url",
-         "api_key"}
+_KEYS = {"workspace", "queues", "max_running", "budget_tokens", "budget_usd", "provider",
+         "base_url", "api_key"}
 
 
 def load_tenants(settings: config.Settings) -> dict[str, TenantPlace]:
@@ -165,6 +169,10 @@ def _place(name: str, path: Path, data: dict[str, Any],
         workspace = os.path.realpath(os.path.expanduser(str(workspace)))
         if not os.path.isdir(workspace):
             raise ValueError(f"{path}: workspace {workspace} is not a directory")
+    queues = data.get("queues")
+    if queues is not None and (not isinstance(queues, list) or not queues
+                               or not all(isinstance(q, str) and q for q in queues)):
+        raise ValueError(f"{path}: queues must be a non-empty list of queue names")
     provider_for = None
     if {"provider", "base_url", "api_key"} & set(data):
         # Its own endpoint never borrows the server's key.
@@ -172,7 +180,8 @@ def _place(name: str, path: Path, data: dict[str, Any],
                                   base_url=data.get("base_url"), api_key=data.get("api_key"))
         made = own.make_provider()
         provider_for = lambda _model: made  # noqa: E731
-    return TenantPlace(name=name, workspace=workspace, allowed=Tenant(
+    return TenantPlace(name=name, workspace=workspace,
+                       queues=tuple(queues) if queues is not None else None, allowed=Tenant(
         max_running=data.get("max_running"), budget_tokens=data.get("budget_tokens"),
         budget_usd=float(data["budget_usd"]) if "budget_usd" in data else None,
         provider_for=provider_for))

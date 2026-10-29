@@ -165,6 +165,25 @@ async def test_a_tenants_tasks_run_in_its_workspace(tmp_path: Path) -> None:
     await store.close()
 
 
+async def test_a_tenant_creates_tasks_only_on_its_queues(tmp_path: Path) -> None:
+    from noeta.core.client import Client
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    api = create_app(Client(store), token="tok-default", tokens={**TOKENS, "tok-c": "c"},
+                     cwd=str(tmp_path), queues={"c": ["gpu"]})
+    expected = {("tok-a", "default"): 201, ("tok-a", "a"): 201, ("tok-a", "b"): 403,
+                ("tok-a", "gpu"): 403, ("tok-b", "a"): 403, ("tok-c", "gpu"): 201,
+                ("tok-c", "default"): 403, ("tok-c", "c"): 403,
+                ("tok-default", "a"): 201, ("tok-default", "anything"): 201}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                 base_url="http://x") as http:
+        for (token, queue), status in expected.items():
+            got = await http.post("/tasks", json={"agent": "main", "queue": queue},
+                                  headers=_headers(token))
+            assert got.status_code == status, (token, queue, got.text)
+    await store.close()
+
+
 def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
                                                monkeypatch: pytest.MonkeyPatch) -> None:
     import stat

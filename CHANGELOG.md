@@ -474,3 +474,7 @@ All notable changes to Noeta are documented here. The format is based on
 - Resuming or forking over `/stream-json` looks the task up through the tenant's client
   first. Before, resuming another tenant's task had this server serve its tree and could
   name its agent in the error.
+- A tenant creates tasks only on its own queues: `queues = [...]` in
+  `~/.noeta/tenants/<name>/config.toml`, by default `default` and the queue of its own name
+  (`create_app(queues=)`). Before, any tenant could push tasks onto another tenant's dedicated
+  worker pool.

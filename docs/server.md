@@ -72,6 +72,7 @@ What a tenant may do lives in `~/.noeta/tenants/<name>/config.toml` (read by `no
 
 ```toml
 workspace = "/srv/shared/acme"   # its tasks' cwd must lie in it; tasks start there by default
+queues = ["acme"]                # the queues its requests may create tasks on
 max_running = 4                  # its tasks running at once; the rest wait their turn
 budget_tokens = 5_000_000        # per calendar month (UTC), input + output tokens
 budget_usd = 50.0                # per calendar month, at catalog prices
@@ -82,6 +83,10 @@ api_key = "{env:ACME_API_KEY}"   # or "{keyring:service/user}"; never the secret
 
 - `workspace` is checked where tasks come in (the HTTP API, including `config` signals and
   stream-json); with a shared filesystem, put it there.
+- `queues` is checked on `POST /tasks`: a queue not listed answers 403. Without it a tenant
+  may use `default` and the queue of its own name, so a pool started with
+  `noeta worker --queue acme` takes only acme's tasks (and the default tenant's, which may
+  use any queue).
 - `max_running` is enforced by the claim, exactly, across all workers; other tenants are not
   held up behind it.
 - A model call past a budget fails its turn with `budget_spent` and a message that names the

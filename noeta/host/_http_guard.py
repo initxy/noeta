@@ -50,12 +50,15 @@ class GuardedClient:
     from the server's directory (not the process's) and passed on
     absolute, so every worker resolves it the same. With a ``workspace``
     (a tenant's) that directory is the only root, and a task created
-    without a ``cwd`` runs in it."""
+    without a ``cwd`` runs in it. ``queues``: the queues a task may be
+    created on (any when ``None``)."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
-                 roots: Sequence[str] = (), workspace: str | None = None) -> None:
+                 roots: Sequence[str] = (), workspace: str | None = None,
+                 queues: Sequence[str] | None = None) -> None:
         self._client = client
         self._allow_bypass = allow_bypass
+        self._queues = None if queues is None else tuple(queues)
         self._fill = workspace is not None
         if workspace is not None:
             cwd, roots = workspace, ()
@@ -109,6 +112,9 @@ class GuardedClient:
                      queue: str = "default", dedupe_key: str | None = None,
                      history_from: str | None = None,
                      history_through: int | None = None) -> str:
+        if self._queues is not None and queue not in self._queues:
+            raise Refused(f"queue {queue!r} is not one this tenant may use "
+                          f"({', '.join(self._queues)})")
         config = self.check_config(config)
         if self._fill and not (config or {}).get("cwd"):
             config = {**(config or {}), "cwd": self._cwd}
@@ -171,6 +177,13 @@ class Scope:
     front: Any
 
 
+def tenant_queues(tenant: str) -> tuple[str, ...] | None:
+    """The queues a tenant may create tasks on when its settings name none:
+    ``default`` and the queue of its own name (any for the default tenant,
+    the server's own token)."""
+    return None if tenant == DEFAULT_TENANT else ("default", tenant)
+
+
 def _digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -220,7 +233,8 @@ class Guard:
     def __init__(self, client: Any, serving: Any, *, token: str | None, tokens: Any,
                  auth: bool, allowed_hosts: Sequence[str] | None, origins: Sequence[str],
                  allow_bypass: bool, cwd: str | None, roots: Sequence[str],
-                 workspaces: Mapping[str, str] | None) -> None:
+                 workspaces: Mapping[str, str] | None,
+                 queues: Mapping[str, Sequence[str]] | None = None) -> None:
         self._client = client
         self._serving = serving
         self._auth = auth
@@ -229,6 +243,7 @@ class Guard:
         self._cwd = cwd
         self._roots = roots
         self._workspaces = workspaces
+        self._queues = queues or {}
         self._scopes: dict[str, Scope] = {}
         self._hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
         self._origins = {o.rstrip("/").lower() for o in origins}
@@ -240,7 +255,8 @@ class Guard:
             scoped = client.scoped(tenant) if hasattr(client, "scoped") else client
             guarded = GuardedClient(scoped, allow_bypass=self._allow_bypass, cwd=self._cwd,
                                     roots=self._roots,
-                                    workspace=(self._workspaces or {}).get(tenant))
+                                    workspace=(self._workspaces or {}).get(tenant),
+                                    queues=self._queues.get(tenant, tenant_queues(tenant)))
             found = self._scopes[tenant] = Scope(scoped, guarded,
                                                  _GuardedFront(self._serving, guarded))
         return found

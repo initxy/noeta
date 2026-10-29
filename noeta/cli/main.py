@@ -200,7 +200,9 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
                      workspaces={name: p.workspace for name, p in places.items()
-                                 if p.workspace})
+                                 if p.workspace},
+                     queues={name: p.queues for name, p in places.items()
+                             if p.queues is not None})
     port = args.port
     try:
         await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()

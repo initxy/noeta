@@ -126,7 +126,7 @@ def test_tenant_directories_are_read_with_their_secrets(
     work.mkdir()
     (tmp_path / "tenants" / "acme").mkdir(parents=True)
     (tmp_path / "tenants" / "acme" / "config.toml").write_text(
-        f'workspace = "{work}"\nmax_running = 3\nbudget_usd = 5\n'
+        f'workspace = "{work}"\nqueues = ["acme", "gpu"]\nmax_running = 3\nbudget_usd = 5\n'
         'provider = "openai_compat"\nbase_url = "http://llm.example/v1"\n'
         'api_key = "{env:ACME_KEY}"\n')
     (tmp_path / "tenants" / "empty").mkdir()  # no config.toml: not a tenant
@@ -134,12 +134,15 @@ def test_tenant_directories_are_read_with_their_secrets(
     found = tenants.load_tenants(config.Settings(model="m", api_key="server-key"))
     assert list(found) == ["acme"]
     acme = found["acme"]
-    assert acme.workspace == str(work.resolve())
+    assert acme.workspace == str(work.resolve()) and acme.queues == ("acme", "gpu")
     assert acme.allowed.max_running == 3 and acme.allowed.budget_usd == 5.0
     assert acme.allowed.provider_for is not None
     made: Any = acme.allowed.provider_for("m")
     assert made._client.headers["authorization"] == "Bearer sk-acme"  # never the server's
     assert str(made._client.base_url).rstrip("/") == "http://llm.example/v1"
+    (tmp_path / "tenants" / "acme" / "config.toml").write_text("queues = []\n")
+    with pytest.raises(ValueError, match="queues"):
+        tenants.load_tenants(config.Settings(model="m"))
     (tmp_path / "tenants" / "acme" / "config.toml").write_text("max_runing = 3\n")
     with pytest.raises(ValueError, match="unknown setting"):
         tenants.load_tenants(config.Settings(model="m"))

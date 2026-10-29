@@ -113,7 +113,8 @@ def create_app(client: Client, *, token: str | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
                cwd: str | None = None, roots: Sequence[str] = (),
-               workspaces: Mapping[str, str] | None = None) -> Starlette:
+               workspaces: Mapping[str, str] | None = None,
+               queues: Mapping[str, Sequence[str]] | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -132,7 +133,10 @@ def create_app(client: Client, *, token: str | None = None,
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
     below it, or below one of ``roots`` (anywhere when ``None``);
     ``workspaces``: per tenant, the directory its tasks run in or below
-    (instead of ``cwd`` and ``roots``), and by default."""
+    (instead of ``cwd`` and ``roots``), and by default; ``queues``: per
+    tenant, the queues its requests may create tasks on (a tenant not
+    named: ``default`` and the queue of its own name; the default tenant:
+    any)."""
     if auth and not token and not tokens:
         raise ValueError("create_app needs a bearer token (token= or tokens=); pass "
                          "auth=False to serve every request without one")
@@ -144,7 +148,7 @@ def create_app(client: Client, *, token: str | None = None,
                                                           live=deltas)
     guard = Guard(client, serving, token=token, tokens=tokens, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, roots=roots, workspaces=workspaces)
+                  cwd=cwd, roots=roots, workspaces=workspaces, queues=queues)
     r = Routes(serving, app, agents)
     s = StreamRoutes(guard, deltas)
     return Starlette(routes=[
