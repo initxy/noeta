@@ -7,8 +7,9 @@ Code plugin. Its parts load through the plugins that already read those
 formats: ``skills/`` (the skills plugin), ``agents/*.md`` (agent files),
 ``commands/*.md`` (the ``markdown_commands`` plugin, named
 ``<plugin>:<command>`` as Claude Code does), ``hooks/hooks.json`` (the hooks
-plugin) and ``.mcp.json`` (the MCP plugin; from a project only once its
-settings consent, so a cloned repository never starts a server by itself).
+plugin) and ``.mcp.json`` (the MCP plugin; never from a project's plugin,
+whose servers the person is told to copy into ``.noeta/mcp.json``, so a
+cloned repository never starts a server by itself).
 ``${CLAUDE_PLUGIN_ROOT}`` and ``${CLAUDE_PLUGIN_DATA}`` (``~/.noeta/plugin-data/<name>``)
 are substituted in hooks, MCP servers, commands and agent prompts. Monitors,
 ``bin/``, LSP servers, themes and output styles are not loaded.
@@ -49,7 +50,7 @@ class ClaudePlugin:
     name: str
     root: Path
     version: str = ""
-    #: From a project's ``.noeta/plugins`` (its MCP servers need consent).
+    #: From a project's ``.noeta/plugins`` (its MCP servers never start).
     project: bool = False
     skill_dirs: list[str] = field(default_factory=list)
     agents: list[AgentFile] = field(default_factory=list)

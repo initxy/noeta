@@ -72,7 +72,7 @@ plugins that read those formats; commands are `/<plugin>:<command>` and, as skil
 their `!` lines through the permission checks and pre-approve their `allowed-tools`.
 `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` (`~/.noeta/plugin-data/<name>`) are
 substituted. From a project, its MCP
-servers start only once `.noeta/mcp.json` consents. Monitors, `bin/`, LSP servers, themes and
+servers never start: noeta says to copy them into `.noeta/mcp.json`, which needs consent. Monitors, `bin/`, LSP servers, themes and
 output styles are not loaded (reasons [below](#what-noeta-does-not-build-and-why)). noeta never
 reads `~/.claude` or `.claude/`.
 
