@@ -176,9 +176,10 @@ def isolation_problem(settings: config.Settings, cwd: str) -> str | None:
         return None
     return ("tenants' tools would run as this OS user with no boundary: they could read "
             f"{home_dir.HOME} (tokens, the store) and this process's environment. Set "
-            f"{', '.join(missing)} in settings.json, run the workers with a remote exec env, "
-            "or accept tenants separated at the API only with [server] "
-            f"shared_os_user_tenants = true in {home_dir.HOME / 'config.toml'}")
+            f"{', '.join(missing)} in settings.json, or accept tenants separated at the API "
+            f"only with [server] shared_os_user_tenants = true in "
+            f"{home_dir.HOME / 'config.toml'}. (A remote exec env per task is the other "
+            "boundary, set up by host code embedding noeta, not by this command.)")
 
 
 @dataclass(frozen=True)
