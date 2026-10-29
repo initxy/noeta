@@ -58,6 +58,7 @@ __all__ = [
     "forget_plugin_files",
     "load",
     "load_plugin_files",
+    "missing_modules",
     "note_arguments",
     "pin",
     "provider",

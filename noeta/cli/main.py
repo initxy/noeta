@@ -371,10 +371,12 @@ def _install_hint(module: str) -> str:
         wanted = ",".join(dict.fromkeys((*README_EXTRAS, extra)))
         return (f"; it needs the {extra} extra: uv tool install --reinstall"
                 f" 'noeta[{wanted}] @ {SOURCE_URL}' (name every extra and --with you use:"
-                " a reinstall drops the rest)")
+                " a reinstall drops the rest; from a checkout, its path instead of the URL), or"
+                f" pip install 'noeta[{extra}] @ {SOURCE_URL}'")
     return (f"; install it next to noeta: uv tool install --reinstall --with {module}"
             f" 'noeta[{','.join(README_EXTRAS)}] @ {SOURCE_URL}' (name every extra and --with"
-            f" you use: a reinstall drops the rest), or pip install {module} in noeta's"
+            f" you use: a reinstall drops the rest; from a checkout, its path instead of the"
+            f" URL), or pip install {module} in noeta's"
             " environment; the package's name may differ from the module's")
 
 
