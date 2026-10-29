@@ -62,5 +62,14 @@ def test_the_recorded_text_check_finds_a_shared_run(tmp_path: Path) -> None:
     assert not own_words.matches(head + " but then ours", indexed, [head])
 
 
+def test_a_deferred_tools_description_is_indexed() -> None:
+    """Claude Code sends a loaded deferred tool's full description in
+    ``tools`` (``defer_loading: true``), so the check covers it; a deferred
+    tool no recording loads has no Claude Code text to compare."""
+    said = "Fetches a page and answers a question about it with a small, fast model."
+    body = {"tools": [{"name": "WebFetch", "defer_loading": True, "description": said}]}
+    assert said in list(own_words.claude_code_texts(body))
+
+
 def test_noeta_repeats_no_recorded_text_of_claude_code() -> None:
     assert own_words.check() == []
