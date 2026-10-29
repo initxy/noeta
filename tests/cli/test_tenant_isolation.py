@@ -93,6 +93,28 @@ def test_a_worker_fences_the_tenants_workspaces(home: Path, tmp_path: Path,
     assert seen["tenant_workspaces"] == {"acme": str((tmp_path / "acme-ws").resolve())}
 
 
+@pytest.mark.parametrize("command", [("serve",), ("worker",)])
+def test_a_worker_that_knows_no_tenants_still_refuses_their_tasks(
+        home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        command: tuple[str, ...]) -> None:
+    seen: dict[str, object] = {}
+
+    def started(*_a: object, **kw: object) -> None:
+        seen.update(kw)
+        raise _Started
+
+    monkeypatch.setattr(main, "_app", started)
+    with pytest.raises(_Started):
+        _run(tmp_path, *command)
+    refusal = (seen.get("permissions") or {}).get("tenant_refusal")  # type: ignore[attr-defined]
+    assert refusal and "shared_os_user_tenants" in refusal
+    (home / "config.toml").write_text("[server]\nshared_os_user_tenants = true\n")
+    seen.clear()
+    with pytest.raises(_Started):
+        _run(tmp_path, *command)
+    assert "tenant_refusal" not in (seen.get("permissions") or {})  # type: ignore[operator]
+
+
 async def test_the_permissions_plugin_gets_the_fenced_places(home: Path,
                                                              tmp_path: Path) -> None:
     settings = config.load_settings(model="sonnet", store=f"sqlite:///{tmp_path / 't.db'}")

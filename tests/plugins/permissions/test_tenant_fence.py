@@ -13,8 +13,9 @@ from typing import Any
 import pytest
 
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.core import records
 from noeta.core.client import Client
-from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
+from noeta.core.events import ExtensionRecorded, TaskEnded, ToolFinished, Waiting
 from noeta.plugins.permissions import MODE_SIGNAL, Permissions
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.paths import project_slug
@@ -147,6 +148,33 @@ async def test_a_tenants_plan_file_goes_in_its_own_directory(
     plans = [e.data["plan"]["path"] for e in await events(client, tid)
              if isinstance(e, ExtensionRecorded) and e.kind == "mode" and "plan" in e.data]
     assert len(plans) == 1 and Path(plans[0]).parent == places["home"] / "plans" / "acme"
+
+
+@pytest.mark.parametrize("one_shot", [False, True])
+async def test_a_worker_not_set_up_for_tenants_fails_their_turns(
+        store: SqliteStore, places: dict[str, Path], one_shot: bool) -> None:
+    read = Fake("Read")
+    provider = ScriptedProvider([reply("", ("Read", {"file_path": "README"})), reply("done")])
+    ag = agent([perms(places, tenant_refusal="no sandbox here")], [read], one_shot=one_shot)
+    rt = runtime(store, provider, ag)
+    theirs = await Client(store).scoped("acme").create("a", "go",
+                                                       config={"cwd": str(places["acme"])})
+    await rt.run_until_idle()
+    assert not provider.requests and not read.runs
+    evs = await events(Client(store), theirs)
+    if one_shot:
+        ended = [e for e in evs if isinstance(e, TaskEnded)]
+        assert ended and ended[0].status == "failed"
+        assert ended[0].error.startswith("tenant_not_isolated: ")
+        why = ended[0].error
+    else:
+        failed = [d for e in evs if isinstance(d := records.decode(e), records.TurnFailed)]
+        assert failed and failed[0].reason == "tenant_not_isolated"
+        why = failed[0].detail
+    assert "tenant 'acme'" in why and "no sandbox here" in why
+    mine = await Client(store).create("a", "go", config={"cwd": str(places["acme"])})
+    await rt.run_until_idle()
+    assert read.runs and (await Client(store).get(mine)).status != "failed"
 
 
 def test_own_spill_and_project_directories_stay_open(places: dict[str, Path]) -> None:

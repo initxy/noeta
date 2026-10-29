@@ -570,6 +570,12 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   actually opened for a read and the opened directory a write lands in, and `noeta serve` /
   `noeta worker` give every non-default tenant's task such an env, so a symlink swapped by a
   background command between the permission check and the read cannot redirect it.
+- A worker with no OS-level boundary for tenants (no strict sandbox, no `[server]
+  shared_os_user_tenants = true`) that claims a task of a tenant other than the default one
+  runs none of its tools: the turn fails with `tenant_not_isolated` and the reason before any
+  model call (`Permissions(tenant_refusal=)`, set by `noeta serve` and `noeta worker`).
+  Before, a worker that knew no tenants (no tokens file or tenant directories, e.g. on
+  another machine) started and ran such tasks unconfined.
 - A non-default tenant's task shares a repository's memory only with a main checkout that
   holds its working directory, and keeps an agent's `user`-scope memory in
   `.noeta/agent-memory/` of its working directory. Before, a `.git` file naming another

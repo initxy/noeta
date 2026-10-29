@@ -178,14 +178,17 @@ def _workspaces(places: dict[str, tenants.TenantPlace]) -> dict[str, str]:
     return {name: p.workspace for name, p in places.items() if p.workspace}
 
 
-def _check_isolation(s: Settings, cwd: str, places: dict[str, tenants.TenantPlace]) -> bool:
-    """Whether tools of tenants other than the default one may run here;
-    exits when such tenants exist and may not."""
+def _check_isolation(s: Settings, cwd: str,
+                     places: dict[str, tenants.TenantPlace]) -> str | None:
+    """Why tools of tenants other than the default one may not run here, or
+    ``None``; exits when such tenants are configured and may not. A task of
+    another tenant such a worker still claims fails its turn with the reason
+    (the permissions plugin's ``tenant_refusal``)."""
     problem = tenants.isolation_problem(s, cwd)
     others = tenants.other_tenants(places)
     if problem is not None and others:
         sys.exit(f"noeta: tenant(s) {', '.join(others)} configured, but {problem}")
-    return problem is None
+    return problem
 
 
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
@@ -203,13 +206,16 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
         print(f"noeta: bearer token: the one shown when {HOME / 'server-token'} was made "
               "(delete that file and restart for a new one)", file=sys.stderr)
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
-    refuse = {} if args.allow_bypass_permissions else {
-        "permissions": {"disable_bypass_mode": True}}
+    permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
+        "disable_bypass_mode": True}
     places = _tenants(s)
-    isolated = not with_worker or _check_isolation(s, cwd, places)
+    problem = _check_isolation(s, cwd, places) if with_worker else None
+    isolated = problem is None
+    if problem is not None:
+        permissions["tenant_refusal"] = problem
     app = _app(s, cwd=cwd, with_channels=True,
                tenants={name: p.allowed for name, p in places.items()},
-               tenant_workspaces=_workspaces(places), **refuse)
+               tenant_workspaces=_workspaces(places), permissions=permissions)
     await app.start(worker=with_worker)
     api = create_app(app.client, auth=server is not None,
                      tokens=tenants.tenant_tokens(
@@ -236,7 +242,9 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
     places = _tenants(s)
-    _check_isolation(s, os.getcwd(), places)
+    problem = _check_isolation(s, os.getcwd(), places)
+    if problem is not None:
+        kw["permissions"] = {"tenant_refusal": problem}
     kw["tenants"] = {name: p.allowed for name, p in places.items()}
     kw["tenant_workspaces"] = _workspaces(places)
     if snapshot_every is not None:

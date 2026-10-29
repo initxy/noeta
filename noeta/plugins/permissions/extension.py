@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core import records
+from noeta.core.errors import TurnFailed
 from noeta.core.events import (
     DEFAULT_TENANT,
     Answer,
@@ -75,6 +76,10 @@ CanUseTool = Callable[[str, dict[str, Any]], "bool | Awaitable[bool]"]
 
 #: Text a call refused by ``can_use_tool`` returns (0.6's deny default).
 DENIED_BY_HUMAN = "denied by human"
+
+#: The reason a turn fails with on a worker that may not run the task's
+#: tenant (``tenant_refusal``).
+TENANT_NOT_ISOLATED = "tenant_not_isolated"
 
 
 class UntrustedProjectShellAllowlistWarning(UserWarning):
@@ -146,6 +151,10 @@ class Permissions(Extension):
       and ``/proc`` (:mod:`noeta.toolkit.tenant_fence`); no rule, mode or
       answer lifts it. Such a task keeps its plan files under
       ``plans_dir/<tenant>``.
+    * ``tenant_refusal`` — why this worker may not run tools of tenants
+      other than the default one (``noeta worker`` without an OS-level
+      boundary): such a task's turn fails with ``tenant_not_isolated`` and
+      this reason before any model call, and its calls are denied.
 
     Remembered rules are per task; a child spawned by ``Subtasks`` starts
     with its parent's (``config["permission_rules"]``).
@@ -185,7 +194,9 @@ class Permissions(Extension):
         tenant_workspaces: Mapping[str, str] | None = None,
         store_files: Sequence[str] = (),
         spill_root: str | None = None,
+        tenant_refusal: str | None = None,
     ) -> None:
+        self.tenant_refusal = tenant_refusal
         self.mode = p.check_mode(mode)
         self.disable_bypass = bool(disable_bypass_mode)
         #: What front ends offer for this task (published on start).
@@ -304,6 +315,9 @@ class Permissions(Extension):
     # ------------------------------------------------------------ the gate
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        refused = self._tenant_refused(view)
+        if refused is not None:
+            return Deny(reason=refused)
         fenced = await fc.refusal(self.fence, view, call)
         if fenced is not None:
             return Deny(reason=fenced)
@@ -334,6 +348,12 @@ class Permissions(Extension):
             "title": w.TITLES.get(name, name),
             "always": rules or None, "always_label": decision.always_label,
             "choices": choices(decision), "classify": decision.classify})
+
+    def _tenant_refused(self, view: TaskView) -> str | None:
+        if self.tenant_refusal is None or view.state.tenant == DEFAULT_TENANT:
+            return None
+        return (f"this worker does not run tasks of tenant {view.state.tenant!r}: "
+                f"{self.tenant_refusal}")
 
     def _guards(self, view: TaskView, st: PermState, call: ToolUse) -> Gate | None:
         """noeta's own guards: the budget, the risk ceiling, the repetition
@@ -487,6 +507,9 @@ class Permissions(Extension):
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         import msgspec
 
+        refused = self._tenant_refused(view)
+        if refused is not None:
+            raise TurnFailed(TENANT_NOT_ISOLATED, refused)
         if self.budget.max_iterations is not None:
             view.record(NAME, "step")
         if self.allowed is not None or self.disallowed:
