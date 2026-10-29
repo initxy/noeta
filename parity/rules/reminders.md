@@ -185,6 +185,15 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.skill-mention.1 | When a user message names a skill as `/<name>` anywhere but as its leading command (preceded by the start, whitespace or a CJK sentence mark, followed by whitespace or the end), a `<system-reminder>` after the message says it names that skill: call `Skill` with it (and the arguments given) if the user wants it run, and do not run it if they only mention it. One per skill named; only skills the model may invoke. noeta today: covered (`skills` plugin, `reminder/skill_mention`, our words). |
 | rem.nested-skills.1 | When a tool touches a file in a directory below the working directory that has its own skills directory (in a directory between the two), that directory's skills join the conversation and a `<system-reminder>` names the directory (relative) and lists the new skills by name, one `- <name>` line each. noeta today: covered for `.noeta/skills` and `.agents/skills` (noeta's places), in trusted workspaces; the found directories are recorded in the task log. |
 
+## list changes (bundle, not recorded)
+
+The recordings never changed a list mid-conversation; these rows come from the 2.1.312 bundle.
+Each note goes out with the next request after the change, as a `role: "system"` note.
+
+| id | rule |
+|---|---|
+| rem.deltas.1 | Deferred tools: names that join are listed under the deferred-tool lead-in (`main.env.6`); names announced earlier that return are named as available again (for MCP tools: their server reconnected), to be loaded with `ToolSearch` as before; names that leave are listed as no longer available (for MCP tools: their server disconnected), not to be searched for since `ToolSearch` will not find them. A note that names a removal closes with a line saying it is background context, not to be narrated to the user unless relevant. After a compaction the full list is sent again. noeta today: covered (`environment` plugin, our words; the last list named is in the task log). |
+
 ## plan mode
 
 | id | rule |
@@ -253,4 +262,4 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | id | rule |
 |---|---|
 | rem.absent.1 | No todo/task-list nudge, no `TodoWrite`/`TaskCreate` reminder (neither tool is in the baseline tool set). |
-| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred list is fixed in the environment message and re-sent only after compaction), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. |
+| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred set never changed mid-conversation; see rem.deltas), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. |

@@ -257,3 +257,82 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
         "more", "<total_tokens>15000000 tokens left</total_tokens>"]
     assert sum(m.text.startswith("# Environment") for m in third) == 1
     assert provider.requests[3].messages[-1].text.startswith("<command-name>/plan")
+
+
+def test_the_deferred_delta_names_what_joined_and_what_left() -> None:
+    from noeta.plugins.environment import deferred_delta
+    assert deferred_delta(["A"], ["A"], ["A"]) == ""
+    text = deferred_delta(["A", "mcp__s__x"], ["A", "mcp__s__x", "mcp__s__y"],
+                          ["A", "B", "mcp__s__y"])
+    parts = text.split("\n\n")
+    assert parts[0].startswith("The tools below are deferred") and parts[0].endswith("\nB")
+    assert parts[1] == ("1 deferred tool is available again (their MCP server reconnected; "
+                        "the names were given earlier in this conversation): mcp__s__y. Load "
+                        "them with ToolSearch as before.")
+    assert parts[2].startswith("These deferred tools are no longer available (their MCP server "
+                               "disconnected)") and parts[2].endswith(":\nmcp__s__x")
+    assert parts[3].startswith("This is background information")
+
+
+async def test_deferred_tools_that_come_and_go_mid_task_are_told(tmp_path: Path) -> None:
+    from noeta.backends.stores.sqlite import SqliteStore
+    from noeta.core.agent import Agent
+    from noeta.core.client import Client
+    from noeta.core.extension import Extension
+    from noeta.core.runner import Runtime
+    from noeta.core.tool import text_output
+    from noeta.testing import ScriptedProvider, reply
+
+    class Remote:
+        description = "remote"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = True
+        clearable = False
+        deferred = True
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            return text_output("ok")
+
+    class Server(Extension):
+        name = "server"
+        up: tuple[str, ...] = ("mcp__s__a",)
+
+        def tools(self, view: Any) -> Any:
+            return [Remote(n) for n in self.up]
+
+    server = Server()
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("three"), reply("four")])
+    agent = Agent(name="a", model="m", extensions=[server, Environment(today=lambda: "2026-10-28")])
+
+    def runtime() -> Runtime:  # a new one per message: another worker, say
+        return Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                       env_for=lambda _s: LocalExecEnv(str(tmp_path)), sleep=_no_sleep)
+
+    client = Client(store)
+    tid = await client.create("a", "hi", config={"cwd": str(tmp_path)})
+    await runtime().run_until_idle()
+    server.up = ("mcp__s__a", "mcp__s__b")
+    await client.send(tid, "more")
+    await runtime().run_until_idle()
+    server.up = ("mcp__s__b",)
+    await client.send(tid, "again")
+    await runtime().run_until_idle()
+    await client.send(tid, "quiet")
+    await runtime().run_until_idle()
+    await store.close()
+
+    def notes(i: int) -> list[str]:
+        return [m.text for m in provider.requests[i].messages
+                if m.role == "system" and "deferred" in m.text][-1:]
+
+    assert notes(1)[0].startswith("The tools below are deferred") and \
+        notes(1)[0].endswith("\nmcp__s__b")
+    assert "no longer available (their MCP server disconnected)" in notes(2)[0]
+    assert notes(2)[0].split("\n\n")[0].endswith(":\nmcp__s__a")
+    # Nothing changed since: no new note.
+    assert len([m for m in provider.requests[3].messages if "no longer available" in m.text]) \
+        == 1
