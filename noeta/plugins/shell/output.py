@@ -9,8 +9,8 @@ import binascii
 import re
 
 from noeta.core.execenv import RunResult
+from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.types import Image
-from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.shell_syntax import parse
 
 #: Commands whose exit status 1 is an answer, not a failure (no match, a

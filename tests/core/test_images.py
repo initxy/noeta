@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from noeta.toolkit.images import (
+from noeta.core.images import (
     MAX_BASE64_BYTES,
     TARGET_RAW_BYTES,
     ImageTooLarge,

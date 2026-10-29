@@ -28,6 +28,7 @@ from noeta.plugins.checkpoints import Checkpoints
 from noeta.plugins.fs import FileTools
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.signals import RESUMED_SIGNAL
+from tests.images import png as a_png
 
 MODEL = "claude-opus-5-5"
 
@@ -129,7 +130,7 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
     work = tmp_path / "w"
     (work / "calc.py").write_text("def add(a, b):\n    return a - b\n")
     png = tmp_path / "shot.png"
-    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    png.write_bytes(a_png(4, 4))
     async with app.run_test(size=(110, 40)) as pilot:
         await app.add_image(Image(media_type="image/png", data=png.read_bytes()), "shot.png")
         await type_line(pilot, "look at @calc.py " + app.query_one(PromptInput).text)

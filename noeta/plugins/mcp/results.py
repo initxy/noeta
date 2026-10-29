@@ -25,9 +25,9 @@ import os
 import posixpath
 from typing import Any
 
+from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Image, Text
-from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
 from noeta.toolkit.tools import spill_path
 

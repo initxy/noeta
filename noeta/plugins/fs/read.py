@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core.execenv import ExecEnv
+from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Image
 from noeta.plugins.fs._missing import missing_file_message
@@ -35,7 +36,6 @@ from noeta.plugins.fs._read_formats import (
     too_many_tokens,
 )
 from noeta.plugins.fs.state import FS, KIND_NOTICE, KIND_READ, current_fs_state
-from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     Workspace,
@@ -69,7 +69,7 @@ _READ_CHUNK_BYTES = 1024 * 1024
 _SNIFF_BYTES = 16
 
 #: Largest image file read at all (Claude Code's); what is read is then made
-#: to fit a request by :func:`noeta.toolkit.images.fit_image`.
+#: to fit a request by :func:`noeta.core.images.fit_image`.
 IMAGE_MAX_BYTES = 128 * 1024 * 1024
 
 #: Extensions read as images (Claude Code's); a file without an extension is

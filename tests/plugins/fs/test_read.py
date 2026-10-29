@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
+from noeta.core.images import image_dimensions
 from noeta.plugins.fs import read as read_module
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import FS
-from noeta.toolkit.images import image_dimensions
 from tests.images import png
 from tests.plugins.conftest import Harness, images_of, text_of
 
