@@ -16,7 +16,7 @@ reminders are one kernel mechanism instead of ten hand-rolled ones.
 ## Non-goals
 
 - Compatibility with 0.6 (code, stores, APIs). 0.6 stays reachable at tag `v0.6.42`.
-- Migrating host-app.
+- Migrating host applications.
 - Splitting plugins into separate distributions (each is written so it could be).
 - Declarative Claude Code plugin bundles (a directory of skills, agents, commands and MCP
   config with no Python); later, on top of the agent and command files below.

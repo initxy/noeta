@@ -28,10 +28,10 @@ its own spec before work starts.
 
 ### Owner sign-offs (before any push or release)
 - [ ] Owner signs off on publishing the committed Claude Code interface data (scripts/parity/README.md) and the remaining owner decisions before any push.
-- [ ] Owner decides on the internal company and host names in committed docs before any push (left as they are until then): the release spec's D9 ("gateway token gateway"); `docs/specs/2026-10-26-noeta-1-0-redesign.md` lines 45 (host-app, host-app-2, noeta-agent), 63, 370, 371, 385, 395, 418 and 420 (host-app); `docs/specs/archive/2026-10-27-layout-split.md` line 27 and `docs/specs/archive/2026-10-27-noeta-1-0-layout.md` line 19 (host-app); `docs/specs/archive/2026-10-28-claude-code-parity.md` line 365 (the `gateway/seed-evolving` upstream).
+- [x] Private company, product and gateway names are out of every committed file (owner, 2026-10-29: they are private and are not published).
 - [ ] Push `main` and publish: the owner signs off (no push, no release, no host data touched until then).
 - [ ] A skill's `allowed-tools` plus `acceptEdits` writing `.noeta/skills` widens a trusted project's permissions, as in Claude Code. Owner decision (likely moot: `.noeta` is a protected path, so `acceptEdits` asks before writing `.noeta/skills`).
-- [ ] The old `holds` table stays unused in upgraded stores. Owner decision (dropping it deletes data on a host's store).
+- [x] The old `holds` table is dropped when a store is opened, after its trees are told the hold is gone (owner, 2026-10-29: old data may be deleted).
 - [ ] `noeta plugin add` installs no pip dependencies. Owner decision (it would run a package's build code on install).
 - [ ] Tenant directories are per-machine copies read at worker start (D47; `docs/server.md`). Owner decision on a shared source.
 - [ ] The README's `git+https` install line is untested until the branch is pushed, and its relative links will not resolve on a PyPI page. Owner decision, with the push and the first release.

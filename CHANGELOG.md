@@ -40,12 +40,13 @@ All notable changes to Noeta are documented here. The format is based on
 - **Stores are at schema version 3 and refuse a newer store.** Holds moved to `tree_holds`,
   and `tasks.tenant`, `tenant_usage` and `snapshots` (keyed by task and fold version) were
   added. The first process of this version moves a version 1 store (sqlite or Postgres)
-  forward in place, posting `hold_lost` for the old `holds` rows and keeping that table
-  unused (a version 2 store from a development build gets its snapshot rows re-keyed); a store at a later version than the
-  code knows is refused with `StoreUnavailable` before anything is written to it (sqlite never
-  checked before). Upgrading: stop every worker first; an older sqlite binary does not refuse
-  the upgraded store and keeps holding trees in the old `holds` table that newer workers do
-  not read.
+  forward in place, posting `hold_lost` for the old `holds` rows and then dropping that table
+  (a version 2 store from a development build gets its snapshot rows re-keyed); a store at a
+  later version than the code knows is refused with `StoreUnavailable` before anything is
+  written to it (sqlite never checked before). Upgrading: stop every worker first; an older
+  sqlite binary does not refuse the upgraded store: one left running fails, one started again
+  writes a new `holds` table, which the next open drops again (a tree told before is not
+  told twice).
 - **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
   `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
   longer read, so the two tools never pick up each other's hooks, env or instructions.
@@ -220,7 +221,7 @@ All notable changes to Noeta are documented here. The format is based on
   and settled once by the task's runner. A worker stopping on purpose (closing the TUI) posts
   `hold_lost` without waking the task (`Post.wake`): it hears with its next message. Third-party
   stores implement `hold`, `unhold` and `reap_holds` (a store an earlier
-  development build opened keeps its unused `holds` table; upgrading it posts `hold_lost`, with
+  development build opened has its old `holds` table dropped; upgrading it first posts `hold_lost`, with
   epoch 0, to the tasks of each tree held there, and the tree's running jobs recorded without
   an epoch are told lost). A hold is refused while another
   worker runs a task of the tree, and on Postgres a claim and a hold of one tree serialize, so a

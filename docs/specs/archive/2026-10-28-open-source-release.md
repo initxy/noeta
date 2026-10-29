@@ -77,7 +77,7 @@ servers and runs on many machines.
   missing a task's pinned plugin fails the task with `plugin_missing` (no silent run); `add_to`
   defaults to `()`; channel replies relay from inside the task; Claude Code plugin directories
   load only from noeta's places, fetched at a pinned commit by `noeta plugin add`.
-- D9 Evaluation model: the `.env` live endpoint (gateway token gateway) or DeepSeek Flash;
+- D9 Evaluation model: the `.env` live endpoint (a model gateway) or DeepSeek Flash;
   `make eval` must not drop below `evals/baseline.json`.
 - D10 (refined by D24) A task tree has at most one holding worker (refines D6, ADR-011): a hold by another
   worker while one exists (expired but unreaped included) is refused in the store's

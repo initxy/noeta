@@ -260,20 +260,20 @@ class PostgresStore:
                 await conn.execute(self._q("INSERT INTO {s}.noeta_schema VALUES (%s)"),
                                    (SCHEMA_VERSION,))
             elif version < SCHEMA_VERSION:
-                if version < 2:
-                    await self._tell_version_1_holds(conn)
-                else:  # version 2 kept one snapshot per task
+                if version >= 2:  # version 2 kept one snapshot per task
                     await conn.execute(self._q(
                         "ALTER TABLE {s}.snapshots DROP CONSTRAINT snapshots_pkey,"
                         " ADD PRIMARY KEY (task_id, version)"))
                 await conn.execute(self._q("UPDATE {s}.noeta_schema SET version = %s"),
                                    (SCHEMA_VERSION,))
+            await self._drop_version_1_holds(conn)
 
-    async def _tell_version_1_holds(self, conn: Conn) -> None:
+    async def _drop_version_1_holds(self, conn: Conn) -> None:
         """Version 1 kept holds in ``holds``, which this version does not
         read: each tree held there is told the hold is gone (``hold_lost``
-        with epoch 0, which no hold of ``tree_holds`` has). The table itself
-        is kept."""
+        with epoch 0, which no hold of ``tree_holds`` has), then the table
+        is dropped. An old worker still inside a transaction on it makes
+        the drop, and so this open, wait for that transaction."""
         cur = await conn.execute(
             "SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
             " AND table_name = 'holds'", (self.schema,))
@@ -284,6 +284,7 @@ class PostgresStore:
         for root_id, worker in await cur.fetchall():
             await self._lost_posts(conn, str(root_id), str(worker), 0, changes)
         await self._notify(conn, changes)
+        await conn.execute(self._q("DROP TABLE {s}.holds"))
 
     async def _notify(self, conn: Conn, changes: Sequence[tuple[str, ChangeKind]]) -> None:
         """Queue the notifications in the current transaction."""

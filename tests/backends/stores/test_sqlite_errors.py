@@ -123,7 +123,30 @@ async def test_upgrading_a_version_1_store_tells_its_held_trees(tmp_path: Path) 
         assert await store.inbox("free") == []
         await store.close()
     conn = sqlite3.connect(path)
-    assert conn.execute("SELECT count(*) FROM holds").fetchone() == (1,)  # kept
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'holds'").fetchone() is None
+    conn.close()
+
+
+async def test_a_holds_table_an_old_binary_wrote_again_is_told_and_dropped(
+        tmp_path: Path) -> None:
+    """An older binary started on an upgraded store writes ``holds`` anew;
+    the next open tells those trees and drops the table again."""
+    path = str(tmp_path / "t.db")
+    store = SqliteStore(path)
+    await store.create(NewTask(task_id="R", created=TaskCreated(agent="a")))
+    await store.close()
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE holds (root_id TEXT PRIMARY KEY, worker TEXT NOT NULL,"
+                 " until REAL NOT NULL)")
+    conn.execute("INSERT INTO holds VALUES ('R', 'w-old', 1e12)")
+    conn.commit()
+    conn.close()
+    store = SqliteStore(path)
+    assert [i.body for i in await store.inbox("R")] == [
+        External(name=HOLD_LOST, data={"worker": "w-old", "epoch": 0})]
+    await store.close()
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'holds'").fetchone() is None
     conn.close()
 
 
