@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -70,9 +71,20 @@ async def test_the_model_calls_it(tmp_path: Path) -> None:
     client = Client(store)
     tid = await client.create("a", "go", task_id="t1")
     await rt.run_until_idle()
-    results = [r.event.result for r in await client.events(tid)
-               if isinstance(r.event, ToolFinished)]
+    results = sorted((r.event.result for r in await client.events(tid)
+                      if isinstance(r.event, ToolFinished)), key=lambda r: r.call_id)
     assert [r.text for r in results] == [
         "5", "add: missing a", '{"kind": "task", "id": "t1", "tags": []}']
     assert [r.is_error for r in results] == [False, True, False]
     await store.close()
+
+
+async def test_a_sync_function_runs_off_the_event_loop() -> None:
+    @function_tool
+    def where() -> str:
+        """Name the thread."""
+        return threading.current_thread().name
+
+    out = await where.run({}, ToolContext(task_id="t", call_id="c", env=None, state={},
+                                       record=lambda *_: None))
+    assert out.content[0].text != threading.current_thread().name  # type: ignore[union-attr]

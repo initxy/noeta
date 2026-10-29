@@ -439,6 +439,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **A sync `function_tool` runs off the event loop.** It ran on the worker's event loop,
+  so a blocking function stalled every other task of the worker; it now runs in a thread.
 - **The MCP plugin keeps a bounded number of tasks in memory.** Its per-task entries (the
   resolved servers, their tools, roots and scope) were dropped only when the task waited or
   ended here, so a task another worker took, or one left by a crash, stayed for the
