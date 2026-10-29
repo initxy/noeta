@@ -398,6 +398,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **An unknown model is announced once.** The front end's notice now also says its cost
+  counts as $0.00, and the catalog no longer logs a second "not in the catalog" warning about
+  its price.
 - **An interrupted reply keeps the thinking it finished.** Only the streamed text was kept;
   completed thinking blocks (signature included) now go back ahead of it
   (`TurnStopped.thinking`; older records fold as before).

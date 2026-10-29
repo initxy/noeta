@@ -197,6 +197,17 @@ def test_an_unknown_model_is_announced() -> None:
     assert "'my-gateway-model'" in notice and "128,000 tokens" in notice
 
 
+def test_an_announced_unknown_model_is_not_announced_again_for_its_price(
+        caplog: pytest.LogCaptureFixture) -> None:
+    notice = models.unknown_model_notice("deepseek-chat")
+    assert notice is not None and "$0.00" in notice
+    with caplog.at_level("WARNING", logger=models._LOGGER.name):
+        assert models.model_limits("deepseek-chat") == (
+            models.UNKNOWN_MODEL_CONTEXT_WINDOW, models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS)
+        assert models.price("deepseek-chat", Usage(uncached=1000, output=1000)) == 0.0
+    assert caplog.records == []
+
+
 def test_superseded_rows_stay_addressable_by_full_id() -> None:
     for model_id in ("claude-opus-4-8", "claude-sonnet-4-6"):
         spec = spec_for(model_id)
