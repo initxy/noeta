@@ -533,6 +533,29 @@ async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
     assert not Path(cwd).exists()  # unchanged, so removed again
 
 
+async def test_a_cancelled_parent_closes_its_agents_worktrees(store: SqliteStore,
+                                                              tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for cmd in (["init", "-q"], ["-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q",
+                                 "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched")])
+    c = ScriptedProvider([reply("", ("probe", {"x": 1}))])  # waits for an approval
+    rt = Runtime(store=store, agents={"main": parent(), "worker": worker(AskEverything())},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    cwd = (await events(client, child.task_id))[0].config["cwd"]
+    assert Path(cwd).exists()
+    await client.cancel(tid)
+    await rt.run_until_idle()
+    assert not Path(cwd).exists()  # unchanged, so removed with its parent
+
+
 async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -439,6 +439,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **An isolated agent's worktree goes when its caller ends first.** A task that ended or
+  was cancelled while its `isolation: "worktree"` agents ran never heard their ends, so
+  their worktrees stayed; they are now closed when it ends (an unchanged one removed).
 - **A plugin's markdown command fills its arguments as a skill does.** It replaced only
   `$ARGUMENTS` and otherwise appended what was typed after a blank line; `$0`,
   `$ARGUMENTS[0]` and `\$` now work as in Claude Code, and arguments no placeholder took
