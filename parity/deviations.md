@@ -82,6 +82,7 @@ A row without an id is a difference the replay cannot see.
 |---|---|---|
 | | The `!`-prefix rule (ask the user to run an interactive command as `! <command>`) is left out of the main prompt (`main.session.1`). | No noeta front end runs `!` commands yet; the rule returns with that front-end feature. |
 | | The environment section names noeta's own front ends instead of Claude Code's, and leaves out fast mode (`main.envp.2`, `main.envp.3`). | Product facts of Claude Code; noeta has no fast mode. |
+| | For a task whose exec env is not the worker's machine (a container), the environment leaves out the shell and OS version lines and names the env's own platform (`main.env.2`). | Claude Code always runs commands on the machine it describes; a worker's shell and OS would be wrong facts about where noeta's commands run. |
 | | The attribution note's PR footer links to noeta, and is left out for a model the catalog gives no display name. | The footer names the tool that wrote the PR; the trailer needs the model's name. |
 
 ## noeta's own files

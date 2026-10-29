@@ -6,7 +6,7 @@ token budget and today's date) as a system turn right after it, and a
 sub-agent's after its tool results).
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
-host subprocess: on a container the facts describe the container's checkout,
+host subprocess: on a container the facts describe the container's checkout and platform,
 and the shell / OS version lines (facts of this machine) are left out. git
 runs with the hardening the Bash tool's ``git status`` rule applies (``-c
 core.fsmonitor=``, no hooks), no signature program and no look inside
@@ -178,21 +178,41 @@ async def capture_environment(env: ExecEnv, cwd: str, model: str) -> str:
         is_git = await env.stat(posixpath.join(cwd, ".git")) is not None
     except Exception:  # noqa: BLE001 — capture is best-effort
         is_git = False
-    return render_environment(cwd, model, is_git=is_git, local=is_local(env))
+    local = is_local(env)
+    return render_environment(cwd, model, is_git=is_git, local=local,
+                              platform_name=sys.platform if local else await _env_platform(env))
+
+
+async def _env_platform(env: ExecEnv) -> str:
+    """The exec env's platform in ``sys.platform``'s words (``linux``,
+    ``darwin``), from its ``uname -s``; ``""`` when it cannot be told."""
+    try:
+        out = await env.run(["uname", "-s"], timeout=5, output_cap=1024)
+    except Exception:  # noqa: BLE001 — capture is best-effort
+        return ""
+    if out.exit_code != 0 or out.timed_out:
+        return ""
+    name = out.stdout.decode("utf-8", errors="replace").strip().lower()
+    return name if name in ("linux", "darwin") or name.startswith("freebsd") else ""
 
 
 def _today() -> str:
     return datetime.now().astimezone().date().isoformat()
 
 
-def render_environment(cwd: str, model: str, *, is_git: bool, local: bool = True) -> str:
+def render_environment(cwd: str, model: str, *, is_git: bool, local: bool = True,
+                       platform_name: str | None = None) -> str:
+    """``platform_name`` is the exec env's (default: this machine's); an
+    empty one leaves the line out."""
+    shown = sys.platform if platform_name is None else platform_name
     lines = [
         "# Environment",
         "This conversation runs in the following environment:",
         f" - Primary working directory: {cwd}",
         f" - Is a git repository: {'true' if is_git else 'false'}",
-        f" - Platform: {sys.platform}",
     ]
+    if shown:
+        lines.append(f" - Platform: {shown}")
     if local:
         lines.append(f" - Shell: {_shell()}")
         lines.append(f" - OS Version: {platform.system()} {platform.release()}".rstrip())

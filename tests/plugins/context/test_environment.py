@@ -142,6 +142,8 @@ class FakeContainer:
                   env: Mapping[str, str] | None = None, stdin: bytes | None = None,
                   timeout: float | None = None, output_cap: int | None = None) -> RunResult:
         self.argv.append(list(argv))
+        if argv[0] == "uname":
+            return RunResult(exit_code=0, stdout=b"Linux\n")
         if "config" in argv:
             return RunResult(exit_code=1, stdout=b"")  # no filter driver configured
         out = b"main\n" if "rev-parse" in argv else b" M src/x.py\n"
@@ -157,10 +159,23 @@ async def test_a_container_env_is_asked_and_host_facts_left_out() -> None:
     assert " - Primary working directory: /workspace" in text
     assert "Current branch: main" in text and " M src/x.py" in text
     assert " - Shell: " not in text and " - OS Version: " not in text
+    # The platform is the container's, whatever this machine is.
+    assert " - Platform: linux" in text
     assert "Model: `agent-model`." in text
     for argv in env.argv:
-        assert argv[:3] == ["git", "-c", "core.fsmonitor="]
+        assert argv[:3] == ["git", "-c", "core.fsmonitor="] or argv[0] == "uname"
     assert any("status" in a for a in env.argv)
+
+
+async def test_a_container_whose_platform_cannot_be_told_gets_no_platform_line() -> None:
+    class Bare(FakeContainer):
+        async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
+            if argv[0] == "uname":
+                return RunResult(exit_code=127, stdout=b"")
+            return await super().run(argv, **kw)
+
+    text = await _block(Environment(model="m"), _view("/workspace", Bare("/workspace")))
+    assert " - Platform:" not in text and " - Is a git repository: true" in text
 
 
 async def test_the_model_line_prefers_the_task_config(tmp_path: Path) -> None:
