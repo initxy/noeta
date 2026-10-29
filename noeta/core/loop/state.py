@@ -499,9 +499,19 @@ def _end_turn(state: TaskState, seq: int) -> None:
 def _erase(state: TaskState, seqs: set[int]) -> None:
     for messages, at in ((state.messages, state.message_seqs),
                          (state.history, state.history_seqs)):
-        keep = [i for i, (m, s) in enumerate(zip(messages, at, strict=True))
-                if not (s in seqs and m.role == "user" and m.origin in ("human", "inline")
-                        and not any(isinstance(b, ToolResult) for b in m.content))]
+        # Where the person's message shares its seq with other text (a stop
+        # marker released with it), only what follows it is its expansion.
+        with_person = {s for m, s in zip(messages, at, strict=True)
+                       if s in seqs and m.origin == "human"}
+        person_seen: set[int] = set()
+        keep = []
+        for i, (m, s) in enumerate(zip(messages, at, strict=True)):
+            if m.origin == "human":
+                person_seen.add(s)
+            if not (s in seqs and m.role == "user" and m.origin in ("human", "inline")
+                    and (s not in with_person or s in person_seen)
+                    and not any(isinstance(b, ToolResult) for b in m.content)):
+                keep.append(i)
         messages[:] = [messages[i] for i in keep]
         at[:] = [at[i] for i in keep]
 

@@ -8,16 +8,19 @@ from typing import Any
 
 from noeta.core import snapshots
 from noeta.core.events import (
+    Cancel,
     ExtensionRecorded,
     InboxItem,
     InputTaken,
+    ModelReplied,
     Recorded,
     Say,
     TaskCreated,
+    ToolStarted,
 )
 from noeta.core.loop.state import fold
 from noeta.core.records import CORE, ERASED_KIND
-from noeta.core.types import user
+from noeta.core.types import Message, ModelResponse, ToolUse, user
 
 
 def _rec(seq: int, ev: Any) -> Recorded:
@@ -69,3 +72,26 @@ def test_every_plugin_with_state_folds_the_erase() -> None:
     # A plugin that never recorded anything is not woken by it.
     assert not any(name == "quiet" for name, _k, _d in seen)
     assert state.ext["commands"] == {"last": ERASED_KIND}
+
+
+def test_an_erase_keeps_the_stop_marker_released_with_the_message() -> None:
+    call = ToolUse(id="c1", name="Echo", input={})
+    stop_marker = "[Request interrupted by user]"
+    state = fold([
+        _rec(1, TaskCreated(agent="a")),
+        _rec(2, InputTaken(items=[InboxItem(seq=1, at=0, body=Say(message=user("go")))],
+                           through=1)),
+        _rec(3, ModelReplied(response=ModelResponse(
+            message=Message(role="assistant", content=[call]), stop_reason="tool_use"))),
+        _rec(4, ToolStarted(call=call)),
+        _rec(5, InputTaken(items=[
+            InboxItem(seq=2, at=0, body=Cancel(turn_only=True)),
+            InboxItem(seq=3, at=0, body=Say(message=user("my SECRET is 42", origin="human"),
+                                            when="now"))], through=3)),
+        # The stop releases the held message at its own seq, after its marker.
+        _rec(6, ExtensionRecorded(extension=CORE, kind="turn_stopped",
+                                  data={"marker": stop_marker})),
+        _rec(7, ExtensionRecorded(extension=CORE, kind="erased", data={"seqs": [6]})),
+    ], {})
+    texts = [m.text for m in state.messages]
+    assert texts[-1] == stop_marker and not any("SECRET" in t for t in texts)
