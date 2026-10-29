@@ -14,7 +14,7 @@ import pytest
 
 from noeta.core.errors import CommitUnknown, StoreUnavailable
 from noeta.core.events import Cancel, TaskCreated, Waiting
-from noeta.core.store import NewTask, Post
+from noeta.core.store import NewTask, Post, Snapshot
 
 pytestmark = pytest.mark.usefixtures("pg")
 
@@ -206,7 +206,29 @@ async def test_a_version_1_schema_is_upgraded_in_place(pg: Any) -> None:
     await store.close()
     with psycopg.connect(pg.dsn, autocommit=True) as conn:
         rows = conn.execute(f'SELECT version FROM "{pg.schema}".noeta_schema').fetchall()
-    assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 2
+    assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 3
+
+
+async def test_a_version_2_schema_keeps_its_snapshots_keyed_by_version(pg: Any) -> None:
+    """Version 2 kept one snapshot per task; version 3 keys them by task and
+    fold version, the rows kept."""
+    import psycopg
+
+    store = pg.store()
+    await store.create(new())
+    await store.close()
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        conn.execute(f'DROP TABLE "{pg.schema}".snapshots')
+        conn.execute(f'CREATE TABLE "{pg.schema}".snapshots (task_id TEXT PRIMARY KEY,'
+                     " seq BIGINT NOT NULL, version TEXT NOT NULL, data BYTEA NOT NULL)")
+        conn.execute(f"INSERT INTO \"{pg.schema}\".snapshots VALUES ('t1', 4, 'v1', '\\x00')")
+        conn.execute(f'UPDATE "{pg.schema}".noeta_schema SET version = 2')
+    for _ in range(2):
+        store = pg.store()
+        assert await store.snapshot("t1", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
+        await store.put_snapshot("t1", Snapshot(seq=6, version="v2", data=b"two"))
+        assert await store.snapshot("t1", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
+        await store.close()
 
 
 async def test_a_claim_waits_for_a_hold_of_its_tree_being_taken(pg: Any) -> None:

@@ -25,10 +25,11 @@ All notable changes to Noeta are documented here. The format is based on
   `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
   that picks up a task a newer one touched fails on it again and again. Logs written by
   older versions still load.
-- **Stores are at schema version 2 and refuse a newer store.** Holds moved to `tree_holds`,
-  and `tasks.tenant`, `tenant_usage` and `snapshots` were added. The first process of this
-  version moves a version 1 store (sqlite or Postgres) forward in place, posting `hold_lost`
-  for the old `holds` rows and keeping that table unused; a store at a later version than the
+- **Stores are at schema version 3 and refuse a newer store.** Holds moved to `tree_holds`,
+  and `tasks.tenant`, `tenant_usage` and `snapshots` (keyed by task and fold version) were
+  added. The first process of this version moves a version 1 store (sqlite or Postgres)
+  forward in place, posting `hold_lost` for the old `holds` rows and keeping that table
+  unused (a version 2 store from a development build gets its snapshot rows re-keyed); a store at a later version than the
   code knows is refused with `StoreUnavailable` before anything is written to it (sqlite never
   checked before). Upgrading: stop every worker first; an older sqlite binary does not refuse
   the upgraded store and keeps holding trees in the old `holds` table that newer workers do
@@ -235,7 +236,7 @@ All notable changes to Noeta are documented here. The format is based on
   `noeta.plugins.structured` -> `noeta.plugins.structured_output` (its registry name).
 - **Store interface.** `append` returns `Appended(seq, at)` (the stored time); a claim clears
   the row's `waiting_on`; giving back a claim or a hold reports a `released` change, only when a
-  row changed; optional `snapshot` / `put_snapshot`; `claim(tenant_limits=)`; `Post.wake`.
+  row changed; optional `snapshot(task_id, version=None)` / `put_snapshot`; `claim(tenant_limits=)`; `Post.wake`.
   Creating a task with a known id is idempotent under a race (store contract test).
 - **The plugin set is pinned per task.** A task records each plugin's name, source (package
   version or file hash) and a hash of its arguments when it first starts and when a pickup
@@ -426,7 +427,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   folds the task's newest snapshot plus the events after it; written every
   `Runtime.snapshot_every` (100) events, versioned by the code that folds (hashed when the
   `Runtime` is made, so code upgraded on disk under a running worker does not change it), never
-  trusted when the version differs. A 20,002-event log claims in 21 ms instead of 120 ms on sqlite.
+  trusted when the version differs. One is kept per task and version (`SNAPSHOT_VERSIONS`, 2;
+  the one at the lowest seq goes), so workers of two versions during an upgrade do not replace
+  each other's. A 20,002-event log claims in 21 ms instead of 120 ms on sqlite.
 - `noeta worker --lease` and `--snapshot-every`; one worker id `host:pid:random`.
 - `make cluster`: worker processes on Postgres under random SIGKILL / SIGSTOP with a scripted
   provider (tool calls, background jobs, sub-agents, timers, Cron, mid-run messages); a CI job
@@ -444,6 +447,19 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   server; a relative one is taken from the server's); otherwise the server records its own
   directory (a tenant's: its workspace) in the task and the agent's model applies.
   `noeta -p --server` ran locally and silently ignored `--server`; it now refuses it.
+- **A hold whose commit was cut off is no longer left behind.** When the store's connection
+  dropped while a hold committed (`CommitUnknown`), a hold that had landed was neither
+  registered nor renewed: the tree stayed unclaimable until the hold ran out and its reaping
+  told the tree `hold_lost` for nothing. `Runtime.hold` now asks again (up to three times);
+  taking a hold extends the one the worker has, so a hold that landed comes back with its
+  epoch and is renewed and given back as usual.
+- **An agent's `denied_tools` / `allowed_tools` also cover tools a plugin adds from the
+  others' (`Extension.tool_changes`).** An agent that denied `ToolSearch` was still offered
+  it and ran it. An added tool the lists refuse is now neither sent nor run, and the rest of
+  that plugin's changes go with it; the deferred tools it withheld are sent as plain tools
+  and not announced (an agent that denies `ToolSearch` gets its deferred tools up front, as
+  Claude Code does when its search tool is unavailable). `TaskView.deferred_tool_names` also
+  leaves out denied tools.
 - **Crash recovery no longer removes another agent's worktree.** An isolated agent's
   worktree was named after the last characters of the call id, which is unique only within
   its task, so a crashed call's recovery could force-remove the worktree of another task or

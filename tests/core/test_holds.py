@@ -15,7 +15,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.errors import HeldElsewhere
+from noeta.core.errors import CommitUnknown, HeldElsewhere
 from noeta.core.events import External, InputTaken
 from noeta.core.runner import Runtime
 from noeta.core.store import HOLD_LOST
@@ -179,4 +179,63 @@ async def test_a_holds_local_clock_starts_when_it_was_asked_for(tmp_path: Path) 
         await release()
     finally:
         await rt._drop_holds()
+        await store.close()
+
+
+class LostCommit(SqliteStore):
+    """The first ``fail`` holds raise ``CommitUnknown``: after committing
+    (``committed``), or before."""
+
+    def __init__(self, path: str, *, committed: bool, fail: int = 1) -> None:
+        super().__init__(path)
+        self.committed = committed
+        self.fail = fail
+
+    async def hold(self, root_id: str, worker: str, seconds: float,
+                   *, epoch: int | None = None) -> int | None:
+        if epoch is None and self.fail:
+            self.fail -= 1
+            if self.committed:
+                await super().hold(root_id, worker, seconds)
+            raise CommitUnknown("connection lost during COMMIT")
+        return await super().hold(root_id, worker, seconds, epoch=epoch)
+
+
+async def _hold_rows(store: SqliteStore) -> list[tuple[Any, ...]]:
+    def tx(conn: Any) -> list[tuple[Any, ...]]:
+        return [tuple(r) for r in conn.execute("SELECT root_id, worker, epoch FROM tree_holds")]
+    rows: list[tuple[Any, ...]] = await store._write(tx)
+    return rows
+
+
+@pytest.mark.parametrize("committed", [True, False])
+async def test_a_hold_whose_commit_is_unknown_is_read_back(tmp_path: Path,
+                                                            committed: bool) -> None:
+    """The connection drops while the hold commits: the worker asks again
+    (taking a hold extends its own), so a hold that landed is registered,
+    renewed and given back, never left to be reaped as lost."""
+    store = LostCommit(str(tmp_path / "t.db"), committed=committed)
+    rt = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
+    try:
+        release = await rt.hold("root")
+        [(root, worker, epoch)] = await _hold_rows(store)
+        assert (root, worker, epoch) == ("root", rt.worker, release.tree.epoch)
+        await asyncio.sleep(rt.hold_seconds + 0.1)
+        assert release.tree.fresh() and not release.tree.lost
+        await release()
+        assert await _hold_rows(store) == []
+        assert await store.reap_holds() == 0
+    finally:
+        await rt._drop_holds()
+        await store.close()
+
+
+async def test_a_hold_whose_commit_stays_unknown_raises(tmp_path: Path) -> None:
+    store = LostCommit(str(tmp_path / "t.db"), committed=False, fail=10)
+    rt = _runtime(store, ScriptedProvider([]), lease_seconds=0.15)
+    try:
+        with pytest.raises(CommitUnknown):
+            await rt.hold("root")
+        assert rt._holds == {} and await _hold_rows(store) == []
+    finally:
         await store.close()

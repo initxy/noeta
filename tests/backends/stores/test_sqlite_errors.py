@@ -12,7 +12,7 @@ import pytest
 from noeta.backends.stores.sqlite import SCHEMA_VERSION, SqliteStore
 from noeta.core.errors import StoreUnavailable
 from noeta.core.events import External, TaskCreated
-from noeta.core.store import HOLD_LOST, NewTask
+from noeta.core.store import HOLD_LOST, NewTask, Snapshot
 
 
 async def test_a_locked_database_is_store_unavailable(tmp_path: Path) -> None:
@@ -93,7 +93,7 @@ async def test_a_version_1_store_is_upgraded_in_place(tmp_path: Path) -> None:
     conn = sqlite3.connect(path)
     assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
     conn.close()
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
 
 
 async def test_upgrading_a_version_1_store_tells_its_held_trees(tmp_path: Path) -> None:
@@ -123,4 +123,27 @@ async def test_upgrading_a_version_1_store_tells_its_held_trees(tmp_path: Path) 
         await store.close()
     conn = sqlite3.connect(path)
     assert conn.execute("SELECT count(*) FROM holds").fetchone() == (1,)  # kept
+    conn.close()
+
+
+async def test_a_version_2_store_keeps_its_snapshots_keyed_by_version(tmp_path: Path) -> None:
+    """Version 2 kept one snapshot per task; version 3 keys them by task
+    and fold version. The rows are carried over."""
+    path = str(tmp_path / "t.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE noeta_schema (version INTEGER NOT NULL)")
+    conn.execute("INSERT INTO noeta_schema VALUES (2)")
+    conn.execute("CREATE TABLE snapshots (task_id TEXT PRIMARY KEY, seq INTEGER NOT NULL,"
+                 " version TEXT NOT NULL, data BLOB NOT NULL) WITHOUT ROWID")
+    conn.execute("INSERT INTO snapshots VALUES ('t', 4, 'v1', x'00')")
+    conn.commit()
+    conn.close()
+    for _ in range(2):
+        store = SqliteStore(path)
+        assert await store.snapshot("t", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
+        await store.put_snapshot("t", Snapshot(seq=6, version="v2", data=b"two"))
+        assert await store.snapshot("t", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
+        await store.close()
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT version FROM noeta_schema").fetchall() == [(SCHEMA_VERSION,)]
     conn.close()

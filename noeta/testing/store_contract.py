@@ -20,7 +20,15 @@ import pytest
 
 from noeta.core.errors import Conflict, InboxUnread, UnknownTask
 from noeta.core.events import DEFAULT_TENANT, Cancel, External, Say, TaskCreated, TaskEnded, Waiting
-from noeta.core.store import HOLD_LOST, NewTask, Patch, Post, Snapshot, Store
+from noeta.core.store import (
+    HOLD_LOST,
+    SNAPSHOT_VERSIONS,
+    NewTask,
+    Patch,
+    Post,
+    Snapshot,
+    Store,
+)
 from noeta.core.types import user
 
 
@@ -542,12 +550,35 @@ async def test_snapshots_keep_the_latest_seq(store: Store) -> None:
         pytest.skip("the store keeps no snapshots")
     assert await get("t1") is None
     await put("t1", Snapshot(seq=5, version="v1", data=b"\x00five"))
-    await put("t1", Snapshot(seq=3, version="v2", data=b"three"))
-    assert await get("t1") == Snapshot(seq=5, version="v1", data=b"\x00five")
-    await put("t1", Snapshot(seq=9, version="v2", data=b"nine"))
+    await put("t1", Snapshot(seq=3, version="v1", data=b"three"))
+    assert await get("t1", "v1") == Snapshot(seq=5, version="v1", data=b"\x00five")
+    await put("t1", Snapshot(seq=9, version="v1", data=b"nine"))
     await put("t2", Snapshot(seq=1, version="v1", data=b"one"))
-    assert await get("t1") == Snapshot(seq=9, version="v2", data=b"nine")
+    assert await get("t1") == Snapshot(seq=9, version="v1", data=b"nine")
     assert (await get("t2") or Snapshot(seq=0, version="", data=b"")).seq == 1
+
+
+async def test_snapshots_of_two_versions_are_both_kept(store: Store) -> None:
+    """Workers of two fold versions (a rolling upgrade) each keep their
+    own snapshot instead of replacing each other's; without a version the
+    newest is read. Past ``SNAPSHOT_VERSIONS`` the one furthest behind
+    goes."""
+    get, put = getattr(store, "snapshot", None), getattr(store, "put_snapshot", None)
+    if get is None or put is None:
+        pytest.skip("the store keeps no snapshots")
+    await put("t1", Snapshot(seq=5, version="old", data=b"old five"))
+    await put("t1", Snapshot(seq=3, version="new", data=b"new three"))
+    await put("t1", Snapshot(seq=7, version="old", data=b"old seven"))
+    assert await get("t1", "new") == Snapshot(seq=3, version="new", data=b"new three")
+    assert await get("t1", "old") == Snapshot(seq=7, version="old", data=b"old seven")
+    assert await get("t1") == Snapshot(seq=7, version="old", data=b"old seven")
+    assert await get("t1", "other") is None
+    assert SNAPSHOT_VERSIONS == 2
+    await put("t1", Snapshot(seq=4, version="third", data=b"third four"))
+    assert await get("t1", "new") is None  # the furthest behind
+    assert (await get("t1", "old"), await get("t1", "third")) == (
+        Snapshot(seq=7, version="old", data=b"old seven"),
+        Snapshot(seq=4, version="third", data=b"third four"))
 
 
 async def test_ending_a_task_deletes_its_snapshot(store: Store) -> None:
@@ -560,10 +591,11 @@ async def test_ending_a_task_deletes_its_snapshot(store: Store) -> None:
     claim = await store.claim("w", ["default"], 30)
     assert claim is not None and claim.task_id == "t1"
     await put("t1", Snapshot(seq=1, version="v1", data=b"one"))
+    await put("t1", Snapshot(seq=1, version="v2", data=b"one again"))
     await put("t2", Snapshot(seq=1, version="v1", data=b"other"))
     await store.append(claim, [TaskEnded(status="done")], expected_seq=1,
                        patch=Patch(status="ended", end_status="done"))
-    assert await get("t1") is None
+    assert await get("t1") is None and await get("t1", "v2") is None
     await put("t1", Snapshot(seq=2, version="v1", data=b"late"))  # a write in flight
     assert await get("t1") is None
     assert await get("t2") == Snapshot(seq=1, version="v1", data=b"other")

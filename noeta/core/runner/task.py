@@ -19,7 +19,6 @@ import contextlib
 import logging
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from msgspec.structs import replace
@@ -39,7 +38,7 @@ from noeta.core.events import (
     ToolFinished,
     Waiting,
 )
-from noeta.core.extension import Extension, TaskView, ToolEntry, task_cwd
+from noeta.core.extension import Extension, TaskView, ToolOffer, offer_tools, task_cwd
 from noeta.core.loop import decide
 from noeta.core.loop.state import TaskState, apply, continued, fold, new_state
 from noeta.core.prompts import load_overrides
@@ -65,17 +64,11 @@ class LostClaim(Exception):
     pass
 
 
-@dataclass(frozen=True)
-class ToolOffer:
-    """A task's tools for one step (``TaskRun.tool_offer``)."""
-
-    #: The tools it offers: the ones a call runs.
-    tools: list[Tool]
-    #: Offered tools left out of the request: name -> the error a call to
-    #: one gets.
-    withheld: dict[str, str]
-    #: The request's entries that are no tool, by name.
-    entries: list[ToolEntry]
+def _decoded(stored: Snapshot) -> TaskState | None:
+    try:
+        return snapshots.decode(stored.data)
+    except Exception:  # noqa: BLE001 — another fold's data: fold from the start
+        return None
 
 
 class TaskRun:
@@ -297,12 +290,21 @@ class TaskRun:
         stored: Snapshot | None = await get(self.task_id)
         if stored is None:
             return False
-        try:
-            state = snapshots.decode(stored.data)
-        except Exception:  # noqa: BLE001 — another fold's data: fold from the start
+        state = _decoded(stored)
+        if state is not None:
+            agent = state.agent
+        else:  # another fold's data (a rolling upgrade): the row names the agent
+            row = await self.store.get(self.task_id)
+            agent = row.agent if row is not None else ""
+        self._use_agent(agent)
+        if self.agent is None:
             return False
-        self._use_agent(state.agent)
-        if self.agent is None or stored.version != self.fold_version():
+        mine = self.fold_version()
+        if stored.version != mine:
+            # The newest is another fold version's: this version's own, if any.
+            stored = await get(self.task_id, mine)
+            state = _decoded(stored) if stored is not None else None
+        if stored is None or state is None or state.agent != agent:
             return False
         records = await self.store.read(self.task_id, after=stored.seq)
         self.state = fold(records, self.reducers, state=state)
@@ -519,36 +521,11 @@ class TaskRun:
                 for c in staged]
 
     def tool_offer(self, view: TaskView) -> ToolOffer:
-        """The task's tools for this step: every extension's (the first of
-        a name wins, the agent's allow and deny lists applied), then each
-        extension's ``tool_changes`` to them."""
-        allowed = self.agent.allowed_tools if self.agent is not None else None
-        denied = set(self.agent.denied_tools if self.agent is not None else ())
-        tools: list[Tool] = []
-        seen: set[str] = set()
-        for ext in self.exts:
-            for t in ext.tools(view):
-                if (allowed is not None and t.name not in allowed) or t.name in denied:
-                    continue
-                if t.name not in seen:
-                    seen.add(t.name)
-                    tools.append(t)
-        offered = tuple(tools)
-        withheld: dict[str, str] = {}
-        entries: list[ToolEntry] = []
-        for ext in self.exts:
-            changes = ext.tool_changes(view, offered)
-            if changes is None:
-                continue
-            for t in changes.add:
-                if t.name not in seen:
-                    seen.add(t.name)
-                    tools.append(t)
-            for name, error in changes.withhold.items():
-                withheld.setdefault(name, error)
-            entries.extend(changes.entries)
-        return ToolOffer(tools=tools, withheld=withheld,
-                         entries=sorted(entries, key=lambda e: e.spec.name))
+        """The task's tools for this step (``offer_tools`` with the agent's
+        allow and deny lists)."""
+        agent = self.agent
+        return offer_tools(self.exts, view, agent.allowed_tools if agent else None,
+                           agent.denied_tools if agent else ())
 
     def tools(self, view: TaskView) -> list[Tool]:
         """The tools the task offers (``tool_offer``'s): the ones a call runs."""

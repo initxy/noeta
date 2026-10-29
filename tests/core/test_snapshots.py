@@ -314,3 +314,21 @@ async def test_snapshot_bytes_written_stay_within_a_few_times_the_logs(
         assert after <= SNAPSHOT_GROWTH * len(stored.data) + log / 100
     finally:
         await store.close()
+
+
+@pytest.mark.parametrize("readable", [True, False])
+async def test_a_newer_snapshot_of_another_version_leaves_this_ones(
+        store: Counting, readable: bool) -> None:
+    """A worker of another fold version (a rolling upgrade) writes its own
+    snapshot, readable here or not; this worker still starts from the one
+    of its version."""
+    rt = _runtime(store, Note())
+    tid = await _turns(store, rt, 3)
+    mine = await store.snapshot(tid)
+    assert mine is not None
+    await store.put_snapshot(tid, Snapshot(seq=mine.seq + 1, version="0:other",
+                                           data=mine.data if readable else b"{new shape"))
+    assert (await store.snapshot(tid) or mine).version == "0:other"
+    store.reads.clear()
+    await _loaded(store, rt, tid)
+    assert store.reads[0] == mine.seq

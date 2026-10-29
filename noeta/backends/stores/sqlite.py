@@ -28,6 +28,7 @@ from noeta.backends.stores._rows import (
 from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
 from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
+    SNAPSHOT_VERSIONS,
     Appended,
     ChangeKind,
     Claim,
@@ -45,9 +46,10 @@ from noeta.core.store import (
 T = TypeVar("T")
 
 #: 2: holds moved to ``tree_holds`` (one holding worker per tree), and
-#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. A store
-#: at a later version than this code knows is refused.
-SCHEMA_VERSION = 2
+#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. 3:
+#: ``snapshots`` keyed by task and fold version. A store at a later version
+#: than this code knows is refused.
+SCHEMA_VERSION = 3
 _BUSY_TIMEOUT_MS = 10000
 _OPEN_ATTEMPTS = 5
 #: sqlite failures that mean "the store is not usable right now", not a bug
@@ -111,10 +113,11 @@ CREATE TABLE IF NOT EXISTS tree_holds (
 );
 CREATE INDEX IF NOT EXISTS tree_holds_until ON tree_holds (until);
 CREATE TABLE IF NOT EXISTS snapshots (
-    task_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
     seq     INTEGER NOT NULL,
     version TEXT NOT NULL,
-    data    BLOB NOT NULL
+    data    BLOB NOT NULL,
+    PRIMARY KEY (task_id, version)
 ) WITHOUT ROWID;
 """
 
@@ -150,13 +153,28 @@ def _set_version(conn: sqlite3.Connection) -> None:
         if row is None or row[0] is None:
             conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
         elif int(row[0]) < SCHEMA_VERSION:
-            _tell_version_1_holds(conn)
+            if int(row[0]) < 2:
+                _tell_version_1_holds(conn)
+            else:
+                _key_snapshots_by_version(conn)
             conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION,))
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
+
+
+def _key_snapshots_by_version(conn: sqlite3.Connection) -> None:
+    """Version 2 kept one snapshot per task: its rows move to a table keyed
+    by task and version (sqlite cannot change a primary key in place)."""
+    conn.execute("CREATE TABLE snapshots_by_version (task_id TEXT NOT NULL,"
+                 " seq INTEGER NOT NULL, version TEXT NOT NULL, data BLOB NOT NULL,"
+                 " PRIMARY KEY (task_id, version)) WITHOUT ROWID")
+    conn.execute("INSERT INTO snapshots_by_version (task_id, seq, version, data)"
+                 " SELECT task_id, seq, version, data FROM snapshots")
+    conn.execute("DROP TABLE snapshots")
+    conn.execute("ALTER TABLE snapshots_by_version RENAME TO snapshots")
 
 
 def _tell_version_1_holds(conn: sqlite3.Connection) -> None:
@@ -717,10 +735,13 @@ class SqliteStore:
         return conn.execute("SELECT 1 FROM tree_holds WHERE until < ? LIMIT 1",
                             (time.time(),)).fetchone() is not None
 
-    async def snapshot(self, task_id: str) -> Snapshot | None:
+    async def snapshot(self, task_id: str, version: str | None = None) -> Snapshot | None:
         def q(conn: sqlite3.Connection) -> Snapshot | None:
-            row = conn.execute("SELECT seq, version, data FROM snapshots WHERE task_id = ?",
-                               (task_id,)).fetchone()
+            row = conn.execute(
+                "SELECT seq, version, data FROM snapshots WHERE task_id = ?"
+                + (" AND version = ?" if version is not None else "")
+                + " ORDER BY seq DESC LIMIT 1",
+                (task_id, version) if version is not None else (task_id,)).fetchone()
             return Snapshot(seq=int(row[0]), version=str(row[1]), data=bytes(row[2])) \
                 if row else None
 
@@ -733,10 +754,14 @@ class SqliteStore:
                 return  # its end deleted the last one; nothing claims it again
             conn.execute(
                 "INSERT INTO snapshots (task_id, seq, version, data) VALUES (?, ?, ?, ?)"
-                " ON CONFLICT (task_id) DO UPDATE SET seq = excluded.seq,"
-                " version = excluded.version, data = excluded.data"
-                " WHERE excluded.seq >= snapshots.seq",
+                " ON CONFLICT (task_id, version) DO UPDATE SET seq = excluded.seq,"
+                " data = excluded.data WHERE excluded.seq >= snapshots.seq",
                 (task_id, snapshot.seq, snapshot.version, snapshot.data))
+            conn.execute(
+                "DELETE FROM snapshots WHERE task_id = ? AND version NOT IN ("
+                " SELECT version FROM snapshots WHERE task_id = ?"
+                " ORDER BY version = ? DESC, seq DESC LIMIT ?)",
+                (task_id, task_id, snapshot.version, SNAPSHOT_VERSIONS))
 
         await self._write(tx)
 
