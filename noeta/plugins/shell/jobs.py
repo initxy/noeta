@@ -359,9 +359,10 @@ class Registry:
                      ws: tuple[str, list[str]] | None = None,
                      ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
                      foreground: bool = False) -> Job | str:
-        running = len(self.running(root_id))
-        # A foreground command is not held to the cap: past its timeout it
+        # The cap counts background jobs only (what TaskStop can stop); a
+        # foreground command is not held to it either: past its timeout it
         # moves to the background rather than being killed.
+        running = sum(not j.foreground for j in self.running(root_id))
         if running >= self.max_jobs and not foreground:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
                     f"TaskStop first")
