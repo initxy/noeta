@@ -92,8 +92,13 @@ match to speak the same protocol to the model, not prose:
   discloses only short texts such as a bare tag.
 - `parity/<version>/script/`: the model's side of each scenario (replies of
   the upstream model, with the steps we typed), not Claude Code's text.
-- `parity/rules/*.md`: Claude Code's rules restated in our words, with
-  sha256 hashes of the source texts (no-copy rule in `parity/rules/README.md`).
+- `parity/rules/*.md` and `parity/rules/tools/*.md` (one file per tool the
+  baseline sends, 19 files): Claude Code's rules restated in our words, with
+  sha256 hashes of the source texts (no-copy rule in `parity/rules/README.md`,
+  which also indexes them). `parity/rules/source_hash.py` computes those
+  hashes from the recordings; it holds no recorded text.
+- `parity/deviations.md`: the accepted model-visible differences, each with
+  its mismatch id and reason, in our words.
 - `parity/own-words-allowed.txt`: literals that both sides must spell the
   same way (tags, sentinels, formats), each with its reason.
 
