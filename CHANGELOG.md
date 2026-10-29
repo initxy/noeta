@@ -872,6 +872,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- A non-default tenant's slash-command listing no longer follows its `.noeta/skills` (or
+  `.agents/skills`) linked out of its workspace: it listed the names and descriptions of the
+  skills it pointed at, such as another tenant's. A workspace skill directory must resolve
+  inside the tenant's working directory.
 - The Linux sandbox's filter refused `socket(AF_UNIX)` but not `socketpair(AF_UNIX, ...)`,
   whose datagram sockets send to any Unix socket by address (the host's journald). It is
   refused under the same rule, unless Unix sockets are allowed.

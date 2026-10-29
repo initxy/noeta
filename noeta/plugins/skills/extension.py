@@ -321,8 +321,14 @@ class Skills(Extension):
 
     def _commands(self, cwd: str, tenant: str = DEFAULT_TENANT) -> list[Command]:
         found: dict[str, str] = {}
-        for root, _tier in self.tiers(cwd):
+        real_cwd = os.path.realpath(cwd) if cwd else ""
+        for root, tier in self.tiers(cwd):
             real_root = os.path.realpath(root)
+            # A tenant's own skill directory linked out of its workspace (into
+            # another tenant's) is not listed.
+            if tenant != DEFAULT_TENANT and tier >= 3 and not (
+                    real_cwd and real_root.startswith(real_cwd.rstrip(os.sep) + os.sep)):
+                continue
             for path in sorted(Path(root).rglob("SKILL.md")) if Path(root).is_dir() else []:
                 # Read here, with no task env to fence it: a tenant's skill
                 # file linked out of its directory is not read.

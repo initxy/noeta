@@ -4,6 +4,7 @@ activation text, ``/<name>``, scripts, allowed-tools, budget fitting."""
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -689,6 +690,22 @@ async def test_a_tenants_command_list_skips_a_skill_linked_outside(
     assert acme == {"mine": "My own."}
     default = await skills.commands(CommandContext(cwd=str(h.work), tenant="default"))
     assert {c.name for c in default} == {"mine", "leak"}
+
+
+async def test_a_tenants_command_list_skips_its_skill_directory_linked_outside(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.core.extension import CommandContext
+
+    other = tmp_path / "other" / ".noeta" / "skills"
+    write_skill(other, "secret", "OTHER TENANT'S TEXT")
+    (h.work / ".noeta").mkdir(exist_ok=True)
+    shutil.rmtree(skills_dir(h), ignore_errors=True)
+    skills_dir(h).symlink_to(other)
+    skills = Skills()
+    acme = await skills.commands(CommandContext(cwd=str(h.work), tenant="acme"))
+    assert acme == []
+    default = await skills.commands(CommandContext(cwd=str(h.work), tenant="default"))
+    assert {c.name for c in default} == {"secret"}
 
 
 async def test_a_tenants_skill_lists_no_resource_behind_the_fence(
