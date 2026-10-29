@@ -149,8 +149,9 @@ class TurnDone(Struct):
 
 class Erased(Struct):
     """The person's messages taken at these log ``seqs``, and what a plugin
-    expanded them into (``inline`` text), leave the conversation the model
-    sees (a ``UserPromptSubmit`` hook blocked them). Every plugin reducer
+    expanded them into (``inline`` text) or recalled for them (``memory``),
+    leave the conversation the model sees (a ``UserPromptSubmit`` hook
+    blocked them). Every plugin reducer
     with state is folded with it too, as :data:`ERASED_KIND`."""
 
     kind: ClassVar[str] = "erased"
@@ -320,9 +321,9 @@ class CoreNotices:
         self._record_core(TimerCleared(name=name))
 
     def erase_messages(self, seqs: list[int]) -> None:
-        """Take the person's messages, and the ``inline`` expansions of them,
-        recorded at log ``seqs`` out of the conversation (and its history):
-        the model never sees them."""
+        """Take the person's messages, and the ``inline`` expansions of and
+        ``memory`` recalls for them, recorded at log ``seqs`` out of the
+        conversation (and its history): the model never sees them."""
         self._record_core(Erased(seqs=seqs))
 
     def _record_core(self, entry: CoreRecord) -> None:

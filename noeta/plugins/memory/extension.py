@@ -25,6 +25,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from noeta.core import records
 from noeta.core.events import DEFAULT_TENANT
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
@@ -78,6 +79,11 @@ INSTRUCTIONS = "instructions"
 RECALL_MAX_FILES = 5
 RECALL_MAX_TOKENS = 512
 RECALL_TASK_BYTES = 61_440
+#: Recalls kept so a hook's erase of their prompt can take them back (a
+#: prompt is blocked before the model answers it: the newest few).
+ERASABLE_RECALLS = 8
+#: Erased prompt seqs remembered, for a recall recorded after the erase.
+ERASED_SEQS_KEEP = 64
 RECALL_HEAD = ("Memories that may be relevant to this message; use one only if it really "
                "applies to what the user asked.")
 _RECALL_SCHEMA = {
@@ -155,11 +161,34 @@ class Memory(Extension):
         if kind == "dir":
             return {**state, "dir": data["dir"]}
         if kind == "recalled":
+            through = data.get("through") or state.get("through")
+            if through is not None and through in (state.get("erased") or ()):
+                # Recalled for a prompt a hook blocked (one listed after
+                # this plugin): taken out of the conversation next round.
+                return {**state, "through": through,
+                        "voided": [*(state.get("voided") or ()), through]}
+            recent = [*(state.get("recent") or ()),
+                      {"through": through, "paths": data["paths"],
+                       "bytes": int(data.get("bytes") or 0)}]
             return {**state, "surfaced": [*state["surfaced"], *data["paths"]],
                     "bytes": state["bytes"] + int(data.get("bytes") or 0),
-                    "through": data.get("through") or state.get("through")}
+                    "through": through, "recent": recent[-ERASABLE_RECALLS:]}
         if kind == "checked":
             return {**state, "through": data["through"]}
+        if kind == records.ERASED_KIND:
+            seqs = set(data["seqs"])
+            state = {**state, "erased": [*(state.get("erased") or ()),
+                                         *sorted(seqs)][-ERASED_SEQS_KEEP:]}
+            for recall in [r for r in state.get("recent") or () if r["through"] in seqs]:
+                gone = set(recall["paths"])
+                state = {**state, "surfaced": [p for p in state["surfaced"] if p not in gone],
+                         "bytes": max(0, state["bytes"] - recall["bytes"]),
+                         "recent": [r for r in state["recent"] if r is not recall],
+                         "voided": [*(state.get("voided") or ()), recall["through"]]}
+            return state
+        if kind == "unrecalled":
+            return {**state, "voided": [t for t in state.get("voided") or ()
+                                        if t != data["through"]]}
         return state
 
     def _dir(self, view: TaskView) -> str | None:
@@ -212,6 +241,7 @@ class Memory(Extension):
         a message arrives, so a ``UserPromptSubmit`` hook listed before this
         plugin has blocked (and erased) a prompt before its text reaches the
         recall model."""
+        self._drop_voided(view)
         directory = self._dir(view)
         if not self.recall_model or view.complete is None or directory is None:
             return ()
@@ -234,6 +264,23 @@ class Memory(Extension):
         text, paths, used = found
         return (Reminder(text=text, kind="recalled", origin="memory",
                          data={"paths": paths, "bytes": used, "through": through}),)
+
+    def _drop_voided(self, view: TaskView) -> None:
+        """Erase the recalls made for prompts a hook blocked: a hook listed
+        after this plugin blocks a prompt after its recall was taken, so the
+        recall is recorded behind the erase and outlives it."""
+        voided = (view.ext_state(self.name) or {}).get("voided") or ()
+        if not voided:
+            return
+        state = view.state
+        for through in voided:
+            # The recall's message is the first recalled memory after the
+            # prompt it was made for (none: compacted away).
+            seq = next((s for s, m in zip(state.message_seqs, state.messages, strict=False)
+                        if s > through and m.origin == "memory"), None)
+            if seq is not None:
+                view.erase_messages([seq])
+            view.record(self.name, "unrecalled", {"through": through})
 
     # ------------------------------------------------------------ helpers
 

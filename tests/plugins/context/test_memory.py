@@ -312,3 +312,35 @@ async def test_a_blocked_prompt_is_never_recalled_for(h: Harness, tmp_path: Path
     assert not any("SECRET" in m.text for r in h.provider.requests for m in r.messages)
     main = h.provider.requests[-1]
     assert main.model == "m" and not [m for m in main.messages if m.origin == "memory"]
+
+
+async def test_a_blocked_prompts_recall_is_dropped_whatever_the_plugin_order(
+        h: Harness, tmp_path: Path) -> None:
+    # Memory listed before Hooks recalls for the prompt before the hook
+    # blocks it: that recall never reaches the model, and its files may be
+    # recalled again.
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "vault.md", "the vault", "The vault code is 1234.")
+
+    def answer(request: ModelRequest) -> ModelResponse:
+        if request.model == "small":
+            picked = ["vault.md"] if "vault please" in request.messages[0].text else []
+            return reply(json.dumps({"selected_memories": picked}))
+        return reply("ok")
+
+    h.provider.add(*[answer] * 6)
+    hooks = {"UserPromptSubmit": [{"matcher": "", "hooks": [{
+        "type": "command", "command": "grep -q SECRET && { echo no >&2; exit 2; }; exit 0"}]}]}
+    a = Agent(name="a", model="m", extensions=[
+        Memory(home=str(home), recall_model="small"), Hooks(hooks=hooks)])
+    tid = await h.start(a, goal="SECRET vault please", config={"cwd": str(h.work)})
+    await h.say(a, tid, "hello")
+    main = h.provider.requests[-1]
+    assert main.model == "m"
+    assert [m.text for m in main.messages if m.origin != "system"] == ["hello"]
+    assert not any("1234" in m.text or "SECRET" in m.text for m in main.messages)
+    await h.say(a, tid, "vault please")
+    main = h.provider.requests[-1]
+    assert [m for m in main.messages if m.origin == "memory" and "1234" in m.text]
