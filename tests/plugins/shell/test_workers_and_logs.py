@@ -407,6 +407,21 @@ async def test_a_foreground_job_moved_to_the_background_outlives_its_guard_perio
     assert job.exit_code == 0
 
 
+async def test_an_ended_job_no_longer_listens_for_its_hold_being_lost(
+        tmp_path: Path) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    job = await registry.spawn(
+        env=LocalExecEnv(str(tmp_path)), command="sleep 0.2", cwd=str(tmp_path),
+        env_vars={}, root_id="r", spawner_id="r", tool_use_id="c", description="",
+        post=_posted)
+    assert isinstance(job, Job)
+    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=60.0)
+    registry.hold_with(job, tree)
+    assert len(tree._on_lost) == 1
+    await asyncio.wait_for(job.done.wait(), 5)
+    assert tree._on_lost == []
+
+
 async def test_ended_jobs_are_kept_only_up_to_a_bound(tmp_path: Path) -> None:
     reg = Registry(log_dir=str(tmp_path / "logs"), ended_jobs_keep=3)
     env = LocalExecEnv(str(tmp_path))

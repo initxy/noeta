@@ -207,6 +207,8 @@ class Job:
     #: Says the job no longer works in its directory (a worktree is not
     #: removed under a running job).
     left_dir: Callable[[], None] = lambda: None
+    #: Stops listening for its hold being lost (:meth:`Registry.hold_with`).
+    forget_hold: Callable[[], None] = lambda: None
     outbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
 
@@ -456,6 +458,7 @@ class Registry:
                 if job.foreground:
                     # The call waiting for it reports the end itself.
                     job.outbox.put_nowait(None)
+                    job.forget_hold()
                     job.done.set()
                 else:
                     await self._end(job)
@@ -476,6 +479,7 @@ class Registry:
                 # claims the tree next finds the end in the inbox.
                 await self._post_end(job, notice)
             finally:
+                job.forget_hold()
                 job.done.set()
                 if job.release is not None:
                     with contextlib.suppress(Exception):
@@ -577,7 +581,7 @@ class Registry:
             self._in_background(self._drop(job.root_id,
                                            list(self.jobs.get(job.root_id, {}).values())))
 
-        tree.on_lost(lost)
+        job.forget_hold = tree.on_lost(lost)
 
     async def discard(self, job: Job) -> None:
         """Forget a foreground job once it is done, with its files."""
