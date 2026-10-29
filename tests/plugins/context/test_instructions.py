@@ -289,3 +289,31 @@ async def test_an_import_of_a_non_text_file_is_skipped(h: Harness) -> None:
     # Claude Code's text extensions only; a name without one is read.
     assert [Path(f["path"]).name for f in rec.data["files"]] == [
         "NOETA.md", "notes.txt", "Makefile", "stats.R"]
+
+
+def test_the_nested_limit_follows_the_window() -> None:
+    from noeta.plugins.instructions.extension import cut_nested, nested_max_chars
+    from noeta.toolkit.tokens import chars_per_token
+    assert chars_per_token("claude-sonnet-4-5-20250929") == 4
+    assert chars_per_token("claude-opus-5-5") == 3 and chars_per_token("deepseek-v4") == 3
+    assert chars_per_token("") == 4
+    # 1M window, 3 characters a token: 5 % is 150,000 characters.
+    assert nested_max_chars("claude-opus-5-5") == 150_000
+    assert nested_max_chars("") == 40_000
+    assert cut_nested("/p", "short", 10) == "short"
+    cut = cut_nested("/p/NOETA.md", "aaaa\nbbbb\ncccc\n", 12)
+    assert cut == ("aaaa\nbbbb\n> Only the start of this file is shown here; Read /p/NOETA.md "
+                   "from offset=3 for the rest.")
+
+
+async def test_a_long_nested_file_shows_its_start(h: Harness) -> None:
+    pkg = h.work / "gen"
+    pkg.mkdir()
+    (pkg / "NOETA.md").write_text("".join(f"line {i:06d}\n" for i in range(10_000)))
+    (pkg / "a.py").write_text("x = 1\n")
+    h.provider.add(reply("", ("Read", {"file_path": "gen/a.py"})), reply("done"))
+    await h.start(agent())
+    [nested] = [m.text for m in h.provider.requests[1].messages
+                if m.text.startswith(str(pkg / "NOETA.md"))]
+    assert len(nested) < 40_000 + 600
+    assert nested.endswith(f"Read {pkg / 'NOETA.md'} from offset=3334 for the rest.")

@@ -37,6 +37,7 @@ from typing import Any, Literal
 from noeta.core.events import Recorded, ToolFinished
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, TaskView
+from noeta.core.models import model_limits
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.instructions.files import (
     FALLBACK_FILES,
@@ -54,6 +55,7 @@ from noeta.plugins.instructions.files import (
 )
 from noeta.toolkit.context import read_text, task_env
 from noeta.toolkit.memory_index import read_memory_index
+from noeta.toolkit.tokens import chars_per_token
 from noeta.toolkit.tools import path_within
 
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_file",
@@ -73,6 +75,14 @@ LABELS = {
 }
 #: The plugin whose recorded state names the memory directory.
 MEMORY_PLUGIN = "memory"
+#: A nested file (one a touched file brings) longer than the larger of
+#: these is cut: characters, and the share of the model's window in
+#: characters (Claude Code's limit).
+NESTED_MAX_CHARS = 40_000
+NESTED_WINDOW_SHARE = 0.05
+#: Closes a nested file cut to its start.
+NESTED_CUT_NOTE = ("> Only the start of this file is shown here; Read {path} from offset={offset} "
+                   "for the rest.")
 #: Tools whose touching a file brings the instructions that apply to it.
 FILE_TOOLS = {"Read": "file_path", "Edit": "file_path", "Write": "file_path",
               "NotebookEdit": "notebook_path"}
@@ -85,6 +95,24 @@ def render_file(path: str, kind: str, text: str) -> str:
 def render_instructions(files: Sequence[tuple[str, str, str]]) -> str:
     """The start-of-conversation message: ``(path, kind, text)`` per file."""
     return "\n\n".join([PREAMBLE, *(render_file(*f) for f in files)])
+
+
+def nested_max_chars(model: str) -> int:
+    """The longest nested instruction file shown whole for ``model``."""
+    window, _ = model_limits(model) if model else (0, 0)
+    return max(NESTED_MAX_CHARS, round(window * NESTED_WINDOW_SHARE * chars_per_token(model)))
+
+
+def cut_nested(path: str, text: str, limit: int) -> str:
+    """``text`` within ``limit`` characters, cut at a line end, with a note
+    saying where the rest starts."""
+    if len(text) <= limit:
+        return text
+    kept = text[:limit]
+    newline = kept.rfind("\n")
+    kept = kept[:newline] if newline > 0 else kept
+    offset = kept.count("\n") + 2
+    return f"{kept}\n{NESTED_CUT_NOTE.format(path=path, offset=offset)}"
 
 
 def _entry(f: InstructionFile, real: str) -> dict[str, str]:
@@ -159,6 +187,10 @@ class Instructions(Extension):
         return state
 
     # ------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _model(view: TaskView) -> str:
+        return str(view.state.config.get("model") or view.model or "")
 
     def _reader(self, view: TaskView) -> tuple[Reader, str]:
         env = task_env(view.env, view.state.config)
@@ -251,10 +283,12 @@ class Instructions(Extension):
         state = view.ext_state(self.name) or {}
         reader.seen.update(e["real"] for e in [*state.get("files", []), *state.get("nested", [])])
         reader.seen.update(posixpath.join(root, n) for n in state.get("names", []))
+        limit = nested_max_chars(self._model(view))
         for f in await self._nested_files(reader, root, resolved):
             real = await _real(reader.env_for(f.kind), f.path)
+            text = f.text if f.kind == MANAGED else cut_nested(f.path, f.text, limit)
             view.record(self.name, "nested", {"files": [_entry(f, real)]},
-                        message=user(render_file(f.path, f.kind, f.text), origin=self.origin))
+                        message=user(render_file(f.path, f.kind, text), origin=self.origin))
 
     async def _nested_files(self, reader: Reader, root: str,
                             target: str) -> list[InstructionFile]:
@@ -297,9 +331,12 @@ class Instructions(Extension):
         if memory is not None:
             start.append(memory)
         out = [user(render_instructions(start), origin=self.origin)] if start else []
+        limit = nested_max_chars(self._model(view))
         for e in state.get("nested", []):
             text = await _reread(reader.env_for(e["kind"]), e["path"])
             if text is not None:
+                if e["kind"] != MANAGED:
+                    text = cut_nested(e["path"], text, limit)
                 out.append(user(render_file(e["path"], e["kind"], text), origin=self.origin))
         return out
 
