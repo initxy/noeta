@@ -439,6 +439,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **`WebFetch` no longer says a body was "saved to None".** A raw body of a text type
+  (from a custom transport) with no spill directory, or one that could not be written,
+  was reported, and cached, as saved to `None`; it is now an error, not cached.
 - **`NotebookEdit` refuses a `cell-N` that names no cell object.** On a notebook whose
   N-th entry in `cells` is not an object, the call failed with an `AttributeError`; it
   now returns a tool error.
