@@ -8,7 +8,6 @@ import json
 import re
 import shlex
 from collections.abc import Awaitable, Callable
-from importlib import resources
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -26,7 +25,7 @@ from noeta.plugins.shell.state import SHELL, shell_state
 from noeta.plugins.shell.websocket import parse_ws
 from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
 from noeta.toolkit.shell_syntax import parse
-from noeta.toolkit.tools import Workspace, require_str, tool_error
+from noeta.toolkit.tools import Workspace, load_description, require_str, tool_error
 
 #: Claude Code's ``Monitor`` deadline bounds.
 DEFAULT_MONITOR_TIMEOUT_MS = 300_000
@@ -49,11 +48,6 @@ HELD_ELSEWHERE = ("cannot start a background command now: another worker process
 #: worker that does not have it is not the one that started it.
 LOST_REASON = ("the worker process running it stopped, so its further output and exit "
                "status are unknown")
-
-
-def _description(name: str) -> str:
-    text = (resources.files(__package__) / f"{name}.md").read_text("utf-8")
-    return text.rstrip("\n")
 
 
 def _unknown(registry: Registry, ctx: ToolContext, job_id: str) -> str:
@@ -452,7 +446,7 @@ class MonitorTool:
 
     def __init__(self, shell: BackgroundBash) -> None:
         self.shell = shell
-        self.description = _description("monitor")
+        self.description = load_description("noeta.plugins.shell", "monitor")
         self.input_schema: dict[str, Any] = {
             "$schema": SCHEMA_DIALECT,
             "type": "object",

@@ -3,7 +3,6 @@ directory, scripts and ``allowed-tools`` grant)."""
 
 from __future__ import annotations
 
-from importlib import resources
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
@@ -15,7 +14,7 @@ from noeta.plugins.skills.registry import (
 )
 from noeta.plugins.skills.script import is_skill_script_resource
 from noeta.toolkit.context import task_env
-from noeta.toolkit.tools import SCHEMA_DIALECT
+from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -43,11 +42,6 @@ def skill_name(raw: Any) -> str | None:
     return (name[1:] if name.startswith("/") else name) or None
 
 
-def _skill_description() -> str:
-    path = resources.files("noeta.plugins.skills").joinpath("descriptions", "skill.md")
-    return path.read_text(encoding="utf-8").rstrip("\n")
-
-
 class SkillTool:
     """``Skill(skill, args?)``: the same schema bytes for every task. The listing
     in the conversation names the skills; the tool validates against the
@@ -60,7 +54,7 @@ class SkillTool:
 
     def __init__(self, owner: Skills) -> None:
         self._owner = owner
-        self.description = _skill_description()
+        self.description = load_description("noeta.plugins.skills", "skill")
         self.input_schema: dict[str, Any] = {
             "$schema": SCHEMA_DIALECT,
             "type": "object",

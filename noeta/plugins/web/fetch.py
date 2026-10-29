@@ -16,7 +16,6 @@ import posixpath
 import time
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
-from importlib import resources
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -35,6 +34,7 @@ from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     format_size,
     limit_output,
+    load_description,
     spill_path,
     truncate_bytes,
 )
@@ -63,11 +63,7 @@ WEBFETCH_RESULT_LIMIT = 50_000
 _FETCH_SCHEMES = frozenset({"http", "https"})
 
 
-def _resource(name: str) -> str:
-    return (resources.files(__package__) / f"{name}.md").read_text("utf-8").rstrip("\n")
-
-
-DIGEST_INSTRUCTIONS = _resource("webfetch_digest")
+DIGEST_INSTRUCTIONS = load_description("noeta.plugins.web", "webfetch_digest")
 
 
 def render_digest_prompt(*, url: str, title: str, page_markdown: str, prompt: str,
@@ -354,7 +350,7 @@ class WebFetchTool:
                  cache_for: Callable[[ToolContext], PageCache] | None = None,
                  digest_timeout: float = 60.0) -> None:
         self.transport = transport
-        self.description = _resource("webfetch")
+        self.description = load_description("noeta.plugins.web", "webfetch")
         self.input_schema = _schema()
         self.digest_for = digest_for
         self._cache = PageCache()
