@@ -154,7 +154,7 @@ class McpServer:
     ``tools`` keeps only the named raw tools (``None`` = all advertised).
     ``call_timeout`` bounds one ``tools/call`` (``None``: :func:`tool_timeout_s`).
     ``deferred`` (the default) announces the server's tools by name only:
-    the model loads them with ``ToolSearch`` (``noeta.core.deferred``);
+    the model loads them with ``ToolSearch`` (the ``tool_search`` plugin);
     ``False`` sends their schemas from the first request.
     ``bare_elicitation`` declares the elicitation capability without its
     ``form`` / ``url`` modes, for servers that reject them.
