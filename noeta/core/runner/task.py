@@ -502,6 +502,13 @@ class TaskRun:
         """The task's model: its config's, else its agent's."""
         return str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
 
+    def serves_queue(self, queue: str) -> bool:
+        """Whether a child staged on ``queue`` could run now: not while this
+        worker holds the tree and does not serve ``queue`` (a held tree's
+        tasks run only on its holder, so nobody would claim the child until
+        the hold ends)."""
+        return queue in self.rt.queues or not self.rt.holds(self.state.root_id or self.task_id)
+
     def view(self) -> TaskView:
         model = self.model
         return TaskView(state=self.state, complete=self.complete, env=self.env(),
@@ -510,7 +517,7 @@ class TaskRun:
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
                         denied_tools=self.agent.denied_tools if self.agent else (),
                         count_tokens=self.counter(model), read_log=self._read_log,
-                        child_tasks=self._child_ids)
+                        child_tasks=self._child_ids, serves_queue=self.serves_queue)
 
     async def _read_log(self, task_id: str, after: int = 0) -> Sequence[Recorded]:
         """``TaskView.read_log``: another tenant's task is not there for it."""

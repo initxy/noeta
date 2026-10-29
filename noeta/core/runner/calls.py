@@ -259,12 +259,9 @@ async def _foreign_history(run: TaskRun, creates: list[NewTask]) -> str | None:
 
 
 def _unserved_queue(run: TaskRun, creates: list[NewTask]) -> str | None:
-    """A staged child's queue this worker does not serve while it holds the
-    tree: a held tree's tasks run only on its holder, so nobody would claim
-    the child until the hold ends."""
-    if not run.rt.holds(run.state.root_id or run.task_id):
-        return None
-    return next((c.queue for c in creates if c.queue not in run.rt.queues), None)
+    """A staged child's queue the child could not run on now
+    (:meth:`TaskRun.serves_queue`)."""
+    return next((c.queue for c in creates if not run.serves_queue(c.queue)), None)
 
 
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
