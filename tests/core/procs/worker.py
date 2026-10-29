@@ -1,7 +1,10 @@
 """A worker process for the kill -9 test: serves tasks from a sqlite file
 (``worker.py PATH JOURNAL``) or a Postgres schema (``worker.py DSN JOURNAL
 SCHEMA``) until killed. Every tool run is appended to a journal file first, so the test
-can count runs across processes that died mid-call."""
+can count runs across processes that died mid-call. With ``NOETA_KILL9_STALL``
+naming a file, the first tool run to remove it writes its pid to
+``<file>.pid`` and stalls there until killed: a kill that surely lands while
+a call is in flight."""
 
 from __future__ import annotations
 
@@ -38,6 +41,17 @@ class Effect:
             os.fsync(fd)
         finally:
             os.close(fd)
+        stall = os.environ.get("NOETA_KILL9_STALL")
+        if stall:
+            try:
+                os.remove(stall)
+            except FileNotFoundError:
+                pass
+            else:
+                with open(stall + ".tmp", "w") as f:
+                    f.write(str(os.getpid()))
+                os.rename(stall + ".tmp", stall + ".pid")
+                await asyncio.Event().wait()
         await asyncio.sleep(random.uniform(0.01, 0.1))
         return text_output(f"did {input['key']}")
 
