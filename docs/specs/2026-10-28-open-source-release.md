@@ -245,6 +245,25 @@ servers and runs on many machines.
   the tenant's provider, refuses past the budget and counts usage. `tenant_usage` is a
   cross-task total beside the logs (no fold reads it; a refusal is logged), not task state.
   Rejected: a budget plugin on `before_model` (misses extension calls, cannot choose the key).
+- D50 (`os-fix-r4tenant`) A non-default tenant's file tools reach an allow list (refines D16):
+  its workspace, its own corners (D16, D26, D28), its temporary directory and, to read only,
+  `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/libx32`, `/etc`, `/private/etc`,
+  `/nix/store`, never `/etc/noeta`, a home directory (`/home`, `/root`, `/Users`,
+  `/var/root`, the worker's `~`, each account's of uid 0 or 500-65533) or a server
+  directory (the worker's cwd, `TenantFence(server_dirs=)`: serve's cwd and `--allow-root`)
+  inside them. Matched on the resolved path against the resolved places. A tenant whose
+  workspace the worker does not know reaches none (fail closed). The operator's
+  `additionalDirectories` are not its scope. Rejected: `/opt`, `/srv`, `/var`, `/mnt`
+  (other software's data, data disks: `/opt` is a link to one on the dev box); using the
+  task's cwd when the workspace is unknown (host code can set any cwd).
+- D51 (`os-fix-r4tenant`) A non-default tenant's sandboxed commands also cannot read any home
+  directory or server directory (D50's), but the tenant's workspace and own corners; the
+  operator's `allowWrite` / `allowRead` / `additionalDirectories` do not apply to them. The
+  real Python running the bridge (`sys.base_prefix`) is shown again, since a virtual
+  environment's link to it may pass through a home. Directories that hold the machine's
+  programs, `/tmp`, `/var/tmp`, `/opt` or `/run` are never hidden (an account whose home is
+  `/`). bwrap and Seatbelt read rules are applied outermost first. Rejected: hiding every
+  account's home including service accounts (uid < 500: `/var/lib/...`, `/bin`).
 
 ## Plan
 
@@ -343,3 +362,4 @@ servers and runs on many machines.
 - 2026-10-28 `os-kernel-struct` (from `os-structure` 03570c0c), one commit each, structural commits apart, make check green after each (2273 passed, 54 skipped, 88.23% at the end): S29 `core/runner/timers.py` and `core/runner/closing.py` out of `task.py` (733 -> 614 lines) 7f77dbf8; S30 `call_model`'s `_run_hooks` / `_on_overflow` 2afb4a0a; S32 `backends/stores/postgres_conn.py` (pool, opening, transaction retry; `postgres.py` 884 -> 798) 92523059; deferred tool loading out of the kernel into the `tool_search` plugin through the new `Extension.tool_changes` (D29–D31, ADR-017 supersedes ADR-016) 3181ce34. Full suite with Postgres DSN 2327 passed; `make cluster` 13/13; `make parity` 0 (11 accepted deviations), own-words green; `make e2e` 7 passed; `make eval` 1.000 vs 0.987 (`delegate_parallel_review` scored 1.00 with its three trials hitting the 240 s timeout). Left: `plugins/mcp/tools.py` and `plugins/mcp/config.py` docstrings still name `noeta.core.deferred` (the mcp plugin was being changed elsewhere); the `shell/bash.py` split.
 - 2026-10-28 `os-struct-shell` (from `os-structure` 81878191), structure only, one commit each, make check green after each (2294 passed, 54 skipped, 88.32% at the end): S36 `plugins/shell/bash.py` 647 -> 299 lines into `state.py`, `output.py`, `git_prelude.py`, `cwd.py` and `sandbox.py`, `command_script` into `hardening.py`, `BashTool.run`'s rendering into `_result` 9dd4f24e; `plugins/shell/jobs.py` 794 -> 698, the log directory into `job_logs.py` 1911eebb; stale `noeta.core.deferred` references in the mcp docstrings and two parity rules be122964. Left as they are (each one class or one concern, already split once): `backends/stores/postgres.py`, `backends/stores/sqlite.py`, `core/runner/task.py`, `plugins/mcp/extension.py`, `cli/config.py` (its `HOME` is what tests patch). `make parity` 0 (11 accepted deviations).
 - 2026-10-28 `os-fix-r4docs` (from `os-structure` 8a847cc2), the final review's round-4 findings, one commit each, behavior fixes with a test failing before, make check green after each (2305 passed, 54 skipped, 88.35% at the end): front ends on a server need no local model and send neither this machine's directory nor its model, `--cwd PATH` names one on the server, a cwd-less HTTP task gets the server's directory recorded, `-p --server` refused (D32, 2e7762fd); ADR-018 for D26–D28, refining ADR-014 (0ab7a68b); ADR-019, tenant limits and providers as kernel scheduling, refining ADR-007, with the reason in `docs/architecture.md` (D33, 14ebdadd); `docs/extending.md` counts a skill as one step (97d1312c); `~/.noeta` made 0700 and a new sqlite store 0600 (side files follow), existing ones kept with a notice (9af315a3); `cli/config.py` split into `home_dir`, `server_token`, `trust` and `plugin_policy`, `HOME` patched only in `home_dir` (676b1930).
+- 2026-10-28 `os-fix-r4tenant` (from `os-structure` 8a847cc2, rebased on 22c46102), one commit per fix, a test failing before each, make check green after each (2314 passed, 54 skipped at the end): tenant file tools on an allow list and tenant commands seeing no home or server directory (D50, D51; gate tests in bypass mode and after approval, an opened-file test, a real bwrap test with a temp `HOME`'s `~/.ssh` and the server directory's `.env`); MCP prompt commands kept per connection partition (two tenants interleaved); HTTP rewind through the guard with only request config and the task's queue. `noeta/cli/config.py`: one line (the sandbox fence's `server_dirs`). Left: names listed by `find -L` and glob expansion still cover home directories (as before, "Not a boundary"); a worker's `servers()` reads its cwd at check time.
