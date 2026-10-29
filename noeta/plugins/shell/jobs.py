@@ -91,9 +91,12 @@ MONITOR_POLL_S = 0.1
 #: Tasks remembered as ended (their notices go to the root) at most.
 ENDED_KEEP = 4096
 #: Background jobs of a root kept in memory once their end is posted (for
-#: ``TaskStop`` / ``TaskOutput`` on them) at most; older ones are let go,
-#: their logs removed with the root's.
+#: ``TaskStop`` / ``TaskOutput`` on them) at most; older ones are let go.
 ENDED_JOBS_KEEP = 64
+#: Bytes of output logs a root keeps of the jobs it let go of (their end
+#: notices name the file): past it the oldest are removed; the rest go
+#: with the root.
+LET_GO_LOGS_MAX_BYTES = 256 * 1024 * 1024
 #: Roots kept in the table at most: past it, the least recently used root
 #: with no running job is let go of with its logs (a server's roots rarely
 #: end here: an idle one waits for days, a tree another worker took never
@@ -104,6 +107,9 @@ GUARD_TICK_S = 0.5
 #: How long a foreground command outlives a worker that stopped re-creating
 #: its ``.alive`` file (it has no hold to time it by).
 FOREGROUND_ALIVE_S = 30.0
+#: Ticks of 20 ms a foreground command's keeper is given to write what came
+#: once the command's shell exited.
+FOREGROUND_DRAIN_TICKS = 50
 #: Bytes of a job's output (and, for a monitor, of its stderr) its log keeps.
 DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
 
@@ -258,9 +264,15 @@ def _label(text: str) -> str:
     return " ".join(text.split())
 
 
+def _keeping(out_path: str) -> str:
+    """The file a foreground command's output keeper removes once done."""
+    return f"{out_path}.keeping"
+
+
 def _files(job: Job) -> list[str]:
     """The job's files in its env."""
-    return [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path) if p]
+    keeping = _keeping(job.out_path) if job.cwd_path else ""
+    return [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path, keeping) if p]
 
 
 class Registry:
@@ -271,9 +283,14 @@ class Registry:
                  log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
                  foreground_alive_s: float = FOREGROUND_ALIVE_S,
                  ended_jobs_keep: int = ENDED_JOBS_KEEP,
-                 roots_keep: int = ROOTS_KEEP) -> None:
+                 roots_keep: int = ROOTS_KEEP,
+                 let_go_logs_max_bytes: int = LET_GO_LOGS_MAX_BYTES) -> None:
         self.max_jobs = max_jobs
         self.ended_jobs_keep = ended_jobs_keep
+        self.let_go_logs_max_bytes = let_go_logs_max_bytes
+        #: Output logs of the jobs each root let go of, oldest first, with
+        #: their sizes: ``(env, path, bytes)``.
+        self.let_go_logs: dict[str, list[tuple[ExecEnv, str, int]]] = {}
         self.roots_keep = roots_keep
         self.foreground_alive_s = foreground_alive_s
         self.log_dir = log_dir
@@ -359,9 +376,10 @@ class Registry:
                      ws: tuple[str, list[str]] | None = None,
                      ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
                      foreground: bool = False) -> Job | str:
-        running = len(self.running(root_id))
-        # A foreground command is not held to the cap: past its timeout it
+        # The cap counts background jobs only (what TaskStop can stop); a
+        # foreground command is not held to it either: past its timeout it
         # moves to the background rather than being killed.
+        running = sum(not j.foreground for j in self.running(root_id))
         if running >= self.max_jobs and not foreground:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
                     f"TaskStop first")
@@ -405,15 +423,29 @@ class Registry:
                 # members of the pipeline, so both are written out before
                 # the shell exits.
                 pipeline = (f'{{ "$@" 2>&1 1>&4 4>&- | keep_head {cap} {shlex.quote(err)}; '
-                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | {keep_out}')
+                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | {keep_out}\n'
+                            'exit "${PIPESTATUS[0]}"')
+            elif foreground:
+                # Ends when the command's shell exits, as Claude Code's: a
+                # child it left running (``cmd &``) holds the keeper's pipe,
+                # so the keeper is given a moment to write what came (its
+                # flag file gone), not waited for. Nothing but the shell
+                # may hold the run's own output: the keeper, a process
+                # substitution, gets /dev/null.
+                flag = shlex.quote(_keeping(out))
+                pipeline = (f': > {flag}\nexec >/dev/null 2>&1\n'
+                            f'"$@" > >({keep_out}; rm -f {flag}) 2>&1\n'
+                            f'code=$?\nn=0\nwhile [ -e {flag} ] && [ "$n" -lt '
+                            f'{FOREGROUND_DRAIN_TICKS} ]; do sleep 0.02; n=$((n + 1)); done\n'
+                            f'rm -f {flag}\nexit "$code"')
             else:
-                pipeline = f'"$@" 2>&1 | {keep_out}'
+                pipeline = f'"$@" 2>&1 | {keep_out}\nexit "${{PIPESTATUS[0]}}"'
             fd3 = f"exec 3>{shlex.quote(cwd_file)}\n" if cwd_file else ""
             # The command runs in the pipeline, the guard beside it: a
             # ``wait`` in the command never waits for the guard.
             script = (f"{fd3}{_KEEP_HEAD}{_KEEP_TAIL if foreground else ''}"
                       f"{self._guard(job)} </dev/null >/dev/null 2>&1 3>&- &\n"
-                      f'{pipeline}\nexit "${{PIPESTATUS[0]}}"')
+                      f"{pipeline}")
             run = ["bash", "-c", script, "bash", *(argv or ["bash", "-c", command])]
             job.proc = asyncio.ensure_future(env.run(run, cwd=cwd,
                                                      env=dict(env_vars), timeout=None,
@@ -527,15 +559,32 @@ class Registry:
 
     def _let_go_of_ended(self, root_id: str) -> None:
         """Keep at most :attr:`ended_jobs_keep` of the root's background jobs
-        whose end is posted, dropping the oldest with their log files: a
-        root that runs for days keeps a bounded number on disk."""
+        whose end is posted, dropping the oldest. A dropped job's output log
+        stays until its root goes (its end notice named it), within
+        :attr:`let_go_logs_max_bytes`; its other files go now."""
         jobs = self.jobs.get(root_id)
         if not jobs:
             return
         ended = [j for j in jobs.values() if j.done.is_set() and not j.foreground]
         for job in ended[:max(0, len(ended) - self.ended_jobs_keep)]:
             del jobs[job.job_id]
-            self._in_background(self._remove_files(job.env, _files(job)))
+            self._in_background(self._keep_log(job))
+
+    async def _keep_log(self, job: Job) -> None:
+        await self._remove_files(job.env, [p for p in _files(job) if p != job.out_path])
+        try:
+            st = await job.env.stat(job.out_path)
+        except OSError:
+            st = None
+        kept = self.let_go_logs.setdefault(job.root_id, [])
+        kept.append((job.env, job.out_path, st.size if st is not None else 0))
+        while kept and sum(size for _, _, size in kept) > self.let_go_logs_max_bytes:
+            env, path, _ = kept.pop(0)
+            await self._remove_files(env, [path])
+
+    async def _remove_let_go_logs(self, root_id: str) -> None:
+        for env, path, _ in self.let_go_logs.pop(root_id, []):
+            await self._remove_files(env, [path])
 
     def _let_go_of_roots(self) -> None:
         """Keep at most :attr:`roots_keep` roots, letting go of the least
@@ -548,6 +597,7 @@ class Registry:
                 self.ended.pop(job.spawner_id, None)
             self.ended.pop(root_id, None)
             self._in_background(self._remove_files_of(list(jobs.values())))
+            self._in_background(self._remove_let_go_logs(root_id))
 
     async def _remove_files_of(self, jobs: list[Job]) -> None:
         for job in jobs:
@@ -658,6 +708,7 @@ class Registry:
         if not jobs:
             self.jobs.pop(root_id, None)
             self.ended.pop(root_id, None)
+            self._in_background(self._remove_let_go_logs(root_id))
             return
         self._in_background(self._drop(root_id, jobs))
 
@@ -667,6 +718,7 @@ class Registry:
         for job in jobs:
             await job.done.wait()
         await self._remove_files_of(jobs)
+        await self._remove_let_go_logs(root_id)
         table = self.jobs.get(root_id, {})
         for job in jobs:
             if table.get(job.job_id) is job:

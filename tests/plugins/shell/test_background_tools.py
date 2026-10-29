@@ -185,6 +185,23 @@ async def test_the_job_cap_refuses_a_ninth_job(tmp_path: Path) -> None:
         await h.settle(out.meta["job_id"])
 
 
+async def test_foreground_commands_do_not_count_toward_the_job_cap(tmp_path: Path) -> None:
+    # A foreground command is waited on, not stoppable with TaskStop: it must
+    # not take a background job's place.
+    registry = Registry(log_dir=str(tmp_path / "logs"), max_jobs=1)
+    h = Harness(tmp_path, registry, Shell(registry=registry))
+    fg = asyncio.create_task(h.call("Bash", command="true; sleep 1"))
+    for _ in range(100):
+        if registry.jobs.get("task"):
+            break
+        await asyncio.sleep(0.01)
+    assert registry.jobs.get("task")
+    bg = await h.call("Bash", command="true", run_in_background=True)
+    assert not bg.is_error, text(bg)
+    await h.settle(bg.meta["job_id"])
+    assert not (await fg).is_error
+
+
 async def test_a_timeout_moves_the_command_to_the_background_past_the_job_cap(
         tmp_path: Path) -> None:
     registry = Registry(log_dir=str(tmp_path / "logs"), max_jobs=1)
@@ -290,6 +307,17 @@ async def test_a_foreground_command_ends_quietly_and_leaves_nothing(h: Harness) 
     await asyncio.sleep(0.05)
     assert h.posts == [] and h.registry.jobs == {}
     assert list((h.tmp.parent / "logs" / f"w{os.getpid()}").iterdir()) == []
+
+
+async def test_a_foreground_command_returns_when_its_shell_exits(h: Harness) -> None:
+    # As Claude Code: a child left running with `&` (holding the output) does
+    # not keep the call waiting.
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    out = await h.call("Bash", command="echo before; sleep 5 & echo hi", timeout=20000)
+    assert loop.time() - start < 3
+    assert not out.is_error and text(out) == "before\nhi"
+    assert h.registry.jobs == {} or all(not jobs for jobs in h.registry.jobs.values())
 
 
 async def test_a_command_using_fd_3_keeps_its_file_and_the_directory(h: Harness) -> None:

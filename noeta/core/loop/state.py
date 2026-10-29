@@ -508,7 +508,7 @@ def _erase(state: TaskState, seqs: set[int]) -> None:
         for i, (m, s) in enumerate(zip(messages, at, strict=True)):
             if m.origin == "human":
                 person_seen.add(s)
-            if not (s in seqs and m.role == "user" and m.origin in ("human", "inline")
+            if not (s in seqs and m.role == "user" and m.origin in ("human", "inline", "memory")
                     and (s not in with_person or s in person_seen)
                     and not any(isinstance(b, ToolResult) for b in m.content)):
                 keep.append(i)

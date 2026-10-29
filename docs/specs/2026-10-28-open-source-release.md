@@ -579,6 +579,19 @@ servers and runs on many machines.
   does not run (`Runtime._running`); the row's epoch fences it like any claim. A row left
   `running` by a run that stopped early (store error, unreadable log) can be adopted this way
   too, sooner than its lease would hand it back.
+- D104 (`os-fix-r11tools`, refines D90) A blocked prompt's memory recall is dropped whatever
+  the plugin order: with memory listed before hooks the recall is recorded after the erase,
+  so memory folds `ERASED_KIND` (a recall for an erased prompt is voided and its files may
+  surface again) and erases the recall's message before the next model call; an erase now
+  also takes a `memory`-origin message. The recall selector still saw the blocked text in
+  that order (the main model does not).
+- D105 (`os-fix-r11tools`) A foreground `Bash` command ends when its shell exits, as Claude
+  Code's (checked live: `sleep 15 & echo hi` returned at once): the output keeper is a
+  process substitution given up to 1 s to write what came; a child left running keeps
+  writing to the log.
+- D106 (`os-fix-r11tools`) A background job a root forgets (past 64 ended) keeps its output
+  log until the root ends, at most 256 MB of such logs per root (oldest removed first); the
+  remaining pruning is a deviations row.
 
 ## Plan
 
@@ -741,3 +754,4 @@ Still open from the Progress log's "Left" notes (2026-10-29, each checked agains
 - 2026-10-29 `os-fix-r11sec` (from `os-structure` e947884a), the final security review's two findings (no P1 on Linux), one commit per fix with a test failing before it, make check green after each (2539 passed, 65 skipped, 88.71% at the end): on macOS the sandbox is not a tenant boundary, so tenants besides the default one are refused there unless `shared_os_user_tenants` (D99, tested by faking the platform) 8c80486b; the permissions plugin trusts each task's working directory, not the server's (D100) 959c1244. Left: the macOS Seatbelt profile itself still allows `mach-lookup` and Apple Events (untestable here); a single-user macOS setup keeps it as before.
 - 2026-10-29 `os-fix-r11docs` (from `os-structure` 46553cb5), the final review's round-11 docs and front-end findings, one commit per fix, the behavior fix with a test failing before it, make check green after each (2541 passed, 65 skipped, 88.71% at the end): `noeta acp --server` asks the server first (`server_problem`, as the TUI does) and exits with one line naming `NOETA_SERVER_TOKEN` instead of failing `session/new` with a traceback (subprocess test against a stand-in server; closes `os-fix-r10docs`' leftover) f9739cae; every refines / extends / supersedes link between decisions stated on both ends (14 back-links added, a script found 30 links, none one-way) 896c61b7; D1 and the header say phases merged into `os-structure`, which merges to local main after the final review 5c52edb6; every still-open "Left" note checked against the code and listed under Follow-ups with an owner (`core/runner/task.py` at 730 lines among them) c715d32e; Phase 6 gates publishing on the owner's call on internal names, file by file 3a2e5c2d. No prompt text changed, so `make eval` and `make e2e` were not run.
 - 2026-10-29 `os-fix-r11kernel` (from `os-structure` e947884a), the final review's round-11 kernel findings, one commit per fix with a test failing before each behavior fix, make check green after each (2539 passed, 67 skipped, 89% at the end; with Postgres 2606 passed; `make cluster` 13 passed): a worker behind the store's clock fires the timer the store woke it for instead of rewriting the same `Waiting` (D101) a46d98cc; a channel thread whose task ended goes on in a continuation `<id>.N`, `current_task` (D102) a97d6c84; a claim answered `CommitUnknown` adopts the row this worker owns, `Store.tasks(owner=)` (D103) 3e43a7b8; the kill -9 test always kills one worker mid-call aef3fefe; the cluster invariants count `ToolSearch` as retry-safe (a cron-scenario false positive) 08eee9eb.
+- 2026-10-29 `os-fix-r11tools` (from `os-structure` e947884a), the final review's round-11 tool findings, one commit per fix with a test failing before each behavior fix, make check green after each (2537 passed, 65 skipped at the end): the background job cap counts only background jobs d68fe819; a blocked prompt's memory recall is dropped with memory listed before hooks (D104) 94d4a86c; a foreground `Bash` command returns when its shell exits, as Claude Code's (D105) 1798b4b6; a forgotten job's output log stays until its root ends, bounded, plus a deviations row for the rest (D106) 0a66de3f; `ToolSearch` imports `SCHEMA_DIALECT` be6d6d4e. `make parity` 0 mismatches (11 accepted). Left: with memory before hooks the recall selector still sees a blocked prompt's text. No prompt text changed, so `make eval` and `make e2e` were not run.

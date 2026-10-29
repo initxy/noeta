@@ -9,6 +9,7 @@ from typing import Any
 
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolReference
+from noeta.toolkit.tools import SCHEMA_DIALECT
 
 TOOL_SEARCH = "ToolSearch"
 #: Matches a keyword search returns when the model gives no count.
@@ -17,8 +18,6 @@ DEFAULT_MAX_RESULTS = 5
 MAX_SELECT_NAMES = 64
 #: A keyword query reads at most this many words.
 MAX_KEYWORDS = 32
-
-SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
 _SEARCH_DESCRIPTION = """\
 Fetch the full definition of deferred tools so you can call them.
