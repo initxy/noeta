@@ -1,7 +1,7 @@
 # ADR-006: Claims fold from versioned snapshots; a snapshot may be missing, never wrong
 
 - Status: accepted
-- Refined by: ADR-012
+- Refined by: ADR-012, ADR-023 (snapshots per fold version)
 - Date: 2026-10-28
 
 ## Context

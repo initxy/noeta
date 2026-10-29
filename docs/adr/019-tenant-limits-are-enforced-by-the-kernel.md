@@ -4,7 +4,8 @@
 - Date: 2026-10-28
 - Refines: [ADR-007](007-tenants.md)
 - Refined by: [ADR-022](022-the-model-catalog-is-kernel-data.md) (the model catalog stays in
-  the kernel)
+  the kernel), [ADR-024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md)
+  (the running limit counts live leases only)
 
 ## Context
 

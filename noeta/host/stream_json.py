@@ -241,6 +241,10 @@ class StreamJson(ControlRequests):
             source = o.resume if o.fork else None
             self.task_id = await self.client.create(
                 o.agent, None, task_id=o.task_id, config=config, history_from=source)
+        if not o.cwd:
+            # A server picks the directory of a task created without one and
+            # records it; that is where the task runs, so say so.
+            o.cwd = await self._recorded_cwd()
         self._put(await self._init_message())
         if self.options.include_partial_messages:
             self._unsubscribe = self.app.deltas(self._on_delta)
@@ -261,6 +265,12 @@ class StreamJson(ControlRequests):
             self._out.put_nowait(None)
             with contextlib.suppress(BaseException):
                 await self._writer
+
+    async def _recorded_cwd(self) -> str:
+        """The ``cwd`` in the task's ``TaskCreated`` config, or ``""``."""
+        events = await self.client.events(self.task_id, 0)
+        first = events[0].event if events else None
+        return str(first.config.get("cwd") or "") if isinstance(first, TaskCreated) else ""
 
     async def _init_message(self) -> dict[str, Any]:
         tools: list[str] = []

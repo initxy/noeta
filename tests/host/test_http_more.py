@@ -106,6 +106,22 @@ async def test_stream_json_over_a_websocket(served: tuple[str, ScriptedProvider]
             pass  # no token
 
 
+async def test_stream_json_init_names_the_directory_the_server_chose(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with websockets.connect(f"ws://{host}/stream-json?token=secret&model={MODEL}") as ws:
+        init = json.loads(await ws.recv())
+    assert init["cwd"] == str(tmp_path.resolve())
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        resp = await http.post(f"/stream-json?model={MODEL}&resume={init['session_id']}",
+                               content="")
+        assert json.loads(resp.text.splitlines()[0])["cwd"] == str(tmp_path.resolve())
+    Gate.listed_in.clear()
+    async with websockets.connect(f"ws://{host}/stream-json?token=secret&cwd=sub") as ws:
+        assert json.loads(await ws.recv())["cwd"] == str((tmp_path / "sub").resolve())
+    assert set(Gate.listed_in) == {str((tmp_path / "sub").resolve())}
+
+
 async def test_stream_json_one_way_and_the_rest(served: tuple[str, ScriptedProvider]) -> None:
     host, provider = served
     provider.add(reply("", ("Echo", {})), reply("no echo then"))
