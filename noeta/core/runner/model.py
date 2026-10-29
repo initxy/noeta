@@ -103,12 +103,11 @@ def _final_answer(run: TaskRun, response: ModelResponse) -> ModelResponse:
                          stop_reason="end_turn", usage=response.usage, model=response.model)
 
 
-async def call_model(run: TaskRun, *, final: bool = False) -> bool:
-    if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
-        return await closing.fail_turn(run, texts.LLM_ERROR,
-                                       "the model call kept being interrupted")
+async def _run_hooks(run: TaskRun, request: ModelRequest) -> ModelRequest | bool:
+    """The reminders, then every ``before_model``: the request to send, or
+    what ``call_model`` returns when a hook ended the step (the turn failed
+    or is done, or the request went stale)."""
     view = run.view()
-    request = build_model_request(run, final=final)
     try:
         # The reminders first, as Claude Code adds its notes before it
         # decides to compact: the hooks see the request that would go.
@@ -127,6 +126,32 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     except RequestStale:
         await run.flush(view)
         return True  # the next boundary builds the request from the new state
+    return request
+
+
+async def _on_overflow(run: TaskRun, exc: ContextOverflow) -> bool:
+    """The model refused the request as too long: an extension makes room
+    and the next boundary calls again, or the turn fails."""
+    overflow_view = run.view()
+    try:
+        for ext in run.exts:
+            if await ext.on_context_overflow(overflow_view):
+                await run.flush(overflow_view)
+                return True  # room was made; the next boundary calls again
+    except TurnFailed as failed:
+        await run.flush(overflow_view)
+        return await closing.fail_turn(run, failed.reason, failed.detail)
+    return await closing.fail_turn(run, texts.CONTEXT_OVERFLOW, _detail(exc))
+
+
+async def call_model(run: TaskRun, *, final: bool = False) -> bool:
+    if run.state.model_attempts >= texts.MAX_MODEL_ATTEMPTS:
+        return await closing.fail_turn(run, texts.LLM_ERROR,
+                                       "the model call kept being interrupted")
+    prepared = await _run_hooks(run, build_model_request(run, final=final))
+    if isinstance(prepared, bool):
+        return prepared
+    request = prepared
     refusal = await run.rt.budget_refusal(run.state.tenant)
     if refusal is not None:
         return await closing.fail_turn(run, texts.BUDGET_SPENT, refusal)
@@ -162,16 +187,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
                                                on_retry=on_retry)
     except ContextOverflow as exc:
         await asyncio.gather(*pending, return_exceptions=True)
-        overflow_view = run.view()
-        try:
-            for ext in run.exts:
-                if await ext.on_context_overflow(overflow_view):
-                    await run.flush(overflow_view)
-                    return True  # room was made; the next boundary calls again
-        except TurnFailed as failed:
-            await run.flush(overflow_view)
-            return await closing.fail_turn(run, failed.reason, failed.detail)
-        return await closing.fail_turn(run, texts.CONTEXT_OVERFLOW, _detail(exc))
+        return await _on_overflow(run, exc)
     except ModelError as exc:
         await asyncio.gather(*pending, return_exceptions=True)
         return await closing.fail_turn(run, texts.LLM_ERROR, _detail(exc))
