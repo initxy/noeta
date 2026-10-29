@@ -545,6 +545,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   recovery removes it.
 - A command hook whose run is cancelled (its turn stopped) is killed with its process
   group, as a timed-out one was; its output is capped while it is read, not after.
+- Compaction's request estimate (and the files restored after it) and the MCP result budget
+  count a CJK character as one token, as the other budgets do; they counted four characters
+  a token, so Chinese, Japanese or Korean text was undercounted three- to four-fold.
 
 ### Security
 

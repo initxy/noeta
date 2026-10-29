@@ -101,7 +101,7 @@ Known differences that no kernel or product reason forces: follow-ups, not accep
 | difference | where |
 |---|---|
 | `AskUserQuestion` needs every question answered; Claude Code accepts unanswered questions and a note per question. | `noeta/plugins/ask_user` |
-| MCP result sizes are estimated (four characters a token, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
+| MCP result sizes are estimated (four characters a token, a CJK character one, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
 | `WebFetch` has no raw-markdown answer for known documentation sites. | `noeta/plugins/web` |
 | `Bash` does not note that a command changed a file the model has read. | `noeta/plugins/shell`, `noeta/plugins/fs` |
 | The file tools refuse UTF-16 text files (Claude Code reads and writes them). | `noeta/plugins/fs` |

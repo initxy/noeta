@@ -1,4 +1,5 @@
-"""A deterministic, provider-neutral token estimate (0.6's ``chars/4``).
+"""A deterministic, provider-neutral token estimate of a request (the
+CJK-aware ``noeta.toolkit.tokens.estimate_tokens`` every budget uses).
 
 Deliberately not a tokenizer: a tokenizer drifts across library versions, so
 the same history would estimate differently on two hosts and a resumed task
@@ -22,9 +23,8 @@ from noeta.core.types import (
     ToolSpec,
     ToolUse,
 )
+from noeta.toolkit.tokens import estimate_tokens
 
-#: ~4 characters per token. Changing it changes every estimate.
-CHARS_PER_TOKEN = 4
 #: Flat overhead per message for the role markers a provider adds.
 PER_MESSAGE_OVERHEAD_TOKENS = 1
 #: An image's estimate (Claude Code's per-image figure). 0.6 estimated an
@@ -34,11 +34,9 @@ IMAGE_TOKENS = 2_000
 
 
 def text_tokens(text: str) -> int:
-    """``ceil(len / 4)``: any non-empty text costs at least one token."""
-    n = len(text)
-    if n <= 0:
-        return 0
-    return (n + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
+    """:func:`noeta.toolkit.tokens.estimate_tokens`: a CJK character one
+    token, other text ``ceil(len / 4)``."""
+    return estimate_tokens(text)
 
 
 def _canonical(value: object) -> str:

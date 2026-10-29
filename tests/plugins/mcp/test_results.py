@@ -84,6 +84,14 @@ async def test_without_a_spill_directory_the_head_is_kept_and_marked_at_the_end(
                            "and only the first 100000 are shown above.")
 
 
+async def test_cjk_text_counts_a_token_a_character(tmp_path: Path) -> None:
+    out = await render_result({"content": [{"type": "text", "text": "字" * 30_000}]},
+                              ctx(tmp_path, spill=False))
+    cut, note = texts(out)
+    assert cut == "字" * 25_000
+    assert "the server returned 30000 characters and only the first 25000 are shown" in note
+
+
 async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NOETA_MAX_MCP_OUTPUT_TOKENS", "2000")
