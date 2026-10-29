@@ -773,6 +773,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
+  allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
+  `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so
+  they could open the user's D-Bus (`systemd-run --user` ran a command outside the sandbox
+  that read `~/.noeta/tokens.json`), Docker's or Postgres's socket. `TenantFence.confine` now
+  clears all three for a task of a tenant other than the default one.
 - **A tenant's commands no longer follow a working directory swapped for a link.** The
   `cwd` was checked only when the task was created; the tenant could then replace a
   directory on the way with a link to noeta's home or another tenant's workspace, and its
