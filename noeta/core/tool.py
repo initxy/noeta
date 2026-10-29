@@ -123,8 +123,9 @@ class Tool(Protocol):
 
     Optional members, read with their default when a tool leaves them out:
 
-    * ``deferred: bool = False`` — named to the model and sent only once it
-      loads the tool with ``ToolSearch`` (``noeta.core.deferred``).
+    * ``deferred: bool = False`` — named to the model by name only
+      (``TaskView.deferred_tool_names``) and sent with ``defer_loading``; the
+      ``tool_search`` plugin withholds it until the model loads it.
     * ``listed_last: bool = False`` — sent after the other tools (keeps a
       changing set of tools at the end of the cached prefix).
     * ``run_last: bool = False`` — runs after the reply's other calls

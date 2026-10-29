@@ -1,44 +1,16 @@
-"""Deferred tools: a tool that sets ``deferred = True`` is announced by name
-only and sent to the model once ``ToolSearch`` has loaded it.
-
-Any extension's tool may be deferred. While a task offers at least one, the
-runner adds ``ToolSearch``; its result is a list of ``ToolReference`` blocks,
-and the fold keeps every referenced name in ``TaskState.loaded_tools`` (a
-compaction does not unload a tool). The request then sends each loaded
-deferred tool with ``defer_loading`` and always sends
-``DeferredToolPlaceholder``, a tool that is never called and keeps the
-vendor's deferred-loading mode on from the first request.
-
-Order: every sent tool sorted by name, then the tools that declare
-``listed_last`` (server tools) sorted by name. The placeholder goes right
-before the ``listed_last`` group; while that group is empty and no deferred
-tool is loaded, it goes right before the last tool.
-"""
+"""``ToolSearch``: loads deferred tools by exact name or by keywords; its
+result is one ``ToolReference`` per match."""
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output, tool_flag
-from noeta.core.types import ToolReference, ToolSpec
-
-__all__ = [
-    "PLACEHOLDER",
-    "TOOL_LOADED_TEXT",
-    "TOOL_SEARCH",
-    "ToolSearchTool",
-    "deferred_names",
-    "is_deferred",
-    "request_tools",
-    "with_tool_search",
-]
+from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.types import ToolReference
 
 TOOL_SEARCH = "ToolSearch"
-PLACEHOLDER = "DeferredToolPlaceholder"
-#: The text that follows a ``ToolSearch`` result in the same user message.
-TOOL_LOADED_TEXT = "Tool loaded."
 #: Matches a keyword search returns when the model gives no count.
 DEFAULT_MAX_RESULTS = 5
 #: A ``select:`` query reads at most this many names.
@@ -47,10 +19,6 @@ MAX_SELECT_NAMES = 64
 MAX_KEYWORDS = 32
 
 SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-
-_PLACEHOLDER_DESCRIPTION = (
-    "Reserved entry that only keeps deferred tool loading enabled. It does nothing; "
-    "never call it.")
 
 _SEARCH_DESCRIPTION = """\
 Fetch the full definition of deferred tools so you can call them.
@@ -72,64 +40,6 @@ Ways to query:
 
 _CAMEL = re.compile(r"([a-z])([A-Z])")
 _MCP_SPLIT = re.compile(r"[\s_.]+")
-
-
-def is_deferred(tool: Tool) -> bool:
-    return tool_flag(tool, "deferred")
-
-
-def _listed_last(tool: Tool) -> bool:
-    return tool_flag(tool, "listed_last")
-
-
-def deferred_names(tools: Iterable[Tool]) -> list[str]:
-    """The names of the deferred tools among ``tools``, sorted: what the
-    conversation announces (``TaskView.deferred_tool_names``)."""
-    return sorted({t.name for t in tools if is_deferred(t)})
-
-
-def with_tool_search(tools: Sequence[Tool]) -> list[Tool]:
-    """``tools`` plus ``ToolSearch`` when any of them is deferred (and none
-    is already called so): the tools a task offers."""
-    out = list(tools)
-    deferred = {t.name: t for t in out if is_deferred(t)}
-    if deferred and all(t.name != TOOL_SEARCH for t in out):
-        out.append(ToolSearchTool(deferred))
-    return out
-
-
-def placeholder_spec() -> ToolSpec:
-    return ToolSpec(name=PLACEHOLDER, description=_PLACEHOLDER_DESCRIPTION,
-                    input_schema={"type": "object", "properties": {}}, defer_loading=True)
-
-
-def request_tools(tools: Sequence[Tool], loaded: Iterable[str],
-                  describe: Callable[[Tool], str]) -> list[ToolSpec]:
-    """The tool list of a request: every tool that is not deferred, plus each
-    deferred one that is loaded, in the module's order. ``describe`` gives a
-    tool's (possibly overridden) description."""
-    done = set(loaded)
-    any_deferred = any_loaded = False
-    sent: list[Tool] = []
-    for t in tools:
-        if is_deferred(t):
-            any_deferred = True
-            if t.name not in done:
-                continue
-            any_loaded = True
-        sent.append(t)
-    def spec(t: Tool) -> ToolSpec:
-        return ToolSpec(name=t.name, description=describe(t), input_schema=t.input_schema,
-                        defer_loading=is_deferred(t))
-    body = sorted((t for t in sent if not _listed_last(t)), key=lambda t: t.name)
-    tail = sorted((t for t in sent if _listed_last(t)), key=lambda t: t.name)
-    head = [spec(t) for t in body]
-    rest = [spec(t) for t in tail]
-    if not any_deferred:
-        return head + rest
-    if rest or any_loaded or not head:
-        return [*head, placeholder_spec(), *rest]
-    return [*head[:-1], placeholder_spec(), head[-1]]
 
 
 def _mcp_tool_part(name: str) -> str | None:

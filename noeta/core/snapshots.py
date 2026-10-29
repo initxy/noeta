@@ -38,7 +38,7 @@ FORMAT = 1
 
 #: The modules whose code decides what a log folds to.
 FOLD_MODULES = ("noeta.core.loop.state", "noeta.core.records", "noeta.core.events",
-                "noeta.core.types", "noeta.core.deferred")
+                "noeta.core.types")
 
 
 def _source_path(module: str) -> str | None:

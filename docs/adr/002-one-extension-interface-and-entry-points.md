@@ -1,7 +1,7 @@
 # ADR-002: Every capability is a plugin behind one Extension interface, found through entry points
 
 - Status: accepted
-- Refined by: ADR-016
+- Refined by: ADR-017 (ADR-016, superseded)
 - Date: 2026-10-28
 
 ## Context

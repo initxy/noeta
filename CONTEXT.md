@@ -133,8 +133,8 @@ its own settings, so a cloned repository never starts a process by itself.
 
 ## Extension
 
-The one capability-plugin interface (`noeta/core/extension.py`): tools, context parts, commands,
-reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
+The one capability-plugin interface (`noeta/core/extension.py`): tools, `tool_changes` (tools
+computed from the others'), context parts, commands, reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
 an approving Allow satisfies asks that are not firm), `resolve_ask` (answers asks before the
 call parks), `after_tool`, `on_event`, `reduce`, `continue_state`, `inherit`, `on_context_overflow`,
 `before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is
@@ -147,11 +147,11 @@ something with `notify`; neither reaches the model as the user.
 ## Deferred tool
 
 A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
-sent only once the model loads it with `ToolSearch`, which the runner adds while any is offered
-(`noeta/core/deferred.py`). MCP tools are deferred by default. It is the one capability left in
-the kernel: a plugin cannot yet offer a tool computed from the other plugins' tools, nor
-withhold tools from a request without order-dependent `before_model` rewrites (ADR-016, with
-the plan to move `ToolSearch` into a plugin).
+sent only once the model loads it with `ToolSearch`. The `tool_search` plugin
+(`noeta/plugins/tool_search`) adds `ToolSearch` and withholds the tools not loaded through
+`Extension.tool_changes`; a tool is loaded once a `ToolReference` in the task's history or open
+batch names it. Every agent built from agent files runs it. MCP tools are deferred by default
+(ADR-017).
 
 ## Agent file
 

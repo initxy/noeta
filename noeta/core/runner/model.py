@@ -35,13 +35,16 @@ def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     assert agent is not None
     view = run.view()
     config = run.state.config
+    offer = run.tool_offer(view)
     request = build_request(
         run.state,
         model=run.model,
         system_prompt=run.state.prompt(f"system/{agent.name}", agent.system_prompt),
         identity=run.state.prompt(f"identity/{agent.name}", agent.identity),
         parts=[p for ext in run.exts for p in ext.context(view)],
-        tools=run.tools(view),
+        tools=offer.tools,
+        withheld=offer.withheld,
+        entries=offer.entries,
         effort=config.get("effort") or agent.effort,
         max_tokens=agent.max_tokens or run.rt.output_ceiling(run.model),
         output_schema=config.get("output_schema") or agent.output_schema,

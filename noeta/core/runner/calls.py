@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core import records as core_records
-from noeta.core.deferred import is_deferred
 from noeta.core.errors import UnknownTask
 from noeta.core.events import (
     Event,
@@ -120,16 +119,16 @@ def _groups(runnable: list[tuple[ToolUse, Tool]]) -> list[list[tuple[ToolUse, To
 
 async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     view = run.view()
-    tools = {t.name: t for t in run.tools(view)}
+    offer = run.tool_offer(view)
+    tools = {t.name: t for t in offer.tools}
     runnable: list[tuple[ToolUse, Tool]] = []
     asks: dict[str, Ask] = {}
     outright: set[str] = set()
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
-        wanted = tools.get(c.use.name)
-        if wanted is not None and is_deferred(wanted) \
-                and c.use.name not in run.state.loaded_tools:
-            await run.append([run.error_result(
-                c.use.id, texts.DEFERRED_NOT_LOADED.format(name=c.use.name))])
+        withheld = offer.withheld.get(c.use.name)
+        if withheld is not None:
+            # Not in the request the model saw: refused before any gate.
+            await run.append([run.error_result(c.use.id, withheld)])
             continue
         answer = run.state.answers.get(c.use.id)
         if answer is not None and answer.decision == "deny" and isinstance(answer.data, dict) \

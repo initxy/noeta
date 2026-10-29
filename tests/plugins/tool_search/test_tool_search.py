@@ -1,5 +1,6 @@
-"""Deferred tools (``noeta.core.deferred``): announced by name, loaded with
-``ToolSearch``, then sent with ``defer_loading`` for the rest of the task."""
+"""Deferred tools (the ``tool_search`` plugin): announced by name, loaded
+with ``ToolSearch``, then sent with ``defer_loading`` for the rest of the
+task."""
 
 from __future__ import annotations
 
@@ -14,13 +15,14 @@ from noeta.backends.providers.openai_compat import OpenAICompatProvider
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.deferred import PLACEHOLDER, ToolSearchTool, request_tools
 from noeta.core.events import Compacted, ToolFinished
 from noeta.core.extension import Extension, TaskView
+from noeta.core.loop.request import request_tools
 from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, Text, ToolReference, ToolResult, ToolSpec
+from noeta.plugins.tool_search import PLACEHOLDER, ToolSearch, ToolSearchTool, loaded_tools
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -45,7 +47,17 @@ def names(specs: Sequence[ToolSpec]) -> list[str]:
 
 
 def specs(tools: Sequence[Tool], loaded: Sequence[str] = ()) -> list[ToolSpec]:
-    return request_tools(tools, loaded, lambda t: t.description)
+    """The request's tool list with the plugin's changes, ``loaded`` named
+    by an earlier tool result."""
+    state = TaskState()
+    if loaded:
+        state._add(Message(role="user", content=[ToolResult(call_id="c", content=[
+            ToolReference(tool_name=n) for n in loaded])]), 1)
+    changes = ToolSearch().tool_changes(TaskView(state=state), tools)
+    if changes is None:
+        return request_tools(tools, {}, (), lambda t: t.description)
+    return request_tools([*tools, *changes.add], changes.withhold, changes.entries,
+                         lambda t: t.description)
 
 
 def test_no_deferred_tool_means_a_sorted_list_and_no_placeholder() -> None:
@@ -138,7 +150,7 @@ class CompactOnce(Extension):
         self.done = False
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        if not self.done and view.state.loaded_tools:
+        if not self.done and loaded_tools(view.state):
             self.done = True
             view.compacted(Compacted(summary="(summary)", through=view.state.last_seq))
         return request
@@ -164,7 +176,7 @@ async def test_a_loaded_tool_is_sent_and_callable_and_survives_compaction(
         reply("done"),
     ])
     ext = Offers([Fake("Read"), Fake("WebFetch", deferred=True)])
-    agent = Agent(name="a", model="m", extensions=[ext, CompactOnce()])
+    agent = Agent(name="a", model="m", extensions=[ext, ToolSearch(), CompactOnce()])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
     client = Client(store)
@@ -191,7 +203,7 @@ async def test_a_continued_task_keeps_the_tools_its_source_loaded(store: SqliteS
         reply("done"),
     ])
     ext = Offers([Fake("Read"), Fake("WebFetch", deferred=True)])
-    agent = Agent(name="a", model="m", extensions=[ext])
+    agent = Agent(name="a", model="m", extensions=[ext, ToolSearch()])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
     client = Client(store)

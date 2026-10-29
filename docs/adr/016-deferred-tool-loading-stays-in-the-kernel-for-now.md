@@ -1,6 +1,6 @@
 # ADR-016: Deferred tool loading stays in the kernel for now
 
-- Status: accepted
+- Status: superseded by ADR-017
 - Date: 2026-10-28
 - Refines: ADR-002
 

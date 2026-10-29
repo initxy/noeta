@@ -36,6 +36,7 @@ from noeta.plugins.subtasks.tool import (
     handback_sender,
 )
 from noeta.plugins.subtasks.worktree import make_agent_worktree
+from noeta.plugins.tool_search import ToolSearch
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.notices import NOTICE_GUARD
 from tests.plugins.subtasks.conftest import Probe, events, runtime
@@ -583,7 +584,7 @@ async def test_resuming_a_worktree_agent_whose_worktree_is_gone(store: SqliteSto
 async def test_send_message_is_deferred(store: SqliteStore) -> None:
     SendMessageTool.deferred = True  # type: ignore[misc]
     p = ScriptedProvider([reply("hi")])
-    rt = runtime(store, {"p": p}, parent())
+    rt = runtime(store, {"p": p}, parent(ToolSearch()))
     await Client(store).create("main", "go")
     await rt.run_until_idle()
     assert [t.name for t in p.requests[0].tools] == [

@@ -56,10 +56,16 @@ class ToolUse(Struct, tag="tool_use", tag_field="type"):
 
 
 class ToolReference(Struct, tag="tool_reference", tag_field="type"):
-    """A tool result naming a deferred tool whose schema is now loaded
-    (``noeta.core.deferred``): from the next request on, the tool is sent."""
+    """A tool result naming a deferred tool whose schema is now loaded (the
+    ``tool_search`` plugin's ``ToolSearch`` answers with them): adapters
+    send it as the vendor's tool reference, or as text."""
 
     tool_name: str
+
+
+#: The text that follows a batch's tool results in the same user message
+#: when one of them holds a :class:`ToolReference`.
+TOOL_LOADED_TEXT = "Tool loaded."
 
 
 class ToolResult(Struct, tag="tool_result", tag_field="type"):
@@ -130,8 +136,8 @@ class ToolSpec(Struct):
     name: str
     description: str
     input_schema: dict[str, Any]
-    #: A deferred tool (sent once loaded, see ``noeta.core.deferred``); the
-    #: adapter marks it so the vendor keeps it out of the cached prefix.
+    #: A deferred tool (``Tool.deferred``); the adapter marks it so the
+    #: vendor keeps it out of the cached prefix.
     defer_loading: bool = False
 
 

@@ -19,6 +19,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from msgspec.structs import replace
@@ -26,7 +27,6 @@ from msgspec.structs import replace
 from noeta.core import records as core_records
 from noeta.core import registry, snapshots
 from noeta.core.agent import Agent
-from noeta.core.deferred import with_tool_search
 from noeta.core.errors import Conflict, InboxUnread, StoreUnavailable
 from noeta.core.events import (
     Cancel,
@@ -39,7 +39,7 @@ from noeta.core.events import (
     ToolFinished,
     Waiting,
 )
-from noeta.core.extension import Extension, TaskView, task_cwd
+from noeta.core.extension import Extension, TaskView, ToolEntry, task_cwd
 from noeta.core.loop import decide
 from noeta.core.loop.state import TaskState, apply, continued, fold, new_state
 from noeta.core.prompts import load_overrides
@@ -63,6 +63,19 @@ LOAD_ATTEMPTS = 3
 
 class LostClaim(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class ToolOffer:
+    """A task's tools for one step (``TaskRun.tool_offer``)."""
+
+    #: The tools it offers: the ones a call runs.
+    tools: list[Tool]
+    #: Offered tools left out of the request: name -> the error a call to
+    #: one gets.
+    withheld: dict[str, str]
+    #: The request's entries that are no tool, by name.
+    entries: list[ToolEntry]
 
 
 class TaskRun:
@@ -505,7 +518,10 @@ class TaskRun:
         return [NewTask(task_id=c.task_id, created=c.created, queue=c.queue, inbox=[c.first])
                 for c in staged]
 
-    def tools(self, view: TaskView) -> list[Tool]:
+    def tool_offer(self, view: TaskView) -> ToolOffer:
+        """The task's tools for this step: every extension's (the first of
+        a name wins, the agent's allow and deny lists applied), then each
+        extension's ``tool_changes`` to them."""
         allowed = self.agent.allowed_tools if self.agent is not None else None
         denied = set(self.agent.denied_tools if self.agent is not None else ())
         tools: list[Tool] = []
@@ -517,7 +533,26 @@ class TaskRun:
                 if t.name not in seen:
                     seen.add(t.name)
                     tools.append(t)
-        return with_tool_search(tools)
+        offered = tuple(tools)
+        withheld: dict[str, str] = {}
+        entries: list[ToolEntry] = []
+        for ext in self.exts:
+            changes = ext.tool_changes(view, offered)
+            if changes is None:
+                continue
+            for t in changes.add:
+                if t.name not in seen:
+                    seen.add(t.name)
+                    tools.append(t)
+            for name, error in changes.withhold.items():
+                withheld.setdefault(name, error)
+            entries.extend(changes.entries)
+        return ToolOffer(tools=tools, withheld=withheld,
+                         entries=sorted(entries, key=lambda e: e.spec.name))
+
+    def tools(self, view: TaskView) -> list[Tool]:
+        """The tools the task offers (``tool_offer``'s): the ones a call runs."""
+        return self.tool_offer(view).tools
 
     @staticmethod
     def error_result(call_id: str, text: str) -> ToolFinished:

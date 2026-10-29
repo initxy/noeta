@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core import records
-from noeta.core.deferred import TOOL_LOADED_TEXT
 from noeta.core.events import (
     DEFAULT_TENANT,
     Answer,
@@ -33,6 +32,7 @@ from noeta.core.events import (
 )
 from noeta.core.prompts import resolve
 from noeta.core.types import (
+    TOOL_LOADED_TEXT,
     Block,
     Message,
     StopReason,
@@ -148,10 +148,6 @@ class TaskState:
     #: The plugins the task last recorded running with
     #: (``noeta.core.registry.pin``); ``None`` until first recorded.
     plugins: list[dict[str, str]] | None = None
-
-    #: Deferred tools a ``ToolSearch`` result loaded, in load order; kept
-    #: across compaction (``noeta.core.deferred``).
-    loaded_tools: list[str] = field(default_factory=list)
 
     usage: Usage = field(default_factory=Usage)
     #: Tool calls this task finished (a continued task counts its own).
@@ -282,8 +278,6 @@ def _on_tool_finished(state: TaskState, ev: ToolFinished, seq: int) -> None:
         state.end_turn = ev.end_turn
     if ev.note:
         state.notes.append(ev.note)
-    refs = [b.tool_name for b in ev.result.content if isinstance(b, ToolReference)]
-    state.loaded_tools += [n for n in dict.fromkeys(refs) if n not in state.loaded_tools]
     if state.calls and not state.open_calls:
         results = [c.result for c in state.calls if c.result is not None]
         content: list[Any] = list(results)
@@ -365,7 +359,7 @@ def fold_on_copy(state: TaskState, events: Sequence[Event],
 def continued(state: TaskState,
               carry: Mapping[str, Callable[[Any], Any]] | None = None) -> TaskState:
     """``state`` (another task's, folded) as the start of a task that
-    continues its conversation: messages, loaded tools and extension state
+    continues its conversation: messages and extension state
     stay (each extension's through ``carry[name]``, its
     ``Extension.continue_state``); what belongs to that task's run (its log
     positions, inbox, children, timers, open turn) does not. Calls still
@@ -377,7 +371,7 @@ def continued(state: TaskState,
            for name, value in state.ext.items()}
     out = TaskState(ext=ext, prompt_files=state.prompt_files,
                     compaction=state.compaction, last_usage=state.last_usage,
-                    call_ids=set(state.call_ids), loaded_tools=list(state.loaded_tools))
+                    call_ids=set(state.call_ids))
     for m in state.messages:
         out._add(m, 0)
     out.history, out.history_seqs = list(state.history), [0] * len(state.history)

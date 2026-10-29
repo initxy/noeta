@@ -35,12 +35,14 @@ ARGS = {"token": "{env:CHAT_TOKEN}", "header": "Bearer {env:CHAT_TOKEN}",
 
 def test_env_references_resolve_when_the_plugin_is_made(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CHAT_TOKEN", "s3cret")
-    [ext] = build_agents([AGENT], model="m", plugins={"holder": ARGS})[0].extensions
+    [ext] = build_agents([AGENT], model="m", plugins={"holder": ARGS,
+                                                     "tool_search": False})[0].extensions
     assert ext.kw == {"token": "s3cret", "header": "Bearer s3cret",  # type: ignore[attr-defined]
                       "nested": {"keys": ["s3cret", 3]}}
     pinned = registry.pin(ext)["arguments"]
     monkeypatch.setenv("CHAT_TOKEN", "rotated")
-    [again] = build_agents([AGENT], model="m", plugins={"holder": ARGS})[0].extensions
+    [again] = build_agents([AGENT], model="m", plugins={"holder": ARGS,
+                                                       "tool_search": False})[0].extensions
     assert again.kw["token"] == "rotated"  # type: ignore[attr-defined]
     assert registry.pin(again)["arguments"] == pinned  # a rotated secret is the same plugin
 

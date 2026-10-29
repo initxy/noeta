@@ -86,6 +86,11 @@ MEMORY_SCOPES = ("user", "project", "local")
 #: (file, field) pairs already warned about: a reload does not repeat them.
 _WARNED: set[tuple[str, str]] = set()
 
+#: Plugins every agent runs with, whether its file names them or not (a host
+#: setting can still turn one off): any plugin's tool may be deferred, and
+#: only ``tool_search`` loads deferred tools.
+ALWAYS_PLUGINS: tuple[str, ...] = ("tool_search",)
+
 PluginEntry = tuple[str, Mapping[str, Any]]
 #: The host's setting of one plugin: its arguments, a ready instance, or on/off.
 PluginSetting = Mapping[str, Any] | Extension | bool
@@ -417,7 +422,8 @@ def build_agents(
     leave it out of every agent. ``add`` names more plugins per agent
     (``"*"``: every agent), after the file's own; a plugin an agent already
     has is not added twice. A plugin is made once per set of arguments and
-    shared by every agent that names it with those arguments. ``extensions``
+    shared by every agent that names it with those arguments. Every agent also
+    gets the :data:`ALWAYS_PLUGINS` it does not name. ``extensions``
     are added after every agent's own. ``made`` keeps the plugins made, so a
     later build with it reuses each one whose code and arguments are the same
     (a reload keeps what the unchanged plugins hold in memory)."""
@@ -448,6 +454,13 @@ def build_agents(
     for f in by_name.values():
         entries = list(f.plugins if f.plugins is not None else default_plugins)
         names = {name for name, _ in entries}
+        for name in ALWAYS_PLUGINS:
+            if name not in names:
+                names.add(name)
+                # Before compaction, which stays last (it reuses the request).
+                at = len(entries) - 1 if entries and entries[-1][0] == "compaction" \
+                    else len(entries)
+                entries.insert(at, (name, {}))
         for name, args in (*add.get(f.name, ()), *add.get("*", ())):
             if name not in names:
                 names.add(name)
