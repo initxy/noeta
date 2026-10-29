@@ -43,8 +43,9 @@ servers and runs on many machines.
   — `audit-architecture.md` (commit plan S1–S40, F1–F16), `audit-multimachine.md`,
   `research-extensibility.md` (table, B1–B9, three example plugins), `audit-facade-parity.md`.
 - Claude Code baseline: 2.1.312 (recordings and the installed CLI agree).
-- The parity spec `2026-10-28-claude-code-parity.md` stays the home of the per-feature parity
-  checklist; phase 4 here closes its open Plan items.
+- The parity spec `archive/2026-10-28-claude-code-parity.md` held the per-feature parity
+  checklist; phase 4 here closed its open Plan items, and what it left open is listed under
+  "Not yet matched" in `parity/deviations.md`.
 
 ## Decisions
 
