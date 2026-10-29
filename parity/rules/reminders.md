@@ -113,8 +113,8 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | id | rule |
 |---|---|
 | rem.quiet-nudge.1 | Content: the user has not heard from the model for a while; keep them updated when there is something worth telling (a finding, a change of plan). |
-| rem.quiet-nudge.2 | Trigger (observed twice in `m1`): after the fifth consecutive assistant step that produced tool calls but no text since the last user input (a prompt, or a plan approval). Whether the real trigger is step count or elapsed time cannot be told from the recordings. |
-| rem.quiet-nudge.3 | Placement: `role: "system"` message after the tool-result message, joined before the `<total_tokens>` line. Sent once per silent stretch; persists. |
+| rem.quiet-nudge.2 | Trigger (observed twice in `m1`): after the fifth consecutive assistant step that produced tool calls but no text since the last user input (a prompt, or a plan approval). The 2.1.312 bundle counts steps (`silent_turn_reminder`: 5 steps; a seconds-based form exists behind a setting). |
+| rem.quiet-nudge.3 | Placement: `role: "system"` message after the tool-result message, joined before the `<total_tokens>` line. Persists. A silent stretch is nudged again after five more tool-only steps since its last nudge, three times at most (2.1.312 bundle; the recordings' stretches were too short to show a second). |
 
 ## tool-loaded
 
