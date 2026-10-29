@@ -120,6 +120,10 @@ class Runtime:
     #: Per task: claims in a row whose log could not be read or folded here
     #: (``TaskRun._unreadable``).
     _unreadable: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    #: Per task: claims in a row, and the log's last seq, that found a
+    #: pinned plugin missing here (``TaskRun._plugin_missing``).
+    _plugin_missing: dict[str, tuple[int, int]] = field(default_factory=dict, init=False,
+                                                        repr=False)
 
     def __post_init__(self) -> None:
         # The snapshot version is of the code this process runs: hash it
@@ -187,6 +191,11 @@ class Runtime:
                 await asyncio.shield(unholding)
 
         return Release(tree, release)
+
+    def holds(self, root_id: str) -> bool:
+        """Whether this worker holds the tree of ``root_id`` (not lost)."""
+        tree = self._holds.get(root_id)
+        return tree is not None and not tree.lost
 
     async def _take_hold(self, root_id: str) -> tuple[float, int | None]:
         """``Store.hold`` without an epoch, and this process's monotonic

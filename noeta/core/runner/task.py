@@ -83,6 +83,8 @@ _NEWER_FORMAT = re.compile(r"Invalid (enum )?value '")
 
 
 def _newer_format(exc: Exception) -> bool:
+    if isinstance(exc, core_records.NewerRecord):
+        return True
     return isinstance(exc, msgspec.ValidationError) and bool(_NEWER_FORMAT.match(str(exc)))
 
 
@@ -275,12 +277,33 @@ class TaskRun:
         prompts = core_records.Prompts(files=found)
         view.record(CORE, prompts.kind, prompts.data())
 
+    async def _plugin_missing(self, missing: list[str]) -> bool:
+        """A pinned plugin this worker lacks, as in a rolling install: the
+        lease runs out with nothing written (a worker that has it claims the
+        task), and after ``LOAD_ATTEMPTS`` such claims in a row here with the
+        log unchanged the task ends failed. Always ``False``."""
+        seq = self.state.last_seq
+        tries, at = self.rt._plugin_missing.get(self.task_id, (0, seq))
+        tries = tries + 1 if at == seq else 1
+        if tries < LOAD_ATTEMPTS:
+            counts = self.rt._plugin_missing
+            if self.task_id not in counts and len(counts) >= UNREADABLE_KEEP:
+                counts.pop(next(iter(counts)))
+            counts[self.task_id] = (tries, seq)
+            log.warning("task %s: runs with %s, which this worker does not have; leaving it "
+                        "to a worker that has them", self.task_id, ", ".join(missing))
+            return False
+        self.rt._plugin_missing.pop(self.task_id, None)
+        await closing.end(self, "failed", self.state.last_answer,
+                          texts.PLUGIN_MISSING.format(names=", ".join(missing)))
+        return False
+
     async def _record_start(self) -> bool:
         """At each pickup, before ``on_start``: record the prompt override
         files when the task first starts, and the plugins it runs with then
         and whenever a pickup finds them changed (a reload, an upgrade).
-        ``False`` (the task ended failed) when a plugin it recorded is
-        missing here: it never runs without it."""
+        ``False`` when a plugin it recorded is missing here
+        (:meth:`_plugin_missing`): it never runs without it."""
         view = self.view()
         if self.state.prompt_files is None:
             await self._record_prompt_files(view)
@@ -290,10 +313,8 @@ class TaskRun:
             missing = sorted({str(p.get("name")) for p in pinned}
                              - {p["name"] for p in current})
             if missing:
-                await self.flush(view)
-                await closing.end(self, "failed", self.state.last_answer,
-                               texts.PLUGIN_MISSING.format(names=", ".join(missing)))
-                return False
+                return await self._plugin_missing(missing)
+            self.rt._plugin_missing.pop(self.task_id, None)
             if pinned != current:
                 log.info("task %s: plugins changed since it last ran", self.task_id)
         if pinned != current:

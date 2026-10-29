@@ -28,8 +28,8 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   taken from the server's). `noeta -p` always runs here and refuses `--server`.
 - **Same settings everywhere.** Each process reads its own `~/.noeta` (`NOETA_HOME`): agents,
   plugins, `config.toml`, tenant directories. Ship the same copy to every machine; a worker
-  missing a plugin a task was started with fails that task with `plugin_missing` instead of
-  running it without.
+  missing a plugin a task was started with never runs that task without it
+  ([extending](extending.md#durable-and-multi-machine)).
 - **Server directories and bypass mode.** A worker hides from other tenants' tasks the
   directory it started in, but knows nothing of where `noeta serve` started or its
   `--allow-root` paths: list them as `dirs = ["/srv/app", ...]` under `[server]` in

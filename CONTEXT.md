@@ -103,8 +103,9 @@ package's `add_to` is ignored). `noeta plugin add <git-url>@<commit>` installs o
 
 A task records the plugins it runs with (`records.Plugins`: each one's `registry.pin` — name,
 source, version or file hash, arguments hash) when it first starts and whenever a pickup finds
-them changed. A worker missing a recorded plugin ends the task failed with `plugin_missing`
-instead of running it without (`noeta/core/runner/task.py`). A reload (the TUI's
+them changed. A worker missing a recorded plugin never runs the task without it: it lets the
+lease run out, and fails the task with `plugin_missing` after `LOAD_ATTEMPTS` such claims in a
+row (`TaskRun._plugin_missing`). A reload (the TUI's
 `/reload-plugins`, `LocalApp.reload_plugins`; on servers a rolling restart) re-imports plugin
 files and remakes the agents: a task runs the new code from its next turn, recorded so.
 

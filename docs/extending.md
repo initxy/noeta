@@ -94,12 +94,16 @@ is itself a repository needs `<url>@<commit>`).
 ## Durable and multi-machine
 
 - **Pinned plugin set.** A task records which plugins it runs with (name, package version or
-  file hash, a hash of the arguments) when it starts. A worker that lacks one fails the task with
-  `plugin_missing` rather than running it without; a changed set is recorded again.
+  file hash, a hash of the arguments) when it starts. A worker that lacks one never runs the task
+  without it: it lets its lease run out, so a worker that has the plugin picks the task up, and
+  after three such claims in a row with nothing new in the log it fails the task with
+  `plugin_missing`. A changed set is recorded again.
 - **Reload.** `/reload-plugins` re-imports plugin files and remakes the agents. A turn in
   progress finishes on the old code; each task runs the new code from its next turn. On servers
   the reload is a rolling restart: stop one `noeta worker` at a time (its running tasks go back
-  to the store and continue on another worker from their logs), install, start it again.
+  to the store and continue on another worker from their logs), install, start it again. Finish
+  within a few leases: a task pinned to a new plugin that keeps landing on a worker without it
+  fails after three of its leases.
   Different code on two workers for the same task is visible in its log and never silent.
 - **Channels** run in every `noeta worker` / `noeta serve` that enables them; inbound posts are
   idempotent, so several replicas are safe, and replies leave from the task's one writer.

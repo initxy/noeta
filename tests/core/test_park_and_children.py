@@ -143,6 +143,26 @@ async def test_a_child_is_created_on_its_parents_queue_unless_one_is_named(
     assert child.queue == lands
 
 
+async def test_a_child_on_a_queue_this_worker_does_not_serve_is_refused_while_it_holds_the_tree(
+        store: SqliteStore) -> None:
+    """A held tree's tasks run only on its holder: a child on a queue the
+    holder does not serve would wait, unclaimed, until the hold ends."""
+    provider = ScriptedProvider([reply("", ("Delegate", {"prompt": "go", "queue": "kids"})),
+                                 reply("ok")])
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Delegate()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    release = await rt.hold(tid)  # as a background job does
+    try:
+        await rt.run_until_idle()
+    finally:
+        await release()
+    assert await client.tasks(parent_id=tid) == []
+    [result] = [r.event.result for r in await client.events(tid)
+                if isinstance(r.event, ToolFinished)]
+    assert result.is_error and "kids" in result.text
+
+
 @pytest.mark.parametrize("source_tenant", ["acme", "beta"])
 async def test_a_child_continues_only_its_own_tenants_conversation(
         store: SqliteStore, source_tenant: str) -> None:

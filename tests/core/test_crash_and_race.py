@@ -304,6 +304,7 @@ async def test_a_workers_count_of_unreadable_logs_is_bounded(
     b'{"type":"FutureEvent"}',
     b'{"type":"ModelReplied","response":{"message":{"role":"assistant",'
     b'"content":[{"type":"future_block"}]},"usage":{}}}',
+    b'{"type":"ExtensionRecorded","extension":"core","kind":"future_record","data":{}}',
 ])
 async def test_a_log_written_by_a_newer_version_is_left_to_it(tmp_path: Path,
                                                              data: bytes) -> None:

@@ -251,6 +251,12 @@ def event(record: CoreRecord, *, message: Message | None = None) -> ExtensionRec
                              message=message)
 
 
+class NewerRecord(ValueError):
+    """Folding met a core record of a kind this version does not know: a
+    newer version wrote it. Skipping it could fold a different task (a newer
+    way to park or end a turn), so the task is left to a newer worker."""
+
+
 def decode(ev: Event) -> CoreRecord | None:
     """``ev`` as a core record, or ``None`` when it is not one."""
     if not isinstance(ev, ExtensionRecorded) or ev.extension != CORE:
