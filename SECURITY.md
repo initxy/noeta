@@ -57,8 +57,7 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   needs that project's consent).
 - **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or one made on first
   start and printed once; `~/.noeta/server-token`, owner-only, keeps only its SHA-256);
-  `--no-token` is accepted only on a loopback address and with no tenant tokens or tenant
-  directories. Only the WebSocket route also takes the token as
+  `--no-token` is accepted only on a loopback address. Only the WebSocket route also takes the token as
   `?token=` (a browser cannot set the header there); `noeta serve` logs it as `REDACTED`
   (host code serving `create_app` calls `noeta.host.http.redact_token_logs`).
   Other web origins are refused, and so are `Host` headers other than the loopback names
@@ -66,37 +65,11 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   `--allow-host`, `Host` is not checked: put the server behind a proxy that checks it, or
   name the hosts). No request may start or switch a
   task into `bypassPermissions` unless the server allows it, and tasks run only inside the
-  server's directory or `--allow-root` paths. Tenant tokens (`noeta token add`) are stored as
-  digests and confine every request to that tenant's tasks, workspace (required: a tenant
-  without one starts no task) and queues; a request sets only the task config and signals a
-  client may. A way around any of this is a
-  vulnerability.
-- **Tenants are separated at the API, not by the OS.** Their tools run as the worker's OS
-  user, so without a boundary a tenant can read what that user can (`~/.noeta`, the store, the
-  worker's environment). `noeta serve` and `noeta worker` refuse other tenants unless the
-  sandbox confines every command (Linux only: on macOS Seatbelt is not a boundary between
-  tenants, so they need a container or a remote exec env), or the operator sets `[server] shared_os_user_tenants =
-  true` (tenants then trust each other). A non-default tenant's file tools (fenced
-  in-process, whatever the deployment) never reach a protected set, whatever its rules,
-  mode or approvals: noeta's home (but its own corners: its spilled outputs and
-  transcripts, its plans and memory, the operator's skills and workflows to read), the
-  store's files, `/etc/noeta`, `/proc`, what other tasks leave in the temp directories,
-  other tenants' workspaces, the server's own directories (the default tenant's
-  workspace, its `.env`), the credential stores of every home directory (`~/.ssh`,
-  `~/.aws`, `~/.config/gh`, `~/.netrc`, ...) and the operator's sandbox `denyRead`. They
-  write only in the tenant's workspace, its own corners and its temporary directory; the
-  operator's `additionalDirectories` are not its. The rest of what the OS user can read
-  stays readable to them. Under the sandbox its commands (`Bash`, a skill's script, any
-  `git` noeta runs in the tenant's checkout with the hooks and programs its config names)
-  cannot read the protected set either and write only where its file tools may, and
-  code noeta runs on its own outside the sandbox never comes from the tenant's workspace;
-  it starts no local MCP server (`docs/server.md`, "What separates tenants",
-  lists what is and is not a boundary). A tenant reaching another tenant's tasks through the
-  API, or a file tool or command reaching the protected set or writing outside its places,
-  is a vulnerability; a tenant reading what the OS user can outside the protected set (an
-  operator puts other secrets in `denyRead`), anything after the operator chose shared OS
-  users, or through what the operator configured to run outside the sandbox (hooks, MCP
-  servers of the default tenant), is not.
+  server's directory or `--allow-root` paths; a request sets only the task config and
+  signals a client may. A way around any of this is a vulnerability.
+- **One server serves one party.** Everyone holding the token has the same rights, and every
+  task's tools run as the worker's OS user. To keep parties apart, run a server (and store)
+  per party, or isolate commands with the sandbox or a container exec env.
 - **Plugins are code you install.** They run in-process with noeta's rights; installing one
   (`noeta plugin add`, a plugin file, a package) is trusting it. noeta runs nothing from a plugin
   while installing it, and a machine policy (`/etc/noeta/config.toml` `[policy]`) can allow or

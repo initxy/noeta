@@ -95,7 +95,10 @@ class Client:
         conversation idempotently, create it without ``input`` and ``send``
         each message with its own ``dedupe_key``.
         ``history_from`` starts it from another task's conversation, up to
-        that task's event ``history_through`` (a fork, a rewind)."""
+        that task's event ``history_through`` (a fork, a rewind); a source
+        that is no task raises ``UnknownTask``."""
+        if history_from is not None:
+            await self.get(history_from)
         tid = task_id or uuid.uuid4().hex
         created = await pin_history(self.store, TaskCreated(
             agent=agent, config=dict(config or {}), root_id=tid,

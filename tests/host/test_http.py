@@ -116,6 +116,11 @@ async def test_token_is_required(served: tuple[str, ScriptedProvider]) -> None:
         auth = {"authorization": "Bearer secret"}
         for path in ("/tasks/nope", "/tasks/nope/events", "/tasks/nope/pending"):
             assert (await http.get(path, headers=auth)).status_code == 404
+        rewind = await http.post("/tasks/nope/rewind", json={"index": 0}, headers=auth)
+        assert rewind.status_code == 404
+        fork = await http.post("/tasks", json={"agent": "main", "history_from": "nope"},
+                               headers=auth)
+        assert fork.status_code == 404
 
 
 async def test_create_app_needs_a_token_unless_auth_is_turned_off(tmp_path: Path) -> None:
