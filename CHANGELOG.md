@@ -509,6 +509,19 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   ran only at a turn's first model call, so a `when="now"` message (or one held behind open
   calls) reached the model unchecked, and a block at the next turn erased it after the model
   had answered it. It now runs before any model call that carries new messages.
+- **A blocked `/skill` or `/command` leaves nothing behind.** The skill stayed active with
+  the blocked arguments (re-attached after a compaction; a later `Skill` call with the same
+  arguments got the "already loaded" note) and the command's `allowed-tools` stayed
+  pre-approved. For plugin authors: a reducer whose plugin holds state is also folded with
+  `records.ERASED_KIND` (`{"seqs": [...]}`) when messages are erased.
+- **A `UserPromptSubmit` hook added to a running task checks only the messages the model has
+  not answered.** Its first run checked the whole history, and a block erased messages the
+  model had already answered. A blocked message released with a stop's interruption marker
+  no longer erases the marker.
+- **`Bash`: a foreground command whose tree hold cannot be taken (a store error) is killed at
+  its timeout** instead of being left running unmanaged.
+- **`ToolSearch` scores each query term on its own:** a term found only in a tool's whole
+  name (`ack__send`) counts even after an earlier term scored.
 - **`Bash`: a fast foreground command's output is kept about 3x to 5x faster.** The log
   keeper checked the file's size after every 64 KB read (two processes each); it now takes up
   to 16 reads per check while reads come back full.
