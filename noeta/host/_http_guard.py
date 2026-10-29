@@ -22,6 +22,7 @@ from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
 from noeta.core.tenants import token_digest
+from noeta.host._errors import error_text
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -346,7 +347,7 @@ class Guard:
             except Refused as exc:
                 return JSONResponse({"error": str(exc)}, status_code=403)
             except (msgspec.ValidationError, ValueError, KeyError, IndexError) as exc:
-                return JSONResponse({"error": str(exc)}, status_code=400)
+                return JSONResponse({"error": error_text(exc)}, status_code=400)
         return wrapped
 
 

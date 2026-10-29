@@ -1138,3 +1138,7 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - A tenant's memory directory is no longer created where the tenant fence refuses writes:
   the worker made it with `mkdir -p` itself, following a link in the tenant's `.noeta/` (or
   a repository's shared directory outside the workspace) to a place outside it.
+- The HTTP server and `/stream-json` control requests no longer send a client the text of an
+  error that a library or the system raised (it may name the server's paths); the client
+  gets a generic message and the server logs the error. Errors noeta raises for the caller
+  keep their text.
