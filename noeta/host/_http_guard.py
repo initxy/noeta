@@ -15,8 +15,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from noeta.core.client import ClientAPI, Input
+from noeta.core.commands import Typed
 from noeta.core.errors import UnknownTask
 from noeta.core.events import DEFAULT_TENANT, Recorded
+from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
 from noeta.core.tenants import token_digest
@@ -202,6 +204,7 @@ class Scope:
     """What a request of one tenant reaches: its scoped client, that client
     guarded, and a stream-json front on it."""
 
+    tenant: str
     client: Any
     guarded: GuardedClient
     front: Any
@@ -230,14 +233,26 @@ def _token_lookup(token: str | None, tokens: Any) -> Callable[[str], str | None]
 
 
 class _GuardedFront:
-    """A stream-json front whose ``client`` is guarded."""
+    """A stream-json front whose ``client`` is guarded and whose commands
+    run as its tenant's, whatever tenant a caller's context names."""
 
-    def __init__(self, front: Any, client: GuardedClient) -> None:
+    def __init__(self, front: Any, client: GuardedClient, tenant: str) -> None:
         self._front = front
         self.client = client
+        self._tenant = tenant
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._front, name)
+
+    async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
+        found: list[Command] = await self._front.commands(
+            agent, dataclasses.replace(ctx, tenant=self._tenant))
+        return found
+
+    async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
+        typed: Typed | None = await self._front.run_command(
+            agent, dataclasses.replace(ctx, tenant=self._tenant), text)
+        return typed
 
 
 #: ``Host`` names a server on a loopback address answers to.
@@ -286,8 +301,8 @@ class Guard:
                                     roots=self._roots, workspace=workspaces.get(tenant),
                                     queues=self._queues.get(tenant, tenant_queues(tenant)),
                                     tenant=tenant, others=others)
-            found = self._scopes[tenant] = Scope(scoped, guarded,
-                                                 _GuardedFront(self._serving, guarded))
+            found = self._scopes[tenant] = Scope(tenant, scoped, guarded,
+                                                 _GuardedFront(self._serving, guarded, tenant))
         return found
 
     def tenant(self, headers: Any, query: Any = None) -> str | None:

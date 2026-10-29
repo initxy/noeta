@@ -103,9 +103,8 @@ class Schedule(Extension):
                 else texts.CRON_TICK
         cwd = view.cwd
         try:
-            expanded = await expand_with(view.extensions, CommandContext(cwd=cwd,
-                                                                         task_id=view.task_id),
-                                         prompt.strip())
+            ctx = CommandContext(cwd=cwd, task_id=view.task_id, tenant=view.state.tenant)
+            expanded = await expand_with(view.extensions, ctx, prompt.strip())
         except Exception:  # noqa: BLE001 — a command that fails to expand is sent as typed
             expanded = None
         return expanded or prompt

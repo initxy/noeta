@@ -20,6 +20,7 @@ from acp import schema
 from noeta.core import models, records
 from noeta.core.commands import parse_command
 from noeta.core.events import (
+    DEFAULT_TENANT,
     ExtensionRecorded,
     InputTaken,
     ModelCalled,
@@ -256,7 +257,8 @@ class NoetaAcpAgent:
         return schema.SetSessionConfigOptionResponse(config_options=options)
 
     def _command_context(self, session_id: str) -> CommandContext:
-        return CommandContext(cwd=self._cwd.get(session_id) or os.getcwd(), task_id=session_id)
+        return CommandContext(cwd=self._cwd.get(session_id) or os.getcwd(), task_id=session_id,
+                              tenant=DEFAULT_TENANT)
 
     async def _announce_commands(self, session_id: str) -> None:
         """The agent's plugin commands, as the editor's slash commands."""

@@ -251,7 +251,7 @@ async def test_a_command_in_its_tags_puts_the_body_in_the_persons_turn(h: Harnes
 
     d = write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $ARGUMENTS.\n")
     skills = Skills()
-    text = await expand_with([skills], CommandContext(cwd=str(h.work)), "/notes v0.2")
+    text = await expand_with([skills], CommandContext(cwd=str(h.work), tenant="default"), "/notes v0.2")
     assert text == ("<command-message>notes</command-message>\n<command-name>/notes"
                     "</command-name>\n<command-args>v0.2</command-args>")
     h.provider.add(reply("ok"))
@@ -687,7 +687,7 @@ async def test_a_tenants_command_list_skips_a_skill_linked_outside(
     acme = {c.name: c.description for c in
             await skills.commands(CommandContext(cwd=str(h.work), tenant="acme"))}
     assert acme == {"mine": "My own."}
-    default = await skills.commands(CommandContext(cwd=str(h.work)))
+    default = await skills.commands(CommandContext(cwd=str(h.work), tenant="default"))
     assert {c.name for c in default} == {"mine", "leak"}
 
 

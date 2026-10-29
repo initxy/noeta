@@ -1112,3 +1112,8 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   `noeta serve --no-worker` and separate workers, serve's working directory and
   `--allow-root` paths were readable to other tenants' tasks (and a worker started in `/`
   hid no server directory), and a worker's tasks could be switched into bypassPermissions.
+- **A tenant's slash commands over `/stream-json` run as that tenant.** The stream-json
+  front (WebSocket and POST) listed and ran commands as the default tenant, so a tenant's
+  `/mcp__…` command started the server's local stdio MCP servers and used the default
+  tenant's connections; a scheduled `/loop` command expanded the same way. For plugin
+  authors: `CommandContext.tenant` is now required (keyword only), so every caller names it.

@@ -92,6 +92,6 @@ async def test_config_toml_adds_it_to_main(tmp_path: Path,
     main = app.runtime.agents["main"]
     [hello] = [e for e in main.extensions if e.name == "hello"]
     assert hello.greeting == "Yo"  # type: ignore[attr-defined]
-    ctx = CommandContext(cwd=str(tmp_path))
+    ctx = CommandContext(cwd=str(tmp_path), tenant="default")
     assert await expand_command(main, ctx, "/greet Ada") == "Please greet Ada."
     await app.store.close()

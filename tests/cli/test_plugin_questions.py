@@ -170,7 +170,7 @@ async def test_mcp_servers_in_claude_codes_shape() -> None:
 
     try:
         mcp = Mcp({"fake": {"command": sys.executable, "args": [FAKE_MCP]}}, pool=pool)
-        [command] = await mcp.commands(CommandContext(cwd="/"))
+        [command] = await mcp.commands(CommandContext(cwd="/", tenant="default"))
         assert command.name == "mcp__fake__review"
     finally:
         await pool.close()
