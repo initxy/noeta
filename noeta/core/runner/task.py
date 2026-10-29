@@ -100,7 +100,18 @@ class TaskRun:
         keeper = asyncio.create_task(self._keep_claim())
         unsubscribe = self.store.on_change(self._on_change)
         try:
-            await self.load()
+            try:
+                await self.load()
+            except (Conflict, LostClaim, StoreUnavailable):
+                raise
+            except Exception as exc:
+                # The log could not even be read and folded (nothing was written).
+                log.exception("task %s: could not load", self.task_id)
+                try:
+                    await self._unreadable(exc)
+                except Exception:  # claimed again once the lease runs out
+                    log.exception("task %s: could not end it failed", self.task_id)
+                return
             self.rt._unreadable.pop(self.task_id, None)
             self.snapshots.write_loaded()
             if self.agent is None:
@@ -117,13 +128,10 @@ class TaskRun:
             # The store is unreachable: stop; the lease runs out and the task
             # is claimed again once the store is back.
             log.warning("task %s: store error, stopping: %s", self.task_id, exc)
-        except Exception as exc:
-            # The log could not even be read and folded (nothing was written).
+        except Exception:
+            # Even failing the turn failed (the log itself read fine): the
+            # task is claimed again once the lease runs out.
             log.exception("task %s: could not run", self.task_id)
-            try:
-                await self._unreadable(exc)
-            except Exception:  # claimed again once the lease runs out
-                log.exception("task %s: could not end it failed", self.task_id)
         finally:
             unsubscribe()
             keeper.cancel()

@@ -417,7 +417,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - **A task whose log cannot be read no longer loops forever.** A log no claim could read or
   fold left the task `running` to be claimed again on every lease; after three such claims in
   a row on a worker it now ends `failed` (`unreadable_log: ...` with the last error), its
-  parent gets `ChildEnded` and its children are cancelled.
+  parent gets `ChildEnded` and its children are cancelled. Only a failure to load counts: one
+  raised later (failing the turn failed too) is logged and the task claimed again.
 - **An interrupted reply keeps the thinking it finished.** Only the streamed text was kept;
   completed thinking blocks (signature included) now go back ahead of it
   (`TurnStopped.thinking`; older records fold as before).
