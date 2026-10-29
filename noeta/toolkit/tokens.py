@@ -38,6 +38,19 @@ def estimate_tokens(text: str) -> int:
     return cjk + (other + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
 
 
+def prefix_within(text: str, max_tokens: int, suffix: str = "") -> int:
+    """The length of the longest prefix of ``text`` that, followed by
+    ``suffix``, estimates at most ``max_tokens``."""
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_tokens(text[:mid] + suffix) <= max_tokens:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def resident_budget(model: str) -> int:
     """1 % of ``model``'s catalog window, capped at 4,096 tokens."""
     if not model:

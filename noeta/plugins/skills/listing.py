@@ -23,7 +23,7 @@ from noeta.plugins.skills.registry import (
     SkillRegistry,
     strip_argument_placeholder,
 )
-from noeta.toolkit.tokens import estimate_tokens
+from noeta.toolkit.tokens import estimate_tokens, prefix_within
 
 __all__ = [
     "ADDED_HEADER",
@@ -60,14 +60,7 @@ ADDED_HEADER = "New skills are available via the `Skill` tool:"
 
 def _clip_to_tokens(text: str, max_tokens: int, marker: str) -> str:
     """The longest prefix of ``text`` that, with ``marker``, fits."""
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if estimate_tokens(text[:mid] + marker) <= max_tokens:
-            lo = mid
-        else:
-            hi = mid - 1
-    return text[:lo].rstrip() + marker
+    return text[:prefix_within(text, max_tokens, marker)].rstrip() + marker
 
 
 def short_summary(text: str) -> str:
