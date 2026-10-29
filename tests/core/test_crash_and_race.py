@@ -4,6 +4,7 @@ a finished tool, and racing runners never double-write."""
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
+from noeta.core.errors import StoreUnavailable
 from noeta.core.events import Event, ToolFinished, ToolStarted
 from noeta.core.runner import INTERRUPTED_CALL_ERROR, Runtime
 from noeta.core.store import Appended, Claim, NewTask, Patch, Post
@@ -178,3 +180,26 @@ async def test_racing_runtimes_never_double_run(tmp_path: Path, backend: str,
         assert sum(isinstance(e, ToolStarted) for e in events) == 2
     for s in stores:
         await s.close()
+
+
+class RenewFails(SqliteStore):
+    async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
+        raise StoreUnavailable("the store is unreachable")
+
+
+async def test_a_lease_that_cannot_be_renewed_is_given_up_by_the_local_clock(
+        tmp_path: Path) -> None:
+    """``lease_until`` is the store's clock: a store clock running ahead must
+    not keep a runner going past its lease when it cannot renew it."""
+    from noeta.core.runner.task import TaskRun
+
+    store = RenewFails(str(tmp_path / "t.db"))
+    rt = Runtime(store=store, agents={}, provider_for=lambda _m: None,  # type: ignore[arg-type,return-value]
+                 lease_seconds=0.3)
+    ahead = time.time() + 3600
+    run = TaskRun(rt, Claim(task_id="t", worker=rt.worker, epoch=1, lease_until=ahead))
+    try:
+        await asyncio.wait_for(run._keep_claim(), 2.0)
+        assert run._lost
+    finally:
+        await store.close()

@@ -89,6 +89,10 @@ class TaskRun:
         self.reducers: dict[str, Any] = {}
         self._step: asyncio.Task[Any] | None = None
         self._lost = False
+        #: When the claim's lease runs out by this process's monotonic clock
+        #: (``Claim.lease_until`` is the store's clock, which may differ):
+        #: counted from just before the last successful renewal was sent.
+        self._lease_deadline = time.monotonic() + rt.lease_seconds
         self._write_lock = asyncio.Lock()
         self._env: Any = None
         #: The text the model call in flight has streamed so far, and the
@@ -342,10 +346,11 @@ class TaskRun:
         interval = max(self.rt.lease_seconds / 3, 0.05)
         while True:
             await asyncio.sleep(interval)
+            sent = time.monotonic()
             try:
                 renewed = await self.store.renew(self.claim, self.rt.lease_seconds)
             except Exception as exc:  # noqa: BLE001 — the keeper must never die silently
-                if time.time() + interval < self.claim.lease_until:
+                if time.monotonic() + interval < self._lease_deadline:
                     log.warning("task %s: renew failed, retrying: %s", self.task_id, exc)
                     continue
                 log.warning("task %s: renew kept failing; giving the task up: %s",
@@ -357,6 +362,7 @@ class TaskRun:
                     self._step.cancel()
                 return
             self.claim = renewed
+            self._lease_deadline = sent + self.rt.lease_seconds
 
     def _on_change(self, task_id: str, kind: str) -> None:
         if task_id == self.task_id and kind == "posted" and self._step is not None:
