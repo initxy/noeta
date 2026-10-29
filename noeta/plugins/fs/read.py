@@ -27,6 +27,8 @@ from noeta.core.types import Image
 from noeta.plugins.fs._missing import missing_file_message
 from noeta.plugins.fs._read_formats import (
     MAX_READ_TOKENS,
+    NOTEBOOK_MAX_BYTES,
+    notebook_too_large,
     read_notebook,
     read_pdf,
     read_size_tokens,
@@ -362,6 +364,8 @@ class ReadTool:
             return await read_pdf(self.name, env, resolved, display, size, input.get("pages"))
 
         if posixpath.splitext(resolved)[1] == ".ipynb":
+            if size > NOTEBOOK_MAX_BYTES:
+                return notebook_too_large(self.name)
             try:
                 raw_nb = b"".join([c async for c in chunks()])
             except OSError as exc:

@@ -406,6 +406,32 @@ servers and runs on many machines.
   filter is needed); tenants' commands are then refused through `failIfUnavailable`, which
   a multi-tenant server needs anyway (or the operator chose `shared_os_user_tenants`).
 
+- D60 (`os-fix-r7tools`) A prompt a `UserPromptSubmit` hook blocks is erased as Claude Code
+  does: the hook records a core `erased` entry with the log seqs of the person's messages it
+  blocked, and the fold drops them from `messages` and `history` (the log keeps them).
+- D61 (`os-fix-r7tools`) A foreground `Bash` command's final directory still goes through a
+  descriptor, not the cwd file's path: the wrapper moves the job's fd 3 to fd 254 and closes
+  fd 3 before the command runs. A path would have to be writable inside the sandbox; a
+  descriptor passes through it.
+- D62 (`os-fix-r7tools`) A foreground job's log past `log_max_bytes` keeps its first and last
+  quarter around a line saying the middle was not kept (cut again each time it reaches the
+  cap), so the result's last 256 KB is the real end. Background jobs keep their head.
+- D63 (`os-fix-r7tools`) The skills plugin loads the skill registry once per task and input
+  taken (`TaskState.inbox_read`) for the person's message, `context: fork` and the path
+  unlock; the `Skill` tool loads fresh.
+- D64 (`os-fix-r7tools`) A worktree removal queued for a running job stays in the worker's
+  memory; the caller's note says a restart leaves the worktree. No sweep of clean agent
+  worktrees at start: one may belong to an agent running on another worker. Resuming the
+  agent cancels the queued removal.
+- D65 (`os-fix-r7tools`) An MCP OAuth refresh clears the saved tokens only on `invalid_grant`,
+  and holds the token file's lock from the read to the write; tokens renewed meanwhile are
+  used instead of refreshing again.
+- D66 (`os-fix-r7tools`) `Edit` / `Write` compute their diff in a thread and skip it past a
+  million characters (before and after together); the display says the file was too large
+  to diff.
+- D67 (`os-fix-r7tools`) An agent's `project` / `local` memory is under the repository's main
+  checkout (auto memory's workspace), so an agent in a temporary worktree keeps it.
+
 ## Plan
 
 ### Phase 0 — security
@@ -517,3 +543,4 @@ servers and runs on many machines.
 - 2026-10-29 `os-fix-r7docs` (from `os-structure` f1acec64), the final review's round-7 docs findings, one commit per fix, make check green after each (2410 passed, 60 skipped, 88.55% at the end): the README no longer claims prompt text is in our own words (D39, ADR-020) e1aaf3b7; distill keeps a thinking block's place but not its text, which quoted Claude Code's system prompt in `m5`, and `parity/2.1.312/script/` is re-distilled from `~/cc-recordings/2.1.312-r2` with only the thinking texts changed 3ffbca53; `cls.intent.3` and `tool.ListAgents.3` restated without quoting d64c2a5c; the missing-extra hint's `uv tool install --reinstall` names `tui,images` with the missing extra (a test failing before) c72c9558. Note: D numbers in some earlier commit messages predate the renumbering at merge: b14abf1a's D70–D74 are D49–D53, 792acbd4's D60 is D40, cc966100's D70 is D38, 405f34a6's D50–D51 are D36–D37, d1d87c4d's D50–D53 are D41–D44. `make parity` 0 (11 accepted), own-words none. No prompt text changed, so `make eval` and `make e2e` were not run.
 - 2026-10-29 `os-fix-r7kernel` (from `os-structure` f1acec64), the final review's round-7 kernel findings, one commit per fix, a test failing before each, make check green after each (2413 passed, 60 skipped, 88.53% at the end; with Postgres 2473 passed; `make cluster` 13/13): a child on a queue the tree's holder does not serve is refused with a tool error while it holds the tree (D54) 11260476; a worker missing a pinned plugin lets the lease run out and fails the task `plugin_missing` only after `LOAD_ATTEMPTS` claims with the log unchanged, `docs/extending.md`, `docs/server.md` and `CONTEXT.md` updated (D55) 7985363d; a core record of an unknown kind is a newer version's log (D56) 7db3cd48. The sqlite 2 to 3 migration already had its test (`test_a_version_2_store_keeps_its_snapshots_keyed_by_version`, fails with the migration removed); nothing added. No edits in the other agent's plugin and toolkit directories.
 - 2026-10-29 `os-fix-r7sec` (from `os-structure` f1acec64), the final security review's round-7 findings, one commit per fix, a test failing before each, make check green after each (2414 passed, 60 skipped, 88.55% at the end): a non-default tenant's sandbox drops the operator's Unix-socket and nested user-namespace allowances, so its commands no longer reach D-Bus (`systemd-run --user`), Docker or Postgres sockets (D57) e31d5485; a tenant with its own provider, `base_url` or `extra_headers` must set its own `api_key` and never inherits the server's `extra_headers` (D58) efbe4b44; the sandbox is unavailable on a Linux architecture its seccomp filter does not know (D59) b4e14b1b. Two `make check` runs under heavy machine load hung in teardown of `tests/plugins/subtasks/test_agent_tool.py`'s worktree recovery tests (asyncio `_cancel_all_tasks`); they pass alone and the reruns were green.
+- 2026-10-29 `os-fix-r7tools` (from `os-structure` f1acec64), the final review's round-7 tool findings, one commit per fix, a test failing before each behavior fix, make check green after each (2424 passed, 60 skipped at the end): a blocked `UserPromptSubmit` prompt is erased by a core `erased` record the fold applies (D60; touches `noeta/core/records.py` and `loop/state.py`); the foreground `Bash` exit trap writes through fd 254, not fd 3 (D61); a foreground log keeps its start and a rolling tail (D62); resuming an agent cancels its worktree's queued removal, and the note says a restart leaves it (D64); agent `project` / `local` memory lives in the main checkout (D67); a re-typed `/skill args` follows `Skill.md` r.3; one skill registry per task and input taken (D63); `Edit` / `Write` diffs in a thread, skipped past 1M characters (D66); MCP OAuth clears tokens only on `invalid_grant`, under the file lock across the refresh (D65); `Read` checks a notebook's size before reading; CRLF plus curly-quote multi-line `Edit`; positional-only `ToolContext` in `function_tool`; `tool.Edit.p.old_string` rule text; a deviations row for the empty `transcript_path`. `make parity` 0 mismatches; `make eval` 0.987 (baseline 0.987, no regression; `injection_in_file` 0.83 rerun with `--trials 9` sequentially: 1.00, noise).

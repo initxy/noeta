@@ -21,7 +21,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | id | name | type | required | enum / default / limits | noeta today |
 |---|---|---|---|---|---|
 | `tool.Edit.p.file_path` | `file_path` | string | yes | absolute path of the file to change | covered (stated; relative paths still accepted) |
-| `tool.Edit.p.old_string` | `old_string` | string | yes | text to replace | covered (noeta also rejects an empty string) |
+| `tool.Edit.p.old_string` | `old_string` | string | yes | text to replace | covered (an empty string creates the file: `tool.Edit.9`) |
 | `tool.Edit.p.new_string` | `new_string` | string | yes | replacement; must differ from `old_string` | covered |
 | `tool.Edit.p.replace_all` | `replace_all` | boolean | no | default `false` (schema `default: false`); replace every occurrence | covered |
 

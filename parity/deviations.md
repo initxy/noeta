@@ -63,6 +63,7 @@ A row without an id is a difference the replay cannot see.
 | id | difference | reason |
 |---|---|---|
 | | A `Stop` / `SubagentStop` hook that blocks the end of the turn 8 times in a row is let through (`MAX_STOP_CONTINUATIONS`); Claude Code sets no limit and leaves the loop to the hook (`stop_hook_active`). | A server runs unattended: a hook that always blocks would spend model calls until a budget or a person stopped it. `stop_hook_active` is still sent, so a hook written for Claude Code ends the loop itself first. |
+| | A hook's input carries an empty `transcript_path` (and `agent_transcript_path`): noeta writes no transcript file. | Durable tasks: the conversation is the task's event log in the store, which a hook reads through a client (`Client.events`), not a local JSONL file. |
 
 ## Request envelope
 

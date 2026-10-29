@@ -13,8 +13,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from noeta.core.execenv import ExecEnv
 from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
-__all__ = ["WORKTREES", "add_worktree", "after_jobs", "git", "job_runs_in", "job_runs_under",
-           "remove_worktree", "repository_top", "unsaved_work"]
+__all__ = ["WORKTREES", "add_worktree", "after_jobs", "cancel_after_jobs", "git", "job_runs_in",
+           "job_runs_under", "remove_worktree", "repository_top", "unsaved_work"]
 
 #: Where new worktrees go, under the directory that holds them.
 WORKTREES = ".noeta/worktrees"
@@ -53,6 +53,12 @@ def after_jobs(path: str, then: Callable[[], Awaitable[object]]) -> None:
     it (when the last one ends, or is killed with its root)."""
     _AFTER_JOBS[path] = then
     _run_due()
+
+
+def cancel_after_jobs(path: str) -> None:
+    """Drop what :func:`after_jobs` queued for ``path`` (someone works there
+    again)."""
+    _AFTER_JOBS.pop(path, None)
 
 
 def _run_due() -> None:

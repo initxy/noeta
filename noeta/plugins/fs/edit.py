@@ -20,9 +20,8 @@ from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
     changed_since_read,
-    compute_diff,
     diff_display,
-    diff_stat_counts,
+    file_diff,
     mutation_result,
     read_precondition_error,
     record_written,
@@ -175,10 +174,13 @@ class EditTool:
         # ``Read`` shows lines without their ``\r``, so the model writes bare
         # ``\n``. In a CRLF file, match and write with the file's own ending —
         # never a mixed file.
+        asked = old
         eol = _dominant_eol(before)
         if eol == "\r\n":
             old_eol, new_eol = _to_eol(old, "\r\n"), _to_eol(new, "\r\n")
-            if before.count(old_eol):
+            # Also when neither matches: the quote and escape fallbacks
+            # below then look for the file's own line ends.
+            if before.count(old_eol) or old not in before:
                 old, new = old_eol, new_eol
         tried_escapes = False
         if old not in before and (found := _as_in_file(before, old)) is not None:
@@ -204,7 +206,7 @@ class EditTool:
                     "both ways; neither matched, so the difference is elsewhere in old_string. "
                     "Read the file again and copy the exact text.)" if tried_escapes else "")
             return tool_error(
-                self.name, f"old_string does not occur in the file.\nLooked for: {old}{hint}")
+                self.name, f"old_string does not occur in the file.\nLooked for: {asked}{hint}")
         if count > 1 and not replace_all:
             return tool_error(
                 self.name,
@@ -290,8 +292,8 @@ class EditTool:
                 return planned
             count, after = planned
         rel = ws.relative(resolved)
-        diff = compute_diff(before, after, rel)
-        added, removed = diff_stat_counts(diff)
+        diff, added, removed = await file_diff(before, after, rel)
+        skipped = not diff and before != after
         after_bytes = after.encode("utf-8")
         try:
             await env.write_bytes(resolved, after_bytes)
@@ -309,5 +311,5 @@ class EditTool:
                 "removed": removed,
                 "replacements": count if replace_all else 1,
             },
-            display=diff_display(rel, diff, added, removed),
+            display=diff_display(rel, diff, added, removed, skipped=skipped),
         )

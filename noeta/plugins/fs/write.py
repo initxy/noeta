@@ -17,9 +17,8 @@ from noeta.plugins.fs._globs import compile_glob, glob_matches
 from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
-    compute_diff,
     diff_display,
-    diff_stat_counts,
+    file_diff,
     mutation_result,
     read_precondition_error,
     record_written,
@@ -147,8 +146,8 @@ class WriteTool:
             if existing.startswith(_BOM) and content and not content.startswith("\ufeff"):
                 body = _BOM + body
 
-        diff = compute_diff(before_text, content, rel)
-        added, removed = diff_stat_counts(diff)
+        diff, added, removed = await file_diff(before_text, content, rel)
+        skipped = not diff and before_text != content
         try:
             # ``write_bytes`` creates missing parents: a new module usually
             # starts with its first file.
@@ -167,5 +166,5 @@ class WriteTool:
                 "bytes": len(body),
                 "created": not overwrite,
             },
-            display=diff_display(rel, diff, added, removed),
+            display=diff_display(rel, diff, added, removed, skipped=skipped),
         )

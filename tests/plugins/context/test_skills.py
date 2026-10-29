@@ -102,6 +102,22 @@ async def test_a_slash_command_fills_the_skill_from_what_follows_it(h: Harness) 
         "Do it.\n\nARGUMENTS: fast please")
 
 
+async def test_a_slash_command_typed_again_follows_the_skill_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "notes", "Release notes.", body="Notes for $0 since $1.\n")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a, "/notes v0.1 monday")
+    await h.say(a, tid, "/notes v0.2 friday")
+    changed = h.provider.requests[1].messages[-1].text
+    assert changed.startswith("(/notes called again") and changed.endswith(
+        "Notes for v0.2 since friday.\n")
+    await h.say(a, tid, "/notes v0.2 friday")
+    same = h.provider.requests[2].messages[-1].text
+    assert "notes" in same and "Arguments: v0.2 friday" in same and "Notes for" not in same
+    acts = await h.records(tid, "skills", "activated")
+    assert [x.data["args"] for x in acts] == ["v0.1 monday", "v0.2 friday"]
+
+
 async def test_unknown_and_disabled_skills_are_refused(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     write_skill(skills_dir(h), "hidden", "User only.", **{"disable-model-invocation": "yes"})
@@ -569,6 +585,27 @@ async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
     assert unlocked.data == {"names": ["pyfix"]}
     texts = [m.text for m in h.provider.requests[3].messages]
     assert f"{ADDED_HEADER}\n\n- pyfix: Python fixes." in texts
+
+
+async def test_the_skill_directories_are_scanned_once_a_turn_not_after_every_read(
+        h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.plugins.skills import extension as skills_extension
+
+    write_skill(skills_dir(h), "pyfix", "Python fixes.", paths="[\"src/**\"]")
+    (h.work / "a.txt").write_text("hi\n")
+    scans = 0
+    real = skills_extension.load_registry
+
+    async def counting(*args: Any) -> Any:
+        nonlocal scans
+        scans += 1
+        return await real(*args)
+
+    monkeypatch.setattr(skills_extension, "load_registry", counting)
+    h.provider.add(*[reply("", ("Read", {"file_path": "a.txt"})) for _ in range(5)],
+                   reply("done"))
+    await h.start(agent())
+    assert scans <= 2
 
 
 def test_path_patterns() -> None:

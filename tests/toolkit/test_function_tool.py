@@ -118,3 +118,15 @@ async def test_an_optional_context_and_positional_only_parameters() -> None:
     assert out.content[0].text == "6 in t"  # type: ignore[union-attr]
     out = await scale.run({"x": 3, "factor": 5}, ctx)
     assert out.content[0].text == "15 in t"  # type: ignore[union-attr]
+
+
+async def test_a_positional_only_context_is_passed_by_position() -> None:
+    @function_tool
+    def where(ctx: ToolContext, x: int, /) -> str:
+        """Say where."""
+        return f"{x} in {ctx.task_id}"
+
+    assert where.input_schema["properties"] == {"x": {"type": "integer"}}
+    ctx = ToolContext(task_id="t", call_id="c", env=None, state={}, record=lambda *_: None)
+    out = await where.run({"x": 3}, ctx)
+    assert not out.is_error and out.content[0].text == "3 in t"  # type: ignore[union-attr]

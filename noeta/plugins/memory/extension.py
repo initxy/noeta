@@ -175,8 +175,11 @@ class Memory(Extension):
     async def on_start(self, view: TaskView) -> None:
         if self._dir(view) is not None:
             return
-        directory = self.directory or self._agent_dir(view) \
-            or memory_dir_for(await self._workspace(view), self.home, view.state.tenant)
+        directory = self.directory
+        if not directory:
+            workspace = await self._workspace(view)
+            directory = self._agent_dir(view, workspace) \
+                or memory_dir_for(workspace, self.home, view.state.tenant)
         try:
             Path(directory).mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -203,7 +206,10 @@ class Memory(Extension):
 
     # ------------------------------------------------------------ helpers
 
-    def _agent_dir(self, view: TaskView) -> str | None:
+    def _agent_dir(self, view: TaskView, workspace: str) -> str | None:
+        """The agent's own memory: under noeta's home (``user``) or under
+        ``workspace``, the main checkout, so an agent in a temporary
+        worktree keeps it."""
         if self.agent_scope is None or self.agent_name is None:
             return None
         # "user" memory under noeta's home is shared by every tenant: a task
@@ -213,9 +219,8 @@ class Memory(Extension):
                                                   DEFAULT_TENANT) == DEFAULT_TENANT:
             base = self.home or noeta_home()
             return str(base / "agent-memory" / self.agent_name) + "/"
-        cwd = view.cwd or task_env(view.env, view.state.config).cwd
         folder = "agent-memory-local" if self.agent_scope == "local" else "agent-memory"
-        return posixpath.join(cwd, ".noeta", folder, self.agent_name) + "/"
+        return posixpath.join(workspace, ".noeta", folder, self.agent_name) + "/"
 
     async def _workspace(self, view: TaskView) -> str:
         """The repository's main checkout when the working directory is in

@@ -235,6 +235,9 @@ class Hooks(Extension):
         view.record(self.name, "prompted", {"through": through})
         for r in reads:
             if r.block is not None:
+                # A blocked prompt is erased, as Claude Code does: the next
+                # turn's request never carries it.
+                view.erase_messages(sorted({seq for seq, _ in new}))
                 raise TurnFailed("blocked_by_hook", r.block)
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "

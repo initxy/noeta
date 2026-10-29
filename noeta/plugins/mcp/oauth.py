@@ -40,7 +40,7 @@ import socket
 import tempfile
 import time
 import urllib.parse
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +138,26 @@ class TokenStore:
         finally:
             os.close(fd)
 
+    @contextlib.asynccontextmanager
+    async def locked_async(self) -> AsyncIterator[None]:
+        """:meth:`locked` held across awaits: the lock is taken in a thread,
+        so a wait for another process never stalls the event loop. Nothing
+        inside may take :meth:`locked` again (``update``): save instead."""
+        cm = self.locked()
+        taking = asyncio.ensure_future(asyncio.to_thread(cm.__enter__))
+        try:
+            await asyncio.shield(taking)
+        except asyncio.CancelledError:
+            # The thread may still get the lock: let it go once it does.
+            taking.add_done_callback(
+                lambda t: None if t.cancelled() or t.exception() is not None
+                else cm.__exit__(None, None, None))
+            raise
+        try:
+            yield
+        finally:
+            cm.__exit__(None, None, None)
+
     def update(self, **fields: Any) -> dict[str, Any]:
         with self.locked():
             data = {**self.load(), **fields}
@@ -177,6 +197,15 @@ def _client_auth(client: Mapping[str, Any], methods: list[str], body: dict[str, 
     return {}
 
 
+class TokenRefused(McpError):
+    """The authorization server answered a token request with an error
+    (``error``: its OAuth error code, else the HTTP status)."""
+
+    def __init__(self, message: str, *, error: Any) -> None:
+        super().__init__(message)
+        self.error = error
+
+
 async def _token_request(http: httpx.AsyncClient, data: Mapping[str, Any],
                          body: dict[str, str]) -> dict[str, Any]:
     endpoints = data.get("endpoints") or {}
@@ -195,7 +224,7 @@ async def _token_request(http: httpx.AsyncClient, data: Mapping[str, Any],
     if resp.status_code != 200 or not isinstance(tokens, dict) \
             or not tokens.get("access_token"):
         detail = tokens.get("error") if isinstance(tokens, dict) else resp.status_code
-        raise McpError(f"token request refused ({detail})")
+        raise TokenRefused(f"token request refused ({detail})", error=detail)
     expires = tokens.get("expires_in")
     if isinstance(expires, (int, float)) and not isinstance(expires, bool):
         tokens["expires_at"] = time.time() + float(expires)
@@ -222,7 +251,7 @@ class OAuth:
                 return None
             expires = tokens.get("expires_at")
             if isinstance(expires, (int, float)) and expires - time.time() < REFRESH_MARGIN_S:
-                tokens = await self._refresh(data) or tokens
+                tokens = await self._refresh(tokens) or tokens
             return f"Bearer {tokens['access_token']}"
 
     async def refused(self, sent: str | None) -> bool:
@@ -234,26 +263,38 @@ class OAuth:
             current = f"Bearer {tokens['access_token']}" if tokens.get("access_token") else None
             if current is not None and current != sent:
                 return True  # another connection renewed it meanwhile
-            return await self._refresh(data) is not None
+            return await self._refresh(tokens) is not None
 
-    async def _refresh(self, data: dict[str, Any]) -> dict[str, Any] | None:
-        tokens = data.get("tokens") or {}
-        refresh = tokens.get("refresh_token")
-        if not refresh or not (data.get("endpoints") or {}).get("token"):
-            return None
-        body = {"grant_type": "refresh_token", "refresh_token": str(refresh)}
-        resource = (data.get("endpoints") or {}).get("resource")
-        if resource:
-            body["resource"] = str(resource)
-        try:
-            async with _client(self._http) as http:
-                fresh = await _token_request(http, data, body)
-        except McpError:
-            self.store.update(tokens={})  # a refused refresh token is spent
-            return None
-        fresh.setdefault("refresh_token", refresh)
-        self.store.update(tokens=fresh)
-        return fresh
+    async def _refresh(self, seen: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Renew the tokens ``seen`` holds: the new ones, or ``None``. Under
+        the file's lock from the read to the write, so another connection
+        or process renewing meanwhile is found instead of spending a
+        rotated refresh token twice."""
+        async with self.store.locked_async():
+            data = self.store.load()
+            tokens = data.get("tokens") or {}
+            if tokens.get("access_token") and tokens.get("access_token") != seen.get(
+                    "access_token"):
+                return dict(tokens)  # renewed elsewhere meanwhile
+            refresh = tokens.get("refresh_token")
+            if not refresh or not (data.get("endpoints") or {}).get("token"):
+                return None
+            body = {"grant_type": "refresh_token", "refresh_token": str(refresh)}
+            resource = (data.get("endpoints") or {}).get("resource")
+            if resource:
+                body["resource"] = str(resource)
+            try:
+                async with _client(self._http) as http:
+                    fresh = await _token_request(http, data, body)
+            except TokenRefused as exc:
+                if exc.error == "invalid_grant":  # the refresh token is spent
+                    self.store.save({**data, "tokens": {}})
+                return None
+            except McpError:  # the network: try again later
+                return None
+            fresh.setdefault("refresh_token", refresh)
+            self.store.save({**data, "tokens": fresh})
+            return fresh
 
 
 @contextlib.asynccontextmanager

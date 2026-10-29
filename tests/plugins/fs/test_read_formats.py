@@ -287,3 +287,24 @@ async def test_an_over_large_notebook_is_refused_by_tokens(h: Harness, ws: Path)
     )
     out = await h.call(ReadTool(), file_path="nb.ipynb")
     assert "over the 25000-token limit" in text_of(out)
+
+
+async def test_a_notebook_over_the_cap_is_refused_before_it_is_read(
+        h: Harness, ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.plugins.fs._read_formats import NOTEBOOK_MAX_BYTES
+
+    with (ws / "huge.ipynb").open("wb") as fh:
+        fh.truncate(NOTEBOOK_MAX_BYTES + 1)  # sparse: nothing written
+    read = 0
+    real = h.env.read_range
+
+    async def counting(path: str, offset: int, length: int) -> bytes:
+        nonlocal read
+        data = await real(path, offset, length)
+        read += len(data)
+        return data
+
+    monkeypatch.setattr(h.env, "read_range", counting)
+    out = await h.call(ReadTool(), file_path="huge.ipynb")
+    assert out.is_error and "Notebook file exceeds the maximum size" in text_of(out)
+    assert read < 1024 * 1024

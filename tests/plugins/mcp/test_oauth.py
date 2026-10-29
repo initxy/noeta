@@ -4,6 +4,7 @@ to the loopback listener."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -336,3 +337,58 @@ def test_concurrent_updates_of_one_token_file_lose_nothing(tmp_path: Path) -> No
     assert len(TokenStore(path).load()) == 8 * 25
     assert sorted(p.name for p in path.parent.iterdir()
                   if not p.name.endswith(".lock")) == ["server.json"]
+
+
+def _signed_in(tmp_path: Path) -> TokenStore:
+    store = TokenStore(tmp_path / "oauth" / "srv.json")
+    store.save({"endpoints": {"token": "https://auth.test/token"},
+                "client": {"client_id": "c1"},
+                "tokens": {"access_token": "a1", "refresh_token": "r1"}})
+    return store
+
+
+async def test_a_refresh_the_network_failed_keeps_the_tokens(tmp_path: Path) -> None:
+    store = _signed_in(tmp_path)
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(down)) as http:
+        assert await OAuth(SERVER, store, http).refused("Bearer a1") is False
+    assert store.load()["tokens"]["refresh_token"] == "r1"
+    busy = _signed_in(tmp_path / "busy")
+    unavailable = httpx.MockTransport(
+        lambda r: httpx.Response(503, json={"error": "temporarily_unavailable"}))
+    async with httpx.AsyncClient(transport=unavailable) as http:
+        assert await OAuth(SERVER, busy, http).refused("Bearer a1") is False
+    assert busy.load()["tokens"]["refresh_token"] == "r1"
+
+
+async def test_an_invalid_grant_clears_the_tokens(tmp_path: Path) -> None:
+    store = _signed_in(tmp_path)
+    spent = httpx.MockTransport(lambda r: httpx.Response(400, json={"error": "invalid_grant"}))
+    async with httpx.AsyncClient(transport=spent) as http:
+        assert await OAuth(SERVER, store, http).refused("Bearer a1") is False
+    assert store.load()["tokens"] == {}
+
+
+async def test_two_connections_refreshing_at_once_keep_the_sign_in(tmp_path: Path) -> None:
+    # The server rotates refresh tokens: r1 works once. The second
+    # connection must find the first one's new tokens, not spend r1 again.
+    store = _signed_in(tmp_path)
+    used: list[str] = []
+
+    async def rotating(request: httpx.Request) -> httpx.Response:
+        form = dict(urllib.parse.parse_qsl(request.content.decode()))
+        used.append(form["refresh_token"])
+        await asyncio.sleep(0.05)
+        if form["refresh_token"] == "r1" and used.count("r1") == 1:
+            return httpx.Response(200, json={"access_token": "a2", "refresh_token": "r2"})
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(rotating)) as http:
+        results = await asyncio.gather(OAuth(SERVER, store, http).refused("Bearer a1"),
+                                       OAuth(SERVER, store, http).refused("Bearer a1"))
+    assert results == [True, True]
+    assert used == ["r1"]
+    assert store.load()["tokens"]["access_token"] == "a2"

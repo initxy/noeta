@@ -269,6 +269,26 @@ async def test_a_log_stops_growing_at_its_cap_and_says_so(tmp_path: Path, monito
     assert note == "\n[exited with code 0]\n" or (monitor and note == "")
 
 
+async def test_a_foreground_log_keeps_its_start_and_its_true_end(tmp_path: Path) -> None:
+    # A foreground command's result is the end of its log: past the cap the
+    # log keeps its start and a rolling tail, never only the head.
+    registry = Registry(log_dir=str(tmp_path / "logs"), log_max_bytes=1000)
+    command = "head -c 300000 /dev/zero | tr '\\0' x; echo; echo end"
+    job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command=command,
+                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               tool_use_id="c", description="", post=_posted,
+                               foreground=True)
+    assert isinstance(job, Job)
+    await asyncio.wait_for(job.done.wait(), 10)
+    assert job.exit_code == 0
+    text = Path(job.out_path).read_text()
+    head, _, tail = text.partition("\n[output past the first 250 bytes was not kept, up to "
+                                   "its last part below]\n")
+    assert head == "x" * 250
+    assert tail.rstrip("\n").endswith("x\nend") or tail.endswith("x\nend\n")
+    assert 250 <= len(tail) <= 1000 + 65536
+
+
 async def test_a_job_counts_as_running_until_its_end_is_posted(tmp_path: Path) -> None:
     # Whoever waits for a tree's jobs to finish (a front end before its next
     # prompt) must find the end in the inbox once none runs: a job whose

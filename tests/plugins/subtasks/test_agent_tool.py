@@ -612,6 +612,8 @@ async def test_a_worktree_a_background_job_runs_in_is_kept_until_the_job_ends(
     told = [e.data["text"] for e in await events(client, tid)
             if getattr(e, "kind", "") == "pending"]
     assert told and texts.WORKTREE_IN_USE.format(path=cwd) in told[0]
+    # The removal waits in this worker's memory: a restart leaves the worktree.
+    assert "unless this worker restarts first" in told[0]
     [job] = registry.running(tid)
     registry.retire(tid)  # the root ends: its jobs are killed
     await asyncio.wait_for(job.done.wait(), 10)
@@ -620,6 +622,48 @@ async def test_a_worktree_a_background_job_runs_in_is_kept_until_the_job_ends(
             break
         await asyncio.sleep(0.05)
     assert not Path(cwd).exists()
+
+
+class AskProbe(Extension):
+    name = "ask-probe"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        return Ask(prompt="may I?") if call.name == "probe" else None
+
+
+async def test_a_resumed_agent_keeps_the_worktree_its_job_was_to_free(
+        store: SqliteStore, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    p = ScriptedProvider([reply("", agent("look", isolation="worktree")), reply("launched"),
+                          reply("seen it")])
+    c = ScriptedProvider([reply("", ("Bash", {"command": "sleep 30",
+                                              "run_in_background": True})),
+                          handback("started it")])
+    child_agent = Agent(name="worker", model="c", tools=[Probe()],
+                        extensions=[Subtasks(()), Shell(registry=registry), AskProbe()])
+    rt = Runtime(store=store, agents={"main": parent(), "worker": child_agent},
+                 provider_for=lambda m: {"p": p, "c": c}[m],  # type: ignore[arg-type,return-value]
+                 env_for=lambda s: LocalExecEnv(str(s.config.get("cwd") or repo)))
+    client = Client(store)
+    tid = await client.create("main", "go", config={"cwd": str(repo)})
+    await rt.run_until_idle()
+    [first] = await client.tasks(parent_id=tid)
+    cwd = (await events(client, first.task_id))[0].config["cwd"]
+    assert (await client.get(first.task_id)).status == "ended" and Path(cwd).exists()
+    # Resumed while its job still runs: it works in the worktree again.
+    p.add(reply("", ("SendMessage", {"to": first.task_id, "message": "look again"})),
+          reply("asked"))
+    c.add(reply("", ("probe", {"x": 1})))  # waits for an approval
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    second = next(r for r in await client.tasks(parent_id=tid) if r.task_id != first.task_id)
+    assert (await events(client, second.task_id))[0].config["cwd"] == cwd
+    [job] = registry.running(tid)
+    registry.retire(tid)
+    await asyncio.wait_for(job.done.wait(), 10)
+    await asyncio.sleep(0.5)
+    assert Path(cwd).exists()  # the resumed agent still works there
 
 
 async def test_a_call_a_crash_cut_short_removes_the_worktree_it_made(tmp_path: Path) -> None:
