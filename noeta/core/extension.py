@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Union
 from noeta.core import records
 from noeta.core.deferred import deferred_names
 from noeta.core.events import (
+    DEFAULT_TENANT,
     Compacted,
     Event,
     ExtensionRecorded,
@@ -125,10 +126,11 @@ class Command(Struct):
 @dataclass(frozen=True)
 class CommandContext:
     """Where a command is listed or run: the front end's task (``None``
-    before it has one) and working directory."""
+    before it has one), working directory and tenant."""
 
     cwd: str
     task_id: str | None = None
+    tenant: str = DEFAULT_TENANT
 
 
 class StagedChild(Struct):

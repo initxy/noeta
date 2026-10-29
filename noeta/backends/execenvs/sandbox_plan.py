@@ -242,9 +242,13 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
                 deny_write.append(path)  # a worktree's ``.git`` file
         deny_write += [os.path.join(w, p) for p in PROTECTED]
     home = str(noeta_home())
-    deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read], base)
-    allow_read = _expand(settings, [*(os.path.join(home, p) for p in HOME_ALLOW_READ),
-                                    *settings.allow_read], base)
+    deny_read = _expand(settings, [*DEFAULT_DENY_READ, home, *settings.deny_read,
+                                   *settings.tenant_deny_read], base)
+    readable = HOME_ALLOW_READ if settings.noeta_home_readable is None \
+        else settings.noeta_home_readable
+    allow_read = _expand(settings, [*(os.path.join(home, p) for p in readable),
+                                    *settings.allow_read, *settings.tenant_allow_read],
+                         base)
     # A denied directory holding a writable one would hide it.
     deny_read = [d for d in deny_read if not any(_within(w, d) for w in writes)]
     hidden = [d for d in deny_read if os.path.isdir(d)]

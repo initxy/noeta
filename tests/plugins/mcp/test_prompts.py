@@ -26,6 +26,7 @@ async def test_prompts_become_commands_and_expand_to_text() -> None:
     pool = McpPool()
     try:
         [prompt] = await list_prompts([SERVER], pool=pool)
+        assert len(pool) == 1  # the pool given, though it was empty, not the default one
         assert prompt.command_name == "mcp__fake__review"
         assert prompt.arguments == [{"name": "path", "description": "", "required": True}]
         command = prompt.command()

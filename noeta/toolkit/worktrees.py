@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from noeta.core.execenv import ExecEnv
+from noeta.toolkit.sandbox import run_in_tenant_sandbox
 
 __all__ = ["WORKTREES", "add_worktree", "git", "remove_worktree", "repository_top",
            "unsaved_work"]
@@ -18,8 +19,8 @@ WORKTREES = ".noeta/worktrees"
 
 async def git(env: ExecEnv, args: Sequence[str], cwd: str) -> tuple[int, str]:
     """``git args`` in ``cwd``: its exit code and its output (stderr when it
-    failed), stripped."""
-    out = await env.run(["git", *args], cwd=cwd)
+    failed), stripped. In a tenant's sandbox (it runs hooks)."""
+    out = await run_in_tenant_sandbox(env, ["git", *args], cwd=cwd)
     text = out.stdout if out.exit_code == 0 else out.stderr or out.stdout
     return out.exit_code, text.decode(errors="replace").strip()
 

@@ -125,16 +125,50 @@ of these holds:
    `shared_os_user_tenants = true` under `[server]` in `~/.noeta/config.toml`. Tenants then must trust each
    other and the operator with everything the OS user can reach.
 
-File tools (`Read`, `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) run in the
-worker process whatever the deployment, so a task of a tenant other than the default one is
-fenced off from these paths: noeta's home (`NOETA_HOME`: tokens, settings, tenant
-directories, other tasks' files), the sqlite store and its `-wal` / `-shm` files,
-`/etc/noeta`, `/proc` and every other tenant's workspace. The fence is checked at the
-permission gate after symlinks and `..` are resolved, and again by the local exec env on
-the file actually opened (a link swapped in between does not help), and no allow rule, permission mode (`bypassPermissions`
-included) or approval lifts it. Inside noeta's home such a task keeps its own spilled tool
-outputs, its tenant's plan files (`plans/<tenant>/`), the memory of its working directory
-(`projects/<slug>/`) and read access to `skills/`. The default tenant's tasks are not fenced.
+A task of a tenant other than the default one is fenced off from these places: noeta's
+home (`NOETA_HOME`: tokens, settings, tenant directories, other tasks' files), the spill
+directory wherever it is, the sqlite store and its `-wal` / `-shm` files wherever they are,
+`/etc/noeta`, `/proc` and every other tenant's workspace. Inside them such a task keeps its
+own spilled tool outputs, its tenant's plan files (`plans/<tenant>/`), the memory of its
+working directory (`projects/<slug>/`) and read access to `skills/` and `workflows/`. No
+allow rule, permission mode (`bypassPermissions` included) or approval lifts the fence. The
+default tenant's tasks are not fenced, and their sandbox is the settings' own.
+
+- **File tools** (`Read`, `Edit`, `Write`, `NotebookEdit`, a workflow's `scriptPath`) run in
+  the worker process whatever the deployment. The fence is checked at the permission gate after symlinks and `..` are
+  resolved, and again by the local exec env on the file actually opened, so a link swapped
+  in between does not help. A PDF is read once through the fence and its page converters
+  get a copy.
+- **Commands**, under the sandbox: `Bash` (foreground, background, `Monitor`), a skill's
+  script, an inline skill command and `git` for a worktree (its hooks included) run inside
+  the sandbox with the same places unreadable (`TenantFence.confine`), always: the
+  settings' `excludedCommands`, `dangerouslyDisableSandbox`, `filesystem.disabled` and
+  `enableWeakerNestedSandbox` do not apply to them. On Linux each command has its own PID
+  namespace, so no other process (`/proc/<pid>/environ`) is visible; writes go only where
+  the settings allow. A worktree under `.noeta/worktrees/` cannot be made from inside the
+  sandbox (`.noeta/` is read-only there), so `EnterWorktree` and isolated agents fail for
+  such a task.
+- **MCP**: servers that run a process on the worker (stdio servers, a `headersHelper`) do
+  not start for such a task, whoever configured them; they show as down. Remote servers do,
+  with the headers configured for them, in a connection partition of the tenant's own
+  (`tenant:<name>/<scope>`), so no connection or OAuth sign-in is shared with another
+  tenant.
+
+Not a boundary, even under the strict sandbox:
+
+- What the operator runs outside the sandbox: hooks (`settings.json` `hooks`, run as the OS
+  user with the tool call on stdin), plugins (in-process code), the MCP servers of default
+  tenant tasks.
+- A remote MCP server configured for the server reaches tenants with its configured
+  headers, and `WebFetch` fetches any address the worker can reach (loopback and cloud
+  metadata addresses included); the sandbox's network filter confines commands only.
+- File and directory names: the permission gate expands a command's globs, and the
+  instructions and skills plugins list directories of the working directory (following
+  links), as the OS user; the files themselves are then read through the fence.
+- On macOS, Seatbelt does not hide other processes: a command can list them and may see
+  the arguments and environment of the worker's own (`ps eww`).
+- A trusted tenant workspace is configuration: its `.noeta/settings.json`, hooks, plugins and
+  agents load as the operator's own. Do not `noeta trust` a tenant's workspace.
 
 A token for another tenant added while a non-isolated server runs is not accepted (401) until
 it is restarted with one of the above. `noeta serve --no-worker` runs no tools and is not

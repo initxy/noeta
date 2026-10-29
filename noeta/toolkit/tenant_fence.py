@@ -9,13 +9,19 @@ tenant's file tools and those files; a tenant answers its own approval
 prompts, so nothing it can approve may lift it. Inside the fenced places a
 task keeps its own corners: its spilled tool outputs and its tree's
 transcripts, its tenant's plan files, the project directory (memory) of its
-working directory, and read access to the operator's skills.
+working directory, and read access to the operator's skills and saved
+workflows.
+
+:meth:`TenantFence.refusal` is the check for in-process file access;
+:meth:`TenantFence.confine` makes the same places unreadable to the task's
+sandboxed commands.
 
 Paths given to :meth:`TenantFence.refusal` must already be resolved
 (symlinks and ``..``); the fence resolves its own places the same way."""
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import posixpath
 from collections.abc import Mapping
@@ -23,6 +29,7 @@ from dataclasses import dataclass, field
 
 from noeta.core.events import DEFAULT_TENANT
 from noeta.toolkit.paths import noeta_home, project_slug
+from noeta.toolkit.sandbox import SandboxSettings
 from noeta.toolkit.tools import spill_path
 
 __all__ = ["SYSTEM_PATHS", "TenantFence", "store_files"]
@@ -31,7 +38,7 @@ __all__ = ["SYSTEM_PATHS", "TenantFence", "store_files"]
 #: environment, command line and open files.
 SYSTEM_PATHS = ("/etc/noeta", "/proc")
 #: Inside noeta's home, what a tenant's task may read but never write.
-_HOME_READABLE = ("skills",)
+_HOME_READABLE = ("skills", "workflows")
 #: The files sqlite keeps beside a database.
 _SQLITE_SIDE_FILES = ("", "-wal", "-shm", "-journal")
 
@@ -93,6 +100,27 @@ class TenantFence:
         if any(_within(path, own) for own in self._own(tenant, task_id, root_id, cwd, write)):
             return None
         return head + "it is in noeta's own directories (tokens, settings, other tasks' files)"
+
+    def confine(self, settings: SandboxSettings, *, tenant: str, task_id: str,
+                root_id: str = "", cwd: str = "") -> SandboxSettings:
+        """``settings`` for the commands of the task ``task_id`` (as
+        :meth:`refusal` names it): the fenced places unreadable but for the
+        task's own corners, every command inside the sandbox (no excluded
+        commands, no way out, filesystem confined) and a fresh ``/proc`` of
+        its own PID namespace. ``settings`` themselves for the default
+        tenant."""
+        if tenant == DEFAULT_TENANT:
+            return settings
+        home = self.home or str(noeta_home())
+        others = [w for name, w in self.workspaces.items() if name != tenant]
+        denied = [home, *(p for p in (self.spill_root, self.plans_dir) if p),
+                  *(s for s in SYSTEM_PATHS if s != "/proc"), *self.store_files, *others]
+        own = self._own(tenant, task_id, root_id or task_id, cwd, write=False)
+        return dataclasses.replace(
+            settings, tenant_deny_read=tuple(denied), tenant_allow_read=tuple(own),
+            noeta_home_readable=(),
+            excluded_commands=(), allow_unsandboxed=False, filesystem_disabled=False,
+            weaker_nested=False)
 
     def _workspace_owner(self, path: str) -> str | None:
         """The tenant whose workspace most closely holds ``path``."""

@@ -4,7 +4,9 @@ their outputs). The wording, page caps and size limits are Claude Code's.
 
 PDF pages are rendered by poppler's ``pdftoppm`` (page count from
 ``pdfinfo``) through the ``ExecEnv``, so a container renders inside itself
-exactly as the host does locally; no Python dependency.
+exactly as the host does locally; no Python dependency. A fenced env (a
+tenant's task) reads the PDF once through its fence and the converters work
+on a copy in a temporary directory.
 """
 
 from __future__ import annotations
@@ -134,15 +136,30 @@ async def read_pdf(
     if size > PDF_MAX_BYTES:
         return tool_error(tool_name, f"The PDF {display} is over the "
                                      f"{format_size(PDF_MAX_BYTES)} that page rendering accepts.")
-    head = await env.read_range(path, 0, 5)
+    # A fenced env (a tenant's task) reads the file once through the fence;
+    # the converters, run by the worker, get a copy and never the path.
+    data = await env.read_bytes(path) if getattr(env, "fence", None) is not None else None
+    head = data[:5] if data is not None else await env.read_range(path, 0, 5)
     if head != b"%PDF-":
         return tool_error(tool_name,
                           f"{display} does not start with a %PDF- header, so it is not a PDF.")
-    total = await _page_count(env, path)
-    span = _page_span(pages, total)
-    if isinstance(span, str):
-        return tool_error(tool_name, span)
-    images = await _render_pages(env, path, *span)
+    copy_dir = None
+    if data is not None:
+        copy_dir = await _scratch_dir(env, posixpath.dirname(path))
+        if copy_dir is None:
+            return tool_error(tool_name, "read failed: could not make a directory for the copy")
+        path = posixpath.join(copy_dir, "document.pdf")
+    try:
+        if data is not None:
+            await env.write_bytes(path, data)
+        total = await _page_count(env, path)
+        span = _page_span(pages, total)
+        if isinstance(span, str):
+            return tool_error(tool_name, span)
+        images = await _render_pages(env, path, *span)
+    finally:
+        if copy_dir is not None:
+            await _run(env, ["rm", "-rf", copy_dir], posixpath.dirname(copy_dir))
     if isinstance(images, str):
         return tool_error(tool_name, images)
     count = len(images)
@@ -194,16 +211,22 @@ def _page_span(pages: Any, total: int | None) -> tuple[int, int | None] | str:
     return first, last
 
 
+async def _scratch_dir(env: ExecEnv, cwd: str) -> str | None:
+    """A new temporary directory (``mktemp -d``), or ``None``."""
+    made = await _run(env, ["mktemp", "-d"], cwd)
+    if made is None or made.exit_code != 0:
+        return None
+    out_dir = made.stdout.decode("utf-8", "replace").strip()
+    return out_dir if posixpath.isabs(out_dir) else None
+
+
 async def _render_pages(env: ExecEnv, path: str, first: int,
                         last: int | None) -> list[Image] | str:
     """Pages ``first`` to ``last`` as JPEG images (``pdftoppm`` in a scratch
     directory), or why they could not be made."""
     cwd = posixpath.dirname(path)
-    made = await _run(env, ["mktemp", "-d"], cwd)
-    if made is None:
-        return "read failed: could not make a directory for the pages"
-    out_dir = made.stdout.decode("utf-8", "replace").strip()
-    if made.exit_code != 0 or not posixpath.isabs(out_dir):
+    out_dir = await _scratch_dir(env, cwd)
+    if out_dir is None:
         return "read failed: could not make a directory for the pages"
     try:
         argv = ["pdftoppm", "-jpeg", "-r", "100", "-f", str(first)]

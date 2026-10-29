@@ -201,3 +201,12 @@ async def test_the_default_tenant_is_not_fenced(store: SqliteStore,
         tenant="default", mode="bypassPermissions")
     assert [err for _, err in outcomes(evs)] == [False, False]
     assert len(tools["Read"].runs) == 2
+
+
+def test_the_operators_saved_workflows_are_readable_like_skills(tmp_path: Path) -> None:
+    # The Workflow tool reads them by name in-process; the fence says the same.
+    fence = TenantFence(home=str(tmp_path))
+    saved = str(tmp_path / "workflows" / "review.js")
+    assert fence.refusal(saved, tenant="acme", task_id="t") is None
+    assert fence.refusal(saved, tenant="acme", task_id="t", write=True) is not None
+    assert fence.refusal(str(tmp_path / "tokens.json"), tenant="acme", task_id="t")

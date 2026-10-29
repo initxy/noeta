@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from typing import Any, Union
 
 from noeta.core.errors import HeldElsewhere
-from noeta.core.events import Answer, Recorded, TaskEnded, Waiting
+from noeta.core.events import DEFAULT_TENANT, Answer, Recorded, TaskEnded, Waiting
 from noeta.core.extension import (
     Command,
     CommandContext,
@@ -148,6 +148,10 @@ class Mcp(Extension):
     the same scope share one connection per worker process; give each tenant
     its own scope so a stateful server (a browser, a login) never carries one
     tenant's state into another's task. ``None`` = one shared partition.
+    A task whose tenant is not the default one is always in a partition of
+    its tenant's (``tenant:<name>/<scope>``), and gets no server that runs a
+    process on the worker (a ``command`` or a ``headers_helper``): those
+    run as the worker's OS user, outside any sandbox. They show as down.
 
     ``pool``: the connection pool (default: one per worker process and event
     loop, idle connections closed after 30 minutes).
@@ -189,6 +193,8 @@ class Mcp(Extension):
         self._prompts: dict[str, tuple[McpServer, str | None, McpPrompt]] = {}
         #: task id -> the workspace directories ``roots/list`` answers.
         self._roots: dict[str, list[str]] = {}
+        #: task id -> {alias: why not started} (a tenant's local servers).
+        self._refused: dict[str, dict[str, str]] = {}
         #: (task id, call id) -> a call waiting on the person's answer.
         self._parked: dict[tuple[str, str], _Parked] = {}
         self._sign_ins = SignIns(self.pool)
@@ -431,7 +437,8 @@ class Mcp(Extension):
                     await parked.release()
         if isinstance(recorded.event, (Waiting, TaskEnded)):
             # The runner lets go of the task; the next pick-up resolves again.
-            for cache in (self._known, self._scopes, self._tools, self._marks, self._roots):
+            for cache in (self._known, self._scopes, self._tools, self._marks, self._roots,
+                          self._refused):
                 cache.pop(view.task_id, None)
         elif self._turn_start(view) and view.task_id in self._known:
             # A turn opens on taken input, or on input queued behind the
@@ -461,6 +468,12 @@ class Mcp(Extension):
             self._scopes[view.task_id] = scope(view) if callable(scope) else scope
             self._roots[view.task_id] = [view.cwd] if view.cwd else []
             servers = [*self._agent_servers, *servers, *await self._from_files(view)]
+            tenant = view.state.tenant
+            self._scopes[view.task_id] = _tenant_scope(tenant, self._scopes[view.task_id])
+            if tenant != DEFAULT_TENANT:
+                self._refused[view.task_id] = {s.alias: _refusal(tenant)
+                                               for s in servers if _runs_here(s)}
+                servers = [s for s in servers if not _runs_here(s)]
         except Exception:
             # Keep the recorded tool set; its calls fail until a pick-up
             # resolves the servers again.
@@ -505,13 +518,18 @@ class Mcp(Extension):
         known: dict[str, McpServer] = {}
         for server in [*self._agent_servers, *given, *files]:
             known.setdefault(server.alias, server)
-        return list(known.values())
+        return [s for s in known.values()
+                if ctx.tenant == DEFAULT_TENANT or not _runs_here(s)]
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         """Each server prompt as ``/mcp__<alias>__<prompt>``; arguments are
         typed after it, separated by spaces (the last takes the rest)."""
-        scope = self._scopes.get(ctx.task_id or "") if ctx.task_id else (
-            self._scope if isinstance(self._scope, str) else None)
+        if ctx.task_id:
+            scope = self._scopes[ctx.task_id] if ctx.task_id in self._scopes \
+                else _tenant_scope(ctx.tenant, None)
+        else:
+            scope = _tenant_scope(ctx.tenant,
+                                  self._scope if isinstance(self._scope, str) else None)
         out: list[Command] = []
         for server in await self._command_servers(ctx):
             try:
@@ -547,7 +565,7 @@ class Mcp(Extension):
         listed = await asyncio.gather(*(self._list(s, scope, context) for s in servers))
         entries: list[dict[str, Any]] = []
         owner: dict[str, str] = {}
-        failures: dict[str, str] = {}
+        failures: dict[str, str] = dict(self._refused.get(view.task_id, {}))
         for server, (entry, error) in zip(servers, listed, strict=True):
             if entry is not None:
                 clash = next((t["name"] for t in entry["tools"] if t["name"] in owner), None)
@@ -584,6 +602,23 @@ class Mcp(Extension):
                     "tools": auth_stub_entries(server)}, None
         except (McpError, McpConfigError) as exc:
             return None, str(exc)
+
+
+def _runs_here(server: McpServer) -> bool:
+    """Does ``server`` run a process on the worker (as its OS user)?"""
+    return bool(server.command or server.headers_helper)
+
+
+def _refusal(tenant: str) -> str:
+    return f"MCP servers that run a process on the worker do not start for tenant {tenant!r}"
+
+
+def _tenant_scope(tenant: str, scope: str | None) -> str | None:
+    """``scope`` within ``tenant``'s own partition (the default tenant's is
+    ``scope`` itself)."""
+    if tenant == DEFAULT_TENANT:
+        return scope
+    return f"tenant:{tenant}" + (f"/{scope}" if scope else "")
 
 
 def _server_entry(server: McpServer, raw: list[dict[str, Any]]) -> dict[str, Any]:

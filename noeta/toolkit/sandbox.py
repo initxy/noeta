@@ -9,7 +9,10 @@ attribute (:func:`sandbox_of`); the ``Bash`` tool asks it to
 (:func:`runs_sandboxed`), runs the argv it gets back, and reports the hosts the
 sandbox's network filter refused (:func:`violations_block`).
 
-Nothing here starts a process; :func:`resolve_allowed` looks a name up.
+A command a tool runs besides ``Bash``'s (a skill's script, ``git`` for a
+worktree) goes through :func:`run_in_tenant_sandbox`: inside the sandbox
+when the task is a tenant's. Nothing else here starts a process;
+:func:`resolve_allowed` looks a name up.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from noeta.core.execenv import ExecEnv, RunResult
 from noeta.toolkit.permission_rules import idna, parse_rule, shell_rule_matches
 
 __all__ = [
@@ -33,6 +37,7 @@ __all__ = [
     "domain_allowed",
     "leaves_sandbox",
     "resolve_allowed",
+    "run_in_tenant_sandbox",
     "runs_sandboxed",
     "sandbox_of",
     "violations_block",
@@ -97,6 +102,15 @@ class SandboxSettings:
     deny_env: tuple[str, ...] = ()
     #: An absolute ``bwrap`` to use instead of the one on ``PATH``.
     bwrap_path: str | None = None
+    #: Inside noeta's home (unreadable), the names a command may still read;
+    #: ``None``: spilled tool outputs and project memory (a tenant's task
+    #: gets none, and its own corners in :attr:`tenant_allow_read` instead).
+    noeta_home_readable: tuple[str, ...] | None = None
+    #: A tenant's task: absolute paths its commands may not read, and those
+    #: inside them they may (``noeta.toolkit.tenant_fence``). Never shown
+    #: to the model, and not compared, so tasks of one profile share it.
+    tenant_deny_read: tuple[str, ...] = field(default=(), compare=False)
+    tenant_allow_read: tuple[str, ...] = field(default=(), compare=False)
     #: Where the working directory is, for relative paths.
     base_dir: str = field(default="", compare=False)
 
@@ -392,6 +406,31 @@ def sandbox_of(env: object) -> CommandSandbox | None:
     if sandbox is None or not isinstance(sandbox, CommandSandbox):
         return None
     return sandbox if sandbox.settings.enabled else None
+
+
+async def run_in_tenant_sandbox(env: ExecEnv, argv: Sequence[str], *, cwd: str | None = None,
+                                timeout: float | None = None,
+                                output_cap: int | None = None) -> RunResult:
+    """``env.run(argv)``, inside ``env``'s sandbox when ``env`` is the env of
+    a task whose tenant is not the default one (it carries a ``fence``), so
+    the program and what it starts (a git hook, a script) are held to that
+    task's sandbox profile. Raises ``OSError`` when the sandbox is required
+    but cannot start; any other env runs ``argv`` as it is."""
+    sandbox = sandbox_of(env)
+    if getattr(env, "fence", None) is None or sandbox is None:
+        return await env.run(argv, cwd=cwd, timeout=timeout, output_cap=output_cap)
+    reason = sandbox.unavailable()
+    if reason is not None:
+        if sandbox.settings.fail_if_unavailable:
+            raise OSError(f"the sandbox is required but cannot start: {reason}")
+        return await env.run(argv, cwd=cwd, timeout=timeout, output_cap=output_cap)
+    where = cwd or str(getattr(env, "cwd", "") or os.getcwd())
+    prepared = await sandbox.prepare(list(argv), cwd=where)
+    try:
+        return await env.run(prepared.argv, cwd=where, env=prepared.env, timeout=timeout,
+                             output_cap=output_cap)
+    finally:
+        await prepared.close()
 
 
 def runs_sandboxed(sandbox: CommandSandbox | None, command: str,
