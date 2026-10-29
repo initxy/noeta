@@ -138,6 +138,7 @@ def time_trial(
             status=trace.status,
             error=trace.error,
             tools=[[c.tool_name for c in b] for b in trace.batches],
+            commands=[c[:300] for c in trace.bash_commands()],
             spawned=trace.spawned,
             compactions=trace.compactions,
             final=trace.final_text[:600],
