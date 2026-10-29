@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from noeta.plugins.skills.registry import argument_names, substitute_arguments
+from noeta.plugins.skills.registry import argument_names
+from noeta.toolkit.arguments import substitute_arguments
 
 
 @pytest.mark.parametrize(("body", "args", "out"), [
