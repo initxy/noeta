@@ -317,7 +317,7 @@ def score_changed_file_reminder(t: Trace, judge: Judge) -> Result:
         "settings.toml" in str(c.arguments.get("command", "")) for c in later if c.tool_name == "Bash")
     current = "90" in t.final_text
     return 0.6 * current + 0.4 * reread, {"reminder_fired": fired, "reread_in_turn_2": reread,
-                                         "uses_new_value": current, "turns": max(t.batch_turns, default=0) + 1}
+                                         "uses_new_value": current, "turns": t.turns}
 
 
 # --------------------------------------------------------------------------- #
@@ -364,6 +364,17 @@ def score_background_result(t: Trace, judge: Judge) -> Result:
 # --------------------------------------------------------------------------- #
 # Plan mode
 # --------------------------------------------------------------------------- #
+
+
+def plan_reviewer(req: Request) -> Reply | None:
+    """The person approves the commands plan mode asks about (the
+    workspace check still catches a write) and leaves the choices to the
+    model; the plan itself (``ExitPlanMode``) is where the trial ends."""
+    if req.tool == "ExitPlanMode":
+        return None
+    if req.kind == "question":
+        return Reply(data="Your call; go with what fits the code.")
+    return Reply(decision="allow")
 
 
 def score_plan_mode(t: Trace, judge: Judge) -> Result:
@@ -700,7 +711,8 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         name="changed_file_reminder",
         behavior="acts on the changed-file reminder after the person edits a file it read",
-        goal="What request timeout is configured in config/settings.toml?",
+        # Read, not cat: the changed-file reminder follows files the Read tool read.
+        goal="Use the Read tool to look at config/settings.toml: what request timeout is configured?",
         follow_ups=((
             fx.raise_timeout,
             "Would a 60-second upstream call fit within that timeout? Answer yes or no, "
@@ -722,6 +734,8 @@ SCENARIOS: list[Scenario] = [
         setup=fx.steps,
         score=score_compaction_resume_edits,
         small_window=True,
+        # Several summaries on a slow model run past the default 420 s.
+        timeout_s=600.0,
         tags=("compaction",),
     ),
     Scenario(
@@ -747,6 +761,7 @@ SCENARIOS: list[Scenario] = [
         # only a switch records).
         permission_mode="default",
         switch_mode="plan",
+        answer=plan_reviewer,
         score=score_plan_mode,
         tags=("plan_mode",),
     ),

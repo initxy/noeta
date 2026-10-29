@@ -106,6 +106,8 @@ class Trace:
     asked: list[tuple[Request, Reply | None]] = field(default_factory=list)
     #: The user turn (0 = the goal) each of ``batches`` belongs to.
     batch_turns: list[int] = field(default_factory=list)
+    #: User turns the task took.
+    turns: int = 0
     memory_dir: Path | None = None
 
     @property

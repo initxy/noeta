@@ -24,8 +24,16 @@ from noeta.backends.providers import provider_for
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.events import InputTaken, ModelReplied, Say, TaskEnded, ToolFinished
+from noeta.core.events import (
+    ExtensionRecorded,
+    InputTaken,
+    ModelReplied,
+    Say,
+    TaskEnded,
+    ToolFinished,
+)
 from noeta.core.provider import Provider
+from noeta.core.questions import detail_questions
 from noeta.core.runner import Runtime
 from noeta.host.pending import Pending, pending_tree
 from noeta.plugins.mcp import default_pool
@@ -83,7 +91,10 @@ def _request(p: Pending) -> Request:
 
 async def _reply(client: Client, p: Pending, reply: Reply) -> None:
     if p.kind == "question":
-        await client.answer(p.task_id, p.request_id, data=reply.data)
+        data = reply.data
+        if isinstance(data, str):  # free text for every question asked
+            data = {q["id"]: {"other": data} for q in detail_questions(p.detail)}
+        await client.answer(p.task_id, p.request_id, data=data)
     elif reply.decision == "deny":
         await client.answer(p.task_id, p.request_id, "deny",
                             data={"message": reply.message} if reply.message else None)
@@ -146,6 +157,27 @@ class _Person:
             await self._wait_past(row.last_seq)
 
 
+async def _start(client: Client, agent: str, sc: Scenario, config: dict[str, Any]) -> str:
+    """Create the task and send the goal; a mode switch is made first and
+    is in effect before the goal is sent, as when a person toggles the mode
+    and then types (taken in one batch with the goal, the plan-mode note
+    would skip the first request)."""
+    if sc.switch_mode is None:
+        return await client.create(agent, sc.goal, config=config)
+    tid = await client.create(agent, config=config)
+    await client.signal(tid, MODE_SIGNAL, {"mode": sc.switch_mode})
+
+    async def switched() -> None:
+        while not any(isinstance(r.event, ExtensionRecorded) and r.event.extension == "permissions"
+                      and r.event.kind == "mode" and r.event.data.get("mode") == sc.switch_mode
+                      for r in await client.events(tid)):
+            await asyncio.sleep(_POLL_S)
+
+    await asyncio.wait_for(switched(), 60)
+    await client.send(tid, sc.goal)
+    return tid
+
+
 async def _drive(cfg: EvalConfig, agents: list[Agent], sc: Scenario, ws: Path, root: Path,
                  ) -> tuple[list[Any], str | None, str, _Person]:
     store = SqliteStore(str(root / "tasks.db"))
@@ -155,22 +187,18 @@ async def _drive(cfg: EvalConfig, agents: list[Agent], sc: Scenario, ws: Path, r
                  env_for=lambda _s: LocalExecEnv(str(ws)), spill_root=str(root / "spill"))
     client = Client(store)
     config = {"cwd": str(ws), "model": cfg.model, "permission_mode": sc.permission_mode}
-    if sc.switch_mode is None:
-        tid = await client.create(agent.name, sc.goal, config=config)
-    else:
-        tid = await client.create(agent.name, config=config)
-        await client.signal(tid, MODE_SIGNAL, {"mode": sc.switch_mode})
-        await client.send(tid, sc.goal)
-    person = _Person(client, tid, sc, ws)
     error: str | None = None
     # Serve like a worker does (sub-agents run concurrently) until the main
     # task ends, or waits on the person with nothing more to say.
     stop = asyncio.Event()
     serving = asyncio.create_task(rt.serve(stop))
     try:
-        await asyncio.wait_for(person.run(), sc.timeout_s)
-    except TimeoutError:
-        error = f"timeout after {sc.timeout_s:.0f}s"
+        tid = await _start(client, agent.name, sc, config)
+        person = _Person(client, tid, sc, ws)
+        try:
+            await asyncio.wait_for(person.run(), sc.timeout_s)
+        except TimeoutError:
+            error = f"timeout after {sc.timeout_s:.0f}s"
     finally:
         stop.set()
         await serving
@@ -253,7 +281,7 @@ def run_trial(cfg: EvalConfig, sc: Scenario) -> tuple[Trace, dict[str, Any], Pat
         spawned=sum(len(e.data.get("children", [])) for e in events
                     if type(e).__name__ == "ExtensionRecorded" and e.kind == "spawned"),
         compactions=sum(type(e).__name__ == "Compacted" for e in events), error=error,
-        asked=person.asked, batch_turns=batch_turns, memory_dir=memory,
+        asked=person.asked, batch_turns=batch_turns, turns=turn + 1, memory_dir=memory,
     )
     return trace, usage, root
 
