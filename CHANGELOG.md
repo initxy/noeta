@@ -447,6 +447,9 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   branch kept, with git's reason.
 - **`ToolSearch`'s `+word` filters on tool names only.** It also kept tools whose
   description held the word, which its description (and Claude Code's) rule out.
+- **`ToolSearch` takes an infinite `max_results`.** `1e400` (an infinity once parsed) made
+  the call fail with an `OverflowError`; it now means the default of 5, like any other
+  unusable value.
 - **Front ends attached to a server work without a local model.** `noeta --server URL`
   exited with "no model configured" unless this machine named one, and its new tasks (and
   `noeta acp --server`'s) carried this machine's directory, which the server refuses (403

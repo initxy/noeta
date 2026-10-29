@@ -161,7 +161,7 @@ class ToolSearchTool:
         limit = input.get("max_results", DEFAULT_MAX_RESULTS)
         try:
             max_results = int(limit) if limit is not None else DEFAULT_MAX_RESULTS
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):  # OverflowError: an infinity
             max_results = DEFAULT_MAX_RESULTS
         found = self.search(query, max_results)
         if not found:

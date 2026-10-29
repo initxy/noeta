@@ -124,6 +124,16 @@ def test_keyword_ranking() -> None:
     assert schema["properties"]["max_results"]["default"] == 5
 
 
+@pytest.mark.parametrize("limit", [float("inf"), float("-inf"), float("nan"), "5", None])
+async def test_an_unusable_max_results_means_the_default(limit: Any) -> None:
+    # JSON's 1e400 arrives as float("inf"), which int() cannot take.
+    search = ToolSearchTool({f"Tool{n}": Fake(f"Tool{n}") for n in range(7)})
+    ctx = ToolContext(task_id="t", call_id="c", env=None, state={}, record=lambda *_: None)
+    out = await search.run({"query": "tool", "max_results": limit}, ctx)
+    assert not out.is_error
+    assert len(out.content) == 5
+
+
 def test_select_takes_an_mcp_tool_by_its_own_name() -> None:
     search = ToolSearchTool({t.name: t for t in [
         Fake("mcp__slack__send"), Fake("mcp__mail__send"), Fake("mcp__docs__query-docs")]})
