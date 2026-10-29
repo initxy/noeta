@@ -2,7 +2,7 @@
 status: active
 created: 2026-10-28
 owner: main agent (integrates); phase work by subagents in worktrees
-branch: os-structure (phase 1; each phase gets its own branch)
+branch: os-structure (phase and fix branches merge into it; it merges to local main after the final review, D1)
 ---
 
 # Open-source release: Claude Code parity, extensible, multi-machine
@@ -51,7 +51,10 @@ servers and runs on many machines.
 ## Decisions
 
 - D1 Phases run on their own branches, each merged to local main `--no-ff` only after an
-  independent review per `docs/reviewing.md` says mergeable.
+  independent review per `docs/reviewing.md` says mergeable. (2026-10-29: in practice every
+  phase branch and every review-fix branch merged `--no-ff` into `os-structure`, not local
+  main, which is still at a244d2e; `os-structure` merges to local main once the final review
+  in Phase 6 finds no P0/P1.)
 - D2 Structural and behavior commits never mix (AGENTS.md); phase 1 does the structural series
   before the behavior series.
 - D3 Workspace on many machines: the exec env stays replaceable. Supported deployments are a
@@ -118,7 +121,7 @@ servers and runs on many machines.
   for its cwd and the directories above it within its workspace, and read access to
   `skills/`. The memory plugin, which reads in-process, takes a git main checkout only when
   it holds the cwd and keeps `user`-scope agent memory under the cwd for such tasks.
-- D17 The tenant decision is also made per task: a worker without a strict sandbox or
+- D17 (extends D14) The tenant decision is also made per task: a worker without a strict sandbox or
   `[server] shared_os_user_tenants = true` (whether or not it knows of tenants) fails a
   non-default tenant's turn with `tenant_not_isolated` and the reason before any model
   call, and denies its pending calls (`Permissions(tenant_refusal=)`). Rejected: skipping
@@ -157,7 +160,7 @@ servers and runs on many machines.
   that only list names (`find -L` of instructions and skills, the gate's glob expansion) and
   the PDF converters (given a fenced copy) do not. The operator's saved workflows join
   `skills/` as readable.
-- D23 (`os-fix-r2host`) git that noeta itself runs in a non-default tenant's workspace (the
+- D23 (`os-fix-r2host`; extends D22) git that noeta itself runs in a non-default tenant's workspace (the
   environment's snapshot, memory's repository lookup) goes through `run_in_tenant_sandbox`
   too, extending D22 to every place operator code runs git on a tenant's checkout. Hardened
   flags alone are not sound: the repository's config is the tenant's, git has no switch for
@@ -303,14 +306,14 @@ servers and runs on many machines.
   (`/opt`, `/srv`, `/var`, data disks, `/tmp` are where tenants' inputs live); hiding
   whole home directories (credential stores are what matters there); matching credential
   names anywhere on disk (a project's own `.npmrc`).
-- D39 (`os-fix-r4tools`, owner) Supersedes D19's "fails on any shared run": copying Claude
+- D39 (`os-fix-r4tools`, owner; partly supersedes D19) Supersedes D19's "fails on any shared run": copying Claude
   Code's prompt wording is acceptable where it serves parity; what matters is the behavior
   (ADR-020, refining ADR-003). `scripts/parity/own_words.py` is an advisory report: it
   prints the shared runs, always exits 0, and no test fails on them. The rest of D19 holds
   (recordings read from outside the repository, nothing derived from their wording
   committed). Rejected: a word-run rule (8 consecutive words) on top of the character
   windows, and rewording `Agent`, `ToolSearch` and the background-command result to pass it.
-- D40 (`os-fix-r5sec`) The server's own directories are named once for every process:
+- D40 (`os-fix-r5sec`; extends D38) The server's own directories are named once for every process:
   `[server] dirs` in `config.toml` (absolute paths, read by `noeta serve` and `noeta
   worker`) plus `noeta worker --server-dir PATH`; a worker refuses `bypassPermissions`
   unless `--allow-bypass-permissions`, as serve does. A server directory inside a tenant's
@@ -333,7 +336,7 @@ servers and runs on many machines.
   value '...'" (an unknown tag or literal) is a newer version's log: the worker lets the
   lease run out without counting it toward `unreadable_log`, so it backs off by the lease
   instead of releasing into a busy loop. Malformed JSON and wrong shapes still count.
-- D44 (`os-fix-r5kernel`) A model call is charged to its tenant as soon as it returns,
+- D44 (`os-fix-r5kernel`; extends D33) A model call is charged to its tenant as soon as it returns,
   empty replies included; the kernel's `spawn(history_from=)` is refused like
   `Client.create`'s, an unknown source included.
 - D45 (`os-fix-r5tools`) A worker's background-job table lets a root go, with its jobs'
@@ -370,10 +373,10 @@ servers and runs on many machines.
   sends the command tags (`command_message`), and the `markdown_commands` plugin adds the body
   on the person's message, running its `!` lines and keeping its `allowed-tools` as
   pre-approval for the rest of the task, the skills' rules (`noeta.toolkit.inline_commands`).
-- D51 (`os-fix-r6core`) D43 holds for the inbox: an item that fails to decode as a newer
+- D51 (`os-fix-r6core`; extends D43) D43 holds for the inbox: an item that fails to decode as a newer
   version's (msgspec's "Invalid value") lets the lease run out with nothing written; a
   malformed one counts toward `unreadable_log` with the log's own count.
-- D52 (`os-fix-r6core`) The budget is checked before a step's request hooks and in
+- D52 (`os-fix-r6core`; extends D33) The budget is checked before a step's request hooks and in
   `TaskRun.complete`, which raises `BudgetSpent` (a `Fatal`) without calling: no model call of
   a tenant past its budget is made, compaction's and extensions' included.
 - D53 (`os-fix-r6core`; refined by D64) An agent's worktree kept for a running job is removed, if git finds no
@@ -384,11 +387,11 @@ servers and runs on many machines.
   (checked as the call finishes, where `_foreign_history` is). Rejected: letting a claim take a
   held tree's task on a queue the holder does not serve (it would run off the holder, against
   D24, and the holder's background job could not reach it).
-- D55 (`os-fix-r7kernel`) A worker missing a task's pinned plugin backs off like D43: the lease
+- D55 (`os-fix-r7kernel`; extends D43) A worker missing a task's pinned plugin backs off like D43: the lease
   runs out with nothing written, and after `LOAD_ATTEMPTS` such claims in a row on one worker
   with the log's last seq unchanged it ends the task failed with `plugin_missing` as before
   (a rolling install, `docs/extending.md`). Rejected: a time bound (one more clock to set).
-- D56 (`os-fix-r7kernel`; extended by D73) Folding a core record of a kind this version does not know raises
+- D56 (`os-fix-r7kernel`; extends D43; extended by D73) Folding a core record of a kind this version does not know raises
   `records.NewerRecord`, treated as a newer version's log (D43); `records.decode` still returns
   `None` for it, so front ends that only display records skip it.
 - D57 (`os-fix-r7sec`) A non-default tenant's sandbox drops the operator's
@@ -444,15 +447,15 @@ servers and runs on many machines.
   rules files) drop what the fence refuses; names leaked otherwise, contents never did. The
   skill commands a front end lists for a non-default tenant, read with no task env, skip a
   `SKILL.md` that resolves out of its skill directory rather than consult the fence.
-- D71 (`os-fix-r8sec`) With tenants besides the default one, `noeta serve` / `noeta worker`
+- D71 (`os-fix-r8sec`; extends D38) With tenants besides the default one, `noeta serve` / `noeta worker`
   refuse to start when a server directory cannot be hidden (D38's reasonable protection: a
   refusal, not a warning); without them nothing changes.
-- D72 (`os-fix-r8kernel`; refined by D80) D54 covers an extension's `TaskView.spawn(queue=...)`: the spawn
+- D72 (`os-fix-r8kernel`; extends D54; refined by D80) D54 covers an extension's `TaskView.spawn(queue=...)`: the spawn
   raises `ValueError` naming the queue, staging nothing, through the same
   `TaskRun.serves_queue` a tool call's spawn is checked with. Rejected: checking in
   `TaskRun.staged` at append (the hook's `spawned` record is already pending; dropping the
   child would leave the parent waiting on a child that never exists).
-- D73 (`os-fix-r8kernel`) `ToolContext.record` / `TaskView.record` refuse a `core` record of
+- D73 (`os-fix-r8kernel`; extends D56) `ToolContext.record` / `TaskView.record` refuse a `core` record of
   a kind the core does not know with `ValueError` (`records.check_writable`); in a tool call
   it fails the call with that error. Since D56 folding one would leave the task to a newer
   worker for good.
@@ -460,11 +463,11 @@ servers and runs on many machines.
   lease (`lease_until >= now`) on both stores (store contract). A task whose lease ran out
   may then be reclaimed while the tenant's next task runs, briefly one over the limit, as a
   dead worker's task was before.
-- D75 (`os-fix-r8tools`) A blocked prompt's erase also takes the `inline` user messages
+- D75 (`os-fix-r8tools`; extends D60) A blocked prompt's erase also takes the `inline` user messages
   recorded from the first blocked input on (its `/command` / `/skill` expansions); the fold
   drops `human` and `inline` user messages at the erased seqs, never tool results or other
   agents' messages.
-- D76 (`os-fix-r8tools`) `UserPromptSubmit` runs before any model call that carries new
+- D76 (`os-fix-r8tools`; extends D60) `UserPromptSubmit` runs before any model call that carries new
   human messages, not only a turn's first, so a mid-turn message is checked before the model
   sees it and never again; a block mid-turn fails the turn as at its start.
 - D77 (`os-fix-r8tools`) An agent hook keeps the task's read-only tools (Claude Code offers
@@ -598,11 +601,42 @@ servers and runs on many machines.
 - [ ] Final independent review on code only: no P0/P1.
 - [ ] Run make check, make parity, make cluster, make e2e and make eval on the final head and record the numbers.
 - [ ] Owner signs off on publishing the committed Claude Code interface data (scripts/parity/README.md) and the remaining owner decisions before any push.
-
+- [ ] Owner decides on the internal company and host names in committed docs before any push (left as they are until then): this spec's D9 ("gateway token gateway"); `docs/specs/2026-10-26-noeta-1-0-redesign.md` lines 45 (host-app, host-app-2, noeta-agent), 63, 370, 371, 385, 395, 418 and 420 (host-app); `docs/specs/archive/2026-10-27-layout-split.md` line 27 and `docs/specs/archive/2026-10-27-noeta-1-0-layout.md` line 19 (host-app); `docs/specs/archive/2026-10-28-claude-code-parity.md` line 365 (the `gateway/seed-evolving` upstream).
 ### Follow-ups (after this release; each moves to a spec of its own before this one is `done`)
 - [x] Deferred tool loading out of the kernel (ADR-016): an `Extension` way to offer tools computed from the task's other tools, then `ToolSearchTool`, its description and the placeholder into a `tool_search` plugin; request bytes unchanged (`make parity` 0), existing snapshots still valid.
 - [x] The file splits S22–S40 left undone in the kernel: `core/runner/task.py` (timers; stopping and ending a turn), `core/runner/model.py` `call_model` (reminders and hooks; overflow), and `backends/stores/postgres.py`'s connection handling; structure only.
 - [x] The last S22–S40 split: `plugins/shell/bash.py` (`ShellState`, the sandbox helpers, `BashTool.run`); structure only, once no other branch is changing it.
+
+Still open from the Progress log's "Left" notes (2026-10-29, each checked against the code at `os-fix-r11docs`; the parity differences that are follow-ups are under "Not yet matched" in `parity/deviations.md`):
+
+- [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
+- [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.
+- [ ] A background command's planted `.git/commondir` lives until the command ends (D96). Follow-up spec.
+- [ ] The macOS Seatbelt profile still allows `mach-lookup` and Apple Events (D99 refuses tenants there instead). Follow-up spec: needs a macOS machine to test.
+- [ ] MCP (`plugins/mcp/stdio.py`, `plugins/mcp/pool.py`) and the hooks runner (`plugins/hooks/runners.py`) still start processes with asyncio subprocesses: before CPython 3.14 a loop shut down mid-start waits forever (`LocalExecEnv` moved to `subprocess.Popen` for this). Follow-up spec.
+- [ ] A skill's `allowed-tools` plus `acceptEdits` writing `.noeta/skills` widens a trusted project's permissions, as in Claude Code. Owner decision.
+- [ ] The old `holds` table stays unused in upgraded stores. Owner decision (dropping it deletes data on a host's store).
+- [ ] Holds under unknown commits: a hold whose last of three attempts commits and still raises `CommitUnknown` is reaped as lost; lease renewal does not retry on it; a second failed unhold ends in a false `hold_lost`. Follow-up spec.
+- [ ] A parked MCP elicitation learns of a lost hold only when answered ("outcome unknown"). Follow-up spec.
+- [ ] A crash between taking `hold_lost` and enqueuing an ended sub-agent's loss notice loses that notice. Follow-up spec.
+- [ ] A sub-agent that takes its input, gets `hold_lost` and ends, while the root took its own copy when the sub-agent was live, is told by neither (one inbox read to the end append). Follow-up spec.
+- [ ] Snapshots hold the whole conversation (a 20k-event log's is 12 MiB), so Postgres claims are bound by transfer. Follow-up spec.
+- [ ] Deltas published before a front end's `LISTEN` is up are not replayed (the recorded reply still arrives). Follow-up spec.
+- [ ] A worker's `TenantFence.servers()` reads its working directory when it checks, not at start. Follow-up spec.
+- [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46; file tools keep the opened-file fence). Follow-up spec.
+- [ ] `EnterWorktree`'s worktree is read-only in the sandbox (`.noeta`; `parity/deviations.md`). Follow-up spec: a task's working directory would have to change mid-task.
+- [ ] Dead workers' job log directories (`w<pid>`) in an exec env that is not this machine are not swept (`plugins/shell/job_logs.py`). Follow-up spec.
+- [ ] Claude Code plugin directories: no `<plugin>:<name>` namespacing of skills and agents (agent names may not hold `:`), no `${CLAUDE_PLUGIN_ROOT}` in skill bodies, a plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
+- [ ] `noeta plugin add` installs no pip dependencies. Owner decision (it would run a package's build code on install).
+- [ ] Tenant directories are per-machine copies read at worker start (D47; `docs/server.md`). Owner decision on a shared source.
+- [ ] The README's `git+https` install line is untested until the branch is pushed, and its relative links will not resolve on a PyPI page. Owner decision, with the push and the first release.
+- [ ] A budget may end over its limit by one call's cost (checked before each call, D52). Won't do: a call's cost is known only after it returns.
+- [ ] ACP over `--server` cannot pass the editor's MCP servers. Won't do: they hold the editor's credentials and stay in its process.
+- [ ] MCP tools are never retry-safe on recovery. Won't do: a server's `idempotentHint` is not trusted.
+- [ ] A hold is not checked again on renewal (D42). Won't do: a child named onto another queue meanwhile is the host's explicit route, and refusing would stop a running background job.
+- [ ] Operator hooks run as the OS user in a tenant's directory, and the sandbox plan's `git rev-parse --git-path hooks` reads the tenant's config; `find -L` and glob expansion list names under home directories; credentials under other names are readable unless `denyRead` names them. Won't do: documented under "Not a boundary" in `docs/server.md`.
+- [ ] Texts the recordings never show (deferred tools, MCP sign-in) are outside the own-words report. Won't do: the report is advisory (D39).
+- [ ] A short PDF stays page images. Won't do: a logged document block would be lost after a `/model` switch to a provider without one (`parity/deviations.md`).
 
 ## Acceptance criteria
 
@@ -689,3 +723,4 @@ servers and runs on many machines.
 - 2026-10-29 `os-fix-r10tools` (from `os-structure` 9d4bbea0), the final review's round-10 tool findings, one commit per fix with a test failing before it, make check green after each (2517 passed, 65 skipped at the end): memory recall after the prompt hook (D90) ce318639; one reply's `Agent` calls count once against the cap 4196af3f; timeout kills the group after its leader was reaped ba5f3103; fork skill commands after every check (D92) 390e4bff; compaction context survives a blocked prompt a0030870; `SubagentStop` prompt/agent hooks see no unanswered call c485b96f; no worktree for a queue-refused `Agent` (D93) 801d265c; MCP sign-in writes the token file off the loop ddd20f6e; missing-file guess behind the fence 8c341659; WebFetch checks the redirect target for credentials 18b9076e; bounded erase/fork state (D94) 1538c376; failed MCP resolution leaves no entries 9b5687e8; hand-back recovers with a dedupe key 6d84e665; deviations UTF-8 row 5233c170; dead `FsState.digest` / `PageCache.get` 748c187a. Not changed: blocked `/plan` keeps plan mode, as Claude Code (D91); the fenced PDF read was left to `os-fix-r10sec`. `make parity` 0 mismatches (11 accepted); `make eval` 1.000 (baseline 0.987), no regression; `delegate_parallel_review` hit its 240 s timeout in all 3 trials as in r8/r9 (scored 1.00).
 - 2026-10-29 `os-fix-r10sec` (from `os-structure` 9d4bbea0), the final security review's round-10 findings, one commit per fix with a test failing before it, make check green after each (2515 passed, 65 skipped, 89% at the end): a tenant's PDF `Read` feeds `pdfinfo` / `pdftoppm` on stdin and renders pages to stdout (D95); the sandbox protects `.git/commondir` and `.git/modules` (D96); noeta's worktree git runs no hook or fsmonitor (D97); the read-only `git` guard refuses a planted repository with a work tree outside the workspace too (D98; the reported `git -C evil status` inside the workspace was already refused on this branch); HTTP input is the person's text-and-image user turn; `socketpair(AF_UNIX)` refused; a tenant's skill directory linked outside is not listed; stream ends use `error_text`; the HTTP guard knows `[server] dirs`; a tenant's profile clears `allowLocalBinding`; local reads refuse a FIFO; fenced writes make parents through checked fds; SECURITY.md on instruction files; `noeta token add` notes `--no-token` servers. Left: the memory plugin's `git rev-parse` (other branch's file) runs without the no-hook flags; a background command's planted `.git/commondir` lives until it ends; skills `allowed-tools` plus acceptEdits writing `.noeta/skills` widens a trusted project's permissions as in Claude Code (owner's call).
 - 2026-10-29 `os-fix-r11sec` (from `os-structure` e947884a), the final security review's two findings (no P1 on Linux), one commit per fix with a test failing before it, make check green after each (2539 passed, 65 skipped, 88.71% at the end): on macOS the sandbox is not a tenant boundary, so tenants besides the default one are refused there unless `shared_os_user_tenants` (D99, tested by faking the platform) 8c80486b; the permissions plugin trusts each task's working directory, not the server's (D100) 959c1244. Left: the macOS Seatbelt profile itself still allows `mach-lookup` and Apple Events (untestable here); a single-user macOS setup keeps it as before.
+- 2026-10-29 `os-fix-r11docs` (from `os-structure` 46553cb5), the final review's round-11 docs and front-end findings, one commit per fix, the behavior fix with a test failing before it, make check green after each (2541 passed, 65 skipped, 88.71% at the end): `noeta acp --server` asks the server first (`server_problem`, as the TUI does) and exits with one line naming `NOETA_SERVER_TOKEN` instead of failing `session/new` with a traceback (subprocess test against a stand-in server; closes `os-fix-r10docs`' leftover) f9739cae; every refines / extends / supersedes link between decisions stated on both ends (14 back-links added, a script found 30 links, none one-way) 896c61b7; D1 and the header say phases merged into `os-structure`, which merges to local main after the final review 5c52edb6; every still-open "Left" note checked against the code and listed under Follow-ups with an owner (`core/runner/task.py` at 730 lines among them) c715d32e; Phase 6 gates publishing on the owner's call on internal names, file by file 3a2e5c2d. No prompt text changed, so `make eval` and `make e2e` were not run.

@@ -395,11 +395,14 @@ def _main(argv: list[str]) -> None:
     if args.command == "acp":
         from noeta.host.acp import EditorServers, serve_stdio
         if args.server:
-            from noeta.cli.server_token import server_token
+            from noeta.cli.server_token import server_problem, server_token
             from noeta.host.remote import RemoteApp
+            token = server_token()
+            if (problem := server_problem(args.server, token)) is not None:
+                sys.exit(f"noeta: {problem}")
             # The editor's directory is a path on this machine, and the
             # model is the server's unless --model names one.
-            asyncio.run(serve_stdio(RemoteApp(args.server, token=server_token()),
+            asyncio.run(serve_stdio(RemoteApp(args.server, token=token),
                                     model=args.model or "", editor_cwd=False,
                                     cwd=args.cwd or ""))
             return
