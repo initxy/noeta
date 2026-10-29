@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 import yaml
 
 from noeta.core.execenv import ExecEnv
-from noeta.toolkit.context import read_text
+from noeta.toolkit.context import fence_refuses, read_text
 from noeta.toolkit.tools import path_within
 
 log = logging.getLogger("noeta.instructions")
@@ -267,8 +267,9 @@ async def list_markdown(env: ExecEnv, directory: str) -> list[str]:
     except (OSError, ValueError) as exc:
         log.warning("instructions: listing %s failed (%s); skipped", directory, exc)
         return []
+    # A link in a tenant's rules may lead behind its fence: not listed.
     return sorted(line for line in out.stdout.decode("utf-8", errors="replace").split("\n")
-                  if line)
+                  if line and not fence_refuses(env, line))
 
 
 # ------------------------------------------------------------------ globs

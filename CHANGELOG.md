@@ -826,6 +826,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   tenant fence, so a link there put a server file into the context. For a task of a
   non-default tenant these reads now go through the task's fenced env, which refuses the
   file it opens; so does the instructions plugin's read of `MEMORY.md`.
+- A tenant's skills and rules no longer list what a link leads to behind the fence. A
+  skill's resources and the rules directory's files are listed without what the tenant
+  fence refuses (their contents already were read through the fence), and the skill
+  commands a front end lists for a non-default tenant skip a `SKILL.md` that resolves out
+  of its skill directory, read with no task env to fence it.
 - **A tenant's commands no longer keep the operator's Unix-socket and user-namespace
   allowances.** With `network.allowAllUnixSockets`, `network.allowUnixSockets` or
   `allowNestedUserNamespaces` in the settings, a tenant's sandboxed commands had them too, so
