@@ -232,6 +232,13 @@ servers and runs on many machines.
   lists its plugins without it would announce tools nothing can load. An `Agent` built in code
   adds `ToolSearch()` itself (CHANGELOG). Rejected: listing it in each built-in agent file
   (third-party agent files with their own plugin lists would break).
+- D32 (`os-fix-r4docs`) A front end attached to a server (`noeta --server`,
+  `noeta acp --server`) needs no local model and sends neither this machine's directory nor
+  its model: `--cwd PATH` names a directory on the server, `--model` a model. A task created
+  over HTTP without a `cwd` gets the server's directory (a tenant's: its workspace) written
+  into its config, so every worker runs it in the same place. `noeta -p --server` is refused
+  rather than implemented (headless drives a local app). Rejected: sending the local path
+  when it happens to exist on the server (a coincidence, and still another machine's path).
 
 ## Plan
 

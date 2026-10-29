@@ -72,8 +72,11 @@ class NoetaApp(TranscriptView):
 
     def __init__(self, local: LocalApp | Any, *, agent: str, model: str, cwd: str,
                  resume: str | None = None, permission_mode: str | None = None,
-                 settings: Any = None) -> None:
+                 settings: Any = None, task_config: dict[str, Any] | None = None) -> None:
         super().__init__()
+        #: What each new task's config starts with (default: ``cwd`` and ``model``).
+        self.task_config = {"cwd": cwd, "model": model} if task_config is None \
+            else task_config
         self.local = local
         #: The front end's settings (``/config`` shows them), when known.
         self.settings = settings
@@ -159,7 +162,7 @@ class NoetaApp(TranscriptView):
 
     async def new_task(self) -> None:
         self.read_only = False
-        config: dict[str, Any] = {"cwd": self.cwd, "model": self.model}
+        config = dict(self.task_config)
         if self.permission_mode:
             config["permission_mode"] = self.permission_mode
         tid = await self.local.client.create(self.agent, None, config=config)

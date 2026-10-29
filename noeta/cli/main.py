@@ -53,7 +53,9 @@ def _common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
     ap.add_argument("--base-url")
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
-    ap.add_argument("--cwd", default=None, help="working directory (default: current)")
+    ap.add_argument("--cwd", default=None,
+                    help="working directory (default: current); with --server, a directory "
+                         "on the server (default: the server's own, or the tenant's workspace)")
     ap.add_argument("--system-prompt", help="replace the main agent's system prompt")
     ap.add_argument("--append-system-prompt",
                     help="add text after the main agent's system prompt")
@@ -109,7 +111,8 @@ def _front_parser() -> argparse.ArgumentParser:
     _common(ap)
     ap.add_argument("-r", "--resume", nargs="?", const="", default=None,
                     help="resume a task (id; the TUI offers a list without one)")
-    ap.add_argument("--server", help="TUI: attach to a noeta server URL")
+    ap.add_argument("--server", metavar="URL",
+                    help="TUI: drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN)")
     add_arguments(ap)
     return ap
 
@@ -153,11 +156,14 @@ def _plugins(cwd: str) -> None:
         print(notice, file=sys.stderr)
 
 
-def _settings(args: argparse.Namespace, **layers: Any) -> Settings:
+def _settings(args: argparse.Namespace, *, need_model: bool = True,
+              **layers: Any) -> Settings:
+    """The settings; ``need_model``: exit when none names a model (a front
+    end attached to a server uses the server's)."""
     s = load_settings(cwd=os.path.abspath(args.cwd or os.getcwd()),
                       model=args.model, provider=args.provider, base_url=args.base_url,
                       store=args.store, effort=args.effort, **layers)
-    if not s.model:
+    if need_model and not s.model:
         sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
     if args.system_prompt is not None:
         s.prompts["system/main"] = args.system_prompt
@@ -337,8 +343,11 @@ def _main(argv: list[str]) -> None:
         if args.server:
             from noeta.cli.config import server_token
             from noeta.host.remote import RemoteApp
+            # The editor's directory is a path on this machine, and the
+            # model is the server's unless --model names one.
             asyncio.run(serve_stdio(RemoteApp(args.server, token=server_token()),
-                                    model=args.model or ""))
+                                    model=args.model or "", editor_cwd=False,
+                                    cwd=args.cwd or ""))
             return
         s = _settings(args)
         servers = EditorServers()
@@ -370,6 +379,9 @@ def _front(argv: list[str]) -> None:
     if args.permission_mode in MODE_ALIASES:
         args.permission_mode = MODE_ALIASES[args.permission_mode]
     if headless.headless(args):
+        if args.server:
+            sys.exit("noeta: -p runs its task here; --server attaches the terminal UI "
+                     "(or noeta acp --server) to a server")
         try:
             layers: dict[str, Any] = {
                 "sources": headless.setting_sources(args),
@@ -392,7 +404,15 @@ def _front(argv: list[str]) -> None:
         sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd)))
     from noeta.cli.tui import run_tui
 
-    run_tui(_settings(args), cwd=cwd, resume=args.resume, server=args.server,
+    if args.server:
+        # The server's model and directory unless --model / --cwd name one;
+        # a local path or a model only this machine knows means nothing there.
+        run_tui(_settings(args, need_model=False), cwd=cwd, resume=args.resume,
+                server=args.server, permission_mode=args.permission_mode,
+                task_config={k: v for k, v in (("cwd", args.cwd), ("model", args.model))
+                             if v})
+        return
+    run_tui(_settings(args), cwd=cwd, resume=args.resume,
             permission_mode=args.permission_mode)
 
 

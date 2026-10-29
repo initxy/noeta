@@ -436,6 +436,14 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **Front ends attached to a server work without a local model.** `noeta --server URL`
+  exited with "no model configured" unless this machine named one, and its new tasks (and
+  `noeta acp --server`'s) carried this machine's directory, which the server refuses (403
+  outside its directories), and the TUI's model, which overrode the server's. They now send
+  a model only with `--model` and a directory only with `--cwd PATH` (a directory on the
+  server; a relative one is taken from the server's); otherwise the server records its own
+  directory (a tenant's: its workspace) in the task and the agent's model applies.
+  `noeta -p --server` ran locally and silently ignored `--server`; it now refuses it.
 - **Crash recovery no longer removes another agent's worktree.** An isolated agent's
   worktree was named after the last characters of the call id, which is unique only within
   its task, so a crashed call's recovery could force-remove the worktree of another task or
