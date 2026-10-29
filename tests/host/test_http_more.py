@@ -43,11 +43,14 @@ class Echo:
 
 class Gate(Extension):
     name = "gate"
+    #: The ``cwd`` of every command listing, in order.
+    listed_in: list[str] = []
 
     async def before_tool(self, view: TaskView, call: ToolUse) -> Any:
         return Ask(prompt="echo?")
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        Gate.listed_in.append(ctx.cwd)
         return [Command(name="hi", description="Say hi", template="hi {args}"),
                 Command(name="where", description="Where", local=True)]
 
@@ -140,6 +143,8 @@ async def test_stream_json_one_way_and_the_rest(served: tuple[str, ScriptedProvi
                                  json={"name": "config", "data": {"model": "opus"}})
         assert signal.status_code == 200
         assert (await http.get("/models", headers={"authorization": "x"})).status_code == 401
+        in_url = await http.get("/models?token=secret", headers={"authorization": ""})
+        assert in_url.status_code == 401  # a query token only on the WebSocket
 
 
 async def test_web_pages_and_rebound_names_are_refused(
@@ -195,6 +200,64 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         answer = json.loads(await asyncio.wait_for(ws.recv(), 10))
         assert answer["response"]["subtype"] == "error"
         assert "bypassPermissions" in answer["response"]["error"]
+
+
+async def test_requests_cannot_set_the_config_plugins_own(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        for key, value in (("permission_rules", ["Bash"]), ("subtask_depth", -99),
+                           ("unattended", True), ("prompts", {"system/main": "x"})):
+            got = await http.post("/tasks", json={"agent": "main", "config": {key: value}})
+            assert got.status_code == 403, key
+            assert repr(key) in got.json()["error"]
+        assert (await http.get("/tasks")).json() == []
+        ok = await http.post("/tasks", json={"agent": "main", "config": {
+            "model": MODEL, "effort": "high", "max_turns": 3, "cwd": str(tmp_path),
+            "permission_mode": "plan", "output_schema": {"type": "object"}}})
+        assert ok.status_code == 201
+        task_id = ok.json()["task_id"]
+        refused = await http.post(f"/tasks/{task_id}/signals", json={
+            "name": "config", "data": {"permission_rules": ["Bash"]}})
+        assert refused.status_code == 403
+
+
+async def test_commands_run_only_in_the_servers_directories(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        assert (await http.get("/commands", params={"cwd": "/etc"})).status_code == 403
+        run = await http.post("/commands/run", json={"text": "/hi x", "cwd": "/etc"})
+        assert run.status_code == 403
+        (tmp_path / "sub").mkdir()
+        task_id = (await http.post("/tasks", json={"agent": "main", "config": {
+            "cwd": str(tmp_path / "sub")}})).json()["task_id"]
+        Gate.listed_in.clear()
+        got = await http.get("/commands", params={"task_id": task_id, "cwd": "/etc"})
+        assert got.status_code == 200
+        ran = await http.post("/commands/run", json={"text": "/hi x", "task_id": task_id,
+                                                     "cwd": "/etc"})
+        assert ran.json() == {"text": "hi x", "local": False}
+        assert set(Gate.listed_in) == {str(tmp_path / "sub")}
+
+
+async def test_requests_post_only_the_signals_front_ends_send(
+        served: tuple[str, ScriptedProvider]) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        task_id = (await http.post("/tasks", json={"agent": "main"})).json()["task_id"]
+        for name, data in (("subtasks.idle_subscribe", {"from": "other", "id": "s1"}),
+                           ("shell_job_ended", {"job_id": "j", "notice": "all done"}),
+                           ("hold_lost", {"worker": "w", "epoch": 1})):
+            got = await http.post(f"/tasks/{task_id}/signals", json={"name": name,
+                                                                     "data": data})
+            assert got.status_code == 403, name
+            assert repr(name) in got.json()["error"]
+        for name, data in (("resumed", None), ("permission_mode", {"mode": "plan"}),
+                           ("restore_files", {"files": []})):
+            got = await http.post(f"/tasks/{task_id}/signals", json={"name": name,
+                                                                     "data": data})
+            assert got.status_code == 200, name
 
 
 async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(

@@ -63,8 +63,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command")
     ac = sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
     ac.add_argument("--server", metavar="URL",
-                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN or "
-                         "~/.noeta/server-token) instead of running them here")
+                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN) "
+                         "instead of running them here")
     w = sub.add_parser("worker", help="run tasks from the store until stopped")
     w.add_argument("--queue", action="append", default=None)
     w.add_argument("--concurrency", type=int, default=8)
@@ -174,25 +174,41 @@ def _tenants(s: Settings) -> dict[str, tenants.TenantPlace]:
         sys.exit(f"noeta: {exc}")
 
 
+def _check_isolation(s: Settings, cwd: str, places: dict[str, tenants.TenantPlace]) -> bool:
+    """Whether tools of tenants other than the default one may run here;
+    exits when such tenants exist and may not."""
+    problem = tenants.isolation_problem(s, cwd)
+    others = tenants.other_tenants(places)
+    if problem is not None and others:
+        sys.exit(f"noeta: tenant(s) {', '.join(others)} configured, but {problem}")
+    return problem is None
+
+
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
-    from noeta.cli.config import HOME, server_token
+    from noeta.cli.config import HOME, server_token_digest
     from noeta.host.http import LOOPBACK_HOSTS, create_app
 
     host, with_worker = args.host, not args.no_worker
-    token = None if args.no_token else server_token(create=True)
-    if token is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
-        print(f"noeta: bearer token in {HOME / 'server-token'}: {token}", file=sys.stderr)
+    server = None if args.no_token else server_token_digest()
+    if server is not None and server.shown is not None:
+        print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "
+              f"SHA-256): {server.shown}", file=sys.stderr)
+    elif server is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
+        print(f"noeta: bearer token: the one shown when {HOME / 'server-token'} was made "
+              "(delete that file and restart for a new one)", file=sys.stderr)
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     refuse = {} if args.allow_bypass_permissions else {
         "permissions": {"disable_bypass_mode": True}}
     places = _tenants(s)
+    isolated = not with_worker or _check_isolation(s, cwd, places)
     app = _app(s, cwd=cwd, with_channels=True,
                tenants={name: p.allowed for name, p in places.items()}, **refuse)
     await app.start(worker=with_worker)
-    api = create_app(app.client, token=token, auth=token is not None,
-                     tokens=tenants.tenant_tokens(),
+    api = create_app(app.client, auth=server is not None,
+                     tokens=tenants.tenant_tokens(
+                         others=isolated, server_sha256=server.sha256 if server else None),
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
                      allowed_hosts=LOOPBACK_HOSTS if host in LOOPBACK_HOSTS else None,
@@ -200,7 +216,9 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
                      workspaces={name: p.workspace for name, p in places.items()
-                                 if p.workspace})
+                                 if p.workspace},
+                     queues={name: p.queues for name, p in places.items()
+                             if p.queues is not None})
     port = args.port
     try:
         await uvicorn.Server(uvicorn.Config(api, host=host, port=port)).serve()
@@ -213,7 +231,9 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     from noeta.host.channels import run_channels
 
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
-    kw["tenants"] = {name: p.allowed for name, p in _tenants(s).items()}
+    places = _tenants(s)
+    _check_isolation(s, os.getcwd(), places)
+    kw["tenants"] = {name: p.allowed for name, p in places.items()}
     if snapshot_every is not None:
         kw["snapshot_every"] = snapshot_every
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
@@ -248,7 +268,8 @@ def main(argv: list[str] | None = None) -> None:
         if extra is None:
             raise
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
-                 f"pip install 'noeta[{extra}]'")
+                 f"pip install 'noeta[{extra}]' (or, for a uv tool install, "
+                 f"uv tool install --reinstall 'noeta[{extra}]')")
 
 
 def _main(argv: list[str]) -> None:
@@ -290,7 +311,8 @@ def _main(argv: list[str]) -> None:
                             args.lease, args.snapshot_every))
         return
     if args.command == "serve":
-        if args.no_token and args.host not in ("127.0.0.1", "localhost", "::1"):
+        from noeta.host.http import LOOPBACK_HOSTS
+        if args.no_token and args.host not in LOOPBACK_HOSTS:
             sys.exit("noeta: --no-token serves only a loopback address")
         asyncio.run(_serve(_settings(args), args, cwd))
         return

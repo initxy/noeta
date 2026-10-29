@@ -15,6 +15,7 @@ from starlette.responses import Response
 
 from noeta.core import models
 from noeta.core.agent import Agent
+from noeta.core.events import TaskCreated
 from noeta.core.extension import CommandContext
 from noeta.core.types import Message
 from noeta.host._http_guard import scope
@@ -35,6 +36,23 @@ def _input(value: Any) -> Any:
     if value is None or isinstance(value, str):
         return value
     return msgspec.convert(value, Message)
+
+
+async def _command_place(request: Request, agent: str | None, task_id: str | None,
+                         cwd: str | None) -> tuple[str, CommandContext]:
+    """The agent and context a slash command is listed or run in: a task's
+    own agent and the ``cwd`` it was created with, else the request's
+    ``cwd`` checked as a new task's would be (commands read the
+    directory's skills and may start its MCP servers)."""
+    if task_id:
+        mine = scope(request).client
+        row = await mine.get(task_id)
+        first = (await mine.events(task_id, 0))[:1]
+        made = first[0].event if first else None
+        where = made.config.get("cwd") if isinstance(made, TaskCreated) else None
+        return row.agent, CommandContext(cwd=str(where or ""), task_id=task_id)
+    where = scope(request).guarded.check_cwd(cwd) or scope(request).guarded.workspace or ""
+    return agent or "main", CommandContext(cwd=str(where))
 
 
 class Routes:
@@ -84,9 +102,8 @@ class Routes:
         task_id = request.path_params["task_id"]
         value = _input(body["input"])
         if isinstance(value, str) and value.startswith("/"):
-            row = await scope(request).client.get(task_id)
-            typed = await self._serving.run_command(
-                row.agent, CommandContext(cwd="", task_id=task_id), value)
+            agent, ctx = await _command_place(request, "", task_id, None)
+            typed = await self._serving.run_command(agent, ctx, value)
             if typed is not None and typed.local:
                 return _json({"output": typed.text})
             value = typed.text if typed is not None else value
@@ -159,22 +176,17 @@ class Routes:
 
     async def commands(self, request: Request) -> Response:
         q = request.query_params
-        name = q.get("agent") or "main"
-        if q.get("task_id"):
-            name = (await scope(request).client.get(q["task_id"])).agent
-        listed = await self._serving.commands(name, CommandContext(cwd=q.get("cwd") or "",
-                                                                   task_id=q.get("task_id")))
+        name, ctx = await _command_place(request, q.get("agent"), q.get("task_id"),
+                                         q.get("cwd"))
+        listed = await self._serving.commands(name, ctx)
         return _json([{"name": c.name, "description": c.description,
                        "argument_hint": c.argument_hint, "local": c.local} for c in listed])
 
     async def run_command(self, request: Request) -> Response:
         body = await request.json()
-        task_id = body.get("task_id")
-        name = body.get("agent") or "main"
-        if task_id:
-            name = (await scope(request).client.get(task_id)).agent
-        typed = await self._serving.run_command(
-            name, CommandContext(cwd=body.get("cwd") or "", task_id=task_id), str(body["text"]))
+        name, ctx = await _command_place(request, body.get("agent"), body.get("task_id"),
+                                         body.get("cwd"))
+        typed = await self._serving.run_command(name, ctx, str(body["text"]))
         return _json(None if typed is None else {"text": typed.text, "local": typed.local})
 
     async def list_agents(self, request: Request) -> Response:

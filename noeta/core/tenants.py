@@ -5,6 +5,7 @@ monthly token and cost budget (a model call past it fails its turn with
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,6 +13,11 @@ from dataclasses import dataclass
 from noeta.core import models
 from noeta.core.provider import Provider
 from noeta.core.types import Usage
+
+
+def token_digest(token: str) -> str:
+    """What is kept of a bearer token: its SHA-256, in hex."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

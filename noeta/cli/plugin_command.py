@@ -79,8 +79,14 @@ def _git(*args: str, cwd: str | None = None) -> str:
 
 def _checkout(url: str, commit: str, into: Path) -> str:
     """Clone ``url`` into ``into`` at ``commit`` (no submodules, no hooks);
-    returns the full commit id."""
-    _git("clone", "--quiet", "--no-checkout", url, str(into))
+    returns the full commit id. ``url`` must look like a git URL (a
+    marketplace's entry could otherwise smuggle in a git option)."""
+    if not _GIT_URL.match(url):
+        raise PluginInstallError(f"{url!r} is not a git URL (https://, ssh://, git://, "
+                                 "file:// or user@host:path)")
+    if not _COMMIT.match(commit):
+        raise PluginInstallError(f"{commit!r} is not a commit id")
+    _git("clone", "--quiet", "--no-checkout", "--", url, str(into))
     _git("checkout", "--quiet", "--detach", commit, cwd=str(into))
     full = _git("rev-parse", "HEAD", cwd=str(into))
     if not full.startswith(commit):

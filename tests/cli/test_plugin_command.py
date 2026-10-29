@@ -132,3 +132,22 @@ def test_a_marketplace_is_read_to_find_its_plugins(home: Path, tmp_path: Path) -
         install("nope", marketplace=str(market))
     assert json.loads(listing_text := (market / ".claude-plugin" / "marketplace.json")
                       .read_text()) == listing, listing_text  # only read
+
+
+def test_a_marketplace_url_that_is_not_a_git_url_is_refused(home: Path,
+                                                            tmp_path: Path) -> None:
+    pwned = tmp_path / "pwned"
+    market = tmp_path / "market"
+    (market / ".claude-plugin").mkdir(parents=True)
+    sha = "a" * 40
+    listing = {"name": "m", "plugins": [
+        {"name": "flag", "source": {"source": "url", "url": f"--upload-pack=touch {pwned}",
+                                    "sha": sha}},
+        {"name": "sub", "source": {"source": "git-subdir", "url": f"-uploadpack=touch {pwned}",
+                                   "sha": sha}},
+        {"name": "plain", "source": {"source": "url", "url": "/some/where", "sha": sha}}]}
+    (market / ".claude-plugin" / "marketplace.json").write_text(json.dumps(listing))
+    for name in ("flag", "sub", "plain"):
+        with pytest.raises(PluginInstallError, match="not a git URL"):
+            install(name, marketplace=str(market))
+    assert not pwned.exists()

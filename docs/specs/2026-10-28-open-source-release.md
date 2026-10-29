@@ -75,6 +75,27 @@ servers and runs on many machines.
   load only from noeta's places, fetched at a pinned commit by `noeta plugin add`.
 - D9 Evaluation model: the `.env` live endpoint (gateway token gateway) or DeepSeek Flash;
   `make eval` must not drop below `evals/baseline.json`.
+- D10 What a request may set is an allow list, not a deny list: a new task's `config` takes
+  `model`, `effort`, `max_turns`, `cwd`, `permission_mode`, `output_schema`; a `config` signal
+  the kernel's `CHANGEABLE_CONFIG`; signals only `permission_mode`, `config`, `resumed`,
+  `restore_files`. Everything else (plugin keys such as `permission_rules`, plugin signals such
+  as `shell_job_ended`) is 403 naming it. A host plugin that wants a new request-settable key
+  or signal must be added to the list (`noeta/host/_http_guard.py`).
+- D11 Tenant queues: `queues = [...]` per tenant; without it `default` and the queue of the
+  tenant's own name; the default tenant (server token) may use any queue.
+- D12 (owner may revisit) Tenants and the OS user: `noeta serve` (with its worker) and
+  `noeta worker` refuse to start when tenants besides the default one are known (tokens file or
+  tenant directories), unless the sandbox confines every command (`enabled`,
+  `failIfUnavailable`, no `allowUnsandboxedCommands`) or `[server] shared_os_user_tenants =
+  true` accepts API-only separation; a tenant token added later is ignored by such a server.
+  Known limits: the sandbox confines `Bash` only (file tools run in-process, bounded by
+  permission rules the tenant answers itself; docs recommend `Read`/`Edit` deny rules for
+  `~/.noeta`); a remote exec env is reachable only from host code; `serve --no-worker` is not
+  checked and a worker without tenant directories or tokens file does not know of tenants.
+- D13 The server token is kept as `sha256:<hex>` in `~/.noeta/server-token` and printed only
+  when made (or when an older plain-text file is migrated, one last time); clients take it from
+  `NOETA_SERVER_TOKEN`. This changes ADR-009's "read by `noeta --server`" consequence: a
+  refining ADR is due at wrap-up.
 
 ## Plan
 
@@ -147,3 +168,4 @@ servers and runs on many machines.
 - 2026-10-28 Phase 4 open item on `os-parity2` (from `os-structure` d06c6cf6), one commit per behavior, a test failing before each, check green after each: the per-tool behavior pass, `SendMessage.notify_when_idle` and the sub-agent transcript `output_file`, ACP diffs / plan updates / model and mode switching, an interrupted reply keeping its finished thinking, `pip install 'noeta[<extra>]'` for extras-dependent commands (the os-docs leftover), and the TUI's "UI did not settle" flake (busy set after the send returned); details in the parity spec's progress log. make check 2157 passed (88.14%); `make parity` 0 (11 accepted deviations); make eval 1.000 vs 0.987; make e2e 7 passed; make cluster 12/12.
 - 2026-10-28 `os-fix-tui` (from `os-structure` abcee613), the two TUI "UI did not settle" hangs under load, one commit each, a test failing before each, check green after each. Shift+Tab pressed before the follower showed the permissions plugin's records stepped from the fallback `auto` into `bypassPermissions` (the task really switched); it now reads the mode and offered modes from the log (waiting up to 2 s for a new task's start) and does nothing without a recorded mode. Textual's `MarkdownStream.stop()` raises the cancel into its caller when the stream's task was cancelled before it first ran, which ended the TUI's follower and delta pump after a fast failed attempt (35/300 runs hung at `-n 8` with CPU load); `_end_stream` absorbs it and writes the undelivered text. After: 300/300 of that test and 30 loops of the four TUI test files (870 runs) green at `-n 8` with 40 busy processes. make check 2161 passed.
 - 2026-10-28 Review fixes on `os-fix-docs` (from `os-structure` b8f21252), one commit each, make check green after each (2161 passed, 88.16% at the end): CHANGELOG Unreleased caught up to b8f21252 (per-tool pass, notify_when_idle, transcripts, ACP, thinking on interrupt, job-end forwarding; a Store contract heading for `InboxUnread` and `Post.forward_if_ended`); chat-bridge keeps the reply URL out of the task log and requires an `X-Chat-Secret` shared secret (hmac); house-style keeps a horizontal rule in the body; `noeta -p` announces an unknown model once; WebFetch's user agent names github.com/initxy/noeta; extending/architecture docs (notify signature, marketplace `--commit`, `--no-token`); the parity spec archived `done`, its open differences under "Not yet matched" in `parity/deviations.md`. Left: the missing-extra message in `noeta/cli/main.py` still says only `pip install 'noeta[<extra>]'` (wrong for a `uv tool install`); the skills plugin logs its untrusted-workspace notice once per agent (three times in `noeta -p`).
+- 2026-10-28 Host security review fixes on `os-fix-host` (from `os-structure` b8f21252), one commit each, a test failing before every behavior fix, check green after each: request `config` and `config` signals take only the allow-listed keys and signals only the front ends' four (D10; the repro `permission_rules: ["Bash"]` now 403); `/commands` and `/commands/run` check `cwd` and use a task's recorded one; stream-json resume/fork read the task through the scoped client before `adopt`; tenant queues (D11); serve/worker refuse tenants without an OS-level boundary unless opted in (D12); server token kept as a digest, printed once, plain-text file migrated (D13); `?token=` only on the WebSocket; `noeta plugin add` takes only git URLs, after `--`; one `token_digest`, `LOOPBACK_HOSTS` reused; SECURITY.md and docs/server.md say what is and is not a boundary; also the missing-extra message's `uv tool install --reinstall` form and the untrusted-skills warning once per process. make check 2173 passed. Not done: ADR-009 refinement (D13, at wrap-up); the sandbox does not confine file tools (D12).

@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import Waiting
@@ -547,3 +549,14 @@ async def test_a_fork_skill_runs_in_a_sub_agent(h: Harness) -> None:
     assert any(m.text.endswith("Review a.py closely.\n")
                for r in h.provider.requests for m in r.messages)
     assert await h.records(tid, "skills", "activated") == []
+
+
+def test_an_untrusted_workspace_is_warned_about_once(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    every_agent = [Skills(trusted=lambda _cwd: False) for _ in range(3)]
+    with caplog.at_level("WARNING", logger="noeta.plugins.skills.extension"):
+        for skills in every_agent:
+            skills.tiers(str(tmp_path))
+            skills.tiers(str(tmp_path))
+    warned = [r for r in caplog.records if "is not trusted" in r.getMessage()]
+    assert len(warned) == 1

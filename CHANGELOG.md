@@ -527,3 +527,42 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   reach the model as one block each with the next prompt joined to them, as Claude Code sends
   them.
 - Workflow end notices keep their dedupe key.
+
+### Security
+
+- `noeta serve` takes only `model`, `effort`, `max_turns`, `cwd`, `permission_mode` and
+  `output_schema` in a new task's `config`, and only `model`, `effort` and `max_turns` in a
+  `config` signal; any other key is refused with 403 naming it. Before, a request could set
+  the permissions plugin's inherited allow rules (`permission_rules`) or `subtask_depth` and
+  run tools without being asked.
+- `POST /tasks/{id}/signals` takes only the signals front ends send (`permission_mode`,
+  `config`, `resumed`, `restore_files`). Before, a request could post a plugin's own signal,
+  such as a background job's end (a forged `<task-notification>`) or a sub-agent's idle
+  subscription naming another tenant's task, which then received the notice.
+- `GET /commands` and `POST /commands/run` check `cwd` as a new task's (outside the server's
+  directories or the tenant's workspace: 403) and, given a `task_id`, use the directory that
+  task was created in. Before, any `cwd` was scanned for skills and could start a trusted
+  directory's MCP servers.
+- Resuming or forking over `/stream-json` looks the task up through the tenant's client
+  first. Before, resuming another tenant's task had this server serve its tree and could
+  name its agent in the error.
+- A tenant creates tasks only on its own queues: `queues = [...]` in
+  `~/.noeta/tenants/<name>/config.toml`, by default `default` and the queue of its own name
+  (`create_app(queues=)`). Before, any tenant could push tasks onto another tenant's dedicated
+  worker pool.
+- `noeta serve` and `noeta worker` refuse to start with tenants besides the default one
+  unless the sandbox confines every command (`enabled`, `failIfUnavailable`, no
+  `allowUnsandboxedCommands`) or `[server] shared_os_user_tenants = true` accepts tenants
+  separated at the API only; a tenant token added later is not accepted by such a server.
+  Before, every tenant's tools ran as the server's OS user and could read `~/.noeta`, the
+  store and the process environment.
+- `~/.noeta/server-token` keeps only the server token's SHA-256, like tenant tokens; the token
+  is printed once, when made (`noeta serve` no longer prints it on every start). A file an
+  older noeta left holding the token itself is rewritten to its digest on the next start,
+  which prints the token one last time. Clients (`noeta --server`, `noeta acp --server`) read
+  the token from `NOETA_SERVER_TOKEN`.
+- The bearer token is taken from `?token=` only on the `/stream-json` WebSocket; every other
+  route needs the `Authorization` header, so tokens stay out of ordinary URLs and their logs.
+- `noeta plugin add` fetches only from git URLs (`https://`, `ssh://`, `git://`, `file://`,
+  `user@host:path`) and passes `--` before them, so a marketplace entry's `url` cannot be a
+  git option such as `--upload-pack=…`.

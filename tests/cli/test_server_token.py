@@ -8,21 +8,66 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import config, main
+from noeta.cli import config, main, tenants
+from noeta.core.tenants import token_digest
 
 
-def test_a_token_is_made_once_and_kept_private(tmp_path: Path,
-                                              monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_token_is_made_once_and_only_its_digest_kept(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     monkeypatch.delenv("NOETA_SERVER_TOKEN", raising=False)
     assert config.server_token() is None
-    token = config.server_token(create=True)
-    assert token and len(token) >= 32
+    made = config.server_token_digest()
+    assert made.shown and len(made.shown) >= 32 and made.sha256 == token_digest(made.shown)
     path = tmp_path / "home" / "server-token"
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert config.server_token() == config.server_token(create=True) == token
+    assert made.shown not in path.read_text() and made.sha256 in path.read_text()
+    again = config.server_token_digest()
+    assert again.sha256 == made.sha256 and again.shown is None
+    assert config.server_token() is None  # a client needs NOETA_SERVER_TOKEN now
+    lookup = tenants.tenant_tokens(server_sha256=made.sha256)
+    assert lookup(made.shown) == "default" and lookup("wrong") is None
     monkeypatch.setenv("NOETA_SERVER_TOKEN", "configured")
-    assert config.server_token(create=True) == "configured"
+    assert config.server_token() == "configured"
+    assert config.server_token_digest() == config.ServerToken(token_digest("configured"))
+
+
+def test_a_plain_text_token_file_is_moved_to_its_digest(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    monkeypatch.delenv("NOETA_SERVER_TOKEN", raising=False)
+    (tmp_path / "home").mkdir()
+    path = tmp_path / "home" / "server-token"
+    path.write_text("old-token\n")
+    assert config.server_token() == "old-token"  # what an older noeta left
+    moved = config.server_token_digest()
+    assert moved.shown == "old-token" and moved.sha256 == token_digest("old-token")
+    assert "old-token" not in path.read_text() and stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert config.server_token_digest().shown is None
+
+
+def test_serve_shows_the_token_only_when_it_is_made(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    monkeypatch.delenv("NOETA_SERVER_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    def started(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("started")
+
+    monkeypatch.setattr(main, "_app", started)
+    argv = ["--model", "m", "--store", f"sqlite:///{tmp_path}/t.db", "serve"]
+    with pytest.raises(RuntimeError, match="started"):
+        main.main(argv)
+    first = capsys.readouterr().err
+    with pytest.raises(RuntimeError, match="started"):
+        main.main(argv)
+    second = capsys.readouterr().err
+    shown = first.rpartition(": ")[2].strip()
+    assert "shown only now" in first and token_digest(shown) in (
+        tmp_path / "home" / "server-token").read_text()
+    assert shown not in second and "was made" in second
 
 
 def test_no_token_only_on_a_loopback_address(monkeypatch: pytest.MonkeyPatch) -> None:

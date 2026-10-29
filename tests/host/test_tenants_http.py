@@ -6,6 +6,7 @@ SendMessage; the single server token stays the default tenant's."""
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -96,6 +97,28 @@ async def test_a_tenant_reaches_nothing_of_another(
     await a.close()
 
 
+async def test_stream_json_cannot_resume_or_fork_another_tenants_task(
+        served: tuple[str, ScriptedProvider, LocalApp], monkeypatch: pytest.MonkeyPatch) -> None:
+    websockets = pytest.importorskip("websockets")
+    url, _, local = served
+    theirs = await local.client.scoped("a").create("secret-agent", None)
+    adopted: list[str] = []
+    real = local.adopt
+
+    async def adopt(task_id: str) -> None:
+        adopted.append(task_id)
+        await real(task_id)
+
+    monkeypatch.setattr(local, "adopt", adopt)
+    base = url.replace("http://", "ws://")
+    for query in (f"resume={theirs}", f"resume={theirs}&fork=1"):
+        async with websockets.connect(f"{base}/stream-json?token=tok-b&{query}") as ws:
+            said = [json.loads(m) async for m in ws]
+        assert said == [{"type": "error", "error": f"unknown task {theirs}"}], query
+    assert theirs not in adopted
+    assert (await local.client.get(theirs)).agent == "secret-agent"
+
+
 async def test_send_message_cannot_cross_tenants(
         served: tuple[str, ScriptedProvider, LocalApp]) -> None:
     url, provider, local = served
@@ -139,6 +162,25 @@ async def test_a_tenants_tasks_run_in_its_workspace(tmp_path: Path) -> None:
                                  base_url="http://x", headers=_headers("tok-b")) as b:
         got = await b.post("/tasks", json={"agent": "main", "config": {"cwd": str(other)}})
         assert got.status_code == 201  # a tenant without a workspace: the server's dirs
+    await store.close()
+
+
+async def test_a_tenant_creates_tasks_only_on_its_queues(tmp_path: Path) -> None:
+    from noeta.core.client import Client
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    api = create_app(Client(store), token="tok-default", tokens={**TOKENS, "tok-c": "c"},
+                     cwd=str(tmp_path), queues={"c": ["gpu"]})
+    expected = {("tok-a", "default"): 201, ("tok-a", "a"): 201, ("tok-a", "b"): 403,
+                ("tok-a", "gpu"): 403, ("tok-b", "a"): 403, ("tok-c", "gpu"): 201,
+                ("tok-c", "default"): 403, ("tok-c", "c"): 403,
+                ("tok-default", "a"): 201, ("tok-default", "anything"): 201}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                 base_url="http://x") as http:
+        for (token, queue), status in expected.items():
+            got = await http.post("/tasks", json={"agent": "main", "queue": queue},
+                                  headers=_headers(token))
+            assert got.status_code == status, (token, queue, got.text)
     await store.close()
 
 

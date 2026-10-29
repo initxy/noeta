@@ -1,13 +1,14 @@
 """Tenants of a ``noeta serve`` server: the tokens that map a request to
 one tenant (``~/.noeta/tokens.json``, owner-only, holding each token's
 SHA-256 only), and ``noeta token add | list | remove``. The single server
-token (``NOETA_SERVER_TOKEN`` or ``~/.noeta/server-token``) stays the
-default tenant's.
+token (``NOETA_SERVER_TOKEN``, or the one whose digest
+``~/.noeta/server-token`` keeps) stays the default tenant's.
 
 What a tenant is allowed lives in ``~/.noeta/tenants/<name>/config.toml``
 (every worker and server reads its own copy; keep them the same)::
 
     workspace = "/srv/acme"      # its tasks run here or below (and here by default)
+    queues = ["acme"]            # the queues its requests may use (default: "default", "acme")
     max_running = 4              # its tasks running at once; the rest wait their turn
     budget_tokens = 5_000_000    # per calendar month (UTC); past it a turn fails
     budget_usd = 50.0            #   with budget_spent
@@ -21,7 +22,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import hashlib
+import hmac
 import json
 import os
 import re
@@ -36,7 +37,9 @@ from typing import Any
 
 from noeta.agents.agent_files import resolve_secrets
 from noeta.cli import config
-from noeta.core.tenants import Tenant
+from noeta.core.events import DEFAULT_TENANT
+from noeta.core.tenants import Tenant, token_digest
+from noeta.toolkit.sandbox import SandboxSettings
 
 #: A tenant name: what a token, a tenant directory and the task rows use.
 TENANT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
@@ -44,10 +47,6 @@ TENANT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
 def _tokens_path() -> Any:
     return config.HOME / "tokens.json"
-
-
-def _digest(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def read_tokens() -> list[dict[str, Any]]:
@@ -80,7 +79,7 @@ def add_token(tenant: str, name: str = "") -> str:
                          f"(at most 63): {tenant!r}")
     token = secrets.token_urlsafe(32)
     entries = read_tokens()
-    entries.append({"sha256": _digest(token), "tenant": tenant, "name": name,
+    entries.append({"sha256": token_digest(token), "tenant": tenant, "name": name,
                     "created": time.time()})
     _write_tokens(entries)
     return token
@@ -98,12 +97,19 @@ def remove_tokens(prefix: str) -> int:
     return len(entries) - len(kept)
 
 
-def tenant_tokens() -> Callable[[str], str | None]:
+def tenant_tokens(*, others: bool = True,
+                  server_sha256: str | None = None) -> Callable[[str], str | None]:
     """``token -> tenant`` from the tokens file, read again whenever the
-    file changes (a token added or removed works without a restart)."""
+    file changes (a token added or removed works without a restart).
+    ``others=False``: a token of a tenant other than the default one finds
+    nothing (tenants are not isolated here; :func:`isolation_problem`).
+    ``server_sha256``: the server token's digest, the default tenant's."""
     seen: dict[str, Any] = {"stamp": None, "table": {}}
 
     def lookup(token: str) -> str | None:
+        digest = token_digest(token)
+        if server_sha256 is not None and hmac.compare_digest(digest, server_sha256):
+            return DEFAULT_TENANT
         try:
             st = _tokens_path().stat()
             stamp: Any = (st.st_mtime_ns, st.st_size)
@@ -111,25 +117,61 @@ def tenant_tokens() -> Callable[[str], str | None]:
             stamp = None
         if stamp != seen["stamp"]:
             seen["stamp"] = stamp
-            seen["table"] = {str(e["sha256"]): str(e["tenant"]) for e in read_tokens()}
-        found: str | None = seen["table"].get(_digest(token))
+            seen["table"] = {str(e["sha256"]): str(e["tenant"]) for e in read_tokens()
+                             if others or e["tenant"] == DEFAULT_TENANT}
+        found: str | None = seen["table"].get(digest)
         return found
 
     return lookup
 
 
+def other_tenants(places: dict[str, Any]) -> list[str]:
+    """The tenants besides the default one that this machine knows of: in
+    the tokens file or with a tenant directory."""
+    named = {str(e["tenant"]) for e in read_tokens()} | set(places)
+    return sorted(named - {DEFAULT_TENANT})
+
+
+def isolation_problem(settings: config.Settings, cwd: str) -> str | None:
+    """Why tenants' tools here would run with no boundary between them and
+    this server, or ``None`` when they would not: the settings' sandbox
+    confines every command (``enabled``, ``failIfUnavailable``, no
+    ``allowUnsandboxedCommands``), or the operator accepted tenants
+    separated at the API only (``[server] shared_os_user_tenants = true``)."""
+    if settings.server.get("shared_os_user_tenants") is True:
+        return None
+    found = config.file_settings(cwd)
+    box = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
+                                        base_dir=cwd)
+    missing = [what for what, ok in (("sandbox.enabled: true", box.enabled),
+                                     ("sandbox.failIfUnavailable: true",
+                                      box.fail_if_unavailable),
+                                     ("sandbox.allowUnsandboxedCommands: false",
+                                      not box.allow_unsandboxed)) if not ok]
+    if not missing:
+        return None
+    return ("tenants' tools would run as this OS user with no boundary: they could read "
+            f"{config.HOME} (tokens, the store) and this process's environment. Set "
+            f"{', '.join(missing)} in settings.json, run the workers with a remote exec env, "
+            "or accept tenants separated at the API only with [server] "
+            f"shared_os_user_tenants = true in {config.HOME / 'config.toml'}")
+
+
 @dataclass(frozen=True)
 class TenantPlace:
-    """One tenant directory read: its workspace (for the HTTP host) and its
-    limits and provider (for the workers)."""
+    """One tenant directory read: its workspace and queues (for the HTTP
+    host) and its limits and provider (for the workers)."""
 
     name: str
     workspace: str | None
     allowed: Tenant
+    #: The queues its requests may create tasks on; ``None``: the default
+    #: (``noeta.host.http.create_app``'s ``queues``).
+    queues: tuple[str, ...] | None = None
 
 
-_KEYS = {"workspace", "max_running", "budget_tokens", "budget_usd", "provider", "base_url",
-         "api_key"}
+_KEYS = {"workspace", "queues", "max_running", "budget_tokens", "budget_usd", "provider",
+         "base_url", "api_key"}
 
 
 def load_tenants(settings: config.Settings) -> dict[str, TenantPlace]:
@@ -165,6 +207,10 @@ def _place(name: str, path: Path, data: dict[str, Any],
         workspace = os.path.realpath(os.path.expanduser(str(workspace)))
         if not os.path.isdir(workspace):
             raise ValueError(f"{path}: workspace {workspace} is not a directory")
+    queues = data.get("queues")
+    if queues is not None and (not isinstance(queues, list) or not queues
+                               or not all(isinstance(q, str) and q for q in queues)):
+        raise ValueError(f"{path}: queues must be a non-empty list of queue names")
     provider_for = None
     if {"provider", "base_url", "api_key"} & set(data):
         # Its own endpoint never borrows the server's key.
@@ -172,7 +218,8 @@ def _place(name: str, path: Path, data: dict[str, Any],
                                   base_url=data.get("base_url"), api_key=data.get("api_key"))
         made = own.make_provider()
         provider_for = lambda _model: made  # noqa: E731
-    return TenantPlace(name=name, workspace=workspace, allowed=Tenant(
+    return TenantPlace(name=name, workspace=workspace,
+                       queues=tuple(queues) if queues is not None else None, allowed=Tenant(
         max_running=data.get("max_running"), budget_tokens=data.get("budget_tokens"),
         budget_usd=float(data["budget_usd"]) if "budget_usd" in data else None,
         provider_for=provider_for))

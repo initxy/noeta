@@ -49,6 +49,7 @@ from noeta.cli.settings_files import load as load_file_settings
 from noeta.core import models, registry
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
+from noeta.core.tenants import token_digest
 from noeta.toolkit.sandbox import SandboxSettings
 
 if TYPE_CHECKING:
@@ -86,6 +87,9 @@ class Settings:
     add_plugins: dict[str, tuple[PluginEntry, ...]] = field(default_factory=dict)
     #: Per channel name: its arguments (``enabled = false`` turns it off).
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: ``[server]``: ``noeta serve`` / ``noeta worker`` switches
+    #: (``shared_os_user_tenants``).
+    server: dict[str, Any] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
         kw: dict[str, Any] = {}
@@ -121,29 +125,58 @@ def device_id() -> str | None:
     return value
 
 
-def server_token(*, create: bool = False) -> str | None:
-    """The bearer token of ``noeta serve``: ``NOETA_SERVER_TOKEN``, else the
-    one kept in ``~/.noeta/server-token`` (owner-only), made when
-    ``create`` and missing."""
+#: How ``~/.noeta/server-token`` starts: it keeps the token's digest only.
+_DIGEST_PREFIX = "sha256:"
+
+
+def server_token() -> str | None:
+    """The bearer token a client sends to ``noeta serve``:
+    ``NOETA_SERVER_TOKEN``, else one an older noeta still keeps in plain text
+    in ``~/.noeta/server-token`` (a server keeps only its digest there)."""
     if os.environ.get("NOETA_SERVER_TOKEN"):
         return os.environ["NOETA_SERVER_TOKEN"]
+    try:
+        text = (HOME / "server-token").read_text("utf-8").strip()
+    except OSError:
+        return None
+    return text if text and not text.startswith(_DIGEST_PREFIX) else None
+
+
+@dataclass(frozen=True)
+class ServerToken:
+    """The server's bearer token as ``noeta serve`` holds it."""
+
+    #: Its SHA-256 (``noeta.core.tenants.token_digest``).
+    sha256: str
+    #: The token itself when it was made, or moved out of a plain-text file,
+    #: just now: shown this once, never again.
+    shown: str | None = None
+
+
+def server_token_digest() -> ServerToken:
+    """``NOETA_SERVER_TOKEN``'s digest, else the one kept in
+    ``~/.noeta/server-token`` (owner-only). A missing file gets a new token;
+    a file of an older noeta holding the token itself is rewritten to hold
+    its digest. Either way the token is :attr:`ServerToken.shown`."""
+    if os.environ.get("NOETA_SERVER_TOKEN"):
+        return ServerToken(token_digest(os.environ["NOETA_SERVER_TOKEN"]))
     path = HOME / "server-token"
     try:
         text = path.read_text("utf-8").strip()
-        if text:
-            return text
     except OSError:
-        pass
-    if not create:
-        return None
-    value = secrets.token_urlsafe(32)
+        text = ""
+    if text.startswith(_DIGEST_PREFIX):
+        return ServerToken(text.removeprefix(_DIGEST_PREFIX))
+    value = text or secrets.token_urlsafe(32)
     HOME.mkdir(parents=True, exist_ok=True)
+    fresh = path.with_name(f".server-token-{os.getpid()}")
     with contextlib.suppress(FileNotFoundError):
-        path.unlink()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fresh.unlink()
+    fd = os.open(fresh, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(value + "\n")
-    return value
+        fh.write(_DIGEST_PREFIX + token_digest(value) + "\n")
+    os.replace(fresh, path)
+    return ServerToken(token_digest(value), shown=value)
 
 
 def file_settings(cwd: str | None, *, sources: Collection[str] | None = None,
@@ -185,6 +218,8 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
     data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
+    if not isinstance(data.get("server", {}), dict):
+        raise ValueError("config.toml: [server] is a table of switches")
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
     if settings.models_file:
