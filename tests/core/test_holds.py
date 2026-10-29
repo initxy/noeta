@@ -5,6 +5,7 @@ its way out gives its holds up the same way."""
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -140,3 +141,42 @@ async def test_a_hold_taken_while_the_last_share_is_given_back_is_kept(
     assert not again.tree.lost and rt._holds["r"] is again.tree
     assert await store.hold("r", rt.worker, 30, epoch=again.tree.epoch) == again.tree.epoch
     await again()
+
+
+class SlowHold(SqliteStore):
+    """A hold whose round trip takes ``delay`` seconds; ``sent`` is when
+    each epoch renewal was asked for (this process's monotonic clock)."""
+
+    delay = 0.2
+
+    def __init__(self, path: str) -> None:
+        super().__init__(path)
+        self.sent: list[float] = []
+
+    async def hold(self, root_id: str, worker: str, seconds: float,
+                   *, epoch: int | None = None) -> int | None:
+        if epoch is not None:
+            self.sent.append(time.monotonic())
+        await asyncio.sleep(self.delay)
+        return await super().hold(root_id, worker, seconds, epoch=epoch)
+
+
+async def test_a_holds_local_clock_starts_when_it_was_asked_for(tmp_path: Path) -> None:
+    """How long a hold is surely still this worker's counts from before the
+    request was sent, not from when the answer came back."""
+    store = SlowHold(str(tmp_path / "t.db"))
+    rt = _runtime(store, ScriptedProvider([]), lease_seconds=0.6)
+    try:
+        before = time.monotonic()
+        release = await rt.hold("root")
+        assert release.tree.renewed < before + SlowHold.delay / 2
+        while not store.sent:
+            await asyncio.sleep(0.02)
+        while release.tree.renewed < store.sent[0] - SlowHold.delay / 2:
+            await asyncio.sleep(0.02)
+        renewed = release.tree.renewed
+        assert any(abs(renewed - sent) < SlowHold.delay / 2 for sent in store.sent)
+        await release()
+    finally:
+        await rt._drop_holds()
+        await store.close()

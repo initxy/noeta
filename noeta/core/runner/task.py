@@ -64,7 +64,7 @@ class LostClaim(Exception):
 
 
 class TaskRun:
-    def __init__(self, rt: Runtime, claim: Claim) -> None:
+    def __init__(self, rt: Runtime, claim: Claim, *, sent: float | None = None) -> None:
         self.rt = rt
         self.store = rt.store
         self.claim = claim
@@ -77,8 +77,9 @@ class TaskRun:
         self._lost = False
         #: When the claim's lease runs out by this process's monotonic clock
         #: (``Claim.lease_until`` is the store's clock, which may differ):
-        #: counted from just before the last successful renewal was sent.
-        self._lease_deadline = time.monotonic() + rt.lease_seconds
+        #: counted from just before the claim, then the last successful
+        #: renewal, was asked for.
+        self._lease_deadline = (time.monotonic() if sent is None else sent) + rt.lease_seconds
         self._write_lock = asyncio.Lock()
         self._env: Any = None
         #: The text the model call in flight has streamed so far, and the
