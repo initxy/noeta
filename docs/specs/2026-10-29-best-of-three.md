@@ -106,3 +106,4 @@ and reported in the README.
 - 2026-10-29 B8: instruction files shown so far are read again with each new message; changed ones are shown again under a re-read note (digests in the log; deviation row for the trigger and placement).
 - 2026-10-29 T2: deferred tools that join, return or leave mid-task are told in a system note (`deferred_delta`, `noeta/plugins/environment.py`; shared `noeta/toolkit/deltas.py`); the last list named is in the log.
 - 2026-10-29 B7 (agents): agent types that join or leave mid-task are told in a system note (`subtasks` plugin, types in the log).
+- 2026-10-29 B7 (MCP): servers' `instructions` from `initialize` reach the model under `# MCP Server Instructions` and are withdrawn on disconnect (`noeta/plugins/mcp/instructions.py`; recorded in the server listing, told set in the log).
