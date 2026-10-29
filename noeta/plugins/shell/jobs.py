@@ -36,7 +36,9 @@ this machine, once the worker's process is gone. The guard needs only
 The log directory is ``job_logs.py``'s. A job's output reaches its log
 through a pipe that keeps the first ``log_max_bytes``
 (:data:`DEFAULT_LOG_MAX_BYTES`), then a line saying the rest was not kept,
-and drains the rest, so the command runs on unharmed.
+and drains the rest, so the command runs on unharmed; a foreground
+command's log keeps its start and a rolling tail instead (its result is the
+end of what it printed).
 """
 
 from __future__ import annotations
@@ -121,6 +123,29 @@ _KEEP_HEAD = r"""keep_head() {
     printf '\n[output past %s bytes was not kept]\n' "$1" >>"$2"
     cat >/dev/null
   fi
+}
+"""
+
+#: A foreground command's keeper: its result is the end of what it printed,
+#: so past ``$1`` bytes the file ``$2`` is cut back to its first quarter, a
+#: line saying the middle was not kept, and its last quarter, and goes on
+#: growing (each cut copies at most ``$1`` bytes once ``$1 / 2`` came in).
+_KEEP_TAIL = r"""keep_tail() {
+  s=0
+  q=$(($1 / 4))
+  while :; do
+    dd bs=65536 count=1 2>/dev/null >>"$2"
+    t=$(wc -c <"$2")
+    [ "$t" -gt "$s" ] || return 0
+    s=$t
+    if [ "$s" -ge "$1" ]; then
+      { head -c "$q" "$2"
+        printf '\n[output past the first %s bytes was not kept, up to its last part below]\n' "$q"
+        tail -c "$q" "$2"; } >"$2.cut" && cat "$2.cut" >"$2"
+      rm -f "$2.cut"
+      s=$(wc -c <"$2")
+    fi
+  done
 }
 """
 
@@ -360,7 +385,8 @@ class Registry:
                                                     resolve=ws_resolve))
         else:
             cap = str(self.log_max_bytes)
-            keep_out = f"keep_head {cap} {shlex.quote(out)}"
+            keeper = "keep_tail" if foreground else "keep_head"
+            keep_out = f"{keeper} {cap} {shlex.quote(out)}"
             if err is not None:
                 # stdout and stderr each through their own pipe: both are
                 # members of the pipeline, so both are written out before
@@ -372,7 +398,7 @@ class Registry:
             fd3 = f"exec 3>{shlex.quote(cwd_file)}\n" if cwd_file else ""
             # The command runs in the pipeline, the guard beside it: a
             # ``wait`` in the command never waits for the guard.
-            script = (f"{fd3}{_KEEP_HEAD}"
+            script = (f"{fd3}{_KEEP_HEAD}{_KEEP_TAIL if foreground else ''}"
                       f"{self._guard(job)} </dev/null >/dev/null 2>&1 3>&- &\n"
                       f'{pipeline}\nexit "${{PIPESTATUS[0]}}"')
             run = ["bash", "-c", script, "bash", *(argv or ["bash", "-c", command])]
