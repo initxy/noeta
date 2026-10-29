@@ -23,7 +23,7 @@ from noeta.core.events import External, Say
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
-from noeta.plugins.subtasks.worktree import add_worktree
+from noeta.plugins.subtasks.worktree import make_agent_worktree
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
@@ -247,7 +247,7 @@ class AgentTool:
             config[TRANSCRIPT_KEY] = transcripts
         worktree = None
         if isolation == "worktree":
-            worktree = await add_worktree(ctx, config)
+            worktree = await make_agent_worktree(ctx, config)
             if isinstance(worktree, str):
                 return text_output(worktree, is_error=True)
             config["cwd"] = worktree["path"]
