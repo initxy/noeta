@@ -42,8 +42,9 @@ Events:
 
 * ``SessionStart`` (``startup``, ``resume``, ``compact``) /
   ``SubagentStart`` — what they add reaches the model.
-* ``UserPromptSubmit`` — before the model answers new messages from the
-  person: adds context, or a block fails the turn and erases those messages.
+* ``UserPromptSubmit`` — before the model first sees new messages from the
+  person (mid-turn ones too): adds context, or a block fails the turn and
+  erases those messages and their command or skill expansions.
 * ``PreToolUse`` — ``permissionDecision`` ``deny`` / ``ask`` / ``allow``
   (an allow skips asking, but a deny or ask rule still wins);
   ``updatedInput`` rewrites the call, which is then checked again.

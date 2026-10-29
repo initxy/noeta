@@ -17,8 +17,10 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
+from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import fold
 from noeta.core.runner import Runtime
+from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks, parse_hooks
 from noeta.plugins.hooks.config import HookCommand
@@ -127,6 +129,70 @@ async def test_a_blocked_skill_command_loses_its_expansion_too(tmp_path: Path) -
     skills = Skills(global_dir=None, global_agents_dir=None)
     texts = await _blocked_expansion(tmp_path, skills, "/deploy SECRET42")
     assert any("hello" in t for t in texts)
+    assert not any("SECRET" in t for t in texts)
+
+
+class _Interject(Extension):
+    """A ``Say`` tool: the person's ``input["text"]`` arrives mid-turn."""
+
+    name = "interject"
+
+    def __init__(self, client: Client) -> None:
+        self.client = client
+
+    def tools(self, view: TaskView) -> list[Tool]:
+        return [_SayTool(self.client)]
+
+
+class _SayTool:
+    name = "Say"
+    description = "Say."
+    input_schema: dict[str, Any] = {"type": "object"}
+    read_only = True
+    clearable = False
+
+    def __init__(self, client: Client) -> None:
+        self.client = client
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        await self.client.send(ctx.task_id, input["text"], when="now")
+        return text_output("said")
+
+
+async def _mid_turn(tmp_path: Path, steps: list[Any],
+                    prompts: tuple[str, ...]) -> ScriptedProvider:
+    hooks = {"UserPromptSubmit": _hook("grep -q SECRET && { echo blocked >&2; exit 2; }; "
+                                       "exit 0")}
+    work = tmp_path / "w"
+    work.mkdir()
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider(steps)
+    client = Client(store)
+    agent = Agent(name="a", model="m", extensions=[_Interject(client), Hooks(hooks=hooks)])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+    tid = await client.create("a", prompts[0], config={"cwd": str(work)})
+    await rt.run_until_idle()
+    for p in prompts[1:]:
+        await client.send(tid, p)
+        await rt.run_until_idle()
+    return provider
+
+
+async def test_a_message_sent_mid_turn_goes_through_the_hook(tmp_path: Path) -> None:
+    provider = await _mid_turn(tmp_path, [reply("", ("Say", {"text": "my SECRET is 42"})),
+                                          reply("ok")], ("go", "hello"))
+    assert all("SECRET" not in m.text for r in provider.requests for m in r.messages)
+    assert any(m.text == "hello" for m in provider.requests[-1].messages)
+
+
+async def test_a_blocked_prompt_leaves_what_the_model_already_saw(tmp_path: Path) -> None:
+    provider = await _mid_turn(tmp_path, [reply("", ("Say", {"text": "also check docs"})),
+                                          reply("done"), reply("ok")],
+                               ("go", "my SECRET is 42", "hello"))
+    assert len(provider.requests) == 3
+    texts = [m.text for m in provider.requests[-1].messages]
+    assert "also check docs" in texts and "hello" in texts
     assert not any("SECRET" in t for t in texts)
 
 
