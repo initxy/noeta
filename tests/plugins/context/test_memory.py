@@ -272,3 +272,30 @@ async def test_recall_attaches_a_long_memory_cut_to_its_start(h: Harness, tmp_pa
     [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
     assert len(recalled.text.encode()) < 4096 + 800
     assert f"Read {directory / 'big.md'} for the whole file." in recalled.text
+
+
+async def test_an_old_recalled_memory_says_how_old_it_is(h: Harness, tmp_path: Path) -> None:
+    import os
+    import time
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "old.md", "old fact", "The parser lives in a.py:10.")
+    _memory(directory, "new.md", "new fact", "Fresh.")
+    _memory(directory, "day.md", "a day old", "Yesterday.")
+    week = time.time() - 7 * 86_400 - 60
+    os.utime(directory / "old.md", (week, week))
+    one = time.time() - 1.5 * 86_400
+    os.utime(directory / "day.md", (one, one))
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["old.md", "new.md", "day.md"]})),
+                   reply("ok"))
+    await h.start(a, goal="where is the parser")
+    [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
+    text = recalled.text
+    assert f"This memory was last changed 7 days ago. A memory records what was true when " \
+        f"it was written" in text
+    assert "Check against the current code before stating it as fact.\n" \
+        f"Memory {directory / 'old.md'}:" in text
+    # A day old or less carries no note (Claude Code's threshold).
+    assert text.count("last changed") == 1

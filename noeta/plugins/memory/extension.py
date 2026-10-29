@@ -19,6 +19,7 @@ import json
 import logging
 import posixpath
 import re
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from importlib import resources
@@ -87,6 +88,11 @@ ERASED_SEQS_KEEP = 64
 RECALL_FILE_MAX_LINES = 200
 RECALL_FILE_MAX_BYTES = 4096
 RECALL_CUT_NOTE = "> Only {what} of this memory are shown; Read {path} for the whole file."
+#: Put ahead of a recalled file last changed more than a day ago.
+RECALL_STALE_NOTE = (
+    "This memory was last changed {days} days ago. A memory records what was true when it was "
+    "written, not what is true now: what it says about the code, and any file:line it cites, "
+    "may be out of date. Check against the current code before stating it as fact.")
 RECALL_HEAD = ("Memories that may be relevant to this message; use one only if it really "
                "applies to what the user asked.")
 _RECALL_SCHEMA = {
@@ -130,6 +136,17 @@ def recalled_text(path: str, text: str) -> str:
         text, what = (kept[:newline] if newline > 0 else kept), \
             f"the first {RECALL_FILE_MAX_BYTES} bytes"
     return f"{text}\n{RECALL_CUT_NOTE.format(what=what, path=path)}" if what else text
+
+
+def _stale_note(path: Path, now: float | None = None) -> str:
+    """The note ahead of a memory changed more than a day ago (``""``
+    otherwise), on its own line."""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return ""
+    days = int(max(0.0, (now if now is not None else time.time()) - mtime) // 86_400)
+    return RECALL_STALE_NOTE.format(days=days) + "\n" if days > 1 else ""
 
 
 def _instructions_show_index(view: TaskView, name: str) -> bool:
@@ -400,7 +417,7 @@ class Memory(Extension):
             if used + size > budget:
                 break
             used += size
-            parts.append(f"Memory {path}:\n{shown}")
+            parts.append(f"{_stale_note(path)}Memory {path}:\n{shown}")
             paths.append(str(path))
         if not parts:
             return None
