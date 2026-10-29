@@ -839,3 +839,22 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   whole config through the unguarded client, so a tenant could rewind a task host code made
   with plugin keys (`permission_rules`) or a mode a request may not ask for, on the
   `default` queue.
+- A non-default tenant's sandboxed commands cannot read or write a server directory (the
+  worker's working directory, serve's `--allow-root`) that lies inside the tenant's
+  workspace. Before, `TenantFence.confine` left such a directory out of what it hides, so
+  the tenant's `Bash` read and overwrote the server's files there while its file tools were
+  refused.
+- A credential store created after a non-default tenant's task started (a new `~/.aws`,
+  `~/.netrc`, ... in any home directory) is hidden from that task's next sandboxed
+  command. Before, `TenantFence.confine` hid only the ones that existed when the task's
+  environment was built.
+- `noeta serve` keeps a query-string token out of uvicorn's logs whatever way its key is
+  spelled: `?%74oken=` (which the server decodes to `token` and accepts) is redacted too.
+  Before, only a literal `token=` was.
+- `noeta worker` hides `noeta serve`'s directories from other tenants' tasks when told
+  where they are: `[server] dirs = [...]` in `config.toml` (read by both) or
+  `noeta worker --server-dir PATH` (repeatable). A worker also refuses `bypassPermissions`
+  unless started with `--allow-bypass-permissions`, as `noeta serve` does. Before, with
+  `noeta serve --no-worker` and separate workers, serve's working directory and
+  `--allow-root` paths were readable to other tenants' tasks (and a worker started in `/`
+  hid no server directory), and a worker's tasks could be switched into bypassPermissions.

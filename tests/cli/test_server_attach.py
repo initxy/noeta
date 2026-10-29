@@ -4,6 +4,7 @@ asked (``--cwd`` names a directory on the server, ``--model`` a model)."""
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +32,9 @@ def no_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 ])
 def test_the_tui_on_a_server_needs_no_local_model(
         argv: list[str], asked: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    import noeta.cli.tui as tui
-
+    # The module ``noeta.cli.main`` imports from: another test may have
+    # made the package attribute a different copy.
+    tui = importlib.import_module("noeta.cli.tui")
     seen: dict[str, Any] = {}
     monkeypatch.setattr(tui, "run_tui", lambda _s, **kw: seen.update(kw))
     cli.main(["--server", "http://api.internal:8642", *argv])

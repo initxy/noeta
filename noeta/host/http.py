@@ -57,6 +57,7 @@ import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
+from urllib.parse import unquote_plus
 
 from starlette.applications import Starlette
 from starlette.routing import Route, WebSocketRoute
@@ -109,8 +110,20 @@ class _Front:
         return None
 
 
-#: A bearer token in a query string (the WebSocket's ``?token=``).
-_QUERY_TOKEN = re.compile(r"(?i)([?&]token=)[^&\s\"']*")
+#: A query parameter: its separator and key, and its value.
+_QUERY_PARAM = re.compile(r"([?&][^=&\s\"']*=)([^&\s\"']*)")
+
+
+def _redact(text: str) -> str:
+    """``text`` with the value of each ``token`` query parameter (the
+    WebSocket's ``?token=``) replaced, its key matched as the server
+    decodes it (``%74oken``)."""
+    def one(m: re.Match[str]) -> str:
+        key = unquote_plus(m.group(1)[1:-1]).lower()
+        return m.group(1) + "REDACTED" if key == "token" else m.group(0)
+    return _QUERY_PARAM.sub(one, text)
+
+
 #: The loggers uvicorn names a request's path in.
 _UVICORN_LOGGERS = ("uvicorn.access", "uvicorn.error")
 
@@ -121,10 +134,10 @@ class _RedactQueryToken(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str):
-            record.msg = _QUERY_TOKEN.sub(r"\1REDACTED", record.msg)
+            record.msg = _redact(record.msg)
         if isinstance(record.args, tuple):
-            record.args = tuple(_QUERY_TOKEN.sub(r"\1REDACTED", a) if isinstance(a, str)
-                                else a for a in record.args)
+            record.args = tuple(_redact(a) if isinstance(a, str) else a
+                                for a in record.args)
         return True
 
 

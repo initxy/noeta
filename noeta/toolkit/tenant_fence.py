@@ -242,9 +242,13 @@ class TenantFence:
         workspace = self.workspaces.get(tenant)
         others = [w for name, w in self.workspaces.items() if name != tenant]
         temps = self.temp_places()
-        servers = [d for d in self.servers()
-                   if not (workspace and _within(_real(d), _real(workspace)))]
-        creds = [c for c in credential_paths() if os.path.lexists(c)]
+        # A server directory inside the workspace stays hidden (the
+        # workspace is mounted first); one holding the workspace is hidden
+        # with the workspace mounted again inside it.
+        servers = self.servers()
+        # Missing ones too: the plan is made again for each command, so one
+        # created after the task started is hidden from the next command.
+        creds = credential_paths()
         denied = [home, *(p for p in (self.spill_root, self.plans_dir) if p),
                   *(s for s in SYSTEM_PATHS if s != "/proc"), *self.store_files, *others,
                   *temps, *servers, *creds, *settings.deny_read]
