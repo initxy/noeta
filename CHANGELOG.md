@@ -13,7 +13,10 @@ All notable changes to Noeta are documented here. The format is based on
   store.** This release writes log entries an older worker cannot decode (messages with
   `role="system"`, origins `inline` and `agent`, `ToolReference` blocks), so an older worker
   that picks up a task a newer one touched fails on it again and again. Logs written by
-  older versions still load.
+  older versions still load. A newer schema is now refused, but an older sqlite binary never
+  checked: left running, it keeps writing the upgraded sqlite store and holds trees in the
+  old `holds` table that newer workers do not read. Stop every old sqlite worker before
+  upgrading.
 - **noeta reads only its own places, with Claude Code's mechanisms.** `~/.claude/`,
   `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and `CLAUDE_CONFIG_DIR` are no
   longer read, so the two tools never pick up each other's hooks, env or instructions.
