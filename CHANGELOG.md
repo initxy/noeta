@@ -439,6 +439,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 
 ### Fixed
 
+- **`function_tool` leaves `*args` and `**kwargs` out of the schema.** They became
+  parameters named `args` and `kwargs` the model was told to fill.
 - **A sync `function_tool` runs off the event loop.** It ran on the worker's event loop,
   so a blocking function stalled every other task of the worker; it now runs in a thread.
 - **The MCP plugin keeps a bounded number of tasks in memory.** Its per-task entries (the

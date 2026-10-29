@@ -79,6 +79,8 @@ class _FunctionTool:
             if _is_context(param, hint):
                 self._context = param.name
                 continue
+            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue  # nothing the model names
             properties[param.name] = _schema(hint)
             if param.default is inspect.Parameter.empty:
                 required.append(param.name)

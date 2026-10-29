@@ -88,3 +88,17 @@ async def test_a_sync_function_runs_off_the_event_loop() -> None:
     out = await where.run({}, ToolContext(task_id="t", call_id="c", env=None, state={},
                                        record=lambda *_: None))
     assert out.content[0].text != threading.current_thread().name  # type: ignore[union-attr]
+
+
+async def test_star_parameters_stay_out_of_the_schema() -> None:
+    @function_tool
+    def greet(name: str, *args: str, **kwargs: str) -> str:
+        """Greet someone."""
+        return f"hi {name}"
+
+    assert greet.input_schema == {"type": "object", "additionalProperties": False,
+                                  "required": ["name"],
+                                  "properties": {"name": {"type": "string"}}}
+    out = await greet.run({"name": "a"}, ToolContext(task_id="t", call_id="c", env=None,
+                                                     state={}, record=lambda *_: None))
+    assert not out.is_error
