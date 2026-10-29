@@ -219,11 +219,13 @@ class Skills(Extension):
             if self.trusted is None or self.trusted(cwd):
                 out += [(gated[0], 3), (gated[1], 4)]
             elif cwd not in _warned_untrusted:
-                if len(_warned_untrusted) >= WARNED_KEEP:
-                    del _warned_untrusted[next(iter(_warned_untrusted))]
-                _warned_untrusted[cwd] = None
-                _log.warning("workspace %s is not trusted; skipping its skill directories: %s",
-                             cwd, ", ".join(gated))
+                skipped = [d for d in gated if os.path.isdir(d)]
+                if skipped:  # nothing is skipped where the directories do not exist
+                    if len(_warned_untrusted) >= WARNED_KEEP:
+                        del _warned_untrusted[next(iter(_warned_untrusted))]
+                    _warned_untrusted[cwd] = None
+                    _log.warning("workspace %s is not trusted; skipping its skill "
+                                 "directories: %s", cwd, ", ".join(skipped))
         return out
 
     async def registry(self, env: ExecEnv) -> SkillRegistry:

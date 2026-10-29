@@ -553,13 +553,24 @@ async def test_a_fork_skill_runs_in_a_sub_agent(h: Harness) -> None:
 
 def test_an_untrusted_workspace_is_warned_about_once(
         tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    (tmp_path / ".noeta" / "skills").mkdir(parents=True)
     every_agent = [Skills(trusted=lambda _cwd: False) for _ in range(3)]
     with caplog.at_level("WARNING", logger="noeta.plugins.skills.extension"):
         for skills in every_agent:
             skills.tiers(str(tmp_path))
             skills.tiers(str(tmp_path))
-    warned = [r for r in caplog.records if "is not trusted" in r.getMessage()]
+    warned = [r.getMessage() for r in caplog.records if "is not trusted" in r.getMessage()]
     assert len(warned) == 1
+    # Only the skill directories that exist are named.
+    assert str(tmp_path / ".noeta" / "skills") in warned[0]
+    assert str(tmp_path / ".agents" / "skills") not in warned[0]
+
+
+def test_an_untrusted_workspace_without_skill_directories_is_not_warned_about(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="noeta.plugins.skills.extension"):
+        Skills(trusted=lambda _cwd: False).tiers(str(tmp_path / "plain"))
+    assert not [r for r in caplog.records if "is not trusted" in r.getMessage()]
 
 
 def test_the_untrusted_warnings_remembered_are_bounded(tmp_path: Path) -> None:
@@ -567,5 +578,6 @@ def test_the_untrusted_warnings_remembered_are_bounded(tmp_path: Path) -> None:
 
     skills = Skills(trusted=lambda _cwd: False)
     for n in range(extension.WARNED_KEEP + 50):
+        (tmp_path / f"w{n}" / ".noeta" / "skills").mkdir(parents=True)
         skills.tiers(str(tmp_path / f"w{n}"))
-    assert len(extension._warned_untrusted) <= extension.WARNED_KEEP
+    assert len(extension._warned_untrusted) == extension.WARNED_KEEP

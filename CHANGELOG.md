@@ -550,6 +550,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
   a token, so Chinese, Japanese or Korean text was undercounted three- to four-fold.
 - MCP sign-ins that ended are let go three minutes after they started, instead of being
   kept for the life of the worker.
+- `noeta -p` in an untrusted directory no longer warns that it skips `.agents/skills` and
+  `.noeta/skills` when neither exists; the warning names only the skill directories that do.
 
 ### Security
 
