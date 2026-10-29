@@ -77,6 +77,7 @@ class Prepared:
     listeners: Listeners | None = None
     workdir: str | None = None
     placeholders: list[tuple[str, bool]] = field(default_factory=list)
+    remove_after: list[str] = field(default_factory=list)
     _closed: bool = field(default=False, repr=False)
 
     def violations(self) -> list[str]:
@@ -87,6 +88,7 @@ class Prepared:
             return
         self._closed = True
         _release(self.placeholders)
+        _remove_planted(self.remove_after)
         if self.proxy is not None and self.listeners is not None:
             await self.proxy.close(self.listeners)
         if self.workdir is not None:
@@ -192,6 +194,7 @@ class LocalSandbox:
         prepared = Prepared(argv=[], env={"TMPDIR": self.tmpdir()}, workdir=work)
         try:
             plan = plan_paths(self.settings, self.root, self.tmpdir(), writable)
+            prepared.remove_after = plan.remove_after
             if self.platform.startswith("linux"):
                 prepared.placeholders = _hold(plan)
                 await self._linux(prepared, plan, list(argv), cwd, work, writable)
@@ -283,6 +286,19 @@ def _release(placeholders: list[tuple[str, bool]]) -> None:
                     os.unlink(path)
             else:
                 os.rmdir(path)
+        except OSError:
+            pass
+
+
+def _remove_planted(paths: list[str]) -> None:
+    """Remove what a command made at a path that was missing and that it
+    must not leave behind (a ``.git/commondir``)."""
+    for path in paths:
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            elif os.path.lexists(path):
+                os.unlink(path)
         except OSError:
             pass
 

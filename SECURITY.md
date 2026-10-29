@@ -37,14 +37,19 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
 - **The sandbox** (`sandbox.enabled` in settings: bubblewrap on Linux, Seatbelt on macOS)
   confines `Bash` to the working directory and allowed paths, with network only to allowed
   domains through a filtering proxy. Paths that would run code later without a person's
-  confirmation (`.noeta/`, `.git/hooks`, `.git/config`, package-manager and build-tool settings)
-  stay read-only, and missing ones are covered by empty read-only placeholders so they cannot be
-  created. An escape from the sandbox, or a write to one of these paths from inside it, is a
-  vulnerability. Without the sandbox, commands run with your user's rights after approval —
+  confirmation (`.noeta/`, `.git/hooks`, `.git/config`, what points git at other config or hooks
+  — `.git/commondir`, `.git/modules/` — and package-manager and build-tool settings) stay
+  read-only, and missing ones are covered by empty read-only placeholders so they cannot be
+  created; on Linux a `.git/commondir` the command creates is removed when it ends (git cannot
+  run with an empty one). An escape from the sandbox, or a write to one of these paths from
+  inside it, is a vulnerability. Without the sandbox, commands run with your user's rights after approval —
   that is intended.
 - **An untrusted project configures nothing.** A cloned repository's `.noeta/` settings,
   agents, prompts, skills and plugins load only after `noeta trust`; its MCP servers start only
-  with consent in its own settings. noeta never reads Claude Code's own files (`~/.claude`,
+  with consent in its own settings. Its instruction files (`NOETA.md`, `AGENTS.md`,
+  `.noeta/rules/`) are read without trust, as Claude Code reads `CLAUDE.md`: they are text
+  for the model, which configures and runs nothing, so they are untrusted input like the rest
+  of the repository. noeta never reads Claude Code's own files (`~/.claude`,
   `.claude/`, `CLAUDE.md`, a project's `.mcp.json`). The one `.mcp.json` it reads is a
   Claude-Code-format plugin's own, inside a plugin directory in noeta's plugin places
   (`~/.noeta/plugins/<plugin>/`; a trusted project's `.noeta/plugins/<plugin>/` never starts

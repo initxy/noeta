@@ -76,21 +76,19 @@ async def test_pages_picks_one_page_or_a_range(h: Harness, ws: Path) -> None:
 
 
 @needs_poppler
-async def test_page_images_are_cleaned_up(h: Harness, ws: Path) -> None:
-    seen: list[str] = []
+async def test_pages_are_rendered_to_stdout_with_no_files(h: Harness, ws: Path) -> None:
+    seen: list[list[str]] = []
 
     class _Spy(LocalExecEnv):
         async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
-            result = await super().run(argv, **kw)
-            if argv[0] == "mktemp":
-                seen.append(result.stdout.decode().strip())
-            return result
+            seen.append(list(argv))
+            return await super().run(argv, **kw)
 
     spy = Harness(env=_Spy(str(ws)))
     (ws / "doc.pdf").write_bytes(_pdf(1))
     assert not (await spy.call(ReadTool(), file_path="doc.pdf")).is_error
-    [tmp] = seen
-    assert not Path(tmp).exists()
+    assert [argv[0] for argv in seen] == ["pdfinfo", "pdftoppm"]
+    assert sorted(p.name for p in ws.iterdir()) == ["doc.pdf"]
 
 
 @needs_poppler

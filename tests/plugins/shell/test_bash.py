@@ -552,6 +552,53 @@ async def test_a_planted_bare_repository_is_refused_unless_a_person_approved(
     assert [k for k, m in markers.items() if m.exists()] == []
 
 
+def _planted_with_a_work_tree(where: Path, marker: Path, *, bare: bool = False) -> Path:
+    """A git directory ``where/evil`` (not ``.git``) whose config gives it
+    ``where`` as its work tree and a filter that touches ``marker``, with
+    ``f.txt`` in its index and changed since: what a model could write
+    into a directory it may write without asking."""
+    (where / "f.txt").write_text("x\n")
+    _git(where, "init", "-q", "--separate-git-dir", str(where / "evil"), str(where))
+    _git(where, "add", "f.txt")
+    (where / ".git").unlink()
+    config = (where / "evil" / "config").read_text()
+    if bare:
+        config = config.replace("bare = false", "bare = true")
+    (where / "evil" / "config").write_text(
+        config + f'\tworktree = ..\n[filter "x"]\n\tclean = "touch {marker}; cat"\n')
+    (where / "evil" / "info" / "attributes").write_text("* filter=x\n")
+    (where / "f.txt").write_text("y\n")
+    return where / "evil"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+async def test_a_planted_repository_outside_the_workspace_is_refused_when_it_has_a_work_tree(
+        tmp_path: Path) -> None:
+    from noeta.plugins.permissions.scope import Scope, read_only
+
+    ws, extra = tmp_path / "ws", tmp_path / "extra"
+    ws.mkdir()
+    extra.mkdir()
+    marker = tmp_path / "filter-ran"
+    evil = _planted_with_a_work_tree(extra, marker)
+    h = Harness(env=LocalExecEnv(str(ws)))
+    for command in (f"git -C {evil} status", f"git -C {evil} diff", f"cd {evil} && git status",
+                    f"git -C {evil} ls-files -m"):
+        # An additional working directory: read-only, so allowed without asking.
+        assert read_only(command, Scope(dirs=(str(ws), str(extra)), home=str(tmp_path)))
+        out = await bash(h, command)
+        assert out.is_error and "not a .git directory" in text_of(out), command
+    assert not marker.exists()
+    # A bare repository outside the workspace (no work tree, so no filter)
+    # still reads.
+    other = tmp_path / "other"
+    other.mkdir()
+    bare = _planted_with_a_work_tree(other, marker, bare=True)
+    out = await bash(h, f"git -C {bare} log --oneline")
+    assert "not a .git directory" not in text_of(out)
+    assert not marker.exists()
+
+
 # -- the capture cap -------------------------------------------------------------
 
 

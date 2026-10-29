@@ -56,18 +56,27 @@ _GIT_FUNCTION = """git() {
 }
 """.replace("@VALUED@", "|".join(_GIT_GLOBAL_VALUED)).replace(
     "@CONFIG@", " ".join(f"-c {c}" for c in _GIT_SAFE_CONFIG))
-#: The refusal of a repository whose git directory lies under the guard
-#: root (``@ROOT@``) without being a ``.git`` directory or the one a
-#: ``.git`` file at its top names: a bare repository committed into the
-#: workspace, whose config its author wrote. A clone cannot carry a
-#: ``.git`` file, so a worktree's or a separate git directory passes.
+#: The refusal of a repository whose git directory is not a ``.git``
+#: directory or the one a ``.git`` file at its top names, when it lies under
+#: the guard root (``@ROOT@``) or has a work tree: one written as plain files
+#: (a bare repository committed into the workspace, or one a model wrote in
+#: another directory it may write), whose config its author wrote and whose
+#: filters a read of the work tree runs. A clone cannot carry a ``.git``
+#: file, so a worktree's or a separate git directory passes, and so does a
+#: bare repository elsewhere (no work tree: no filter runs).
 _GIT_GUARD = """  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" \\
       -c core.fsmonitor= rev-parse --absolute-git-dir 2>/dev/null) \\
       && _noeta_dir=$(cd "$_noeta_dir" 2>/dev/null && pwd -P); then
-    case "$_noeta_dir/" in
-      @ROOT@/*) case "$_noeta_dir" in
-        */.git|*/.git/*) ;;
-        *) _noeta_top=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
+    case "$_noeta_dir" in
+      */.git|*/.git/*) ;;
+      *) case "$_noeta_dir/" in
+          @ROOT@/*) _noeta_top=1 ;;
+          *) _noeta_top=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" \\
+               -c core.fsmonitor= rev-parse --is-bare-repository 2>/dev/null) || _noeta_top=
+            [ "$_noeta_top" = true ] && _noeta_top= || _noeta_top=1 ;;
+        esac
+        if [ -n "$_noeta_top" ]; then
+          _noeta_top=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}"}" -c core.fsmonitor= \\
              rev-parse --show-toplevel 2>/dev/null) || _noeta_top=
           _noeta_named=
           if [ -n "$_noeta_top" ] && [ -f "$_noeta_top/.git" ]; then
@@ -77,8 +86,8 @@ _GIT_GUARD = """  if _noeta_dir=$(command git "${_noeta_pre[@]+"${_noeta_pre[@]}
           if [ "$_noeta_named" != "$_noeta_dir" ]; then
             printf 'git: refused the repository at %s: not a .git directory\\n' \\
               "$_noeta_dir" >&2; return 128
-          fi ;;
-      esac ;;
+          fi
+        fi ;;
     esac
   fi
 """

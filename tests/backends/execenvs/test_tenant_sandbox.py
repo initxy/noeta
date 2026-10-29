@@ -482,10 +482,12 @@ def test_a_tenants_profile_drops_the_operators_socket_and_namespace_allowances(
     p = Places(tmp_path)
     loose = SandboxSettings(enabled=True, allow_all_unix_sockets=True,
                             allow_unix_sockets=("/run/user/1000/bus",),
-                            nested_user_namespaces=True)
+                            nested_user_namespaces=True, allow_local_binding=True)
     box = p.fence.confine(loose, tenant="acme", task_id="t1", cwd=str(p.mine))
     assert not box.allow_all_unix_sockets and box.allow_unix_sockets == ()
     assert not box.nested_user_namespaces
+    # On macOS it also opens every localhost port, the server's own included.
+    assert not box.allow_local_binding
     assert p.fence.confine(loose, tenant="default", task_id="t1") is loose
 
 

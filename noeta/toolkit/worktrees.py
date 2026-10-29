@@ -19,6 +19,8 @@ __all__ = ["WORKTREES", "add_worktree", "after_jobs", "cancel_after_jobs", "git"
 
 #: Where new worktrees go, under the directory that holds them.
 WORKTREES = ".noeta/worktrees"
+#: Global flags for git noeta runs itself: no hook, no fsmonitor command.
+GIT_NO_HOOKS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=")
 
 #: The working directories of this process's running shell jobs, counted by
 #: (filesystem, path) (the shell plugin keeps it). A job holds its task tree
@@ -108,8 +110,10 @@ def _runs_under(filesystem: object, path: str) -> bool:
 
 async def git(env: ExecEnv, args: Sequence[str], cwd: str) -> tuple[int, str]:
     """``git args`` in ``cwd``: its exit code and its output (stderr when it
-    failed), stripped. In a tenant's sandbox (it runs hooks)."""
-    out = await run_in_tenant_sandbox(env, ["git", *args], cwd=cwd)
+    failed), stripped. With no hook and no fsmonitor command (what a
+    sandboxed command could have planted in the repository), and in a
+    tenant's sandbox."""
+    out = await run_in_tenant_sandbox(env, ["git", *GIT_NO_HOOKS, *args], cwd=cwd)
     text = out.stdout if out.exit_code == 0 else out.stderr or out.stdout
     return out.exit_code, text.decode(errors="replace").strip()
 

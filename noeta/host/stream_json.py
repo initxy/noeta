@@ -54,6 +54,7 @@ from noeta.core.events import (
 from noeta.core.extension import CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta, Message, Text, Usage
+from noeta.host._errors import error_text
 from noeta.host._stream_json_control import ControlRequests
 from noeta.host._stream_json_wire import PartialMessages, block_json, message_from, usage_json
 from noeta.host.app import AppAPI
@@ -388,7 +389,7 @@ class StreamJson(ControlRequests):
         except Exception as exc:
             log.exception("following task %s failed", self.task_id)
             await self._finish({"subtype": "error_during_execution", "is_error": True,
-                          "errors": [f"lost the task's events: {exc}"]})
+                          "errors": [f"lost the task's events: {error_text(exc)}"]})
         self.ended.set()
 
     async def _event(self, rec: Recorded) -> None:

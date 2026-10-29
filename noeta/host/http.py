@@ -159,7 +159,8 @@ def create_app(client: Client, *, token: str | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
                cwd: str | None = None, roots: Sequence[str] = (),
                workspaces: Mapping[str, str] | None = None,
-               queues: Mapping[str, Sequence[str]] | None = None) -> Starlette:
+               queues: Mapping[str, Sequence[str]] | None = None,
+               server_dirs: Sequence[str] = ()) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -182,7 +183,9 @@ def create_app(client: Client, *, token: str | None = None,
     (instead of ``cwd`` and ``roots``), and by default; ``queues``: per
     tenant, the queues its requests may create tasks on (a tenant not
     named: ``default`` and the queue of its own name; the default tenant:
-    any)."""
+    any); ``server_dirs``: more of the server's own directories (``[server]
+    dirs``), where no other tenant's task may run, like ``cwd`` and
+    ``roots``."""
     if auth and not token and not tokens:
         raise ValueError("create_app needs a bearer token (token= or tokens=); pass "
                          "auth=False to serve every request without one")
@@ -194,7 +197,8 @@ def create_app(client: Client, *, token: str | None = None,
                                                           live=deltas)
     guard = Guard(client, serving, token=token, tokens=tokens, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, roots=roots, workspaces=workspaces, queues=queues)
+                  cwd=cwd, roots=roots, workspaces=workspaces, queues=queues,
+                  server_dirs=server_dirs)
     r = Routes(serving, app, agents)
     s = StreamRoutes(guard, deltas)
     return Starlette(routes=[

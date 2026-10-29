@@ -901,6 +901,65 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- `noeta token add` says that a `noeta serve` started with `--no-token` never reads the new
+  token (it serves every request as the default tenant) and must restart with a token.
+- A fenced `LocalExecEnv.write_bytes` makes missing parent directories one at a time, each
+  relative to its parent opened and checked first. Before, `os.makedirs` followed a link a
+  tenant's command swapped in after the check and made empty directories outside the fence
+  (the file itself was refused).
+- `LocalExecEnv.read_bytes` / `read_range` open without blocking and refuse anything but a
+  regular file (a directory still raises `IsADirectoryError`). Before, reading a FIFO a
+  command had made held a worker thread until something wrote to it.
+- A non-default tenant's sandbox profile drops the operator's `allowLocalBinding` too, as it
+  drops the Unix-socket and namespace allowances: on macOS it lets a command reach every
+  localhost port, the server's own included.
+- `noeta serve` refuses at the edge a tenant's request for a `cwd` in one of the `[server] dirs`
+  inside its workspace, as `docs/server.md` says; the HTTP guard knew only the server's own
+  directory and `--allow-root` (the worker still refused it). `create_app(server_dirs=)` takes
+  them.
+- The end of a `noeta serve` event stream (`/tasks/{id}/watch`) and stream-json's "lost the
+  task's events" result no longer carry an error's raw text: as for other requests, a client
+  gets the text only of an error noeta raised itself, else a generic message (the server logs
+  the error).
+- A non-default tenant's slash-command listing no longer follows its `.noeta/skills` (or
+  `.agents/skills`) linked out of its workspace: it listed the names and descriptions of the
+  skills it pointed at, such as another tenant's. A workspace skill directory must resolve
+  inside the tenant's working directory.
+- The Linux sandbox's filter refused `socket(AF_UNIX)` but not `socketpair(AF_UNIX, ...)`,
+  whose datagram sockets send to any Unix socket by address (the host's journald). It is
+  refused under the same rule, unless Unix sockets are allowed.
+- `noeta serve` takes a structured `input` (`POST /tasks`, `/tasks/{id}/messages`) only as a
+  user turn of text and images, and always as the person's (`origin` `human`). Before, a
+  client could send an assistant or system turn, tool calls and results, or a user turn
+  marked as another agent's or a system notice, forging the conversation and skipping the
+  `UserPromptSubmit` hooks (they look only at the person's turns). Anything else is a 400.
+- **A read-only `git` no longer runs the filters of a repository planted outside the
+  workspace.** A command that only reads with git already ran with the repository's hooks,
+  fsmonitor, pager, signature program and external diff turned off, and refused a git
+  directory written as plain files inside the workspace (`git -C evil status`). In another
+  directory the model may write without asking (an additional working directory), such a
+  repository with `core.worktree` and a `filter.<name>.clean` still ran the filter on
+  `git status` or `git diff`, auto-allowed as read-only. A git directory that is not `.git`
+  (nor named by a `.git` file) is now refused anywhere unless it is bare.
+- The git noeta runs itself for worktrees (`EnterWorktree`, `isolation: "worktree"`) runs no
+  hook and no `core.fsmonitor` command (`-c core.hooksPath=/dev/null -c core.fsmonitor=`), so
+  what a command planted in the repository does not run as the worker; the sandbox's lookup of
+  the hooks directory runs no fsmonitor either.
+- **A sandboxed command can no longer point git at other config or hooks.** It could write
+  `.git/commondir` (git then takes config and hooks from the directory it names) or a
+  submodule's git directory under `.git/modules/`, and the next unsandboxed `git commit` or
+  `git worktree add` ran the planted hooks. `.git/modules/` and an existing `.git/commondir` are
+  now read-only (an empty placeholder covers a missing `.git/modules/`), as are each linked
+  worktree's `commondir` and `gitdir` seen from the main checkout. A missing `.git/commondir`
+  cannot be covered (git dies on an empty one, on the host too): on Linux one the command
+  creates is removed when the command ends; Seatbelt refuses creating it.
+- **A tenant's `Read` of a PDF no longer lets its commands swap the converters' input or
+  output.** The copy and the rendered pages were in the tenant's own commands' `TMPDIR`, so a
+  background command could replace them with links: `pdfinfo` and `pdftoppm`, run by the
+  worker unsandboxed, then read another tenant's PDF or wrote pages into another tenant's
+  workspace. A fenced task's PDF is now read once through the fence and fed to the converters
+  on stdin, and each page is rendered to stdout, so no file is made anywhere. A PDF the fence
+  refuses is now a `Read` error instead of an exception.
 - **A sandboxed command can no longer reach into the network relay it runs under.** The
   relay inside the Linux sandbox (same user, same PID namespace, no system-call filter, and
   holding the proxies' Unix sockets) was dumpable, so where `kernel.yama.ptrace_scope` is 0 a

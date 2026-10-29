@@ -62,12 +62,13 @@ class GuardedClient:
     created on (any when ``None``). ``tenant``: whose requests these are; one
     other than the default needs a workspace to start or place tasks, and
     never reaches into ``others`` (the other tenants' workspaces), even
-    where they lie inside its own."""
+    where they lie inside its own, nor ``server_dirs`` (the server's own
+    directories besides ``cwd`` and ``roots``)."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
                  roots: Sequence[str] = (), workspace: str | None = None,
                  queues: Sequence[str] | None = None, tenant: str = DEFAULT_TENANT,
-                 others: Sequence[str] = ()) -> None:
+                 others: Sequence[str] = (), server_dirs: Sequence[str] = ()) -> None:
         self._client = client
         self._allow_bypass = allow_bypass
         self._queues = None if queues is None else tuple(queues)
@@ -76,7 +77,8 @@ class GuardedClient:
         self._fill = workspace is not None
         # The server's own directories; a tenant's cwd never lies in one
         # inside its workspace (one holding the workspace is its parent).
-        self._servers = [os.path.realpath(d) for d in (cwd, *roots) if d] if self._fill else []
+        self._servers = [os.path.realpath(d) for d in (cwd, *roots, *server_dirs)
+                         if d] if self._fill else []
         if workspace is not None:
             cwd, roots = workspace, ()
         self._cwd = os.path.realpath(cwd) if cwd else None
@@ -276,9 +278,11 @@ class Guard:
                  auth: bool, allowed_hosts: Sequence[str] | None, origins: Sequence[str],
                  allow_bypass: bool, cwd: str | None, roots: Sequence[str],
                  workspaces: Mapping[str, str] | None,
-                 queues: Mapping[str, Sequence[str]] | None = None) -> None:
+                 queues: Mapping[str, Sequence[str]] | None = None,
+                 server_dirs: Sequence[str] = ()) -> None:
         self._client = client
         self._serving = serving
+        self._server_dirs = tuple(server_dirs)
         self._auth = auth
         self._tenant_of = _token_lookup(token, tokens)
         self._allow_bypass = allow_bypass
@@ -301,7 +305,8 @@ class Guard:
             guarded = GuardedClient(scoped, allow_bypass=self._allow_bypass, cwd=self._cwd,
                                     roots=self._roots, workspace=workspaces.get(tenant),
                                     queues=self._queues.get(tenant, tenant_queues(tenant)),
-                                    tenant=tenant, others=others)
+                                    tenant=tenant, others=others,
+                                    server_dirs=self._server_dirs)
             found = self._scopes[tenant] = Scope(tenant, scoped, guarded,
                                                  _GuardedFront(self._serving, guarded, tenant))
         return found

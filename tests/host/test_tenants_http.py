@@ -213,6 +213,25 @@ async def test_a_server_directory_inside_a_workspace_is_not_a_tenants_cwd(
     await store.close()
 
 
+async def test_a_configured_server_directory_is_refused_at_the_edge(tmp_path: Path) -> None:
+    """``[server] dirs`` (``server_dirs``) are the server's too: a tenant's
+    request for one inside its workspace is refused before any worker."""
+    from noeta.core.client import Client
+
+    work = tmp_path / "work"
+    listed = work / "listed"
+    listed.mkdir(parents=True)
+    store = SqliteStore(str(tmp_path / "t.db"))
+    api = create_app(Client(store), token="tok-default", tokens=TOKENS,
+                     cwd=str(tmp_path / "srv"), workspaces={"a": str(work)},
+                     server_dirs=[str(listed)])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
+                                 base_url="http://x", headers=_headers("tok-a")) as a:
+        got = await a.post("/tasks", json={"agent": "main", "config": {"cwd": "listed"}})
+        assert got.status_code == 403 and "server's own" in got.json()["error"]
+    await store.close()
+
+
 async def test_a_tenant_creates_tasks_only_on_its_queues(tmp_path: Path) -> None:
     from noeta.core.client import Client
 
@@ -271,7 +290,8 @@ async def test_a_rewind_creates_its_task_as_a_request_would(tmp_path: Path) -> N
 
 
 def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
-                                               monkeypatch: pytest.MonkeyPatch) -> None:
+                                               monkeypatch: pytest.MonkeyPatch,
+                                               capsys: pytest.CaptureFixture[str]) -> None:
     import stat
 
     from noeta.cli import home_dir, main, tenants
@@ -298,3 +318,5 @@ def test_the_tokens_file_maps_tokens_to_tenants(tmp_path: Path,
     with pytest.raises(SystemExit) as done:
         main.main(["token", "add", "--tenant", "beta"])
     assert done.value.code == 0 and [e["tenant"] for e in tenants.read_tokens()] == ["beta"]
+    # A server started with --no-token never reads the tokens file.
+    assert "--no-token" in capsys.readouterr().err

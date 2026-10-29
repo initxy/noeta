@@ -292,6 +292,26 @@ async def test_without_a_prompt_host_asks_are_refused_and_the_turn_goes_on(
     assert not echo.runs and result["permission_denials"][0]["tool_name"] == "Echo"
 
 
+async def test_a_lost_event_stream_reports_no_raw_error_text(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import noeta.host.stream_json as sj
+
+    async def broken(*_a: Any, **_k: Any) -> AsyncIterator[Any]:
+        json.loads("{")  # a library's error, naming nothing of noeta's
+        yield None
+
+    monkeypatch.setattr(sj, "_follow_tree", broken)
+    app = local(tmp_path, ScriptedProvider([reply("hi")]), Agent(name="main", model=MODEL))
+    c = Client()
+    async with app:
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path)), c.emit)
+        from noeta.core.types import Message, Text
+        result = await asyncio.wait_for(drive(conv, prompt=Message(
+            role="user", content=[Text(text="go")], origin="human")), 10)
+    assert result is not None and result["subtype"] == "error_during_execution"
+    assert "Expecting property name" not in json.dumps(result)
+
+
 async def test_questions_interrupts_max_turns_and_rewind(tmp_path: Path) -> None:
     question = {"questions": [{"question": "Which database?", "header": "DB",
                                "multiSelect": False,
