@@ -77,6 +77,7 @@ class TranscriptView(App[None]):
     stream: MarkdownStream | None
     stream_widget: AssistantMessage | None
     stream_key: tuple[int, int]
+    stream_text: str
     streamed: set[int]
     attempts: dict[int, int]
     called: int
@@ -163,16 +164,31 @@ class TranscriptView(App[None]):
                 Markdown.get_stream(widget), widget, key
         self.attempts[delta.call_seq] = delta.attempt
         self.streamed.add(delta.call_seq)
+        self.stream_text += delta.text
         await self.stream.write(delta.text)
 
     async def _end_stream(self, *, drop: bool = False) -> None:
-        if self.stream is not None:
-            await self.stream.stop()
-            self.stream = None
-        if drop and self.stream_widget is not None:
-            await self.stream_widget.remove()
+        # Taken off the app before the first await: the delta pump and the
+        # follower both end streams, and the other may start the next one
+        # (the retry's) meanwhile.
+        stream, widget, text = self.stream, self.stream_widget, self.stream_text
+        self.stream, self.stream_widget, self.stream_text = None, None, ""
+        if drop and widget is not None:
             self.streamed.discard(self.stream_key[0])
-        self.stream_widget = None
+        if stream is not None:
+            try:
+                await stream.stop()
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise
+                # Textual's stream task was cancelled before it first ran
+                # (a loaded loop): the cancel surfaces here and what was
+                # written never reached the widget.
+                if not drop and widget is not None:
+                    await widget.update(text)
+        if drop and widget is not None:
+            await widget.remove()
 
     async def _retried(self, failed_attempt: int) -> None:
         """A model call's attempt failed: what it streamed is dropped."""

@@ -99,6 +99,8 @@ class NoetaApp(TranscriptView):
         self.stream_widget: AssistantMessage | None = None
         #: The model call (its ``ModelCalled`` seq) and attempt being streamed.
         self.stream_key = (0, 1)
+        #: What was written to the stream so far.
+        self.stream_text = ""
         #: Model calls whose text was streamed (their reply is not shown again).
         self.streamed: set[int] = set()
         #: Per model call, the attempt still live (earlier ones failed).
