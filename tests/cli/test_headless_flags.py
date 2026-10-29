@@ -5,6 +5,9 @@ above the project's), ``--setting-sources`` (which layers load),
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -151,3 +154,28 @@ def test_an_unknown_model_from_the_settings_file_is_announced_once(
     said = [*capsys.readouterr().err.splitlines(), *(r.getMessage() for r in caplog.records)]
     named = [line for line in said if "gateway-model-y2" in line]
     assert len(named) == 1 and "doesn't recognize" in named[0], named
+
+
+def test_stream_json_input_reads_a_regular_file_on_stdin(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    work = tmp_path / "work"
+    work.mkdir()
+    lines = tmp_path / "in.jsonl"
+    lines.write_text(
+        "not json\n"
+        + json.dumps({"type": "control_request", "request_id": "r1",
+                      "request": {"subtype": "initialize"}}) + "\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("NOETA_")}
+    env.update(NOETA_HOME=str(home), NOETA_MODEL="sonnet", NOETA_API_KEY="k",
+               NOETA_STORE=f"sqlite:///{tmp_path / 't.db'}")
+    with lines.open("rb") as stdin:  # a regular file (`< in.jsonl`), not a pipe
+        done = subprocess.run(
+            [sys.executable, "-m", "noeta.cli.main", "-p", "--input-format", "stream-json",
+             "--output-format", "stream-json", "--verbose", "--cwd", str(work)],
+            stdin=stdin, capture_output=True, text=True, env=env, timeout=120, check=False)
+    assert done.returncode == 0, done.stderr
+    assert "noeta: not JSON" in done.stderr
+    out = [json.loads(x) for x in done.stdout.splitlines()]
+    [response] = [x for x in out if x["type"] == "control_response"]
+    assert response["response"]["request_id"] == "r1"
