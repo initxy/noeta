@@ -560,3 +560,12 @@ def test_an_untrusted_workspace_is_warned_about_once(
             skills.tiers(str(tmp_path))
     warned = [r for r in caplog.records if "is not trusted" in r.getMessage()]
     assert len(warned) == 1
+
+
+def test_the_untrusted_warnings_remembered_are_bounded(tmp_path: Path) -> None:
+    from noeta.plugins.skills import extension
+
+    skills = Skills(trusted=lambda _cwd: False)
+    for n in range(extension.WARNED_KEEP + 50):
+        skills.tiers(str(tmp_path / f"w{n}"))
+    assert len(extension._warned_untrusted) <= extension.WARNED_KEEP
