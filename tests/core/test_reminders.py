@@ -12,6 +12,7 @@ from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.loop.request import cache_breakpoints
+from noeta.core.records import CORE
 from noeta.core.runner import Runtime
 from noeta.testing import ScriptedProvider, reply
 
@@ -91,4 +92,34 @@ async def test_user_reminders_come_first_then_system_turns_by_order(tmp_path: Pa
     assert request.messages[1].origin == "system"
     # One breakpoint, on the newest message, as Claude Code places it.
     assert request.cache_after == [3]
+    await store.close()
+
+
+class ErasesThenReminds(Extension):
+    """On the first call, erases the person's message (as a blocked prompt
+    is) and reminds, without failing the turn."""
+
+    name = "eraser"
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        if any(m.origin == "system" for m in view.state.messages):
+            return ()
+        view.record(CORE, "erased", {"seqs": list(view.state.message_seqs)})
+        return (Reminder(text="Note."),)
+
+
+async def test_a_reminder_round_that_erases_messages_sends_what_the_log_holds(
+        tmp_path: Path) -> None:
+    """The request's recorded messages are taken again from the log once the
+    reminders are recorded, not counted on: an erase among them shifts the
+    count."""
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("ok")])
+    agent = Agent(name="a", model="m", extensions=[ErasesThenReminds()])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 sleep=_no_sleep)
+    await Client(store).create("a", "secret")
+    await rt.run_until_idle()
+    [request] = provider.requests
+    assert [m.text for m in request.messages] == ["Note."]
     await store.close()
