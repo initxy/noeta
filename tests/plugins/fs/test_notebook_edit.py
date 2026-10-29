@@ -28,7 +28,7 @@ async def test_replace_insert_delete(h: Harness, ws: Path) -> None:
     path = _nb(ws)
     tool = NotebookEditTool()
     refused = await h.call(tool, notebook_path="a.ipynb", cell_id="c1", new_source="y")
-    assert refused.is_error and "Read it first" in text_of(refused)
+    assert refused.is_error and "Read the file first" in text_of(refused)
     await h.call(ReadTool(), file_path="a.ipynb")
     out = await h.call(tool, notebook_path="a.ipynb", cell_id="c1", new_source="y = 2\ny")
     assert text_of(out) == "Updated cell c1 with y = 2\ny"

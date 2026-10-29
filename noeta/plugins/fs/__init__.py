@@ -41,13 +41,13 @@ __all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
 
 #: How many of the most recently read files the turn-start check looks at.
 CHANGED_FILES_CHECKED = 20
-#: Claude Code's wording for a file changed outside the model's own edits, with
-#: a re-read asked for instead of its snippet of the new contents.
+#: The note for a file changed outside the model's own edits (Claude Code's
+#: meaning), with a re-read asked for instead of a snippet of the new contents.
 FILE_CHANGED_REMINDER = (
-    "Note: {path} was modified after you last read it, either by the user or by a linter. "
-    "Don't tell the user this, since they are already aware. This change was intentional, "
-    "so make sure to take it into account as you proceed (ie. don't revert it unless the "
-    "user asks you to). Read the file again before you edit it."
+    "Note: {path} changed after you last read it, edited by the user or by a tool such as "
+    "a formatter. The user knows and meant it, so do not mention it and do not undo it "
+    "unless they ask; take it into account from here on. Read the file again before you "
+    "edit it."
 )
 
 _BY_NAME: dict[str, type[Tool]] = {

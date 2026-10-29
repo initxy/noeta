@@ -397,11 +397,10 @@ class ReadTool:
         if w.explicit_limit is None and w.size > _READ_MAX_FILE_BYTES and not w.large:
             return tool_error(
                 self.name,
-                f"File content ({format_size(w.size)}) exceeds maximum allowed "
-                f"size ({format_size(_READ_MAX_FILE_BYTES)}). Use offset and "
-                "limit parameters to read specific portions of the file, or "
-                "search for specific content instead of reading the whole "
-                "file.",
+                f"At {format_size(w.size)} the file is over the "
+                f"{format_size(_READ_MAX_FILE_BYTES)} limit for a read of the whole "
+                "file. Read a part with offset and limit, or search the file for "
+                "what you need.",
             )
 
         start = w.offset - 1

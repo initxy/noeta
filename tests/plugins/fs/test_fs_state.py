@@ -150,7 +150,7 @@ async def test_never_read_is_refused(h: Harness, ws: Path) -> None:
     h.approved = True
     _setup(ws)
     out = await h.call(EditTool(), file_path="a.py", old_string="x = 1", new_string="x = 10")
-    assert "File has not been read yet" in text_of(out)
+    assert "this conversation has not read" in text_of(out)
 
 
 async def test_dropped_records_vouch_for_nothing(h: Harness, ws: Path) -> None:
@@ -161,7 +161,7 @@ async def test_dropped_records_vouch_for_nothing(h: Harness, ws: Path) -> None:
     await h.call(ReadTool(), file_path="a.py")
     h.records.clear()
     out = await _fresh(h).call(EditTool(), file_path="a.py", old_string="x = 1", new_string="x = 10")
-    assert "File has not been read yet" in text_of(out)
+    assert "this conversation has not read" in text_of(out)
 
 
 async def test_the_read_is_recorded_under_the_canonical_path(h: Harness, ws: Path) -> None:

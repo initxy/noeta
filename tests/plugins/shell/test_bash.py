@@ -166,11 +166,11 @@ async def test_a_long_leading_sleep_is_blocked_before_it_runs(h: Harness, ws: Pa
     out = await bash(h, f"sleep 110 && touch {marker}")
     assert out.is_error
     assert text_of(out) == (
-        f"Bash: Blocked: sleep 110 followed by: touch {marker}. To wait for a "
-        "condition, use Monitor with an until-loop (e.g. `until <check>; do "
-        "sleep 2; done`). To wait for a command you started, use "
-        "run_in_background: true. Do not chain shorter sleeps to work around "
-        "this block."
+        f"Bash: Blocked: sleep 110 followed by: touch {marker}. To wait until "
+        "something is true, run an until-loop under Monitor (`until <check>; do "
+        "sleep 2; done`); to wait for a command of yours, start it with "
+        "run_in_background: true. Do not get around this with a chain of shorter "
+        "sleeps."
     )
     assert not marker.exists()
 

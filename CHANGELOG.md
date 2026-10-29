@@ -276,6 +276,12 @@ All notable changes to Noeta are documented here. The format is based on
     its own name. `ReportFindings` refuses values outside its schema; `Workflow` runs at least
     two agents at once and lists the saved workflows for an unknown name; `ExitPlanMode`
     outside plan mode says what to do next; `EnterWorktree` refuses `.` and `.git` segments.
+- **More tool messages in noeta's own words.** The errors and notes the recordings never show
+  still repeated Claude Code's sentences; they now say the same in noeta's words, with the
+  same numbers: `Edit` on several matches, the read-before-write refusal, `Read`'s size and
+  token ceilings, the PDF page limits, a missing `pdftoppm`, a password-protected or
+  unrenderable PDF, a notebook's oversized outputs, the note about a file changed since it
+  was read, and `Bash`'s refusal of a long leading `sleep`.
 
 ### Store contract
 

@@ -87,11 +87,11 @@ async def test_told_once_per_change(tmp_path: Path) -> None:
     await client.send(tid, "edit b")
     await rt.run_until_idle()
     turn2 = provider.requests[2]
-    assert _notes(turn2) == [f"Note: {a} was modified after you last read it, either by the "
-                             "user or by a linter. Don't tell the user this, since they are "
-                             "already aware. This change was intentional, so make sure to take "
-                             "it into account as you proceed (ie. don't revert it unless the "
-                             "user asks you to). Read the file again before you edit it."]
+    assert _notes(turn2) == [f"Note: {a} changed after you last read it, edited by the user "
+                             "or by a tool such as a formatter. The user knows and meant it, "
+                             "so do not mention it and do not undo it unless they ask; take "
+                             "it into account from here on. Read the file again before you "
+                             "edit it."]
     assert len(_notes(provider.requests[3])) == 1  # checked only at the start of a turn
 
     await client.send(tid, "again")  # nothing new changed; b was the model's own edit

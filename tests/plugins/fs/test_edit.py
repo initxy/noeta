@@ -118,7 +118,8 @@ async def test_edit_without_read_first_rejected(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="hello", new_string="world")
     assert out.is_error
     assert text_of(out) == (
-        "Edit: File has not been read yet. Read it first before editing it."
+        "Edit: Read the file first: editing a file this conversation has not read is "
+        "refused."
     )
     assert target.read_text() == "hello\n"
 
@@ -262,9 +263,9 @@ async def test_edit_multi_match_fails_no_write(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="foo", new_string="bar")
     assert out.is_error
     assert text_of(out) == (
-        "Edit: Found 3 matches of the string to replace, but replace_all is false. "
-        "To replace all occurrences, set replace_all to true. To replace only one, "
-        "provide more surrounding context to uniquely identify the instance."
+        "Edit: old_string occurs 3 times in the file and replace_all is false, so "
+        "nothing was changed. Set replace_all to true to change all 3, or add nearby "
+        "lines to old_string until it matches only one."
     )
     assert target.read_text() == "foo\nfoo\nfoo\n"
 
@@ -276,7 +277,7 @@ async def test_edit_replace_all_false_still_rejects_multi_match(h: Harness, ws: 
         EditTool(), file_path="a.py", old_string="foo", new_string="bar", replace_all=False
     )
     assert out.is_error
-    assert "Found 2 matches" in text_of(out)
+    assert "old_string occurs 2 times" in text_of(out)
     assert (ws / "a.py").read_text() == "foo\nfoo\n"
 
 
