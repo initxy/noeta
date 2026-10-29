@@ -43,13 +43,15 @@ Arguments come from `~/.noeta/config.toml` `[plugins.<name>]`; `enabled = false`
 off everywhere; `[agents.<name>] add_plugins` adds one without `add_to`. A secret is written as
 `"{env:NAME}"` or `"{keyring:service/user}"` and resolved only when the plugin is made.
 
-The three examples are each one file, a short README and a test `make check` runs:
+The four examples are each one file, a short README and a test `make check` runs:
 
 - [`examples/run-tests`](../examples/run-tests) — a tool: runs the test command where the task's
   commands run, folds the last result from the log, reminds the model once after an edit.
 - [`examples/chat-bridge`](../examples/chat-bridge) — a channel: a chat thread becomes a task,
-  requests carry a shared secret, senders are allowlisted, approvals are answered from the chat,
-  replies relayed from the task.
+  requests carry a shared secret, senders are allowlisted, replies relayed from the task.
+- [`examples/chat-approvals`](../examples/chat-approvals) — a second channel next to chat-bridge:
+  an approval the task waits on is posted to its thread, and the chat app's Allow or Deny press
+  answers it.
 - [`examples/house-style`](../examples/house-style) — prompt and reminder text: an output style
   captured when the task starts, so a resumed task sends identical bytes.
 

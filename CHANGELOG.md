@@ -398,8 +398,8 @@ Third-party `Store` implementations must add both; `noeta.testing.store_contract
 - `noeta worker --lease` and `--snapshot-every`; one worker id `host:pid:random`.
 - `make cluster`: worker processes on Postgres under random SIGKILL / SIGSTOP with a scripted
   provider (tool calls, background jobs, sub-agents, timers, Cron, mid-run messages); a CI job
-  runs it. Example plugins `examples/run-tests`, `examples/chat-bridge` and
-  `examples/house-style`, run by `make example`. Docs: `docs/extending.md`,
+  runs it. Example plugins `examples/run-tests`, `examples/chat-bridge`,
+  `examples/chat-approvals` and `examples/house-style`, run by `make example`. Docs: `docs/extending.md`,
   `docs/server.md`, `docs/architecture.md`, `docs/adr/`.
 
 ### Fixed
