@@ -69,6 +69,14 @@ class LostClaim(Exception):
     pass
 
 
+class UnreadableInbox(Exception):
+    """The inbox holds an item this version cannot decode (``cause``)."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
 #: How msgspec words a tagged union member or a literal value it does not
 #: know: what a newer version writes, unlike a corrupt or misshapen entry.
 _NEWER_FORMAT = re.compile(r"Invalid (enum )?value '")
@@ -138,7 +146,8 @@ class TaskRun:
                 except Exception:  # claimed again once the lease runs out
                     log.exception("task %s: could not end it failed", self.task_id)
                 return
-            self.rt._unreadable.pop(self.task_id, None)
+            # Kept for an unreadable inbox, which counts on from it.
+            unreadable = self.rt._unreadable.pop(self.task_id, 0)
             self.snapshots.write_loaded()
             if self.agent is None:
                 # Releasing would hand it straight back to this worker; a task
@@ -148,6 +157,8 @@ class TaskRun:
                                                f"registered in the worker that claimed this task")
                 return
             await self._steps()
+        except UnreadableInbox as exc:
+            await self._unreadable_inbox(exc.cause, unreadable)
         except (Conflict, LostClaim):
             log.info("task %s: claim lost; stopping without further writes", self.task_id)
         except StoreUnavailable as exc:
@@ -164,6 +175,23 @@ class TaskRun:
             with contextlib.suppress(asyncio.CancelledError):
                 await keeper
             await self.snapshots.finish()
+
+    async def _unreadable_inbox(self, exc: Exception, tries: int) -> None:
+        """An inbox item that cannot be decoded, judged as a log entry is
+        (``tries``: the unreadable claims before this one): a newer
+        version's is left to a newer worker, a malformed one counts toward
+        ending the task failed. Nothing is written until then."""
+        if _newer_format(exc):
+            log.warning("task %s: its inbox has an item this version does not know, "
+                        "leaving it to a newer worker: %s", self.task_id, exc)
+            return
+        log.error("task %s: could not read its inbox: %r", self.task_id, exc)
+        if tries:
+            self.rt._unreadable[self.task_id] = tries
+        try:
+            await self._unreadable(exc)
+        except Exception:  # claimed again once the lease runs out
+            log.exception("task %s: could not end it failed", self.task_id)
 
     async def _unreadable(self, exc: Exception) -> None:
         """A claim whose log could not be read or folded: the task is
@@ -222,7 +250,8 @@ class TaskRun:
                 if not await self._step_once():
                     return
                 failures = 0
-            except (Conflict, LostClaim, StoreUnavailable, asyncio.CancelledError):
+            except (Conflict, LostClaim, StoreUnavailable, UnreadableInbox,
+                    asyncio.CancelledError):
                 raise
             except Exception as exc:
                 log.exception("task %s: internal error", self.task_id)
@@ -381,7 +410,11 @@ class TaskRun:
                 pass
 
     async def _check_stop(self) -> None:
-        items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
+        try:
+            items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
+        except msgspec.DecodeError:
+            return  # the next take of the input judges it
+
         if any(isinstance(i.body, Cancel) for i in items) and self._step is not None:
             self._step.cancel()
 
@@ -642,7 +675,10 @@ class TaskRun:
         await timers.fire_timers(self)
         for _ in range(3):
             self._enqueued = False
-            items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
+            try:
+                items = await self.store.inbox(self.task_id, after=self.state.inbox_read)
+            except msgspec.DecodeError as exc:
+                raise UnreadableInbox(exc) from exc
             if not items:
                 return
             await self.append([InputTaken(items=items, through=items[-1].seq)])

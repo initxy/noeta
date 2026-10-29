@@ -365,3 +365,76 @@ async def test_a_failure_after_the_log_loaded_is_not_an_unreadable_log(
         assert "t" not in rt._unreadable
     finally:
         await store.close()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def store_kind(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
+@pytest.mark.parametrize(("data", "newer"), [
+    (b'{"kind":"steer","text":"x"}', True),
+    (b'{"kind":"message"', False),
+])
+async def test_an_inbox_item_this_version_cannot_read(
+        tmp_path: Path, request: pytest.FixtureRequest, store_kind: str, data: bytes,
+        newer: bool) -> None:
+    """D43 for the inbox: an item a newer version posted is left to a newer
+    worker, nothing written, however often the task is claimed; a malformed
+    one ends the task failed after ``LOAD_ATTEMPTS`` claims. Neither fails a
+    turn on every lease."""
+    from noeta.core.events import Say, TaskEnded
+    from noeta.core.runner.task import LOAD_ATTEMPTS
+    from noeta.core.types import user
+
+    path = str(tmp_path / "t.db")
+    pg = request.getfixturevalue("pg") if store_kind == "postgres" else None
+    store: Any = pg.store() if pg is not None else SqliteStore(path)
+    calls: list[ModelRequest] = []
+
+    class Model:
+        async def complete(self, req: ModelRequest, on_delta: Any = None) -> ModelResponse:
+            calls.append(req)
+            return ModelResponse(message=Message(role="assistant", content=[Text(text="hi")]),
+                                 stop_reason="end_turn", usage=Usage(), model="m")
+
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                 provider_for=lambda _m: Model(), lease_seconds=0.1)
+    try:
+        await store.create(NewTask(task_id="t", created=TaskCreated(agent="a"),
+                                   inbox=[Say(message=user("hello"))]))
+        await rt.run_until_idle()
+        await store.post(Post(task_id="t", body=Say(message=user("x"))))
+        if pg is not None:
+            import psycopg
+
+            from tests.conftest import PG_DSN
+
+            with psycopg.connect(PG_DSN, autocommit=True) as pconn:
+                pconn.execute(f'UPDATE "{pg.schema}".inbox SET data = %s '
+                              "WHERE task_id = 't' AND seq = 2", (data,))
+        else:
+            import sqlite3
+
+            conn = sqlite3.connect(path)
+            conn.execute("UPDATE inbox SET data = ? WHERE task_id = 't' AND seq = 2", (data,))
+            conn.commit()
+            conn.close()
+        before = (await store.get("t")).last_seq
+        for attempt in range(LOAD_ATTEMPTS + 1):
+            await asyncio.sleep(0.15)  # the last claim's lease runs out
+            await rt.run_once()
+            row = await store.get("t")
+            if row.status == "ended":
+                break
+            assert row.last_seq == before, attempt  # nothing written
+        assert len(calls) == 1
+        events = [r.event for r in await store.read("t")]
+        if newer:
+            assert row.status != "ended" and "t" not in rt._unreadable
+        else:
+            assert row.end_status == "failed"
+            assert isinstance(events[-1], TaskEnded) and "unreadable_log" in str(events[-1].error)
+            assert len(events) == before + 1
+    finally:
+        await store.close()
