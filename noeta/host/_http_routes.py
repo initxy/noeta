@@ -15,7 +15,7 @@ from starlette.responses import Response
 
 from noeta.core import models
 from noeta.core.agent import Agent
-from noeta.core.events import TaskCreated
+from noeta.core.events import DEFAULT_TENANT, TaskCreated
 from noeta.core.extension import CommandContext
 from noeta.core.types import Message
 from noeta.host._http_guard import scope
@@ -43,16 +43,18 @@ async def _command_place(request: Request, agent: str | None, task_id: str | Non
     """The agent and context a slash command is listed or run in: a task's
     own agent and the ``cwd`` it was created with, else the request's
     ``cwd`` checked as a new task's would be (commands read the
-    directory's skills and may start its MCP servers)."""
+    directory's skills and may start its MCP servers), for the request's
+    tenant."""
+    tenant = getattr(scope(request).client, "tenant", None) or DEFAULT_TENANT
     if task_id:
         mine = scope(request).client
         row = await mine.get(task_id)
         first = (await mine.events(task_id, 0))[:1]
         made = first[0].event if first else None
         where = made.config.get("cwd") if isinstance(made, TaskCreated) else None
-        return row.agent, CommandContext(cwd=str(where or ""), task_id=task_id)
+        return row.agent, CommandContext(cwd=str(where or ""), task_id=task_id, tenant=tenant)
     where = scope(request).guarded.check_cwd(cwd) or scope(request).guarded.workspace or ""
-    return agent or "main", CommandContext(cwd=str(where))
+    return agent or "main", CommandContext(cwd=str(where), tenant=tenant)
 
 
 class Routes:
