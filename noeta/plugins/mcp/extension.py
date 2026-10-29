@@ -198,6 +198,9 @@ class Mcp(Extension):
         #: listed in that partition: a tenant's listing never names the
         #: connection another tenant's command runs on.
         self._prompts: dict[tuple[str | None, str], tuple[McpServer, McpPrompt]] = {}
+        #: The partitions in ``_prompts``, least recently listed first; at
+        #: most :data:`TASKS_KEEP` are kept.
+        self._prompt_scopes: dict[str | None, None] = {}
         #: task id -> the workspace directories ``roots/list`` answers.
         self._roots: dict[str, list[str]] = {}
         #: task id -> {alias: why not started} (a tenant's local servers).
@@ -567,6 +570,13 @@ class Mcp(Extension):
                                 for a in p.arguments)
                 out.append(Command(name=p.command_name, description=p.description,
                                    argument_hint=hint))
+        self._prompt_scopes.pop(scope, None)
+        self._prompt_scopes[scope] = None
+        while len(self._prompt_scopes) > TASKS_KEEP:
+            gone = next(iter(self._prompt_scopes))
+            del self._prompt_scopes[gone]
+            for key in [k for k in self._prompts if k[0] == gone]:
+                del self._prompts[key]
         return out
 
     async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
