@@ -51,7 +51,7 @@ async def unsaved_work(env: ExecEnv, path: str, base: str) -> tuple[str, str]:
     if code != 0 or not ahead.isdigit():
         return "", f"git rev-list: {ahead or 'failed'}"
     if int(ahead):
-        lost.append(f"{ahead} commit(s) not on the original branch")
+        lost.append(f"{ahead} commit(s) the starting branch lacks")
     return " and ".join(lost), ""
 
 

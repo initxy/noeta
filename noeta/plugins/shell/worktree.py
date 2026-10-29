@@ -37,8 +37,8 @@ MAX_NAME = 64
 ENTERED = ("Now working in the worktree {path} on branch {branch}: Bash commands start there. "
            "Give file tools absolute paths inside it. Leave it with ExitWorktree.")
 SWITCHED = ("Now working in the worktree {path}: Bash commands start there. Give file tools "
-            "absolute paths inside it. ExitWorktree will not remove a worktree entered this "
-            "way; use action \"keep\" to go back.")
+            "absolute paths inside it. A worktree entered by path is never deleted by "
+            "ExitWorktree: leave it with action \"keep\".")
 NOT_ACTIVE = "No worktree session is active: nothing was changed."
 KEPT = "Back in {root}. The worktree {path} (branch {branch}) is kept."
 REMOVED = "Back in {root}. The worktree {path} and its branch {branch} were removed."
@@ -181,8 +181,9 @@ class ExitWorktreeTool:
                 "\"keep\" leaves the worktree and its branch on disk; \"remove\" deletes "
                 "both.")},
             "discard_changes": {"type": "boolean", "description": (
-                "Needed (true) to remove a worktree with uncommitted files or commits not on "
-                "the original branch; without it the tool refuses and lists them.")},
+                "Set to true to remove a worktree that still holds files not yet committed or "
+                "commits the starting branch lacks; otherwise the tool refuses and says what it "
+                "found.")},
         },
         "required": ["action"],
         "additionalProperties": False,

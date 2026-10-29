@@ -69,11 +69,11 @@ class SignIns:
         earlier = ("A sign-in started earlier is still waiting, so this is its link. "
                    if reused else "")
         return text_output(
-            f"{earlier}Ask the user to open this URL in their browser to authorize the "
-            f"{server.alias!r} MCP server:\n{run.url}\n\nOnce they have, its tools become "
-            "available from their next message. If the browser shows a connection error on "
-            "the page it is sent back to, ask them for the full URL in the address bar and "
-            f"call `{complete}` with it.")
+            f"{earlier}The {server.alias!r} MCP server needs a sign-in. Give the user this "
+            f"link to open in a browser and grant access there:\n{run.url}\n\nOnce they "
+            "have, its tools become available from their next message. Should the page the "
+            "browser lands on afterwards fail to load, have them copy the whole address of "
+            f"that page and pass it to `{complete}`.")
 
     async def _await(self, server: McpServer, scope: str | None, sign_in: SignIn) -> None:
         try:
@@ -96,9 +96,10 @@ class SignIns:
         url = str(args.get("callback_url") or "")
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
         if "code" not in query and "error" not in query:
-            return text_output("That URL carries no authorization code. Ask the user for the "
-                               "full address from the browser's address bar, including the "
-                               "`?code=...&state=...` part.", is_error=True)
+            return text_output("That URL has no `code` parameter, so it is not where the "
+                               "sign-in ended. Have the user copy the whole address of the page "
+                               "the browser landed on, `?code=...&state=...` and all.",
+                               is_error=True)
         if not run.done.done() and not run.sign_in.submit(url):
             return text_output(f"That URL belongs to another sign-in attempt to "
                                f"{server.alias!r}; the current one is still waiting. Ask the "

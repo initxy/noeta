@@ -216,8 +216,8 @@ NO_BROADCAST = 'There is no broadcast: to: "*" names no one. Send one message pe
 NO_CALLER = "\"main\" is the caller of a background sub-agent; this task has none."
 EMPTY_MESSAGE = "'message' is empty; there is nothing to send."
 IDLE_NOT_SENT = (
-    " Your message was not delivered either; send it again without notify_when_idle if it "
-    "should still go."
+    " Nothing was delivered; if the message should still reach them, repeat the call "
+    "without notify_when_idle."
 )
 IDLE_MAIN_ONLY = "notify_when_idle works only from the main conversation, not from a sub-agent."
 IDLE_ROOT_TASKS_ONLY = (
