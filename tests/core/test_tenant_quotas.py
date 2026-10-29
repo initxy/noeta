@@ -222,3 +222,40 @@ def test_tenant_directories_are_read_with_their_secrets(
     (tmp_path / "tenants" / "acme" / "config.toml").write_text("max_runing = 3\n")
     with pytest.raises(ValueError, match="unknown setting"):
         tenants.load_tenants(config.Settings(model="m"))
+
+
+def test_a_tenants_own_endpoint_never_borrows_the_servers_key_or_headers(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.cli import config, home_dir, tenants
+
+    monkeypatch.setattr(home_dir, "HOME", tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "server-env-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "server-env-key")
+    work = tmp_path / "acme-work"
+    work.mkdir()
+    folder = tmp_path / "tenants" / "acme"
+    folder.mkdir(parents=True)
+    server = config.Settings(model="m", api_key="server-key",
+                             extra_headers={"x-gateway-auth": "server-secret"})
+    for own in ('base_url = "https://llm.acme.example"\n',
+                'provider = "openai_compat"\nbase_url = "http://llm.acme.example/v1"\n',
+                'base_url = "https://llm.acme.example"\napi_key = ""\n'):
+        (folder / "config.toml").write_text(f'workspace = "{work}"\n{own}')
+        with pytest.raises(ValueError, match="api_key"):
+            tenants.load_tenants(server)
+    (folder / "config.toml").write_text(
+        f'workspace = "{work}"\nbase_url = "https://llm.acme.example"\napi_key = "sk-acme"\n'
+        '[extra_headers]\nx-acme = "mine"\n')
+    found = tenants.load_tenants(server)["acme"].allowed.provider_for
+    assert found is not None
+    made: Any = found("m")
+    assert made._client.headers["x-api-key"] == "sk-acme"
+    assert made._client.headers["x-acme"] == "mine"
+    assert "x-gateway-auth" not in made._client.headers
+    # Its own key on the server's endpoint: still none of the server's headers.
+    (folder / "config.toml").write_text(f'workspace = "{work}"\napi_key = "sk-acme"\n')
+    found = tenants.load_tenants(server)["acme"].allowed.provider_for
+    assert found is not None
+    made = found("m")
+    assert made._client.headers["x-api-key"] == "sk-acme"
+    assert "x-gateway-auth" not in made._client.headers

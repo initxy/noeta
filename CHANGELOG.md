@@ -779,6 +779,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   they could open the user's D-Bus (`systemd-run --user` ran a command outside the sandbox
   that read `~/.noeta/tokens.json`), Docker's or Postgres's socket. `TenantFence.confine` now
   clears all three for a task of a tenant other than the default one.
+- **A tenant with its own model endpoint no longer borrows the server's key or headers.**
+  A tenant directory with `provider` or `base_url` but no `api_key` got a provider that fell
+  back to the worker's `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (the server's key, sent to the
+  tenant's endpoint), and every tenant provider carried the server's `extra_headers`. Such a
+  tenant must now set a non-empty `api_key` (`noeta serve` and `noeta worker` refuse to start
+  otherwise), and its provider gets only the `extra_headers` table of its own config.
 - **A tenant's commands no longer follow a working directory swapped for a link.** The
   `cwd` was checked only when the task was created; the tenant could then replace a
   directory on the way with a link to noeta's home or another tenant's workspace, and its

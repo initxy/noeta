@@ -196,7 +196,7 @@ class TenantPlace:
 
 
 _KEYS = {"workspace", "queues", "max_running", "budget_tokens", "budget_usd", "provider",
-         "base_url", "api_key"}
+         "base_url", "api_key", "extra_headers"}
 
 
 def load_tenants(settings: config.Settings) -> dict[str, TenantPlace]:
@@ -236,11 +236,22 @@ def _place(name: str, path: Path, data: dict[str, Any],
     if queues is not None and (not isinstance(queues, list) or not queues
                                or not all(isinstance(q, str) and q for q in queues)):
         raise ValueError(f"{path}: queues must be a non-empty list of queue names")
+    headers = data.get("extra_headers", {})
+    if not isinstance(headers, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in headers.items()):
+        raise ValueError(f"{path}: extra_headers must be a table of header names to strings")
     provider_for = None
-    if {"provider", "base_url", "api_key"} & set(data):
-        # Its own endpoint never borrows the server's key.
+    if {"provider", "base_url", "api_key", "extra_headers"} & set(data):
+        # Its own endpoint never borrows the server's key (nor, through the
+        # provider's environment fallback, the worker's) or headers.
+        own_key = data.get("api_key")
+        if not isinstance(own_key, str) or not own_key:
+            raise ValueError(f"{path}: a tenant with its own provider, base_url or "
+                             "extra_headers sets its own api_key (\"{env:NAME}\" or "
+                             "\"{keyring:service/user}\")")
         own = dataclasses.replace(settings, provider=data.get("provider", settings.provider),
-                                  base_url=data.get("base_url"), api_key=data.get("api_key"))
+                                  base_url=data.get("base_url"), api_key=own_key,
+                                  extra_headers=dict(headers))
         made = own.make_provider()
         provider_for = lambda _model: made  # noqa: E731
     return TenantPlace(name=name, workspace=workspace,

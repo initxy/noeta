@@ -123,7 +123,10 @@ api_key = "{env:ACME_API_KEY}"   # or "{keyring:service/user}"; never the secret
 - A model call past a budget fails its turn with `budget_spent` and a message that names the
   tenant, the month and the numbers; the conversation stays and continues next month or once
   the budget is raised. Usage is counted from when a budget is set (table `tenant_usage`).
-- A tenant with its own `provider` never borrows the server's key.
+- A tenant with its own `provider`, `base_url` or `extra_headers` (a table of headers sent
+  with its model calls) must set its own non-empty `api_key`: `noeta serve` and
+  `noeta worker` refuse to start otherwise. It never borrows the server's key, the worker's
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` or the server's `extra_headers`.
 
 ### What separates tenants
 
