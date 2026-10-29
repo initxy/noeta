@@ -98,7 +98,10 @@ Conn = psycopg.AsyncConnection[Any]
 
 log = logging.getLogger("noeta.backends.stores.postgres")
 
-SCHEMA_VERSION = 1
+#: 2: holds moved to ``tree_holds`` (one holding worker per tree), and
+#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. A store
+#: at a later version than this code knows is refused.
+SCHEMA_VERSION = 2
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
 _TENANT_LOCK_CLASS = 0x6E6F7465  # "note": one claim at a time per limited tenant
 _HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree
@@ -313,6 +316,15 @@ class PostgresStore:
             await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
                                (_LOCK_CLASS, self.schema))
             await conn.execute(self._q('CREATE SCHEMA IF NOT EXISTS {s}'))
+            await conn.execute(self._q(
+                "CREATE TABLE IF NOT EXISTS {s}.noeta_schema (version INTEGER NOT NULL)"))
+            cur = await conn.execute(self._q("SELECT max(version) FROM {s}.noeta_schema"))
+            row = await cur.fetchone()
+            version = row[0] if row else None
+            if version is not None and version > SCHEMA_VERSION:
+                raise StoreUnavailable(
+                    f"schema {self.schema!r} is at version {version}; this noeta knows "
+                    f"{SCHEMA_VERSION} (stop every worker and upgrade)")
             await conn.execute(self._q(_SCHEMA))
             cur = await conn.execute(
                 "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
@@ -320,16 +332,12 @@ class PostgresStore:
             if await cur.fetchone() is None:  # ALTER locks the table; only when needed
                 await conn.execute(self._q(_ADDED))
             await conn.execute(self._q(_TABLES))
-            cur = await conn.execute(self._q("SELECT max(version) FROM {s}.noeta_schema"))
-            row = await cur.fetchone()
-            version = row[0] if row else None
             if version is None:
                 await conn.execute(self._q("INSERT INTO {s}.noeta_schema VALUES (%s)"),
                                    (SCHEMA_VERSION,))
-            elif version > SCHEMA_VERSION:
-                raise StoreUnavailable(
-                    f"schema {self.schema!r} is at version {version}; this noeta knows "
-                    f"{SCHEMA_VERSION}")
+            elif version < SCHEMA_VERSION:
+                await conn.execute(self._q("UPDATE {s}.noeta_schema SET version = %s"),
+                                   (SCHEMA_VERSION,))
 
     async def _tx(self, body: Callable[[Conn], Awaitable[T]], *, write: bool = True) -> T:
         """Run ``body`` in one transaction (or, for reads, one autocommit

@@ -43,7 +43,10 @@ from noeta.core.store import (
 
 T = TypeVar("T")
 
-SCHEMA_VERSION = 1
+#: 2: holds moved to ``tree_holds`` (one holding worker per tree), and
+#: ``tasks.tenant``, ``tenant_usage`` and ``snapshots`` were added. A store
+#: at a later version than this code knows is refused.
+SCHEMA_VERSION = 2
 _BUSY_TIMEOUT_MS = 10000
 _OPEN_ATTEMPTS = 5
 #: sqlite failures that mean "the store is not usable right now", not a bug
@@ -130,6 +133,29 @@ CREATE TABLE IF NOT EXISTS tenant_usage (
 """
 
 
+def _refuse_newer(conn: sqlite3.Connection, path: str) -> None:
+    row = conn.execute("SELECT max(version) FROM noeta_schema").fetchone()
+    if row is not None and row[0] is not None and int(row[0]) > SCHEMA_VERSION:
+        raise StoreUnavailable(f"sqlite store {path} is at schema version {row[0]}; this "
+                               f"noeta knows {SCHEMA_VERSION} (stop every worker and upgrade)")
+
+
+def _set_version(conn: sqlite3.Connection) -> None:
+    """Record this code's schema version once its tables are in place."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT max(version) FROM noeta_schema").fetchone()
+        if row is None or row[0] is None:
+            conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
+        elif int(row[0]) < SCHEMA_VERSION:
+            conn.execute("UPDATE noeta_schema SET version = ?", (SCHEMA_VERSION,))
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
 def _add_columns(conn: sqlite3.Connection) -> None:
     for table, column, definition in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -166,16 +192,21 @@ class SqliteStore:
                     conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("CREATE TABLE IF NOT EXISTS noeta_schema"
+                                 " (version INTEGER NOT NULL)")
+                    _refuse_newer(conn, self.path)
                     conn.executescript(_SCHEMA)
                     _add_columns(conn)
-                    if conn.execute("SELECT count(*) FROM noeta_schema").fetchone()[0] == 0:
-                        conn.execute("INSERT INTO noeta_schema VALUES (?)", (SCHEMA_VERSION,))
+                    _set_version(conn)
                 except sqlite3.OperationalError as exc:
                     conn.close()
                     if "locked" not in str(exc) or attempt + 1 >= _OPEN_ATTEMPTS:
                         raise
                     time.sleep(0.05 * (attempt + 1))
                     continue
+                except BaseException:
+                    conn.close()
+                    raise
                 self._conn = conn
                 break
         assert self._conn is not None
