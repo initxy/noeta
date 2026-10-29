@@ -130,13 +130,24 @@ _KEEP_HEAD = r"""keep_head() {
 #: so past ``$1`` bytes the file ``$2`` is cut back to its first quarter, a
 #: line saying the middle was not kept, and its last quarter, and goes on
 #: growing (each cut copies at most ``$1`` bytes once ``$1 / 2`` came in).
+#: While reads come back full it takes up to 16 per size check (never past
+#: ``$1`` by more than one): a check costs two processes.
 _KEEP_TAIL = r"""keep_tail() {
   s=0
   q=$(($1 / 4))
+  n=1
   while :; do
-    dd bs=65536 count=1 2>/dev/null >>"$2"
+    dd bs=65536 count="$n" 2>/dev/null >>"$2"
     t=$(wc -c <"$2")
     [ "$t" -gt "$s" ] || return 0
+    if [ $((t - s)) -gt $((n * 32768)) ]; then
+      [ "$n" -ge 16 ] || n=$((n * 2))
+    else
+      n=1
+    fi
+    m=$((($1 - t) / 65536))
+    [ "$m" -ge 1 ] || m=1
+    [ "$n" -le "$m" ] || n=$m
     s=$t
     if [ "$s" -ge "$1" ]; then
       { head -c "$q" "$2"

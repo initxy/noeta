@@ -32,7 +32,7 @@ from noeta.core.tool import ToolContext
 from noeta.core.types import Text, user
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.job_logs import DEAD_WORKER_LOGS_KEEP_S
-from noeta.plugins.shell.jobs import JOB_ENDED, Job
+from noeta.plugins.shell.jobs import _KEEP_TAIL, JOB_ENDED, Job
 from noeta.plugins.shell.state import ShellState
 from noeta.toolkit.notices import NOTICE_GUARD
 
@@ -287,6 +287,25 @@ async def test_a_foreground_log_keeps_its_start_and_its_true_end(tmp_path: Path)
     assert head == "x" * 250
     assert tail.rstrip("\n").endswith("x\nend") or tail.endswith("x\nend\n")
     assert 250 <= len(tail) <= 1000 + 65536
+
+
+async def test_a_foreground_keeper_checks_the_size_once_per_several_reads(
+        tmp_path: Path) -> None:
+    # Two processes per 64 KB read held a fast command's output to ~35 MB/s.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    real_wc = next(p for p in ("/usr/bin/wc", "/bin/wc") if os.path.exists(p))
+    (bin_dir / "wc").write_text(f"#!/bin/sh\necho >>{calls}\nexec {real_wc} \"$@\"\n")
+    (bin_dir / "wc").chmod(0o755)
+    log = tmp_path / "log"
+    script = (_KEEP_TAIL + f'head -c 8388608 /dev/zero | keep_tail {64 << 20} "$1"\n')
+    proc = await asyncio.create_subprocess_exec(
+        "sh", "-c", script, "sh", str(log),
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    assert await proc.wait() == 0
+    assert log.stat().st_size == 8388608
+    assert len(calls.read_text().splitlines()) < 128 // 4
 
 
 async def test_a_job_counts_as_running_until_its_end_is_posted(tmp_path: Path) -> None:
