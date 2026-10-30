@@ -11,8 +11,9 @@ from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 
 __all__ = ["INSTRUCTIONS_MAX_CHARS", "cap_instructions", "instructions_delta"]
 
-#: Server instructions beyond this are cut, as Claude Code cuts them.
-INSTRUCTIONS_MAX_CHARS = 2048
+#: Server instructions beyond this are cut, as Claude Code cuts them (its
+#: default ``u$()``: 4,096 characters, then ``… [truncated]``).
+INSTRUCTIONS_MAX_CHARS = 4096
 INSTRUCTIONS_HEAD = (
     "# MCP Server Instructions\n"
     "These MCP servers gave instructions for using their tools and resources:")
