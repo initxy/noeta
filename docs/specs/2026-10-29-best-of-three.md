@@ -49,11 +49,11 @@ and reported in the README.
   restored/retracted tool definitions, a denied-tool lead and needs-auth servers, and compresses
   long name lists; noeta tells joined, returned and removed names, and MCP server instructions
   joined/changed/removed. Why: the rest belongs to CC features noeta does not have (definition
-  retraction, the auth-stub listing is already a tool), per "no features beyond CC's". The MCP
-  instructions cap of 2,048 characters is CC's truncation shape ("… [truncated]"); its exact
-  number was not read from the bundle (the constant is imported across modules), so it is the
-  value CC uses for MCP descriptions — check it when the next recording has a server with long
-  instructions.
+  retraction, the auth-stub listing is already a tool), per "no features beyond CC's". MCP
+  server instructions are cut at CC's 4,096 characters plus "… [truncated]" (bundle: the
+  instructions go through the MCP description cut, `u$()` =
+  `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH ?? 4096`; no cut for first-party HTTP servers, which
+  noeta does not have).
 ### @-mention placement (D2)
 - Others: CC attaches the Read call and result as meta messages hoisted ahead of the person's text; pi's CLI inlines `<file>` text into the prompt; dsh attaches nothing and tells the model to read the path.
 - noeta: CC's two meta blocks, read in the task through `Read`, placed after the person's text in the same user turn.
@@ -62,9 +62,10 @@ and reported in the README.
 
 ### Changed-file snippet source (B6)
 - Others: CC diffs against the content it keeps for every read file; pi and dsh send no such note.
-- noeta: the changed lines are worked out against the model's last whole `Read` result still in the conversation; without one the note says they are not shown.
+- noeta: the changed lines are worked out against the model's last whole `Read` result still in the conversation; without one the note says they are not shown. The snippet itself is CC's (`oKs`): 8 context lines, blocks one after another, cut at 8,192 characters with `... [N lines truncated] ...`; a file last read with an offset or a limit gets no note, as in CC.
+- Line numbers: those of the file now; CC numbers each block from its start in the old file, which is off after an earlier block that changed the line count. A number the model cannot find in the file is the one thing numbering must avoid.
 - Why: the log is the only state a task carries between workers; a stored copy of every read file would double the log for reads.
-- Evidence: `tests/plugins/fs/test_changed_reminder.py` (a change shown after the step that made it; `Edit` with no new `Read`).
+- Evidence: `tests/plugins/fs/test_changed_reminder.py` (a change shown after the step that made it; `Edit` with no new `Read`; no note for a windowed read; 8 lines; the cut).
 
 ### Date without the user's zone (C4)
 - Others: CC uses the client's zone, else a UTC-labelled date (`assumedUtc`); dsh stamps the requester's zone; pi gives no date.
@@ -73,7 +74,7 @@ and reported in the README.
 - Evidence: `tests/plugins/context/test_date_change.py`; the full DeepSeek V4.1 eval (which sends no zone, so every request carries the UTC form) scored 0.927 overall against 0.919 on main.
 
 ### Smaller recorded differences
-- Mentioned directory listing capped at 1,000 entries; hook blocking feedback names no command; visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
+- Mentioned directory listing capped at 1,000 entries (left to ctx-fix-safety, which owns @-mentions); visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
 
 ### Extension points (Phase 2)
 - Scope: the item-by-item review (pi e7a0df2, dsh f3803c96) found nine points to add (CC has them, multi-machine needs them, or they are the mechanism); the owner answered the open five on 2026-10-29: userConfig/`settings.json`, Python plugins shipping `skills/` `commands/` `agents/`, `InstructionsLoaded`, open model families yes; `statusLine` no (left to plugins). Every other row is have or won't, with its reason, in `docs/extending.md`.
@@ -99,10 +100,17 @@ and reported in the README.
 - Evidence: `parity/deviations.md` row; `tests/plugins/fs/test_output_limit.py`.
 
 ### Sub-agent plan file (A6)
-- Others: CC gives a sub-agent of a planning conversation the plan-mode text in its sub-agent form with an agent-specific plan file name; pi and dsh have no plan mode in sub-agents.
-- noeta: the child inherits plan mode and is entered into it on start with its own plan file (a new three-word name under `<noeta home>/plans`), and gets the sub-agent text; no plan tools.
-- Why: the plan state lives in the child's own log, which can run on another worker; a name derived from the parent's would need the parent's state at the child's start.
+- Others: CC gives a sub-agent of a planning conversation the plan-mode text in its sub-agent form with the plan file `<session plan name>-agent-<agent id>.md` (`nT`); pi and dsh have no plan mode in sub-agents.
+- noeta: as CC. The parent writes its plan name into the child's config with its mode (`plan_name`, `Permissions.inherit`; a grandchild keeps the root's name), and the child plans in `<plans dir>/<name>-agent-<task id>.md` with the sub-agent text; no plan tools. (The earlier "needs the parent's state" reason did not hold: the parent writes the child's config.)
 - Evidence: `test_a_sub_agent_of_a_planning_task_plans_too`.
+
+### Pending A/B (an A/B run decides these next; behaviour unchanged until then)
+- **Skill listing budget ceiling (S2).** CC: window × chars per token × 1 %, in characters, no ceiling (30,000 characters on a 1M window); pi: no budget, every skill in full; dsh: no total budget, 500 characters a skill. noeta: 1 % of the window in estimated tokens, capped at 4,096 tokens (about 16,000 characters; `RESIDENT_BUDGET_CEILING_TOKENS`). A/B: 80 real skills (about 40,000 characters), 40 prompts each aimed at one skill; arm A the ceiling, arm B CC's budget; first-step `Skill` routing accuracy and tokens per task. Keep the ceiling only if A is within 1 point of B.
+- **Over-budget short-summary step (S4).** CC: each skill gets its full line or its name only, by usage rank; pi and dsh never degrade. noeta: every skill first gets its first sentence (24 tokens at most), full lines only if all fit (`short_summary`, `fit_menu_to_budget`). A/B: the same fixture with the budget forced to half the roster and a synthetic usage table; routing accuracy on prompts aimed at skills A shortens and B names only. Keep the step only if A beats B by 3 points or more.
+- **Plan-mode full text wording (B5).** CC: 4,908 characters. noeta: its own wording, 2,832 bytes, now with the rules it had dropped restored (2026-10-29, ctx-fix-fidelity); the remaining difference is wording and emphasis. A/B: plan-mode scenarios (the plan file written, `ExitPlanMode` instead of a text question, Explore agents used), CC's text against noeta's, 9 trials each; keep noeta's only if it is not worse.
+- **Recall off by default (M7).** CC: behind a server flag the recordings cannot show; pi: no memory. noeta: off unless `recall_model` is set (the CLI never sets it). A/B: record one CC session with two memory files and see whether a selector request goes out; if it does, run memory_recall with recall on against off and default the CLI's `recall_model` to the small model if on is not worse.
+- **Git snapshot refresh on resume (C7).** CC: re-announces the session context when it changed on a resume ("these values replace the earlier ones"). noeta: the snapshot is fixed at task start. A/B: a task resumed after commits and a branch switch; does the model act on the stale branch (for example in PR text), refresh against frozen.
+- **Pasted-image path note (D6).** CC and dsh save a pasted image and tell the model its path; noeta keeps no file. A/B: "put this pasted logo into assets/" tasks with and without the path line (about 60 tokens an image); add it if it lifts success.
 
 ### Skill usage ranking wiring (owner, 2026-10-29)
 - Others: CC ranks the over-budget skill listing by decayed use across sessions, always on; pi and dsh do not rank.
@@ -220,3 +228,5 @@ and reported in the README.
 - 2026-10-29 A5 (ctx-compact-plan): the 16-Agent-calls-per-reply cap is gone (no such cap in CC; no kernel reason: each call stages its child in its own append). Rule `tool.Agent.23`.
 - 2026-10-29 UsageRank (ctx-compact-plan, owner decision): the `noeta` command passes its store's client to every skills plugin (`usage_from`), so the listing ranks by use by default. Rule `main.env.17`.
 - 2026-10-29 ctx-compact-plan gates: `make check` green (2481 passed, coverage 88.51 %), `make parity` 0 mismatches (11 accepted deviations). DeepSeek V4.1, 9 trials (eval-coverage scenarios run from a local copy of that branch's `evals/`, not committed), this branch vs `best-of-three` @b9c7ca7a: memory_save 1.00 vs 0.07; plan_mode_started (local variant of plan_mode_read_only created with `permission_mode: plan`) 0.78 vs 0.00; plan_mode_read_only 1.00 vs 0.89; background_subagent_result, skill_activation 1.00 both; compaction_resume_edits 0.93 vs 1.00 (every trial ends on `autocompact_thrashing`: the scenario's 24K usable window refills within 3 calls of each summary, which is where CC's breaker stops too; at a 40K window the scenario never compacts, 0.00 by its rule, so the scenario needs a window between the two). Against `ds41-main-37fd9997`: compaction_continuity, parallel_independent_reads 1.00 (=); delegate_parallel_review 0.11 (= main, 600 s trial timeouts).
+- 2026-10-29 ctx-fix-fidelity (review-p1-fidelity fixes, from `best-of-three` @0d96a993): changed-file snippet with CC's 8 context lines and 8,192-character cut, no note after a windowed read; new, edited and nested-found skills listed with descriptions before the next model call (one checksum command over the SKILL.md files per call; nested ones no longer recorded as listed); sub-agent plan file `<parent plan name>-agent-<task id>.md`; hook blocking feedback names the command (deviation row removed); Bash 30,000, Monitor and ListAgents 10,000, ScheduleWakeup 1,000, ReportFindings 256 declared on the tools; plan-mode cadence checked per model call; MCP server instructions cut at 4,096 (read from the bundle); the memory index read again with each message; the plan-mode rules cut from the full text restored. Pending A/B section added to Decisions for S2, S4, B5, M7, C7, D6. The directory @-listing cap is left to ctx-fix-safety.
+- 2026-10-29 ctx-fix-fidelity gates: `make check` green (2523 passed, coverage 88.67 %), `make parity` 0 mismatches (11 accepted deviations, the hook-feedback row removed). DeepSeek V4.1, 9 trials, 9 scenarios (eval-coverage `evals/` run from a local copy, not committed), this branch vs `best-of-three` @0d96a993 (session scratchpad `fid/ds41-fix-fidelity*.json`): overall 0.919 vs 0.900; skill_activation, skill_follow, memory_save, memory_recall, plan_mode_read_only, plan_mode_started, mcp_tool_use 1.00 both; changed_file_reminder 0.73 vs 0.78 (every trial got the note and answered with the new value; the score differs only in whether the model also re-read the file, 3 vs 4 of 9); hook_block_adapts 0.53 vs 0.32 (PreToolUse text unchanged; base had more 420 s timeouts). 458 vs 515 requests, 5.6M vs 6.3M input tokens.
