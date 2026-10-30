@@ -76,6 +76,49 @@ async def test_the_model_saves_a_memory_without_asking(
     assert not Path(other).exists()
 
 
+async def test_a_link_in_the_memory_directory_carries_no_write_or_read_past_the_rules(
+        h: Harness, tmp_path: Path) -> None:
+    """The carve-out is judged where a write lands: a repository's planted
+    link ``.noeta/agent-memory/a -> ..`` would turn a memory write into a
+    write of ``.noeta/agents/evil.md`` (an agent file, which can carry hooks)
+    (a read through a link is the next test)."""
+    from noeta.plugins.permissions import Permissions
+
+    memory = h.work / ".noeta" / "agent-memory"
+    memory.mkdir(parents=True)
+    (memory / "a").symlink_to("..")
+    (h.work / ".noeta" / "agents").mkdir()
+    evil = memory / "a" / "agents" / "evil.md"
+    a = Agent(name="a", model="m", extensions=[
+        Memory(agent_scope="project", agent_name="a"), FileTools(), Permissions(mode="default")])
+    h.provider.add(reply("", ("Write", {"file_path": str(evil), "content": "x"})),
+                   reply("done"))
+    tid = await h.start(a, config={"cwd": str(h.work)})
+    assert not (h.work / ".noeta" / "agents" / "evil.md").exists()
+    # Asked, as any write into .noeta/agents is.
+    assert (await h.client.get(tid)).status == "waiting"
+    assert await h.results(tid) == []
+
+
+async def test_a_memory_file_read_through_a_link_out_of_it_asks(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.plugins.permissions import Permissions
+
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    outside = tmp_path / "secret.md"
+    outside.write_text("the key")
+    (directory / "note.md").symlink_to(outside)
+    a = Agent(name="a", model="m", extensions=[
+        Memory(home=str(home)), FileTools(), Permissions(mode="default")])
+    h.provider.add(reply("", ("Read", {"file_path": str(directory / "note.md")})),
+                   reply("done"))
+    tid = await h.start(a)
+    assert await h.results(tid) == []
+    assert (await h.client.get(tid)).status == "waiting"
+
+
 async def test_the_section_goes_before_the_environment_section(
         h: Harness, tmp_path: Path) -> None:
     a = Agent(name="a", model="m", extensions=[Memory(home=str(tmp_path / "home"))],

@@ -141,7 +141,8 @@ class RuleCheck:
                                     for_allow=True) is not None
         else:
             inside = scope.contains(literal)
-        if inside or allowed or self.in_plans(literal) or in_memory(view, literal):
+        if inside or allowed or self.in_plans(literal) \
+                or await memory_file(view, literal, target, write=False):
             return Decision("allow")
         return Decision("ask", w.ASK_READ_OUTSIDE.format(name=name, path=target),
                         why="read", always=(r.format_rule("Read", f"//{_dir_of(target)}/**"),),
@@ -155,14 +156,15 @@ class RuleCheck:
         plan = state_of(view).plan
         if mode == "plan" and plan and target == plan.get("path"):
             return Decision("allow")
-        if target.endswith(".md") and in_memory(view, target):
+        real = await real_path(view, target)
+        if target.endswith(".md") and await memory_file(view, target, real, write=True):
             # Claude Code's auto-memory carve-out: its markdown files are
             # written without asking, in every mode.
             return Decision("allow")
         if not scope.contains(target) and not self.in_plans(target):
             return Decision("deny", w.OUTSIDE_WRITE.format(
                 name=name, dirs=", ".join(scope.dirs), path=target))
-        if sc.is_protected(target) or sc.is_protected(await real_path(view, target)):
+        if sc.is_protected(target) or sc.is_protected(real):
             # The tools write where a symlink points: judge that too.
             return Decision("ask", w.ASK_PROTECTED.format(name=name, path=target),
                             why="protected")
@@ -198,12 +200,34 @@ def _dir_of(path: str) -> str:
     return posixpath.dirname(path).lstrip("/") or ""
 
 
-def in_memory(view: TaskView, path: str) -> bool:
-    """Whether ``path`` lies in the task's memory directory (the memory
-    plugin's ``dir`` record)."""
+def _memory_dir(view: TaskView) -> str | None:
     memory = view.state.ext.get("memory")
     directory = memory.get("dir") if isinstance(memory, dict) else None
-    if not isinstance(directory, str) or not directory:
+    return directory if isinstance(directory, str) and directory else None
+
+
+def _under(path: str, directory: str) -> bool:
+    return posixpath.normpath(path).startswith(posixpath.normpath(directory).rstrip("/") + "/")
+
+
+async def memory_file(view: TaskView, path: str, real: str, *, write: bool) -> bool:
+    """Whether ``path`` (``real`` once its links are resolved) is a memory
+    file: both lie in the memory directory as the env resolves it (one in
+    the working directory reached through no link), and for a write the
+    part below it is no protected path, so a link planted in the directory
+    cannot carry a read or a write elsewhere."""
+    directory = _memory_dir(view)
+    if directory is None or not _under(path, directory):
         return False
-    base = posixpath.normpath(directory).rstrip("/") + "/"
-    return posixpath.normpath(path).startswith(base)
+    directory = posixpath.normpath(directory)
+    real_dir = await real_path(view, directory)
+    cwd = posixpath.normpath(view.cwd or getattr(view.env, "cwd", "") or "/")
+    if _under(directory, cwd):
+        # Inside the working directory (an agent's project memory) every
+        # link on the way is the repository's: none may be followed.
+        expected = posixpath.join(await real_path(view, cwd), posixpath.relpath(directory, cwd))
+        if real_dir != posixpath.normpath(expected):
+            return False
+    if not _under(real, real_dir):
+        return False
+    return not write or not sc.is_protected("/" + posixpath.relpath(real, real_dir))
