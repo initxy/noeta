@@ -13,6 +13,10 @@ NAME = "permissions"
 _KEEP = 256
 #: Task config key a child reads its parent's remembered rules from.
 INHERITED_RULES_KEY = "permission_rules"
+#: Task config key a child of a planning task reads the parent's plan name
+#: from: its own plan file is ``<name>-agent-<child task id>.md`` (Claude
+#: Code's sub-agent plan file).
+PLAN_NAME_KEY = "plan_name"
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import posixpath
 from collections.abc import Sequence
 from typing import Any
 
@@ -54,13 +55,19 @@ def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass:
     view.record(NAME, "mode", data)
 
 
-def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str) -> None:
+def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
+               parent_plan: Any = None) -> None:
     """A task that starts in plan mode (its config's ``permission_mode``, a
     sub-agent of a planning task): recorded as entered with a plan file of
-    its own, so it plans from its first request."""
+    its own, so it plans from its first request. A sub-agent's is named
+    after its parent's plan (``parent_plan``): ``<name>-agent-<task id>.md``,
+    as Claude Code names it."""
     pre = default_mode if default_mode != "plan" else "default"
+    path = (posixpath.join(plans_dir, f"{parent_plan}-agent-{view.task_id}.md")
+            if isinstance(parent_plan, str) and pl.plan_name_ok(parent_plan)
+            else pl.new_plan_path(plans_dir))
     view.record(NAME, "mode", {"mode": mode, "plan": {
-        "path": pl.new_plan_path(plans_dir), "pre_mode": pre, "entered_seq": 0}})
+        "path": path, "pre_mode": pre, "entered_seq": 0}})
 
 
 def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str) -> bool:

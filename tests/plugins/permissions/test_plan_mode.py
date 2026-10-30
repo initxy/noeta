@@ -279,12 +279,19 @@ async def test_a_sub_agent_of_a_planning_task_plans_too(
                                  reply("child done"), reply("parent done")])
     rt = runtime(store, provider, agent([perms], [Spawn(), write]))
     client = Client(store)
-    await client.create("a", "plan it", config={"cwd": str(tmp_path),
-                                                "permission_mode": "plan"})
+    tid = await client.create("a", "plan it", config={"cwd": str(tmp_path),
+                                                      "permission_mode": "plan"})
     await rt.run_until_idle()
     child = next(r for r in provider.requests if any(m.text == "look around"
                                                        for m in r.messages))
     [text] = plan_texts(child)
     assert "Answer the query you were given fully" in text
+    # Its plan file is named after the parent's (Claude Code's
+    # <plan name>-agent-<agent id>.md).
+    [entered] = [e.data for e in await events(client, tid)
+                 if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    [child_id] = [t.task_id for t in await client.tasks(parent_id=tid)]
+    stem = Path(entered["plan"]["path"]).stem
+    assert str(tmp_path / "plans" / f"{stem}-agent-{child_id}.md") in text
     assert not any(t.name in ("ExitPlanMode", "EnterPlanMode") for t in child.tools)
     assert write.runs == []

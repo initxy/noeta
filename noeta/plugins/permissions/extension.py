@@ -10,6 +10,7 @@ import asyncio
 import inspect
 import logging
 import os
+import posixpath
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -51,6 +52,7 @@ from noeta.plugins.permissions.rule_specs import rule_spec_text
 from noeta.plugins.permissions.state import (
     INHERITED_RULES_KEY,
     NAME,
+    PLAN_NAME_KEY,
     PermState,
     fold,
     inherited_rules,
@@ -258,6 +260,12 @@ class Permissions(Extension):
         mode = st.mode if isinstance(st, PermState) else None
         if mode is not None:
             out["permission_mode"] = mode
+        name = state.config.get(PLAN_NAME_KEY) if isinstance(state.config, dict) else None
+        path = (st.plan or {}).get("path") if isinstance(st, PermState) else None
+        if not isinstance(name, str) and isinstance(path, str):
+            name = posixpath.splitext(posixpath.basename(path))[0]
+        if isinstance(name, str) and name:
+            out[PLAN_NAME_KEY] = name
         return out
 
     def initial_state(self) -> PermState:
@@ -407,7 +415,8 @@ class Permissions(Extension):
     async def on_start(self, view: TaskView) -> None:
         st = state_of(view)
         if st.mode is None and self.mode_of(view) == "plan":
-            md.plan_start(view, "plan", default_mode=self.mode, plans_dir=self.plans_dir)
+            md.plan_start(view, "plan", default_mode=self.mode, plans_dir=self.plans_dir,
+                          parent_plan=view.state.config.get(PLAN_NAME_KEY))
         elif st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
         offered = pm.modes_record(self._modes)
