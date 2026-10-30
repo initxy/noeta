@@ -13,11 +13,15 @@ core.fsmonitor=``, no hooks), no signature program and no look inside
 submodules. A ``filter.<driver>.clean`` program has no off
 switch, so when the repository's own config (local or worktree scope)
 defines any filter driver the status is skipped. The capture is recorded
-once, when the task first starts, and never changes under the prompt cache.
+when the task first starts and never changes under the prompt cache; a
+later turn takes it again and, when it differs (another branch, new
+commits), gives the new one in that turn (Claude Code's changed session
+context).
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import posixpath
@@ -42,6 +46,11 @@ from noeta.toolkit.shell import harden_git
 GIT_STATUS_MAX_BYTES = 2048
 #: Commits listed in the git snapshot.
 RECENT_COMMITS = 5
+#: The snapshot's second line: taken at the start, or again for a message.
+SNAPSHOT_AT_START = ("A snapshot taken when this conversation started; it does not change as "
+                     "you work.")
+SNAPSHOT_AGAIN = ("Taken again when the latest message arrived; it replaces the earlier "
+                  "snapshot and does not change as you work.")
 #: Global flags every capture git runs with: no fsmonitor hook, no signature
 #: program, no index refresh written back.
 _GIT_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
@@ -137,7 +146,7 @@ def _shell() -> str:
     return "zsh" if "zsh" in shell else "bash" if "bash" in shell else shell
 
 
-async def capture_git(env: ExecEnv, cwd: str) -> str:
+async def capture_git(env: ExecEnv, cwd: str, *, when: str = SNAPSHOT_AT_START) -> str:
     """The git snapshot for the first user turn (``""`` outside a repository)."""
     try:
         if await env.stat(posixpath.join(cwd, ".git")) is None:
@@ -149,11 +158,15 @@ async def capture_git(env: ExecEnv, cwd: str) -> str:
     commits = (await _git(env, cwd, "log", "--oneline", "-n", str(RECENT_COMMITS))).rstrip("\n")
     return render_git(branch=branch, main=await _main_branch(env, cwd),
                       user=(await _git(env, cwd, "config", "user.name")).strip(),
-                      status=status, commits=commits)
+                      status=status, commits=commits, when=when)
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def render_git(*, branch: str, main: str, user: str, status: str | None,
-               commits: str) -> str:
+               commits: str, when: str = SNAPSHOT_AT_START) -> str:
     shown = "(not captured)" if status is None else status or "(clean)"
     # Like Claude Code: no user line when none is set, an empty commit list
     # in a repository without commits.
@@ -161,7 +174,7 @@ def render_git(*, branch: str, main: str, user: str, status: str | None,
     return "\n".join([
         "Here is context from the workspace that may help you answer:",
         "# Git status",
-        "A snapshot taken when this conversation started; it does not change as you work.",
+        when,
         "",
         f"Current branch: {branch or '(unknown)'}",
         "",
@@ -380,6 +393,9 @@ class Environment(Extension):
     * ``model`` — the agent's model, named when the task's config sets none.
     * ``model_name`` — include the model line.
     * ``git_status`` — put the git snapshot in the first user turn.
+    * ``git_refresh`` — take the snapshot again at the start of every later
+      turn and, when it changed, give the new one in that turn's message
+      (Claude Code's changed session context).
     * ``attribution`` — put the commit / PR attribution note there.
     * ``token_budget`` — the ``<total_tokens>`` budget a turn starts with
       (``0``: no budget notes).
@@ -396,12 +412,14 @@ class Environment(Extension):
     name = "environment"
 
     def __init__(self, *, model: str | None = None, model_name: bool = True,
-                 git_status: bool = True, attribution: bool = True,
+                 git_status: bool = True, git_refresh: bool = True,
+                 attribution: bool = True,
                  token_budget: int = TOKEN_BUDGET, date_change: bool = True,
                  today: Callable[[], str] | None = None) -> None:
         self.model = model
         self.model_name = model_name
         self.git_status = git_status
+        self.git_refresh = git_refresh
         self.attribution = attribution
         self.token_budget = token_budget
         self.date_change = date_change
@@ -417,7 +435,11 @@ class Environment(Extension):
                     "turn_base": 0}
         if not isinstance(state, dict):
             return state
-        if kind in ("git", "attribution"):
+        if kind == "git":
+            text = data.get("text")
+            seen = data.get("seen") or (_digest(text) if isinstance(text, str) else None)
+            return {**state, "git": text, "git_seen": seen}
+        if kind == "attribution":
             return {**state, kind: data.get("text")}
         if kind == "sent":
             return {**state, "held": False, "skip_date": False}
@@ -500,6 +522,7 @@ class Environment(Extension):
                                     order=ORDER_DATE))
         else:
             out += self._deferred_delta(view, st)
+            out += await self._git_again(view, st)
         if not st.get("held") and self.date_change and not view.state.steps_in_turn \
                 and st.get("date"):
             today, _ = self._today(view)
@@ -518,6 +541,19 @@ class Environment(Extension):
             out.append(Reminder(text=budget_note(left), kind="budget", data={"base": base},
                                 role="system", order=ORDER_BUDGET))
         return out
+
+    async def _git_again(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
+        """At the start of a later turn, the snapshot taken again when it
+        differs from the one the model has (new commits, another branch)."""
+        if not (self.git_status and self.git_refresh) or view.state.steps_in_turn \
+                or not isinstance(st.get("git"), str) or view.state.parent_id:
+            return []
+        env = task_env(view.env, view.state.config)
+        plain = await capture_git(env, view.cwd or env.cwd)
+        if not plain or _digest(plain) == st.get("git_seen"):
+            return []
+        again = await capture_git(env, view.cwd or env.cwd, when=SNAPSHOT_AGAIN)
+        return [Reminder(text=again, kind="git", data={"text": again, "seen": _digest(plain)})]
 
     @staticmethod
     def _deferred_delta(view: TaskView, st: dict[str, Any]) -> list[Reminder]:

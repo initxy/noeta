@@ -379,3 +379,35 @@ async def test_deferred_tools_that_come_and_go_mid_task_are_told(tmp_path: Path)
     # Nothing changed since: no new note.
     assert len([m for m in provider.requests[3].messages if "no longer available" in m.text]) \
         == 1
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_changed_git_snapshot_is_given_again_at_a_later_turn(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(repo)], check=True)
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run([*git, "add", "a.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "first"], check=True)
+    ext = Environment(git_refresh=True)
+    view = _view(str(repo), LocalExecEnv(str(repo)))
+    await ext.on_start(view)
+    st: Any = None
+    for rec in view.pending:
+        assert isinstance(rec, ExtensionRecorded)
+        st = ext.reduce(st, rec.kind, rec.data)
+    st = ext.reduce(st, "sent", {})
+
+    def later() -> TaskView:
+        state = TaskState(task_id="t", config={"cwd": str(repo)}, ext={"environment": st})
+        return TaskView(state=state, env=LocalExecEnv(str(repo)))
+
+    assert [r for r in await ext.reminders(later()) if r.kind == "git"] == []
+    subprocess.run([*git, "checkout", "-q", "-b", "fix/other"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "second"], check=True)
+    again = [r for r in await ext.reminders(later()) if r.kind == "git"]
+    assert len(again) == 1 and "Current branch: fix/other" in again[0].text
+    assert "second" in again[0].text and "replaces the earlier snapshot" in again[0].text
+    st = ext.reduce(st, "git", again[0].data)
+    assert [r for r in await ext.reminders(later()) if r.kind == "git"] == []
