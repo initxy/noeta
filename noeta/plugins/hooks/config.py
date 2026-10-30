@@ -28,13 +28,13 @@ EVENTS = (
     "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch", "UserPromptSubmit",
     "Stop", "StopFailure", "SubagentStart", "SubagentStop", "SessionStart", "SessionEnd",
     "PreCompact", "PostCompact", "PostModelSwitch", "PermissionRequest", "PermissionDenied",
-    "Notification", "CwdChanged",
+    "Notification", "CwdChanged", "InstructionsLoaded",
 )
 #: Claude Code's other events: configured ones are skipped with a warning.
 UNSUPPORTED_EVENTS = (
     "UserPromptExpansion", "PreModelSwitch", "Setup", "TeammateIdle", "TaskCreated",
     "TaskCompleted", "Elicitation", "ElicitationResult", "ConfigChange", "WorktreeCreate",
-    "WorktreeRemove", "InstructionsLoaded", "FileChanged", "DirectoryAdded", "MessageDisplay",
+    "WorktreeRemove", "FileChanged", "DirectoryAdded", "MessageDisplay",
 )
 #: Events about one tool call (where ``if`` applies).
 TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure",
@@ -46,7 +46,7 @@ SUBJECT = {
     "SessionStart": "source", "SessionEnd": "reason", "PreCompact": "trigger",
     "PostCompact": "trigger", "Notification": "notification_type",
     "SubagentStart": "agent_type", "SubagentStop": "agent_type", "StopFailure": "error",
-    "PostModelSwitch": "to_model",
+    "PostModelSwitch": "to_model", "InstructionsLoaded": "load_reason",
 }
 #: Old tool names a matcher may use, both ways.
 _ALIASES = {"Task": "Agent", "Agent": "Task"}

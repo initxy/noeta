@@ -361,6 +361,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **`InstructionsLoaded` hooks fire as in Claude Code**: once per instruction file shown (at
+  the start, nested, an `@import`, a `paths:` match, after a compaction, and a changed file
+  shown again), with `file_path`, `memory_type`, `load_reason`, `globs`,
+  `trigger_file_path` and `parent_file_path`; matched on `load_reason`.
 - **`ToolContext.complete`: a tool can call the model** through the task's providers
   (retried, not recorded as a step), as hooks can with `TaskView.complete`.
   `Extension.on_context_overflow(view, request)` now gets the request that overflowed (a

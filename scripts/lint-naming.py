@@ -88,9 +88,11 @@ SESSION_RULE_REL_DIRS: tuple[tuple[str, ...], ...] = (
 )
 #: Wire names a protocol spells with the word, allowed only where noeta
 #: speaks that protocol: Claude Code's hook events and their input field
-#: (the root task's id goes out as ``session_id``).
+#: (the root task's id goes out as ``session_id``; InstructionsLoaded's
+#: ``load_reason`` value ``session_start``).
 SESSION_ALLOWED_IN: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
-    (("noeta", "plugins", "hooks"), frozenset({"SessionStart", "SessionEnd", "session_id"})),
+    (("noeta", "plugins", "hooks"),
+     frozenset({"SessionStart", "SessionEnd", "session_id", "session_start"})),
     # Claude Code's headless protocol: its messages' field and a control request.
     (("noeta", "host", "stream_json.py"),
      frozenset({"session_id", "get_session_cost", "_on_get_session_cost"})),

@@ -124,8 +124,16 @@ def cut_nested(path: str, text: str, limit: int) -> str:
     return f"{kept}\n{NESTED_CUT_NOTE.format(path=path, offset=offset)}"
 
 
-def _entry(f: InstructionFile, real: str) -> dict[str, str]:
-    return {"path": f.path, "kind": f.kind, "real": real, "digest": text_digest(f.text)}
+def _entry(f: InstructionFile, real: str) -> dict[str, Any]:
+    """What the log keeps of a shown file (the hooks plugin reads ``path``,
+    ``kind``, ``globs`` and ``parent`` for InstructionsLoaded)."""
+    out: dict[str, Any] = {"path": f.path, "kind": f.kind, "real": real,
+                           "digest": text_digest(f.text)}
+    if f.globs:
+        out["globs"] = list(f.globs)
+    if f.parent:
+        out["parent"] = f.parent
+    return out
 
 
 def text_digest(text: str) -> str:
@@ -307,7 +315,7 @@ class Instructions(Extension):
         for f in await self._nested_files(reader, root, resolved):
             real = await _real(reader.env_for(f.kind), f.path)
             text = f.text if f.kind == MANAGED else cut_nested(f.path, f.text, limit)
-            view.record(self.name, "nested", {"files": [_entry(f, real)]},
+            view.record(self.name, "nested", {"files": [_entry(f, real)], "trigger": resolved},
                         message=user(render_file(f.path, f.kind, text), origin=self.origin))
 
     async def _reread_changed(self, view: TaskView) -> None:
@@ -396,7 +404,7 @@ class Instructions(Extension):
         return out
 
 
-def _digests(entries: Sequence[dict[str, str]]) -> dict[str, str]:
+def _digests(entries: Sequence[dict[str, Any]]) -> dict[str, str]:
     """The digests of recorded entries (an entry recorded before digests
     were kept has none, and is never shown again)."""
     return {e["path"]: e["digest"] for e in entries if e.get("digest")}
