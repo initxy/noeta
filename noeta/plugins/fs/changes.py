@@ -4,7 +4,8 @@ them, worked out against the file as the model last saw it whole (its last
 full ``Read`` result in the conversation, when no edit of the model's came
 after it). Nothing is kept outside the conversation, so a task on another
 worker finds the same; when that view is gone (compacted, partial, edited
-since) there is no snippet."""
+since) there is no snippet. A file the model read only in part (an offset
+or a limit) gets no note at all, as in Claude Code (``FileRead.window``)."""
 
 from __future__ import annotations
 
@@ -17,10 +18,11 @@ from noeta.core.types import Message, ToolResult
 
 __all__ = ["CONTEXT_LINES", "MAX_SNIPPET_CHARS", "changed_lines", "seen_text"]
 
-#: Unchanged lines shown around each change.
-CONTEXT_LINES = 3
-#: A snippet longer than this is not shown (the model reads the file instead).
-MAX_SNIPPET_CHARS = 4000
+#: Unchanged lines shown around each change (Claude Code's 8).
+CONTEXT_LINES = 8
+#: A snippet longer than this is cut at a line end, with a line saying how
+#: many lines were left out (Claude Code's 8,192 characters).
+MAX_SNIPPET_CHARS = 8192
 _WRITERS = frozenset({"Edit", "Write", "NotebookEdit"})
 _NUMBERED = re.compile(r"^(\d+)\t(.*)$")
 _EMPTY = "Warning: the file is there but holds no content."
@@ -72,19 +74,20 @@ def _unnumbered(text: str) -> str | None:
 
 def changed_lines(before: str, after: str) -> str | None:
     """The changed lines of ``after`` with a little context (a removal
-    shows its neighbours), numbered; ``None`` when nothing differs or it is
-    too long to show."""
+    shows its neighbours), numbered, one block per change, cut to
+    :data:`MAX_SNIPPET_CHARS`; ``None`` when nothing differs."""
     old, new = before.split("\n"), after.split("\n")
     parts: list[str] = []
     for group in difflib.SequenceMatcher(None, old, new, autojunk=False).get_grouped_opcodes(
             CONTEXT_LINES):
         first, last = group[0][3], group[-1][4]
-        if first == last:
-            continue
-        if parts:
-            parts.append("...")
         parts += [f"{n + 1}\t{new[n]}" for n in range(first, last)]
     snippet = "\n".join(parts)
-    if not snippet or len(snippet) > MAX_SNIPPET_CHARS:
+    if not snippet:
         return None
-    return snippet
+    if len(snippet) <= MAX_SNIPPET_CHARS:
+        return snippet
+    end = snippet.rfind("\n", 0, MAX_SNIPPET_CHARS + 1)
+    kept = snippet[:end] if end > 0 else snippet[:MAX_SNIPPET_CHARS]
+    left_out = snippet[len(kept) + 1:].count("\n") + 1
+    return f"{kept}\n... [{left_out} lines truncated] ..."

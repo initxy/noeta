@@ -82,6 +82,11 @@ class FileRead(Struct):
     #: The model had the whole file in view (a read from the top to the end,
     #: or what it wrote itself over such a view).
     whole: bool = True
+    #: Recorded by a ``Read`` given an offset past the first line or a limit
+    #: (or cut to fit the token ceiling): no changed-file note follows it, as
+    #: Claude Code sends none for such a read. Kept when a compaction drops
+    #: ``range``.
+    window: bool = False
 
 
 class FsState(Struct):
@@ -119,7 +124,8 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
             del reads[next(iter(reads))]
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
                                partial=data.get("partial") is True,
-                               whole=data.get("whole") is not False)
+                               whole=data.get("whole") is not False,
+                               window=lines is not None and (lines[0] > 1 or lines[1] > 0))
         return msgspec.structs.replace(base, reads=reads)
     if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
         text = data.get("text")

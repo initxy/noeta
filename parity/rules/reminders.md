@@ -283,7 +283,7 @@ Not in the recordings (no hooks configured); from the 2.1.312 bundle (`hook_addi
 | id | rule |
 |---|---|
 | rem.file-changed.1 | **s1 only.** Trigger: a file the model has in context (here `CLAUDE.md`, changed by a Bash command) changed on disk. Placement: `role: "system"` message after the tool-result message of the step that changed it. |
-| rem.file-changed.2 | Content: the path changed on disk since last read; the change is usually deliberate, so treat it as the current state and do not revert; if it looks wrong say so instead of undoing it; otherwise no need to mention it; then the relevant lines with line numbers (`N<TAB>text`), or, when they cannot be shown, that they are not shown and `Read` gives the current content (2.1.312 bundle, `edited_text_file`). |
+| rem.file-changed.2 | Content: the path changed on disk since last read; the change is usually deliberate, so treat it as the current state and do not revert; if it looks wrong say so instead of undoing it; otherwise no need to mention it; then the relevant lines with line numbers (`N<TAB>text`), or, when they cannot be shown, that they are not shown and `Read` gives the current content (2.1.312 bundle, `edited_text_file`). The lines: each change with 8 unchanged lines either side, one block after another; past 8,192 characters cut at a line end and followed by `... [N lines truncated] ...` (bundle `oKs`). No note for a file last read with an offset or a limit. |
 | rem.agent-list.1 | **s1 only.** A `general-purpose` sub-agent whose first environment message lacked the agent list received the "available agent types" list plus the auto-mode guidance as a `role: "system"` message after its first tool result. |
 
 ## Not observed in 2.1.312 baseline
