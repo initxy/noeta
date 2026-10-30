@@ -74,9 +74,11 @@ parity:
 
 ## several worker processes on one Postgres (a throwaway postgres:16 container,
 ## or NOETA_TEST_POSTGRES_DSN) under random SIGKILL / SIGSTOP, offline with a
-## scripted provider (tests/cluster); NOETA_CLUSTER_SEED replays a run (never in check)
+## scripted provider (tests/cluster); NOETA_CLUSTER_SEED replays a run (never in check).
+## `python -m pytest` so the run's interpreter sees the scripted package; a skipped
+## cluster test fails the run (NOETA_CLUSTER_REQUIRED)
 cluster:
-	uv run --all-extras --with-editable ./tests/cluster/scripted pytest -m cluster -p no:cacheprovider -s -v tests/cluster
+	NOETA_CLUSTER_REQUIRED=1 uv run --all-extras --with-editable ./tests/cluster/scripted python -m pytest -m cluster -p no:cacheprovider -s -v tests/cluster
 
 build:
 	uv build
