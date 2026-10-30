@@ -1,7 +1,12 @@
 """The large-output rule (Claude Code's): an output over a limit is saved
 whole to a file the model can ``Read`` and replaced by a preview. Tools apply
 it to their own output; the runner applies a ceiling per tool and a budget per
-reply to every result."""
+reply to every result.
+
+A task's saved outputs live in its own directory below the spill root,
+written through the task's exec env: wherever the task runs next (another
+worker, after a crash or a wait), the model reads them through that env.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ __all__ = [
     "format_size",
     "large_output_message",
     "limit_output",
+    "result_spill_path",
     "spill_path",
 ]
 
@@ -128,6 +134,26 @@ def spill_path(spill_dir: str, task_id: str, call_id: str) -> str:
     return posixpath.join(spill_dir, task_part, f"{call_part}.txt")
 
 
+def result_spill_path(spill_dir: str, task_id: str, call_id: str) -> str:
+    """Where the runner saves one call's whole result: beside the call's own
+    file (:func:`spill_path`, a tool's), never over it."""
+    return spill_path(spill_dir, task_id, call_id).removesuffix(".txt") + ".result.txt"
+
+
+def _persisted(text: str) -> bool:
+    """Whether ``text`` already points at its saved whole (a tool saved its
+    own output, :func:`limit_output`)."""
+    return "<persisted-output>\nOutput too large (" in text and "Full output saved to: " in text
+
+
+async def _save(text: str, path: str, ctx: ToolContext) -> bool:
+    try:
+        await ctx.env.write_bytes(path, text.encode("utf-8"))
+    except OSError:
+        return False
+    return True
+
+
 async def limit_output(text: str, limit: int, ctx: ToolContext) -> str:
     """``text`` unchanged when it fits ``limit`` characters. Past it, the
     whole text is saved under ``ctx.spill_dir`` (through the env, so the
@@ -138,11 +164,7 @@ async def limit_output(text: str, limit: int, ctx: ToolContext) -> str:
     saved_to: str | None = None
     if ctx.spill_dir:
         path = spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id)
-        try:
-            await ctx.env.write_bytes(path, text.encode("utf-8"))
-            saved_to = path
-        except OSError:
-            saved_to = None
+        saved_to = path if await _save(text, path, ctx) else None
     return large_output_message(text, limit, saved_to=saved_to)
 
 
@@ -161,7 +183,11 @@ async def bound_result(output: ToolOutput, tool: Tool, ctx: ToolContext,
     tool's ``max_result_chars`` (at most ``RESULT_CEILING_CHARS``) is saved
     and previewed; one that would take the reply's results past
     ``REPLY_RESULTS_BUDGET_CHARS`` is saved too when there is a spill
-    directory. Errors and results with images pass unchanged."""
+    directory. The runner's file is its own (:func:`result_spill_path`), and
+    a result that already points at its saved whole is never saved again.
+    When the save fails the result stays whole, as Claude Code keeps it;
+    with no spill directory one over the ceiling keeps its start and end.
+    Errors and results with images pass unchanged."""
     if output.is_error or output.park is not None or not output.content \
             or not all(isinstance(b, Text) for b in output.content):
         return output
@@ -169,13 +195,25 @@ async def bound_result(output: ToolOutput, tool: Tool, ctx: ToolContext,
     declared = getattr(tool, "max_result_chars", RESULT_CEILING_CHARS)
     limit = len(text) if declared is None else min(declared, RESULT_CEILING_CHARS)
     if len(text) <= limit and budget.used + len(text) > REPLY_RESULTS_BUDGET_CHARS \
-            and len(text) > PERSISTED_PREVIEW_CHARS and ctx.spill_dir and declared is not None:
+            and len(text) > PERSISTED_PREVIEW_CHARS and ctx.spill_dir and declared is not None \
+            and not _persisted(text):
         limit = PERSISTED_PREVIEW_CHARS  # past the reply's budget: saved whole
     if len(text) <= limit:
         budget.used += len(text)
         return output
-    budget.used += min(len(text), limit + PERSISTED_PREVIEW_CHARS)  # reserved now
-    bounded = await limit_output(text, limit, ctx)
+    # Reserved before the first wait, so calls finishing together cannot
+    # all pass the budget; settled to what is returned once it is known.
+    reserved = min(len(text), limit + PERSISTED_PREVIEW_CHARS)
+    budget.used += reserved
+    if not ctx.spill_dir:
+        bounded = large_output_message(text, limit)
+    else:
+        path = result_spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id)
+        if not await _save(text, path, ctx):
+            budget.used += len(text) - reserved
+            return output
+        bounded = large_output_message(text, limit, saved_to=path)
+    budget.used += len(bounded) - reserved
     return ToolOutput(content=[Text(text=bounded)], meta={**output.meta, "persisted": True},
                       display=output.display, end_turn=output.end_turn,
                       block_list=output.block_list)
