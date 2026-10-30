@@ -566,20 +566,73 @@ def shop_with_build(ws: Path) -> None:
 # Hooks: a PreToolUse command hook that turns pytest away
 # --------------------------------------------------------------------------- #
 
-PYTEST_HOOK = '''"""PreToolUse hook: this repository runs its tests through tools/testrun.py."""
+PYTEST_HOOK = r'''"""PreToolUse hook: this repository runs its tests through tools/testrun.py."""
 
 import json
+import os
 import re
+import shlex
 import sys
 
-#: A command segment that runs pytest (not one that merely names it).
-RUNS_PYTEST = re.compile(
-    r"^[\\s(]*(\\w+=\\S*\\s+)*((uv|poetry|pipenv)\\s+run\\s+)?"
-    r"(pytest|py\\.test|python[0-9.]*\\s+(-\\w+\\s+)*-m\\s+pytest)([\\s)]|$)")
+#: Programs that run the command after their own options.
+WRAPPERS = {"timeout", "env", "nice", "command", "exec", "nohup", "time", "stdbuf", "sudo"}
+RUNNERS = {"uv", "poetry", "pipenv", "pdm", "hatch"}
+SHELLS = {"sh", "bash", "zsh", "dash"}
+
+
+def words_of(segment):
+    try:
+        return shlex.split(segment)
+    except ValueError:
+        return segment.split()
+
+
+def runs_pytest(segment, depth=0):
+    """Whether one command segment runs pytest (not one that merely names it)."""
+    words = [w.strip("(){}") for w in words_of(segment)]
+    words = [w for w in words if w]
+    i = 0
+    while i < len(words):
+        word = words[i]
+        name = os.path.basename(word)
+        if re.match(r"^[A-Za-z_]\w*=", word):
+            i += 1
+        elif name in WRAPPERS:
+            i += 1
+            while i < len(words) and (words[i].startswith("-")
+                                      or re.match(r"^\d+(\.\d+)?[smhd]?$", words[i])
+                                      or re.match(r"^[A-Za-z_]\w*=", words[i])):
+                i += 1
+        elif name in RUNNERS and i + 1 < len(words) and words[i + 1] in ("run", "exec"):
+            i += 2
+        else:
+            break
+    if i >= len(words):
+        return False
+    name, rest = os.path.basename(words[i]), words[i + 1:]
+    if name in ("pytest", "py.test") or name.startswith("pytest-"):
+        return True
+    if re.match(r"^python[0-9.]*$", name):
+        for j, arg in enumerate(rest):
+            if arg in ("-m", "-mpytest") or arg.startswith("-m"):
+                module = arg[2:] or (rest[j + 1] if j + 1 < len(rest) else "")
+                return module in ("pytest", "py.test")
+            if arg == "-c":
+                return re.search(r"pytest\.(main|console_main)\b", " ".join(rest[j + 1:])) is not None
+            if not arg.startswith("-"):
+                return False
+    if name in SHELLS and "-c" in rest and depth < 3:
+        code = " ".join(rest[rest.index("-c") + 1:])
+        return any(runs_pytest(part, depth + 1) for part in re.split(r"&&|\|\||[;|\n]", code))
+    return False
+
 
 event = json.load(sys.stdin)
 command = str((event.get("tool_input") or {}).get("command", ""))
-if any(RUNS_PYTEST.search(part) for part in re.split(r"&&|\\|\\||[;|\\n]", command)):
+# `python -c "...; pytest.main()"`: its code holds separators the split would cut.
+IN_PROCESS = re.compile(r"\bpython[0-9.]*\s+(-\w+\s+)*-c\s.*\bpytest\.(main|console_main)\b", re.S)
+if IN_PROCESS.search(command) or any(runs_pytest(part)
+                                     for part in re.split(r"&&|\|\||[;|\n]", command)):
     print("pytest is disabled in this repository (it skips the fixture setup). "
           "Run the suite with `python3 tools/testrun.py` instead.", file=sys.stderr)
     sys.exit(2)

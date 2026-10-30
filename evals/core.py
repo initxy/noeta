@@ -156,6 +156,41 @@ def mentions(call: ToolUse, rel: str) -> bool:
     return p == rel or p.endswith("/" + rel)
 
 
+def _repo_roots() -> tuple[str, ...]:
+    """This checkout, and the main checkout when this is a worktree inside it."""
+    here = str(Path(__file__).resolve().parents[1])
+    roots = [here]
+    if "/.claude/worktrees/" in here:
+        roots.append(here.split("/.claude/worktrees/")[0])
+    # The same places spelled through the user's home ($HOME may be a link).
+    home = str(Path.home())
+    real_home = str(Path(home).resolve())
+    for root in list(roots):
+        if root.startswith(real_home + "/"):
+            rest = root[len(real_home):]
+            roots += [home + rest, "~" + rest]
+    return tuple(dict.fromkeys(roots))
+
+
+#: Where the eval's own source (and so its answers) lives.
+REPO_ROOTS = _repo_roots()
+
+
+def in_repo(text: str) -> bool:
+    return any(root in text for root in REPO_ROOTS)
+
+
+def repo_access(t: Trace) -> list[str]:
+    """Calls that name the repo (a command, a path): a leak out of the trial
+    sandbox; recorded, never scored."""
+    out = []
+    for c in t.calls:
+        args = " ".join(str(v) for v in c.arguments.values())
+        if in_repo(args):
+            out.append(f"{c.tool_name}: {args[:160]}")
+    return out
+
+
 #: A shell command doing what a dedicated read/search tool does.
 SHELL_READ_SEARCH = re.compile(
     r"(^|[\s;&|(])(cat|head|tail|less|more|sed|awk|grep|egrep|rg|find|ag)\s"
@@ -224,6 +259,7 @@ def time_trial(
             commands=[c[:300] for c in trace.bash_commands()],
             spawned=trace.spawned,
             compactions=trace.compactions,
+            repo_access=repo_access(trace),
             asked=[{"kind": q.kind, "tool": q.tool, "input": str(q.input)[:200],
                     "reply": None if r is None else (r.decision or "answered")}
                    for q, r in trace.asked],

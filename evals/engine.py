@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import subprocess
 import tempfile
 import threading
 from collections.abc import Mapping
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from evals import live_env as _live_env
-from evals.core import EvalConfig, Reply, Request, Scenario, Trace, TrialDirs
+from evals.core import EvalConfig, Reply, Request, Scenario, Trace, TrialDirs, in_repo
 from noeta.agents import default_agents
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.providers import provider_for
@@ -52,6 +53,7 @@ _STUCK_POLLS = 150
 
 _home_lock = threading.Lock()
 _home: Path | None = None
+_venv: Path | None = None
 
 
 def isolate_home() -> Path:
@@ -68,16 +70,50 @@ def isolate_home() -> Path:
         return _home
 
 
+def trial_venv() -> Path:
+    """A throwaway virtualenv with pytest (once per process, under the eval
+    home): the Python the model's commands find, so nothing they run comes
+    from the repo's own development environment."""
+    global _venv
+    home = isolate_home()
+    with _home_lock:
+        if _venv is None:
+            venv = home / "venv"
+            subprocess.run(["uv", "venv", "--quiet", "--python", "3.12", str(venv)],
+                           check=True, capture_output=True, env=_outside_repo_env())
+            subprocess.run(["uv", "pip", "install", "--quiet", "--python",
+                            str(venv / "bin" / "python"), "pytest"],
+                           check=True, capture_output=True, env=_outside_repo_env())
+            _venv = venv
+        return _venv
+
+
+def _outside_repo_path() -> str:
+    """``PATH`` without the repo's directories (``uv run`` puts its .venv first)."""
+    return os.pathsep.join(d for d in os.environ.get("PATH", "").split(os.pathsep)
+                           if d and not in_repo(d))
+
+
+def _outside_repo_env() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "PYTHONPATH")}
+    env["PATH"] = _outside_repo_path()
+    return env
+
+
 class _TrialEnv(LocalExecEnv):
     """The local exec env with the trial's own ``HOME`` (and XDG
-    directories): commands the model runs never read or write the user's
-    dotfiles."""
+    directories), and the throwaway virtualenv in place of the repo's on
+    ``PATH``: commands the model runs never touch the user's dotfiles, and
+    find nothing that leads back to the repo (where the eval's answers are)."""
 
     def __init__(self, cwd: str, home: Path) -> None:
         super().__init__(cwd)
+        venv = trial_venv()
         self._home_env = {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
                           "XDG_CACHE_HOME": str(home / ".cache"),
-                          "XDG_DATA_HOME": str(home / ".local" / "share")}
+                          "XDG_DATA_HOME": str(home / ".local" / "share"),
+                          "VIRTUAL_ENV": str(venv), "PYTHONPATH": "",
+                          "PATH": os.pathsep.join([str(venv / "bin"), _outside_repo_path()])}
 
     async def run(self, argv: Any, *, cwd: str | None = None,
                   env: Mapping[str, str] | None = None, stdin: bytes | None = None,
