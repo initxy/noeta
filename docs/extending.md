@@ -40,6 +40,10 @@ log upload, no update check. A plugin you install can of course make its own req
    `add_to = ("main",)` (or `("*",)`) and it joins those agents by itself.
 2. Start a front end, or type `/reload-plugins` in a running one.
 
+To try a file kept elsewhere for one run, `noeta --plugin-dir ./my_plugin.py` (also with
+`-p`; a plugin directory or a Claude Code plugin works too, and the flag repeats). A plugin
+file that joins no agent is named in a notice.
+
 Arguments come from `~/.noeta/config.toml` `[plugins.<name>]`; `enabled = false` turns a plugin
 off everywhere; `[agents.<name>] add_plugins` adds one without `add_to`. A secret is written as
 `"{env:NAME}"` or `"{keyring:service/user}"` and resolved only when the plugin is made.

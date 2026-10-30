@@ -61,6 +61,7 @@ __all__ = [
     "missing_modules",
     "note_arguments",
     "pin",
+    "plugin_files",
     "provider",
     "sources",
     "store",
@@ -140,6 +141,11 @@ def added_by_files() -> dict[str, list[str]]:
     return out
 
 
+def plugin_files() -> dict[str, str]:
+    """The plugins plugin files registered: name -> path."""
+    return {name: path for name, (path, _cls) in sorted(_files.items())}
+
+
 def load(group: str, name: str) -> Any:
     """The object the entry point ``name`` in ``group`` points at (for
     plugins, else the class a plugin file defines)."""
@@ -160,7 +166,12 @@ def load(group: str, name: str) -> Any:
 
 
 def _plugin_paths(directory: Path) -> list[Path]:
-    """``*.py`` files and directories with ``__init__.py``, one level down."""
+    """``*.py`` files and directories with ``__init__.py``, one level down;
+    ``directory`` itself when it is one of those (a ``--plugin-dir``)."""
+    if directory.is_file():
+        return [directory] if directory.suffix == ".py" else []
+    if (directory / "__init__.py").is_file():
+        return [directory / "__init__.py"]
     if not directory.is_dir():
         return []
     out = []
@@ -208,7 +219,8 @@ def _import(path: Path) -> Any:
 def load_plugin_files(directories: Iterable[str | Path],
                       admit: Callable[[str], bool] | None = None) -> list[str]:
     """Register the plugins (and channels) of the files in ``directories``
-    (each loaded once per process); returns the names added. A file that
+    (each loaded once per process; an entry may also be one plugin file or
+    plugin directory); returns the names added. A file that
     fails to import is remembered and named when its plugin is asked for; a
     name an installed plugin already has is skipped with a warning.
     ``admit(name)``: whether a file (by its stem, a directory by its name)

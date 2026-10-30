@@ -389,11 +389,14 @@ def _front(argv: list[str]) -> None:
                    permissions=headless.permission_arguments(args),
                    plugins={"mcp": mcp} if mcp is not None else None,
                    setting_sources=layers["sources"], flag_settings=layers["flag"],
-                   agent_files=agent_files)
+                   agent_files=agent_files, plugin_dirs=args.plugin_dirs)
         sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd)))
     from noeta.cli.tui import run_tui
 
     if args.server:
+        if args.plugin_dirs:
+            sys.exit("noeta: --plugin-dir loads plugins into this process; with --server "
+                     "the server's plugins run")
         # The server's model and directory unless --model / --cwd name one;
         # a local path or a model only this machine knows means nothing there.
         run_tui(_settings(args, need_model=False), cwd=cwd, resume=args.resume,
@@ -402,7 +405,7 @@ def _front(argv: list[str]) -> None:
                              if v})
         return
     run_tui(_settings(args), cwd=cwd, resume=args.resume,
-            permission_mode=args.permission_mode)
+            permission_mode=args.permission_mode, plugin_dirs=args.plugin_dirs)
 
 
 if __name__ == "__main__":

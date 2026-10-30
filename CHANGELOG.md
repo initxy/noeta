@@ -361,6 +361,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **`--plugin-dir` loads a plugin for one run.** `noeta --plugin-dir ./x.py` (TUI and `-p`,
+  repeatable) loads a plugin file, a plugin directory, a Claude Code plugin or a directory of
+  them for this process only, as Claude Code's flag does; it was accepted and ignored. A
+  plugin file that joins no agent (no `add_to`, no `add_plugins`) is named in a notice.
 - **`ToolContext.serves_queue(queue)`**: whether a child staged on `queue` could run now (the
   runner drops one that could not, with the call's result); `None` takes every queue.
 - **`Extension.tool_changes(view, offered)`.** A plugin changes the task's tool list from the

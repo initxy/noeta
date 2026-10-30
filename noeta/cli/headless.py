@@ -8,8 +8,8 @@ flags (``noeta.host.stream_json`` speaks the protocol).
                                                    what Claude Code's Agent SDK runs
 
 ``--settings``, ``--setting-sources``, ``--mcp-config`` (with
-``--strict-mcp-config``) and ``--agents`` work as in Claude Code, on noeta's
-own places. Flags Claude Code has and noeta does not use (``--betas`` …)
+``--strict-mcp-config``), ``--agents`` and ``--plugin-dir`` work as in Claude
+Code, on noeta's own places. Flags Claude Code has and noeta does not use (``--betas`` …)
 are accepted and ignored, so an SDK's command line runs unchanged; each
 ignored one is named on stderr.
 """
@@ -36,7 +36,7 @@ from noeta.toolkit.local_env import local_timezone
 #: Accepted for compatibility, not applied (value-taking, then flags).
 IGNORED_WITH_VALUE = ("--fallback-model",
                       "--betas", "--max-thinking-tokens", "--thinking", "--thinking-display",
-                      "--plugin-dir", "--plugin-url", "--task-budget", "--debug-file",
+                      "--plugin-url", "--task-budget", "--debug-file",
                       "--name", "--autocompact", "--file", "--system-prompt-snapshot")
 IGNORED_FLAGS = ("--include-hook-events", "--no-session-persistence",
                  "--session-mirror", "--bare", "--allow-dangerously-skip-permissions",
@@ -85,6 +85,8 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
                     help="use only the --mcp-config servers")
     ap.add_argument("--agents", dest="agents_json",
                     help="sub-agents as a JSON object: name -> {description, prompt, ...}")
+    ap.add_argument("--plugin-dir", dest="plugin_dirs", action="append", default=[],
+                    metavar="PATH", help="load a plugin file or directory for this run only")
     ap.add_argument("-v", "--version", action="store_true")
     ap.add_argument("-d", "--debug", nargs="?", const="", default=None)
     for flag in IGNORED_WITH_VALUE:

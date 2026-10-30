@@ -30,7 +30,8 @@ import yaml
 
 from noeta.agents.agent_files import AgentFile, AgentFileError, parse_agent_file
 
-__all__ = ["ClaudePlugin", "find_claude_plugins", "is_claude_plugin", "plugin_settings"]
+__all__ = ["ClaudePlugin", "find_claude_plugins", "is_claude_plugin", "plugin_settings",
+           "read_claude_plugin"]
 
 log = logging.getLogger("noeta.cli")
 
