@@ -189,28 +189,160 @@ def job_config(args: argparse.Namespace, harbor: str, env: dict[str, str]) -> di
     return config
 
 
-#: Task images the datasets pull. harbor removes the images it builds, not the
-#: ones it pulls, and a full TB4 / SWE-rebench pass pulls far more than a
-#: typical disk holds.
-TASK_IMAGE_PREFIXES = ("harborframework/terminal-bench", "swerebenchv2/", "docker.io/swerebenchv2/")
+def _docker(*argv: str) -> str:
+    return subprocess.run(["docker", *argv], capture_output=True, text=True).stdout
 
 
-def prune_task_images(stop: threading.Event, keep_build_cache_gb: float | None,
-                      every_s: float = 600) -> None:
-    """Every `every_s`, remove pulled task images no container uses (docker
-    refuses to remove one in use). SWE-rebench base images arrive through
-    BuildKit and live in the build cache instead; with `keep_build_cache_gb`
-    that cache (the whole host's) is pruned down to that size."""
-    while not stop.wait(every_s):
-        if keep_build_cache_gb is not None:
-            subprocess.run(["docker", "builder", "prune", "-f", "--keep-storage",
-                            f"{keep_build_cache_gb}gb"], capture_output=True)
-        listed = subprocess.run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}} {{.ID}}"],
-                                capture_output=True, text=True).stdout.split("\n")
-        ids = {line.split()[-1] for line in listed
-               if line.strip() and line.startswith(TASK_IMAGE_PREFIXES)}
-        for image_id in ids:
+def _image_ids() -> set[str]:
+    return set(_docker("images", "-a", "-q", "--no-trunc").split())
+
+
+def _cache_records() -> list[dict[str, Any]]:
+    """`docker buildx du --verbose`, one dict per build-cache record."""
+    records: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    in_parents = False
+    for line in _docker("buildx", "du", "--verbose").splitlines():
+        if line.startswith("ID:"):
+            current = {"id": line.split(":", 1)[1].strip(), "parents": set(), "description": ""}
+            records.append(current)
+            in_parents = False
+        elif current is None:
+            continue
+        elif line.startswith("Parents:"):
+            in_parents = True
+        elif in_parents and line.lstrip().startswith("- "):
+            current["parents"].add(line.strip()[2:].strip())
+        else:
+            in_parents = False
+            if line.startswith("Description:"):
+                current["description"] = line.split(":", 1)[1].strip()
+    return records
+
+
+def _qualified(ref: str) -> str:
+    """`swerebenchv2/x:tag` -> `docker.io/swerebenchv2/x:tag`, as BuildKit names a pull."""
+    first = ref.split("/", 1)[0]
+    if "/" not in ref:
+        return f"docker.io/library/{ref}"
+    if "." in first or ":" in first or first == "localhost":
+        return ref
+    return f"docker.io/{ref}"
+
+
+def _pinned(ref: str) -> str:
+    """`repo:tag@sha256:…` -> `repo@sha256:…`: docker looks a pull-by-digest up by digest."""
+    if "@" not in ref:
+        return ref
+    name, digest = ref.split("@", 1)
+    head, _, tag = name.rpartition(":")
+    return f"{head if head and '/' not in tag else name}@{digest}"
+
+
+def task_image_refs(task_dir: Path) -> list[str]:
+    """The images a task's trials pull: the prebuilt agent / verifier images
+    task.toml names, or, for a task harbor builds, the base images its
+    Dockerfiles start FROM."""
+    import tomllib
+
+    refs: list[str] = []
+    toml = task_dir / "task.toml"
+    if toml.is_file():
+        config = tomllib.loads(toml.read_text("utf-8"))
+        for table in (config.get("environment", {}), config.get("verifier", {}).get("environment", {})):
+            if isinstance(table, dict) and table.get("docker_image"):
+                refs.append(str(table["docker_image"]))
+    if refs:  # prebuilt images: harbor pulls them and builds nothing
+        return refs
+    for dockerfile in task_dir.glob("**/Dockerfile"):
+        for line in dockerfile.read_text("utf-8", errors="replace").splitlines():
+            words = line.split()
+            if len(words) >= 2 and words[0].upper() == "FROM":
+                ref = next((w for w in words[1:] if not w.startswith("--")), "")
+                if ref and "$" not in ref and ref.lower() != "scratch":
+                    refs.append(ref)
+    return refs
+
+
+class RunCleanup:
+    """Removes, per task, what this run pulled for it — once every trial of
+    the task has finished, and never anything else.
+
+    "This run's" means: not on the host when the run started (image IDs and
+    build-cache record IDs are recorded then) and named by the task (its
+    `docker_image`s and Dockerfile `FROM` images; a build-cache record counts
+    when its description is the pull of such an image, or its parent chain
+    leads to one). An image a container still uses is never removed (`docker
+    rmi` without `-f`). harbor itself removes each trial's containers,
+    volumes and built image (`compose down --rmi local --volumes`, scoped to
+    the trial's own compose project)."""
+
+    def __init__(self, dataset_dir: Path, job_dir: Path, trials_per_task: int) -> None:
+        self.job_dir = job_dir
+        self.trials_per_task = trials_per_task
+        self.images_before = _image_ids()
+        self.cache_before = {r["id"] for r in _cache_records()}
+        self.refs = {d.name: task_image_refs(d) for d in dataset_dir.iterdir() if (d / "task.toml").is_file()}
+        self.cleaned: set[str] = set()
+        self.log = job_dir.parent / f"{job_dir.name}.cleanup.log"
+
+    def _note(self, text: str) -> None:
+        with self.log.open("a", encoding="utf-8") as out:
+            out.write(f"{dt.datetime.now().isoformat(timespec='seconds')} {text}\n")
+
+    def finished_tasks(self) -> set[str]:
+        counts: dict[str, int] = defaultdict(int)
+        for path in self.job_dir.glob("*/result.json"):
+            try:
+                result = json.loads(path.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            if result.get("finished_at"):
+                counts[str(result.get("task_name", "")).split("/")[-1]] += 1
+        return {task for task, n in counts.items() if n >= self.trials_per_task}
+
+    def sweep(self, *, all_tasks: bool = False) -> None:
+        tasks = set(self.refs) if all_tasks else self.finished_tasks()
+        for task in sorted(tasks - self.cleaned):
+            if task in self.refs:
+                self.clean(task)
+            self.cleaned.add(task)
+
+    def clean(self, task: str) -> None:
+        refs = self.refs[task]
+        for ref in refs:
+            image_id = _docker("image", "inspect", "-f", "{{.Id}}", _pinned(ref)).strip()
+            if not image_id or image_id in self.images_before:
+                continue
+            if _docker("ps", "-a", "-q", "--filter", f"ancestor={image_id}").strip():
+                self._note(f"{task}: keep {ref} (a container uses it)")
+                continue
             subprocess.run(["docker", "rmi", image_id], capture_output=True)
+            self._note(f"{task}: removed image {ref} {image_id}")
+        pulls = [f"pulled from {_qualified(ref)}" for ref in refs]
+        records = [r for r in _cache_records() if r["id"] not in self.cache_before]
+        ours = {r["id"] for r in records if any(r["description"].startswith(p) for p in pulls)}
+        grew = True
+        while grew:  # records built on top of this task's base image
+            more = {r["id"] for r in records if r["id"] not in ours and r["parents"] & ours}
+            grew = bool(more)
+            ours |= more
+        left = set(ours)
+        for _ in range(len(ours) + 1):  # leaves first: a record with a child cannot go
+            if not left:
+                break
+            parents = {p for r in records if r["id"] in left for p in r["parents"]}
+            for record_id in sorted(left - parents or left):
+                subprocess.run(["docker", "buildx", "prune", "-f", "--filter", f"id={record_id}"],
+                               capture_output=True)
+            left &= {r["id"] for r in _cache_records()}
+        if ours:
+            self._note(f"{task}: removed {len(ours - left)} of {len(ours)} build-cache records"
+                       + (f" (left: {sorted(left)})" if left else ""))
+
+    def run_until(self, stop: threading.Event, every_s: float = 120) -> None:
+        while not stop.wait(every_s):
+            self.sweep()
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -236,14 +368,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.dry_run:
         return 0
     stop = threading.Event()
-    if args.prune_images:
-        threading.Thread(target=prune_task_images, args=(stop, args.keep_build_cache_gb),
-                         daemon=True).start()
+    cleanup = None
+    if not args.keep_task_images:
+        cleanup = RunCleanup(local_dataset(args), args.jobs_dir / args.job_name,
+                             args.k * len(args.agents))
+        threading.Thread(target=cleanup.run_until, args=(stop,), daemon=True).start()
     try:
         code = subprocess.run([harbor, "run", "-c", str(config_path), "-y", *(args.harbor_args or [])],
                               env=env).returncode
     finally:
         stop.set()
+        if cleanup is not None:
+            cleanup.sweep(all_tasks=True)
     job = args.jobs_dir / args.job_name
     if job.is_dir():
         print(summarize([job]))
@@ -388,10 +524,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--job-name")
     run.add_argument("--harbor", help="the harbor executable")
     run.add_argument("--dry-run", action="store_true", help="write the job config, run nothing")
-    run.add_argument("--keep-build-cache-gb", type=float,
-                     help="with --prune-images: also prune the host's docker build cache to this size")
-    run.add_argument("--prune-images", action="store_true",
-                     help="every 10 min, remove pulled TB / SWE-rebench task images no container uses")
+    run.add_argument("--keep-task-images", action="store_true",
+                     help="keep the task images this run pulled (default: remove each task's once its "
+                          "trials finish; see RunCleanup)")
     run.add_argument("harbor_args", nargs="*", help="after --: extra `harbor run` flags")
     summary = sub.add_parser("summary", help="summarize finished job dir(s)")
     summary.add_argument("jobs", nargs="+", type=Path)

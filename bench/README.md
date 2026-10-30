@@ -219,8 +219,8 @@ bench/compare.py run swe-rebench --tasks open-jarvis__OpenJarvis-465 \
 
 # full runs: SWE-rebench at its real 50 min cap; TB4 with the agent capped
 # at 2 h of its 8 h (internal comparison, not board-comparable — say so)
-bench/compare.py run swe-rebench --k 2 --concurrency 16 --prune-images --keep-build-cache-gb 10 --harbor $H
-bench/compare.py run tb4 --k 1 --concurrency 8 --agent-max-timeout-sec 7200 --prune-images --harbor $H
+bench/compare.py run swe-rebench --k 2 --concurrency 16 --harbor $H
+bench/compare.py run tb4 --k 1 --concurrency 8 --agent-max-timeout-sec 7200 --harbor $H
 
 bench/compare.py summary bench/jobs/<job-name>     # re-summarize a finished job
 ```
@@ -233,11 +233,31 @@ only cancels its `docker exec` client, so without this the agent keeps working
 a smoke trial passed that way after its timeout.
 
 `--dry-run` writes the job config (`<jobs-dir>/<job-name>.config.json`) and
-stops. `--prune-images` removes pulled task images no container uses every
-10 minutes; a full TB4 or SWE-rebench pass pulls far more image data than a
-typical disk holds (harbor removes only the images it builds). SWE-rebench's
-base images come in through BuildKit and sit in the build cache instead;
-`--keep-build-cache-gb N` also prunes that cache — the whole host's — to N GB.
+stops.
+
+### Disk: what a run removes, and only that
+
+A full TB4 or SWE-rebench pass pulls far more image data than a typical disk
+holds, and harbor removes only each trial's own compose project
+(`docker compose down --rmi local --volumes --remove-orphans`: the trial's
+containers, volumes and the image it built). So `compare.py` removes, task by
+task once every trial of the task has finished (and for all tasks when the job
+ends), what the run pulled for that task — and nothing else:
+
+- it records the host's image IDs and build-cache record IDs when the run
+  starts; anything already there is never touched;
+- a task's images are the `docker_image`s its `task.toml` names (TB4's agent
+  and verifier images) or, for a task harbor builds, the images its
+  Dockerfiles start `FROM` (SWE-rebench's base images, which arrive through
+  BuildKit and live in the build cache: the records whose description is the
+  pull of that image, plus records built on top of them);
+- removal is `docker rmi <id>` without `-f` (refused while a container uses
+  it) and `docker buildx prune --filter id=<record>` per record; never an
+  unfiltered `docker system prune` / `builder prune`.
+
+Each removal is logged to `<jobs-dir>/<job-name>.cleanup.log`;
+`--keep-task-images` turns it off. Peak disk is then the images of the tasks
+in flight (TB4: up to ~4 GB per task with its verifier image).
 
 ### What the summary measures
 
@@ -294,6 +314,8 @@ Modes: `tb4-full` · `swe-rebench` · `smoke-tb` · `smoke-swe` · `tb-quick6` �
 `swe-full` · `swe-pro-full` · `swe-subset`; `tb4-full` and `swe-rebench` pass any
 further arguments to `harbor run`. `preflight` prints the resolved model /
 effort / concurrency / wheel before it spends anything — check that line first.
+It removes no task images; for a full pass of noeta alone use
+`compare.py run … --agents noeta`, which does (see Disk above).
 
 ### Reading the result
 
