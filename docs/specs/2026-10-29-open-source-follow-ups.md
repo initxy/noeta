@@ -68,6 +68,8 @@ its own spec before work starts.
 - [ ] Git snapshot refresh: a turn woken by a timer does not record the HEAD at its end; the end-of-turn record has unit tests only, none through the runtime.
 - [ ] The memory recall selector fails on gateways that refuse `thinking: disabled` or ignore `output_schema` (found with DeepSeek V4.1); now retried and warned, but recall stays off by default as in Claude Code.
 - [ ] `delegate_parallel_review` scores 0.33 on DeepSeek V4.1 (7 of 9 trials hit the 600 s cap; the model reads 24 modules itself rather than delegating); `hook_block_adapts` 0.52 (the model probes for the hook after a block). Model behaviour under Claude Code's own wording; watch on the next model.
+- [ ] Run the read-only `Bash` commands of one reply together, as Claude Code does (needs a per-input read-only flag on tools; the command classifier lives in the permissions plugin). About 1% of benchmark wall time. From the bench findings.
+- [ ] `-p`: Claude Code offers no `AskUserQuestion`, sends no title side request, and sends the `per-turn-control` beta only for models with per-turn effort; noeta does all three. A wasted call at most. From the bench findings.
 
 ### Decided not to do (kept for the record)
 - [x] ACP over `--server` cannot pass the editor's MCP servers. Won't do: they hold the editor's credentials and stay in its process.
