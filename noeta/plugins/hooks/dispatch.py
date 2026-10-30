@@ -40,6 +40,13 @@ KEEP = 256
 #: event, ``:<tool>`` for a tool's): Claude Code's labels.
 CONTEXT_LABEL = " hook additional context"
 BLOCK_LABEL = " hook blocking error"
+
+
+def blocking_text(name: str, read: Read) -> str:
+    """A hook's block as the model gets it: Claude Code's ``<hook name> hook
+    blocking error from command: "<command>": <reason>`` (the command is
+    the hook's command line, URL or prompt)."""
+    return f'{name}{BLOCK_LABEL} from command: "{read.command}": {(read.block or "").strip()}'
 #: The plugin whose folded ``mode`` is the task's permission mode.
 PERMISSIONS_PLUGIN = "permissions"
 
@@ -118,6 +125,8 @@ class Read:
     data: Mapping[str, Any] = field(default_factory=dict)
     #: Plain stdout (not a JSON object).
     text: str = ""
+    #: The hook that answered: its command line, URL or prompt.
+    command: str = ""
 
     @property
     def context(self) -> str:
@@ -320,12 +329,19 @@ class Dispatcher:
                     result = HookResult(exit_code=2, stderr=result.stderr or "the hook failed")
                 elif record:
                     view.notify(f"{event} hook failed: {result.stderr.strip()[:300]}")
-            read = _read(event, result)
+            read = replace(_read(event, result), command=hook.label)
             message = read.data.get("systemMessage")
             if record and isinstance(message, str) and message.strip():
                 view.notify(message.strip())
             out.append(read)
         return out
+
+    def blocks(self, view: TaskView, kind: str, name: str, reads: Sequence[Read]) -> None:
+        """Record each hook's block for the model (:func:`blocking_text`)."""
+        for r in reads:
+            if r.block and r.block.strip():
+                view.record(NAME, kind, {"hook": f"{name}{BLOCK_LABEL}"},
+                            message=user(blocking_text(name, r), origin="system"))
 
     def context(self, view: TaskView, kind: str, label: str, texts: Sequence[str]) -> None:
         # ``label`` is ``<hook name> hook additional context`` (or ``blocking

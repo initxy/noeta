@@ -276,7 +276,7 @@ Not in the recordings (no hooks configured); from the 2.1.312 bundle (`hook_addi
 
 | id | rule |
 |---|---|
-| rem.hook-context.1 | Text a hook adds for the model (`additionalContext`, or a `UserPromptSubmit` / `SessionStart` hook's plain output) is meta user content led by `<hook name> hook additional context: `; the hook name is the event (`UserPromptSubmit`, `SessionStart`, `SubagentStart`, `PostToolBatch`), or `<event>:<tool>` for a tool's events (`PreToolUse:Read`). A tool hook's blocking feedback is led by `<hook name> hook blocking error`. |
+| rem.hook-context.1 | Text a hook adds for the model (`additionalContext`, or a `UserPromptSubmit` / `SessionStart` hook's plain output) is meta user content led by `<hook name> hook additional context: `; the hook name is the event (`UserPromptSubmit`, `SessionStart`, `SubagentStart`, `PostToolBatch`), or `<event>:<tool>` for a tool's events (`PreToolUse:Read`). A hook's blocking feedback (a tool's events, `PostToolBatch`, `Stop`, `SubagentStop`) is `<hook name> hook blocking error from command: "<command>": <reason>`, the command being the hook's command line, URL or prompt (bundle `hook_blocking_error`). |
 
 ## s1 only
 
