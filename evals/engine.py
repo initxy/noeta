@@ -9,9 +9,11 @@ later turns sent with ``Client.send``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import tempfile
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,33 +27,69 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import (
-    ExtensionRecorded,
     InputTaken,
     ModelReplied,
     Say,
     TaskEnded,
     ToolFinished,
 )
+from noeta.core.execenv import RunResult
 from noeta.core.provider import Provider
 from noeta.core.questions import detail_questions
 from noeta.core.runner import Runtime
 from noeta.host.pending import Pending, pending_tree
 from noeta.plugins.mcp import default_pool
 from noeta.plugins.memory import memory_dir_for
-from noeta.toolkit.permission_modes import MODE_SIGNAL
+from noeta.toolkit.permission_modes import MODE_SIGNAL, current_mode
 
 _STEP_BUDGET = 60
 #: Usable history window for the compaction scenarios.
 _SMALL_USABLE_WINDOW = 24_000
 _POLL_S = 0.2
+#: Polls a wait on the person may show nothing to answer before the trial
+#: is called broken (a wait the host cannot see would spin to the timeout).
+_STUCK_POLLS = 150
+
+_home_lock = threading.Lock()
+_home: Path | None = None
 
 
 def isolate_home() -> Path:
-    """Point ``NOETA_HOME`` at a fresh directory for this process, so plan
-    files and anything else noeta keeps in its home never touch the user's."""
-    home = Path(tempfile.mkdtemp(prefix="noeta-eval-home-"))
-    os.environ["NOETA_HOME"] = str(home)
-    return home
+    """Point ``NOETA_HOME`` at a fresh directory for this process (once), so
+    what noeta keeps in its home never touches the user's. It is process-wide
+    (noeta reads the variable when it needs the home), so concurrent trials
+    share it; each trial's plan files and memory have their own directories
+    under its root."""
+    global _home
+    with _home_lock:
+        if _home is None:
+            _home = Path(tempfile.mkdtemp(prefix="noeta-eval-home-"))
+            os.environ["NOETA_HOME"] = str(_home)
+        return _home
+
+
+class _TrialEnv(LocalExecEnv):
+    """The local exec env with the trial's own ``HOME`` (and XDG
+    directories): commands the model runs never read or write the user's
+    dotfiles."""
+
+    def __init__(self, cwd: str, home: Path) -> None:
+        super().__init__(cwd)
+        self._home_env = {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
+                          "XDG_CACHE_HOME": str(home / ".cache"),
+                          "XDG_DATA_HOME": str(home / ".local" / "share")}
+
+    async def run(self, argv: Any, *, cwd: str | None = None,
+                  env: Mapping[str, str] | None = None, stdin: bytes | None = None,
+                  timeout: float | None = None, output_cap: int | None = None) -> RunResult:
+        return await super().run(argv, cwd=cwd, env={**self._home_env, **(env or {})},
+                                 stdin=stdin, timeout=timeout, output_cap=output_cap)
+
+
+def snapshot(ws: Path) -> dict[str, str]:
+    """Every file under ``ws`` by relative path, with its sha256."""
+    return {str(p.relative_to(ws)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(ws.rglob("*")) if p.is_file()}
 
 
 def _provider(name: str) -> Provider:
@@ -98,8 +136,10 @@ async def _reply(client: Client, p: Pending, reply: Reply) -> None:
     elif reply.decision == "deny":
         await client.answer(p.task_id, p.request_id, "deny",
                             data={"message": reply.message} if reply.message else None)
-    else:
+    elif reply.decision == "allow":
         await client.answer(p.task_id, p.request_id, "allow")
+    else:
+        raise ValueError(f"an approval of {p.tool} needs decision allow or deny")
 
 
 class _Person:
@@ -132,6 +172,7 @@ class _Person:
         return True
 
     async def run(self) -> None:
+        stuck = 0
         while True:
             row = await self.client.get(self.tid)
             if row.status == "ended":
@@ -141,10 +182,15 @@ class _Person:
                 continue
             found = await pending_tree(self.client, self.tid)
             if found:
+                stuck = 0
                 if not await self._answer(found):
                     return
                 await asyncio.sleep(_POLL_S)
                 continue
+            if row.waiting_on in ("approval", "question"):
+                stuck += 1
+                if stuck > _STUCK_POLLS:
+                    raise RuntimeError(f"task waits on {row.waiting_on} but nothing is pending")
             if row.waiting_on in ("children", "approval", "question"):
                 await asyncio.sleep(_POLL_S)
                 continue
@@ -168,9 +214,7 @@ async def _start(client: Client, agent: str, sc: Scenario, config: dict[str, Any
     await client.signal(tid, MODE_SIGNAL, {"mode": sc.switch_mode})
 
     async def switched() -> None:
-        while not any(isinstance(r.event, ExtensionRecorded) and r.event.extension == "permissions"
-                      and r.event.kind == "mode" and r.event.data.get("mode") == sc.switch_mode
-                      for r in await client.events(tid)):
+        while current_mode(await client.events(tid)) != sc.switch_mode:
             await asyncio.sleep(_POLL_S)
 
     await asyncio.wait_for(switched(), 60)
@@ -184,7 +228,8 @@ async def _drive(cfg: EvalConfig, agents: list[Agent], sc: Scenario, ws: Path, r
     provider = _provider(cfg.provider)
     agent = agents[0]
     rt = Runtime(store=store, agents={a.name: a for a in agents}, provider_for=lambda _m: provider,
-                 env_for=lambda _s: LocalExecEnv(str(ws)), spill_root=str(root / "spill"))
+                 env_for=lambda _s: _TrialEnv(str(ws), root / "home"),
+                 spill_root=str(root / "spill"))
     client = Client(store)
     config = {"cwd": str(ws), "model": cfg.model, "permission_mode": sc.permission_mode}
     error: str | None = None
@@ -212,7 +257,13 @@ async def _drive(cfg: EvalConfig, agents: list[Agent], sc: Scenario, ws: Path, r
 
 
 def _plugins(cfg: EvalConfig, sc: Scenario, dirs: TrialDirs) -> dict[str, Any]:
-    plugins: dict[str, Any] = {"memory": {"directory": str(dirs.memory) + "/"}}
+    # Plan files go to the trial's own directory: the permissions plugin
+    # names it, and the file tools may write there (they otherwise allow
+    # only the home's plans directory, which concurrent trials share).
+    plans = str(dirs.root / "plans")
+    plugins: dict[str, Any] = {"memory": {"directory": str(dirs.memory) + "/"},
+                               "permissions": {"plans_dir": plans},
+                               "fs": {"write_roots": [plans]}}
     if sc.small_window:
         from noeta.core.models import model_limits
         from noeta.plugins.compaction import Compaction
@@ -230,6 +281,7 @@ def _plugins(cfg: EvalConfig, sc: Scenario, dirs: TrialDirs) -> dict[str, Any]:
 
 
 def run_trial(cfg: EvalConfig, sc: Scenario) -> tuple[Trace, dict[str, Any], Path]:
+    isolate_home()
     root = Path(tempfile.mkdtemp(prefix="noeta-eval-next-"))
     ws = root / "ws"
     ws.mkdir()
@@ -241,6 +293,7 @@ def run_trial(cfg: EvalConfig, sc: Scenario) -> tuple[Trace, dict[str, Any], Pat
     sc.setup(ws)
     if sc.memory is not None:
         sc.memory(memory)
+    before = snapshot(ws)
     kw: dict[str, Any] = {"one_shot": not sc.follow_ups, "step_budget": _STEP_BUDGET}
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt
@@ -282,6 +335,7 @@ def run_trial(cfg: EvalConfig, sc: Scenario) -> tuple[Trace, dict[str, Any], Pat
                     if type(e).__name__ == "ExtensionRecorded" and e.kind == "spawned"),
         compactions=sum(type(e).__name__ == "Compacted" for e in events), error=error,
         asked=person.asked, batch_turns=batch_turns, turns=turn + 1, memory_dir=memory,
+        before=before,
     )
     return trace, usage, root
 

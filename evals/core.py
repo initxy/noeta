@@ -5,6 +5,7 @@ and ``run_trial``.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import time
@@ -63,8 +64,9 @@ class Request:
 
 @dataclass
 class Reply:
-    """The person's answer: ``decision`` for an approval (``message``: what
-    they said when declining), ``data`` for a question."""
+    """The person's answer: ``decision`` for an approval, which must be
+    given (``message``: what they said when declining), ``data`` for a
+    question."""
 
     decision: Literal["allow", "deny"] | None = None
     message: str = ""
@@ -109,6 +111,15 @@ class Trace:
     #: User turns the task took.
     turns: int = 0
     memory_dir: Path | None = None
+    #: The workspace's files before the task, by relative path with sha256.
+    before: dict[str, str] = field(default_factory=dict)
+
+    def changed_files(self) -> list[str]:
+        """Workspace files added, removed or changed since the task began."""
+        now = {str(p.relative_to(self.workspace)): hashlib.sha256(p.read_bytes()).hexdigest()
+               for p in sorted(self.workspace.rglob("*")) if p.is_file()}
+        return sorted(k for k in now.keys() | self.before.keys()
+                      if now.get(k) != self.before.get(k))
 
     @property
     def calls(self) -> list[ToolUse]:

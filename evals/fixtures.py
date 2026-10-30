@@ -233,6 +233,84 @@ def platform(ws: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# "platform_large": the review fixture, sized so splitting it is clearly right
+# --------------------------------------------------------------------------- #
+
+_LARGE_SUBSYSTEMS = {
+    "billing": ("invoice", "refund", "ledger", "tax", "dunning", "credit", "payout", "statement"),
+    "shipping": ("carrier", "label", "rate", "tracking", "zone", "customs", "pickup", "returns"),
+    "auth": ("session", "token", "password", "mfa", "oauth", "audit", "lockout", "recovery"),
+}
+
+#: One planted defect per module, picked by position, with its signature:
+#: something a review should find, different from module to module.
+_DEFECTS = (
+    ("(items: list[str]) -> str | None",
+     "    if len(items) > 0 and items[len(items)] is not None:\n"
+     "        return items[-1]\n    return None\n"),
+    ("(key: str, cache: list[str] = []) -> list[str]",
+     "    cache.append(key)\n    return cache\n"),
+    ("(raw: str) -> int",
+     "    try:\n        return int(raw)\n    except Exception:\n        pass\n    return 0\n"),
+    ("(amount: int) -> int",
+     "    if amount >= 0 or amount < 0:\n        return amount\n    return -amount\n"),
+    ("(values: list[int]) -> int",
+     "    total = 0\n    for i in range(1, len(values)):\n        total += values[i]\n"
+     "    return total\n"),
+    ("(secret: str) -> str",
+     "    return hashlib.md5(secret.encode()).hexdigest()\n"),
+    ("(user: str | None) -> bool",
+     "    if user == None:\n        return False\n    return user.lower() is 'admin'\n"),
+    ("(limit: float) -> bool",
+     "    started = time.time()\n    while time.time() - started < limit:\n        pass\n"
+     "    return True\n"),
+)
+
+
+def _large_module(system: str, name: str, index: int) -> str:
+    """A ~220-line module: a record type, a dozen functions, and one
+    planted defect."""
+    cls = name.capitalize()
+    out = [f'"""{system}.{name}: {name} handling for the {system} subsystem."""', "",
+           "import hashlib", "import time", "from dataclasses import dataclass, field", "", "",
+           "@dataclass", f"class {cls}Record:", "    id: str", "    owner: str",
+           "    amount: int = 0", '    currency: str = "EUR"',
+           "    tags: list[str] = field(default_factory=list)", "    version: int = 1", ""]
+    verbs = ("validate", "normalize", "summarize", "merge", "split", "score", "route",
+             "archive", "restore", "reconcile", "export", "audit")
+    for k, verb in enumerate(verbs):
+        limit = 10 + 7 * ((index + k) % 9)
+        out += [
+            "", "",
+            f"def {verb}_{name}(rec: {cls}Record, limit: int = {limit}) -> dict[str, object]:",
+            f'    """{verb.capitalize()} one {name} record for the {system} pipeline."""',
+            "    if not rec.id:",
+            f'        raise ValueError("{name} record without an id")',
+            '    result: dict[str, object] = {"id": rec.id, "owner": rec.owner}',
+            f"    if rec.amount > limit * {k + 2}:",
+            f'        result["flag"] = "{verb}-over-limit"',
+            "    matched = [t for t in rec.tags if t.startswith(" + repr(verb[:3]) + ")]",
+            "    if matched:",
+            '        result["matched"] = matched',
+            f'    result["weight"] = (rec.amount * {k + 1} + rec.version) % (limit + 1)',
+            '    result["currency"] = rec.currency.upper()',
+            "    return result",
+        ]
+    signature, body = _DEFECTS[index % len(_DEFECTS)]
+    out += ["", "", f"def {name}_helper{signature}:", f'    """Helper used by the {name} handlers."""']
+    return "\n".join(out) + "\n" + body
+
+
+def platform_large(ws: Path) -> None:
+    files: dict[str, str] = {}
+    for system, names in _LARGE_SUBSYSTEMS.items():
+        files[f"{system}/__init__.py"] = ""
+        for i, n in enumerate(names):
+            files[f"{system}/{n}.py"] = _large_module(system, n, i + len(system))
+    write_tree(ws, files)
+
+
+# --------------------------------------------------------------------------- #
 # Single-purpose fixtures
 # --------------------------------------------------------------------------- #
 
@@ -491,11 +569,17 @@ def shop_with_build(ws: Path) -> None:
 PYTEST_HOOK = '''"""PreToolUse hook: this repository runs its tests through tools/testrun.py."""
 
 import json
+import re
 import sys
+
+#: A command segment that runs pytest (not one that merely names it).
+RUNS_PYTEST = re.compile(
+    r"^[\\s(]*(\\w+=\\S*\\s+)*((uv|poetry|pipenv)\\s+run\\s+)?"
+    r"(pytest|py\\.test|python[0-9.]*\\s+(-\\w+\\s+)*-m\\s+pytest)([\\s)]|$)")
 
 event = json.load(sys.stdin)
 command = str((event.get("tool_input") or {}).get("command", ""))
-if "pytest" in command:
+if any(RUNS_PYTEST.search(part) for part in re.split(r"&&|\\|\\||[;|\\n]", command)):
     print("pytest is disabled in this repository (it skips the fixture setup). "
           "Run the suite with `python3 tools/testrun.py` instead.", file=sys.stderr)
     sys.exit(2)
@@ -534,7 +618,11 @@ HOOK_SUITE_TESTS = 3
 
 
 def shop_with_testrun(ws: Path) -> None:
-    write_tree(ws, {**SHOP, "tools/testrun.py": TESTRUN, "tests/test_pricing.py": TEST_PRICING})
+    """pytest is the obvious way in (pytest.ini, the README), so the hook
+    is what sends the model to tools/testrun.py."""
+    write_tree(ws, {**SHOP, "tools/testrun.py": TESTRUN, "tests/test_pricing.py": TEST_PRICING,
+                    "pytest.ini": "[pytest]\ntestpaths = tests\n",
+                    "README.md": SHOP_README + "\n## Tests\n\nRun the tests with `pytest`.\n"})
 
 
 def write_pytest_hook(root: Path) -> Path:
