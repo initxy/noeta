@@ -27,6 +27,10 @@ Kinds:
 - ``mentions`` — ``{"through", "path"?}``: the person's messages up to log
   seq ``through`` had their ``@`` mentions attached (an attachment is
   recorded with its message and names its ``path``).
+- ``images`` — ``{"through", "paths"}``: the person's message at log seq
+  ``through`` has its pasted images saved as ``paths`` (recorded with the
+  note naming them; again when they had to be written elsewhere, and with
+  no paths once they are gone).
 - ``notice`` — ``{"text"}``: a note for the model to get after this call's
   result (a cut read's paging hint); ``notice_sent`` (the reminder that
   carried it) clears it.
@@ -49,6 +53,7 @@ __all__ = [
     "FS",
     "KIND_CHANGED",
     "KIND_FORGET_RANGES",
+    "KIND_IMAGES",
     "KIND_MENTIONS",
     "KIND_NOTICE",
     "KIND_NOTICE_SENT",
@@ -68,6 +73,7 @@ KIND_FORGET_RANGES = "forget_ranges"
 KIND_NOTICE = "notice"
 KIND_NOTICE_SENT = "notice_sent"
 KIND_MENTIONS = "mentions"
+KIND_IMAGES = "images"
 #: Files remembered as read at most: the oldest are forgotten past it.
 MAX_FILES = 1000
 #: Attachments remembered for placing ahead of the person's text.
@@ -102,6 +108,11 @@ class FsState(Struct):
     #: Log seq of the newest message of the person's whose mentions were
     #: attached.
     mentions_through: int = 0
+    #: Log seq of the newest message of the person's whose pasted images
+    #: were saved as files.
+    images_through: int = 0
+    #: Log seq of a person's message (as text) -> where its images are saved.
+    images: dict[str, list[str]] = msgspec.field(default_factory=dict)
     #: Content digests of the attachments' messages (the newest
     #: :data:`MAX_ATTACHMENTS`), which the request moves ahead of the
     #: person's text.
@@ -153,6 +164,16 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
             attached = [*attached, digest][-MAX_ATTACHMENTS:]
         return msgspec.structs.replace(
             base, mentions_through=max(base.mentions_through, through), attached=attached)
+    if kind == KIND_IMAGES:
+        through = data.get("through")
+        if isinstance(through, bool) or not isinstance(through, int):
+            return base
+        paths = [p for p in data.get("paths") or () if isinstance(p, str)]
+        images = {k: v for k, v in base.images.items() if k != str(through)}
+        if paths:
+            images[str(through)] = paths
+        return msgspec.structs.replace(base, images_through=max(base.images_through, through),
+                                       images=images)
     if kind == KIND_FORGET_RANGES:
         return msgspec.structs.replace(base, reads={
             p: msgspec.structs.replace(r, range=None) for p, r in base.reads.items()})

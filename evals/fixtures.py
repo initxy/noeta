@@ -757,3 +757,65 @@ def write_orders_server(root: Path) -> Path:
     write_tree(root, {"mcp/orders_server.py": ORDERS_MCP.format(status=ORDER_STATUS,
                                                                 notes=ORDER_NOTES)})
     return root / "mcp" / "orders_server.py"
+
+
+# --------------------------------------------------------------------------- #
+# Git snapshot: the person switches branch and commits between two turns
+# --------------------------------------------------------------------------- #
+
+_GIT_ENV = {"GIT_AUTHOR_NAME": "Dana", "GIT_AUTHOR_EMAIL": "dana@example.com",
+            "GIT_COMMITTER_NAME": "Dana", "GIT_COMMITTER_EMAIL": "dana@example.com",
+            "GIT_CONFIG_NOSYSTEM": "1", "HOME": "/nonexistent", "PATH": "/usr/bin:/bin"}
+SWITCHED_BRANCH = "fix/tax-rounding"
+
+
+def _git(ws: Path, *args: str) -> None:
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=ws, env=_GIT_ENV, check=True, capture_output=True)
+
+
+def shop_on_feature_branch(ws: Path) -> None:
+    shop(ws)
+    _git(ws, "init", "-q", "-b", "main")
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-q", "-m", "Initial shop service")
+    _git(ws, "checkout", "-q", "-b", "feature/cart-totals")
+    cart = ws / "shop" / "cart.py"
+    cart.write_text(cart.read_text(encoding="utf-8") + "\n\n# Totals are rounded per line.\n",
+                    encoding="utf-8")
+    _git(ws, "commit", "-qam", "Round cart totals per line")
+
+
+def switch_branch_and_commit(ws: Path) -> None:
+    _git(ws, "checkout", "-q", "main")
+    _git(ws, "checkout", "-q", "-b", SWITCHED_BRANCH)
+    pricing = ws / "shop" / "pricing.py"
+    pricing.write_text(pricing.read_text(encoding="utf-8") + "\n# Tax rounds half-up.\n",
+                       encoding="utf-8")
+    _git(ws, "commit", "-qam", "Round tax half-up to the cent")
+
+
+# --------------------------------------------------------------------------- #
+# A pasted image: a small logo PNG the person pastes with the goal
+# --------------------------------------------------------------------------- #
+
+
+def _png(width: int, height: int, red: set[tuple[int, int]]) -> bytes:
+    import struct
+    import zlib
+
+    rows = b"".join(b"\0" + b"".join(b"\xdc\x1e\x1e" if (x, y) in red else b"\xff\xff\xff"
+                                     for x in range(width)) for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2,
+                                                              0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+#: A red disc on white, 160x64.
+LOGO_PNG = _png(160, 64, {(x, y) for x in range(160) for y in range(64)
+                          if (x - 32) ** 2 + (y - 32) ** 2 < 600})

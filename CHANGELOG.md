@@ -9,6 +9,26 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **The skill listing's budget is Claude Code's: 1 % of the window in characters, no
+  ceiling.** It was 1 % in estimated tokens capped at 4,096; at a 1M window that listed
+  about half of what Claude Code lists in full. On a 200K model counted at 3 characters a
+  token the budget is now 6,000 characters (about 8,000 before), so the listing shortens a
+  little earlier there; CJK descriptions count a character per character, as in Claude Code.
+  `Skills(budget_tokens=)` is now `Skills(budget_chars=)`.
+- **A later turn gets the git snapshot again when the branch or HEAD moved since the
+  previous turn ended** (someone switched branch or committed in between; the model's own
+  commits do not count). noeta's own trigger: Claude Code re-announces a changed session
+  context when a session resumes, and a durable task has no resume moment.
+  `Environment(git_refresh=False)` keeps the start snapshot only.
+- **A pasted image is also saved as a file and named in one line, `[Image source:
+  <path>]`**, so the model can copy it into the project (Claude Code's pasted-image paths):
+  `<noeta home>/image-cache/<task>/` on a local exec env (a sandboxed command may read it),
+  `<temp>/noeta-images-<uid>/<task>/` inside any other; private (0700 / 0600), written
+  again if gone at a later turn, removed when the root task ends or after a week unused.
+- **The memory recall selector no longer fails silently**: a reply that is not the
+  schema's JSON still picks the listed file names in it, a provider that refuses
+  `thinking: disabled` (HTTP 400) is asked again without it (remembered per model), and any
+  other failure logs one warning per reason.
 - **`Extension.on_context_overflow(view, request)` gets the request that overflowed.** An
   override written as `(view)` still runs. Compaction no longer keeps each task's last
   request in memory for it.

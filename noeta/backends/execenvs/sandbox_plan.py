@@ -19,8 +19,9 @@ from noeta.toolkit.protected_paths import PROTECTED_DIRS, PROTECTED_FILES, PROTE
 from noeta.toolkit.sandbox import DEFAULT_DENY_READ, SandboxSettings
 
 #: Inside noeta's home (otherwise unreadable: tokens, the task store), what
-#: a command may still read: spilled tool output and project memory.
-HOME_ALLOW_READ = ("tool-results", "projects")
+#: a command may still read: spilled tool output, project memory and the
+#: images the person pasted.
+HOME_ALLOW_READ = ("tool-results", "projects", "image-cache")
 #: Paths under a writable directory a confined command may not change: the
 #: permissions plugin's protected directories and files (noeta's project
 #: directory, editor tasks, hook runners, shell and package-manager

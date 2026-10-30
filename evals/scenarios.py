@@ -347,6 +347,25 @@ def score_changed_file_reminder(t: Trace, judge: Judge) -> Result:
     return float(current), checks
 
 
+def score_pasted_image(t: Trace, judge: Judge) -> Result:
+    p = t.workspace / "assets" / "logo.png"
+    same = p.is_file() and p.read_bytes() == fx.LOGO_PNG
+    png = p.is_file() and p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    return 1.0 if same else 0.3 if png else 0.0, {"exact_copy": same, "some_png": png,
+                                                  "calls": len(t.calls)}
+
+
+def score_git_after_switch(t: Trace, judge: Judge) -> Result:
+    text = t.file("PR.md") or ""
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    branch = fx.SWITCHED_BRANCH in first
+    stale = "cart-totals" in text
+    subject = "tax" in text.lower() and ("half" in text.lower() or "round" in text.lower())
+    return 0.5 * branch + 0.5 * (subject and not stale), {
+        "first_line": first[:80], "branch_right": branch, "stale_mention": stale,
+        "subject": subject}
+
+
 # --------------------------------------------------------------------------- #
 # Compaction: finishing a multi-step edit
 # --------------------------------------------------------------------------- #
@@ -794,6 +813,31 @@ SCENARIOS: list[Scenario] = [
         setup=fx.shop,
         score=score_changed_file_reminder,
         tags=("reminders",),
+    ),
+    Scenario(
+        name="git_snapshot_after_switch",
+        behavior="uses the branch and commit as they are after the person switched branch",
+        goal="Which file defines the cart's total? Just the path.",
+        follow_ups=((
+            fx.switch_branch_and_commit,
+            "Write a pull request description for my current branch to PR.md. The first line "
+            "is the branch name; then one line summarizing the most recent commit on it. Keep "
+            "it short.",
+        ),),
+        setup=fx.shop_on_feature_branch,
+        score=score_git_after_switch,
+        timeout_s=300.0,
+        tags=("reminders",),
+    ),
+    Scenario(
+        name="pasted_image_into_repo",
+        behavior="copies a pasted image into the repo from the path it was saved at",
+        goal="Put this logo into the repo as assets/logo.png.",
+        images=(fx.LOGO_PNG,),
+        setup=fx.shop,
+        score=score_pasted_image,
+        timeout_s=300.0,
+        tags=("attachments",),
     ),
     Scenario(
         name="compaction_resume_edits",
