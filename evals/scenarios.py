@@ -8,6 +8,7 @@ re-record the baseline (``make eval-baseline``) in the same change.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from evals import fixtures as fx
@@ -347,6 +348,25 @@ def score_changed_file_reminder(t: Trace, judge: Judge) -> Result:
     return float(current), checks
 
 
+def score_pasted_image(t: Trace, judge: Judge) -> Result:
+    p = t.workspace / "assets" / "logo.png"
+    same = p.is_file() and p.read_bytes() == fx.LOGO_PNG
+    png = p.is_file() and p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    return 1.0 if same else 0.3 if png else 0.0, {"exact_copy": same, "some_png": png,
+                                                  "calls": len(t.calls)}
+
+
+def score_git_after_switch(t: Trace, judge: Judge) -> Result:
+    text = t.file("PR.md") or ""
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    branch = fx.SWITCHED_BRANCH in first
+    stale = "cart-totals" in text
+    subject = "tax" in text.lower() and ("half" in text.lower() or "round" in text.lower())
+    return 0.5 * branch + 0.5 * (subject and not stale), {
+        "first_line": first[:80], "branch_right": branch, "stale_mention": stale,
+        "subject": subject}
+
+
 # --------------------------------------------------------------------------- #
 # Compaction: finishing a multi-step edit
 # --------------------------------------------------------------------------- #
@@ -421,6 +441,35 @@ def score_plan_mode(t: Trace, judge: Judge) -> Result:
     if changed or ws_writes:
         return 0.0, checks
     return 0.6 * exited + 0.2 * bool(plan) + 0.2 * explored, checks
+
+
+#: The files retiring ``legacy_connect`` changes: its three callers (found
+#: only by looking) and the module that defines it.
+LEGACY_PLAN_FILES = (*fx.LEGACY_CALL_SITES, "shop/db.py")
+
+
+def score_plan_multi_file(t: Trace, judge: Judge) -> Result:
+    """A plan for a change across files: approval asked with ExitPlanMode,
+    and the plan file names every file that must change and how to verify."""
+    changed = t.changed_files()
+    ws_writes = [path_arg(c) for c in t.named("Edit", "Write", "NotebookEdit")
+                 if "/plans/" not in path_arg(c)]
+    exited = any(not t.failed(c) for c in t.named("ExitPlanMode"))
+    plans = [Path(p) for p in dict.fromkeys(path_arg(c) for c in t.named("Write", "Edit"))
+             if "/plans/" in p]
+    text = "\n".join(p.read_text(encoding="utf-8") for p in plans if p.is_file())
+    named = [f for f in LEGACY_PLAN_FILES if f.split("/")[-1] in text]
+    verify = bool(re.search(r"pytest|verif", text, re.I))
+    explore = [c for c in t.named("Agent", "Task")
+               if c.arguments.get("subagent_type") == "Explore"]
+    checks = {"workspace_changed": changed, "workspace_write_attempts": ws_writes,
+              "exit_plan_mode": exited, "plan_chars": len(text), "files_named": named,
+              "verification": verify, "explore_agents": len(explore),
+              "agents": [str(c.arguments.get("subagent_type")) for c in t.named("Agent", "Task")]}
+    if changed or ws_writes:
+        return 0.0, checks
+    return (0.5 * exited + 0.1 * bool(text) + 0.3 * len(named) / len(LEGACY_PLAN_FILES)
+            + 0.1 * verify), checks
 
 
 # --------------------------------------------------------------------------- #
@@ -796,6 +845,31 @@ SCENARIOS: list[Scenario] = [
         tags=("reminders",),
     ),
     Scenario(
+        name="git_snapshot_after_switch",
+        behavior="uses the branch and commit as they are after the person switched branch",
+        goal="Which file defines the cart's total? Just the path.",
+        follow_ups=((
+            fx.switch_branch_and_commit,
+            "Write a pull request description for my current branch to PR.md. The first line "
+            "is the branch name; then one line summarizing the most recent commit on it. Keep "
+            "it short.",
+        ),),
+        setup=fx.shop_on_feature_branch,
+        score=score_git_after_switch,
+        timeout_s=300.0,
+        tags=("reminders",),
+    ),
+    Scenario(
+        name="pasted_image_into_repo",
+        behavior="copies a pasted image into the repo from the path it was saved at",
+        goal="Put this logo into the repo as assets/logo.png.",
+        images=(fx.LOGO_PNG,),
+        setup=fx.shop,
+        score=score_pasted_image,
+        timeout_s=300.0,
+        tags=("attachments",),
+    ),
+    Scenario(
         name="compaction_resume_edits",
         behavior="after a forced summarize, finishes the remaining edits without redoing done ones",
         goal=(
@@ -850,6 +924,18 @@ SCENARIOS: list[Scenario] = [
         permission_mode="plan",
         answer=plan_reviewer,
         score=score_plan_mode,
+        tags=("plan_mode",),
+    ),
+    Scenario(
+        name="plan_mode_multi_file",
+        behavior="plans a change across files: names each file to change and a verification",
+        goal=("Retire the legacy database driver: every caller of legacy_connect should use "
+              "connect() instead, and legacy_connect should be removed from shop/db.py."),
+        setup=fx.shop,
+        permission_mode="default",
+        switch_mode="plan",
+        answer=plan_reviewer,
+        score=score_plan_multi_file,
         tags=("plan_mode",),
     ),
     Scenario(

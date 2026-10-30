@@ -250,6 +250,8 @@ class Scenario:
     follow_ups: tuple[FollowUp, ...] = ()
     #: Seeds the memory directory before the task starts.
     memory: Callable[[Path], None] | None = None
+    #: PNG images pasted with the goal, ahead of its text.
+    images: tuple[bytes, ...] = ()
 
 
 RunTrial = Callable[[EvalConfig, Scenario], tuple[Trace, dict[str, Any], Path]]

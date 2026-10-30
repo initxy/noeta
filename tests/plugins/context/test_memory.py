@@ -253,6 +253,54 @@ async def test_recall_attaches_what_the_selector_picks(h: Harness, tmp_path: Pat
     assert RECALL_MAX_FILES == 5
 
 
+def test_a_selector_reply_that_is_not_json_still_picks_listed_files() -> None:
+    from noeta.plugins.memory.extension import selected_names
+
+    names = {"tabs.md", "deploy.md"}
+    assert selected_names('{"selected_memories": ["tabs.md"]}', names) == ["tabs.md"]
+    assert selected_names("deploy.md\ntabs.md, nope.md", names) == ["deploy.md", "tabs.md"]
+    assert selected_names("None of them.", names) == []
+
+
+async def test_a_provider_refusing_disabled_thinking_is_asked_again_without_it(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.core.errors import Fatal
+
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    _memory(directory, "deploy.md", "how deploys run", "Deploy on Fridays.", "project")
+    a = agent(home, recall_model="refuses-disabled-thinking")
+    h.provider.add(Fatal("thinking: disabled is not supported", status=400),
+                   reply("tabs.md"), reply("ok"), reply("deploy.md"), reply("again"))
+    tid = await h.start(a, goal="format this file")
+    refused, retried, main = h.provider.requests[:3]
+    assert refused.thinking is False and retried.thinking is None
+    assert any(m.origin == "memory" and "Use tabs." in m.text for m in main.messages)
+    await h.say(a, tid, "and how do deploys run")
+    selector = h.provider.requests[3]
+    assert selector.model == "refuses-disabled-thinking"
+    assert selector.thinking is None  # remembered for the model
+
+
+async def test_a_failing_selector_warns_once(h: Harness, tmp_path: Path,
+                                             caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.core.errors import Fatal
+
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    a = agent(home, recall_model="small")
+    h.provider.add(Fatal("quota gone", status=403), reply("ok"),
+                   Fatal("quota gone", status=403), reply("again"))
+    tid = await h.start(a, goal="format this file")
+    await h.say(a, tid, "and this other file")
+    warned = [r for r in caplog.records if "recall selector failed" in r.message]
+    assert len(warned) == 1 and "quota gone" in warned[0].message
+
+
 async def test_without_a_recall_model_nothing_is_selected(h: Harness, tmp_path: Path) -> None:
     home = tmp_path / "home"
     directory = Path(memory_dir_for(str(h.work), home))

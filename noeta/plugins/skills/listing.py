@@ -112,12 +112,12 @@ def menu_keep_order(
     return tuple(sorted(names, key=key))
 
 
-def _entry_tokens(name: str, description: str) -> int:
-    return estimate_tokens(roster_line(name, description) + "\n")
+def _entry_chars(name: str, description: str) -> int:
+    return len(roster_line(name, description)) + 1
 
 
 def fit_menu_to_budget(
-    entries: Sequence[tuple[str, str]], keep_order: Sequence[str], budget_tokens: int
+    entries: Sequence[tuple[str, str]], keep_order: Sequence[str], budget_chars: int
 ) -> dict[str, str]:
     """The summary each name shows: full, short, or ``""`` (name only).
 
@@ -128,10 +128,10 @@ def fit_menu_to_budget(
     by_name = dict(entries)
     if len(by_name) != len(entries):
         raise ValueError("fit_menu_to_budget: duplicate names in entries")
-    if sum(_entry_tokens(n, d) for n, d in by_name.items()) <= budget_tokens:
+    if sum(_entry_chars(n, d) for n, d in by_name.items()) <= budget_chars:
         return by_name
-    bare = {n: _entry_tokens(n, "") for n in by_name}
-    remaining = budget_tokens - sum(bare.values())
+    bare = {n: _entry_chars(n, "") for n in by_name}
+    remaining = budget_chars - sum(bare.values())
     ordered: list[str] = []
     for name in (*keep_order, *by_name):
         if name in by_name and name not in ordered:
@@ -143,7 +143,7 @@ def fit_menu_to_budget(
         if not description:
             continue
         short = short_summary(description)
-        increment = _entry_tokens(name, short) - bare[name]
+        increment = _entry_chars(name, short) - bare[name]
         if increment <= remaining:
             remaining -= increment
             fitted[name] = short
@@ -155,7 +155,7 @@ def fit_menu_to_budget(
         description = by_name[name]
         if fitted[name] == description:
             continue
-        increment = _entry_tokens(name, description) - _entry_tokens(name, fitted[name])
+        increment = _entry_chars(name, description) - _entry_chars(name, fitted[name])
         if increment <= remaining:
             remaining -= increment
             fitted[name] = description
@@ -163,7 +163,7 @@ def fit_menu_to_budget(
 
 
 def listing_lines(
-    registry: SkillRegistry, *, budget_tokens: int, rank: Mapping[str, float] | None = None,
+    registry: SkillRegistry, *, budget_chars: int, rank: Mapping[str, float] | None = None,
     unlocked: Collection[str] = (),
 ) -> tuple[tuple[str, str], ...]:
     """The roster as ``(name, line)`` pairs fitted to the budget, the
@@ -180,16 +180,16 @@ def listing_lines(
     if not entries:
         return ()
     names = tuple(n for n, _ in entries)
-    fitted = fit_menu_to_budget(entries, menu_keep_order(registry, names, rank), budget_tokens)
+    fitted = fit_menu_to_budget(entries, menu_keep_order(registry, names, rank), budget_chars)
     shortened = sum(1 for n, d in entries if fitted[n] and fitted[n] != d)
     name_only = sum(1 for n, d in entries if d and not fitted[n])
     if shortened or name_only:
         _log.warning(
             "skill menu over budget: of %d skills, %d shortened, %d listed by name only "
-            "(full roster ~%d tokens, budget %d); trim the skill directories or raise "
-            "Skills(budget_tokens=...)",
+            "(full roster %d characters, budget %d); trim the skill directories or raise "
+            "Skills(budget_chars=...)",
             len(entries), shortened, name_only,
-            sum(_entry_tokens(n, d) for n, d in entries), budget_tokens)
+            sum(_entry_chars(n, d) for n, d in entries), budget_chars)
     return tuple((n, roster_line(n, fitted[n])) for n in names)
 
 

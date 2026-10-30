@@ -71,7 +71,10 @@ the task's log the first time they are used.
   that moves finds its saved outputs, plan and memories missing.
 
 Still local to a worker either way: a background `Bash` job and its log (the tree is held by
-that worker while it runs, and its tasks are told `hold_lost` if the worker dies).
+that worker while it runs, and its tasks are told `hold_lost` if the worker dies), and the
+files of images people paste (`~/.noeta/image-cache` with the local exec env, a per-user
+temp directory in any other): a worker that takes a task over writes them again from the
+conversation at the next turn and names the new place.
 
 ## The token
 

@@ -649,6 +649,15 @@ async def test_credentials_are_hidden(tmp_path: Path, home: Path,
 
 
 @needs_bwrap
+async def test_a_pasted_image_in_noetas_home_can_be_copied(tmp_path: Path, home: Path) -> None:
+    (home / "image-cache" / "t").mkdir(parents=True)
+    (home / "image-cache" / "t" / "1-1.png").write_bytes(b"png bytes")
+    env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True})
+    code, _, _ = await _run(env, f"cp {home}/image-cache/t/1-1.png logo.png")
+    assert code == 0 and (tmp_path / "logo.png").read_bytes() == b"png bytes"
+
+
+@needs_bwrap
 async def test_a_timed_out_command_dies_with_its_sandbox(tmp_path: Path, home: Path) -> None:
     env = LocalExecEnv(str(tmp_path), sandbox={"enabled": True}, kill_grace=0.5)
     assert env.sandbox is not None
