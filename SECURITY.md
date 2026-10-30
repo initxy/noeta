@@ -38,8 +38,8 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   task owner mentions is attached only when the permission check would let the model's own
   `Read` of it through without asking (inside the working directories, or under an allow
   rule); otherwise the model is told which file was mentioned, and its `Read` goes through
-  the normal approval. A message a channel posted (framed with `noeta.core.channel.framed`)
-  is never expanded, and `~` is expanded only by a front end on the person's own machine,
+  the normal approval. A message a channel posts (`deliver` frames it as
+  Claude Code frames channel messages, `<channel source=…>`) is never expanded, and `~` is expanded only by a front end on the person's own machine,
   never on a server. An attachment that reads something the rules would have asked about
   is a vulnerability.
 - **The sandbox** (`sandbox.enabled` in settings: bubblewrap on Linux, Seatbelt on macOS)

@@ -8,8 +8,11 @@ sessions' tool results for (``cleanupPeriodDays``). A continuation or a fork
 of an ended task (``history_from``) still names the old files, so they are
 not removed when the task ends.
 
-This sweeps a spill root on this machine (the local exec env's); a host whose
-tasks run in a remote exec env sweeps that env's root itself.
+A directory is matched to its task by the id in its marker file
+(``SPILL_MARKER``, written with its first saved output); one without a
+marker, or whose task the store does not know, is left alone. This sweeps a
+spill root on this machine (the local exec env's); a host whose tasks run in
+a remote exec env sweeps that env's root itself.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import os
 import shutil
 import time
 
+from noeta.core.large_output import SPILL_MARKER
 from noeta.core.store import Store
 
 __all__ = ["SPILL_KEEP_DAYS", "SWEEP_EVERY_SECONDS", "keep_spills_swept", "sweep_spills"]
@@ -42,11 +46,19 @@ def _last_write(path: str) -> float:
     return newest
 
 
+def _marked(path: str) -> str | None:
+    try:
+        with open(os.path.join(path, SPILL_MARKER), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 async def sweep_spills(store: Store, root: str, *, keep_days: float = SPILL_KEEP_DAYS,
                        now: float | None = None) -> list[str]:
-    """Remove the directories below ``root`` whose task has ended (or is
-    not in ``store``) and that were not written for ``keep_days``; returns
-    the task directories removed."""
+    """Remove the directories below ``root`` whose marked task (and its
+    tree) has ended and that were not written for ``keep_days``; returns the
+    directory names removed."""
     try:
         names = await asyncio.to_thread(os.listdir, root)
     except OSError:
@@ -60,12 +72,13 @@ async def sweep_spills(store: Store, root: str, *, keep_days: float = SPILL_KEEP
                 continue
             if await asyncio.to_thread(_last_write, path) > cutoff:
                 continue
+            task_id = await asyncio.to_thread(_marked, path)
         except OSError:
             continue
-        row = await store.get(name)
-        if row is not None and row.status != "ended":
+        row = await store.get(task_id) if task_id else None
+        if row is None or row.status != "ended":
             continue
-        if row is not None and row.root_id and row.root_id != row.task_id:
+        if row.root_id and row.root_id != row.task_id:
             # A sub-agent's files stay while its tree is open.
             tree = await store.get(row.root_id)
             if tree is not None and tree.status != "ended":

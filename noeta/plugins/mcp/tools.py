@@ -20,7 +20,7 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.mcp.config import McpError, McpServer, cap_injected, make_tool_name
-from noeta.toolkit.tools import format_size, load_description, spill_path
+from noeta.toolkit.tools import format_size, load_description, save_spilled, spill_path
 
 __all__ = [
     "AUTH_STUBS",
@@ -253,10 +253,8 @@ async def _save_blob(ctx: ToolContext, alias: str, entry: dict[str, Any],
     ext = (mimetypes.guess_extension(mime) if mime else None) or ".bin"
     base = posixpath.splitext(spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id))[0]
     path = f"{base}-resource-{index}{ext}"
-    try:
-        await ctx.env.write_bytes(path, raw)
-    except OSError as exc:
-        return {**out, "text": f"The binary data was not saved ({exc}); it is not available here."}
+    if not await save_spilled(ctx, path, raw):
+        return {**out, "text": "The binary data was not saved; it is not available here."}
     return {**out, "blobSavedTo": path,
             "text": f"[Resource from {alias} at {entry.get('uri')}] Binary content "
                     f"({mime or 'unknown type'}, {format_size(len(raw))}) saved to {path}"}

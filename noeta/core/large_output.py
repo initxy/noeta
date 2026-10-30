@@ -10,10 +10,12 @@ worker, after a crash or a wait), the model reads them through that env.
 
 from __future__ import annotations
 
+import hashlib
 import posixpath
 import re
 from dataclasses import dataclass
 
+from noeta.core.execenv import ExecEnv
 from noeta.core.tool import (
     REPLY_RESULTS_BUDGET_CHARS,
     RESULT_CEILING_CHARS,
@@ -25,14 +27,18 @@ from noeta.core.types import Text
 
 __all__ = [
     "PERSISTED_PREVIEW_CHARS",
+    "SPILL_MARKER",
     "ReplyBudget",
     "bound_result",
     "file_name_part",
     "format_size",
     "large_output_message",
     "limit_output",
+    "mark_spill_dir",
     "result_spill_path",
+    "save_spilled",
     "spill_path",
+    "task_spill_dir",
 ]
 
 
@@ -126,12 +132,49 @@ def large_output_message(output: str, limit: int, *, saved_to: str | None = None
     )
 
 
+#: The file in a task's spill directory naming the task it belongs to (its
+#: directory name cannot always be read back as the id).
+SPILL_MARKER = ".task-id"
+
+
+def task_spill_dir(spill_dir: str, task_id: str) -> str:
+    """A task's directory below the spill root: its id when that is a safe
+    file name, else the id made safe plus a short hash of it, so two ids
+    never share a directory."""
+    part = file_name_part(task_id, "task")
+    if part != task_id:
+        part += "-" + hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:10]
+    return posixpath.join(spill_dir, part)
+
+
+async def mark_spill_dir(env: ExecEnv, directory: str, task_id: str) -> None:
+    """Write :data:`SPILL_MARKER` into a task's spill directory once (what
+    the host's sweep goes by); a failure leaves it unmarked, never swept."""
+    marker = posixpath.join(directory, SPILL_MARKER)
+    try:
+        if await env.stat(marker) is None:
+            await env.write_bytes(marker, task_id.encode("utf-8"))
+    except OSError:
+        pass
+
+
 def spill_path(spill_dir: str, task_id: str, call_id: str) -> str:
     """Where one call's full output is saved: a pure function of the
     directory, the task and the call, so a re-run names the same file."""
-    task_part = file_name_part(task_id, "task")
     call_part = file_name_part(call_id, "call")
-    return posixpath.join(spill_dir, task_part, f"{call_part}.txt")
+    return posixpath.join(task_spill_dir(spill_dir, task_id), f"{call_part}.txt")
+
+
+async def save_spilled(ctx: ToolContext, path: str, data: bytes) -> bool:
+    """Write ``data`` at ``path`` (in the task's spill directory) through the
+    task's env, marking the directory as the task's; ``False`` on failure."""
+    try:
+        await ctx.env.write_bytes(path, data)
+    except OSError:
+        return False
+    if ctx.spill_dir:
+        await mark_spill_dir(ctx.env, task_spill_dir(ctx.spill_dir, ctx.task_id), ctx.task_id)
+    return True
 
 
 def result_spill_path(spill_dir: str, task_id: str, call_id: str) -> str:
@@ -147,11 +190,7 @@ def _persisted(text: str) -> bool:
 
 
 async def _save(text: str, path: str, ctx: ToolContext) -> bool:
-    try:
-        await ctx.env.write_bytes(path, text.encode("utf-8"))
-    except OSError:
-        return False
-    return True
+    return await save_spilled(ctx, path, text.encode("utf-8"))
 
 
 async def limit_output(text: str, limit: int, ctx: ToolContext) -> str:

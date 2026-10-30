@@ -42,7 +42,7 @@ async def test_local_app_saves_long_output(tmp_path: Path) -> None:
         [result] = [r.event.result for r in await app.client.events(tid)
                     if isinstance(r.event, ToolFinished)]
     saved = tmp_path / "spill" / tid
-    [file] = list(saved.iterdir())
+    [file] = [f for f in saved.iterdir() if f.name != ".task-id"]
     assert file.read_text() == "x" * 50_000
     assert str(file) in result.text
 
@@ -65,7 +65,7 @@ async def test_the_model_reads_a_saved_output_without_asking(tmp_path: Path) -> 
                         spill_root=str(spill)) as app:
         tid = await app.client.create("main", "go", config={"cwd": str(work)})
         await app.client.wait(tid, timeout=10)
-        [file] = list((spill / tid).iterdir())
+        [file] = [f for f in (spill / tid).iterdir() if f.name != ".task-id"]
         provider.add(reply("", ("Read", {"file_path": str(file), "limit": 1})), reply("done"))
         await app.client.send(tid, "read it")
         row = await app.client.wait(tid, timeout=10)
@@ -92,32 +92,58 @@ async def test_every_host_has_a_spill_root(tmp_path: Path,
 
 async def test_an_ended_tasks_old_saved_outputs_are_swept(tmp_path: Path) -> None:
     """Kept while the task is open, however old; removed once it ended and
-    nothing was written there for 30 days (Claude Code's cleanup period)."""
+    nothing was written there for 30 days (Claude Code's cleanup period).
+    A directory is matched to its task by its marker, never by its name: an
+    open task whose id is no file name (``chat:room1``) keeps its files, and
+    so does a directory with no marker or an unknown task."""
     import os
     import time
 
     from noeta.core.client import Client
+    from noeta.core.large_output import SPILL_MARKER, task_spill_dir
     from noeta.core.runner import Runtime
     from noeta.host.spill_sweep import SPILL_KEEP_DAYS, sweep_spills
 
     store = SqliteStore(str(tmp_path / "t.db"))
-    provider = ScriptedProvider([reply("a"), reply("b"), reply("c")])
+    provider = ScriptedProvider([reply("a"), reply("b"), reply("c"), reply("d")])
     agent = Agent(name="main", model="m")
     rt = Runtime(store=store, agents={"main": agent}, provider_for=lambda _m: provider)
     client = Client(store)
     open_old, ended_old, ended_new = [await client.create("main", "go") for _ in range(3)]
+    chat = await client.create("main", "go", task_id="chat:room1")
     await rt.run_until_idle()
     for tid in (ended_old, ended_new):
         await client.cancel(tid)
     await rt.run_until_idle()
     root = tmp_path / "spill"
     old = time.time() - (SPILL_KEEP_DAYS + 1) * 86_400
-    for name in (open_old, ended_old, ended_new, "gone"):
-        (root / name).mkdir(parents=True)
-        (root / name / "c.txt").write_text("x")
-        if name != ended_new:
-            for p in (root / name / "c.txt", root / name):
+    dirs = {}
+    for tid in (open_old, ended_old, ended_new, chat, "gone", "unmarked"):
+        d = Path(task_spill_dir(str(root), tid))
+        d.mkdir(parents=True)
+        (d / "c.txt").write_text("x")
+        if tid != "unmarked":
+            (d / SPILL_MARKER).write_text(tid)
+        if tid != ended_new:
+            for p in (*d.iterdir(), d):
                 os.utime(p, (old, old))
-    assert sorted(await sweep_spills(store, str(root))) == sorted([ended_old, "gone"])
-    assert sorted(p.name for p in root.iterdir()) == sorted([open_old, ended_new])
+        dirs[tid] = d.name
+    assert dirs[chat] != "chat_room1" and dirs[chat].startswith("chat_room1-")
+    assert task_spill_dir(str(root), "chat_room1") != task_spill_dir(str(root), chat)
+    assert await sweep_spills(store, str(root)) == [dirs[ended_old]]
+    assert sorted(p.name for p in root.iterdir()) == sorted(
+        dirs[t] for t in (open_old, ended_new, chat, "gone", "unmarked"))
     await store.close()
+
+
+async def test_a_saved_output_marks_its_tasks_directory(tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", ("Loud", {})), reply("done")])
+    agent = Agent(name="main", model="m", tools=[Loud()])
+    async with LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                        env_for=lambda _s: LocalExecEnv(str(tmp_path)),
+                        spill_root=str(tmp_path / "spill")) as app:
+        tid = await app.client.create("main", "go", task_id="chat:room1")
+        await app.client.wait(tid, timeout=10)
+    from noeta.core.large_output import SPILL_MARKER, task_spill_dir
+
+    assert (Path(task_spill_dir(str(tmp_path / "spill"), tid)) / SPILL_MARKER).read_text() == tid

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import posixpath
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
@@ -50,6 +51,7 @@ from noeta.plugins.subtasks.tool import (
 from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
 from noeta.toolkit.notices import NOTICE_GUARD, escape
+from noeta.toolkit.tools import mark_spill_dir
 
 __all__ = ["SubagentSpec", "Subtasks", "task_notification"]
 
@@ -418,6 +420,9 @@ class Subtasks(Extension):
                         return count, last, known[2] + len(data)
             data = lines(0)
             await env.write_bytes(path, data)
+            # The tree's spill directory: swept by the host only once marked.
+            await mark_spill_dir(env, posixpath.dirname(posixpath.dirname(path)),
+                                 state.root_id or state.task_id)
             return count, last, len(data)
         except OSError:
             log.debug("transcript %s not written", path, exc_info=True)

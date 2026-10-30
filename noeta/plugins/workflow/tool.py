@@ -15,7 +15,7 @@ from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message
 from noeta.plugins.workflow.engine import EngineMissing
 from noeta.toolkit.paths import noeta_home
-from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, spill_path
+from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, save_spilled, task_spill_dir
 
 if TYPE_CHECKING:
     from noeta.plugins.workflow import Orchestration
@@ -185,13 +185,9 @@ class WorkflowTool:
         directory there)."""
         if not ctx.spill_dir:
             return ""
-        task_dir = posixpath.dirname(spill_path(ctx.spill_dir, ctx.task_id, "x"))
+        task_dir = task_spill_dir(ctx.spill_dir, ctx.task_id)
         path = posixpath.join(task_dir, "workflows", f"{rid}.js")
-        try:
-            await ctx.env.write_bytes(path, script.encode("utf-8"))
-        except OSError:
-            return ""
-        return path
+        return path if await save_spilled(ctx, path, script.encode("utf-8")) else ""
 
 
 class _ToolView:

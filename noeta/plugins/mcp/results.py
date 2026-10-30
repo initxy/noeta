@@ -30,7 +30,7 @@ from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Image, Text
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
-from noeta.toolkit.tools import spill_path
+from noeta.toolkit.tools import save_spilled, spill_path
 
 __all__ = ["DEFAULT_MAX_OUTPUT_TOKENS", "IMAGE_TOKENS", "max_output_tokens", "render_result"]
 
@@ -104,11 +104,7 @@ async def _save(ctx: ToolContext, suffix: str, data: bytes) -> str | None:
         return None
     base = spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id)
     path = posixpath.splitext(base)[0] + suffix
-    try:
-        await ctx.env.write_bytes(path, data)
-    except OSError:
-        return None
-    return path
+    return path if await save_spilled(ctx, path, data) else None
 
 
 def _saved_note(path: str, full: str, limit: int, *, as_json: bool) -> str:

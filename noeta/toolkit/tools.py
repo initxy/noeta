@@ -15,7 +15,10 @@ from noeta.core.large_output import (
     format_size,
     large_output_message,
     limit_output,
+    mark_spill_dir,
+    save_spilled,
     spill_path,
+    task_spill_dir,
 )
 from noeta.core.tool import ToolOutput, text_output
 from noeta.core.types import Text
@@ -30,10 +33,13 @@ __all__ = [
     "large_output_message",
     "limit_output",
     "load_description",
+    "mark_spill_dir",
     "output_text",
     "path_within",
     "require_str",
+    "save_spilled",
     "spill_path",
+    "task_spill_dir",
     "tool_error",
     "truncate_bytes",
 ]

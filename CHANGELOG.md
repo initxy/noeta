@@ -991,8 +991,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 - **An `@path` mention attaches only what the model's own `Read` could read without asking**
   (the working directories, an allow rule); a file it would ask about is named instead, so
-  the model's `Read` goes through approval. A channel's message (framed with
-  `noeta.core.channel.framed`; `from_channel` tells) is never expanded, `~` is expanded only
+  the model's `Read` goes through approval. A channel's message is never expanded:
+  `deliver` now frames every message not framed yet (`source=`, `sender=`; `from_channel`
+  tells), as Claude Code's channel messages arrive. `~` is expanded only
   with `FileTools(home=)` (set by the `noeta` command's front ends, never `serve` or
   `worker`), and no `PreToolUse` hook command runs for the attachment. Before, any chat
   member could have a worker read `~/.ssh` or `~/.noeta` into the conversation.
