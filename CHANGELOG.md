@@ -380,6 +380,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **`TaskView.spill_dir`**: the spill root, whose saved outputs the permissions plugin lets
+  `Read` open without asking, as it does the task's plan file. A host sweeps its spill root
+  (`noeta.host.spill_sweep`): an ended task's directory not written for 30 days is removed.
 - **A Python plugin directory may ship `skills/`, `commands/` and `agents/`** in Claude Code's
   format next to its `__init__.py`, as pi's and dsh's plugins add resources; they load as a
   Claude Code plugin's do (commands as `/<directory>:<command>`). Before, a directory was
@@ -527,6 +530,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A long output a tool saved itself is never saved over.** Past one reply's 200,000
+  character budget the runner saved a `Bash` / MCP / web result's preview to the tool's own
+  file, losing the full output; the runner writes `<call>.result.txt` and leaves an already
+  saved result alone. When its save fails the result stays whole.
+- **With a remote exec env, auto memory lives in the env**, where the model's file tools
+  write it; the memory plugin read the worker's disk.
 - **A claim whose commit landed unseen runs at once.** When the connection dropped during
   a claim's `COMMIT` (`CommitUnknown` on Postgres) the worker only logged it; if the claim had
   landed, the task sat `running` until its lease ran out. The worker now asks the store for
@@ -980,6 +989,20 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **An `@path` mention attaches only what the model's own `Read` could read without asking**
+  (the working directories, an allow rule); a file it would ask about is named instead, so
+  the model's `Read` goes through approval. A channel's message (framed with
+  `noeta.core.channel.framed`; `from_channel` tells) is never expanded, `~` is expanded only
+  with `FileTools(home=)` (set by the `noeta` command's front ends, never `serve` or
+  `worker`), and no `PreToolUse` hook command runs for the attachment. Before, any chat
+  member could have a worker read `~/.ssh` or `~/.noeta` into the conversation.
+- **The memory directory's write and read exceptions are judged where the file lands**: a
+  link planted in a project agent's memory directory no longer writes `.noeta/agents/`
+  without asking.
+- **An image over 50 million pixels is refused before it is decoded** (a small PNG could
+  take gigabytes); Bash and MCP images are decoded off the event loop.
+- **A skills directory git ignores (a dependency's) is never discovered**, and a skill found
+  below the working directory never replaces one of the same name.
 - The permissions plugin decides whether a workspace is trusted from each task's own working
   directory (`noeta trust`), as the MCP and skills plugins do. Before, the `noeta` command
   took the trust of the directory it started in for every task, so a server started in a
