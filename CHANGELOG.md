@@ -361,6 +361,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **Claude Code plugins' `userConfig` and `settings.json`.** `noeta plugin add` asks for a
+  plugin's `userConfig` values (or takes `--config KEY=VALUE`; `noeta plugin configure` sets
+  them again), keeps them in `~/.noeta/settings.json` `pluginConfigs` with sensitive ones in
+  the OS keyring, and substitutes `${user_config.KEY}` / `CLAUDE_PLUGIN_OPTION_<KEY>` as
+  Claude Code does; a plugin's `settings.json` `agent` (and the settings files' own `agent`)
+  picks the agent front ends start with, and the TUI honours `--agent`.
 - **A running tool shows its progress** (`ToolContext.progress(text)`), as Claude Code's
   `tool_progress`: never recorded nor sent to the model, it streams with the model's live
   output (across machines on Postgres). A foreground `Bash` command shows its latest output

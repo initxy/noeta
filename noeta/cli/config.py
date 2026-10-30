@@ -411,12 +411,15 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
+    plugin_agent: dict[str, str] = {}
 
     def make_agents() -> list[Agent]:
         """The agents from the agent files and plugins found now; a plugin
         whose code and arguments did not change is the one made before."""
         claude, found_notices = claude_plugins(cwd, plugin_dirs)
         notices.extend(n for n in found_notices if n not in notices)
+        plugin_agent.clear()
+        plugin_agent.update(plugins_agent(claude))
         files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
         if source("user"):
             files += read_agent_dir(home_dir.HOME / "agents")
@@ -453,10 +456,29 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                    **runtime_kw)
     app.notices = notices
 
+    def pick_main_agent() -> None:
+        """The agent front ends start with: the settings' ``agent``, else
+        the one a Claude Code plugin's settings name, else ``main``."""
+        wanted = found.agent or plugin_agent.get("agent")
+        known = app.runtime.agents
+        # A plugin's agent is named <plugin>:<agent> in Claude Code.
+        name = wanted if not wanted or wanted in known else wanted.rpartition(":")[2]
+        app.main_agent = name if name and name in known else "main"
+        if wanted and name not in known:
+            notice = (f"agent {wanted!r} (from the settings of "
+                      f"{plugin_agent.get('source') if not found.agent else 'noeta'}) "
+                      "is not an agent here; main is used")
+            if notice not in notices:
+                notices.append(notice)
+                log.warning("%s", notice)
+
+    pick_main_agent()
+
     def reload_plugins() -> list[str]:
         registry.forget_plugin_files()
         found = load_plugin_files(cwd, plugin_dirs)
         app.replace_agents(make_agents())
+        pick_main_agent()
         return found + unjoined
 
     app.reload_plugins = reload_plugins
@@ -519,6 +541,20 @@ def claude_plugins(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()
     notices = [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
                for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
     return found, notices
+
+
+def plugins_agent(plugins: Sequence[ClaudePlugin]) -> dict[str, str]:
+    """The ``agent`` Claude Code plugins' settings name (a later plugin
+    wins, as in Claude Code) and which plugin names it (``source``)."""
+    out: dict[str, str] = {}
+    for p in plugins:
+        agent = p.settings.get("agent")
+        if not isinstance(agent, str):
+            continue
+        if out:
+            log.info("plugin %s overrides setting 'agent' (set by %s)", p.name, out["source"])
+        out = {"agent": agent, "source": f"plugin {p.name}"}
+    return out
 
 
 def plugin_changes(before: Mapping[str, Agent], after: Mapping[str, Agent]) -> list[str]:

@@ -90,6 +90,9 @@ class HookCommand:
     tool: str = ""
     #: An ``mcp_tool`` hook's arguments (``${path}`` filled from the input).
     arguments: Mapping[str, Any] = field(default_factory=dict)
+    #: More environment for a ``command`` hook: a Claude Code plugin's
+    #: option values (``CLAUDE_PLUGIN_OPTION_<KEY>``), set by noeta.
+    env: tuple[tuple[str, str], ...] = ()
 
     @property
     def key(self) -> str:
@@ -171,7 +174,11 @@ def _hook(event: str, h: Mapping[str, Any]) -> HookCommand | None:
         if not isinstance(command, str) or not command.strip():
             raise ValueError(f"{where}: a command hook needs 'command'")
         args = _strings(h["args"], where, "args") if h.get("args") is not None else None
-        return HookCommand(command=command, args=args,
+        env = h.get("env") or {}
+        if not isinstance(env, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+            raise ValueError(f"{where}: 'env' must map names to strings")
+        return HookCommand(command=command, args=args, env=tuple(env.items()),
                            background=bool(h.get("async") or h.get("asyncRewake")), **common)
     if kind == "http":
         url = h.get("url")

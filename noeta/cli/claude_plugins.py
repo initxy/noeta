@@ -11,8 +11,11 @@ plugin) and ``.mcp.json`` (the MCP plugin; never from a project's plugin,
 whose servers the person is told to copy into ``.noeta/mcp.json``, so a
 cloned repository never starts a server by itself).
 ``${CLAUDE_PLUGIN_ROOT}`` and ``${CLAUDE_PLUGIN_DATA}`` (``~/.noeta/plugin-data/<name>``)
-are substituted in hooks, MCP servers, commands and agent prompts. Monitors,
-``bin/``, LSP servers, themes and output styles are not loaded.
+are substituted in hooks, MCP servers, commands and agent prompts, and the
+manifest's ``userConfig`` values as Claude Code does (:mod:`noeta.cli.plugin_options`).
+The plugin's ``settings.json`` (else the manifest's ``settings``) may name
+the ``agent`` front ends start with, below the person's own settings.
+Monitors, ``bin/``, LSP servers, themes and output styles are not loaded.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from typing import Any
 import yaml
 
 from noeta.agents.agent_files import AgentFile, AgentFileError, parse_agent_file
+from noeta.cli import plugin_options
 
 __all__ = ["ClaudePlugin", "find_claude_plugins", "is_claude_plugin", "plugin_settings",
            "read_claude_plugin"]
@@ -61,6 +65,10 @@ class ClaudePlugin:
     hooks: dict[str, list[Any]] = field(default_factory=dict)
     #: Claude Code's ``mcpServers`` map.
     mcp_servers: dict[str, Any] = field(default_factory=dict)
+    #: The manifest's ``userConfig`` fields.
+    user_config: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: The settings it brings (of Claude Code's plugin keys, ``agent``).
+    settings: dict[str, Any] = field(default_factory=dict)
 
 
 def _paths(root: Path, value: Any, key: str) -> list[Path]:
@@ -125,16 +133,77 @@ def _command_files(paths: Iterable[Path]) -> list[Path]:
     return out
 
 
-def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False) -> ClaudePlugin:
+def _manifest(root: Path) -> dict[str, Any]:
+    path = root / ".claude-plugin" / "plugin.json"
+    manifest = _json(path) if path.is_file() else {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _settings(root: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """The settings a plugin brings: its ``settings.json``, else the
+    manifest's ``settings``; only the key Claude Code takes from a plugin
+    that noeta has (``agent``)."""
+    path = root / "settings.json"
+    for data in (_json(path) if path.is_file() else None, manifest.get("settings")):
+        if isinstance(data, dict) and isinstance(data.get("agent"), str) and data["agent"]:
+            return {"agent": data["agent"]}
+    return {}
+
+
+def _hook_with_options(name: str, hook: dict[str, Any],
+                       values: Mapping[str, Any]) -> dict[str, Any] | None:
+    """A plugin's hook with its option values: filled into a command's
+    ``args`` form (a shell-form command naming one is left out: the shell
+    would read the value again) and given as ``CLAUDE_PLUGIN_OPTION_<KEY>``
+    in a command's environment; ``None`` when it is left out."""
+    if hook.get("args") is None and plugin_options.uses(hook.get("command")):
+        log.warning("plugin %s: a hook names ${user_config.*} in a shell-form command "
+                    "(use args, or read $CLAUDE_PLUGIN_OPTION_<KEY>); skipped", name)
+        return None
+    try:
+        hook = plugin_options.substitute(hook, values)
+    except plugin_options.OptionError as exc:
+        log.warning("plugin %s: %s; a hook using it is skipped", name, exc)
+        return None
+    if values and hook.get("type", "command") == "command":
+        hook = {**hook, "env": plugin_options.hook_env(values)}
+    return hook
+
+
+def _hooks_with_options(name: str, events: Mapping[str, Any],
+                        values: Mapping[str, Any]) -> dict[str, list[Any]]:
+    out: dict[str, list[Any]] = {}
+    for event, groups in events.items():
+        kept = []
+        for group in groups if isinstance(groups, list) else []:
+            if not isinstance(group, dict):
+                continue
+            hooks = [h for h in (_hook_with_options(name, hook, values)
+                                 for hook in group.get("hooks") or [] if isinstance(hook, dict))
+                     if h is not None]
+            if hooks:
+                kept.append({**group, "hooks": hooks})
+        out[event] = kept
+    return out
+
+
+def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
+                       options: Mapping[str, Any] | None = None) -> ClaudePlugin:
+    """``options``: the person's ``userConfig`` values (references
+    unresolved); left out, those kept for it (:func:`plugin_options.load`)."""
     root = root.resolve()
-    manifest = _json(root / ".claude-plugin" / "plugin.json") \
-        if (root / ".claude-plugin" / "plugin.json").is_file() else {}
-    manifest = manifest if isinstance(manifest, dict) else {}
+    manifest = _manifest(root)
     name = str(manifest.get("name") or root.name)
     names = {"CLAUDE_PLUGIN_ROOT": str(root),
              "CLAUDE_PLUGIN_DATA": str(data_home / re.sub(r"[^A-Za-z0-9_-]", "-", name))}
+    fields = plugin_options.schema(manifest)
+    values = dict(options) if options is not None else plugin_options.load(name, fields)
     plugin = ClaudePlugin(name=name, root=root, version=str(manifest.get("version") or ""),
-                          project=project)
+                          project=project, user_config=fields,
+                          settings=_settings(root, manifest))
+
+    def text(body: str) -> str:
+        return plugin_options.content(_substitute(body, names), values, fields)
     skills = [root / "skills", *_paths(root, manifest.get("skills", []), "skills")]
     plugin.skill_dirs = [str(p) for p in skills if p.is_dir()]
     agents = _paths(root, manifest["agents"], "agents") if "agents" in manifest \
@@ -146,14 +215,14 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False) ->
         except (OSError, AgentFileError) as exc:
             log.warning("skipping agent file %s: %s", file, exc)
             continue
-        plugin.agents.append(dataclasses.replace(agent, prompt=_substitute(agent.prompt, names)))
+        plugin.agents.append(dataclasses.replace(agent, prompt=text(agent.prompt)))
     commands = manifest.get("commands")
     sources = [] if isinstance(commands, dict) else \
         _paths(root, commands, "commands") if commands is not None else [root / "commands"]
     for file in _command_files(sources):
         front, body = _frontmatter(file.read_text("utf-8"))
         plugin.commands.append({"name": f"{name}:{file.stem}",
-                                "body": _substitute(body, names),
+                                "body": text(body),
                                 "description": str(front.get("description") or ""),
                                 "argument_hint": str(front.get("argument-hint") or ""),
                                 "allowed_tools": _allowed(front.get("allowed-tools"), names)})
@@ -168,7 +237,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False) ->
                 front, content = _frontmatter(path.read_text("utf-8"))
         if isinstance(content, str):
             allowed = entry.get("allowedTools", front.get("allowed-tools"))
-            plugin.commands.append({"name": f"{name}:{key}", "body": _substitute(content, names),
+            plugin.commands.append({"name": f"{name}:{key}", "body": text(content),
                                     "description": str(entry.get("description") or ""),
                                     "argument_hint": str(entry.get("argumentHint") or ""),
                                     "allowed_tools": _allowed(allowed, names)})
@@ -179,8 +248,9 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False) ->
     for source in hook_sources:
         events = source if isinstance(source, dict) else \
             (_json(source).get("hooks") or {}) if source.is_file() else {}
-        for event, groups in _substitute(events, names).items():
-            plugin.hooks.setdefault(event, []).extend(groups if isinstance(groups, list) else [])
+        for event, groups in _hooks_with_options(name, _substitute(events, names),
+                                                 values).items():
+            plugin.hooks.setdefault(event, []).extend(groups)
     mcp_sources: list[Any] = [root / ".mcp.json"]
     declared = manifest.get("mcpServers")
     for item in declared if isinstance(declared, list) else [declared] if declared else []:
@@ -189,7 +259,12 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False) ->
     for source in mcp_sources:
         data = source if isinstance(source, dict) else _json(source) if source.is_file() else {}
         servers = data.get("mcpServers", data) if isinstance(data, dict) else {}
-        plugin.mcp_servers.update(_substitute(servers, names))
+        for server, spec in _substitute(servers, names).items():
+            try:
+                plugin.mcp_servers[server] = plugin_options.substitute(spec, values)
+            except plugin_options.OptionError as exc:
+                log.warning("plugin %s: MCP server %s needs configuration before it can "
+                            "start (%s): noeta plugin configure %s", name, server, exc, name)
     return plugin
 
 

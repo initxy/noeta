@@ -404,7 +404,7 @@ def _front(argv: list[str]) -> None:
                 task_config={k: v for k, v in (("cwd", args.cwd), ("model", args.model))
                              if v})
         return
-    run_tui(_settings(args), cwd=cwd, resume=args.resume,
+    run_tui(_settings(args), cwd=cwd, resume=args.resume, agent=args.agent,
             permission_mode=args.permission_mode, plugin_dirs=args.plugin_dirs)
 
 

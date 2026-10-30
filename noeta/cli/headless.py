@@ -72,7 +72,8 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--fork-session", dest="fork", action="store_true",
                     help="with --resume/--continue: go on in a new task")
     ap.add_argument("--session-id", dest="new_task_id", help="the id the new task gets")
-    ap.add_argument("--agent", default="main")
+    ap.add_argument("--agent", default=None,
+                    help="the agent to run (default: the settings' agent, else main)")
     ap.add_argument("--system-prompt-file")
     ap.add_argument("--append-system-prompt-file")
     ap.add_argument("--settings", dest="settings_flag",
@@ -301,15 +302,16 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str) -> i
     mode = args.permission_mode
     if args.dangerously_skip_permissions:
         mode = "bypassPermissions"
+    agent = args.agent or getattr(app, "main_agent", "main")
     async with app:  # app.notices were logged to stderr when the app was made
         resume = args.resume or None
         if args.continue_last and not resume:
-            resume = await find_latest_task(app.client, cwd, args.agent)
+            resume = await find_latest_task(app.client, cwd, agent)
             if resume is None:
                 print("noeta: no task to continue in this directory", file=sys.stderr)
                 return 1
         options = HeadlessOptions(
-            agent=args.agent, model=s.model, cwd=cwd, permission_mode=mode,
+            agent=agent, model=s.model, cwd=cwd, permission_mode=mode,
             max_turns=args.max_turns, max_budget_usd=args.max_budget_usd,
             output_schema=schema, include_partial_messages=args.include_partial_messages,
             replay_user_messages=args.replay_user_messages,

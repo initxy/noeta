@@ -4,6 +4,7 @@
     noeta plugin add <path>                       a local plugin file or directory (copied)
     noeta plugin add --marketplace <src> <name>   a plugin a Claude Code marketplace lists
     noeta plugin list                             what was installed this way, and from where
+    noeta plugin configure <name>                 set a Claude Code plugin's userConfig values
     noeta plugin remove <name>
 
 A plugin is a noeta plugin file or directory, or a Claude Code plugin
@@ -14,6 +15,11 @@ marketplace (``<root>/.claude-plugin/marketplace.json``, a local path or
 its entry must pin a ``sha`` (or give ``--commit``). Installing runs nothing
 from the plugin: no install scripts, no git hooks, no dependency install.
 What was installed is recorded in ``~/.noeta/plugin-sources.json``.
+
+A Claude Code plugin whose manifest declares ``userConfig`` is configured as
+it is added, as Claude Code does when a plugin is enabled: each value is
+asked for on a terminal, or given with ``--config KEY=VALUE``
+(:mod:`noeta.cli.plugin_options` says where they are kept).
 """
 
 from __future__ import annotations
@@ -29,7 +35,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from noeta.cli import home_dir
+from noeta.cli import home_dir, plugin_options
 
 __all__ = ["add_parser", "install", "run"]
 
@@ -58,6 +64,13 @@ def add_parser(sub: Any) -> None:
                                            "<git-url>@<commit>")
     add.add_argument("--commit", help="the commit to install when the marketplace entry "
                                       "pins none")
+    configure = cmds.add_parser("configure", help="set a Claude Code plugin's userConfig "
+                                                  "values")
+    configure.add_argument("name")
+    for parser in (add, configure):
+        parser.add_argument("--config", action="append", default=[], metavar="KEY=VALUE",
+                            help="a userConfig value (repeatable); the others are asked for "
+                                 "on a terminal")
     cmds.add_parser("list", help="the plugins installed with noeta plugin add")
     remove = cmds.add_parser("remove", help="remove an installed plugin")
     remove.add_argument("name")
@@ -242,6 +255,36 @@ def _list() -> int:
     return 0
 
 
+def _fields(path: Path) -> dict[str, dict[str, Any]]:
+    """The ``userConfig`` fields of the plugin at ``path``."""
+    manifest = path / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        return {}
+    data = json.loads(manifest.read_text("utf-8"))
+    return plugin_options.schema(data) if isinstance(data, dict) else {}
+
+
+def _installed(name: str) -> Path | None:
+    rec = _records().get(name)
+    plugins = home_dir.HOME / "plugins"
+    for path in ([Path(rec["path"])] if rec and rec.get("path") else []) + [plugins / name]:
+        if path.is_dir():
+            return path
+    return None
+
+
+def _configure(name: str, path: Path, given: list[str]) -> int:
+    fields = _fields(path)
+    try:
+        notes = plugin_options.configure(name, fields, given)
+    except plugin_options.OptionError as exc:
+        print(f"noeta: {exc}", file=sys.stderr)
+        return 1
+    for note in notes:
+        print(f"noeta: {note}", file=sys.stderr)
+    return 0
+
+
 def _remove(name: str) -> int:
     records = _records()
     plugins = (home_dir.HOME / "plugins").resolve()
@@ -255,6 +298,7 @@ def _remove(name: str) -> int:
         shutil.rmtree(path) if path.is_dir() else path.unlink()
         removed = True
     _save(records)
+    plugin_options.forget(name)
     if not removed and rec is None:
         print(f"noeta: no plugin {name} in {plugins}", file=sys.stderr)
         return 1
@@ -268,6 +312,13 @@ def run(args: argparse.Namespace, cwd: str) -> int:
         return _list()
     if args.plugin_command == "remove":
         return _remove(args.name)
+    if args.plugin_command == "configure":
+        path = _installed(args.name)
+        if path is None or not _fields(path):
+            print(f"noeta: {args.name} is no installed Claude Code plugin with userConfig "
+                  "options", file=sys.stderr)
+            return 1
+        return _configure(args.name, path, args.config)
     try:
         name, path = install(args.source, marketplace=args.marketplace, commit=args.commit)
     except (PluginInstallError, OSError, ValueError) as exc:
@@ -275,4 +326,10 @@ def run(args: argparse.Namespace, cwd: str) -> int:
         return 1
     print(f"installed {name} in {path}; it loads in front ends started from now "
           "(or /reload-plugins)")
+    if path.is_dir() and _fields(path):
+        return _configure(name, path, args.config)
+    if args.config:
+        print(f"noeta: --config was given but plugin {name!r} declares no userConfig options",
+              file=sys.stderr)
+        return 1
     return 0
