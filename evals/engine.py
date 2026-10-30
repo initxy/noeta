@@ -37,6 +37,7 @@ from noeta.core.execenv import RunResult
 from noeta.core.provider import Provider
 from noeta.core.questions import detail_questions
 from noeta.core.runner import Runtime
+from noeta.core.types import Image, Message, Text
 from noeta.host.pending import Pending, pending_tree
 from noeta.plugins.mcp import default_pool
 from noeta.plugins.memory import memory_dir_for
@@ -235,8 +236,12 @@ async def _start(client: Client, agent: str, sc: Scenario, config: dict[str, Any
     is in effect before the goal is sent, as when a person toggles the mode
     and then types (taken in one batch with the goal, the plan-mode note
     would skip the first request)."""
+    goal: str | Message = sc.goal
+    if sc.images:
+        goal = Message(role="user", origin="human", content=[
+            *(Image(media_type="image/png", data=d) for d in sc.images), Text(text=sc.goal)])
     if sc.switch_mode is None:
-        return await client.create(agent, sc.goal, config=config)
+        return await client.create(agent, goal, config=config)
     tid = await client.create(agent, config=config)
     await client.signal(tid, MODE_SIGNAL, {"mode": sc.switch_mode})
 
@@ -245,7 +250,7 @@ async def _start(client: Client, agent: str, sc: Scenario, config: dict[str, Any
             await asyncio.sleep(_POLL_S)
 
     await asyncio.wait_for(switched(), 60)
-    await client.send(tid, sc.goal)
+    await client.send(tid, goal)
     return tid
 
 

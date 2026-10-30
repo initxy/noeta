@@ -345,6 +345,14 @@ def score_changed_file_reminder(t: Trace, judge: Judge) -> Result:
     return 0.6 * current + 0.4 * reread, checks
 
 
+def score_pasted_image(t: Trace, judge: Judge) -> Result:
+    p = t.workspace / "assets" / "logo.png"
+    same = p.is_file() and p.read_bytes() == fx.LOGO_PNG
+    png = p.is_file() and p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    return 1.0 if same else 0.3 if png else 0.0, {"exact_copy": same, "some_png": png,
+                                                  "calls": len(t.calls)}
+
+
 def score_git_after_switch(t: Trace, judge: Judge) -> Result:
     text = t.file("PR.md") or ""
     first = text.strip().splitlines()[0] if text.strip() else ""
@@ -818,6 +826,16 @@ SCENARIOS: list[Scenario] = [
         score=score_git_after_switch,
         timeout_s=300.0,
         tags=("reminders",),
+    ),
+    Scenario(
+        name="pasted_image_into_repo",
+        behavior="copies a pasted image into the repo from the path it was saved at",
+        goal="Put this logo into the repo as assets/logo.png.",
+        images=(fx.LOGO_PNG,),
+        setup=fx.shop,
+        score=score_pasted_image,
+        timeout_s=300.0,
+        tags=("attachments",),
     ),
     Scenario(
         name="compaction_resume_edits",

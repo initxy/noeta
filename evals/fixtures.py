@@ -794,3 +794,28 @@ def switch_branch_and_commit(ws: Path) -> None:
     pricing.write_text(pricing.read_text(encoding="utf-8") + "\n# Tax rounds half-up.\n",
                        encoding="utf-8")
     _git(ws, "commit", "-qam", "Round tax half-up to the cent")
+
+
+# --------------------------------------------------------------------------- #
+# A pasted image: a small logo PNG the person pastes with the goal
+# --------------------------------------------------------------------------- #
+
+
+def _png(width: int, height: int, red: set[tuple[int, int]]) -> bytes:
+    import struct
+    import zlib
+
+    rows = b"".join(b"\0" + b"".join(b"\xdc\x1e\x1e" if (x, y) in red else b"\xff\xff\xff"
+                                     for x in range(width)) for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2,
+                                                              0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+#: A red disc on white, 160x64.
+LOGO_PNG = _png(160, 64, {(x, y) for x in range(160) for y in range(64)
+                          if (x - 32) ** 2 + (y - 32) ** 2 < 600})
