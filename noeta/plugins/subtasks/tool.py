@@ -29,7 +29,7 @@ from noeta.plugins.subtasks.worktree import (
     reopen_worktree,
     worktree_exists,
 )
-from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
+from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, task_spill_dir
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -88,7 +88,7 @@ def transcript_dir(spill_dir: str | None, root_id: str) -> str | None:
     a ``tasks`` directory beside the tree's spilled tool outputs."""
     if not spill_dir:
         return None
-    return posixpath.join(spill_dir, _UNSAFE_NAME.sub("_", root_id) or "task", "tasks")
+    return posixpath.join(task_spill_dir(spill_dir, root_id), "tasks")
 
 
 def transcript_file(directory: str, agent_id: str) -> str:
@@ -481,6 +481,8 @@ class ListAgentsTool:
     name = texts.LIST_TOOL
     description = load_description("noeta.plugins.subtasks", "list_agents")
     read_only = True
+    #: Claude Code's ListAgents result limit.
+    max_result_chars = 10_000
     retry_safe = True
     clearable = True
     input_schema = _schema({

@@ -339,10 +339,12 @@ def score_changed_file_reminder(t: Trace, judge: Judge) -> Result:
     checks = {"reminder_fired": fired, "reread_in_turn_2": reread, "uses_new_value": current,
               "turns": t.turns}
     # The reminder is noeta's own, deterministic part: without it there is
-    # nothing to act on, and a re-read out of habit would hide its loss.
+    # nothing to act on, and a re-read out of habit would hide its loss. The
+    # note carries the changed lines (as Claude Code's does), so using the new
+    # value is the behaviour; a re-read is recorded, not required.
     if not fired:
         return 0.0, checks
-    return 0.6 * current + 0.4 * reread, checks
+    return float(current), checks
 
 
 def score_pasted_image(t: Trace, judge: Judge) -> Result:

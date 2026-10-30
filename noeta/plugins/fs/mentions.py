@@ -5,42 +5,59 @@ notebook or image comes out as ``Read`` shows it, and the read's limits hold.
 
 Each attachment is a note in the person's turn holding the call and its
 result (``Called the Read tool with the following input: …`` / ``Result of
-calling the Read tool: …``); a directory is shown as an ``ls`` through Bash.
-A text file over the read limit is attached by its first 2,000 lines, and
-one too large even for that, a PDF longer than one read takes, or a path that
-cannot be read is named with how to read it instead. A path a deny rule keeps
-from ``Read`` is left out. Forms: ``@path``, ``@"path with spaces"``,
-``@path#L10-20`` (those lines) and ``@file:///abs/path`` (an editor's link).
+calling the Read tool: …``), sent ahead of the person's text as Claude Code
+sends it (moved there when the request is built; the log keeps it after the
+message it answers). A directory is shown as an ``ls`` through Bash. A text
+file over the read limit is attached by its first 2,000 lines, and one too
+large even for that, a PDF longer than one read takes, or a path that cannot
+be read is named with how to read it instead. Forms: ``@path``,
+``@"path with spaces"``, ``@path#L10-20`` (those lines) and
+``@file:///abs/path`` (an editor's link).
+
+Only the task owner's words are expanded: a message carrying a channel's
+frame (an outside sender's, :func:`noeta.core.channel.from_channel`) is not.
+A file is attached only when the task's checks would let the model's own
+``Read`` of it through without asking (in the working directory, or under an
+allow rule); one they would ask about is named, so the model's ``Read`` goes
+through the approval, and one a deny rule keeps from ``Read`` is left out.
+``~`` is the person's home only where the host names it (``home``: a front
+end on the person's machine); on a server it is not expanded.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-import os
 import posixpath
 import re
 import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
-from noeta.core.extension import Deny, TaskView
+import msgspec
+
+from noeta.core.channel import from_channel
+from noeta.core.extension import Allow, Deny, TaskView
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Block, Image, Message, Text, ToolUse
 from noeta.plugins.fs._read_formats import PDF_MAX_PAGES_PER_READ, PDF_MAX_PAGES_WHOLE, page_count
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import FS, KIND_MENTIONS, KIND_NOTICE, current_fs_state
-from noeta.toolkit.local_env import is_local
 from noeta.toolkit.tools import format_size, output_text
 
-__all__ = ["FIRST_LINES", "MENTION", "attach_mentions", "mentioned", "new_prompts"]
+__all__ = ["FIRST_LINES", "MENTION", "attach_mentions", "attachment_digest",
+           "hoist_attachments", "mentioned", "new_prompts"]
 
 #: ``@path`` or ``@"path with spaces"``, not inside a word or an e-mail address.
 MENTION = re.compile(r'(?<![\w@])@("([^"]+)"|[^\s"]+)')
 _LINES = re.compile(r"^(.+?)#L(\d+)(?:-(\d+))?$")
 #: A file over the read limit is attached by this many first lines.
 FIRST_LINES = 2000
-#: Entries of a mentioned directory listed at most.
-MAX_ENTRIES = 1000
+#: The plugin whose gates run commands of the person's (``PreToolUse``
+#: hooks): not run for an attachment's ``Read``, as Claude Code checks only
+#: its rules for one.
+HOOKS = "hooks"
 
 CALLED = "Called the {tool} tool with the following input: {input}"
 RESULT = "Result of calling the {tool} tool:\n{text}"
@@ -56,6 +73,9 @@ UNREAD = (
     "directory, read them with your file tools before you answer.")
 WHY_NO_ENV = "Files are not attached automatically here"
 WHY_UNREADABLE = "They could not be read, so nothing was attached"
+NEEDS_APPROVAL = (
+    "The user @-mentioned {paths}. They were not attached: reading them needs the user's "
+    "approval. If you need them, read them with your file tools, which asks for it.")
 PDF_REFERENCE = (
     "PDF file: {path} ({pages} pages, {size}). None of it is in this conversation yet. Before "
     'you write anything else, call Read with file_path set to this path and a few pages (for '
@@ -90,18 +110,19 @@ def mentioned(text: str) -> list[Mention]:
 
 
 def new_prompts(view: TaskView, through: int) -> list[tuple[int, Message]]:
-    """The person's messages of the current exchange (after the model's
-    last reply) newer than seq ``through``."""
+    """The task owner's messages of the current exchange (after the model's
+    last reply) newer than seq ``through``: the person's, not a channel's."""
     messages, seqs = view.state.messages, view.state.message_seqs
     start = max((i + 1 for i, m in enumerate(messages) if m.role == "assistant"), default=0)
     return [(seqs[i], messages[i]) for i in range(start, min(len(messages), len(seqs)))
             if seqs[i] > through and messages[i].role == "user"
-            and messages[i].origin == "human"]
+            and messages[i].origin == "human" and not from_channel(messages[i].text)]
 
 
-async def attach_mentions(view: TaskView) -> None:
+async def attach_mentions(view: TaskView, home: str | None = None) -> None:
     """Record an attachment for each new mention of the person's (once per
-    message: what was handled is recorded, in the log)."""
+    message: what was handled is recorded, in the log). ``home``: what
+    ``~`` stands for (``None``: it is not expanded)."""
     prompts = new_prompts(view, current_fs_state(view.state.ext).mentions_through)
     found = [m for _, message in prompts for m in mentioned(message.text)]
     if not found:
@@ -116,12 +137,20 @@ async def attach_mentions(view: TaskView) -> None:
                   UNREAD.format(paths=", ".join(named), why=WHY_NO_ENV))
         return
     unread: list[str] = []
+    asks: list[str] = []
     for i, mention in enumerate(found):
-        path = _absolute(view, mention.path)
-        if path is None or await env.stat(path) is None:
+        path = _absolute(view, mention.path, home)
+        if path is None:
+            asks.append(mention.path)
             continue
-        if await _denied(view, ToolUse(id=f"mention.{through}.{i}", name="Read",
-                                       input={"file_path": path})):
+        if await env.stat(path) is None:
+            continue
+        verdict = await _verdict(view, ToolUse(id=f"mention.{through}.{i}", name="Read",
+                                               input={"file_path": path}))
+        if verdict == "deny":
+            continue
+        if verdict == "ask":
+            asks.append(path)
             continue
         try:
             content = await _attachment(view, mention, path, f"mention.{through}.{i}")
@@ -130,43 +159,80 @@ async def attach_mentions(view: TaskView) -> None:
         if content is None:
             unread.append(path)
         else:
-            view.record(FS, KIND_MENTIONS, {"through": through, "path": path},
-                        message=Message(role="user", content=content, origin="system"))
+            _record(view, through, path, content)
+    unread, asks = list(dict.fromkeys(unread)), list(dict.fromkeys(asks))
     if unread:
         _note(view, through, ", ".join(unread),
               UNREAD.format(paths=", ".join(unread), why=WHY_UNREADABLE))
+    if asks:
+        _note(view, through, ", ".join(asks),
+              view.prompt("reminder/mention_needs_approval", NEEDS_APPROVAL).format(
+                  paths=", ".join(asks)))
+
+
+def attachment_digest(content: Sequence[Block]) -> str:
+    """What names an attachment's message among the request's messages."""
+    return hashlib.sha256(msgspec.json.encode(list(content))).hexdigest()
+
+
+def _record(view: TaskView, through: int, path: str, content: list[Block]) -> None:
+    view.record(FS, KIND_MENTIONS,
+                {"through": through, "path": path, "digest": attachment_digest(content)},
+                message=Message(role="user", content=content, origin="system"))
 
 
 def _note(view: TaskView, through: int, path: str, text: str) -> None:
-    view.record(FS, KIND_MENTIONS, {"through": through, "path": path},
-                message=Message(role="user", content=[Text(text=text)], origin="system"))
+    _record(view, through, path, [Text(text=text)])
 
 
-def _absolute(view: TaskView, raw: str) -> str | None:
-    if raw.startswith("~"):
-        if not is_local(view.env):
+def hoist_attachments(messages: Sequence[Message], digests: frozenset[str]) -> list[Message]:
+    """``messages`` with each attachment (a system-origin message whose
+    content digest is in ``digests``) moved ahead of the person's message it
+    follows in the same user turn, as Claude Code sends attachments."""
+    out: list[Message] = []
+    anchor: int | None = None  # where the next attachment goes
+    for message in messages:
+        if message.role != "user":
+            anchor = None
+        elif message.origin == "human":
+            anchor = len(out)
+        elif anchor is not None and message.origin == "system" \
+                and attachment_digest(message.content) in digests:
+            out.insert(anchor, message)
+            anchor += 1
+            continue
+        out.append(message)
+    return out
+
+
+def _absolute(view: TaskView, raw: str, home: str | None) -> str | None:
+    if raw == "~" or raw.startswith("~/"):
+        if home is None:
             return None
-        raw = os.path.expanduser(raw)
+        raw = home + raw[1:]
     base = view.cwd or getattr(view.env, "cwd", "") or "/"
     return posixpath.normpath(posixpath.join(base, raw))
 
 
-async def _denied(view: TaskView, call: ToolUse) -> bool:
-    """Whether a check of the task refuses ``Read`` of the path (a deny
-    rule). Only a refusal counts: the person named the file, so nothing
-    asks. Whatever a check records while it is asked does not stand."""
+async def _verdict(view: TaskView, call: ToolUse) -> Literal["allow", "ask", "deny"]:
+    """What the task's checks say about ``Read`` of the path, as if the
+    model asked: ``allow`` only when no check would ask (or rewrite the
+    call). Whatever a check records while it is asked does not stand."""
     marks = len(view.pending), len(view.enqueued), len(view.creates)
+    verdict: Literal["allow", "ask", "deny"] = "allow"
     try:
         for ext in view.extensions:
-            if ext.name == FS:
+            if ext.name in (FS, HOOKS):
                 continue
             try:
-                verdict = await ext.before_tool(view, call)
+                gate = await ext.before_tool(view, call)
             except Exception:  # noqa: BLE001 — a failing check refuses
-                return True
-            if isinstance(verdict, Deny):
-                return True
-        return False
+                return "deny"
+            if isinstance(gate, Deny):
+                return "deny"
+            if gate is not None and not isinstance(gate, Allow):
+                verdict = "ask"
+        return verdict
     finally:
         del view.pending[marks[0]:]
         del view.enqueued[marks[1]:]
@@ -239,10 +305,10 @@ async def _directory(view: TaskView, path: str) -> list[Block] | None:
     done = await env.run(["ls", "-1Ap", path], timeout=30, output_cap=1024 * 1024)
     if done.exit_code != 0:
         return None
-    names = done.stdout.decode("utf-8", "replace").splitlines()
-    listing = "\n".join(names[:MAX_ENTRIES])
-    if len(names) > MAX_ENTRIES:
-        listing += f"\n(and {len(names) - MAX_ENTRIES} more)"
+    listing = "\n".join(done.stdout.decode("utf-8", "replace").splitlines())
+    if done.stdout_truncated:
+        listing = "[earlier entries dropped: only the last 1 MB of the listing was kept]\n" \
+            + listing.split("\n", 1)[-1]
     call = {"command": f"ls {shlex.quote(path)}", "description": f"Lists files in {path}"}
     return [Text(text=CALLED.format(tool="Bash", input=_json(call))),
             Text(text=RESULT.format(tool="Bash", text=listing))]

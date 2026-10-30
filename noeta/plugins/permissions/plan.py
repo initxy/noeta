@@ -105,6 +105,14 @@ _NOUNS = ("acorn", "badger", "comet", "dolphin", "ember", "falcon", "garden", "h
           "sparrow", "tulip", "valley", "willow", "kettle", "biscuit", "canyon", "puffin")
 
 
+_PLAN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def plan_name_ok(name: str) -> bool:
+    """A plan name a child may build its file name on: one path segment."""
+    return _PLAN_NAME.fullmatch(name) is not None and ".." not in name
+
+
 def new_plan_path(directory: str, rng: random.Random | None = None) -> str:
     r = rng or random.SystemRandom()
     first, second = r.sample(_ADJECTIVES, 2)

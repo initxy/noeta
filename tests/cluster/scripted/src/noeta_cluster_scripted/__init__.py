@@ -39,6 +39,13 @@ stopped. The task answers ``DONE <id>`` once the job's end (or loss), the
 sub-agent's end and the wake-up have all reached it, else ``WAITING <id>``.
 A call answered with an error (a crash's "outcome unknown") counts as
 settled and is never issued again.
+
+A spill task starts from ``CLUSTER-SPILL {"id": "s1", "lines": 4000}``: a
+``Bash`` call prints that many lines (more than ``Bash`` returns inline, so
+its output is saved to a file) and the task answers ``SPILLED <id>``; once
+it is sent ``CLUSTER-SPILL-READ <id>`` it calls ``Read`` on the saved file's
+last lines and answers ``SPILL-READ <id> ok`` when the last line is there
+(``missing`` otherwise).
 """
 
 from __future__ import annotations
@@ -59,6 +66,7 @@ from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse
 
 ROOT = "CLUSTER-ROOT "
 CHILD = "CLUSTER-CHILD "
+SPILL = "CLUSTER-SPILL "
 PING = re.compile(r"CLUSTER-PING (\S+) (\d+)")
 CHILD_AGENT = "cluster-child"
 
@@ -342,12 +350,32 @@ def child_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
     return _say(f"CHILD-DONE {rid}")
 
 
+def spill_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
+    rid, lines = str(spec["id"]), int(spec.get("lines", 4000))
+    run, read = f"spl-{rid}", f"spr-{rid}"
+    if run not in seen.issued:
+        return _call(run, "Bash", {"command": f"seq -f 'spill-line %g' 1 {lines}",
+                                   "description": "Print many lines"})
+    if f"CLUSTER-SPILL-READ {rid}" not in seen.text:
+        return _say(f"SPILLED {rid}")
+    saved = re.search(r"Full output saved to: (\S+)", seen.results.get(run, ("", True))[0])
+    if saved is not None and read not in seen.issued:
+        return _call(read, "Read", {"file_path": saved.group(1), "offset": lines - 1,
+                                    "limit": 5})
+    got, failed = seen.results.get(read, ("", True))
+    ok = not failed and f"spill-line {lines}" in got
+    return _say(f"SPILL-READ {rid} {'ok' if ok else 'missing'}")
+
+
 class ScriptedProvider:
     family = "scripted"
 
     async def complete(self, request: ModelRequest, on_delta: Any | None = None) -> ModelResponse:
         await asyncio.sleep(random.uniform(0, 0.05))
         seen = _Seen(list(request.messages))
+        spec = _spec(seen.text, SPILL)
+        if spec is not None:
+            return spill_step(spec, seen)
         spec = _spec(seen.text, ROOT)
         if spec is not None:
             return root_step(spec, seen)

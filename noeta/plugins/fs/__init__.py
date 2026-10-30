@@ -8,7 +8,8 @@ modification time moved is hashed, and if its bytes are neither what the
 model read nor what it was already told about, the model is told once, in a
 system turn (the prompt ``reminder/file_changed``; ``{path}`` is the file),
 with the changed lines when the model's last whole view of the file is still
-in the conversation (:mod:`noeta.plugins.fs.changes`). With those lines shown
+in the conversation (:mod:`noeta.plugins.fs.changes`). A file last read with
+an offset or a limit is not checked, as in Claude Code. With those lines shown
 the file counts as read as it is now; otherwise ``Edit`` and ``Write`` refuse
 until the model reads it again.
 
@@ -25,12 +26,15 @@ import os
 from collections.abc import Sequence
 from typing import Any
 
+import msgspec
+
 from noeta.core.events import Compacted, Recorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
+from noeta.core.types import ModelRequest
 from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
-from noeta.plugins.fs.mentions import attach_mentions
+from noeta.plugins.fs.mentions import attach_mentions, hoist_attachments
 from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.pasted import remove_task_images, save_pasted_images
 from noeta.plugins.fs.read import ReadTool
@@ -76,12 +80,15 @@ class FileTools(Extension):
     tools may write (Claude Code's ``additionalDirectories``); plan mode's
     plan directory and the task's memory directory are always among them.
     ``mentions``: attach the files the person names with ``@path`` (default
-    on)."""
+    on). ``home``: the person's home directory, which ``@~/…`` names (a
+    front end on the person's machine sets it; unset, as on a server, ``~``
+    is not expanded)."""
 
     name = FS
 
     def __init__(self, tools: Sequence[str | Tool] | None = None, *,
-                 write_roots: Sequence[str] = (), mentions: bool = True) -> None:
+                 write_roots: Sequence[str] = (), mentions: bool = True,
+                 home: str | None = None) -> None:
         if tools is None:
             tools = list(_BY_NAME)
         unknown = [t for t in tools if isinstance(t, str) and t not in _BY_NAME]
@@ -89,6 +96,7 @@ class FileTools(Extension):
             raise ValueError(f"FileTools: unknown tools {unknown}; known: {list(_BY_NAME)}")
         extra = tuple(os.path.expanduser(d) for d in write_roots)
         self.mentions = mentions
+        self.home = home
 
         def roots(ctx: Any) -> list[str]:
             return [*extra, str(plans_dir()), *memory_dir(ctx.state)]
@@ -109,9 +117,16 @@ class FileTools(Extension):
             view.record(self.name, KIND_FORGET_RANGES, {})
         await remove_task_images(view, recorded)
 
+    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+        st = view.ext_state(self.name)
+        if not isinstance(st, FsState) or not st.attached:
+            return request
+        messages = hoist_attachments(request.messages, frozenset(st.attached))
+        return msgspec.structs.replace(request, messages=messages)
+
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         if self.mentions:
-            await attach_mentions(view)
+            await attach_mentions(view, self.home)
         await save_pasted_images(view)
         st = view.ext_state(self.name)
         if not isinstance(st, FsState):
@@ -122,6 +137,8 @@ class FileTools(Extension):
         if view.env is None:
             return out
         for path, read in list(st.reads.items())[-CHANGED_FILES_CHECKED:]:
+            if read.window:
+                continue
             try:
                 stat = await view.env.stat(path)
                 if stat is None or stat.is_dir or stat.mtime == read.mtime:

@@ -31,13 +31,13 @@ from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 from noeta.plugins.hooks.config import Matcher, parse_hooks, read_settings
 from noeta.plugins.hooks.dispatch import (
-    BLOCK_LABEL,
     CONTEXT_LABEL,
     NAME,
     Dispatcher,
     HookState,
     Read,
     agent_fields,
+    blocking_text,
     fold,
 )
 from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
@@ -256,9 +256,10 @@ class Hooks(Extension):
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a PostToolBatch hook stopped "
                                                               "the turn")
-        return [Reminder(text=f"PostToolBatch{label}: {t}", kind="context")
-                for r in reads for label, t in ((BLOCK_LABEL, r.block), (CONTEXT_LABEL, r.context))
-                if t]
+        out = [Reminder(text=blocking_text("PostToolBatch", r), kind="context")
+               for r in reads if r.block and r.block.strip()]
+        return out + [Reminder(text=f"PostToolBatch{CONTEXT_LABEL}: {r.context}", kind="context")
+                      for r in reads if r.context]
 
     async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
         # Before every model call, not only a turn's first: a message sent
@@ -331,10 +332,8 @@ class Hooks(Extension):
             event = "PostToolUse"
             payload = {**base, "tool_response": {"text": text, "is_error": False}}
         reads = await self._d.run(event, view, payload, call=call)
-        blocks: list[str] = []
         notes: list[str] = []
         for r in reads:
-            blocks.extend(n for n in (r.block,) if n)
             notes.extend(n for n in (r.context,) if n)
             if event == "PostToolUse":
                 replaced = r.specific.get("updatedToolOutput")
@@ -345,7 +344,7 @@ class Hooks(Extension):
                     output = msgspec.structs.replace(output, content=[Text(text=shown)])
             if r.stop is not None:
                 await self._d.stop_turn(view, r.stop)
-        self._d.context(view, "feedback", f"{event}:{call.name}{BLOCK_LABEL}", blocks)
+        self._d.blocks(view, "feedback", f"{event}:{call.name}", reads)
         self._d.context(view, "feedback", f"{event}:{call.name}{CONTEXT_LABEL}", notes)
         return output
 
@@ -569,7 +568,8 @@ class Hooks(Extension):
         reads = await self._d.run(event, view, payload, transcript=_answered(view.state.messages))
         if any(r.stop is not None for r in reads):
             return None
-        reasons = [n for r in reads for n in (r.block, r.context) if n]
+        reasons = [n for r in reads for n in (
+            blocking_text(event, r) if r.block else None, r.context) if n]
         if not reasons:
             return None
         view.record(self.name, "stop_blocked", {"since": since, "event": event})

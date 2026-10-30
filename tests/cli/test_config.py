@@ -80,6 +80,16 @@ def test_from_settings_applies_the_tables(home: Path) -> None:
         str(home / "settings.json"), str(home / "managed" / "managed-settings.json"))
 
 
+@pytest.mark.parametrize("front_end", [True, False])
+def test_only_a_front_end_names_the_persons_home_for_mentions(home: Path,
+                                                              front_end: bool) -> None:
+    (home / "config.toml").write_text(
+        f'model = "m"\nprovider = "anthropic"\napi_key = "k"\nstore = "sqlite:///{home / "t.db"}"\n')
+    app = from_settings(load_settings(), cwd=str(home), own_tasks_only=front_end)
+    [fs] = [e for e in app.runtime.agents["main"].extensions if e.name == "fs"]
+    assert fs.home == (str(Path.home()) if front_end else None)  # type: ignore[attr-defined]
+
+
 def test_settings_files_layer_in_claude_codes_precedence(
         home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = home / "proj"

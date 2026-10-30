@@ -49,22 +49,28 @@ and reported in the README.
   restored/retracted tool definitions, a denied-tool lead and needs-auth servers, and compresses
   long name lists; noeta tells joined, returned and removed names, and MCP server instructions
   joined/changed/removed. Why: the rest belongs to CC features noeta does not have (definition
-  retraction, the auth-stub listing is already a tool), per "no features beyond CC's". The MCP
-  instructions cap of 2,048 characters is CC's truncation shape ("… [truncated]"); its exact
-  number was not read from the bundle (the constant is imported across modules), so it is the
-  value CC uses for MCP descriptions — check it when the next recording has a server with long
-  instructions.
+  retraction, the auth-stub listing is already a tool), per "no features beyond CC's". MCP
+  server instructions are cut at CC's 4,096 characters plus "… [truncated]" (bundle: the
+  instructions go through the MCP description cut, `u$()` =
+  `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH ?? 4096`; no cut for first-party HTTP servers, which
+  noeta does not have).
 ### @-mention placement (D2)
 - Others: CC attaches the Read call and result as meta messages hoisted ahead of the person's text; pi's CLI inlines `<file>` text into the prompt; dsh attaches nothing and tells the model to read the path.
-- noeta: CC's two meta blocks, read in the task through `Read`, placed after the person's text in the same user turn.
-- Why: the attachment is made inside the task once the message is in its append-only log; moving it ahead would rewrite a logged message. The wire turn is the same; only the block order differs.
+- noeta: CC's two meta blocks, read in the task through `Read`, logged after the person's message and moved ahead of its text when the request is built (the fs plugin's `before_model`, by each attachment's content digest in its record), as CC sends them. (Review fix, 2026-10-29: first shipped after the text; the "can't move it" reason held only for the log, not the request.)
 - Evidence: `tests/plugins/fs/test_mentions.py`; DeepSeek V4.1, edit_not_write with and without `@shop/pricing.py`, 9 trials each: Read calls on the file 0.89 -> 0, requests 4.22 -> 2.89, input tokens 44.8k -> 30.9k, score 0.92 -> 1.00.
+
+### @-mentions read only what the model could read unasked (review-p1-safety P1)
+- Others: CC expands mentions only in what the person types into their own terminal, and checks only deny rules (`LYn(path, ctx, "person")`); no PreToolUse hook runs for an attachment. pi inlines what its CLI user names; dsh attaches nothing.
+- noeta: a file is attached only when the task's gates would let the model's `Read` of it through without asking; an Ask (outside the working directories, through a link out of them, a rule) names the file instead, so the model's own `Read` goes through approval; a deny leaves it out. A message carrying a channel's frame (`from_channel`, the `<channel source=` mark `framed` puts on what an outside sender wrote, anywhere in the text so a sender cannot close it early) is not expanded; there is no other origin mark (a channel's text is posted as `human`), so `deliver` frames every message not framed yet (`source` / `sender` arguments, default `channel`), as CC's channel messages always arrive framed (re-review P3: safer than a docstring rule a channel could miss). `~` is expanded only with `FileTools(home=)`, which the `noeta` command sets for front ends (`own_tasks_only`), never for `serve` / `worker`. The hooks plugin's gate is not run for the attachment's `Read` (CC's behaviour): it runs the person's commands, and with the allow-only rule and owner-only expansion it can no longer be the only thing between a third party and a file, so skipping it opens nothing a hook guarded against for anyone but the owner, who can read the file anyway. Other plugins' gates still run (a host's own gate keeps its say).
+- Why: noeta takes messages from servers and channels; CC's deny-only check would let any chat member read the worker's files (`~/.ssh`, `~/.noeta`) with no one approving.
+- Evidence: `tests/plugins/fs/test_mentions.py` (outside / `../` / link in default, plan, acceptEdits; channel frame incl. an early `</channel>`; `~` with and without `home`; no hook command; directory listed whole), `tests/cli/test_config.py::test_only_a_front_end_names_the_persons_home_for_mentions`; `parity/deviations.md` Attachments row.
 
 ### Changed-file snippet source (B6)
 - Others: CC diffs against the content it keeps for every read file; pi and dsh send no such note.
-- noeta: the changed lines are worked out against the model's last whole `Read` result still in the conversation; without one the note says they are not shown.
+- noeta: the changed lines are worked out against the model's last whole `Read` result still in the conversation; without one the note says they are not shown. The snippet itself is CC's (`oKs`): 8 context lines, blocks one after another, cut at 8,192 characters with `... [N lines truncated] ...`; a file last read with an offset or a limit gets no note, as in CC.
+- Line numbers: those of the file now; CC numbers each block from its start in the old file, which is off after an earlier block that changed the line count. A number the model cannot find in the file is the one thing numbering must avoid.
 - Why: the log is the only state a task carries between workers; a stored copy of every read file would double the log for reads.
-- Evidence: `tests/plugins/fs/test_changed_reminder.py` (a change shown after the step that made it; `Edit` with no new `Read`).
+- Evidence: `tests/plugins/fs/test_changed_reminder.py` (a change shown after the step that made it; `Edit` with no new `Read`; no note for a windowed read; 8 lines; the cut).
 
 ### Date without the user's zone (C4)
 - Others: CC uses the client's zone, else a UTC-labelled date (`assumedUtc`); dsh stamps the requester's zone; pi gives no date.
@@ -73,7 +79,7 @@ and reported in the README.
 - Evidence: `tests/plugins/context/test_date_change.py`; the full DeepSeek V4.1 eval (which sends no zone, so every request carries the UTC form) scored 0.927 overall against 0.919 on main.
 
 ### Smaller recorded differences
-- Mentioned directory listing capped at 1,000 entries; hook blocking feedback names no command; visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
+- Visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
 
 ### Extension points (Phase 2)
 - Scope: the item-by-item review (pi e7a0df2, dsh f3803c96) found nine points to add (CC has them, multi-machine needs them, or they are the mechanism); the owner answered the open five on 2026-10-29: userConfig/`settings.json`, Python plugins shipping `skills/` `commands/` `agents/`, `InstructionsLoaded`, open model families yes; `statusLine` no (left to plugins). Every other row is have or won't, with its reason, in `docs/extending.md`.
@@ -88,21 +94,39 @@ and reported in the README.
 - Review fixes (2026-10-29, review-ext-points): a plugin's option references are checked per MCP server and per hook when the plugin is read, so a secret one machine cannot read (keyring lacking it or no backend, a variable unset) leaves out only what uses it, with a notice naming the plugin, logged on a worker; `PreToolUse` / `PermissionRequest` / `UserPromptSubmit` hooks refuse (exit 2, `onFailure: block`) instead of disappearing; `Stop`-like events are left out, not refused, because refusing a stop would loop the turn. Every hook of a plugin gets each option this machine can read as `CLAUDE_PLUGIN_OPTION_<KEY>`, as CC; one it cannot read is left unset with a notice, and only a hook that names it is left out or refuses. Plugin-authored hooks and MCP servers may name only `{keyring:noeta-plugin/<plugin>/…}`; `{env:}` stays allowed (CC expands environment variables in `.mcp.json`). `plugin add` removes what it copied when configuring fails. Readers skip unknown delta kinds; versions before this one cannot, so the CHANGELOG gives the upgrade order. The digest model stays the task's (`ctx.model`), not the main request's after `before_model`: that model is not in the fold, and adding it is a fold-version change for one edge case.
 ### Reply result budget order (S3)
 - Others: CC persists the largest fresh results of one user message once they pass 200,000 characters together (`Udr`), freezing each choice by `tool_use_id`; pi and dsh have no per-message budget.
-- noeta: the same budget and `<persisted-output>` form, decided per result as each call finishes (a running total shared by calls that run together), so the results that arrive past the budget are saved, not necessarily the largest; nothing is saved for the budget without a spill directory.
+- noeta: the same budget and `<persisted-output>` form, decided per result as each call finishes (a running total shared by calls that run together), so the results that arrive past the budget are saved, not necessarily the largest; nothing is saved for the budget without a spill directory. The runner saves to its own file, `<call>.result.txt` (`result_spill_path`), and never saves again a result that already points at its saved whole (a tool's own `<persisted-output>`: Bash, MCP, WebFetch, WebSearch); before the review fix (review-p1-safety P1) it wrote the tool's preview over the tool's own `<call>.txt`, losing the full output.
 - Why: each call's result is logged as it finishes (crash safety); a largest-first choice would have to hold every result of the reply unlogged, or rewrite logged ones.
-- Evidence: `tests/core/test_result_limits.py` (six 45K results: four inline, two saved, total ≤ 200K); `parity/deviations.md` row.
+- Evidence: `tests/core/test_result_limits.py` (six 45K results: four inline, two saved, total ≤ 200K; a self-saved result past the budget keeps its file whole; the runner's own file name); `parity/deviations.md` row.
 
 ### Fallback when a large result cannot be saved (S4)
 - Others: CC keeps only the first part ("only the first X are shown"); pi keeps the tail of a command's output; dsh keeps head and tail.
-- noeta: keeps the head and the tail around an elision (`<truncated-output>`).
+- noeta: with no spill directory, keeps the head and the tail around an elision (`<truncated-output>`). When the runner's save fails (a spill directory that cannot be written) the result stays whole, as CC keeps it (`Er`: a failed persist returns the content unchanged), for the ceiling and the reply budget alike (review fix: it was cut to ~2K with no file to point to, against this spec's own "nothing is saved for the budget").
 - Why: a build or test log's error is at its end; two of the three keep the end. Only a host without a spill directory reaches it (every built-in host sets one), so no eval was run for it.
-- Evidence: `parity/deviations.md` row; `tests/plugins/fs/test_output_limit.py`.
+- Evidence: `parity/deviations.md` row; `tests/plugins/fs/test_output_limit.py`; `tests/core/test_result_limits.py::test_a_result_whose_save_fails_stays_whole`.
 
 ### Sub-agent plan file (A6)
-- Others: CC gives a sub-agent of a planning conversation the plan-mode text in its sub-agent form with an agent-specific plan file name; pi and dsh have no plan mode in sub-agents.
-- noeta: the child inherits plan mode and is entered into it on start with its own plan file (a new three-word name under `<noeta home>/plans`), and gets the sub-agent text; no plan tools.
-- Why: the plan state lives in the child's own log, which can run on another worker; a name derived from the parent's would need the parent's state at the child's start.
+- Others: CC gives a sub-agent of a planning conversation the plan-mode text in its sub-agent form with the plan file `<session plan name>-agent-<agent id>.md` (`nT`); pi and dsh have no plan mode in sub-agents.
+- noeta: as CC. The parent writes its plan name into the child's config with its mode (`plan_name`, `Permissions.inherit`; a grandchild keeps the root's name), and the child plans in `<plans dir>/<name>-agent-<task id>.md` with the sub-agent text; no plan tools. (The earlier "needs the parent's state" reason did not hold: the parent writes the child's config.)
 - Evidence: `test_a_sub_agent_of_a_planning_task_plans_too`.
+
+### Where a task's own files live across workers (review-p1-safety P2)
+- Others: CC keeps tool results, plans and auto memory as files in its config directory (`~/.claude/projects/<slug>/…`, `plans/`), one machine; its diskless mode keeps none and refuses to save. pi and dsh run on one machine.
+- noeta: they stay files, read and written through the task's exec env, at paths recorded in the task's log (the `<persisted-output>` path, the memory plugin's `dir`, the plan's `path`), so they follow the task: Read of the spill root and the recorded plan file asks for nothing (`TaskView.spill_dir`; CC's "Tool result files / Plan files … are allowed for reading"), the memory plugin lists and reads its directory through the env when the env is not this machine (`toolkit/context.read_task_text` / `task_files`). With a remote exec env nothing besides the env is shared; with the local env on a shared filesystem the four directories of noeta's home go on the mount (docs/server.md, which states it precisely).
+- Not the store: the model reaches these files with Read, Edit and Bash (`grep` a saved log), which a store row cannot serve without a second file system in every tool; a copy of each saved output in the log would put megabytes into every fold and every `/watch` reader, the opposite of why it is saved.
+- Cleanup: CC deletes after `cleanupPeriodDays` (30). noeta: a host sweeps its spill root at start and daily (`noeta/host/spill_sweep.py`): a directory whose task and tree ended and that was not written for 30 days goes; an open task keeps its files however long it sleeps, and a continuation (`history_from`) of an ended task still reads its recent ones, which removal at task end would break. A remote env's root is the host's to sweep.
+- Evidence: `tests/host/test_spill.py` (read without asking; sweep), `tests/plugins/context/test_memory.py::test_with_a_remote_exec_env_memory_lives_in_it`, cluster `test_a_saved_output_is_read_back_on_another_worker` (every worker killed between the save and the Read; default mode, no approval).
+
+### Image decode cap (review-p1-safety P2)
+- Others: CC decodes with sharp (its own pixel limit); pi and dsh pass images through.
+- noeta: an image whose header (or Pillow's opened size, for formats without a known header) names more than 50 million pixels is refused before decoding; Bash and MCP images are fitted off the event loop. Why: a 640 KB PNG of 13000x13000 px took 1.4 GB and 4.9 s, below Pillow's own 178M limit; 50M is ~7000 px a side, far over the 2000 px the model gets.
+- Evidence: `tests/core/test_images.py`, `tests/plugins/shell/test_bash.py`, `tests/plugins/mcp/test_results.py` (decode thread).
+
+### Memory carve-out and nested skills (review-p1-safety P2)
+- Memory: CC's auto-memory carve-out is judged on the literal path, with a list of path segments it never allows below the memory directory. noeta judges where the write lands: the resolved path in the resolved memory directory, a memory directory inside the working directory reached through no link, nothing protected below it; a planted `.noeta/agent-memory/a -> ..` no longer writes `.noeta/agents/` unasked, and a link out of the memory directory no longer reads unasked. Plan mode still writes memory `.md` files, as the carve-out shipped (CC's check sits ahead of its mode checks; not re-verified per mode). Evidence: `tests/plugins/context/test_memory.py` (two link tests).
+- Nested skills: CC skips a gitignored skills directory (`git check-ignore`, "Skipped gitignored skills dir") and lists dynamic skills after the others, keeping the first of a name. noeta does both (nested directories first in the merge, so any other skill of the name wins; only unshadowed names announced). Evidence: `tests/plugins/context/test_skills.py` (two tests).
+### Pending A/B (an A/B run decides these next; behaviour unchanged until then)
+- S2, S4, M7, C7 and D6 are decided: "A/B results" below.
+- **Plan-mode full text wording (B5).** CC: 4,908 characters. noeta: its own wording, 2,832 bytes, now with the rules it had dropped restored (2026-10-29, ctx-fix-fidelity); the remaining difference is wording and emphasis. A/B: plan-mode scenarios (the plan file written, `ExitPlanMode` instead of a text question, Explore agents used), CC's text against noeta's, 9 trials each; keep noeta's only if it is not worse.
 
 ### Skill usage ranking wiring (owner, 2026-10-29)
 - Others: CC ranks the over-budget skill listing by decayed use across sessions, always on; pi and dsh do not rank.
@@ -113,6 +137,40 @@ and reported in the README.
 ### Parity replay usage
 - The replay's fake model reported zero input tokens; with the threshold now anchored on reported usage (C2) it would never compact. It reports noeta's own estimate of each request's text, as a real model reports its count; `make parity` stays at 0 mismatches.
 - The comparator names the opening of CC's too-large-file note (`names.json`), so it is split as its own kind instead of merging into the token-counter part, which is why the missing note (C9) went unseen; m3's contract re-distilled from the r2 recording changes only those layouts. A general "kind CC sends and noeta never does" check already existed (`diff_layout`); it could not fire on a part merged into another.
+
+### Benchmark (Phase 4)
+- Benchmarks: Terminal-Bench 4.0 (63 of 66 tasks; 3 need a GPU) and SWE-rebench 07-2026 (111).
+  Why: TB4 is the current headline board with Claude Code as its reference agent and is not
+  saturated; SWE-rebench is fresh (issues after the model's data) and cheap per task. TB 2.1 is
+  the smoke loop only.
+- Comparison: noeta against harbor's `claude-code` agent (CC 2.1.312) in one harbor job — same
+  model (`opensource/deepseek_v4_1_flash`, gateway Anthropic endpoint), effort `high`, tasks,
+  timeouts, interleaved trials, concurrency split evenly. Recorded requests agree on
+  `max_tokens` 65536, `thinking` adaptive, `output_config.effort` high, no temperature; CC gets
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = noeta's 1M window (2.1.312 honours it for non-Claude ids,
+  else it assumes 200k). The one wrapper over CC: both agents' process trees are stopped at
+  the agent timeout (harbor only cancels its `docker exec`; the agent kept editing during a
+  same-container verify).
+- Fairness of the environment: noeta installs into its own venv under `/opt/noeta-bench`
+  from uploaded static uv, rg and a python-build-standalone CPython; the task's interpreter
+  and packages are never touched.
+- Nothing uploaded: harbor telemetry off; CC telemetry, error reporting, auto-updater,
+  non-essential traffic and the WebFetch domain preflight off; local dataset copies (a
+  registry run records a download at harbor's hub); LiteLLM's price-map download off; network
+  logs of the smoke runs show only the gateway, the corp proxy (package and install
+  downloads) and task-driven traffic. The gateway key is redacted from job dirs.
+- Nothing else touched: each run builds every image through its own buildx builder, removed
+  with all it pulled at the end; prebuilt task images come in via a run-local dataset copy
+  whose Dockerfiles are `FROM <prebuilt>` (compose sidecars' `image:` too, every service kept),
+  so they live in the trial's compose project;
+  leftovers are removed only when compose labels or container mounts prove them the run's.
+  Pulled images are never removed by name or digest: another program may hold the same one.
+  Cost of that: disk peaks per task in flight (SWE-rebench median ~2 GB on docker's disk with
+  the builder's state elsewhere), so concurrency is sized to free space.
+- Measures: pass rate (setup failures counted, infrastructure errors shown apart), paired
+  per-task difference with its standard error, tokens from each agent's own records
+  (noeta: its store — sub-agents and compaction included; side calls such as titles are in
+  neither agent's count), time, and cost at DeepSeek's own list price (read 2026-10-30).
 
 ### A/B results (2026-10-29)
 Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, both ran on DeepSeek V4.1 (`opensource/deepseek_v4_1_flash`, Anthropic wire), 9 trials per scenario and arm; a tie (within noise) goes to CC unless noeta's saves a measured amount of tokens with no score loss. Driver (not committed; the two scenarios worth keeping are): `evals.engine.run_trial` with each arm's plugin settings or a patch for the run only; every model call counted, side calls included. Results: `evals/results/ab-*.json` (git-ignored). Input tokens are per trial, cached included.
@@ -141,7 +199,7 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - [x] DeepSeek V4.1 eval of the existing 13 scenarios on main, 9 trials, archived.
 
 ### Phase 1: context audit (branch `ctx-*`)
-- [ ] Per-area comparison CC / pi / dsh / noeta: system prompt, reminders, environment and
+- [x] Per-area comparison CC / pi / dsh / noeta: system prompt, reminders, environment and
       git snapshot, attachments and images, skills, memory, project files, tool definitions
       and deferred tools, compaction, sub-agents, plan mode, todos.
 - [ ] Revert every unexplained difference to CC; adopt pi/dsh where better, each with numbers.
@@ -154,13 +212,13 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - [x] Plugin authoring steps no more than pi's.
 
 ### Phase 3: eval coverage (branch `eval-coverage`)
-- [ ] A scenario for each area: skills, reminders, memory, compaction continuation,
+- [x] A scenario for each area: skills, reminders, memory, compaction continuation,
       sub-agents and parallel, plan mode, todos, permissions and approval, hooks, MCP,
       prompt injection, tool selection, ask vs act.
-- [ ] 9 trials each on DeepSeek V4.1; results and baseline archived.
+- [x] 9 trials each on DeepSeek V4.1; results and baseline archived.
 
 ### Phase 4: benchmark
-- [ ] Pick one or two current benchmarks, with reasons.
+- [x] Pick one or two current benchmarks, with reasons.
 - [ ] Run noeta and, where possible, CC on DeepSeek V4.1; version, samples, runs and cost in
       the README.
 
@@ -241,4 +299,11 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - 2026-10-29 A5 (ctx-compact-plan): the 16-Agent-calls-per-reply cap is gone (no such cap in CC; no kernel reason: each call stages its child in its own append). Rule `tool.Agent.23`.
 - 2026-10-29 UsageRank (ctx-compact-plan, owner decision): the `noeta` command passes its store's client to every skills plugin (`usage_from`), so the listing ranks by use by default. Rule `main.env.17`.
 - 2026-10-29 ctx-compact-plan gates: `make check` green (2481 passed, coverage 88.51 %), `make parity` 0 mismatches (11 accepted deviations). DeepSeek V4.1, 9 trials (eval-coverage scenarios run from a local copy of that branch's `evals/`, not committed), this branch vs `best-of-three` @b9c7ca7a: memory_save 1.00 vs 0.07; plan_mode_started (local variant of plan_mode_read_only created with `permission_mode: plan`) 0.78 vs 0.00; plan_mode_read_only 1.00 vs 0.89; background_subagent_result, skill_activation 1.00 both; compaction_resume_edits 0.93 vs 1.00 (every trial ends on `autocompact_thrashing`: the scenario's 24K usable window refills within 3 calls of each summary, which is where CC's breaker stops too; at a 40K window the scenario never compacts, 0.00 by its rule, so the scenario needs a window between the two). Against `ds41-main-37fd9997`: compaction_continuity, parallel_independent_reads 1.00 (=); delegate_parallel_review 0.11 (= main, 600 s trial timeouts).
+- 2026-10-29 Review fixes (review-p1-safety, branch `ctx-fix-safety`; gates: `make check` 2541 passed, coverage 88.69 %, `make parity` 0 mismatches, `make cluster` 14/14): @-mentions attach only what the model's own `Read` could read unasked, never from a channel's message, `~` only on the person's machine, no hook command for the attachment, ahead of the person's text, directory listed whole; the runner never saves over a tool's own saved output and keeps a result whole when its save fails; spill files, plans and memory follow a task to any worker (Read of the spill root and plan unasked, memory through the exec env, ended tasks' old outputs swept after 30 days); image decode cap and off-loop decoding; memory carve-out judged on the resolved path; nested skills skip gitignored directories and shadow nothing; `make cluster` runs `python -m pytest` and fails on skips. The review's probe tests are real tests now (mentions, spill, memory).
+- 2026-10-29 Re-review fixes (`ctx-fix-safety`): a task's spill directory is named by its id when that is a safe file name, else the id made safe plus a 10-hex hash (`task_spill_dir`), so two ids never share one; every save marks the directory with the task id (`.task-id`, `save_spilled` / `mark_spill_dir`) and the sweep goes by the marker only (no marker, or a task the store does not know: kept), so an open `chat:room1` task keeps its files. `deliver` frames every unframed message (re-review P3). Probe `test_probe_fix2.py` is `tests/host/test_spill.py::test_an_ended_tasks_old_saved_outputs_are_swept` and `tests/plugins/fs/test_mentions.py` (outside path and `~` on a server).
+- 2026-10-29 ctx-fix-fidelity (review-p1-fidelity fixes, from `best-of-three` @0d96a993): changed-file snippet with CC's 8 context lines and 8,192-character cut, no note after a windowed read; new, edited and nested-found skills listed with descriptions before the next model call (one checksum command over the SKILL.md files per call; nested ones no longer recorded as listed); sub-agent plan file `<parent plan name>-agent-<task id>.md`; hook blocking feedback names the command (deviation row removed); Bash 30,000, Monitor and ListAgents 10,000, ScheduleWakeup 1,000, ReportFindings 256 declared on the tools; plan-mode cadence checked per model call; MCP server instructions cut at 4,096 (read from the bundle); the memory index read again with each message; the plan-mode rules cut from the full text restored. Pending A/B section added to Decisions for S2, S4, B5, M7, C7, D6. The directory @-listing cap is left to ctx-fix-safety.
+- 2026-10-29 ctx-fix-fidelity gates: `make check` green (2523 passed, coverage 88.67 %), `make parity` 0 mismatches (11 accepted deviations, the hook-feedback row removed). DeepSeek V4.1, 9 trials, 9 scenarios (eval-coverage `evals/` run from a local copy, not committed), this branch vs `best-of-three` @0d96a993 (session scratchpad `fid/ds41-fix-fidelity*.json`): overall 0.919 vs 0.900; skill_activation, skill_follow, memory_save, memory_recall, plan_mode_read_only, plan_mode_started, mcp_tool_use 1.00 both; changed_file_reminder 0.73 vs 0.78 (every trial got the note and answered with the new value; the score differs only in whether the model also re-read the file, 3 vs 4 of 9); hook_block_adapts 0.53 vs 0.32 (PreToolUse text unchanged; base had more 420 s timeouts). 458 vs 515 requests, 5.6M vs 6.3M input tokens.
+- 2026-10-30 Phase 4 harness on branch `bench-2026` (`bench/compare.py`, `bench/harbor_adapter.py`): smoke 2+2 tasks both agents graded; gateway took 32 parallel calls with no 429; review fixes (own venv, CC context window, store usage, WebFetch preflight, run-owned builder and cleanup). Full run not started.
+- 2026-10-30 Phases 1–3 integrated on best-of-three (ctx-skills-memory, ctx-attach-env, ctx-compact-plan, ctx-fix-safety, ctx-fix-fidelity, ext-points, bench-2026; eval-coverage via main); each reviewed independently until no P0/P1. Gates @a461f768: `make check` 2563 passed; `make parity` 0 mismatches (11 accepted deviations); `make cluster` 14/14; `make e2e` 7 passed; DeepSeek V4.1 eval 29 scenarios x 9 trials overall 0.944 vs baseline 0.868 (`evals/results/ds41-best-of-three-19751ff9.json`, local), the known gaps memory_save and plan_mode_started 0→1.00; changed_file_reminder 1.00→0.64 traced to its scorer requiring a re-read the note now makes unnecessary (the note carries the changed lines, as CC's), rescored: 9/9 1.00.
+- 2026-10-30 Eval results stay local (`evals/results/`, git-ignored: they hold machine paths); the baseline (`evals/baseline.json`) and the per-scenario numbers in this log are the archive.
 - 2026-10-29 A/B of the undecided context choices on `ab-context` (S2, S4, M7, C7, D6, C14, C15; Decisions "A/B results"): listing budget is CC's (characters, no cap); short-form degrade kept; recall stays off; git snapshot given again when branch or commit moved; pasted images saved with their path; compaction stays CC's. New eval scenarios `git_snapshot_after_switch`, `pasted_image_into_repo` (baseline rows from 9 trials each). Tests get their own `NOETA_HOME` (one wrote to the user's). `make check` green, `make parity` 0 mismatches.

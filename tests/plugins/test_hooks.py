@@ -320,7 +320,8 @@ async def test_post_tool_use_feedback_follows_the_result(tmp_path: Path) -> None
                                   [reply("", ("Read", {"file_path": "a.txt"})), reply("ok")])
     second = provider.requests[1].messages
     assert second[-1].origin == "system"
-    assert second[-1].text == "PostToolUse:Read hook blocking error: lint: 2 warnings"
+    assert second[-1].text == ("PostToolUse:Read hook blocking error from command: "
+                               "\"echo 'lint: 2 warnings' >&2; exit 2\": lint: 2 warnings")
     assert second[-2].role == "user" and second[-2].content[0].call_id  # type: ignore[union-attr]
 
 
@@ -331,7 +332,8 @@ async def test_stop_hook_keeps_the_model_going_then_lets_it_stop(tmp_path: Path)
     hooks = {"Stop": _hook(script)}
     provider, client, tid = await _run(tmp_path, hooks, [reply("done"), reply("tests pass")])
     assert len(provider.requests) == 2
-    assert provider.requests[1].messages[-1].text == "Run the tests before you stop."
+    assert provider.requests[1].messages[-1].text == (
+        f'Stop hook blocking error from command: "{script}": Run the tests before you stop.')
     assert (await client.get(tid)).status == "waiting"
 
 

@@ -141,7 +141,7 @@ async def test_a_change_made_by_a_command_is_told_after_its_step_and_can_be_edit
     work = tmp_path / "w"
     work.mkdir()
     src = work / "calc.py"
-    lines = [f"x{n} = {n}" for n in range(1, 21)]
+    lines = [f"x{n} = {n}" for n in range(1, 31)]
     src.write_text("\n".join(lines) + "\n")
     changed = list(lines)
     changed[9] = "x10 = 100"
@@ -160,16 +160,36 @@ async def test_a_change_made_by_a_command_is_told_after_its_step_and_can_be_edit
     client = Client(store)
     tid = await client.create("a", "go")
     await rt.run_until_idle()
-    # Told in the very next request, with the changed line and its neighbours.
+    # Told in the very next request, with the changed line and 8 lines either side.
     [note] = _notes(provider.requests[2])
-    assert note.endswith("numbered as in the file now:\n"
-                         "7\tx7 = 7\n8\tx8 = 8\n9\tx9 = 9\n10\tx10 = 100\n"
-                         "11\tx11 = 11\n12\tx12 = 12\n13\tx13 = 13")
+    shown = [f"{n}\tx{n} = {100 if n == 10 else n}" for n in range(2, 19)]
+    assert note.endswith("numbered as in the file now:\n" + "\n".join(shown))
     # With the change shown, the edit needs no new Read.
     results = [r.event.result for r in await client.events(tid)
                if isinstance(r.event, ToolFinished)]
     assert [r.is_error for r in results] == [False, False, False], results[-1].text
     assert "x10 = 10\n" in src.read_text()
+    await store.close()
+
+
+async def test_a_file_read_in_part_gets_no_note(tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    src = work / "notes.txt"
+    src.write_text("a\nb\nc\n")
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(src), "offset": 2, "limit": 1})),
+        reply("", ("Format", {})),
+        reply("done"),
+    ])
+    agent = Agent(name="a", model="m", tools=[Formatter(src, "a\nB\nc\n")],
+                  extensions=[FileTools()])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+    await Client(store).create("a", "go")
+    await rt.run_until_idle()
+    assert _notes(provider.requests[2]) == []  # Claude Code sends none for a windowed read
     await store.close()
 
 
@@ -181,19 +201,20 @@ async def test_without_a_whole_view_in_the_conversation_the_changes_are_not_show
     src.write_text("a\nb\nc\n")
     store = SqliteStore(str(tmp_path / "t.db"))
     provider = ScriptedProvider([
-        reply("", ("Read", {"file_path": str(src), "offset": 2, "limit": 1})),
+        reply("", ("Read", {"file_path": str(src)})),
+        reply("", ("Edit", {"file_path": str(src), "old_string": "c", "new_string": "C"})),
         reply("", ("Format", {})),
         reply("", ("Edit", {"file_path": str(src), "old_string": "B", "new_string": "b"})),
         reply("done"),
     ])
-    agent = Agent(name="a", model="m", tools=[Formatter(src, "a\nB\nc\n")],
+    agent = Agent(name="a", model="m", tools=[Formatter(src, "a\nB\nC\n")],
                   extensions=[FileTools()])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
     client = Client(store)
     tid = await client.create("a", "go")
     await rt.run_until_idle()
-    [note] = _notes(provider.requests[2])
+    [note] = _notes(provider.requests[3])  # the last whole view is older than the edit
     assert note.endswith("The changes are not shown here; read the file if you need what "
                          "it holds now.")
     results = [r.event.result for r in await client.events(tid)
@@ -208,7 +229,19 @@ def test_changed_lines_and_the_view_they_are_worked_out_against() -> None:
 
     assert changed_lines("a\nb", "a\nB") == "1\ta\n2\tB"
     assert changed_lines("a\nb\nc", "a\nc") == "1\ta\n2\tc"  # a removal shows where
-    assert changed_lines("x", "y\n" * 3000) is None  # too long to show
+    assert changed_lines("a", "a") is None
+    # Changes far apart are separate blocks, one after the other (Claude Code's join).
+    far = [str(n) for n in range(40)]
+    moved = [*far[:2], "B", *far[3:30], "Z", *far[31:]]
+    assert changed_lines("\n".join(far), "\n".join(moved)) == "\n".join(
+        [f"{n + 1}\t{moved[n]}" for n in range(0, 11)]
+        + [f"{n + 1}\t{moved[n]}" for n in range(22, 39)])
+    # Past 8,192 characters the snippet is cut at a line end with a count.
+    long = changed_lines("x", "\n".join("y" * 99 for _ in range(200)))
+    assert long is not None and len(long) < 8300
+    kept, marker = long.rsplit("\n", 1)
+    assert len(kept) <= 8192 and kept.endswith("y" * 99)
+    assert marker == f"... [{200 - kept.count(chr(10)) - 1} lines truncated] ..."
 
     def call(i: int, name: str, **input: Any) -> list[Message]:
         return [Message(role="assistant", content=[ToolUse(id=f"c{i}", name=name, input=input)]),

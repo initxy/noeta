@@ -102,6 +102,10 @@ TURN_REGISTRIES_KEEP = 256
 #: their calls, newest last.
 ERASABLE_KEEP = 32
 FORKS_KEEP = 32
+#: One checksum of every ``SKILL.md`` (paths and text) under the directories
+#: given as arguments: changes when a skill is added, removed or edited.
+_FINGERPRINT = ('for d in "$@"; do [ -d "$d" ] && find -L "$d" -type f -name SKILL.md '
+                '-print -exec cat {} + ; done 2>/dev/null | cksum')
 #: Calls whose file makes a skill with matching ``paths`` available.
 FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
@@ -130,8 +134,9 @@ INVOKED_ORDER = 20
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
 WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
-#: The tier of a skill directory found below the working directory: above
-#: the workspace's own.
+#: The keep-order tier of a skill directory found below the working
+#: directory. Such a skill never shadows another of the same name (Claude
+#: Code lists the others first and keeps the first of a name).
 NESTED_TIER = 5
 #: Announces the skills of a directory found below the working directory.
 NESTED_SKILLS = "Skills found in {dir}, now available through the Skill tool:"
@@ -275,6 +280,8 @@ class Skills(Extension):
         #: The registry a task's turn last loaded, by task: ``(turn key,
         #: registry)`` (see :meth:`turn_registry`).
         self._turn_registries: dict[str, tuple[tuple[Any, ...], SkillRegistry]] = {}
+        #: What the task's ``SKILL.md`` files held at its last model call.
+        self._fingerprints: dict[str, str] = {}
         #: Fork skills whose commands wait until every check passed the
         #: ``Skill`` call: ``(task, call id)`` -> ``(Agent input, activation)``.
         self._forks_due: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
@@ -284,8 +291,9 @@ class Skills(Extension):
     def tiers(self, cwd: str, nested: Sequence[str] = ()) -> list[tuple[str, int]]:
         """``(directory, keep-order tier)``, low precedence first; ``nested``
         are skill directories found below the working directory (deepest
-        last)."""
+        last), below every other."""
         out = [(d, 0) for d in self.dirs]
+        first: list[tuple[str, int]] = []
         if self.global_agents_dir is not None:
             out.append((self.global_agents_dir, 1))
         if self.global_dir is not None:
@@ -297,7 +305,7 @@ class Skills(Extension):
                      os.path.join(cwd, WORKSPACE_SKILLS_DIR)]
             if self.trusted is None or self.trusted(cwd):
                 out += [(gated[0], 3), (gated[1], 4)]
-                out += [(d, NESTED_TIER) for d in nested]
+                first = [(d, NESTED_TIER) for d in nested]
             elif cwd not in _warned_untrusted:
                 skipped = [d for d in gated if os.path.isdir(d)]
                 if skipped:  # nothing is skipped where the directories do not exist
@@ -306,7 +314,7 @@ class Skills(Extension):
                     _warned_untrusted[cwd] = None
                     _log.warning("workspace %s is not trusted; skipping its skill "
                                  "directories: %s", cwd, ", ".join(skipped))
-        return out
+        return first + out
 
     async def registry(self, env: ExecEnv, state: Any = None) -> SkillRegistry:
         """The skills ``env`` sees, with the nested directories ``state``
@@ -314,12 +322,14 @@ class Skills(Extension):
         return await load_registry(env, self.tiers(env.cwd, nested_dirs(state)))
 
     async def turn_registry(self, view: TaskView) -> SkillRegistry:
-        """The skills as found once per turn of the task: loaded again when
-        new input was taken (a skill installed since shows up with the
-        person's next message), not after every file a call touched."""
+        """The skills as found for the task: loaded again when new input was
+        taken, when the skill directories changed (a nested one found) or
+        when :meth:`_refresh` saw their ``SKILL.md`` files change before a
+        model call, not after every file a call touched."""
         env = task_env(view.env, view.state.config)
         tiers = self.tiers(env.cwd, nested_dirs(view.ext_state(self.name)))
-        key = (view.state.inbox_read, env.cwd, tuple(tiers))
+        key = (view.state.inbox_read, env.cwd, tuple(tiers),
+               self._fingerprints.get(view.task_id))
         cached = self._turn_registries.pop(view.task_id, None)
         if cached is not None and cached[0] == key:
             registry = cached[1]
@@ -329,6 +339,28 @@ class Skills(Extension):
         while len(self._turn_registries) > TURN_REGISTRIES_KEEP:
             del self._turn_registries[next(iter(self._turn_registries))]
         return registry
+
+    async def _refresh(self, view: TaskView) -> None:
+        """Note what the task's ``SKILL.md`` files hold now (one command over
+        every skill directory), so a skill installed or changed mid-turn is
+        found before the next model call (Claude Code watches the
+        directories)."""
+        env = task_env(view.env, view.state.config)
+        roots = [root for root, _tier in self.tiers(env.cwd, nested_dirs(
+            view.ext_state(self.name)))]
+        try:
+            out = await env.run(["sh", "-c", _FINGERPRINT, "sh", *roots], timeout=10,
+                                output_cap=256)
+        except Exception:  # noqa: BLE001 — any exec env failure skips the look, not the call
+            return
+        now = out.stdout.decode("ascii", errors="replace")
+        cached = self._turn_registries.get(view.task_id)
+        if view.task_id not in self._fingerprints and cached is not None:
+            # The first look: the registry loaded this turn stands for it.
+            self._turn_registries[view.task_id] = ((*cached[0][:-1], now), cached[1])
+        self._fingerprints[view.task_id] = now
+        while len(self._fingerprints) > TURN_REGISTRIES_KEEP:
+            del self._fingerprints[next(iter(self._fingerprints))]
 
     # ------------------------------------------------------------ state
 
@@ -458,7 +490,13 @@ class Skills(Extension):
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The listing taken at start, in the environment's system turn
-        (Claude Code's place for it)."""
+        (Claude Code's place for it); before every later model call, the
+        skills not listed yet or whose listed text changed (Claude Code's
+        skill listing attachment): installed since, found in a nested
+        directory, or edited."""
+        if view.env is not None:
+            await self._refresh(view)
+            await self._list_new(view)
         state = view.ext_state(self.name) or {}
         out: list[Reminder] = []
         if state.get("invoked"):
@@ -477,23 +515,6 @@ class Skills(Extension):
             return
         state = view.ext_state(self.name) or {}
         registry = await self.turn_registry(view)
-        # Skills installed since the last listing, or whose description
-        # changed, are listed with the person's next message (the first
-        # listing when the task started with none).
-        if state.get("listings"):
-            announced, digests = self.announced(state), self.digests(state)
-            lines = listing_lines(registry, budget_chars=self._budget(view),
-                                  unlocked=unlocked_skills(state))
-            current = _digests(registry, lines)
-            added = [(n, line) for n, line in lines if n not in announced
-                     or digests.get(n, current[n]) != current[n]]
-            if added:
-                self._record_listing(view, added, registry)
-        else:
-            lines = listing_lines(registry, budget_chars=self._budget(view),
-                                  rank=await self._rank(view), unlocked=unlocked_skills(state))
-            if lines:
-                self._record_listing(view, lines, registry)
         for message in messages:
             self._note_mentions(view, registry, state, message.text)
             typed = _typed_command(message.text)
@@ -516,6 +537,28 @@ class Skills(Extension):
                     continue
                 self._record_invocation(view, {**data, "input": recorded.seq}, prior,
                                         "inline")
+
+    async def _list_new(self, view: TaskView) -> None:
+        """List the skills not listed yet, or whose description changed (the
+        whole first listing, ranked, when the task started with none)."""
+        state = view.ext_state(self.name) or {}
+        if any(listing.get("held") for listing in state.get("listings", [])):
+            return  # the first request's listing is still to go out
+        registry = await self.turn_registry(view)
+        if state.get("listings"):
+            announced, digests = self.announced(state), self.digests(state)
+            lines = listing_lines(registry, budget_chars=self._budget(view),
+                                  unlocked=unlocked_skills(state))
+            current = _digests(registry, lines)
+            added = [(n, line) for n, line in lines if n not in announced
+                     or digests.get(n, current[n]) != current[n]]
+            if added:
+                self._record_listing(view, added, registry)
+        else:
+            lines = listing_lines(registry, budget_chars=self._budget(view),
+                                  rank=await self._rank(view), unlocked=unlocked_skills(state))
+            if lines:
+                self._record_listing(view, lines, registry)
 
     def _note_mentions(self, view: TaskView, registry: SkillRegistry, state: Any,
                        text: str) -> None:
@@ -632,7 +675,8 @@ class Skills(Extension):
         """Skill directories (``.noeta/skills``, ``.agents/skills``) of the
         directories between the working directory and the file this call
         touched join the task, announced with their skills' names (Claude
-        Code's nested skill discovery)."""
+        Code's nested skill discovery). A directory git ignores (a
+        dependency's, a build's) is skipped, as Claude Code skips it."""
         path = next((call.input[k] for k in ("file_path", "notebook_path")
                      if isinstance(call.input.get(k), str) and call.input[k]), None)
         if path is None or self.skills_dir is not None or not self.workspace:
@@ -655,24 +699,24 @@ class Skills(Extension):
                 if root in known:
                     continue
                 found = await index_dir(env, root)
-                names = sorted(n for n, desc in found.items()
-                               if desc.model_invocable and not desc.paths)
-                if not found:
+                if not found or await _git_ignored(env, root, cwd):
                     continue
                 known.add(root)
                 view.record(self.name, "nested", {"dir": root})
                 state = {**state, "nested": [*nested_dirs(state), root]}
+                registry = await self.registry(env, state)
+                # Only the skills not shadowed by one of the same name.
+                names = sorted(n for n, desc in found.items()
+                               if desc.model_invocable and not desc.paths
+                               and (won := registry.get(n)) is not None
+                               and won.source_path == desc.source_path)
                 if not names:
                     continue
-                registry = await self.registry(env, state)
-                lines = [(n, line) for n, line in listing_lines(
-                    registry, budget_chars=self._budget(view), unlocked=unlocked_skills(state))
-                    if n in names]
+                # Names only here; the next model call lists them with their
+                # descriptions (Claude Code's dynamic_skill, then its listing).
                 text = NESTED_SKILLS.format(dir=os.path.relpath(root, cwd)) + "\n" + "\n".join(
                     f"- {n}" for n in names)
-                view.record(self.name, "listing",
-                            {"names": [n for n, _ in lines], "lines": [t for _, t in lines],
-                             "digests": _digests(registry, lines)},
+                view.record(self.name, "nested_found", {"dir": root, "names": names},
                             message=user(text, origin=self.origin))
 
     async def _unlock(self, view: TaskView, call: ToolUse) -> None:
@@ -784,3 +828,14 @@ def _cut_skill(text: str) -> str:
         return text
     return text[:prefix_within(text, INVOKED_SKILL_MAX_TOKENS, INVOKED_SKILL_CUT)] \
         + INVOKED_SKILL_CUT
+
+
+async def _git_ignored(env: ExecEnv, path: str, cwd: str) -> bool:
+    """Whether git ignores ``path`` in the repository at ``cwd`` (``False``
+    outside a repository or without git)."""
+    try:
+        done = await env.run(["git", "check-ignore", "-q", "--", path], cwd=cwd, timeout=5,
+                             output_cap=4096)
+    except Exception:  # noqa: BLE001 — no git: nothing is ignored
+        return False
+    return done.exit_code == 0 and not done.timed_out

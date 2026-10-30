@@ -54,12 +54,27 @@ worker. Two deployments work:
    (`noeta.backends.execenvs.container`, or your own exec env in the `noeta.execenvs` group),
    chosen per task by the host's `Runtime(env_for=…)`.
 
+A task's own files live where its tools do, in its exec env, so they follow the task to
+any worker: long tool outputs saved for the model (the spill directory,
+`~/.noeta/tool-results/<task id>/`, written through the exec env; an ended task's are removed
+30 days after their last write), plan files (`~/.noeta/plans/`) and auto memory
+(`~/.noeta/projects/<project>/memory/`, `~/.noeta/agent-memory/`; a project agent's is in
+the workspace). The model reads and edits them with its file tools (and `grep`s them with
+`Bash`), as in Claude Code, so they are files, not store rows; their paths are recorded in
+the task's log the first time they are used.
+
+- With a remote exec env they live in that env and nothing else needs sharing; noeta's home
+  path must be the same on every worker (it names the files) and writable in the env.
+- With the local exec env on a shared filesystem, those directories of noeta's home must be
+  on the shared mount too, at the same path on every worker (`NOETA_HOME` on the mount, or
+  `tool-results`, `plans`, `projects` and `agent-memory` linked to it); otherwise a task
+  that moves finds its saved outputs, plan and memories missing.
+
 Still local to a worker either way: a background `Bash` job and its log (the tree is held by
 that worker while it runs, and its tasks are told `hold_lost` if the worker dies), and the
-spill directory for long tool outputs (`~/.noeta/tool-results`; put it on the shared mount if
-front ends on other machines should open those files), and the files of images people paste
-(`~/.noeta/image-cache` on a local exec env; a worker that takes a task over writes them
-again from the conversation at the next turn and names the new place).
+files of images people paste (`~/.noeta/image-cache` with the local exec env, a per-user
+temp directory in any other): a worker that takes a task over writes them again from the
+conversation at the next turn and names the new place.
 
 ## The token
 

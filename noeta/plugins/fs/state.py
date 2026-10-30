@@ -76,6 +76,8 @@ KIND_MENTIONS = "mentions"
 KIND_IMAGES = "images"
 #: Files remembered as read at most: the oldest are forgotten past it.
 MAX_FILES = 1000
+#: Attachments remembered for placing ahead of the person's text.
+MAX_ATTACHMENTS = 200
 
 
 class FileRead(Struct):
@@ -88,6 +90,11 @@ class FileRead(Struct):
     #: The model had the whole file in view (a read from the top to the end,
     #: or what it wrote itself over such a view).
     whole: bool = True
+    #: Recorded by a ``Read`` given an offset past the first line or a limit
+    #: (or cut to fit the token ceiling): no changed-file note follows it, as
+    #: Claude Code sends none for such a read. Kept when a compaction drops
+    #: ``range``.
+    window: bool = False
 
 
 class FsState(Struct):
@@ -106,6 +113,10 @@ class FsState(Struct):
     images_through: int = 0
     #: Log seq of a person's message (as text) -> where its images are saved.
     images: dict[str, list[str]] = msgspec.field(default_factory=dict)
+    #: Content digests of the attachments' messages (the newest
+    #: :data:`MAX_ATTACHMENTS`), which the request moves ahead of the
+    #: person's text.
+    attached: list[str] = msgspec.field(default_factory=list)
 
 
 def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
@@ -130,7 +141,8 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
             del reads[next(iter(reads))]
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
                                partial=data.get("partial") is True,
-                               whole=data.get("whole") is not False)
+                               whole=data.get("whole") is not False,
+                               window=lines is not None and (lines[0] > 1 or lines[1] > 0))
         return msgspec.structs.replace(base, reads=reads)
     if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
         text = data.get("text")
@@ -146,8 +158,12 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         through = data.get("through")
         if isinstance(through, bool) or not isinstance(through, int):
             return base
+        digest = data.get("digest")
+        attached = base.attached
+        if isinstance(digest, str) and digest:
+            attached = [*attached, digest][-MAX_ATTACHMENTS:]
         return msgspec.structs.replace(
-            base, mentions_through=max(base.mentions_through, through))
+            base, mentions_through=max(base.mentions_through, through), attached=attached)
     if kind == KIND_IMAGES:
         through = data.get("through")
         if isinstance(through, bool) or not isinstance(through, int):

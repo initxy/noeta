@@ -33,7 +33,8 @@ from noeta.core.errors import ModelError
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
-from noeta.toolkit.context import read_local_text, task_env
+from noeta.toolkit.context import read_task_text, task_env, task_files
+from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import (
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
@@ -162,13 +163,9 @@ def recalled_text(path: str, text: str) -> str:
     return f"{text}\n{RECALL_CUT_NOTE.format(what=what, path=path)}" if what else text
 
 
-def _stale_note(path: Path, now: float | None = None) -> str:
+def _stale_note(mtime: float, now: float | None = None) -> str:
     """The note ahead of a memory changed more than a day ago (``""``
     otherwise), on its own line."""
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        return ""
     days = int(max(0.0, (now if now is not None else time.time()) - mtime) // 86_400)
     return RECALL_STALE_NOTE.format(days=days) + "\n" if days > 1 else ""
 
@@ -286,9 +283,13 @@ class Memory(Extension):
             workspace = await self._workspace(view)
             directory = self._agent_dir(view, workspace) \
                 or memory_dir_for(workspace, self.home)
+        env = task_env(view.env, view.state.config)
         try:
-            Path(directory).mkdir(parents=True, exist_ok=True)
-        except OSError:
+            if is_local(env):
+                Path(directory).mkdir(parents=True, exist_ok=True)
+            else:  # the model's file tools write it there
+                await env.run(["mkdir", "-p", directory], timeout=10)
+        except Exception:  # noqa: BLE001 — written into by the first save anyway
             log.warning("memory: could not create %s", directory)
         view.record(self.name, "dir", {"dir": directory})
         index = None if _instructions_show_index(view, self.name) \
@@ -395,19 +396,17 @@ class Memory(Extension):
 
     @staticmethod
     async def _manifest(env: ExecEnv, directory: str,
-                        skip: set[str]) -> list[tuple[str, str]]:
-        """``(file name, manifest line)`` for every memory file not yet
-        attached. Read on this machine."""
+                        skip: set[str]) -> list[tuple[str, float, str]]:
+        """``(file name, modification time, manifest line)`` for every memory
+        file not yet attached, newest first. Read where the model's file
+        tools write them."""
         out: list[tuple[str, float, str]] = []
-        for path in Path(directory).glob("*.md"):
+        for name, mtime in await task_files(env, directory, ".md"):
+            path = Path(directory) / name
             if path.name == INDEX_FILE or str(path) in skip:
                 continue
-            text = await read_local_text(env, str(path))
+            text = await read_task_text(env, str(path))
             if text is None:
-                continue
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:
                 continue
             m = _FRONTMATTER.match(text)
             head = m.group(1) if m else ""
@@ -416,7 +415,7 @@ class Memory(Extension):
             line = f"- {f'[{kind}] ' if kind else ''}{path.name} ({when})"
             out.append((path.name, mtime, f"{line}: {desc}" if desc else line))
         out.sort(key=lambda t: -t[1])
-        return [(name, line) for name, _, line in out]
+        return out
 
     async def _recall(self, view: TaskView, directory: str,
                       query: str) -> tuple[str, list[str], int] | None:
@@ -431,7 +430,7 @@ class Memory(Extension):
         if not manifest:
             return None
         assert view.complete is not None and self.recall_model is not None
-        listing = "\n".join(line for _, line in manifest)
+        listing = "\n".join(line for _, _, line in manifest)
         request = ModelRequest(
             model=self.recall_model,
             system=[SystemPart(text=view.prompt("memory/recall", RECALL_PROMPT), cache=True)],
@@ -440,7 +439,8 @@ class Memory(Extension):
             max_tokens=RECALL_MAX_TOKENS,
             thinking=None if self.recall_model in _THINKING_REFUSED else False,
             output_schema=_RECALL_SCHEMA)
-        names = {name for name, _ in manifest}
+        names = {name for name, _, _ in manifest}
+        mtimes = {name: mtime for name, mtime, _ in manifest}
         try:
             try:
                 response = await view.complete(request)
@@ -462,9 +462,9 @@ class Memory(Extension):
         parts: list[str] = []
         paths: list[str] = []
         used = 0
-        for name in [p for p in picked if isinstance(p, str) and p in names][:RECALL_MAX_FILES]:
+        for name in [p for p in picked if isinstance(p, str) and p in mtimes][:RECALL_MAX_FILES]:
             path = Path(directory) / name
-            body = await read_local_text(env, str(path))
+            body = await read_task_text(env, str(path))
             if body is None:
                 continue
             shown = recalled_text(str(path), body.strip())
@@ -472,7 +472,7 @@ class Memory(Extension):
             if used + size > budget:
                 break
             used += size
-            parts.append(f"{_stale_note(path)}Memory {path}:\n{shown}")
+            parts.append(f"{_stale_note(mtimes[name])}Memory {path}:\n{shown}")
             paths.append(str(path))
         if not parts:
             return None

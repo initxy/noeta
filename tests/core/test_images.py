@@ -6,12 +6,16 @@ from __future__ import annotations
 
 import io
 import os
+import struct
 import sys
+import zlib
 
 import pytest
 
+from noeta.core import images
 from noeta.core.images import (
     MAX_BASE64_BYTES,
+    MAX_DECODED_PIXELS,
     TARGET_RAW_BYTES,
     ImageTooLarge,
     base64_size,
@@ -84,3 +88,39 @@ def test_pillow_refuses_what_it_cannot_decode() -> None:
     pytest.importorskip("PIL")
     with pytest.raises(ImageTooLarge, match="could not be decoded"):
         fit_image(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, "image/png")
+
+
+def _png_header(width: int, height: int) -> bytes:
+    """A PNG whose header claims ``width`` x ``height`` and whose pixels are
+    never there: decoding it would be the expensive part."""
+    body = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    ihdr = (struct.pack(">I", len(body)) + b"IHDR" + body
+            + struct.pack(">I", zlib.crc32(b"IHDR" + body) & 0xFFFFFFFF))
+    return b"\x89PNG\r\n\x1a\n" + ihdr + b"\x00" * 64
+
+
+def test_an_image_of_too_many_pixels_is_refused_before_it_is_decoded(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("PIL")
+    side = 13_000
+    assert side * side > MAX_DECODED_PIXELS
+    opened: list[bytes] = []
+    pil = pytest.importorskip("PIL.Image")
+    real_open = pil.open
+    monkeypatch.setattr(pil, "open", lambda fp, *a, **k: opened.append(b"") or real_open(fp, *a, **k))
+    with pytest.raises(ImageTooLarge, match="more pixels than this host decodes"):
+        fit_image(_png_header(side, side), "image/png")
+    assert opened == []
+
+
+def test_a_format_without_a_known_header_is_checked_once_opened(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    pil = pytest.importorskip("PIL.Image")
+    buf = io.BytesIO()
+    pil.new("L", (300, 200)).save(buf, "BMP")
+    assert image_dimensions(buf.getvalue()) is None
+    monkeypatch.setattr(images, "MAX_DECODED_PIXELS", 300 * 200 - 1)
+    with pytest.raises(ImageTooLarge, match="300x200 px"):
+        fit_image(buf.getvalue(), "image/bmp")
+    monkeypatch.setattr(images, "MAX_DECODED_PIXELS", 300 * 200)
+    assert fit_image(buf.getvalue(), "image/bmp").shown == (300, 200)
