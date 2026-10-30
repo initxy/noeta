@@ -588,12 +588,14 @@ def free_gb(path: str = "/var/lib/docker") -> float:
 def background(stop: threading.Event, builder: RunBuilder, leftovers: TrialLeftovers, job_dir: Path,
                secrets: list[str], prune_below_gb: float, every_s: float = 120) -> None:
     """Every two minutes: remove finished trials' leftovers, redact the key,
-    and prune the run's builder only when docker's disk runs low (a pruned
-    cache makes the next trial of a task pull its image again)."""
+    and prune the run's builder only when the disk holding its cache runs
+    low — its state dir's, else docker's (a pruned cache makes the next
+    trial of a task pull its image again)."""
+    cache_disk = str(builder.state_dir) if builder.state_dir is not None else "/var/lib/docker"
     while not stop.wait(every_s):
         leftovers.clean()
         redact_tree(job_dir, secrets)
-        if free_gb() < prune_below_gb:
+        if free_gb(cache_disk) < prune_below_gb:
             builder.prune()
 
 
@@ -915,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--build-timeout-mult", type=float, default=3.0,
                      help="environment build timeout multiplier (pulls of large images)")
     run.add_argument("--prune-below-gb", type=float, default=6.0,
-                     help="prune the run's builder cache when docker's disk has less free")
+                     help="prune the run's builder cache when the disk holding it has less free")
     run.add_argument("--jobs-dir", default=str(REPO / "bench" / "jobs"))
     run.add_argument("--datasets-dir", default=str(REPO / "bench" / "datasets"))
     run.add_argument("--job-name")

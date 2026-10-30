@@ -265,7 +265,7 @@ unfiltered:
 
 - **Builds** go through a buildx builder the run creates (`bench-<job>`,
   `BUILDX_BUILDER` for harbor's compose builds). Everything it pulls and caches
-  is the run's; it is pruned only when docker's disk drops below
+  is the run's; it is pruned only when the disk holding it (its state dir's, else docker's) drops below
   `--prune-below-gb` (default 6; a pruned cache makes the next trial of a task
   pull again) and removed whole when the run ends. The host's default builder
   is not used. A builder, container or state directory of the same name
