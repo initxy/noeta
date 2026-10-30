@@ -116,7 +116,7 @@ exclude = ["/.claude"]
 
 [tool.mypy]
 strict = true
-files = ["noeta"]
+files = ["noeta", "evals"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

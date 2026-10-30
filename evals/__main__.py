@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import statistics
 import subprocess
 import sys
@@ -111,22 +112,29 @@ def _compare(
         return regressions, verdict
     tol = baseline.get("tolerance", _DEFAULT_TOLERANCE)
     base = baseline.get("scenarios", {})
+    # A known gap scores what a noeta defect lets it: it is shown, never a
+    # regression, and kept out of the overall mean on both sides.
+    gaps = baseline.get("known_gaps", {})
     for name, s in summary.items():
         if name not in base:
             verdict[name] = "new"
             continue
         delta = s["mean"] - base[name]["mean"]
-        if delta < -tol.get("per_scenario", {}).get(name, tol["scenario"]):
+        if name in gaps:
+            verdict[name] = f"known gap {delta:+.2f}"
+        elif delta < -tol.get("per_scenario", {}).get(name, tol["scenario"]):
             verdict[name] = f"REGRESSED {delta:+.2f}"
             regressions.append(f"{name}: {base[name]['mean']:.2f} -> {s['mean']:.2f}")
         else:
             verdict[name] = f"{delta:+.2f}"
     if set(summary) == set(base):
-        d = overall - baseline["overall"]
+        kept = [n for n in base if n not in gaps]
+        overall = statistics.fmean(summary[n]["mean"] for n in kept)
+        d = overall - statistics.fmean(base[n]["mean"] for n in kept)
         verdict["__overall__"] = f"{d:+.3f}"
         if d < -tol["overall"]:
             verdict["__overall__"] = f"REGRESSED {d:+.3f}"
-            regressions.append(f"overall: {baseline['overall']:.3f} -> {overall:.3f}")
+            regressions.append(f"overall (known gaps aside): {d:+.3f}")
     return regressions, verdict
 
 
@@ -167,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     if baseline and baseline.get("model") != model:
         print(f"evals: warning — baseline was recorded on {baseline.get('model')!r}, running {model!r}")
 
+    home = engine.isolate_home()
     judge = engine.Judge(cfg)
     jobs = [(s, i) for i in range(args.trials) for s in chosen]
     started = time.monotonic()
@@ -181,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {r['scenario']:<30} #{r['trial']}  {r['score']:.2f}  {r['seconds']:>6.1f}s"
                   + (f"  [{r['error'][:80]}]" if r.get("error") else ""), flush=True)
     wall = round(time.monotonic() - started, 1)
+    shutil.rmtree(home, ignore_errors=True)
 
     summary = _summarize(records)
     overall = round(statistics.fmean(s["mean"] for s in summary.values()), 4)
@@ -210,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
           f"{usage['input_tokens']:,} input tokens "
           f"({usage['cache_read_tokens']:,} cached), {usage['output_tokens']:,} output; "
           f"judge {usage['judge_requests']} requests; catalog cost ${usage['cost_usd']}")
+    leaks = [f"{r['scenario']}#{r['trial']}" for r in records if r.get("repo_access")]
+    print(f"calls naming the repo (a leak out of the trial): "
+          f"{', '.join(leaks) if leaks else 'none'}")
     print(f"results: {out}")
 
     if args.write_baseline:
@@ -224,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
             "provider": args.provider,
             "trials": args.trials,
             "tolerance": tol,
+            "known_gaps": (baseline or {}).get("known_gaps", {}),
             "overall": overall,
             "scenarios": {k: {"mean": v["mean"], "scores": v["scores"]} for k, v in summary.items()},
         }, indent=2) + "\n")
