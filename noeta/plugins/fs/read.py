@@ -311,6 +311,8 @@ class ReadTool:
     read_only = True
     retry_safe = True
     clearable = True
+    #: Bounded by its own size and token ceilings, as Claude Code's Read.
+    max_result_chars = None
     input_schema: dict[str, Any]
 
     def __init__(self) -> None:

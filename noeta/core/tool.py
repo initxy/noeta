@@ -152,6 +152,10 @@ class Tool(Protocol):
       system drops a repeat of that key); ``None`` when the outcome cannot
       be told (then a ``retry_safe`` tool runs again, any other is answered
       "outcome unknown"). Asked before ``retry_safe``.
+    * ``max_result_chars: int | None`` — the runner saves a text result
+      longer than this (at most :data:`RESULT_CEILING_CHARS`, the default) to
+      a file and sends a preview (``noeta.core.large_output``); ``None``
+      exempts a tool that bounds its own result (``Read``).
     """
 
     name: str
@@ -167,6 +171,12 @@ class Tool(Protocol):
     clearable: bool
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput: ...
+
+
+#: Claude Code's ceiling on any tool's inline text result, in characters.
+RESULT_CEILING_CHARS = 50_000
+#: Claude Code's budget for the text results of one reply's calls together.
+REPLY_RESULTS_BUDGET_CHARS = 200_000
 
 
 #: Starts of a ``retry_safe`` call before a crash during it is answered

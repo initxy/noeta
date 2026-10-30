@@ -103,6 +103,13 @@ summary, so their hash is specific to this recording; review them for the templa
 | compact.reattach.13 | Re-attachment candidates are the files touched since the previous compaction, then the files that compaction re-attached in full; a file it only named as too large, or that sat in its kept messages, is not re-attached again unless touched since (r2 m3/0019: the 84K-character partial read kept before the r2 compaction gets no note after the next one). |
 | compact.reattach.14 | Invoked skills are re-attached newest invoked first; each body is cut to 5,000 tokens with a note that the rest can be read from the skill file, and the block holds at most 25,000 tokens of bodies: a skill that would pass it is left out (bundle constants; the recordings' skills are small). |
 
+## Large tool results (bundle; the recordings stay under both limits)
+
+| id | rule |
+|---|---|
+| compact.results.1 | Every tool's text result has a ceiling of the tool's own limit and at most 50,000 characters; past it the result is saved to a file and replaced by the `<persisted-output>` block (size, path, 2 KB preview). `Read` has no such limit (it bounds itself); `WebSearch`'s own limit (100,000) is cut to 50,000 by the ceiling. |
+| compact.results.2 | The results that answer one reply's calls together hold at most 200,000 characters inline: past it, fresh results are saved the same way (Claude Code picks the largest first), and the choice for each call never changes afterwards. |
+
 ## Manual `/compact`
 
 | id | rule |

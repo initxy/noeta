@@ -35,8 +35,8 @@ DEFAULT_COUNT = 5
 #: Hits asked for in ``extended`` mode.
 EXTENDED_COUNT = 10
 MODES = ("standard", "extended")
-#: Claude Code's ``maxResultSizeChars`` for WebSearch.
-WEBSEARCH_RESULT_LIMIT = 100_000
+#: Claude Code's ``maxResultSizeChars`` for WebSearch (1e5) under its 50,000 ceiling.
+WEBSEARCH_RESULT_LIMIT = 50_000
 #: The line closing every result that has hits.
 CITE_REMINDER = "Reminder: cite the sources above in your reply, as Markdown links."
 
