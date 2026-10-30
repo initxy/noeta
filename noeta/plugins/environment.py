@@ -3,9 +3,10 @@ same places: a git snapshot and the commit-attribution note in the first
 user turn, the environment (with the model line, the deferred tools, the
 token budget and today's date) as a system turn right after it, and a
 ``<total_tokens>`` budget note after every prompt and tool result (a
-sub-agent's after its tool results). As in Claude Code, only a Claude model
-of the shipped catalog gets the budget: for any other model the notes are
-not sent and the prompt's budget line is taken out.
+sub-agent's after its tool results). As in Claude Code, only a model Claude
+Code knows as a Claude model gets the budget (:func:`gets_budget`): for any
+other model, and with ``token_budget=0``, no note is sent and the prompt's
+budget line is taken out wherever it sits.
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout and platform,
@@ -365,17 +366,35 @@ def budget_note(left: int) -> str:
     return f"<total_tokens>{left} tokens left</total_tokens>"
 
 
-#: A budget line closing a system prompt (``main.md``'s last line).
-_PROMPT_BUDGET_LINE = re.compile(r"\n*<total_tokens>\d+ tokens left</total_tokens>\s*\Z")
+#: A budget line of a system prompt (``main.md``'s last line), with the
+#: blank lines before it; an appended prompt may follow it.
+_PROMPT_BUDGET_LINE = re.compile(r"\n*^<total_tokens>\d+ tokens left</total_tokens>[ \t]*$",
+                                 re.MULTILINE)
+
+#: Claude Code 2.1.312's Claude models: every row of its catalog has the
+#: ``total_tokens_reminder`` capability. It recognizes a model id that
+#: contains one of these (case-insensitive: ``claude-opus-5-5[1m]``,
+#: ``us.anthropic.claude-opus-5-5-v1:0``, a dated id), or the dated
+#: first-party id of a 4.0 model.
+_CLAUDE_CODE_MODELS = (
+    "claude-3-5-haiku", "claude-3-5-sonnet", "claude-3-7-sonnet",
+    "claude-haiku-4-5", "claude-haiku-5-5",
+    "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-5",
+    "claude-sonnet-5-5",
+    "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
+    "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5",
+    "claude-fable-5", "claude-fable-5-1", "claude-mythos-5", "claude-mythos-5-1",
+    "claude-opus-4-2025", "claude-sonnet-4-2025",
+)
 
 
 def gets_budget(model: str) -> bool:
     """Whether ``model`` is told the ``<total_tokens>`` budget: Claude Code
-    tells only the models whose catalog row has ``total_tokens_reminder``,
-    every Claude model it ships and nothing else (a gateway id it does not
-    know gets none)."""
-    real = models.resolve_alias(model)
-    return real in models.CATALOG and real.startswith("claude")
+    tells exactly the Claude models it knows (:data:`_CLAUDE_CODE_MODELS`)
+    and nothing else (a gateway id like ``auto_model/x`` gets none). An
+    alias resolves first."""
+    real = models.resolve_alias(model).lower()
+    return any(known in real for known in _CLAUDE_CODE_MODELS)
 
 
 def date_line(today: str, *, utc: bool = False) -> str:
@@ -427,7 +446,7 @@ class Environment(Extension):
       stand-in for Claude Code's re-announce on resume).
     * ``attribution`` — put the commit / PR attribution note there.
     * ``token_budget`` — the ``<total_tokens>`` budget a turn starts with
-      (``0``: no budget notes).
+      (``0``: no budget notes, and the prompt's budget line taken out).
     * ``date_change`` — tell the model, at the start of a turn, when the date
       is no longer the one it was given (the prompt
       ``reminder/date_changed``, or ``reminder/date_changed_utc`` for UTC

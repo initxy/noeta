@@ -436,23 +436,32 @@ async def test_a_changed_git_snapshot_is_given_again_at_a_later_turn(tmp_path: P
 
 
 async def test_a_model_claude_code_tells_no_budget_gets_no_budget(tmp_path: Path) -> None:
-    """Only a shipped Claude model is told the ``<total_tokens>`` budget (Claude
-    Code's ``total_tokens_reminder`` capability): any other model gets no
-    budget notes and the prompt's budget line is taken out; a Claude model
-    keeps both."""
+    """Only a model Claude Code knows as a Claude model is told the
+    ``<total_tokens>`` budget: any other model gets no budget notes and the
+    prompt's budget line is taken out wherever it sits (an appended prompt
+    and a plugin's part follow it); a Claude model keeps both."""
     from noeta.backends.stores.sqlite import SqliteStore
     from noeta.core.agent import Agent
     from noeta.core.client import Client
+    from noeta.core.extension import ContextPart, Extension
     from noeta.core.runner import Runtime
     from noeta.testing import ScriptedProvider, reply
 
-    prompt = "Be brief.\n\n<total_tokens>15000000 tokens left</total_tokens>"
+    class Part(Extension):
+        name = "part"
+
+        def context(self, view: TaskView) -> Sequence[ContextPart]:
+            return [ContextPart(text="A plugin's part.")]
+
+    prompt = ("Be brief.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\n"
+              "Appended by the host.")
     sent: dict[str, Any] = {}
     for model in ("claude-opus-5-5", "opus", "g3-test-gateway-model"):
         store = SqliteStore(str(tmp_path / f"{model}.db"))
         provider = ScriptedProvider([reply("", ("Read", {})), reply("done")])
         agent = Agent(name="a", model=model, system_prompt=prompt,
-                      extensions=[Environment(git_status=False, today=lambda: "2026-10-30")])
+                      extensions=[Environment(git_status=False, today=lambda: "2026-10-30"),
+                                  Part()])
         rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m, p=provider: p,
                      env_for=lambda _s: LocalExecEnv(str(tmp_path)), sleep=_no_sleep)
         await Client(store).create("a", "hi", config={"cwd": str(tmp_path)})
@@ -461,10 +470,23 @@ async def test_a_model_claude_code_tells_no_budget_gets_no_budget(tmp_path: Path
         sent[model] = provider.requests
     for model in ("claude-opus-5-5", "opus"):
         first, second = sent[model]
-        assert first.system[-1].text == prompt
+        assert first.system[-1].text == f"{prompt}\nA plugin's part."
         assert any(m.text == "<total_tokens>15000000 tokens left</total_tokens>"
                    for m in first.messages)
         assert second.messages[-1].text.startswith("<total_tokens>")
     for request in sent["g3-test-gateway-model"]:
-        assert request.system[-1].text == "Be brief."
+        assert request.system[-1].text == "Be brief.\n\nAppended by the host.\nA plugin's part."
         assert not any("<total_tokens>" in m.text for m in request.messages)
+
+
+@pytest.mark.parametrize(("model", "told"), [
+    ("claude-opus-5-5", True), ("opus", True), ("claude-opus-5-5[1m]", True),
+    ("us.anthropic.claude-opus-5-5-v1:0", True), ("anthropic/claude-opus-5-5", True),
+    ("claude-opus-5-5-20260101", True), ("CLAUDE-OPUS-5-5", True),
+    ("claude-opus-4-1", True), ("claude-3-5-haiku", True), ("claude-sonnet-4-20250514", True),
+    ("auto_model/alwaysday1_max", False), ("opensource/deepseek_v4_1_flash", False),
+    ("claude-foo-9", False), ("claude-opus-9", False), ("claude-3-opus", False),
+])
+def test_the_budget_goes_to_the_models_claude_code_knows(model: str, told: bool) -> None:
+    from noeta.plugins.environment import gets_budget
+    assert gets_budget(model) is told

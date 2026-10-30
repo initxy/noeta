@@ -56,7 +56,9 @@ Findings:
 5. **`<total_tokens>` sent to every model.** Claude Code sends the budget line (system prompt
    end) and the per-step `<total_tokens>` notes only for models whose catalog row has the
    `total_tokens_reminder` capability: every Claude model it ships, never an unknown id
-   (2.1.312 bundle; confirmed by capture: zero occurrences for the gateway model). noeta sent
+   (2.1.312 bundle; confirmed by capture: zero occurrences for the gateway model, see
+   `2026-10-30-bench-findings-capture.json`, which also lists which selectors Claude Code
+   treats as its own models). noeta sent
    both to every model. A/B on `alwaysday1_max` through the live gateway (5 snapshots of the
    `nanobot-4129` trial, 4 samples each, with vs without the lines): mean output 1013 vs 1174
    tokens per call, within noise. So this is a parity defect, not the cause of finding 6.
@@ -81,12 +83,19 @@ Findings:
 
 ## Decisions
 
-- Budget notes follow Claude Code: only a model whose shipped catalog row is a Claude model gets
-  the `<total_tokens>` notes; for any other model the environment plugin also takes the budget
-  line out of the system prompt (`before_model`), so `main.md` keeps the line for Claude models
-  and the parity replay is unchanged. A host-registered row (a gateway alias of a Claude) gets
-  none, as Claude Code gives none to an id it does not know. `token_budget=0` now also drops
-  the prompt line.
+- Budget notes follow Claude Code: only a model Claude Code knows as a Claude model gets the
+  `<total_tokens>` notes; for any other model the environment plugin also takes the budget
+  line out of the system prompt wherever it sits as its own line (`before_model`; an appended
+  prompt or a plugin's part may follow it), so `main.md` keeps the line for Claude models and
+  the parity replay is unchanged. `token_budget=0` now also drops the prompt line.
+- What "knows" means (`gets_budget`), taken from Claude Code 2.1.312 by capture: after noeta's
+  alias resolution (a built-in alias, or a host alias that targets a Claude row), the id,
+  lowercased, contains one of Claude Code's 22 catalog Claude ids (`claude-3-5-haiku` …
+  `claude-mythos-5-1`), or the dated first-party id of a 4.0 model (`claude-opus-4-2025…`).
+  So `claude-opus-5-5[1m]`, `us.anthropic.claude-opus-5-5-v1:0`, `anthropic/claude-opus-5-5`
+  and dated ids are told; `claude-opus-9`, `claude-3-opus` and gateway ids are not. A host
+  row whose id names no Claude model gets none even with family `anthropic`, as in Claude
+  Code. The list is a copy of Claude Code's and goes stale with its catalog.
 - Everything else found is either not a noeta defect (findings 1–3, 6), documented (7, 8), or
   small enough to leave for a follow-up (4, 9).
 
@@ -101,8 +110,13 @@ Findings:
 
 ## Acceptance criteria
 
-- A non-Claude model's requests carry no `<total_tokens>` text; a shipped Claude model's are
-  byte-identical to before (`make parity`: 0 mismatches).
+- For a task whose model does not change, a model Claude Code does not know gets no
+  `<total_tokens>` text in any request; a Claude model's requests are byte-identical to before
+  (`make parity`: 0 mismatches).
+- A model switch mid-task is not reconciled: notes already in the history stay after a switch
+  to a non-Claude model, and after a switch to a Claude model the first count may start from
+  an older turn's base. Claude Code has the same shape (its notes are history too); not
+  handled.
 - `make check` green; `make eval` shows no regression.
 
 ## Follow-ups
@@ -118,11 +132,12 @@ Findings:
 
 ## Risks
 
-- A Claude model reached under a gateway id no longer sees the budget; Claude Code behaves the
-  same way.
+- A Claude model reached under a gateway id that names no Claude model no longer sees the
+  budget; Claude Code behaves the same way.
 
 ## Progress log
 
 2026-10-30: findings from rb-ds41 / rb-ad1max; budget gating implemented; check green
 (2579 passed, 88.75%); parity 0 mismatches; live A/B 20 vs 20 calls, no effect on output.
 2026-10-30: `make eval` (DeepSeek V4.1, 3 trials): 0.948 vs baseline 0.953, no regression.
+2026-10-30: review fixes: the prompt line is stripped wherever it sits; `gets_budget` matches Claude Code's id recognition (captured); capture summary committed.
