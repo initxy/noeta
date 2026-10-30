@@ -141,6 +141,8 @@ class BashTool:
     description = load_description("noeta.plugins.shell", "shell_run")
     read_only = False
     clearable = True
+    #: Claude Code's Bash result limit (its default ``bashOutputMaxChars``).
+    max_result_chars = SHELL_OUTPUT_LIMIT
     input_schema: dict[str, Any]
     #: Refuse a long leading ``sleep`` (its refusal points at ``Monitor`` and
     #: ``run_in_background``, so only where background jobs are offered).

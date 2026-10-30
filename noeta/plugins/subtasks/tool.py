@@ -481,6 +481,8 @@ class ListAgentsTool:
     name = texts.LIST_TOOL
     description = load_description("noeta.plugins.subtasks", "list_agents")
     read_only = True
+    #: Claude Code's ListAgents result limit.
+    max_result_chars = 10_000
     retry_safe = True
     clearable = True
     input_schema = _schema({

@@ -112,6 +112,8 @@ class ReportFindingsTool:
     input_schema = SCHEMA
     read_only = True
     clearable = False
+    #: Claude Code's ReportFindings result limit.
+    max_result_chars = 256
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         findings = input.get("findings")
