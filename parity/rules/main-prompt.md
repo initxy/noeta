@@ -162,6 +162,7 @@ order:
 | `main.env.14` | The working-directory note of noeta ("paths resolve relative to the primary working directory") has no baseline counterpart. | covered — the extra line is gone. |
 | `main.env.15` | (bundle) A skill's listed text (description, then ` - ` and `when_to_use`) longer than 1,536 characters is cut to 1,535 and ends with `…`; the cap counts characters, so CJK text keeps as many as Latin. | covered — `noeta/plugins/skills/listing.py`. |
 | `main.env.16` | (bundle) Later in the conversation, a skill that appears, or whose listed text changed since it was listed (a digest of name and text), is listed again with the next prompt, under the same lead-in as the first listing; a removed skill is not announced. After a compaction the whole listing is sent again. | covered — the `skills` plugin records each listing's digests in the task log. |
+| `main.env.17` | (bundle) When the skill list is over its budget, skills keep their text in order of use: a score of uses times max(0.5^(days since last use / 7), 0.1) over past sessions, on by default. | covered — the `noeta` command gives every agent's skills plugin `usage_from` (its store's tasks are the sessions; `UsageRank`, `noeta/plugins/skills/usage.py`); an SDK host passes `rank` or `usage_from` itself. |
 
 ## Variants (not baseline)
 

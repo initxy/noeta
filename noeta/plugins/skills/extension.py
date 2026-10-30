@@ -15,6 +15,7 @@ from typing import Any, Literal
 import msgspec
 
 from noeta.core import records
+from noeta.core.client import ClientAPI
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
@@ -56,6 +57,7 @@ from noeta.plugins.skills.tool import (
     skill_name,
     unlocked_skills,
 )
+from noeta.plugins.skills.usage import UsageRank
 from noeta.toolkit import permission_rules as pr
 from noeta.toolkit.commands import command_message, parse_command_message
 from noeta.toolkit.context import new_user_messages, task_env
@@ -212,6 +214,9 @@ class Skills(Extension):
       when the listing is recorded; higher keeps more of its summary over
       budget (0.6 ``skill_menu_rank_resolver``). ``noeta.plugins.skills.usage``
       has a store-wide usage ranker a host can pass.
+    * ``usage_from`` — a client whose tasks rank the listing by use
+      (Claude Code's ranking across sessions; ``UsageRank``) when ``rank``
+      is not given. The ``noeta`` command passes its store's.
     * ``preload`` — skills activated at task start (0.6 ``Options.skills``),
       ``disable-model-invocation`` ones included.
     * ``scripts`` — offer ``run_skill_script`` (0.6 ``allow_skill_scripts``).
@@ -238,6 +243,7 @@ class Skills(Extension):
         trusted: Callable[[str], bool] | None = None,
         budget_tokens: int | None = None,
         rank: Rank | None = None,
+        usage_from: ClientAPI | None = None,
         preload: Sequence[str] = (),
         scripts: bool = False,
         tool_enforcement: Enforcement = "off",
@@ -257,7 +263,7 @@ class Skills(Extension):
         self.skills_dir = str(skills_dir) if skills_dir is not None else None
         self.trusted = trusted
         self.budget_tokens = budget_tokens
-        self.rank = rank
+        self.rank = rank if rank is not None or usage_from is None else UsageRank(usage_from)
         self.preload = list(preload)
         self.scripts = scripts
         self.tool_enforcement = tool_enforcement

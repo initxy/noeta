@@ -375,6 +375,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     and win a name."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
+    from noeta.core.client import Client
     from noeta.host.local import LocalApp
 
     home_dir.ensure_home()
@@ -398,6 +399,12 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
     base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
+    store = open_store(settings.store_url)
+    # Claude Code ranks the skill listing by use across its sessions; here
+    # the store's tasks are the sessions (scanned in the background).
+    skills = base.get("skills")
+    if isinstance(skills, Mapping):
+        base["skills"] = {**skills, "usage_from": Client(store)}
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
 
@@ -429,7 +436,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices += _apply_sandbox(sandbox, cwd, runtime_kw)
     runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
-    app = LocalApp(open_store(settings.store_url), agents,
+    app = LocalApp(store, agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
                    channels=make_channels(settings.channels) if with_channels else (),
