@@ -35,9 +35,9 @@ PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
 
 
 def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass: bool,
-           plans_dir: str) -> None:
+           plans_dir: str, by_command: bool = False) -> None:
     """Record a switch from ``current`` to ``mode`` (asked for at log seq
-    ``seq``), when it is one."""
+    ``seq``; ``by_command``: by a typed ``/plan``), when it is one."""
     if not isinstance(mode, str) or mode not in p.PERMISSION_MODES:
         return
     if mode == "bypassPermissions" and disable_bypass:
@@ -49,8 +49,18 @@ def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass:
     if mode == "plan":
         st = state_of(view)
         path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
-        data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq}
+        data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq,
+                        **({"by_command": True} if by_command else {})}
     view.record(NAME, "mode", data)
+
+
+def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str) -> None:
+    """A task that starts in plan mode (its config's ``permission_mode``, a
+    sub-agent of a planning task): recorded as entered with a plan file of
+    its own, so it plans from its first request."""
+    pre = default_mode if default_mode != "plan" else "default"
+    view.record(NAME, "mode", {"mode": mode, "plan": {
+        "path": pl.new_plan_path(plans_dir), "pre_mode": pre, "entered_seq": 0}})
 
 
 def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str) -> bool:
@@ -102,14 +112,30 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
     out: list[Reminder] = []
     sent: list[str] = []
     plan_noted = st.plan_noted
+    reminders = st.plan_reminders
     if mode == "plan" and st.plan is not None:
         newest = _newest_prompt(view)
         entered = int(st.plan.get("entered_seq") or 0)
-        same_turn = view.state.steps_in_turn == 0 and newest == entered
-        if ("plan_active" in st.due and not same_turn) or (
-                newest > max(st.plan_noted, entered) and view.state.steps_in_turn == 0):
+        # A typed /plan with a request: Claude Code's text comes with the
+        # call after the one that request started (recorded in m1).
+        held = bool(st.plan.get("by_command")) and view.state.steps_in_turn == 0 \
+            and newest == entered
+        after = max(st.plan_noted, entered)
+        due = "plan_active" in st.due and not held
+        cadence = not due and "plan_active" not in st.due \
+            and view.state.steps_in_turn == 0 and newest > after \
+            and _prompts_after(view, after) >= pl.PLAN_TURNS_BETWEEN
+        if due or cadence:
+            path = st.plan["path"]
+            exists = await _exists(view, path)
+            if "plan_reentry" in st.due and exists:
+                out.append(Reminder(text=pl.plan_reentry_text(path), kind="plan_reentry",
+                                    role="system", order=ORDER_PLAN - 1))
+                sent.append("plan_reentry")
+            reminders = 1 if due else reminders + 1
+            sparse = (reminders - 1) % pl.PLAN_FULL_EVERY != 0
             out.append(Reminder(text=pl.plan_active_text(
-                st.plan["path"], await _exists(view, st.plan["path"])),
+                path, exists, sparse=sparse, subagent=view.state.parent_id is not None),
                 kind="plan_active", role="system", order=ORDER_PLAN))
             sent.append("plan_active")
             plan_noted = max(newest, entered)
@@ -129,9 +155,11 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
         sent.append("auto_guidance")
     stale = [k for k in st.due if k not in sent and (
         (k == "auto_guidance" and (mode != "auto" or view.state.parent_id is not None))
-        or (k == "plan_active" and mode != "plan"))]
+        or (k in ("plan_active", "plan_reentry") and mode != "plan")
+        or (k == "plan_reentry" and "plan_active" in sent))]
     if sent or stale or plan_noted != st.plan_noted:
-        view.record(NAME, "noted", {"kinds": [*sent, *stale], "plan_noted": plan_noted})
+        view.record(NAME, "noted", {"kinds": [*sent, *stale], "plan_noted": plan_noted,
+                                    "plan_reminders": reminders})
     return out
 
 
@@ -150,6 +178,12 @@ def _new_input(view: TaskView, after: int) -> bool:
     return any(seq > after and m.role == "user" and (
         m.origin in (None, "human") or any(isinstance(b, ToolResult) for b in m.content))
         for seq, m in zip(view.state.message_seqs, view.state.messages, strict=False))
+
+
+def _prompts_after(view: TaskView, after: int) -> int:
+    """The person's prompts logged after seq ``after``."""
+    return sum(1 for seq, m in zip(view.state.message_seqs, view.state.messages, strict=False)
+               if m.from_person and seq > after)
 
 
 def _newest_prompt(view: TaskView) -> int:

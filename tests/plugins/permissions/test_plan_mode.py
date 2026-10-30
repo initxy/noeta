@@ -154,3 +154,137 @@ async def test_enter_plan_mode_in_auto_mode_needs_no_approval(store: SqliteStore
     assert not pending(await client.events(tid), tid)
     first, second = [e.result.text for e in evs if isinstance(e, ToolFinished)][-2:]
     assert first == pl.ENTERED and second == pl.ALREADY_PLANNING
+
+
+FULL, SPARSE = "Plan mode is on.", "Plan mode is still on"
+
+
+def plan_texts(request: Any) -> list[str]:
+    """The plan-mode texts this request adds after its newest prompt."""
+    last = max(i for i, m in enumerate(request.messages) if m.from_person)
+    found: list[tuple[int, int, str]] = []
+    for i, m in enumerate(request.messages[last:]):
+        if m.role != "system":
+            continue
+        for marker in (FULL, SPARSE, "## Back in plan mode"):
+            at = m.text.find(marker)
+            if at >= 0:
+                found.append((i, at, m.text[at:]))
+    return [text for _i, _at, text in sorted(found)]
+
+
+async def test_a_task_created_in_plan_mode_plans_from_its_first_request(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """``noeta -p --permission-mode plan``: the task's config starts it in
+    plan mode, with a plan file, the plan-mode text on its first request and
+    edits held for the person."""
+    write = Fake("Write")
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": str(tmp_path / "a.py")})),
+                                 reply("ok")])
+    rt = runtime(store, provider, agent([perms], [write]))
+    client = Client(store)
+    tid = await client.create("a", "add caching",
+                              config={"cwd": str(tmp_path), "permission_mode": "plan"})
+    await rt.run_until_idle()
+    [entered] = [e.data for e in await events(client, tid)
+                 if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    assert entered["mode"] == "plan" and entered["plan"]["pre_mode"] == "default"
+    [text] = plan_texts(provider.requests[0])
+    assert text.startswith(FULL) and entered["plan"]["path"] in text
+    assert write.runs == []
+
+
+async def test_a_switch_that_comes_with_the_prompt_is_told_at_once(
+        store: SqliteStore, tmp_path: Path) -> None:
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("ok")])
+    rt = runtime(store, provider, agent([perms], []))
+    client = Client(store)
+    tid = await client.create("a", config={"cwd": str(tmp_path)})
+    await client.signal(tid, "permission_mode", {"mode": "plan"})
+    await client.send(tid, "add caching")
+    await rt.run_until_idle()
+    [text] = plan_texts(provider.requests[0])
+    assert text.startswith(FULL)
+
+
+async def test_the_plan_text_follows_claude_codes_cadence(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Full on entering; nothing for the next four prompts; then the short
+    form; full again on every fifth text."""
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("ok") for _ in range(26)])
+    rt = runtime(store, provider, agent([perms], []))
+    client = Client(store)
+    tid = await client.create("a", "p1", config={"cwd": str(tmp_path),
+                                                 "permission_mode": "plan"})
+    await rt.run_until_idle()
+    for i in range(2, 27):
+        await client.send(tid, f"p{i}")
+        await rt.run_until_idle()
+    kinds = [("full" if t[0].startswith(FULL) else "sparse") if (t := plan_texts(r)) else None
+             for r in provider.requests]
+    sent = {i + 1: k for i, k in enumerate(kinds) if k}
+    assert sent == {1: "full", 6: "sparse", 11: "sparse", 16: "sparse", 21: "sparse",
+                    26: "full"}
+
+
+async def test_planning_again_with_a_plan_file_reads_it_first(
+        store: SqliteStore, tmp_path: Path) -> None:
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("ok") for _ in range(3)])
+    rt = runtime(store, provider, agent([perms], []))
+    client = Client(store)
+    tid = await client.create("a", "plan it", config={"cwd": str(tmp_path),
+                                                      "permission_mode": "plan"})
+    await rt.run_until_idle()
+    [entered] = [e.data for e in await events(client, tid)
+                 if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    path = Path(entered["plan"]["path"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Plan\n")
+    for mode, prompt in (("default", "build it"), ("plan", "plan the next part")):
+        await client.signal(tid, "permission_mode", {"mode": mode})
+        await client.send(tid, prompt)
+        await rt.run_until_idle()
+    again = plan_texts(provider.requests[-1])
+    assert again[0].startswith("## Back in plan mode") and str(path) in again[0]
+    assert again[1].startswith(FULL)
+
+
+async def test_a_sub_agent_of_a_planning_task_plans_too(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Claude Code's sub-agents run in their parent's mode, plan mode too,
+    with the sub-agent form of the text; they are offered no ExitPlanMode."""
+
+    class Spawn:
+        name = "Spawn"
+        description = "start a child"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = True
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            from noeta.core.tool import text_output
+            assert ctx.spawn is not None
+            ctx.spawn("a", "look around", background=True)
+            return text_output("started")
+
+    write = Fake("Write")
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"),
+                        risk={"Spawn": "low"})
+    provider = ScriptedProvider([reply("", ("Spawn", {})),
+                                 reply("", ("Write", {"file_path": str(tmp_path / "a.py")})),
+                                 reply("child done"), reply("parent done")])
+    rt = runtime(store, provider, agent([perms], [Spawn(), write]))
+    client = Client(store)
+    await client.create("a", "plan it", config={"cwd": str(tmp_path),
+                                                "permission_mode": "plan"})
+    await rt.run_until_idle()
+    child = next(r for r in provider.requests if any(m.text == "look around"
+                                                       for m in r.messages))
+    [text] = plan_texts(child)
+    assert "Answer the query you were given fully" in text
+    assert not any(t.name in ("ExitPlanMode", "EnterPlanMode") for t in child.tools)
+    assert write.runs == []
