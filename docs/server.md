@@ -57,7 +57,9 @@ worker. Two deployments work:
 Still local to a worker either way: a background `Bash` job and its log (the tree is held by
 that worker while it runs, and its tasks are told `hold_lost` if the worker dies), and the
 spill directory for long tool outputs (`~/.noeta/tool-results`; put it on the shared mount if
-front ends on other machines should open those files).
+front ends on other machines should open those files), and the files of images people paste
+(`~/.noeta/image-cache` on a local exec env; a worker that takes a task over writes them
+again from the conversation at the next turn and names the new place).
 
 ## The token
 

@@ -28,8 +28,9 @@ Kinds:
   seq ``through`` had their ``@`` mentions attached (an attachment is
   recorded with its message and names its ``path``).
 - ``images`` — ``{"through", "paths"}``: the person's message at log seq
-  ``through`` had its pasted images saved as ``paths`` (recorded with the
-  note naming them).
+  ``through`` has its pasted images saved as ``paths`` (recorded with the
+  note naming them; again when they had to be written elsewhere, and with
+  no paths once they are gone).
 - ``notice`` — ``{"text"}``: a note for the model to get after this call's
   result (a cut read's paging hint); ``notice_sent`` (the reminder that
   carried it) clears it.
@@ -103,6 +104,8 @@ class FsState(Struct):
     #: Log seq of the newest message of the person's whose pasted images
     #: were saved as files.
     images_through: int = 0
+    #: Log seq of a person's message (as text) -> where its images are saved.
+    images: dict[str, list[str]] = msgspec.field(default_factory=dict)
 
 
 def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
@@ -149,7 +152,12 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         through = data.get("through")
         if isinstance(through, bool) or not isinstance(through, int):
             return base
-        return msgspec.structs.replace(base, images_through=max(base.images_through, through))
+        paths = [p for p in data.get("paths") or () if isinstance(p, str)]
+        images = {k: v for k, v in base.images.items() if k != str(through)}
+        if paths:
+            images[str(through)] = paths
+        return msgspec.structs.replace(base, images_through=max(base.images_through, through),
+                                       images=images)
     if kind == KIND_FORGET_RANGES:
         return msgspec.structs.replace(base, reads={
             p: msgspec.structs.replace(r, range=None) for p, r in base.reads.items()})

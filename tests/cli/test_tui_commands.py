@@ -136,7 +136,7 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
         await settle(pilot, lambda: len(provider.requests) == 1 and not app.busy)
         *_, sent, attached, saved = provider.requests[0].messages
         # The pasted image is also saved as a file the model is told of.
-        assert saved.origin == "system" and "also saved as a file" in saved.text
+        assert saved.origin == "system" and "[Image source: " in saved.text
         [prompt] = [b for b in sent.content if isinstance(b, Text)]
         assert prompt.text.startswith("look at @calc.py")
         assert [b.media_type for b in sent.content if isinstance(b, Image)] == ["image/png"]

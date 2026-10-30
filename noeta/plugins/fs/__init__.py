@@ -32,7 +32,7 @@ from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
 from noeta.plugins.fs.mentions import attach_mentions
 from noeta.plugins.fs.notebook import NotebookEditTool
-from noeta.plugins.fs.pasted import save_pasted_images
+from noeta.plugins.fs.pasted import remove_task_images, save_pasted_images
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import (
     FS,
@@ -107,6 +107,7 @@ class FileTools(Extension):
         # The earlier Read results are gone: a re-read must return content.
         if isinstance(recorded.event, Compacted):
             view.record(self.name, KIND_FORGET_RANGES, {})
+        await remove_task_images(view, recorded)
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         if self.mentions:
