@@ -58,6 +58,18 @@ log = logging.getLogger("noeta.compaction")
 #: (``Reminder.order``): first, ahead of the invoked skills and the lists.
 RESTORED_ORDER = 10
 
+#: Claude Code's rapid-refill breaker: an automatic compaction needed again
+#: within this many model calls of the previous one, in the same turn, is
+#: a refill; this many refills in a row stop the turn instead.
+RAPID_REFILL_CALLS = 3
+RAPID_REFILLS_TO_STOP = 3
+THRASHING_REASON = "autocompact_thrashing"
+THRASHING_DETAIL = (
+    f"Automatic compaction stopped: the context filled up again within "
+    f"{RAPID_REFILL_CALLS} model calls of the previous compaction, "
+    f"{RAPID_REFILLS_TO_STOP} times in a row. A file or tool output is probably too large "
+    "for the context window; read it in smaller parts, or start a new conversation.")
+
 #: The ``/compact`` command and the text it puts in the conversation.
 COMMAND = "compact"
 COMMAND_DESCRIPTION = ("Summarize the conversation so far to free context "
@@ -94,6 +106,12 @@ class CompactionState:
     #: recorded, where every touch counts).
     seen_through: int | None = None
     restored_paths: tuple[str, ...] | None = None
+    #: Where the last compaction ran (person turns so far, model calls in
+    #: that turn) and the automatic compactions in a row that each came
+    #: within ``RAPID_REFILL_CALLS`` calls of the one before.
+    turn: int = -1
+    step: int = 0
+    rapid_refills: int = 0
 
 
 def _user_turns(state: TaskState) -> int:
@@ -174,6 +192,8 @@ class Compaction(Extension):
             return st
         seen, paths = data.get("seen_through"), data.get("restored_paths")
         return replace(st, compactions=st.compactions + 1,
+                       turn=int(data.get("turn") or 0), step=int(data.get("step") or 0),
+                       rapid_refills=int(data.get("rapid_refills") or 0),
                        kept_replies=int(data.get("kept_replies") or 0),
                        seen_through=seen if isinstance(seen, int) else None,
                        restored_paths=tuple(paths) if isinstance(paths, list) else None)
@@ -242,11 +262,16 @@ class Compaction(Extension):
         cut = self._cut(state, n, manual=False)
         if cut is None or self._through(state, cut) is None:
             return request
+        rapid = self._rapid_refills(state)
+        if rapid >= RAPID_REFILLS_TO_STOP:
+            log.warning("task %s: auto-compaction refilled %d times in a row; stopping",
+                        view.task_id, rapid)
+            raise TurnFailed(THRASHING_REASON, THRASHING_DETAIL)
         extra = await self._instructions(view, "auto", "")
         if extra is None:
             return request
         await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
-                            extra=extra)
+                            extra=extra, rapid_refills=rapid)
         # Every extension builds the request again from the compacted
         # conversation (betas and notes that depend on it included).
         raise RequestStale()
@@ -315,6 +340,16 @@ class Compaction(Extension):
             return n
         return last
 
+    def _rapid_refills(self, state: TaskState) -> int:
+        """The refill count an automatic compaction now would make: one more
+        than the last one's when that ran in this turn fewer than
+        ``RAPID_REFILL_CALLS`` model calls ago, else 0."""
+        ext = self._ext(state)
+        if not ext.compactions or ext.turn != _user_turns(state):
+            return 0
+        calls = state.steps_in_turn - ext.step
+        return ext.rapid_refills + 1 if 0 <= calls < RAPID_REFILL_CALLS else 0
+
     @staticmethod
     def _through(state: TaskState, cut: int) -> int | None:
         """The newest log seq among the first ``cut`` messages, or ``None``
@@ -345,7 +380,7 @@ class Compaction(Extension):
 
     async def _compact(self, view: TaskView, state: TaskState, request: ModelRequest,
                        cut: int, *, reason: str, estimated: int, extra: str = "",
-                       command_at: int | None = None) -> TaskState:
+                       command_at: int | None = None, rapid_refills: int = 0) -> TaskState:
         """Summarize the first ``cut`` messages, rebuild what follows the
         summary, record; returns the state as it is once the records are
         folded. ``command_at``: the index of the ``/compact`` message a
@@ -401,6 +436,8 @@ class Compaction(Extension):
                                  kept=after_summary, after=after, usage=usage))
         view.record(self.name, "compacted", {"reason": reason, "through": through,
                                              "estimated": estimated, "turn": _user_turns(state),
+                                             "step": state.steps_in_turn,
+                                             "rapid_refills": rapid_refills,
                                              "kept_replies": kept_replies,
                                              "restored_paths": full,
                                              "seen_through": max(state.history_seqs,

@@ -133,16 +133,34 @@ async def test_the_request_after_a_compaction_is_sent_as_it_is(store: SqliteStor
     await assert_rebuilds(store, a, tid)
 
 
-async def test_a_context_that_keeps_refilling_keeps_being_compacted(
+async def test_a_context_that_keeps_refilling_stops_after_three_rapid_refills(
         store: SqliteStore) -> None:
+    """Claude Code's rapid-refill breaker: a context that is over the
+    threshold again within 3 model calls of the previous compaction, 3
+    times in a row, ends the turn instead of summarizing on every step."""
     a = agent()
     model = Model([call(), *(big_call() for _ in range(7)), answer("done")])
     client, tid = await run(store, a, model)
-    # As Claude Code: every refill is compacted (the reply right after a
-    # compaction makes the next one summarize everything), the turn goes on.
-    assert len(await compactions(client, tid)) >= 4
+    assert len(await compactions(client, tid)) == 3
     last = (await events(client, tid))[-1]
-    assert isinstance(last, Waiting) and last.detail == {"answer": "done"}
+    assert last.detail["turn_failed"].startswith("autocompact_thrashing: Automatic compaction "
+                                                 "stopped")
+    recorded = [e.data["rapid_refills"] for e in await events(client, tid)
+                if isinstance(e, ExtensionRecorded) and e.kind == "compacted"]
+    assert recorded == [0, 1, 2]
+    await assert_rebuilds(store, a, tid)
+
+
+async def test_a_refill_in_a_new_turn_starts_the_count_again(store: SqliteStore) -> None:
+    a = agent()
+    model = Model([call(), *(big_call() for _ in range(3)), answer("one"),
+                   *(big_call() for _ in range(3)), answer("two")])
+    client, tid = await run(store, a, model)
+    await client.send(tid, "again")
+    await runtime(store, a, model).run_until_idle()
+    last = (await events(client, tid))[-1]
+    assert isinstance(last, Waiting) and last.detail == {"answer": "two"}
+    assert len(await compactions(client, tid)) >= 4  # two in each turn at least
 
 
 async def test_overflow_compacts_and_retries(store: SqliteStore) -> None:

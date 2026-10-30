@@ -30,6 +30,7 @@ summary, so their hash is specific to this recording; review them for the templa
 | compact.trigger.4 | The first request after a compaction is sent even when it is itself over the threshold (m3/0010 and m3/0019 carried ~35K input tokens); the next check, after that response, compacts again. |
 | compact.trigger.5 | No "context low" warning reminder is sent before an auto-compaction; the next request is simply the compaction request. |
 | compact.trigger.6 | The threshold is a fraction of the model's context window (configurable; the recording forced 30 % of a 100K window). The default fraction is not visible in the baseline recordings. |
+| compact.trigger.7 | Rapid-refill breaker (bundle, not in the recordings): within one user turn, an auto-compaction needed again fewer than 3 model calls after the previous one counts as a refill; at the third refill in a row no summary is made and the turn ends with an error telling the user the context keeps refilling, likely from an oversized file or tool output. A new user turn starts the count again. |
 
 ## The compaction request
 
