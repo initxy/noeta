@@ -433,3 +433,38 @@ async def test_a_changed_git_snapshot_is_given_again_at_a_later_turn(tmp_path: P
     subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "between"], check=True)
     [between] = [r for r in await ext.reminders(later()) if r.kind == "git"]
     assert "between" in between.text
+
+
+async def test_a_model_claude_code_tells_no_budget_gets_no_budget(tmp_path: Path) -> None:
+    """Only a shipped Claude model is told the ``<total_tokens>`` budget (Claude
+    Code's ``total_tokens_reminder`` capability): any other model gets no
+    budget notes and the prompt's budget line is taken out; a Claude model
+    keeps both."""
+    from noeta.backends.stores.sqlite import SqliteStore
+    from noeta.core.agent import Agent
+    from noeta.core.client import Client
+    from noeta.core.runner import Runtime
+    from noeta.testing import ScriptedProvider, reply
+
+    prompt = "Be brief.\n\n<total_tokens>15000000 tokens left</total_tokens>"
+    sent: dict[str, Any] = {}
+    for model in ("claude-opus-5-5", "opus", "g3-test-gateway-model"):
+        store = SqliteStore(str(tmp_path / f"{model}.db"))
+        provider = ScriptedProvider([reply("", ("Read", {})), reply("done")])
+        agent = Agent(name="a", model=model, system_prompt=prompt,
+                      extensions=[Environment(git_status=False, today=lambda: "2026-10-30")])
+        rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m, p=provider: p,
+                     env_for=lambda _s: LocalExecEnv(str(tmp_path)), sleep=_no_sleep)
+        await Client(store).create("a", "hi", config={"cwd": str(tmp_path)})
+        await rt.run_until_idle()
+        await store.close()
+        sent[model] = provider.requests
+    for model in ("claude-opus-5-5", "opus"):
+        first, second = sent[model]
+        assert first.system[-1].text == prompt
+        assert any(m.text == "<total_tokens>15000000 tokens left</total_tokens>"
+                   for m in first.messages)
+        assert second.messages[-1].text.startswith("<total_tokens>")
+    for request in sent["g3-test-gateway-model"]:
+        assert request.system[-1].text == "Be brief."
+        assert not any("<total_tokens>" in m.text for m in request.messages)

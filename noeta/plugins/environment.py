@@ -3,7 +3,9 @@ same places: a git snapshot and the commit-attribution note in the first
 user turn, the environment (with the model line, the deferred tools, the
 token budget and today's date) as a system turn right after it, and a
 ``<total_tokens>`` budget note after every prompt and tool result (a
-sub-agent's after its tool results).
+sub-agent's after its tool results). As in Claude Code, only a Claude model
+of the shipped catalog gets the budget: for any other model the notes are
+not sent and the prompt's budget line is taken out.
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout and platform,
@@ -27,18 +29,21 @@ from __future__ import annotations
 import os
 import platform
 import posixpath
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import msgspec
+
 from noeta.core import models
 from noeta.core.events import Recorded, Waiting
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
-from noeta.core.types import Message, ToolResult, system_message, user
+from noeta.core.types import Message, ModelRequest, ToolResult, system_message, user
 from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
 from noeta.toolkit.deltas import AMBIENT_NOTE, changed
@@ -360,6 +365,19 @@ def budget_note(left: int) -> str:
     return f"<total_tokens>{left} tokens left</total_tokens>"
 
 
+#: A budget line closing a system prompt (``main.md``'s last line).
+_PROMPT_BUDGET_LINE = re.compile(r"\n*<total_tokens>\d+ tokens left</total_tokens>\s*\Z")
+
+
+def gets_budget(model: str) -> bool:
+    """Whether ``model`` is told the ``<total_tokens>`` budget: Claude Code
+    tells only the models whose catalog row has ``total_tokens_reminder``,
+    every Claude model it ships and nothing else (a gateway id it does not
+    know gets none)."""
+    real = models.resolve_alias(model)
+    return real in models.CATALOG and real.startswith("claude")
+
+
 def date_line(today: str, *, utc: bool = False) -> str:
     """Today's date for the environment turn; ``utc`` when the user's time
     zone is not known, so the date is UTC's and said to be."""
@@ -547,14 +565,23 @@ class Environment(Extension):
                 out.append(Reminder(text=text.replace("{date}", today), kind="date",
                                     data={"date": today}, role="system", order=ORDER_DATE))
         # A sub-agent's task prompt gets none; its tool results do.
-        if self.token_budget and _owes_budget_note(view.state.messages,
-                                                   prompts=not view.state.parent_id):
+        if self.token_budget and gets_budget(self._model(view)) and _owes_budget_note(
+                view.state.messages, prompts=not view.state.parent_id):
             spent = view.state.usage.output
             base = spent if not view.state.steps_in_turn else st.get("turn_base", 0)
             left = max(self.token_budget - (spent - base), 0)
             out.append(Reminder(text=budget_note(left), kind="budget", data={"base": base},
                                 role="system", order=ORDER_BUDGET))
         return out
+
+    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+        """A model that is told no budget is not shown the prompt's budget
+        line either."""
+        if self.token_budget and gets_budget(request.model):
+            return request
+        system = [msgspec.structs.replace(p, text=_PROMPT_BUDGET_LINE.sub("", p.text))
+                  for p in request.system]
+        return msgspec.structs.replace(request, system=system)
 
     async def _git_again(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
         """At the start of a later turn, the snapshot taken again when the
