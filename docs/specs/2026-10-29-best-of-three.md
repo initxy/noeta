@@ -142,6 +142,40 @@ and reported in the README.
 - The replay's fake model reported zero input tokens; with the threshold now anchored on reported usage (C2) it would never compact. It reports noeta's own estimate of each request's text, as a real model reports its count; `make parity` stays at 0 mismatches.
 - The comparator names the opening of CC's too-large-file note (`names.json`), so it is split as its own kind instead of merging into the token-counter part, which is why the missing note (C9) went unseen; m3's contract re-distilled from the r2 recording changes only those layouts. A general "kind CC sends and noeta never does" check already existed (`diff_layout`); it could not fire on a part merged into another.
 
+### Benchmark (Phase 4)
+- Benchmarks: Terminal-Bench 4.0 (63 of 66 tasks; 3 need a GPU) and SWE-rebench 07-2026 (111).
+  Why: TB4 is the current headline board with Claude Code as its reference agent and is not
+  saturated; SWE-rebench is fresh (issues after the model's data) and cheap per task. TB 2.1 is
+  the smoke loop only.
+- Comparison: noeta against harbor's `claude-code` agent (CC 2.1.312) in one harbor job — same
+  model (`opensource/deepseek_v4_1_flash`, gateway Anthropic endpoint), effort `high`, tasks,
+  timeouts, interleaved trials, concurrency split evenly. Recorded requests agree on
+  `max_tokens` 65536, `thinking` adaptive, `output_config.effort` high, no temperature; CC gets
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = noeta's 1M window (2.1.312 honours it for non-Claude ids,
+  else it assumes 200k). The one wrapper over CC: both agents' process trees are stopped at
+  the agent timeout (harbor only cancels its `docker exec`; the agent kept editing during a
+  same-container verify).
+- Fairness of the environment: noeta installs into its own venv under `/opt/noeta-bench`
+  from uploaded static uv, rg and a python-build-standalone CPython; the task's interpreter
+  and packages are never touched.
+- Nothing uploaded: harbor telemetry off; CC telemetry, error reporting, auto-updater,
+  non-essential traffic and the WebFetch domain preflight off; local dataset copies (a
+  registry run records a download at harbor's hub); LiteLLM's price-map download off; network
+  logs of the smoke runs show only the gateway, the corp proxy (package and install
+  downloads) and task-driven traffic. The gateway key is redacted from job dirs.
+- Nothing else touched: each run builds every image through its own buildx builder, removed
+  with all it pulled at the end; prebuilt task images come in via a run-local dataset copy
+  whose Dockerfiles are `FROM <prebuilt>` (compose sidecars' `image:` too, every service kept),
+  so they live in the trial's compose project;
+  leftovers are removed only when compose labels or container mounts prove them the run's.
+  Pulled images are never removed by name or digest: another program may hold the same one.
+  Cost of that: disk peaks per task in flight (SWE-rebench median ~2 GB on docker's disk with
+  the builder's state elsewhere), so concurrency is sized to free space.
+- Measures: pass rate (setup failures counted, infrastructure errors shown apart), paired
+  per-task difference with its standard error, tokens from each agent's own records
+  (noeta: its store — sub-agents and compaction included; side calls such as titles are in
+  neither agent's count), time, and cost at DeepSeek's own list price (read 2026-10-30).
+
 ## Plan
 
 ### Phase 0: baseline
@@ -167,7 +201,7 @@ and reported in the README.
 - [ ] 9 trials each on DeepSeek V4.1; results and baseline archived.
 
 ### Phase 4: benchmark
-- [ ] Pick one or two current benchmarks, with reasons.
+- [x] Pick one or two current benchmarks, with reasons.
 - [ ] Run noeta and, where possible, CC on DeepSeek V4.1; version, samples, runs and cost in
       the README.
 
@@ -252,3 +286,4 @@ and reported in the README.
 - 2026-10-29 Re-review fixes (`ctx-fix-safety`): a task's spill directory is named by its id when that is a safe file name, else the id made safe plus a 10-hex hash (`task_spill_dir`), so two ids never share one; every save marks the directory with the task id (`.task-id`, `save_spilled` / `mark_spill_dir`) and the sweep goes by the marker only (no marker, or a task the store does not know: kept), so an open `chat:room1` task keeps its files. `deliver` frames every unframed message (re-review P3). Probe `test_probe_fix2.py` is `tests/host/test_spill.py::test_an_ended_tasks_old_saved_outputs_are_swept` and `tests/plugins/fs/test_mentions.py` (outside path and `~` on a server).
 - 2026-10-29 ctx-fix-fidelity (review-p1-fidelity fixes, from `best-of-three` @0d96a993): changed-file snippet with CC's 8 context lines and 8,192-character cut, no note after a windowed read; new, edited and nested-found skills listed with descriptions before the next model call (one checksum command over the SKILL.md files per call; nested ones no longer recorded as listed); sub-agent plan file `<parent plan name>-agent-<task id>.md`; hook blocking feedback names the command (deviation row removed); Bash 30,000, Monitor and ListAgents 10,000, ScheduleWakeup 1,000, ReportFindings 256 declared on the tools; plan-mode cadence checked per model call; MCP server instructions cut at 4,096 (read from the bundle); the memory index read again with each message; the plan-mode rules cut from the full text restored. Pending A/B section added to Decisions for S2, S4, B5, M7, C7, D6. The directory @-listing cap is left to ctx-fix-safety.
 - 2026-10-29 ctx-fix-fidelity gates: `make check` green (2523 passed, coverage 88.67 %), `make parity` 0 mismatches (11 accepted deviations, the hook-feedback row removed). DeepSeek V4.1, 9 trials, 9 scenarios (eval-coverage `evals/` run from a local copy, not committed), this branch vs `best-of-three` @0d96a993 (session scratchpad `fid/ds41-fix-fidelity*.json`): overall 0.919 vs 0.900; skill_activation, skill_follow, memory_save, memory_recall, plan_mode_read_only, plan_mode_started, mcp_tool_use 1.00 both; changed_file_reminder 0.73 vs 0.78 (every trial got the note and answered with the new value; the score differs only in whether the model also re-read the file, 3 vs 4 of 9); hook_block_adapts 0.53 vs 0.32 (PreToolUse text unchanged; base had more 420 s timeouts). 458 vs 515 requests, 5.6M vs 6.3M input tokens.
+- 2026-10-30 Phase 4 harness on branch `bench-2026` (`bench/compare.py`, `bench/harbor_adapter.py`): smoke 2+2 tasks both agents graded; gateway took 32 parallel calls with no 429; review fixes (own venv, CC context window, store usage, WebFetch preflight, run-owned builder and cleanup). Full run not started.
