@@ -12,6 +12,7 @@ import pytest
 
 from noeta.core.agent import Agent
 from noeta.core.types import ModelRequest, ModelResponse
+from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
@@ -232,3 +233,118 @@ async def test_a_blocked_prompts_recall_is_dropped_whatever_the_plugin_order(
     await h.say(a, tid, "vault please")
     main = h.provider.requests[-1]
     assert [m for m in main.messages if m.origin == "memory" and "1234" in m.text]
+
+
+def test_the_selector_is_sparing_with_broad_memories() -> None:
+    from noeta.plugins.memory.extension import RECALL_PROMPT
+    # Claude Code's selector rule: match the subject, not shared words, and
+    # be most careful with the user-profile and project-overview memories.
+    assert "[user]" in RECALL_PROMPT and "[project]" in RECALL_PROMPT
+    assert "not by words it happens to share" in RECALL_PROMPT
+
+
+def test_a_recalled_file_shows_its_start_and_says_where_the_rest_is() -> None:
+    from noeta.plugins.memory.extension import (
+        RECALL_FILE_MAX_BYTES,
+        RECALL_FILE_MAX_LINES,
+        recalled_text,
+    )
+    assert recalled_text("/m/a.md", "short") == "short"
+    many = "\n".join(f"line {i}" for i in range(300))
+    cut = recalled_text("/m/a.md", many)
+    assert cut.split("\n")[RECALL_FILE_MAX_LINES - 1] == f"line {RECALL_FILE_MAX_LINES - 1}"
+    assert cut.endswith(f"> Only the first {RECALL_FILE_MAX_LINES} lines of this memory are "
+                        "shown; Read /m/a.md for the whole file.")
+    wide = "\n".join("x" * 100 for _ in range(100))
+    cut = recalled_text("/m/a.md", wide)
+    body, note = cut.rsplit("\n", 1)
+    assert len(body.encode()) <= RECALL_FILE_MAX_BYTES and body.endswith("x")
+    assert f"first {RECALL_FILE_MAX_BYTES} bytes" in note
+
+
+async def test_recall_attaches_a_long_memory_cut_to_its_start(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "big.md", "everything", "\n".join("y" * 80 for _ in range(400)))
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["big.md"]})), reply("ok"))
+    await h.start(a, goal="tell me everything")
+    [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
+    assert len(recalled.text.encode()) < 4096 + 800
+    assert f"Read {directory / 'big.md'} for the whole file." in recalled.text
+
+
+async def test_an_old_recalled_memory_says_how_old_it_is(h: Harness, tmp_path: Path) -> None:
+    import os
+    import time
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "old.md", "old fact", "The parser lives in a.py:10.")
+    _memory(directory, "new.md", "new fact", "Fresh.")
+    _memory(directory, "day.md", "a day old", "Yesterday.")
+    week = time.time() - 7 * 86_400 - 60
+    os.utime(directory / "old.md", (week, week))
+    one = time.time() - 1.5 * 86_400
+    os.utime(directory / "day.md", (one, one))
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["old.md", "new.md", "day.md"]})),
+                   reply("ok"))
+    await h.start(a, goal="where is the parser")
+    [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
+    text = recalled.text
+    assert "This memory was last changed 7 days ago. A memory records what was true when " \
+        "it was written" in text
+    assert "Check against the current code before stating it as fact.\n" \
+        f"Memory {directory / 'old.md'}:" in text
+    # A day old or less carries no note (Claude Code's threshold).
+    assert text.count("last changed") == 1
+
+
+async def test_a_one_word_message_asks_no_selector(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    a = agent(home, recall_model="small")
+    h.provider.add(reply("ok"))
+    tid = await h.start(a, goal="  continue  ")
+    assert [r.model for r in h.provider.requests] == ["m"]
+    # CJK prose has no spaces; it is not one word.
+    h.provider.add(reply(json.dumps({"selected_memories": ["tabs.md"]})), reply("ok"))
+    await h.say(a, tid, "用制表符缩进这个文件")
+    assert [r.model for r in h.provider.requests] == ["m", "small", "m"]
+
+
+async def test_a_memory_the_task_read_is_not_recalled(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    _memory(directory, "deploy.md", "how deploys run", "Deploy on Fridays.")
+    a = Agent(name="a", model="m", extensions=[
+        FileTools(), Memory(home=str(home), recall_model="small")])
+    h.provider.add(reply(json.dumps({"selected_memories": []})),
+                   reply("", ("Read", {"file_path": str(directory / "tabs.md")})), reply("ok"))
+    tid = await h.start(a, goal="look at my tabs memory")
+    h.provider.add(reply(json.dumps({"selected_memories": []})), reply("ok"))
+    await h.say(a, tid, "and now the deploy one")
+    listing = h.provider.requests[-2].messages[0].text
+    assert "deploy.md" in listing and "tabs.md" not in listing
+
+
+async def test_a_sub_agent_recalls_nothing(tmp_path: Path) -> None:
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.core.types import user
+
+    async def complete(_r: ModelRequest) -> ModelResponse:
+        raise AssertionError("a sub-agent asked the selector")
+
+    state = TaskState(task_id="r.c1.1", agent="a", parent_id="r", root_id="r",
+                      ext={"memory": {"dir": str(tmp_path), "surfaced": [], "bytes": 0}})
+    state.messages.append(user("format this file"))
+    state.message_seqs.append(1)
+    view = TaskView(state=state, complete=complete)
+    assert await Memory(recall_model="small").reminders(view) == ()

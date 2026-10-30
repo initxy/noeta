@@ -2,18 +2,20 @@
 
 The ``skill`` tool's schema carries no roster (it is the same bytes for every
 task and turn); names and summaries reach the model as a listing recorded
-once per task (``roster``), and skills that join later are announced once
-(``added-<k>``). Removals and edited summaries are not announced.
+once per task (``roster``); a skill that joins later, or whose description
+changed since it was listed (its digest), is listed again under the same
+header, as Claude Code does. Removals are not announced.
 
-Budget: every line is ``- name: summary``; each summary is capped at 384
-estimated tokens; over the total budget every skill first gets a short form
+Budget: every line is ``- name: summary``; each summary is capped at 1,536
+characters (Claude Code's cap); over the total budget every skill first gets a short form
 (its first sentence, at most 24 tokens), then, budget permitting, its full
-summary — in keep order (rank, then tier, then priority, then name). A name
+summary — in keep order (rank, then tier, then name). A name
 is never dropped.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Collection, Mapping, Sequence
@@ -26,8 +28,7 @@ from noeta.plugins.skills.registry import (
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
 
 __all__ = [
-    "ADDED_HEADER",
-    "MENU_DESCRIPTION_MAX_TOKENS",
+    "MENU_DESCRIPTION_MAX_CHARS",
     "MENU_SHORT_SUMMARY_MAX_TOKENS",
     "ROSTER_HEADER",
     "fit_menu_to_budget",
@@ -37,14 +38,15 @@ __all__ = [
     "render_listing",
     "roster_line",
     "short_summary",
+    "skill_digest",
 ]
 
 _log = logging.getLogger(__name__)
 
-#: Per-skill cap on a summary, in estimated tokens (Claude Code's 1,536
-#: characters for an ASCII summary).
-MENU_DESCRIPTION_MAX_TOKENS = 384
-_TRUNCATION_MARKER = "… (truncated)"
+#: Per-skill cap on a summary, in characters (Claude Code's), the last one
+#: the marker.
+MENU_DESCRIPTION_MAX_CHARS = 1536
+_TRUNCATION_MARKER = "…"
 
 #: The short form an over-budget roster gives every skill first.
 MENU_SHORT_SUMMARY_MAX_TOKENS = 24
@@ -55,7 +57,6 @@ _SHORT_MARKER = "…"
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s|(?<=[。！？；])")  # noqa: RUF001
 
 ROSTER_HEADER = "The following skills are available via the `Skill` tool:"
-ADDED_HEADER = "New skills are available via the `Skill` tool:"
 
 
 def _clip_to_tokens(text: str, max_tokens: int, marker: str) -> str:
@@ -77,6 +78,13 @@ def roster_line(name: str, summary: str) -> str:
     return "- " + name + (": " + summary if summary else "")
 
 
+def skill_digest(desc: SkillDescription) -> str:
+    """What a listing remembers of a skill to see that it changed: a short
+    hash of its name and listed text (Claude Code's digest)."""
+    raw = desc.name + "\0" + listing_summary(desc)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def listing_summary(desc: SkillDescription) -> str:
     """What the listing says of a skill: its description, then its
     ``when_to_use`` after a dash (Claude Code's listing line)."""
@@ -87,22 +95,19 @@ def listing_summary(desc: SkillDescription) -> str:
 
 def _menu_description(text: str) -> str:
     text = strip_argument_placeholder(text)
-    if estimate_tokens(text) <= MENU_DESCRIPTION_MAX_TOKENS:
+    if len(text) <= MENU_DESCRIPTION_MAX_CHARS:
         return text
-    return _clip_to_tokens(text, MENU_DESCRIPTION_MAX_TOKENS, _TRUNCATION_MARKER)
+    return text[:MENU_DESCRIPTION_MAX_CHARS - 1] + _TRUNCATION_MARKER
 
 
 def menu_keep_order(
     registry: SkillRegistry, names: Sequence[str], rank: Mapping[str, float] | None = None
 ) -> tuple[str, ...]:
-    """Highest first: rank score, merge tier, then ``priority`` ascending,
-    then name."""
+    """Highest first: rank score, merge tier, then name."""
     scores = rank or {}
 
-    def key(name: str) -> tuple[float, int, int, str]:
-        desc = registry.get(name)
-        return (-float(scores.get(name, 0.0)), -registry.tier_of(name),
-                desc.priority if desc is not None else 0, name)
+    def key(name: str) -> tuple[float, int, str]:
+        return (-float(scores.get(name, 0.0)), -registry.tier_of(name), name)
 
     return tuple(sorted(names, key=key))
 
@@ -188,7 +193,7 @@ def listing_lines(
     return tuple((n, roster_line(n, fitted[n])) for n in names)
 
 
-def render_listing(first: bool, lines: Sequence[str]) -> str:
-    """The text of one recorded listing: a header, a blank line, then one
-    line per skill."""
-    return "\n".join((ROSTER_HEADER if first else ADDED_HEADER, "", *lines))
+def render_listing(lines: Sequence[str]) -> str:
+    """The text of one recorded listing, the first or a later one: a header,
+    a blank line, then one line per skill."""
+    return "\n".join((ROSTER_HEADER, "", *lines))

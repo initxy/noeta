@@ -25,11 +25,15 @@ tool's result, one message each: the instruction files of every directory
 between the working directory and the file, and the ``paths:`` rules (the
 user's, the working directory's and its ancestors', and those directories')
 whose globs match it. A compaction puts them all, read again, ahead of its
-summary. See :mod:`noeta.plugins.instructions.files` for how a file is read.
+summary. With each new message from the person, the files shown so far are
+read again and those whose text changed are shown again (Claude Code does so
+when a conversation is resumed; a durable task may resume with any message,
+on any worker). See :mod:`noeta.plugins.instructions.files` for how a file is read.
 """
 
 from __future__ import annotations
 
+import hashlib
 import posixpath
 from collections.abc import Sequence
 from typing import Any, Literal
@@ -37,6 +41,7 @@ from typing import Any, Literal
 from noeta.core.events import Recorded, ToolFinished
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, TaskView
+from noeta.core.models import model_limits
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.instructions.files import (
     FALLBACK_FILES,
@@ -52,8 +57,9 @@ from noeta.plugins.instructions.files import (
     Reader,
     clean,
 )
-from noeta.toolkit.context import read_text, task_env
+from noeta.toolkit.context import new_user_messages, read_text, task_env
 from noeta.toolkit.memory_index import read_memory_index
+from noeta.toolkit.tokens import chars_per_token
 from noeta.toolkit.tools import path_within
 
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_file",
@@ -64,6 +70,11 @@ DEFAULT_INSTRUCTIONS_FILENAMES = FALLBACK_FILES
 
 PREAMBLE = ("Below are instructions from the codebase and the user. Follow them: they "
             "override your default behavior and must be followed exactly as written.")
+#: Heads the files shown again because their text changed.
+REREAD_HEAD = (
+    "These instruction files changed since they were shown earlier in this conversation and "
+    "were read again; each text below replaces the one shown before. The note that opened the "
+    "instructions still applies.")
 LABELS = {
     MANAGED: "managed instructions set for this machine",
     USER: "the user's own instructions, for every project",
@@ -73,6 +84,14 @@ LABELS = {
 }
 #: The plugin whose recorded state names the memory directory.
 MEMORY_PLUGIN = "memory"
+#: A nested file (one a touched file brings) longer than the larger of
+#: these is cut: characters, and the share of the model's window in
+#: characters (Claude Code's limit).
+NESTED_MAX_CHARS = 40_000
+NESTED_WINDOW_SHARE = 0.05
+#: Closes a nested file cut to its start.
+NESTED_CUT_NOTE = ("> Only the start of this file is shown here; Read {path} from offset={offset} "
+                   "for the rest.")
 #: Tools whose touching a file brings the instructions that apply to it.
 FILE_TOOLS = {"Read": "file_path", "Edit": "file_path", "Write": "file_path",
               "NotebookEdit": "notebook_path"}
@@ -87,8 +106,31 @@ def render_instructions(files: Sequence[tuple[str, str, str]]) -> str:
     return "\n\n".join([PREAMBLE, *(render_file(*f) for f in files)])
 
 
+def nested_max_chars(model: str) -> int:
+    """The longest nested instruction file shown whole for ``model``."""
+    window, _ = model_limits(model) if model else (0, 0)
+    return max(NESTED_MAX_CHARS, round(window * NESTED_WINDOW_SHARE * chars_per_token(model)))
+
+
+def cut_nested(path: str, text: str, limit: int) -> str:
+    """``text`` within ``limit`` characters, cut at a line end, with a note
+    saying where the rest starts."""
+    if len(text) <= limit:
+        return text
+    kept = text[:limit]
+    newline = kept.rfind("\n")
+    kept = kept[:newline] if newline > 0 else kept
+    offset = kept.count("\n") + 2
+    return f"{kept}\n{NESTED_CUT_NOTE.format(path=path, offset=offset)}"
+
+
 def _entry(f: InstructionFile, real: str) -> dict[str, str]:
-    return {"path": f.path, "kind": f.kind, "real": real}
+    return {"path": f.path, "kind": f.kind, "real": real, "digest": text_digest(f.text)}
+
+
+def text_digest(text: str) -> str:
+    """What the task remembers of a shown file's text to see it changed."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 class Instructions(Extension):
@@ -150,15 +192,23 @@ class Instructions(Extension):
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         state = {**self.initial_state(), **(state or {})}
         if kind == "start":
-            return {**state, "files": list(data["files"]), "root": True}
+            return {**state, "files": list(data["files"]), "root": True,
+                    "digests": _digests(data["files"])}
         if kind == "nested":
-            return {**state, "nested": [*state["nested"], *data["files"]]}
+            return {**state, "nested": [*state["nested"], *data["files"]],
+                    "digests": {**(state.get("digests") or {}), **_digests(data["files"])}}
+        if kind in ("reread", "sent"):
+            return {**state, "digests": {**(state.get("digests") or {}), **data["digests"]}}
         if kind in ("root", "file"):  # a log written before the directory walk
             return {**state, "names": [*state["names"], data["name"]],
                     "root": state["root"] or kind == "root"}
         return state
 
     # ------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _model(view: TaskView) -> str:
+        return str(view.state.config.get("model") or view.model or "")
 
     def _reader(self, view: TaskView) -> tuple[Reader, str]:
         env = task_env(view.env, view.state.config)
@@ -229,6 +279,8 @@ class Instructions(Extension):
                     message=user(render_instructions(rendered), origin=self.origin))
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        if new_user_messages(view.state, recorded.seq):
+            await self._reread_changed(view)
         event = recorded.event
         if not self.discovery or not isinstance(event, ToolFinished) or event.result.is_error:
             return
@@ -251,10 +303,40 @@ class Instructions(Extension):
         state = view.ext_state(self.name) or {}
         reader.seen.update(e["real"] for e in [*state.get("files", []), *state.get("nested", [])])
         reader.seen.update(posixpath.join(root, n) for n in state.get("names", []))
+        limit = nested_max_chars(self._model(view))
         for f in await self._nested_files(reader, root, resolved):
             real = await _real(reader.env_for(f.kind), f.path)
+            text = f.text if f.kind == MANAGED else cut_nested(f.path, f.text, limit)
             view.record(self.name, "nested", {"files": [_entry(f, real)]},
-                        message=user(render_file(f.path, f.kind, f.text), origin=self.origin))
+                        message=user(render_file(f.path, f.kind, text), origin=self.origin))
+
+    async def _reread_changed(self, view: TaskView) -> None:
+        """The files shown so far, read again: those whose text changed are
+        shown again under :data:`REREAD_HEAD` (a missing file is not)."""
+        state = view.ext_state(self.name) or {}
+        digests: dict[str, str] = state.get("digests") or {}
+        if not digests:
+            return
+        reader, _cwd = self._reader(view)
+        limit = nested_max_chars(self._model(view))
+        changed: list[tuple[str, str, str]] = []
+        fresh: dict[str, str] = {}
+        nested = {e["path"] for e in state.get("nested", [])}
+        for e in [*state.get("files", []), *state.get("nested", [])]:
+            path, before = e["path"], digests.get(e["path"])
+            if before is None or path in fresh:
+                continue
+            text = await _reread(reader.env_for(e["kind"]), path)
+            if text is None or text_digest(text) == before:
+                continue
+            fresh[path] = text_digest(text)
+            if path in nested and e["kind"] != MANAGED:
+                text = cut_nested(path, text, limit)
+            changed.append((path, e["kind"], text))
+        if changed:
+            body = "\n\n".join([REREAD_HEAD, *(render_file(*f) for f in changed)])
+            view.record(self.name, "reread", {"digests": fresh},
+                        message=user(body, origin=self.origin))
 
     async def _nested_files(self, reader: Reader, root: str,
                             target: str) -> list[InstructionFile]:
@@ -283,10 +365,12 @@ class Instructions(Extension):
         reader, cwd = self._reader(view)
         state = view.ext_state(self.name) or {}
         start: list[tuple[str, str, str]] = []
+        sent: dict[str, str] = {}
         for e in state.get("files", []):
             text = await _reread(reader.env_for(e["kind"]), e["path"])
             if text is not None:
                 start.append((e["path"], e["kind"], text))
+                sent[e["path"]] = text_digest(text)
         for name in state.get("names", []):
             source = self.file if "/" not in name and self.file is not None else name
             path = source if posixpath.isabs(source) else posixpath.join(cwd, source)
@@ -297,11 +381,25 @@ class Instructions(Extension):
         if memory is not None:
             start.append(memory)
         out = [user(render_instructions(start), origin=self.origin)] if start else []
+        limit = nested_max_chars(self._model(view))
         for e in state.get("nested", []):
             text = await _reread(reader.env_for(e["kind"]), e["path"])
             if text is not None:
+                sent[e["path"]] = text_digest(text)
+                if e["kind"] != MANAGED:
+                    text = cut_nested(e["path"], text, limit)
                 out.append(user(render_file(e["path"], e["kind"], text), origin=self.origin))
+        known = state.get("digests") or {}
+        sent = {p: d for p, d in sent.items() if p in known and known[p] != d}
+        if sent:
+            view.record(self.name, "sent", {"digests": sent})
         return out
+
+
+def _digests(entries: Sequence[dict[str, str]]) -> dict[str, str]:
+    """The digests of recorded entries (an entry recorded before digests
+    were kept has none, and is never shown again)."""
+    return {e["path"]: e["digest"] for e in entries if e.get("digest")}
 
 
 async def _real(env: ExecEnv, path: str) -> str:

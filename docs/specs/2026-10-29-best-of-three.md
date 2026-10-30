@@ -37,6 +37,24 @@ and reported in the README.
 
 ## Decisions
 
+- **Instruction re-read trigger (B8).** CC: re-reads instruction files on `--continue`/resume
+  and puts the changed ones before the resumed prompt. pi: re-reads only on `/reload`. dsh:
+  announces updated nested files ("Updated instructions from:"). noeta: re-reads the files shown
+  so far with every new message and shows the changed ones after that message. Why: a durable
+  task has no resume moment (it sleeps between messages and may wake on another worker), and a
+  note for a message lands after it in the append-only log. Evidence: zero tokens when nothing
+  changed (digest compare); `parity/deviations.md` row; test
+  `test_a_changed_instruction_file_is_shown_again_with_the_next_message`.
+- **List-change notes (T2, B7) are a subset of CC's.** CC's deferred-tools delta also covers
+  restored/retracted tool definitions, a denied-tool lead and needs-auth servers, and compresses
+  long name lists; noeta tells joined, returned and removed names, and MCP server instructions
+  joined/changed/removed. Why: the rest belongs to CC features noeta does not have (definition
+  retraction, the auth-stub listing is already a tool), per "no features beyond CC's". The MCP
+  instructions cap of 2,048 characters is CC's truncation shape ("… [truncated]"); its exact
+  number was not read from the bundle (the constant is imported across modules), so it is the
+  value CC uses for MCP descriptions — check it when the next recording has a server with long
+  instructions.
+
 ## Plan
 
 ### Phase 0: baseline
@@ -90,3 +108,21 @@ and reported in the README.
 ## Progress log
 - 2026-10-29 Started from local main @37fd9997; `make check` 2424 passed.
 - 2026-10-29 Baseline on main: `make parity` 0 mismatches (11 accepted deviations); `make cluster` 13/13; DeepSeek V4.1 eval 9 trials overall 0.919 (`evals/results/ds41-main-37fd9997.json`): every scenario 1.00 except delegate_parallel_review 0.11 (5 of 9 hit the 240 s trial timeout), honest_test_failure 0.89, concise_direct_answer 0.94. 522 requests, 6.7M input tokens (5.3M cached), 125k output.
+- 2026-10-29 T3: ToolSearch `+word` also matches a whole word of the description, as Claude Code filters (`noeta/plugins/tool_search/search.py`).
+- 2026-10-29 M5: the recall selector picks by subject and is sparing with [user]/[project] memories (`memory/recall`); `side.recall` rules added.
+- 2026-10-29 M3: a recalled memory shows its first 200 lines / 4,096 bytes with a note naming the file to Read (`noeta/plugins/memory/extension.py`).
+- 2026-10-29 M4: a recalled memory older than a day carries an age-and-verify note ahead of its path.
+- 2026-10-29 M6: recall skips sub-agents and one-word (non-CJK) messages, and never offers a memory file the task already Read.
+- 2026-10-29 S3: a skill listing line is capped at 1,536 characters + `…` (was 384 estimated tokens, which cut CJK descriptions at 384 characters).
+- 2026-10-29 S12: the noeta-only `priority:` skill key is gone; over-budget keep order is rank, tier, name.
+- 2026-10-29 S7/S9: a loaded skill is the base-directory line and its body (no "Activated skill" header or description, one blank line); the Skill result says the skill starts now and its text follows; the post-compaction block follows.
+- 2026-10-29 S6: a skill whose listed text changed is listed again (digest kept in the listing record), under the same header as the first listing.
+- 2026-10-29 S10: a skill named mid-message (`/<name>` not as the leading command) gets a skill-mention note (`reminder/skill_mention`).
+- 2026-10-29 S11: a `.noeta/skills` / `.agents/skills` below the working directory joins the task when a file under it is touched, announced by name (directories recorded in the log).
+- 2026-10-29 I3: an `@import` whose extension is not on Claude Code's text list is skipped (`TEXT_EXTENSIONS`, `noeta/plugins/instructions/files.py`).
+- 2026-10-29 I2: a nested instruction file over max(40,000, 5 % of the window in characters) is cut at a line end with a Read-the-rest note (`noeta/plugins/instructions/extension.py`, `chars_per_token`).
+- 2026-10-29 B8: instruction files shown so far are read again with each new message; changed ones are shown again under a re-read note (digests in the log; deviation row for the trigger and placement).
+- 2026-10-29 T2: deferred tools that join, return or leave mid-task are told in a system note (`deferred_delta`, `noeta/plugins/environment.py`; shared `noeta/toolkit/deltas.py`); the last list named is in the log.
+- 2026-10-29 B7 (agents): agent types that join or leave mid-task are told in a system note (`subtasks` plugin, types in the log).
+- 2026-10-29 B7 (MCP): servers' `instructions` from `initialize` reach the model under `# MCP Server Instructions` and are withdrawn on disconnect (`noeta/plugins/mcp/instructions.py`; recorded in the server listing, told set in the log).
+- 2026-10-29 ctx-skills-memory gates: `make check` 2446 passed, coverage 88.46 %; `make parity` 0 mismatches (11 accepted deviations). DeepSeek V4.1, 9 trials, 5 scenarios vs `ds41-main-37fd9997`: no_delegate_trivial_lookup, read_over_shell_cat, compaction_continuity 1.00 (=); edit_not_write 0.92 (-0.08: 3 trials renamed with `sed` through Bash, which the auto-mode guidance allows; correct result, no Write); delegate_parallel_review 0.00 (-0.11, 5 of 9 hit the 240 s trial timeout, as on main). No list-change or re-read note fired in any trial; the harness reports no regression.

@@ -102,6 +102,7 @@ file names. Each row is a name the model sees; the files themselves are product 
 | id | difference | reason |
 |---|---|---|
 | | An `@path` import from a repository file that leaves the repository directory and the working directory is skipped, not asked about (`rem.instructions.7`). | No noeta front end has Claude Code's approval dialog for external imports; skipping is the safe side of it. |
+| | Changed instruction files are shown again with any new message from the person, not only when a conversation is resumed, and the note follows that message in its turn instead of preceding it (`rem.instructions-reread.1`). | A durable task has no resume moment: it sleeps between messages and may wake days later on another worker, so every message is a resume; a note recorded for a message lands after it in the append-only log. |
 
 ## Not yet matched
 

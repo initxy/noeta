@@ -11,6 +11,7 @@ from noeta.core import models
 from noeta.core.agent import Agent
 from noeta.core.extension import TaskView
 from noeta.plugins.subtasks import texts
+from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 
 #: ``agents=["*"]``: every agent of the worker that has a description.
 ALL_AGENTS = "*"
@@ -86,9 +87,25 @@ def agent_list(roster: Mapping[str, SubagentSpec]) -> str | None:
     """The agent types a task can start, one line each with its tools."""
     if not roster:
         return None
-    lines = [f"- {s.name}: {s.description} (Tools: {s.tools})"
-             for s in sorted(roster.values(), key=lambda s: s.name.lower())]
+    lines = [agent_line(s) for s in sorted(roster.values(), key=lambda s: s.name.lower())]
     return "\n".join([texts.AGENT_LIST_HEAD, *lines, "", texts.AGENT_LIST_TAIL])
+
+
+def agent_line(spec: SubagentSpec) -> str:
+    return f"- {spec.name}: {spec.description} (Tools: {spec.tools})"
+
+
+def agent_list_delta(before: Sequence[str], roster: Mapping[str, SubagentSpec]) -> str:
+    """The note on agent types that joined or left since ``before`` was
+    listed (``""`` when none did)."""
+    joined, left = changed(before, sorted(roster, key=str.lower))
+    parts: list[str] = []
+    if joined:
+        parts.append("\n".join([texts.AGENT_LIST_ADDED, *(agent_line(roster[n]) for n in joined)]))
+    if left:
+        parts.append("\n".join([texts.AGENT_LIST_REMOVED, *(f"- {n}" for n in left)]))
+        parts.append(AMBIENT_NOTE)
+    return "\n".join(parts)
 
 
 def _tools_column(agent: Any) -> str:

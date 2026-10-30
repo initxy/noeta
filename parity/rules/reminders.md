@@ -73,10 +73,10 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.instructions.4 | Sent again before the summary after compaction (see `compaction.md`); unchanged otherwise. |
 | rem.instructions.5 | Files, in order (Claude Code 2.1.312 bundle): the machine's managed `CLAUDE.md` and its `.claude/rules`; the user's `~/.claude/CLAUDE.md` and `~/.claude/rules`; then each directory from the outermost ancestor of the working directory (the filesystem root excluded) down to it: `CLAUDE.md`, `.claude/CLAUDE.md`, the `.claude/rules` files, `CLAUDE.local.md`; last the auto memory index. `AGENTS.md` is not read. |
 | rem.instructions.6 | Kinds named in the path line: managed policy, the user's global instructions, project instructions checked into the codebase, the user's private (not checked-in) project instructions, the auto memory. |
-| rem.instructions.7 | `@path` in a file's text (not in code blocks, inline code or HTML comments; `./`, `~/`, absolute or a plain relative name; a `#fragment` is cut) imports that file, listed right after the importing one with the same kind; a file is listed once; an import five levels below the first file is not read; an import outside the working directory from a repository file needs the user's approval. HTML comments are removed from the text, a rule file's frontmatter too. |
+| rem.instructions.7 | `@path` in a file's text (not in code blocks, inline code or HTML comments; `./`, `~/`, absolute or a plain relative name; a `#fragment` is cut) imports that file, listed right after the importing one with the same kind; a file is listed once; an import five levels below the first file is not read; an import outside the working directory from a repository file needs the user's approval. HTML comments are removed from the text, a rule file's frontmatter too. (bundle) An import whose extension is not on Claude Code's list of text extensions (markdown, plain text, config formats, source code, …) is skipped; a name without an extension is read. |
 | rem.instructions.8 | A rules file whose frontmatter has `paths:` (gitignore-style globs, relative to the directory holding `.claude/`; the user's relative to the working directory) is left out at the start and shown when a file it matches is touched. |
 | rem.instructions.9 | The auto memory index (`MEMORY.md`, cut to its line and byte limits) is the last file of this reminder, labelled as auto memory. |
-| rem.instructions.10 | When a tool touches a file below the working directory, the instruction files of each directory between them (and matching `paths:` rules) that were not shown yet follow as their own reminder, one per file: the path line (no kind) and the text, no preamble. |
+| rem.instructions.10 | When a tool touches a file below the working directory, the instruction files of each directory between them (and matching `paths:` rules) that were not shown yet follow as their own reminder, one per file: the path line (no kind) and the text, no preamble. (bundle) A nested file that is not managed policy and is longer than the larger of 40,000 characters and 5 % of the model's window in characters (3 characters a token, 4 for older Claude models) is cut at a line end and closed by a line saying only its start is shown and naming the path and line offset to `Read` the rest. noeta today: covered (the note in our words; also when the files are sent again after a compaction). |
 
 ## git-status
 
@@ -178,6 +178,24 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.command.5 | `/compact` is preceded by a `<local-command-caveat>` block: the command was run directly by the user, not sent to the model as a request, its output went straight to the user, and it is kept only as context for later messages. `/plan` with arguments had no caveat and itself started a model turn. |
 | rem.command.6 | All command blocks persist; after `/compact` they appear in the first user message after the summary, ahead of the next prompt (see `compaction.md`). |
 
+## skill notes (bundle, not recorded)
+
+| id | rule |
+|---|---|
+| rem.skill-mention.1 | When a user message names a skill as `/<name>` anywhere but as its leading command (preceded by the start, whitespace or a CJK sentence mark, followed by whitespace or the end), a `<system-reminder>` after the message says it names that skill: call `Skill` with it (and the arguments given) if the user wants it run, and do not run it if they only mention it. One per skill named; only skills the model may invoke. noeta today: covered (`skills` plugin, `reminder/skill_mention`, our words). |
+| rem.nested-skills.1 | When a tool touches a file in a directory below the working directory that has its own skills directory (in a directory between the two), that directory's skills join the conversation and a `<system-reminder>` names the directory (relative) and lists the new skills by name, one `- <name>` line each. noeta today: covered for `.noeta/skills` and `.agents/skills` (noeta's places), in trusted workspaces; the found directories are recorded in the task log. |
+
+## list changes (bundle, not recorded)
+
+The recordings never changed a list mid-conversation; these rows come from the 2.1.312 bundle.
+Each note goes out with the next request after the change, as a `role: "system"` note.
+
+| id | rule |
+|---|---|
+| rem.deltas.1 | Deferred tools: names that join are listed under the deferred-tool lead-in (`main.env.6`); names announced earlier that return are named as available again (for MCP tools: their server reconnected), to be loaded with `ToolSearch` as before; names that leave are listed as no longer available (for MCP tools: their server disconnected), not to be searched for since `ToolSearch` will not find them. A note that names a removal closes with a line saying it is background context, not to be narrated to the user unless relevant. After a compaction the full list is sent again. noeta today: covered (`environment` plugin, our words; the last list named is in the task log). |
+| rem.deltas.2 | Agent types: types that join are listed under a lead-in saying new agent types are available, one line each in the agent list's format (`main.env.8`); types that leave are listed by name as no longer available, followed by the background-context line. A conversation that had no agent list gets the whole list once a type appears. noeta today: covered (`subtasks` plugin; the types last listed are in the task log). |
+| rem.deltas.3 | MCP server instructions (the `instructions` of a server's `initialize` result, cut to 2,048 characters): a server that connects with instructions, or whose instructions changed, gets a `# MCP Server Instructions` heading, a lead-in saying these servers gave instructions for their tools and resources, and one `## <server>` block with the text; a server that disconnects is named under a line saying its instructions above no longer apply, followed by the background-context line. Sent again in full after a compaction. noeta today: covered (`mcp` plugin; the instructions ride in the recorded server listing and the last told set is in the task log). |
+
 ## plan mode
 
 | id | rule |
@@ -223,6 +241,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 |---|---|
 | rem.instructions-reread.1 | Trigger: `--continue`/resume when an instruction file changed since it was last sent. Placement: `<system-reminder>` block at the start of the first new user message, before the prompt. |
 | rem.instructions-reread.2 | Content: instruction files were re-read when the session started; only files whose content changed are listed, and each listed text supersedes the version shown before; the earlier preamble (rem.instructions.2) still applies. Then per changed file the same path-and-kind line and full new text as rem.instructions.3. Unchanged files are not repeated. |
+| rem.instructions-reread.4 | noeta today: covered, with the trigger adapted to durable tasks: the files shown so far (start and nested) are read again with every new message from the person, and the changed ones are shown again, in our words; the note follows the person's message in the same turn (`parity/deviations.md`). The digests of what was shown live in the task log. |
 | rem.instructions-reread.3 | Observed defect, not to copy: the resumed prompt appears twice in that message (once with a trailing newline). |
 
 ## user answers through tools
@@ -245,4 +264,4 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | id | rule |
 |---|---|
 | rem.absent.1 | No todo/task-list nudge, no `TodoWrite`/`TaskCreate` reminder (neither tool is in the baseline tool set). |
-| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred list is fixed in the environment message and re-sent only after compaction), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. |
+| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred set never changed mid-conversation; see rem.deltas), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. |

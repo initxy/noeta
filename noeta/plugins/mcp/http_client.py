@@ -35,7 +35,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from noeta.plugins.mcp.client import McpClient, initialize_params, reply_result
+from noeta.plugins.mcp.client import (
+    McpClient,
+    initialize_params,
+    reply_result,
+    server_instructions,
+)
 from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpAuthRequired, McpError
 from noeta.plugins.mcp.stdio import LINE_CAP, TOTAL_CAP
 
@@ -125,6 +130,7 @@ class HttpClient(McpClient):
             self.headers = {**self.headers, **await self._headers_fn()}
         result = await self.request("initialize", initialize_params(
             bare_elicitation=self.bare_elicitation))
+        self.instructions = server_instructions(result)
         version = result.get("protocolVersion")
         self.protocol_version = version if isinstance(version, str) and version else None
         if self.connection_id is not None:

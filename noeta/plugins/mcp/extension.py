@@ -58,10 +58,12 @@ from noeta.core.extension import (
     Command,
     CommandContext,
     Extension,
+    Reminder,
     TaskView,
 )
 from noeta.core.questions import ask
 from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
+from noeta.core.types import Message
 from noeta.plugins.mcp.admin import McpAdmin
 from noeta.plugins.mcp.client import McpClient, RequestContext
 from noeta.plugins.mcp.config import (
@@ -74,6 +76,7 @@ from noeta.plugins.mcp.config import (
     tool_timeout_s,
 )
 from noeta.plugins.mcp.elicitation import elicitation_questions, elicitation_result
+from noeta.plugins.mcp.instructions import cap_instructions, instructions_delta
 from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.prompts import McpPrompt, expand_prompt, list_prompts
 from noeta.plugins.mcp.results import render_result
@@ -98,6 +101,8 @@ log = logging.getLogger("noeta.plugins.mcp")
 Servers = Union[Sequence[McpServer], Mapping[str, Any]]
 ServersFn = Callable[[TaskView], Union[Servers, Awaitable[Servers]]]
 ScopeFn = Callable[[TaskView], Union[str, None]]
+#: A server's tools and its instructions, as listed.
+_Listing = tuple[list[dict[str, Any]], Union[str, None]]
 
 
 #: The ``tools/call`` ``_meta`` key that carries ``ToolContext.idempotency_key``.
@@ -107,6 +112,9 @@ IDEMPOTENCY_META = "noeta/idempotencyKey"
 #: otherwise (another worker took it, a crash) is forgotten, least recently
 #: resolved first, once this many newer ones are.
 TASKS_KEEP = 256
+#: The servers' instructions in the joined system turn (``Reminder.order``):
+#: after the deferred tools, before the agent list.
+INSTRUCTIONS_ORDER = 35
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
@@ -119,7 +127,7 @@ def _as_list(servers: Servers) -> list[McpServer]:
 class _Call:
     """A ``tools/call`` in flight, and the server questions it brought."""
 
-    job: asyncio.Task[tuple[dict[str, Any], list[dict[str, Any]] | None]] | None = None
+    job: asyncio.Task[tuple[dict[str, Any], _Listing | None]] | None = None
     questions: asyncio.Queue[tuple[dict[str, Any], asyncio.Future[dict[str, Any]]]] = field(
         default_factory=asyncio.Queue)
 
@@ -217,6 +225,8 @@ class Mcp(Extension):
             st["down"] = {**st["down"], data["alias"]: data["reason"]}
         elif kind == "server_up":
             st["down"] = {k: v for k, v in st["down"].items() if k != data["alias"]}
+        elif kind == "instructions":
+            st["told"] = dict(data["servers"])
         return st
 
     # ------------------------------------------------------------ tools
@@ -274,7 +284,7 @@ class Mcp(Extension):
         scope = self._scopes.get(ctx.task_id)
         call = _Call()
 
-        async def run(c: McpClient) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
+        async def run(c: McpClient) -> tuple[dict[str, Any], _Listing | None]:
             result = await c.call_tool(tool.remote, args,
                                        timeout=tool_timeout_s(server.call_timeout),
                                        meta={IDEMPOTENCY_META: ctx.idempotency_key})
@@ -282,7 +292,7 @@ class Mcp(Extension):
                 return result, None
             c.tools_changed = False
             try:
-                return result, await c.list_tools()
+                return result, await _listing(c)
             except McpError:
                 return result, None  # the next turn lists it anyway
 
@@ -340,7 +350,7 @@ class Mcp(Extension):
         except McpError as exc:
             return text_output(f"{tool.name}: {exc}", is_error=True)
         if listed is not None and server is not None:
-            self._record_server(ctx, _server_entry(server, listed))
+            self._record_server(ctx, _server_entry(server, *listed))
         return await render_result(result, ctx)
 
     def _drop_parked(self, key: tuple[str, str]) -> None:
@@ -413,14 +423,37 @@ class Mcp(Extension):
         if failed is not None:
             return failed
         try:
-            raw = await self.pool().use(server, scope, lambda c: c.list_tools(),
+            raw = await self.pool().use(server, scope, _listing,
                                         context=self._context(ctx.task_id))
         except McpError:
             return text_output(f"Authentication complete for {server.alias!r}. Its tools "
                                "become available from the user's next message.")
-        self._record_server(ctx, _server_entry(server, raw))
+        self._record_server(ctx, _server_entry(server, *raw))
         return text_output(f"Authentication complete for {server.alias!r}. Its tools are "
                            "available now.")
+
+    # ------------------------------------------------------------ instructions
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """The servers' instructions, as Claude Code gives them: those of a
+        server that joined (or changed them) since they were last told, and
+        the names of servers gone since."""
+        st = view.ext_state(self.name) or {}
+        if st.get("servers") is None:
+            return ()
+        now = {s["alias"]: s["instructions"] for s in st["servers"] if s.get("instructions")}
+        text = instructions_delta(st.get("told") or {}, now)
+        if not text:
+            return ()
+        return (Reminder(text=text, kind="instructions", data={"servers": now},
+                         role="system", order=INSTRUCTIONS_ORDER),)
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """After a compaction the instructions are told again in full."""
+        st = view.ext_state(self.name) or {}
+        if view.keeps_tail is not None and st.get("told"):
+            view.record(self.name, "instructions", {"servers": {}})
+        return ()
 
     # ------------------------------------------------------------ lifecycle
 
@@ -619,9 +652,8 @@ class Mcp(Extension):
     async def _list(self, server: McpServer, scope: str | None, context: RequestContext
                     ) -> tuple[dict[str, Any] | None, str | None]:
         try:
-            raw = await self.pool().use(server, scope, lambda c: c.list_tools(), retry=True,
-                                        context=context)
-            return _server_entry(server, raw), None
+            raw = await self.pool().use(server, scope, _listing, retry=True, context=context)
+            return _server_entry(server, *raw), None
         except McpAuthRequired:
             return {"alias": server.alias, "deferred": server.deferred,
                     "tools": auth_stub_entries(server)}, None
@@ -629,9 +661,16 @@ class Mcp(Extension):
             return None, str(exc)
 
 
-def _server_entry(server: McpServer, raw: list[dict[str, Any]]) -> dict[str, Any]:
+async def _listing(c: McpClient) -> _Listing:
+    """A server's tools and its instructions."""
+    return await c.list_tools(), c.instructions
+
+
+def _server_entry(server: McpServer, raw: list[dict[str, Any]],
+                  instructions: str | None = None) -> dict[str, Any]:
     """The recorded tool set of one server: subset-filtered, named, sorted
-    by offered name (so the order never depends on the server's)."""
+    by offered name (so the order never depends on the server's), with the
+    server's instructions when it gives any."""
     allow = set(server.tools) if server.tools is not None else None
     kept = [r for r in raw if allow is None or r.get("name") in allow]
     names = map_server_names(server.alias, [r.get("name") for r in kept])
@@ -647,5 +686,8 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]]) -> dict[str, Any
         tools[name] = {"name": name, "remote": remote,
                        "description": describe_tool(r.get("description")),
                        "input_schema": schema}
-    return {"alias": server.alias, "deferred": server.deferred,
-            "tools": [tools[n] for n in sorted(tools)]}
+    entry: dict[str, Any] = {"alias": server.alias, "deferred": server.deferred,
+                             "tools": [tools[n] for n in sorted(tools)]}
+    if instructions:
+        entry["instructions"] = cap_instructions(instructions)
+    return entry

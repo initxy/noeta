@@ -269,6 +269,71 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     assert texts[0].endswith("- [Note](note.md) — a note")
     assert texts[1] == "(summary)"
     assert texts[2].startswith("These skills were invoked earlier")
-    assert "### Skill: deploy" in texts[2] and "Activated skill: deploy" in texts[2]
+    assert "### Skill: deploy\nPath: " in texts[2]
+    assert "\n\nBase directory for this skill: " in texts[2] and "Activated" not in texts[2]
     assert texts[3].startswith("The following skills are available")
     assert len(texts) == 4
+
+
+async def test_an_import_of_a_non_text_file_is_skipped(h: Harness) -> None:
+    (h.work / "NOETA.md").write_text("Logo @logo.png data @data.bin notes @notes.txt "
+                                     "make @Makefile R @stats.R\n")
+    (h.work / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    (h.work / "data.bin").write_text("binary-ish\n")
+    (h.work / "notes.txt").write_text("notes\n")
+    (h.work / "Makefile").write_text("all:\n")
+    (h.work / "stats.R").write_text("x <- 1\n")
+    h.provider.add(reply("ok"))
+    tid = await h.start(agent())
+    [rec] = await h.records(tid, "instructions")
+    # Claude Code's text extensions only; a name without one is read.
+    assert [Path(f["path"]).name for f in rec.data["files"]] == [
+        "NOETA.md", "notes.txt", "Makefile", "stats.R"]
+
+
+def test_the_nested_limit_follows_the_window() -> None:
+    from noeta.plugins.instructions.extension import cut_nested, nested_max_chars
+    from noeta.toolkit.tokens import chars_per_token
+    assert chars_per_token("claude-sonnet-4-5-20250929") == 4
+    assert chars_per_token("claude-opus-5-5") == 3 and chars_per_token("deepseek-v4") == 3
+    assert chars_per_token("") == 4
+    # 1M window, 3 characters a token: 5 % is 150,000 characters.
+    assert nested_max_chars("claude-opus-5-5") == 150_000
+    assert nested_max_chars("") == 40_000
+    assert cut_nested("/p", "short", 10) == "short"
+    cut = cut_nested("/p/NOETA.md", "aaaa\nbbbb\ncccc\n", 12)
+    assert cut == ("aaaa\nbbbb\n> Only the start of this file is shown here; Read /p/NOETA.md "
+                   "from offset=3 for the rest.")
+
+
+async def test_a_long_nested_file_shows_its_start(h: Harness) -> None:
+    pkg = h.work / "gen"
+    pkg.mkdir()
+    (pkg / "NOETA.md").write_text("".join(f"line {i:06d}\n" for i in range(10_000)))
+    (pkg / "a.py").write_text("x = 1\n")
+    h.provider.add(reply("", ("Read", {"file_path": "gen/a.py"})), reply("done"))
+    await h.start(agent())
+    [nested] = [m.text for m in h.provider.requests[1].messages
+                if m.text.startswith(str(pkg / "NOETA.md"))]
+    assert len(nested) < 40_000 + 600
+    assert nested.endswith(f"Read {pkg / 'NOETA.md'} from offset=3334 for the rest.")
+
+
+async def test_a_changed_instruction_file_is_shown_again_with_the_next_message(
+        h: Harness) -> None:
+    from noeta.plugins.instructions.extension import REREAD_HEAD
+    (h.work / "NOETA.md").write_text("Use tabs.\n")
+    (h.work / "NOETA.local.md").write_text("Mine.\n")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    await h.say(a, tid, "same files")
+    assert not [m for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]
+    (h.work / "NOETA.md").write_text("Use spaces.\n")
+    # Each message is taken by a new runtime (another worker, say): what
+    # was shown lives in the log.
+    await h.say(a, tid, "files changed")
+    reread = [m.text for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]
+    assert reread == [f"{REREAD_HEAD}\n\n{h.work / 'NOETA.md'} {PROJECT}:\n\nUse spaces."]
+    await h.say(a, tid, "unchanged since")
+    assert len([m for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]) == 1

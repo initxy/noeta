@@ -30,6 +30,7 @@ from noeta.core.types import Message, ModelRequest, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
 from noeta.plugins.subtasks.roster import Roster, SubagentSpec, check_roster
 from noeta.plugins.subtasks.roster import agent_list as listing
+from noeta.plugins.subtasks.roster import agent_list_delta as roster_delta
 from noeta.plugins.subtasks.tool import (
     AGENT_ID_KEY,
     DELEGATION_TOOLS,
@@ -169,7 +170,10 @@ class Subtasks(Extension):
             return {**st, "reminded": True}
         if kind == "agent_list":
             held = data.get("text") if isinstance(data, dict) else None
-            return {**st, "listed": True, "held_list": held}
+            types = data.get("types") if isinstance(data, dict) else None
+            return {**st, "listed": True, "held_list": held, "types": types}
+        if kind == "agent_delta":
+            return {**st, "listed": True, "types": data["types"]}
         if kind == "agent_list_sent":
             return {**st, "held_list": None}
         return idle.reduce(st, kind, data) or st
@@ -283,9 +287,35 @@ class Subtasks(Extension):
             # deferred tools.
             out.append(Reminder(text=st["held_list"], kind="agent_list_sent", data={},
                                 role="system", order=AGENT_LIST_ORDER))
+        elif not st["held_list"]:
+            out += self._agent_delta(view, st)
         return out
 
+    def _agent_delta(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
+        """A note when agent types joined or left since the list went out
+        (an agent file added or removed, a plugin reloaded): Claude Code's
+        agent-list delta."""
+        roster = self.roster_for(view)
+        types = sorted(roster, key=str.lower)
+        if not st["listed"]:
+            # None to list at the start: the whole list once there is one.
+            text = listing(roster)
+            return [Reminder(text=text, kind="agent_delta", data={"types": types},
+                             role="system", order=AGENT_LIST_ORDER)] if text else []
+        if st.get("types") is None:
+            # A list recorded before its types were kept: from here on.
+            view.record(self.name, "agent_delta", {"types": types})
+            return []
+        text = roster_delta(st["types"], roster)
+        if not text:
+            return []
+        return [Reminder(text=text, kind="agent_delta", data={"types": types},
+                         role="system", order=AGENT_LIST_ORDER)]
+
     # ------------------------------------------------------------ events
+
+    def _types(self, view: TaskView) -> list[str]:
+        return sorted(self.roster_for(view), key=str.lower)
 
     def agent_list(self, view: TaskView) -> str | None:
         """The agent types this task can start, one line each with its tools."""
@@ -296,7 +326,7 @@ class Subtasks(Extension):
         request, in the environment's system turn."""
         text = None if view.state.parent_id else self.agent_list(view)
         if text and view.keeps_tail is not None:
-            view.record(self.name, "agent_list", {"text": text})
+            view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
         return ()
 
     async def on_start(self, view: TaskView) -> None:
@@ -304,7 +334,7 @@ class Subtasks(Extension):
         text = self.agent_list(view)
         if text and not st["listed"]:
             # Held for the first request's system turn (``reminders``).
-            view.record(self.name, "agent_list", {"text": text})
+            view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
         # Ends taken before a crash whose notice was never recorded.
         done = set(st["noticed"]) | set(st["pending"])
         for task_id in st["tasks"]:

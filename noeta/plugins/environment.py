@@ -32,6 +32,7 @@ from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.types import Message, ToolResult, system_message, user
 from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
+from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.shell import harden_git
 
@@ -247,6 +248,45 @@ def deferred_list(names: Sequence[str]) -> str:
     return "\n".join([DEFERRED_TOOLS_HEAD, *names])
 
 
+DEFERRED_BACK = (
+    "{count} deferred tool{s} {verb} available again ({why}; the names were given earlier in "
+    "this conversation): {names}. Load them with ToolSearch as before.")
+DEFERRED_GONE_MCP = (
+    "These deferred tools are no longer available (their MCP server disconnected). Do not "
+    "search for them; ToolSearch will not find them:")
+DEFERRED_GONE = (
+    "These deferred tools are no longer available in this conversation. Do not search for "
+    "them; ToolSearch will not find them:")
+
+
+def deferred_delta(before: Sequence[str], ever: Sequence[str], now: Sequence[str]) -> str:
+    """The note on a changed deferred-tool set (``""`` when it did not
+    change): new names under the list's lead-in, names given earlier as
+    available again, and the names gone."""
+    joined, left = changed(before, now)
+    new = [n for n in joined if n not in ever]
+    back = [n for n in joined if n in ever]
+    parts: list[str] = []
+    if new:
+        parts.append(deferred_list(new))
+    for group, why in (([n for n in back if n.startswith("mcp__")], "their MCP server "
+                        "reconnected"), ([n for n in back if not n.startswith("mcp__")],
+                                         "offered again")):
+        if group:
+            parts.append(DEFERRED_BACK.format(
+                count=len(group), s="" if len(group) == 1 else "s",
+                verb="is" if len(group) == 1 else "are", why=why, names=", ".join(group)))
+    mcp = [n for n in left if n.startswith("mcp__")]
+    other = [n for n in left if not n.startswith("mcp__")]
+    if mcp:
+        parts.append("\n".join([DEFERRED_GONE_MCP, *mcp]))
+    if other:
+        parts.append("\n".join([DEFERRED_GONE, *other]))
+    if left:
+        parts.append(AMBIENT_NOTE)
+    return "\n\n".join(parts)
+
+
 def budget_note(left: int) -> str:
     return f"<total_tokens>{left} tokens left</total_tokens>"
 
@@ -324,8 +364,10 @@ class Environment(Extension):
             # it already follows the summary) the date go out again.
             return {**state, "held": True, "compacted": True,
                     "skip_date": not data.get("date", True)}
-        if kind == "deferred":
-            return {**state, "deferred": list(data.get("names") or [])}
+        if kind in ("deferred", "deferred_delta"):
+            names = list(data.get("names") or [])
+            ever = [*(state.get("deferred_ever") or state.get("deferred") or []), *names]
+            return {**state, "deferred": names, "deferred_ever": list(dict.fromkeys(ever))}
         if kind == "date":
             return {**state, "date": data.get("date")}
         if kind == "budget":
@@ -366,17 +408,22 @@ class Environment(Extension):
             out.append(Reminder(text=st["text"], kind="sent", data={}, role="system",
                                 order=ORDER_ENVIRONMENT_AFTER_COMPACTION
                                 if st.get("compacted") else ORDER_ENVIRONMENT))
-            # The deferred tools the first request offers, named once; the
-            # list does not change for the rest of the conversation.
+            # The deferred tools the first request offers, named in full;
+            # later changes are told as they happen (below).
             names = view.deferred_tool_names()
             if names:
                 order = ORDER_DEFERRED_SUBAGENT if view.state.parent_id else ORDER_DEFERRED
                 out.append(Reminder(text=deferred_list(names), kind="deferred",
                                     data={"names": names}, role="system", order=order))
+            elif st.get("deferred"):
+                view.record(self.name, "deferred", {"names": []})
             if not st.get("skip_date"):
                 out.append(Reminder(text=date_line(st["date"]), kind="date",
                                     data={"date": st["date"]}, role="system", order=ORDER_DATE))
-        elif self.date_change and not view.state.steps_in_turn and st.get("date"):
+        else:
+            out += self._deferred_delta(view, st)
+        if not st.get("held") and self.date_change and not view.state.steps_in_turn \
+                and st.get("date"):
             today = self.today()
             if st["date"] != today:
                 text = view.prompt("reminder/date_changed", DATE_CHANGED_REMINDER)
@@ -391,6 +438,19 @@ class Environment(Extension):
             out.append(Reminder(text=budget_note(left), kind="budget", data={"base": base},
                                 role="system", order=ORDER_BUDGET))
         return out
+
+    @staticmethod
+    def _deferred_delta(view: TaskView, st: dict[str, Any]) -> list[Reminder]:
+        """A note when the deferred tools offered changed since they were
+        last named (an MCP server connected late, restarted with other
+        tools, or dropped): Claude Code's deferred-tools delta."""
+        names = view.deferred_tool_names()
+        before = st.get("deferred") or []
+        text = deferred_delta(before, st.get("deferred_ever") or before, names)
+        if not text:
+            return []
+        return [Reminder(text=text, kind="deferred_delta", data={"names": names},
+                         role="system", order=ORDER_DEFERRED)]
 
     async def lead_resident(self, view: TaskView) -> Sequence[Message]:
         """Ahead of a compaction's summary, as Claude Code rebuilds it: the

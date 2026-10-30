@@ -6,6 +6,7 @@ Behavior is steered by environment variables:
   fail, image). ``FAKE_PAGE``: page size (pagination with ``nextCursor``).
 * ``FAKE_TOOLS_FILE``: a JSON file read on every ``tools/list`` instead.
 * ``FAKE_LOG``: a file each received method is appended to.
+* ``FAKE_INSTRUCTIONS``: the ``instructions`` of the ``initialize`` result.
 * ``FAKE_PING``: send a ``ping`` request (with a colliding id) before each
   reply.
 
@@ -69,7 +70,10 @@ def page(items: list, cursor: str | None, key: str) -> dict:
 
 def handle(method: str, params: dict) -> dict:
     if method == "initialize":
-        return {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "f"}}
+        out = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "f"}}
+        if os.environ.get("FAKE_INSTRUCTIONS"):
+            out["instructions"] = os.environ["FAKE_INSTRUCTIONS"]
+        return out
     if method == "tools/list":
         tools = TOOLS
         if os.environ.get("FAKE_TOOLS_FILE"):

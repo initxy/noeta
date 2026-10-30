@@ -932,3 +932,31 @@ async def test_a_sub_agent_inherits_its_callers_queue_unless_its_spec_names_one(
     await rt.run_once()
     [child] = await client.tasks(parent_id=tid)
     assert child.queue == lands
+
+
+async def test_agent_types_that_join_or_leave_mid_task_are_told(store: SqliteStore) -> None:
+    ext = Subtasks(ROSTER)
+    main = Agent(name="main", model="p", extensions=[ext])
+    p = ScriptedProvider([reply("one"), reply("two"), reply("three"), reply("four")])
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+    reviewer = SubagentSpec(name="reviewer", description="Reviews.", agent="worker")
+    ext._roster.specs = {**ext._roster.specs, "reviewer": reviewer}
+    await client.send(tid, "more")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+    ext._roster.specs = {"reviewer": reviewer}
+    await client.send(tid, "again")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+    await client.send(tid, "quiet")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+
+    def notes(i: int) -> list[str]:
+        return [m.text for m in p.requests[i].messages if m.role == "system"
+                and "agent types" in m.text.lower()]
+
+    assert notes(1)[-1] == ("New agent types the Agent tool can start:\n"
+                            "- reviewer: Reviews. (Tools: *)")
+    assert notes(2)[-1].startswith("These agent types are no longer available:\n"
+                                   "- general-purpose\n- scout\nThis is background information")
+    assert notes(3) == notes(2)

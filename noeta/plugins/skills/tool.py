@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.skills.registry import (
     SkillDescription,
-    render_activation,
+    render_command_body,
     substitute_variables,
 )
 from noeta.plugins.skills.script import is_skill_script_resource
@@ -71,8 +71,9 @@ class SkillTool:
         name = skill_name(raw)
         if name is None:
             return text_output(f"Not a skill name: {raw!r}", is_error=True)
-        registry = await self._owner.registry(task_env(ctx.env, {}))
-        menu = registry.model_invocable(unlocked_skills(ctx.state.get(self._owner.name)))
+        state = ctx.state.get(self._owner.name)
+        registry = await self._owner.registry(task_env(ctx.env, {}), state)
+        menu = registry.model_invocable(unlocked_skills(state))
         desc = registry.get(name)
         if desc is not None and not desc.model_invocable:
             return text_output(USER_ONLY_SKILL.format(name=name), is_error=True)
@@ -84,8 +85,7 @@ class SkillTool:
         if args is not None and not isinstance(args, str):
             return text_output("args must be a string", is_error=True)
         return text_output(
-            f"Skill '{name}' loaded; its instructions will appear in your "
-            f"context from your next step.",
+            f"Starting skill: {name}. Its instructions follow.",
             skill_activation=activation_data(desc, "model", args, ctx.env.cwd),
         )
 
@@ -128,7 +128,7 @@ def activation_data(desc: SkillDescription, source: str,
         "allowed_tools": allowed,
         "allow_rules": rules,
         "args": args,
-        "text": render_activation(desc, args, cwd),
+        "text": render_command_body(desc, args, cwd),
     }
 
 
