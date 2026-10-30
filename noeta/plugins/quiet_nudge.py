@@ -1,7 +1,8 @@
 """Claude Code's quiet-stretch nudge: after several steps in a row that only
 called tools, with no text for the user since their last message (or their
-answer to a question), the model is told once (in a system turn) to keep
-the user posted when there is something worth saying."""
+answer to a question), the model is told (in a system turn) to keep the user
+posted when there is something worth saying. A long quiet stretch is nudged
+again after as many more such steps, up to three times."""
 
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from noeta.core.types import Message
 
 #: Tool-only steps in a row that earn the nudge (Claude Code's count).
 QUIET_STEPS = 5
+#: Nudges one quiet stretch gets at most (Claude Code's).
+MAX_NUDGES = 3
 #: Its place in a joined system turn: before the budget note.
 ORDER = 60
 #: Calls the person answers: the quiet stretch starts again after one.
@@ -23,33 +26,38 @@ NUDGE = (
 )
 
 
-def quiet_steps(messages: Sequence[Message], nudge: str) -> int:
-    """Tool-only steps since the user last spoke or the model last wrote
-    text; ``-1`` when this quiet stretch was already nudged."""
-    n = 0
+def quiet_steps(messages: Sequence[Message], nudge: str) -> tuple[int, int]:
+    """In the current quiet stretch (since the user last spoke or the model
+    last wrote text): the tool-only steps since it began or since its last
+    nudge, and how many nudges it has had."""
+    since = nudges = 0
     for m in reversed(messages):
         if m.role == "system" and nudge in m.text:
-            return -1
-        if m.role == "assistant":
+            nudges += 1
+        elif m.role == "assistant":
             if m.text.strip() or not m.tool_uses \
                     or any(u.name in ASKS_USER for u in m.tool_uses):
                 break
-            n += 1
+            if not nudges:
+                since += 1
         elif m.from_person and m.text:
             break
-    return n
+    return since, nudges
 
 
 class QuietNudge(Extension):
-    """``steps`` — tool-only steps in a row before the nudge."""
+    """``steps`` — tool-only steps in a row before each nudge; ``most`` —
+    nudges per quiet stretch."""
 
     name = "quiet_nudge"
 
-    def __init__(self, *, steps: int = QUIET_STEPS) -> None:
+    def __init__(self, *, steps: int = QUIET_STEPS, most: int = MAX_NUDGES) -> None:
         self.steps = steps
+        self.most = most
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         text = view.prompt("reminder/quiet_nudge", NUDGE)
-        if quiet_steps(view.state.messages, text) < self.steps:
+        since, nudges = quiet_steps(view.state.messages, text)
+        if since < self.steps or nudges >= self.most:
             return ()
         return (Reminder(text=text, kind="nudge", role="system", order=ORDER),)

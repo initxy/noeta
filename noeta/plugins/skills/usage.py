@@ -6,12 +6,13 @@ kind="activated")`` entry; the model's ``skill`` calls and the user's
 ``/<name>`` count as use, a host preload does not. The score is Claude
 Code's: ``count * max(0.5 ^ (days since last use / 7), 0.1)``.
 
-The extension reads no other task, so this is opt-in host wiring through
+The extension reads no other task, so a host wires it through
 the host's client (what it may read is what the client shows):
-``Skills(rank=UsageRank(app.client))``. The ranker answers from its last
+``Skills(usage_from=client)`` (the ``noeta`` command passes its store's), or
+``Skills(rank=UsageRank(client))``. The ranker answers from its last
 snapshot at once and refreshes in the background when the snapshot is
 older than ``ttl``, so a task start never waits on the scan; until the first
-scan lands the ranking is empty (tier and priority order).
+scan lands the ranking is empty (tier and name order).
 """
 
 from __future__ import annotations

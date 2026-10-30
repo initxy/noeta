@@ -299,3 +299,16 @@ async def test_acp_sets_a_retry_apart_from_the_failed_attempt(tmp_path: Path) ->
     assert shown.endswith("\n\ngood answer") and shown.count("good answer") == 1
     await app.stop()
 
+
+
+def test_a_running_calls_progress_updates_its_tool_call() -> None:
+    from noeta.core.types import Delta
+    from noeta.host._acp_updates import PromptTurn
+
+    turn = PromptTurn("s1")
+    turn.on_delta("s1", Delta(kind="tool", text="line 1\nline 2", call_id="c1", tool="Bash"))
+    turn.on_delta("other", Delta(kind="tool", text="not ours", call_id="c2"))
+    update = turn.out.get_nowait()
+    assert turn.out.empty()
+    assert update.tool_call_id == "c1" and update.status == "in_progress"
+    assert update.content[0].content.text == "line 1\nline 2"

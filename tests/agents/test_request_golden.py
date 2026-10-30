@@ -121,7 +121,8 @@ async def test_default_agent_requests_match_golden(tmp_path: Path,
     client = Client(store)
     tid = await client.create("main", "What is the secret word in notes.txt?",
                               task_id="t" * 32,
-                              config={"cwd": str(work), "permission_mode": "bypassPermissions"})
+                              config={"cwd": str(work), "permission_mode": "bypassPermissions",
+                                      "timezone": "Europe/Berlin"})
     await rt.run_until_idle()
     await client.send(tid, "And how do we deploy?")
     await rt.run_until_idle()

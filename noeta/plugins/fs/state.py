@@ -24,6 +24,9 @@ Kinds:
   change.
 - ``forget_ranges`` — a compaction dropped the earlier results: no re-read is
   answered from them.
+- ``mentions`` — ``{"through", "path"?}``: the person's messages up to log
+  seq ``through`` had their ``@`` mentions attached (an attachment is
+  recorded with its message and names its ``path``).
 - ``notice`` — ``{"text"}``: a note for the model to get after this call's
   result (a cut read's paging hint); ``notice_sent`` (the reminder that
   carried it) clears it.
@@ -46,6 +49,7 @@ __all__ = [
     "FS",
     "KIND_CHANGED",
     "KIND_FORGET_RANGES",
+    "KIND_MENTIONS",
     "KIND_NOTICE",
     "KIND_NOTICE_SENT",
     "KIND_READ",
@@ -63,8 +67,11 @@ KIND_CHANGED = "changed"
 KIND_FORGET_RANGES = "forget_ranges"
 KIND_NOTICE = "notice"
 KIND_NOTICE_SENT = "notice_sent"
+KIND_MENTIONS = "mentions"
 #: Files remembered as read at most: the oldest are forgotten past it.
 MAX_FILES = 1000
+#: Attachments remembered for placing ahead of the person's text.
+MAX_ATTACHMENTS = 200
 
 
 class FileRead(Struct):
@@ -77,6 +84,11 @@ class FileRead(Struct):
     #: The model had the whole file in view (a read from the top to the end,
     #: or what it wrote itself over such a view).
     whole: bool = True
+    #: Recorded by a ``Read`` given an offset past the first line or a limit
+    #: (or cut to fit the token ceiling): no changed-file note follows it, as
+    #: Claude Code sends none for such a read. Kept when a compaction drops
+    #: ``range``.
+    window: bool = False
 
 
 class FsState(Struct):
@@ -87,6 +99,13 @@ class FsState(Struct):
     noticed: dict[str, str] = msgspec.field(default_factory=dict)
     #: Notes waiting to reach the model after the results they belong to.
     notices: list[str] = msgspec.field(default_factory=list)
+    #: Log seq of the newest message of the person's whose mentions were
+    #: attached.
+    mentions_through: int = 0
+    #: Content digests of the attachments' messages (the newest
+    #: :data:`MAX_ATTACHMENTS`), which the request moves ahead of the
+    #: person's text.
+    attached: list[str] = msgspec.field(default_factory=list)
 
 
 def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
@@ -111,7 +130,8 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
             del reads[next(iter(reads))]
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
                                partial=data.get("partial") is True,
-                               whole=data.get("whole") is not False)
+                               whole=data.get("whole") is not False,
+                               window=lines is not None and (lines[0] > 1 or lines[1] > 0))
         return msgspec.structs.replace(base, reads=reads)
     if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
         text = data.get("text")
@@ -123,6 +143,16 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         elif text in notices:
             notices.remove(text)
         return msgspec.structs.replace(base, notices=notices)
+    if kind == KIND_MENTIONS:
+        through = data.get("through")
+        if isinstance(through, bool) or not isinstance(through, int):
+            return base
+        digest = data.get("digest")
+        attached = base.attached
+        if isinstance(digest, str) and digest:
+            attached = [*attached, digest][-MAX_ATTACHMENTS:]
+        return msgspec.structs.replace(
+            base, mentions_through=max(base.mentions_through, through), attached=attached)
     if kind == KIND_FORGET_RANGES:
         return msgspec.structs.replace(base, reads={
             p: msgspec.structs.replace(r, range=None) for p, r in base.reads.items()})

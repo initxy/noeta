@@ -288,6 +288,10 @@ class TaskView(records.CoreNotices):
     #: While a compaction asks for residents: whether the newest messages
     #: stay after its summary (``None`` outside a compaction).
     keeps_tail: bool | None = None
+    #: The spill root (``Runtime.spill_root``): tool outputs too long to
+    #: return inline are saved below it, in the task's exec env, for the
+    #: model to read (``None``: nothing is saved).
+    spill_dir: str | None = None
 
     @property
     def task_id(self) -> str:
@@ -550,8 +554,8 @@ class Extension:
         ``None``. The compacting extension asks every extension in order."""
         return None
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
-        """The model refused the request as too long. Return ``True`` after
+    async def on_context_overflow(self, view: TaskView, request: ModelRequest) -> bool:
+        """The model refused ``request`` as too long. Return ``True`` after
         making room (recording a compaction); the call is then retried.
         When no extension does, the turn fails with ``context_overflow``."""
         return False

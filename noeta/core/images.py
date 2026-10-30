@@ -6,7 +6,13 @@ would fail every turn after it. :func:`fit_image` shrinks an image to at most
 2000 x 2000 px and 3.75 MB raw (5 MB once base64 encoded) when Pillow is
 installed (the ``images`` extra), the way Claude Code does; without it, an
 image that is already small enough passes unchanged and any other is refused
-with :class:`ImageTooLarge` before it reaches the history.
+with :class:`ImageTooLarge` before it reaches the history. An image whose
+header names more than :data:`MAX_DECODED_PIXELS` pixels is refused before
+it is decoded: a small file can expand to gigabytes of pixels.
+
+Every image a person sends goes through :func:`fit_message` once, in the
+client's create and send, so each front end (the TUI, ACP, stream-json, HTTP)
+is covered by the same code; tools fit the images they return themselves.
 """
 
 from __future__ import annotations
@@ -17,8 +23,11 @@ import struct
 from dataclasses import dataclass
 from typing import Any
 
+from noeta.core.types import Image, Message, Text
+
 __all__ = [
     "MAX_BASE64_BYTES",
+    "MAX_DECODED_PIXELS",
     "MAX_HEIGHT",
     "MAX_WIDTH",
     "TARGET_RAW_BYTES",
@@ -27,6 +36,7 @@ __all__ = [
     "ImageTooLarge",
     "base64_size",
     "fit_image",
+    "fit_message",
     "image_dimensions",
 ]
 
@@ -40,6 +50,10 @@ TARGET_RAW_BYTES = MAX_BASE64_BYTES * 3 // 4
 #: Without an image library nothing is shrunk; the API still takes an image
 #: up to this many pixels on a side.
 UNSHRUNK_MAX_SIDE = 8000
+
+#: The most pixels an image may have to be decoded and shrunk (about
+#: 7000 x 7000; an RGBA image of this size takes 200 MB to decode).
+MAX_DECODED_PIXELS = 50_000_000
 
 _JPEG_QUALITIES = (80, 60, 40, 20)
 _LAST_RESORT_WIDTH = 1000
@@ -151,6 +165,26 @@ def fit_image(raw: bytes, media_type: str) -> FittedImage:
     return _shrink(raw, media_type)
 
 
+def fit_message(message: Message) -> Message:
+    """``message`` with every image made to fit; one that cannot be is
+    replaced by a line saying it was left out and why."""
+    if not any(isinstance(b, Image) for b in message.content):
+        return message
+    content: list[Any] = []
+    for block in message.content:
+        if not isinstance(block, Image):
+            content.append(block)
+            continue
+        try:
+            fitted = fit_image(block.data, block.media_type)
+        except ImageTooLarge as exc:
+            content.append(Text(text=f"[An attached image was left out: {exc}.]"))
+            continue
+        content.append(block if fitted.data == block.data and fitted.media_type == block.media_type
+                       else Image(media_type=fitted.media_type, data=fitted.data))
+    return Message(role=message.role, content=content, origin=message.origin)
+
+
 def _pass_through(raw: bytes, media_type: str) -> FittedImage:
     dims = image_dimensions(raw)
     if dims is None:
@@ -172,11 +206,25 @@ def _pass_through(raw: bytes, media_type: str) -> FittedImage:
     return FittedImage(raw, media_type, dims, dims)
 
 
+def _too_many_pixels(width: int, height: int) -> ImageTooLarge | None:
+    if width * height <= MAX_DECODED_PIXELS:
+        return None
+    return ImageTooLarge(
+        f"at {width}x{height} px it has more pixels than this host decodes "
+        f"({MAX_DECODED_PIXELS // 1_000_000} million); resize it to fit within "
+        f"{MAX_WIDTH}x{MAX_HEIGHT} px and try again")
+
+
 def _shrink(raw: bytes, media_type: str) -> FittedImage:
     from PIL import Image, UnidentifiedImageError
 
+    if (dims := image_dimensions(raw)) is not None and (refused := _too_many_pixels(*dims)):
+        raise refused
     try:
         img: Any = Image.open(io.BytesIO(raw))
+        # ``open`` reads only the header: check the size before decoding.
+        if (refused := _too_many_pixels(int(img.width), int(img.height))) is not None:
+            raise refused
         img.load()
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         if base64_size(len(raw)) <= MAX_BASE64_BYTES and (

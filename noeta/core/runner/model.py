@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import TYPE_CHECKING, Any
 
 import msgspec
@@ -135,13 +136,24 @@ async def _run_hooks(run: TaskRun, request: ModelRequest) -> ModelRequest | bool
     return request
 
 
-async def _on_overflow(run: TaskRun, exc: ContextOverflow) -> bool:
-    """The model refused the request as too long: an extension makes room
+def _overflow_hook(ext: Any, view: TaskView, request: ModelRequest) -> Any:
+    """``ext.on_context_overflow``, also for one written before it took the
+    request (``(view)`` only)."""
+    hook = ext.on_context_overflow
+    try:
+        old = len(inspect.signature(hook).parameters) < 2
+    except (TypeError, ValueError):
+        old = False
+    return hook(view) if old else hook(view, request)
+
+
+async def _on_overflow(run: TaskRun, exc: ContextOverflow, request: ModelRequest) -> bool:
+    """The model refused ``request`` as too long: an extension makes room
     and the next boundary calls again, or the turn fails."""
     overflow_view = run.view()
     try:
         for ext in run.exts:
-            if await ext.on_context_overflow(overflow_view):
+            if await _overflow_hook(ext, overflow_view, request):
                 await run.flush(overflow_view)
                 return True  # room was made; the next boundary calls again
     except TurnFailed as failed:
@@ -190,7 +202,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
                                                on_retry=on_retry)
     except ContextOverflow as exc:
         await asyncio.gather(*pending, return_exceptions=True)
-        return await _on_overflow(run, exc)
+        return await _on_overflow(run, exc, request)
     except ModelError as exc:
         await asyncio.gather(*pending, return_exceptions=True)
         return await closing.fail_turn(run, texts.LLM_ERROR, _detail(exc))

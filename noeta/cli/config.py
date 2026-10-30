@@ -36,7 +36,12 @@ from noeta.agents.agent_files import (
     parse_plugin_list,
 )
 from noeta.cli import home_dir
-from noeta.cli.claude_plugins import ClaudePlugin, find_claude_plugins, plugin_settings
+from noeta.cli.claude_plugins import (
+    ClaudePlugin,
+    find_claude_plugins,
+    plugin_settings,
+    read_plugin_dir,
+)
 from noeta.cli.plugin_policy import plugin_policy
 from noeta.cli.settings_files import (
     FileSettings,
@@ -269,15 +274,18 @@ def _shipped(name: str) -> bool:
     return registry.sources(registry.PLUGINS).get(name) == "package noeta"
 
 
-def load_plugin_files(cwd: str | None) -> list[str]:
-    """Load the plugin files of ``~/.noeta/plugins`` and, for a trusted
-    project, ``<cwd>/.noeta/plugins``. Returns notices for the person: a
-    project's plugin directory left alone because it is not trusted."""
+def load_plugin_files(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()) -> list[str]:
+    """Load the plugin files of ``~/.noeta/plugins``, for a trusted project
+    ``<cwd>/.noeta/plugins``, then ``plugin_dirs`` (``--plugin-dir``: plugin
+    files, plugin directories or directories of them, for this process only).
+    Returns notices for the person: a project's plugin directory left alone
+    because it is not trusted."""
     dirs = [home_dir.HOME / "plugins"]
     notice = untrusted_notice(cwd, ".noeta/plugins")
     if cwd and notice is None and (Path(cwd).expanduser() / ".noeta" / "plugins").is_dir():
         dirs.append(Path(cwd).expanduser().resolve() / ".noeta" / "plugins")
-    registry.load_plugin_files(dirs, admit=plugin_policy(managed_dir()).admits)
+    registry.load_plugin_files(dirs, admit=plugin_policy(managed_dir()).admits,
+                               given=[Path(d).expanduser().resolve() for d in plugin_dirs])
     return [notice] if notice else []
 
 
@@ -349,6 +357,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                   setting_sources: Collection[str] | None = None,
                   flag_settings: Path | None = None,
                   agent_files: Sequence[AgentFile] = (),
+                  plugin_dirs: Sequence[str | Path] = (),
                   **runtime_kw: Any) -> LocalApp:
     """The default agents on the configured store, model and provider, with
     the user's plugin files (``~/.noeta/plugins``, and a trusted project's
@@ -372,14 +381,16 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     (:func:`file_settings`); a left-out ``user`` source also skips
     ``~/.noeta/agents``, a left-out ``project`` source the project's agents
     and its ``.noeta/mcp.json``. ``agent_files`` (``--agents``) come last
-    and win a name."""
+    and win a name. ``plugin_dirs`` (``--plugin-dir``) are plugin places for
+    this process only, read after the others."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
+    from noeta.core.client import Client
     from noeta.host.local import LocalApp
 
     home_dir.ensure_home()
     notices = home_dir.loose_permissions(settings.store_url)
-    notices += load_plugin_files(cwd)
+    notices += load_plugin_files(cwd, plugin_dirs)
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
                 if (n := untrusted_notice(cwd, sub)) is not None]
     if (unknown := models.unknown_model_notice(settings.model)) is not None:
@@ -398,14 +409,35 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
     base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
+    fs = base.get("fs")
+    if own_tasks_only and isinstance(fs, Mapping):
+        # A front end runs on the person's machine: an @-mention of a path
+        # under ~ is their home (never on a server, whose home is not theirs).
+        base["fs"] = {**fs, "home": str(Path.home())}
+    store = open_store(settings.store_url)
+    # Claude Code ranks the skill listing by use across its sessions; here
+    # the store's tasks are the sessions (scanned in the background).
+    skills = base.get("skills")
+    if isinstance(skills, Mapping):
+        base["skills"] = {**skills, "usage_from": Client(store)}
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
+    plugin_agent: dict[str, str] = {}
+    #: ``<plugin>:<agent>`` (Claude Code's name for a plugin's agent) -> its name here.
+    qualified: dict[str, str] = {}
 
     def make_agents() -> list[Agent]:
         """The agents from the agent files and plugins found now; a plugin
         whose code and arguments did not change is the one made before."""
-        claude, found_notices = claude_plugins(cwd)
-        notices.extend(n for n in found_notices if n not in notices)
+        claude, found_notices = claude_plugins(cwd, plugin_dirs)
+        for notice in found_notices:
+            if notice not in notices:
+                notices.append(notice)
+                log.warning("%s", notice)  # a worker has no front end to show it
+        plugin_agent.clear()
+        plugin_agent.update(plugins_agent(claude))
+        qualified.clear()
+        qualified.update({f"{p.name}:{a.name}": a.name for p in claude for a in p.agents})
         files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
         if source("user"):
             files += read_agent_dir(home_dir.HOME / "agents")
@@ -423,27 +455,68 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
             add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
         if "markdown_commands" in from_plugins:
             add["*"] = (*add.get("*", ()), ("markdown_commands", {}))
-        return default_agents(model, plugins=table, add=add, extra_files=files, made=made)
+        agents = default_agents(model, plugins=table, add=add, extra_files=files, made=made)
+        unjoined[:] = _unjoined_notices(agents, table)
+        notices.extend(n for n in unjoined if n not in notices)
+        return agents
 
+    unjoined: list[str] = []
     agents = make_agents()
+    for notice in unjoined:
+        log.warning("%s", notice)
     notices += _apply_sandbox(sandbox, cwd, runtime_kw)
     runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
-    app = LocalApp(open_store(settings.store_url), agents,
+    app = LocalApp(store, agents,
                    settings.make_provider(), own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
                    channels=make_channels(settings.channels) if with_channels else (),
                    **runtime_kw)
     app.notices = notices
 
+    def pick_main_agent() -> None:
+        """The agent front ends start with: the settings' ``agent``, else
+        the one a Claude Code plugin's settings name, else ``main``."""
+        wanted = found.agent or plugin_agent.get("agent")
+        known = app.runtime.agents
+        # A plugin's agent is named <plugin>:<agent> in Claude Code.
+        name = wanted if not wanted or wanted in known else qualified.get(wanted, wanted)
+        app.main_agent = name if name and name in known else "main"
+        if wanted and name not in known:
+            notice = (f"agent {wanted!r} (from the settings of "
+                      f"{plugin_agent.get('source') if not found.agent else 'noeta'}) "
+                      "is not an agent here; main is used")
+            if notice not in notices:
+                notices.append(notice)
+                log.warning("%s", notice)
+
+    pick_main_agent()
+
     def reload_plugins() -> list[str]:
         registry.forget_plugin_files()
-        found = load_plugin_files(cwd)
+        found = load_plugin_files(cwd, plugin_dirs)
         app.replace_agents(make_agents())
-        return found
+        pick_main_agent()
+        return found + unjoined
 
     app.reload_plugins = reload_plugins
     return app
+
+
+def _unjoined_notices(agents: Sequence[Agent],
+                      table: Mapping[str, PluginSetting]) -> list[str]:
+    """One notice per plugin file whose plugin no agent runs (no ``add_to``,
+    not in any ``add_plugins`` or agent file), unless it is switched off."""
+    joined = {e.name for a in agents for e in a.extensions}
+    out = []
+    for name, path in registry.plugin_files().items():
+        setting = table.get(name)
+        if name in joined or setting is False or (
+                isinstance(setting, Mapping) and setting.get("enabled") is False):
+            continue
+        out.append(f"plugin file {path}: {name!r} joins no agent; set add_to = (\"main\",) "
+                   f"on its class, or [agents.main] add_plugins = [\"{name}\"] in config.toml")
+    return out
 
 
 def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
@@ -467,19 +540,41 @@ def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
 BUILTIN_AGENTS = frozenset({"main", "general-purpose", "Explore", "Plan"})
 
 
-def claude_plugins(cwd: str | None) -> tuple[list[ClaudePlugin], list[str]]:
-    """The Claude Code plugin directories of ``~/.noeta/plugins`` and, for a
-    trusted project, ``<cwd>/.noeta/plugins`` (:mod:`noeta.cli.claude_plugins`),
+def claude_plugins(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()
+                   ) -> tuple[list[ClaudePlugin], list[str]]:
+    """The Claude Code plugin directories of ``~/.noeta/plugins``, for a
+    trusted project ``<cwd>/.noeta/plugins``, and ``plugin_dirs`` (each one
+    such directory or a directory of them; :mod:`noeta.cli.claude_plugins`),
     with notices for the person (an agent named like a built-in one)."""
     places = [(home_dir.HOME / "plugins", False)]
     if cwd and project_trusted(cwd):
         places.append((Path(cwd).expanduser().resolve() / ".noeta" / "plugins", True))
+    data_home = home_dir.HOME / "plugin-data"
+    found = find_claude_plugins(places, data_home)
+    for given in (Path(d).expanduser().resolve() for d in plugin_dirs):
+        one = read_plugin_dir(given, data_home)
+        found += [one] if one is not None else [] if (given / "__init__.py").is_file() \
+            else find_claude_plugins([(given, False)], data_home)
     policy = plugin_policy(managed_dir())
-    found = [p for p in find_claude_plugins(places, home_dir.HOME / "plugin-data")
-             if policy.admits(p.name)]
-    notices = [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
-               for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
+    found = [p for p in found if policy.admits(p.name)]
+    notices = [n for p in found for n in p.notices]
+    notices += [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
+                for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
     return found, notices
+
+
+def plugins_agent(plugins: Sequence[ClaudePlugin]) -> dict[str, str]:
+    """The ``agent`` Claude Code plugins' settings name (a later plugin
+    wins, as in Claude Code) and which plugin names it (``source``)."""
+    out: dict[str, str] = {}
+    for p in plugins:
+        agent = p.settings.get("agent")
+        if not isinstance(agent, str):
+            continue
+        if out:
+            log.info("plugin %s overrides setting 'agent' (set by %s)", p.name, out["source"])
+        out = {"agent": agent, "source": f"plugin {p.name}"}
+    return out
 
 
 def plugin_changes(before: Mapping[str, Agent], after: Mapping[str, Agent]) -> list[str]:

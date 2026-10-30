@@ -54,10 +54,24 @@ worker. Two deployments work:
    (`noeta.backends.execenvs.container`, or your own exec env in the `noeta.execenvs` group),
    chosen per task by the host's `Runtime(env_for=…)`.
 
+A task's own files live where its tools do, in its exec env, so they follow the task to
+any worker: long tool outputs saved for the model (the spill directory,
+`~/.noeta/tool-results/<task id>/`, written through the exec env; an ended task's are removed
+30 days after their last write), plan files (`~/.noeta/plans/`) and auto memory
+(`~/.noeta/projects/<project>/memory/`, `~/.noeta/agent-memory/`; a project agent's is in
+the workspace). The model reads and edits them with its file tools (and `grep`s them with
+`Bash`), as in Claude Code, so they are files, not store rows; their paths are recorded in
+the task's log the first time they are used.
+
+- With a remote exec env they live in that env and nothing else needs sharing; noeta's home
+  path must be the same on every worker (it names the files) and writable in the env.
+- With the local exec env on a shared filesystem, those directories of noeta's home must be
+  on the shared mount too, at the same path on every worker (`NOETA_HOME` on the mount, or
+  `tool-results`, `plans`, `projects` and `agent-memory` linked to it); otherwise a task
+  that moves finds its saved outputs, plan and memories missing.
+
 Still local to a worker either way: a background `Bash` job and its log (the tree is held by
-that worker while it runs, and its tasks are told `hold_lost` if the worker dies), and the
-spill directory for long tool outputs (`~/.noeta/tool-results`; put it on the shared mount if
-front ends on other machines should open those files).
+that worker while it runs, and its tasks are told `hold_lost` if the worker dies).
 
 ## The token
 
@@ -71,9 +85,11 @@ the loopback `Host` names are answered (DNS rebinding); on any other bind `Host`
 only against the names given with `--allow-host NAME` (repeatable), so name them.
 
 A request may set only the task config a client may (`model`, `effort`, `max_turns`, `cwd`,
-`permission_mode`, `output_schema`), post only the signals front ends send, and create tasks
+`permission_mode`, `output_schema`, `timezone`), post only the signals front ends send, and create tasks
 only in the server's directory and its `--allow-root` paths. Host code embedding the API uses
-`create_app(client, token=...)` (or `token_sha256=`).
+`create_app(client, token=...)` (or `token_sha256=`). `timezone` is the person's IANA zone
+(`Europe/Berlin`), which noeta's own front ends send: without it the model is given the UTC
+date, marked as UTC's, never the server's local one.
 
 ## Several parties
 

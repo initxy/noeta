@@ -16,9 +16,9 @@
   "main 878fc7760519d7d7",
   "main b12e7409b320e313",
   "main 3bf7e450b5d1640e",
-  "main a861ed712743b548",
-  "main bd7947ea8f4cf549",
-  "main 41dc9d2a6e459ce9"
+  "main 7758da6902957ed9",
+  "main 50798e749e89802c",
+  "main 4ad779cae3ee96df"
  ],
  "last": {
   "child": {
@@ -1105,7 +1105,7 @@
       "role": "user"
      },
      {
-      "content": "<total_tokens>14999935 tokens left</total_tokens>",
+      "content": "The user has heard nothing from you for a while. When you have something worth telling them, such as a finding or a change of plan, give them a short update.\n\n<total_tokens>14999935 tokens left</total_tokens>",
       "role": "system"
      },
      {
@@ -2064,6 +2064,10 @@
       "content": "9",
       "role": "tool",
       "tool_call_id": "b9"
+     },
+     {
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nThe user has heard nothing from you for a while. When you have something worth telling them, such as a finding or a change of plan, give them a short update.",
+      "role": "system"
      },
      {
       "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>14999935 tokens left</total_tokens>",
@@ -3140,6 +3144,20 @@
       "call_id": "b9",
       "output": "9",
       "type": "function_call_output"
+     },
+     {
+      "content": [
+       {
+        "text": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]",
+        "type": "input_text"
+       },
+       {
+        "text": "The user has heard nothing from you for a while. When you have something worth telling them, such as a finding or a change of plan, give them a short update.",
+        "type": "input_text"
+       }
+      ],
+      "role": "system",
+      "type": "message"
      },
      {
       "content": [

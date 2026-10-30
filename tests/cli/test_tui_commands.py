@@ -16,7 +16,6 @@ from textual.widgets import Markdown
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli import mentions
 from noeta.cli.tui.app import NoetaApp
 from noeta.cli.tui.widgets import Notice, PromptInput
 from noeta.core.agent import Agent
@@ -28,6 +27,7 @@ from noeta.plugins.checkpoints import Checkpoints
 from noeta.plugins.fs import FileTools
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.signals import RESUMED_SIGNAL
+from tests.images import png as a_png
 
 MODEL = "claude-opus-5-5"
 
@@ -129,16 +129,19 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
     work = tmp_path / "w"
     (work / "calc.py").write_text("def add(a, b):\n    return a - b\n")
     png = tmp_path / "shot.png"
-    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    png.write_bytes(a_png(4, 4))
     async with app.run_test(size=(110, 40)) as pilot:
         await app.add_image(Image(media_type="image/png", data=png.read_bytes()), "shot.png")
         await type_line(pilot, "look at @calc.py " + app.query_one(PromptInput).text)
         await settle(pilot, lambda: len(provider.requests) == 1 and not app.busy)
-        sent = provider.requests[0].messages[-1]
-        [prompt, attached] = [b for b in sent.content if isinstance(b, Text)]
+        # The attachment goes ahead of the person's text, as Claude Code sends it.
+        *_, attached, sent = provider.requests[0].messages
+        [prompt] = [b for b in sent.content if isinstance(b, Text)]
         assert prompt.text.startswith("look at @calc.py")
-        assert "1\tdef add(a, b):" in attached.text and str(work / "calc.py") in attached.text
         assert [b.media_type for b in sent.content if isinstance(b, Image)] == ["image/png"]
+        # The file is attached inside the task, by the file tools.
+        assert attached.origin == "system" and "1\tdef add(a, b):" in attached.text
+        assert str(work / "calc.py") in attached.text
         first = app.task_id
         await type_line(pilot, "/clear")
         await settle(pilot, lambda: app.task_id != first)
@@ -149,15 +152,6 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
         # The reopened task is told it was resumed (its plugins act on it).
         posted = await app.local.store.inbox(first)
         assert [p.body.name for p in posted if isinstance(p.body, External)] == [RESUMED_SIGNAL]
-
-
-def test_mentions_parse_quoted_paths_and_skip_addresses(tmp_path: Path) -> None:
-    (tmp_path / "a b.txt").write_text("x")
-    (tmp_path / "c.txt").write_text("y")
-    found = mentions.mentioned('see @"a b.txt", @c.txt. mail me@c.txt @missing', str(tmp_path))
-    assert [p.name for p in found] == ["a b.txt", "c.txt"]
-    message = mentions.attach("@.", str(tmp_path))
-    assert "a b.txt" in message.content[1].text  # type: ignore[union-attr]
 
 
 async def test_reload_plugins_reports_what_changed(tmp_path: Path) -> None:

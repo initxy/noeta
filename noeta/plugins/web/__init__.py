@@ -1,16 +1,10 @@
 """The web tools: ``WebFetch`` and ``WebSearch``.
 
-``WebFetch`` answers its ``prompt`` with a digest call. Tools get no model
-access, so the extension supplies it: it keeps, per task, the runner's
-``complete`` (from ``on_start`` / ``before_tool``) and the main request's
-model and headers (from ``before_model``), and hands the tool a digest
-function bound to them. ``webfetch_model`` names a cheaper model for the
-digest; otherwise the task's own model answers. The main request's headers
-go with the digest only when it is sent to that same model (a
-``webfetch_model`` of another provider must not receive the main gateway's
-credentials). A host may instead pass ``digest`` (any ``ModelRequest ->
-ModelResponse`` coroutine). The per-task bindings are kept for the
-:data:`TASKS_KEPT` most recently active tasks.
+``WebFetch`` answers its ``prompt`` with a digest call through the task's
+model (``ToolContext.complete``), or ``webfetch_model``, a cheaper one. A
+host may instead pass ``digest`` (any ``ModelRequest -> ModelResponse``
+coroutine). The page cache is kept for the :data:`TASKS_KEPT` most recently
+active tasks.
 """
 
 from __future__ import annotations
@@ -21,9 +15,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar
 
 from noeta.core.events import Recorded, TaskEnded
-from noeta.core.extension import Extension, Gate, TaskView
+from noeta.core.extension import Extension, TaskView
 from noeta.core.tool import Tool, ToolContext
-from noeta.core.types import ModelRequest, ModelResponse, ToolUse, user
+from noeta.core.types import ModelRequest, ModelResponse, user
 from noeta.plugins.web.fetch import (
     DIGEST_INSTRUCTIONS,
     Digest,
@@ -44,7 +38,7 @@ __all__ = ["Web"]
 
 #: Ceiling on the digest answer.
 DIGEST_MAX_TOKENS = 4096
-#: Tasks whose bindings (model call, main model, page cache) are kept.
+#: Tasks whose page cache is kept.
 TASKS_KEPT = 256
 
 Complete = Callable[[ModelRequest], Awaitable[ModelResponse]]
@@ -86,8 +80,6 @@ class Web(Extension):
                  digest_timeout: float = 60.0) -> None:
         self.webfetch_model = webfetch_model
         self._digest_call = digest
-        self._complete: OrderedDict[str, Complete] = OrderedDict()
-        self._main: OrderedDict[str, tuple[str, dict[str, str]]] = OrderedDict()
         self._caches: OrderedDict[str, PageCache] = OrderedDict()
         self.fetch = WebFetchTool(fetch_transport or HttpFetchTransport(),
                                   digest_for=self._digest_for, cache_for=self._cache_for,
@@ -103,31 +95,8 @@ class Web(Extension):
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return self._tools
 
-    # ------------------------------------------------------------ binding
-
-    async def on_start(self, view: TaskView) -> None:
-        if view.complete is not None:
-            _keep(self._complete, view.task_id, view.complete)
-
-    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        _keep(self._main, view.task_id, (request.model, dict(request.headers)))
-        return request
-
-    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
-        if call.name == self.fetch.name:
-            if view.complete is not None:
-                _keep(self._complete, view.task_id, view.complete)
-            # A call run right after a restart has seen no model request in
-            # this process: fall back to the task's configured model.
-            if view.task_id not in self._main:
-                _keep(self._main, view.task_id,
-                      (str(view.state.config.get("model") or ""), {}))
-        return None
-
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         if isinstance(recorded.event, TaskEnded):
-            self._complete.pop(view.task_id, None)
-            self._main.pop(view.task_id, None)
             self._caches.pop(view.task_id, None)
 
     def _cache_for(self, ctx: ToolContext) -> PageCache:
@@ -135,13 +104,10 @@ class Web(Extension):
         return _keep(self._caches, ctx.task_id, cache if cache is not None else PageCache())
 
     def _digest_for(self, ctx: ToolContext) -> Digest | None:
-        call = self._digest_call or self._complete.get(ctx.task_id)
-        main_model, headers = self._main.get(ctx.task_id, ("", {}))
-        model = self.webfetch_model or main_model
+        call = self._digest_call or ctx.complete
+        model = self.webfetch_model or ctx.model
         if call is None or not model:
             return None
-        if model != main_model:
-            headers = {}
         complete: Complete = call
 
         async def digest(url: str, title: str, page: str, prompt: str) -> str:
@@ -149,8 +115,7 @@ class Web(Extension):
                 url=url, title=title, page_markdown=page, prompt=prompt,
                 instructions=ctx.prompt("web/fetch_digest", DIGEST_INSTRUCTIONS))
             request = ModelRequest(model=model, messages=[user(text)],
-                                   max_tokens=DIGEST_MAX_TOKENS, thinking=False,
-                                   headers=headers)
+                                   max_tokens=DIGEST_MAX_TOKENS, thinking=False)
             response = await complete(request)
             return response.message.text.strip()
 

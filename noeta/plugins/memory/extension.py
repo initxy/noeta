@@ -19,6 +19,7 @@ import json
 import logging
 import posixpath
 import re
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from importlib import resources
@@ -29,7 +30,8 @@ from noeta.core import records
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
-from noeta.toolkit.context import read_local_text, task_env
+from noeta.toolkit.context import read_task_text, task_env, task_files
+from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import (
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
@@ -38,6 +40,7 @@ from noeta.toolkit.memory_index import (
     trim_memory_index,
 )
 from noeta.toolkit.paths import noeta_home, project_dir
+from noeta.toolkit.tokens import has_cjk
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
@@ -82,6 +85,16 @@ RECALL_TASK_BYTES = 61_440
 ERASABLE_RECALLS = 8
 #: Erased prompt seqs remembered, for a recall recorded after the erase.
 ERASED_SEQS_KEEP = 64
+#: A recalled file shows at most its first lines and bytes, then
+#: :data:`RECALL_CUT_NOTE` (Claude Code's limits).
+RECALL_FILE_MAX_LINES = 200
+RECALL_FILE_MAX_BYTES = 4096
+RECALL_CUT_NOTE = "> Only {what} of this memory are shown; Read {path} for the whole file."
+#: Put ahead of a recalled file last changed more than a day ago.
+RECALL_STALE_NOTE = (
+    "This memory was last changed {days} days ago. A memory records what was true when it was "
+    "written, not what is true now: what it says about the code, and any file:line it cites, "
+    "may be out of date. Check against the current code before stating it as fact.")
 RECALL_HEAD = ("Memories that may be relevant to this message; use one only if it really "
                "applies to what the user asked.")
 _RECALL_SCHEMA = {
@@ -107,6 +120,43 @@ _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
 def _field(head: str, key: str) -> str:
     m = re.search(rf"^\s*{key}:\s*(.+?)\s*$", head, re.M)
     return m.group(1).strip().strip("'\"") if m else ""
+
+
+def recalled_text(path: str, text: str) -> str:
+    """A recalled file's text within :data:`RECALL_FILE_MAX_LINES` lines and
+    :data:`RECALL_FILE_MAX_BYTES` bytes, with a note saying where the rest
+    is when it was cut."""
+    what = ""
+    lines = text.split("\n")
+    if len(lines) > RECALL_FILE_MAX_LINES:
+        text, what = "\n".join(lines[:RECALL_FILE_MAX_LINES]), \
+            f"the first {RECALL_FILE_MAX_LINES} lines"
+    encoded = text.encode("utf-8")
+    if len(encoded) > RECALL_FILE_MAX_BYTES:
+        kept = encoded[:RECALL_FILE_MAX_BYTES].decode("utf-8", errors="ignore")
+        newline = kept.rfind("\n")
+        text, what = (kept[:newline] if newline > 0 else kept), \
+            f"the first {RECALL_FILE_MAX_BYTES} bytes"
+    return f"{text}\n{RECALL_CUT_NOTE.format(what=what, path=path)}" if what else text
+
+
+def _stale_note(mtime: float, now: float | None = None) -> str:
+    """The note ahead of a memory changed more than a day ago (``""``
+    otherwise), on its own line."""
+    days = int(max(0.0, (now if now is not None else time.time()) - mtime) // 86_400)
+    return RECALL_STALE_NOTE.format(days=days) + "\n" if days > 1 else ""
+
+
+def _read_files(view: TaskView) -> set[str]:
+    """The files the task's ``Read`` calls named: a memory already read is
+    not recalled again."""
+    out: set[str] = set()
+    for m in view.state.history:
+        for use in m.tool_uses if m.role == "assistant" else ():
+            path = use.input.get("file_path") if use.name == "Read" else None
+            if isinstance(path, str) and path:
+                out.add(posixpath.normpath(path))
+    return out
 
 
 def _instructions_show_index(view: TaskView, name: str) -> bool:
@@ -210,9 +260,13 @@ class Memory(Extension):
             workspace = await self._workspace(view)
             directory = self._agent_dir(view, workspace) \
                 or memory_dir_for(workspace, self.home)
+        env = task_env(view.env, view.state.config)
         try:
-            Path(directory).mkdir(parents=True, exist_ok=True)
-        except OSError:
+            if is_local(env):
+                Path(directory).mkdir(parents=True, exist_ok=True)
+            else:  # the model's file tools write it there
+                await env.run(["mkdir", "-p", directory], timeout=10)
+        except Exception:  # noqa: BLE001 — written into by the first save anyway
             log.warning("memory: could not create %s", directory)
         view.record(self.name, "dir", {"dir": directory})
         index = None if _instructions_show_index(view, self.name) \
@@ -235,7 +289,9 @@ class Memory(Extension):
         recall model."""
         self._drop_voided(view)
         directory = self._dir(view)
-        if not self.recall_model or view.complete is None or directory is None:
+        # A sub-agent recalls nothing: its caller chose its prompt.
+        if not self.recall_model or view.complete is None or directory is None \
+                or view.state.parent_id:
             return ()
         state = view.state
         after = int((view.ext_state(self.name) or {}).get("through") or 0)
@@ -249,7 +305,10 @@ class Memory(Extension):
         if not new:
             return ()
         through = new[-1][0]
-        found = await self._recall(view, directory, "\n\n".join(m.text for _, m in new))
+        query = "\n\n".join(m.text for _, m in new).strip()
+        # A one-word message (Latin script) gives the selector nothing to go on.
+        one_word = not any(c.isspace() for c in query) and not has_cjk(query)
+        found = None if one_word else await self._recall(view, directory, query)
         if found is None:
             view.record(self.name, "checked", {"through": through})
             return ()
@@ -314,19 +373,17 @@ class Memory(Extension):
 
     @staticmethod
     async def _manifest(env: ExecEnv, directory: str,
-                        skip: set[str]) -> list[tuple[str, str]]:
-        """``(file name, manifest line)`` for every memory file not yet
-        attached. Read on this machine."""
+                        skip: set[str]) -> list[tuple[str, float, str]]:
+        """``(file name, modification time, manifest line)`` for every memory
+        file not yet attached, newest first. Read where the model's file
+        tools write them."""
         out: list[tuple[str, float, str]] = []
-        for path in Path(directory).glob("*.md"):
+        for name, mtime in await task_files(env, directory, ".md"):
+            path = Path(directory) / name
             if path.name == INDEX_FILE or str(path) in skip:
                 continue
-            text = await read_local_text(env, str(path))
+            text = await read_task_text(env, str(path))
             if text is None:
-                continue
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:
                 continue
             m = _FRONTMATTER.match(text)
             head = m.group(1) if m else ""
@@ -335,7 +392,7 @@ class Memory(Extension):
             line = f"- {f'[{kind}] ' if kind else ''}{path.name} ({when})"
             out.append((path.name, mtime, f"{line}: {desc}" if desc else line))
         out.sort(key=lambda t: -t[1])
-        return [(name, line) for name, _, line in out]
+        return out
 
     async def _recall(self, view: TaskView, directory: str,
                       query: str) -> tuple[str, list[str], int] | None:
@@ -345,11 +402,12 @@ class Memory(Extension):
         if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
             return None
         env = task_env(view.env, view.state.config)
-        manifest = await self._manifest(env, directory, set(state.get("surfaced") or []))
+        skip = {*(state.get("surfaced") or ()), *_read_files(view)}
+        manifest = await self._manifest(env, directory, skip)
         if not manifest:
             return None
         assert view.complete is not None and self.recall_model is not None
-        listing = "\n".join(line for _, line in manifest)
+        listing = "\n".join(line for _, _, line in manifest)
         request = ModelRequest(
             model=self.recall_model,
             system=[SystemPart(text=view.prompt("memory/recall", RECALL_PROMPT), cache=True)],
@@ -362,21 +420,22 @@ class Memory(Extension):
         except Exception:
             log.info("memory: recall selection failed", exc_info=True)
             return None
-        names = {name for name, _ in manifest}
+        mtimes = {name: mtime for name, mtime, _ in manifest}
         budget = RECALL_TASK_BYTES - int(state.get("bytes") or 0)
         parts: list[str] = []
         paths: list[str] = []
         used = 0
-        for name in [p for p in picked if isinstance(p, str) and p in names][:RECALL_MAX_FILES]:
+        for name in [p for p in picked if isinstance(p, str) and p in mtimes][:RECALL_MAX_FILES]:
             path = Path(directory) / name
-            body = await read_local_text(env, str(path))
+            body = await read_task_text(env, str(path))
             if body is None:
                 continue
-            size = len(body.encode("utf-8"))
+            shown = recalled_text(str(path), body.strip())
+            size = len(shown.encode("utf-8"))
             if used + size > budget:
                 break
             used += size
-            parts.append(f"Memory {path}:\n{body.strip()}")
+            parts.append(f"{_stale_note(mtimes[name])}Memory {path}:\n{shown}")
             paths.append(str(path))
         if not parts:
             return None

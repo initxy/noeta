@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import posixpath
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
@@ -30,6 +31,7 @@ from noeta.core.types import Message, ModelRequest, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
 from noeta.plugins.subtasks.roster import Roster, SubagentSpec, check_roster
 from noeta.plugins.subtasks.roster import agent_list as listing
+from noeta.plugins.subtasks.roster import agent_list_delta as roster_delta
 from noeta.plugins.subtasks.tool import (
     AGENT_ID_KEY,
     DELEGATION_TOOLS,
@@ -49,6 +51,7 @@ from noeta.plugins.subtasks.tool import (
 from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
 from noeta.toolkit.notices import NOTICE_GUARD, escape
+from noeta.toolkit.tools import mark_spill_dir
 
 __all__ = ["SubagentSpec", "Subtasks", "task_notification"]
 
@@ -98,7 +101,6 @@ class Subtasks(Extension):
       without delegation carries, so the child-side tools still apply.
     - ``max_depth``: a task at this depth may not delegate (root = 0).
     - ``max_background``: agents one task may have running at once.
-    - ``max_fanout``: Agent calls one reply may carry.
     - ``exclusive_with``: tool names an Agent call may not share a reply with.
     - ``inherit_config``: parent ``TaskCreated.config`` keys a child copies.
       ``model`` and ``effort`` are copied only when neither the call nor the
@@ -118,7 +120,6 @@ class Subtasks(Extension):
         agents: Sequence[str] = (),
         max_depth: int | None = 3,
         max_background: int = texts.MAX_BACKGROUND,
-        max_fanout: int = texts.MAX_FANOUT,
         exclusive_with: Collection[str] = (),
         inherit_config: Sequence[str] = ("cwd", "model", "effort"),
         queue: str | None = None,
@@ -136,7 +137,6 @@ class Subtasks(Extension):
         self._roster = Roster(self.roster, self.agents)
         self.max_depth = max_depth
         self.max_background = max_background
-        self.max_fanout = max_fanout
         self.exclusive_with = frozenset(exclusive_with)
         self.inherit_config = tuple(inherit_config)
         self.queue = queue
@@ -169,7 +169,10 @@ class Subtasks(Extension):
             return {**st, "reminded": True}
         if kind == "agent_list":
             held = data.get("text") if isinstance(data, dict) else None
-            return {**st, "listed": True, "held_list": held}
+            types = data.get("types") if isinstance(data, dict) else None
+            return {**st, "listed": True, "held_list": held, "types": types}
+        if kind == "agent_delta":
+            return {**st, "listed": True, "types": data["types"]}
         if kind == "agent_list_sent":
             return {**st, "held_list": None}
         return idle.reduce(st, kind, data) or st
@@ -283,9 +286,35 @@ class Subtasks(Extension):
             # deferred tools.
             out.append(Reminder(text=st["held_list"], kind="agent_list_sent", data={},
                                 role="system", order=AGENT_LIST_ORDER))
+        elif not st["held_list"]:
+            out += self._agent_delta(view, st)
         return out
 
+    def _agent_delta(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
+        """A note when agent types joined or left since the list went out
+        (an agent file added or removed, a plugin reloaded): Claude Code's
+        agent-list delta."""
+        roster = self.roster_for(view)
+        types = sorted(roster, key=str.lower)
+        if not st["listed"]:
+            # None to list at the start: the whole list once there is one.
+            text = listing(roster)
+            return [Reminder(text=text, kind="agent_delta", data={"types": types},
+                             role="system", order=AGENT_LIST_ORDER)] if text else []
+        if st.get("types") is None:
+            # A list recorded before its types were kept: from here on.
+            view.record(self.name, "agent_delta", {"types": types})
+            return []
+        text = roster_delta(st["types"], roster)
+        if not text:
+            return []
+        return [Reminder(text=text, kind="agent_delta", data={"types": types},
+                         role="system", order=AGENT_LIST_ORDER)]
+
     # ------------------------------------------------------------ events
+
+    def _types(self, view: TaskView) -> list[str]:
+        return sorted(self.roster_for(view), key=str.lower)
 
     def agent_list(self, view: TaskView) -> str | None:
         """The agent types this task can start, one line each with its tools."""
@@ -296,7 +325,7 @@ class Subtasks(Extension):
         request, in the environment's system turn."""
         text = None if view.state.parent_id else self.agent_list(view)
         if text and view.keeps_tail is not None:
-            view.record(self.name, "agent_list", {"text": text})
+            view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
         return ()
 
     async def on_start(self, view: TaskView) -> None:
@@ -304,7 +333,7 @@ class Subtasks(Extension):
         text = self.agent_list(view)
         if text and not st["listed"]:
             # Held for the first request's system turn (``reminders``).
-            view.record(self.name, "agent_list", {"text": text})
+            view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
         # Ends taken before a crash whose notice was never recorded.
         done = set(st["noticed"]) | set(st["pending"])
         for task_id in st["tasks"]:
@@ -391,6 +420,9 @@ class Subtasks(Extension):
                         return count, last, known[2] + len(data)
             data = lines(0)
             await env.write_bytes(path, data)
+            # The tree's spill directory: swept by the host only once marked.
+            await mark_spill_dir(env, posixpath.dirname(posixpath.dirname(path)),
+                                 state.root_id or state.task_id)
             return count, last, len(data)
         except OSError:
             log.debug("transcript %s not written", path, exc_info=True)

@@ -123,6 +123,8 @@ class McpClient:
 
     def __init__(self) -> None:
         self.broken: str | None = None
+        #: The ``instructions`` of the server's ``initialize`` result.
+        self.instructions: str | None = None
         #: A ``notifications/tools/list_changed`` arrived since it was cleared.
         self.tools_changed = False
         #: Answers server requests made outside any bound context (e.g.
@@ -217,6 +219,12 @@ class McpClient:
                                    {"uri": uri})
 
 
+def server_instructions(result: dict[str, Any]) -> str | None:
+    """The ``instructions`` an ``initialize`` result carries, if any."""
+    text = result.get("instructions")
+    return text.strip() or None if isinstance(text, str) else None
+
+
 def reply_result(method: str, msg: dict[str, Any]) -> dict[str, Any]:
     """A reply's ``result``, or the ``McpError`` its ``error`` says."""
     if msg.get("error") is not None:
@@ -273,8 +281,9 @@ class StreamClient(McpClient):
         self._started = True
         await self._open()
         self._reader = asyncio.create_task(self._read_loop())
-        await self.request("initialize", initialize_params(
+        result = await self.request("initialize", initialize_params(
             bare_elicitation=self.bare_elicitation))
+        self.instructions = server_instructions(result)
         await self._send({"jsonrpc": "2.0", "method": "notifications/initialized",
                           "params": {}})
 

@@ -8,8 +8,8 @@ flags (``noeta.host.stream_json`` speaks the protocol).
                                                    what Claude Code's Agent SDK runs
 
 ``--settings``, ``--setting-sources``, ``--mcp-config`` (with
-``--strict-mcp-config``) and ``--agents`` work as in Claude Code, on noeta's
-own places. Flags Claude Code has and noeta does not use (``--betas`` …)
+``--strict-mcp-config``), ``--agents`` and ``--plugin-dir`` work as in Claude
+Code, on noeta's own places. Flags Claude Code has and noeta does not use (``--betas`` …)
 are accepted and ignored, so an SDK's command line runs unchanged; each
 ignored one is named on stderr.
 """
@@ -31,11 +31,12 @@ import yaml
 
 from noeta.agents.agent_files import AgentFile, AgentFileError, parse_agent_file
 from noeta.cli.config import Settings
+from noeta.toolkit.local_env import local_timezone
 
 #: Accepted for compatibility, not applied (value-taking, then flags).
 IGNORED_WITH_VALUE = ("--fallback-model",
                       "--betas", "--max-thinking-tokens", "--thinking", "--thinking-display",
-                      "--plugin-dir", "--plugin-url", "--task-budget", "--debug-file",
+                      "--plugin-url", "--task-budget", "--debug-file",
                       "--name", "--autocompact", "--file", "--system-prompt-snapshot")
 IGNORED_FLAGS = ("--include-hook-events", "--no-session-persistence",
                  "--session-mirror", "--bare", "--allow-dangerously-skip-permissions",
@@ -71,7 +72,8 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--fork-session", dest="fork", action="store_true",
                     help="with --resume/--continue: go on in a new task")
     ap.add_argument("--session-id", dest="new_task_id", help="the id the new task gets")
-    ap.add_argument("--agent", default="main")
+    ap.add_argument("--agent", default=None,
+                    help="the agent to run (default: the settings' agent, else main)")
     ap.add_argument("--system-prompt-file")
     ap.add_argument("--append-system-prompt-file")
     ap.add_argument("--settings", dest="settings_flag",
@@ -84,6 +86,8 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
                     help="use only the --mcp-config servers")
     ap.add_argument("--agents", dest="agents_json",
                     help="sub-agents as a JSON object: name -> {description, prompt, ...}")
+    ap.add_argument("--plugin-dir", dest="plugin_dirs", action="append", default=[],
+                    metavar="PATH", help="load a plugin file or directory for this run only")
     ap.add_argument("-v", "--version", action="store_true")
     ap.add_argument("-d", "--debug", nargs="?", const="", default=None)
     for flag in IGNORED_WITH_VALUE:
@@ -298,22 +302,24 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str) -> i
     mode = args.permission_mode
     if args.dangerously_skip_permissions:
         mode = "bypassPermissions"
+    agent = args.agent or getattr(app, "main_agent", "main")
     async with app:  # app.notices were logged to stderr when the app was made
         resume = args.resume or None
         if args.continue_last and not resume:
-            resume = await find_latest_task(app.client, cwd, args.agent)
+            resume = await find_latest_task(app.client, cwd, agent)
             if resume is None:
                 print("noeta: no task to continue in this directory", file=sys.stderr)
                 return 1
         options = HeadlessOptions(
-            agent=args.agent, model=s.model, cwd=cwd, permission_mode=mode,
+            agent=agent, model=s.model, cwd=cwd, permission_mode=mode,
             max_turns=args.max_turns, max_budget_usd=args.max_budget_usd,
             output_schema=schema, include_partial_messages=args.include_partial_messages,
             replay_user_messages=args.replay_user_messages,
             ask_client=args.permission_prompt_tool == "stdio"
             and args.permission_prompts == "host",
             resume=resume, fork=bool(args.fork), task_id=args.new_task_id,
-            config={"effort": s.effort} if s.effort else {})
+            config={**({"effort": s.effort} if s.effort else {}),
+                    **({"timezone": zone} if (zone := local_timezone()) else {})})
         if args.permission_prompt_tool not in (None, "stdio"):
             print(f"noeta: --permission-prompt-tool {args.permission_prompt_tool}: only "
                   "\"stdio\" is supported; permission prompts are refused", file=sys.stderr)

@@ -35,6 +35,7 @@ from noeta.toolkit.tools import (
     format_size,
     limit_output,
     load_description,
+    save_spilled,
     spill_path,
     truncate_bytes,
 )
@@ -447,8 +448,4 @@ async def _save_binary(ctx: ToolContext, raw: bytes, content_type: str) -> str |
     ext = mimetypes.guess_extension(media_type_of(content_type)) or ".bin"
     base = posixpath.splitext(spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id))[0]
     path = f"{posixpath.dirname(base)}/webfetch-{posixpath.basename(base)}{ext}"
-    try:
-        await ctx.env.write_bytes(path, raw)
-    except OSError:
-        return None
-    return path
+    return path if await save_spilled(ctx, path, raw) else None

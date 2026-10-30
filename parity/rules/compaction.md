@@ -30,6 +30,7 @@ summary, so their hash is specific to this recording; review them for the templa
 | compact.trigger.4 | The first request after a compaction is sent even when it is itself over the threshold (m3/0010 and m3/0019 carried ~35K input tokens); the next check, after that response, compacts again. |
 | compact.trigger.5 | No "context low" warning reminder is sent before an auto-compaction; the next request is simply the compaction request. |
 | compact.trigger.6 | The threshold is a fraction of the model's context window (configurable; the recording forced 30 % of a 100K window). The default fraction is not visible in the baseline recordings. |
+| compact.trigger.7 | Rapid-refill breaker (bundle, not in the recordings): within one user turn, an auto-compaction needed again fewer than 3 model calls after the previous one counts as a refill; at the third refill in a row no summary is made and the turn ends with an error telling the user the context keeps refilling, likely from an oversized file or tool output. A new user turn starts the count again. |
 
 ## The compaction request
 
@@ -98,6 +99,16 @@ summary, so their hash is specific to this recording; review them for the templa
 | compact.reattach.9 | The permission-mode guidance (auto mode) is not in the first request after an automatic compaction; it is re-sent with the first request that follows a new prompt or tool result (r2 m3/0009, 0020). After a manual compaction it rides in the attachment message after the next prompt (r2 m1/0077). |
 | compact.reattach.10 | Background tasks: none were running at any recorded compaction, so their re-attachment is not observed. |
 | compact.reattach.11 | Layout of the request right after an automatic compaction (r2 m3): with kept messages, the instructions and the git snapshot precede the summary in its user message, the date follows as its own system turn, the attribution note joins the kept tool results, and the token counter, deferred tools, agent list, skill list, environment and model line form the closing system turn; without kept messages, the instructions, git snapshot and attribution note precede the summary and the closing system turn holds the deferred tools, agent list, skill list, environment, model line and date (no token counter). After a manual compaction the summary message stands alone and everything else comes with the next prompt (r2 m1/0077). |
+| compact.reattach.12 | A recently used file that is too large to re-attach (over the per-file cap, or one Read refuses whole for its size) is not dropped: a one-line note names its path, says it was read before the summary and is too large to include, and points to the Read tool (r2 m3/0007, 0009, 0011). A file that can no longer be read is left out. |
+| compact.reattach.13 | Re-attachment candidates are the files touched since the previous compaction, then the files that compaction re-attached in full; a file it only named as too large, or that sat in its kept messages, is not re-attached again unless touched since (r2 m3/0019: the 84K-character partial read kept before the r2 compaction gets no note after the next one). |
+| compact.reattach.14 | Invoked skills are re-attached newest invoked first; each body is cut to 5,000 tokens with a note that the rest can be read from the skill file, and the block holds at most 25,000 tokens of bodies: a skill that would pass it is left out (bundle constants; the recordings' skills are small). |
+
+## Large tool results (bundle; the recordings stay under both limits)
+
+| id | rule |
+|---|---|
+| compact.results.1 | Every tool's text result has a ceiling of the tool's own limit and at most 50,000 characters; past it the result is saved to a file and replaced by the `<persisted-output>` block (size, path, 2 KB preview). `Read` has no such limit (it bounds itself); `WebSearch`'s own limit (100,000) is cut to 50,000 by the ceiling. Tools whose own limit is lower (bundle `maxResultSizeChars`): `Bash` 30,000, `Monitor` and `ListAgents` 10,000, `ScheduleWakeup` 1,000, `ReportFindings` 256. |
+| compact.results.2 | The results that answer one reply's calls together hold at most 200,000 characters inline: past it, fresh results are saved the same way (Claude Code picks the largest first), and the choice for each call never changes afterwards. |
 
 ## Manual `/compact`
 

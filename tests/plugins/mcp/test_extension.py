@@ -438,3 +438,42 @@ async def test_scopes_partition_connections(store: SqliteStore, pool: McpPool) -
         result = finished(await events(client, tid))[0].result
         pids.append(result.text)
     assert pids[0] == pids[1] != pids[2]
+
+
+async def test_server_instructions_are_told_and_withdrawn(
+        store: SqliteStore, pool: McpPool) -> None:
+    docs = server("docs", deferred=True, FAKE_INSTRUCTIONS="Call resolve before query.")
+    late = server("late", deferred=True, FAKE_INSTRUCTIONS="Always pass a project id.")
+    configured = [docs]
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("three"), reply("four")])
+    agent = Agent(name="a", model="m", extensions=[
+        Mcp(lambda _view: list(configured), pool=pool), ToolSearch()])
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await runtime(store, provider, agent).run_until_idle()
+    configured.append(late)
+    await client.send(tid, "more")
+    await runtime(store, provider, agent).run_until_idle()
+    configured.remove(docs)
+    await client.send(tid, "again")
+    await runtime(store, provider, agent).run_until_idle()
+    await client.send(tid, "quiet")
+    await runtime(store, provider, agent).run_until_idle()
+
+    def notes(i: int) -> list[str]:
+        return [m.text for m in provider.requests[i].messages
+                if m.role == "system" and "MCP server" in m.text]
+
+    assert notes(0) == ["# MCP Server Instructions\nThese MCP servers gave instructions for "
+                        "using their tools and resources:\n## docs\nCall resolve before query."]
+    assert notes(1)[-1].endswith("## late\nAlways pass a project id.")
+    assert notes(2)[-1].startswith("These MCP servers disconnected; their instructions above "
+                                   "no longer apply:\ndocs\nThis is background information")
+    assert notes(3) == notes(2)
+
+
+def test_long_server_instructions_are_cut() -> None:
+    from noeta.plugins.mcp.instructions import INSTRUCTIONS_MAX_CHARS, cap_instructions
+    assert cap_instructions("short") == "short"
+    cut = cap_instructions("x" * 5000)
+    assert cut == "x" * INSTRUCTIONS_MAX_CHARS + "… [truncated]"

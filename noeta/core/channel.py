@@ -19,14 +19,16 @@ group, or a ``Channel`` subclass in a plugin file (``noeta.core.registry``).
 from __future__ import annotations
 
 import asyncio
+import re
 from html import escape
 from typing import Any
 
 from noeta.core.client import ClientAPI, Input
 from noeta.core.errors import UnknownTask
 from noeta.core.store import TaskRow
+from noeta.core.types import Message, Text
 
-__all__ = ["Channel", "current_task", "deliver", "framed"]
+__all__ = ["Channel", "current_task", "deliver", "framed", "from_channel"]
 
 
 class Channel:
@@ -45,14 +47,19 @@ class Channel:
 
 async def deliver(client: ClientAPI, *, task_id: str, agent: str, message: Input,
                   dedupe_key: str, config: dict[str, Any] | None = None,
-                  queue: str = "default") -> str:
+                  queue: str = "default", source: str = "channel", sender: str = "") -> str:
     """Post one inbound ``message`` to the conversation ``task_id``,
     creating its task (for ``agent``, with ``config``) the first time, and
     a continuation once that task ended. Returns the id of the task it went
     to. Idempotent: each task is created once however many replicas race,
     and the message is posted once per ``dedupe_key`` (the source's delivery
     id) to the conversation's current task; a delivery repeated after that
-    task ended reaches the continuation again."""
+    task ended reaches the continuation again. What an outside sender wrote
+    always arrives framed, as Claude Code's channel messages do: a message
+    not already framed with :func:`framed` is framed here with ``source`` and
+    ``sender``, so it is never taken as the task owner's own (its ``@path``
+    mentions are not attached, :func:`from_channel`)."""
+    message = _framed_message(message, source, sender)
     n, row = await _newest(client, task_id)
     if row is None:
         await client.create(agent, task_id=task_id, config=config, queue=queue)
@@ -112,8 +119,27 @@ async def _newest(client: ClientAPI, task_id: str) -> tuple[int, TaskRow | None]
     return low, found
 
 
+def _framed_message(message: Input, source: str, sender: str) -> Input:
+    if isinstance(message, str):
+        return message if from_channel(message) else framed(source, sender, message)
+    if from_channel(message.text):
+        return message
+    rest = [b for b in message.content if not isinstance(b, Text)]
+    return Message(role=message.role, content=[Text(text=framed(source, sender, message.text)),
+                                               *rest], origin=message.origin)
+
+
 def framed(source: str, sender: str, text: str) -> str:
     """``text`` marked as what ``sender`` wrote through ``source``, the way
     Claude Code's channels frame it: the model can tell who speaks."""
     return (f'<channel source="{escape(source)}" sender="{escape(sender)}">\n'
             f"{text}\n</channel>")
+
+
+_FRAME = re.compile(r"<channel\s+source=")
+
+
+def from_channel(text: str) -> bool:
+    """Whether ``text`` carries a channel's frame (:func:`framed`): an
+    outside sender's words, not the task owner's, anywhere in it."""
+    return _FRAME.search(text) is not None

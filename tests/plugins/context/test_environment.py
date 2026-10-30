@@ -18,7 +18,7 @@ from noeta.core.events import ExtensionRecorded
 from noeta.core.execenv import RunResult
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState
-from noeta.plugins.environment import Environment
+from noeta.plugins.environment import Environment, render_git
 
 
 def _view(cwd: str, env: Any, **config: Any) -> TaskView:
@@ -142,6 +142,8 @@ class FakeContainer:
                   env: Mapping[str, str] | None = None, stdin: bytes | None = None,
                   timeout: float | None = None, output_cap: int | None = None) -> RunResult:
         self.argv.append(list(argv))
+        if argv[0] == "uname":
+            return RunResult(exit_code=0, stdout=b"Linux\n")
         if "config" in argv:
             return RunResult(exit_code=1, stdout=b"")  # no filter driver configured
         out = b"main\n" if "rev-parse" in argv else b" M src/x.py\n"
@@ -157,10 +159,32 @@ async def test_a_container_env_is_asked_and_host_facts_left_out() -> None:
     assert " - Primary working directory: /workspace" in text
     assert "Current branch: main" in text and " M src/x.py" in text
     assert " - Shell: " not in text and " - OS Version: " not in text
+    # The platform is the container's, whatever this machine is.
+    assert " - Platform: linux" in text
     assert "Model: `agent-model`." in text
     for argv in env.argv:
-        assert argv[:3] == ["git", "-c", "core.fsmonitor="]
+        assert argv[:3] == ["git", "-c", "core.fsmonitor="] or argv[0] == "uname"
     assert any("status" in a for a in env.argv)
+
+
+async def test_a_container_whose_platform_cannot_be_told_gets_no_platform_line() -> None:
+    class Bare(FakeContainer):
+        async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
+            if argv[0] == "uname":
+                return RunResult(exit_code=127, stdout=b"")
+            return await super().run(argv, **kw)
+
+    text = await _block(Environment(model="m"), _view("/workspace", Bare("/workspace")))
+    assert " - Platform:" not in text and " - Is a git repository: true" in text
+
+
+def test_an_unset_git_user_and_no_commits_leave_no_placeholder() -> None:
+    text = render_git(branch="main", main="main", user="", status="", commits="")
+    assert "Git user" not in text and "(unset)" not in text and "(none)" not in text
+    assert "Main branch (where pull requests usually go): main\n\nStatus:\n(clean)" in text
+    assert "Recent commits:\n\n" in text
+    assert "Git user: ada\n\nStatus:" in render_git(branch="b", main="m", user="ada",
+                                                     status="", commits="abc x")
 
 
 async def test_the_model_line_prefers_the_task_config(tmp_path: Path) -> None:
@@ -181,6 +205,25 @@ async def test_a_catalogued_model_gets_its_name_cutoff_and_the_attribution_note(
     text = await _block(Environment(attribution=False),
                         _view(str(tmp_path), env, model="claude-opus-5-5"))
     assert "Co-Authored-By" not in text
+
+
+def test_the_co_author_address_comes_from_the_catalog() -> None:
+    from noeta.core import models
+    from noeta.plugins.environment import render_attribution
+
+    models.register_models({
+        "g1-test-other": models.ModelSpec(real_model_id="g1-test-other", context_window=1000,
+                                          max_output_tokens=100, display_name="Other 1"),
+        "g1-test-mailed": models.ModelSpec(real_model_id="g1-test-mailed",
+                                           context_window=1000, max_output_tokens=100,
+                                           display_name="Mailed 2",
+                                           coauthor_email="bot@example.com"),
+    })
+    assert render_attribution("g1-test-other") is None
+    note = render_attribution("g1-test-mailed")
+    assert note is not None and "Co-Authored-By: Mailed 2 <bot@example.com>" in note
+    claude = render_attribution("claude-opus-5-5")
+    assert claude is not None and "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" in claude
 
 
 async def _no_sleep(_: float) -> None:
@@ -257,3 +300,82 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
         "more", "<total_tokens>15000000 tokens left</total_tokens>"]
     assert sum(m.text.startswith("# Environment") for m in third) == 1
     assert provider.requests[3].messages[-1].text.startswith("<command-name>/plan")
+
+
+def test_the_deferred_delta_names_what_joined_and_what_left() -> None:
+    from noeta.plugins.environment import deferred_delta
+    assert deferred_delta(["A"], ["A"], ["A"]) == ""
+    text = deferred_delta(["A", "mcp__s__x"], ["A", "mcp__s__x", "mcp__s__y"],
+                          ["A", "B", "mcp__s__y"])
+    parts = text.split("\n\n")
+    assert parts[0].startswith("The tools below are deferred") and parts[0].endswith("\nB")
+    assert parts[1] == ("1 deferred tool is available again (their MCP server reconnected; "
+                        "the names were given earlier in this conversation): mcp__s__y. Load "
+                        "them with ToolSearch as before.")
+    assert parts[2].startswith("These deferred tools are no longer available (their MCP server "
+                               "disconnected)") and parts[2].endswith(":\nmcp__s__x")
+    assert parts[3].startswith("This is background information")
+
+
+async def test_deferred_tools_that_come_and_go_mid_task_are_told(tmp_path: Path) -> None:
+    from noeta.backends.stores.sqlite import SqliteStore
+    from noeta.core.agent import Agent
+    from noeta.core.client import Client
+    from noeta.core.extension import Extension
+    from noeta.core.runner import Runtime
+    from noeta.core.tool import text_output
+    from noeta.testing import ScriptedProvider, reply
+
+    class Remote:
+        description = "remote"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = True
+        clearable = False
+        deferred = True
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            return text_output("ok")
+
+    class Server(Extension):
+        name = "server"
+        up: tuple[str, ...] = ("mcp__s__a",)
+
+        def tools(self, view: Any) -> Any:
+            return [Remote(n) for n in self.up]
+
+    server = Server()
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("three"), reply("four")])
+    agent = Agent(name="a", model="m", extensions=[server, Environment(today=lambda: "2026-10-28")])
+
+    def runtime() -> Runtime:  # a new one per message: another worker, say
+        return Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                       env_for=lambda _s: LocalExecEnv(str(tmp_path)), sleep=_no_sleep)
+
+    client = Client(store)
+    tid = await client.create("a", "hi", config={"cwd": str(tmp_path)})
+    await runtime().run_until_idle()
+    server.up = ("mcp__s__a", "mcp__s__b")
+    await client.send(tid, "more")
+    await runtime().run_until_idle()
+    server.up = ("mcp__s__b",)
+    await client.send(tid, "again")
+    await runtime().run_until_idle()
+    await client.send(tid, "quiet")
+    await runtime().run_until_idle()
+    await store.close()
+
+    def notes(i: int) -> list[str]:
+        return [m.text for m in provider.requests[i].messages
+                if m.role == "system" and "deferred" in m.text][-1:]
+
+    assert notes(1)[0].startswith("The tools below are deferred") and \
+        notes(1)[0].endswith("\nmcp__s__b")
+    assert "no longer available (their MCP server disconnected)" in notes(2)[0]
+    assert notes(2)[0].split("\n\n")[0].endswith(":\nmcp__s__a")
+    # Nothing changed since: no new note.
+    assert len([m for m in provider.requests[3].messages if "no longer available" in m.text]) \
+        == 1

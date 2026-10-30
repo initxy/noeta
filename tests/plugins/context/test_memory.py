@@ -10,8 +10,10 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.agent import Agent
 from noeta.core.types import ModelRequest, ModelResponse
+from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
@@ -49,6 +51,129 @@ async def test_the_prompt_names_the_directory_and_it_exists(h: Harness, tmp_path
         assert fact in system, fact
     # No MEMORY.md yet: nothing attached.
     assert [m.text for m in h.provider.requests[0].messages] == ["go"]
+
+
+@pytest.mark.parametrize("mode", ["default", "auto", "plan"])
+async def test_the_model_saves_a_memory_without_asking(
+        h: Harness, tmp_path: Path, mode: str) -> None:
+    """Claude Code's auto-memory carve-out: the memory directory lies
+    outside the working directory, yet its markdown files are written
+    without a prompt, in every mode (and the file tools' fence lets them)."""
+    from noeta.plugins.permissions import Permissions
+
+    home = tmp_path / "home"
+    directory = memory_dir_for(str(h.work), home)
+    note, other = f"{directory}role.md", f"{directory}notes.txt"
+    a = Agent(name="a", model="m", extensions=[
+        Memory(home=str(home)), FileTools(), Permissions(mode=mode)])
+    h.provider.add(reply("", ("Write", {"file_path": note, "content": "user is a chemist\n"})),
+                   reply("", ("Write", {"file_path": other, "content": "x\n"})),
+                   reply("saved"))
+    tid = await h.start(a, config={"unattended": True} if mode == "default" else None)
+    assert Path(note).read_text() == "user is a chemist\n"
+    first = (await h.results(tid))[0].result
+    assert not first.is_error, first.text
+    # Only markdown files are carved out.
+    assert not Path(other).exists()
+
+
+async def test_a_link_in_the_memory_directory_carries_no_write_or_read_past_the_rules(
+        h: Harness, tmp_path: Path) -> None:
+    """The carve-out is judged where a write lands: a repository's planted
+    link ``.noeta/agent-memory/a -> ..`` would turn a memory write into a
+    write of ``.noeta/agents/evil.md`` (an agent file, which can carry hooks)
+    (a read through a link is the next test)."""
+    from noeta.plugins.permissions import Permissions
+
+    memory = h.work / ".noeta" / "agent-memory"
+    memory.mkdir(parents=True)
+    (memory / "a").symlink_to("..")
+    (h.work / ".noeta" / "agents").mkdir()
+    evil = memory / "a" / "agents" / "evil.md"
+    a = Agent(name="a", model="m", extensions=[
+        Memory(agent_scope="project", agent_name="a"), FileTools(), Permissions(mode="default")])
+    h.provider.add(reply("", ("Write", {"file_path": str(evil), "content": "x"})),
+                   reply("done"))
+    tid = await h.start(a, config={"cwd": str(h.work)})
+    assert not (h.work / ".noeta" / "agents" / "evil.md").exists()
+    # Asked, as any write into .noeta/agents is.
+    assert (await h.client.get(tid)).status == "waiting"
+    assert await h.results(tid) == []
+
+
+async def test_a_memory_file_read_through_a_link_out_of_it_asks(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.plugins.permissions import Permissions
+
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    outside = tmp_path / "secret.md"
+    outside.write_text("the key")
+    (directory / "note.md").symlink_to(outside)
+    a = Agent(name="a", model="m", extensions=[
+        Memory(home=str(home)), FileTools(), Permissions(mode="default")])
+    h.provider.add(reply("", ("Read", {"file_path": str(directory / "note.md")})),
+                   reply("done"))
+    tid = await h.start(a)
+    assert await h.results(tid) == []
+    assert (await h.client.get(tid)).status == "waiting"
+
+
+class Elsewhere(LocalExecEnv):
+    """An exec env on another machine (a container every worker reaches):
+    its files are under ``jail`` here, out of this machine's paths."""
+
+    local = False
+
+    def __init__(self, cwd: str, jail: Path, mapped: Path) -> None:
+        super().__init__(cwd)
+        self.jail, self.mapped = str(jail), str(mapped)
+
+    def _p(self, path: str) -> str:
+        return self.jail + path if path.startswith(self.mapped) else path
+
+    async def read_bytes(self, path: str) -> bytes:
+        return await super().read_bytes(self._p(path))
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        await super().write_bytes(self._p(path), data)
+
+    async def stat(self, path: str) -> Any:
+        return await super().stat(self._p(path))
+
+    async def realpath(self, path: str) -> str:
+        return path
+
+    async def run(self, argv: Any, **kw: Any) -> Any:
+        return await super().run([self._p(a) for a in argv], **kw)
+
+
+async def test_with_a_remote_exec_env_memory_lives_in_it(h: Harness, tmp_path: Path) -> None:
+    """The model saves memories with its file tools, through the task's exec
+    env; the plugin reads them there too (not on the worker), so the index
+    and recall see them on any worker that reaches the env."""
+    home = tmp_path / "home"
+    jail = tmp_path / "jail"
+    h.env_for = lambda _s: Elsewhere(str(h.work), jail, home)
+    directory = memory_dir_for(str(h.work), home)
+    note = f"{directory}role.md"
+    a = Agent(name="a", model="m", extensions=[
+        Memory(home=str(home), recall_model="small"), FileTools()])
+    h.provider.add(
+        reply("", ("Write", {"file_path": note,
+                             "content": "---\ndescription: their job\n---\nchemist\n"})),
+        reply("saved"))
+    tid = await h.start(a)
+    assert not Path(note).exists()
+    assert (jail / note.lstrip("/")).read_text().endswith("chemist\n")
+    h.provider.add(reply(json.dumps({"selected_memories": ["role.md"]})),
+                   reply("you are a chemist"))
+    await h.say(a, tid, "what do I do for a living?")
+    selector, main = h.provider.requests[-2:]
+    assert "role.md (" in selector.messages[0].text and "): their job" in selector.messages[0].text
+    [recalled] = [m for m in main.messages if m.origin == "memory"]
+    assert recalled.text.endswith("chemist")
 
 
 async def test_the_section_goes_before_the_environment_section(
@@ -232,3 +357,118 @@ async def test_a_blocked_prompts_recall_is_dropped_whatever_the_plugin_order(
     await h.say(a, tid, "vault please")
     main = h.provider.requests[-1]
     assert [m for m in main.messages if m.origin == "memory" and "1234" in m.text]
+
+
+def test_the_selector_is_sparing_with_broad_memories() -> None:
+    from noeta.plugins.memory.extension import RECALL_PROMPT
+    # Claude Code's selector rule: match the subject, not shared words, and
+    # be most careful with the user-profile and project-overview memories.
+    assert "[user]" in RECALL_PROMPT and "[project]" in RECALL_PROMPT
+    assert "not by words it happens to share" in RECALL_PROMPT
+
+
+def test_a_recalled_file_shows_its_start_and_says_where_the_rest_is() -> None:
+    from noeta.plugins.memory.extension import (
+        RECALL_FILE_MAX_BYTES,
+        RECALL_FILE_MAX_LINES,
+        recalled_text,
+    )
+    assert recalled_text("/m/a.md", "short") == "short"
+    many = "\n".join(f"line {i}" for i in range(300))
+    cut = recalled_text("/m/a.md", many)
+    assert cut.split("\n")[RECALL_FILE_MAX_LINES - 1] == f"line {RECALL_FILE_MAX_LINES - 1}"
+    assert cut.endswith(f"> Only the first {RECALL_FILE_MAX_LINES} lines of this memory are "
+                        "shown; Read /m/a.md for the whole file.")
+    wide = "\n".join("x" * 100 for _ in range(100))
+    cut = recalled_text("/m/a.md", wide)
+    body, note = cut.rsplit("\n", 1)
+    assert len(body.encode()) <= RECALL_FILE_MAX_BYTES and body.endswith("x")
+    assert f"first {RECALL_FILE_MAX_BYTES} bytes" in note
+
+
+async def test_recall_attaches_a_long_memory_cut_to_its_start(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "big.md", "everything", "\n".join("y" * 80 for _ in range(400)))
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["big.md"]})), reply("ok"))
+    await h.start(a, goal="tell me everything")
+    [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
+    assert len(recalled.text.encode()) < 4096 + 800
+    assert f"Read {directory / 'big.md'} for the whole file." in recalled.text
+
+
+async def test_an_old_recalled_memory_says_how_old_it_is(h: Harness, tmp_path: Path) -> None:
+    import os
+    import time
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "old.md", "old fact", "The parser lives in a.py:10.")
+    _memory(directory, "new.md", "new fact", "Fresh.")
+    _memory(directory, "day.md", "a day old", "Yesterday.")
+    week = time.time() - 7 * 86_400 - 60
+    os.utime(directory / "old.md", (week, week))
+    one = time.time() - 1.5 * 86_400
+    os.utime(directory / "day.md", (one, one))
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["old.md", "new.md", "day.md"]})),
+                   reply("ok"))
+    await h.start(a, goal="where is the parser")
+    [recalled] = [m for m in h.provider.requests[1].messages if m.origin == "memory"]
+    text = recalled.text
+    assert "This memory was last changed 7 days ago. A memory records what was true when " \
+        "it was written" in text
+    assert "Check against the current code before stating it as fact.\n" \
+        f"Memory {directory / 'old.md'}:" in text
+    # A day old or less carries no note (Claude Code's threshold).
+    assert text.count("last changed") == 1
+
+
+async def test_a_one_word_message_asks_no_selector(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    a = agent(home, recall_model="small")
+    h.provider.add(reply("ok"))
+    tid = await h.start(a, goal="  continue  ")
+    assert [r.model for r in h.provider.requests] == ["m"]
+    # CJK prose has no spaces; it is not one word.
+    h.provider.add(reply(json.dumps({"selected_memories": ["tabs.md"]})), reply("ok"))
+    await h.say(a, tid, "用制表符缩进这个文件")
+    assert [r.model for r in h.provider.requests] == ["m", "small", "m"]
+
+
+async def test_a_memory_the_task_read_is_not_recalled(h: Harness, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
+    _memory(directory, "deploy.md", "how deploys run", "Deploy on Fridays.")
+    a = Agent(name="a", model="m", extensions=[
+        FileTools(), Memory(home=str(home), recall_model="small")])
+    h.provider.add(reply(json.dumps({"selected_memories": []})),
+                   reply("", ("Read", {"file_path": str(directory / "tabs.md")})), reply("ok"))
+    tid = await h.start(a, goal="look at my tabs memory")
+    h.provider.add(reply(json.dumps({"selected_memories": []})), reply("ok"))
+    await h.say(a, tid, "and now the deploy one")
+    listing = h.provider.requests[-2].messages[0].text
+    assert "deploy.md" in listing and "tabs.md" not in listing
+
+
+async def test_a_sub_agent_recalls_nothing(tmp_path: Path) -> None:
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.core.types import user
+
+    async def complete(_r: ModelRequest) -> ModelResponse:
+        raise AssertionError("a sub-agent asked the selector")
+
+    state = TaskState(task_id="r.c1.1", agent="a", parent_id="r", root_id="r",
+                      ext={"memory": {"dir": str(tmp_path), "surfaced": [], "bytes": 0}})
+    state.messages.append(user("format this file"))
+    state.message_seqs.append(1)
+    view = TaskView(state=state, complete=complete)
+    assert await Memory(recall_model="small").reminders(view) == ()

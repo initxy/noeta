@@ -9,10 +9,10 @@ from typing import Any
 
 import httpx
 
-from noeta import Extension, TaskView
+from noeta import Extension, Recorded, TaskView
 from noeta.core.channel import Channel, deliver, framed
 from noeta.core.client import ClientAPI
-from noeta.core.events import Recorded, Waiting
+from noeta.core.events import Waiting
 
 FIELDS = ("delivery_id", "thread", "sender", "text")
 

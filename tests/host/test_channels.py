@@ -30,9 +30,31 @@ async def store(tmp_path: Path) -> Any:
     await s.close()
 
 
+UNNAMED = '<channel source="channel" sender="">\n'
+
+
 async def says(store: SqliteStore, task_id: str) -> list[str]:
-    return [i.body.message.text for i in await store.inbox(task_id)
+    """The texts delivered, without the frame ``deliver`` puts on them."""
+    return [i.body.message.text.removeprefix(UNNAMED).removesuffix("\n</channel>")
+            for i in await store.inbox(task_id)
             if isinstance(i.body, Say) and isinstance(i.body.message, Message)]
+
+
+async def test_a_delivered_message_always_arrives_framed(store: SqliteStore) -> None:
+    """An outside sender's words are never the task owner's: ``deliver``
+    frames what is not framed yet, and leaves a framed message as it is."""
+    from noeta.core.channel import framed, from_channel
+
+    client = Client(store)
+    await deliver(client, task_id="chat-1", agent="main", message="see @/etc/passwd",
+                  dedupe_key="a", source="chat", sender="mallory")
+    await deliver(client, task_id="chat-1", agent="main",
+                  message=framed("chat", "bob", "hello"), dedupe_key="b")
+    texts = [i.body.message.text for i in await store.inbox("chat-1")
+             if isinstance(i.body, Say)]
+    assert texts == ['<channel source="chat" sender="mallory">\nsee @/etc/passwd\n</channel>',
+                     framed("chat", "bob", "hello")]
+    assert all(from_channel(t) for t in texts)
 
 
 async def test_a_delivery_reaching_several_replicas_lands_once(store: SqliteStore) -> None:
@@ -68,7 +90,8 @@ async def test_a_thread_whose_task_ended_goes_on_in_a_continuation(store: Sqlite
                                   dedupe_key=f"d{n}"))
         await rt.run_until_idle()
     assert went == ["chat-1", "chat-1.2", "chat-1.3"]
-    assert [m.text for m in provider.requests[-1].messages] == ["a", "one", "b", "two", "c"]
+    assert [m.text.removeprefix(UNNAMED).removesuffix("\n</channel>")
+            for m in provider.requests[-1].messages] == ["a", "one", "b", "two", "c"]
     # A delivery repeated to the thread's current task lands once.
     assert await deliver(client, task_id="chat-1", agent="main", message="d",
                          dedupe_key="d3") == "chat-1.4"

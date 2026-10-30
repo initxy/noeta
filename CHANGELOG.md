@@ -9,6 +9,37 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **`Extension.on_context_overflow(view, request)` gets the request that overflowed.** An
+  override written as `(view)` still runs. Compaction no longer keeps each task's last
+  request in memory for it.
+- **`WebFetch`'s digest goes out like every other call beside the step**, through
+  `ToolContext.complete`: without the headers a hook put on the main request, which it used
+  to copy from process memory and lost when another worker ran the call. A host that needs
+  them on every call sets them on the provider, or passes `digest=`.
+- **Live output has a new kind, `Delta(kind="tool")`** (a running tool's progress), and
+  readers now skip a kind they do not know. A process from before this release does not: an
+  older `RemoteClient` watching a newer server loses its watch on the first progress, and on a
+  shared Postgres an older process drops the whole notification batch holding one. In a
+  rolling upgrade, upgrade the front ends and `noeta serve` before the workers; an SDK host on
+  `app.deltas` should ignore kinds it does not know.
+- **A settings file's hooks set no `env`**: that field is noeta's, for a Claude Code
+  plugin's options.
+- **`Agent.inherit_model`, `permission_mode` and `isolation` are gone; `ToolContext.extras`
+  too.** Only the sub-agent plugin acted on the three: it reads them from `Agent.extra` as an
+  agent file spells them (`model: inherit`, `permissionMode`, `isolation`); an SDK host
+  building an `Agent` in code sets them there. `extras` was never used.
+- **Skills, memory recall, instruction files and list changes follow Claude Code 2.1.312.**
+  A skill's listing line is capped at 1,536 characters (not 384 estimated tokens); a skill
+  whose description changed is listed again; a loaded skill is its base-directory line and
+  body (no "Activated skill" header or description); a `/<skill>` named mid-message gets a
+  note; skill directories below the working directory join when a file there is touched; the
+  `priority:` skill key is gone. Recall shows a memory's first 200 lines / 4,096 bytes, notes
+  a memory older than a day, skips one-word messages, sub-agents and files already read, and
+  its selector is sparing with `[user]` / `[project]` memories. An `@import` of a non-text
+  file is skipped; a long nested instruction file is cut to its start; a changed instruction
+  file is shown again with the next message. Deferred tools and agent types that join or
+  leave mid-task are told, MCP servers' `instructions` reach the model, and `ToolSearch`'s
+  `+word` also matches the description. Records written for these live in the task log.
 - **A plugin file missing a package says how to add it.** Plugins install no dependencies;
   one that imports a module noeta's environment lacks is listed as broken (`noeta plugins`,
   `/reload-plugins`) with the `uv tool install` / `pip install` line that adds it, or the
@@ -349,6 +380,47 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **`TaskView.spill_dir`**: the spill root, whose saved outputs the permissions plugin lets
+  `Read` open without asking, as it does the task's plan file. A host sweeps its spill root
+  (`noeta.host.spill_sweep`): an ended task's directory not written for 30 days is removed.
+- **A Python plugin directory may ship `skills/`, `commands/` and `agents/`** in Claude Code's
+  format next to its `__init__.py`, as pi's and dsh's plugins add resources; they load as a
+  Claude Code plugin's do (commands as `/<directory>:<command>`). Before, a directory was
+  either Python or a Claude Code plugin.
+- **Claude Code plugins' `userConfig` and `settings.json`.** `noeta plugin add` asks for a
+  plugin's `userConfig` values (or takes `--config KEY=VALUE`; `noeta plugin configure` sets
+  them again), keeps them in `~/.noeta/settings.json` `pluginConfigs` with sensitive ones in
+  the OS keyring (a machine whose keyring cannot keep it is refused before anything is
+  installed, with the `{env:NAME}` way instead), and substitutes `${user_config.KEY}` in MCP
+  servers, hook `args`, commands and agent prompts (not yet in skill bodies); every hook of the
+  plugin gets each value as `CLAUDE_PLUGIN_OPTION_<KEY>`. A secret a machine cannot read (its
+  keyring lacks it, a variable is not set) stops only what uses it, with a notice naming the
+  plugin: hooks get no variable for it, an MCP server or hook that names it is left out, and
+  a `PreToolUse`, `PermissionRequest` or `UserPromptSubmit` hook that names it refuses. A plugin's own files may
+  name only its own keyring secrets. A plugin's `settings.json` `agent` (and the settings
+  files' own `agent`) picks the agent front ends start with, and the TUI honours `--agent`.
+- **A running tool shows its progress** (`ToolContext.progress(text)`), as Claude Code's
+  `tool_progress`: never recorded nor sent to the model, it streams with the model's live
+  output (across machines on Postgres). A foreground `Bash` command shows its latest output
+  after 2 seconds, then every second: the TUI shows its last lines under the call, ACP sends a
+  `tool_call_update`, and `-p` / stream-json a `tool_progress` message (always, not only with
+  `--include-partial-messages`).
+- **The names a plugin author uses come from `noeta`**: `Allow`, `Deny`, `Ask`, `Rewrite`,
+  `ToolChanges`, `ToolUse`, `Recorded` and `TaskState` join `Extension`, `Tool` and the rest,
+  so a plugin file needs one import line.
+- **`InstructionsLoaded` hooks fire as in Claude Code**: once per instruction file shown (at
+  the start, nested, an `@import`, a `paths:` match, after a compaction, and a changed file
+  shown again), with `file_path`, `memory_type`, `load_reason`, `globs`,
+  `trigger_file_path` and `parent_file_path`; matched on `load_reason`.
+- **`ToolContext.complete`: a tool can call the model** through the task's providers
+  (retried, not recorded as a step), as hooks can with `TaskView.complete`.
+- **`register_models` accepts a provider family beyond `anthropic` / `openai`** (also a
+  models file's `family`), so a third-party provider package can declare its own; only those
+  two carry noeta's conventions, and a near-miss like `antropic` is still refused.
+- **`--plugin-dir` loads a plugin for one run.** `noeta --plugin-dir ./x.py` (TUI and `-p`,
+  repeatable) loads a plugin file, a plugin directory, a Claude Code plugin or a directory of
+  them for this process only, as Claude Code's flag does; it was accepted and ignored. A
+  plugin file that joins no agent (no `add_to`, no `add_plugins`) is named in a notice.
 - **`ToolContext.serves_queue(queue)`**: whether a child staged on `queue` could run now (the
   runner drops one that could not, with the call's result); `None` takes every queue.
 - **`Extension.tool_changes(view, offered)`.** A plugin changes the task's tool list from the
@@ -458,6 +530,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A long output a tool saved itself is never saved over.** Past one reply's 200,000
+  character budget the runner saved a `Bash` / MCP / web result's preview to the tool's own
+  file, losing the full output; the runner writes `<call>.result.txt` and leaves an already
+  saved result alone. When its save fails the result stays whole.
+- **With a remote exec env, auto memory lives in the env**, where the model's file tools
+  write it; the memory plugin read the worker's disk.
 - **A claim whose commit landed unseen runs at once.** When the connection dropped during
   a claim's `COMMIT` (`CommitUnknown` on Postgres) the worker only logged it; if the claim had
   landed, the task sat `running` until its lease ran out. The worker now asks the store for
@@ -911,6 +989,21 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Security
 
+- **An `@path` mention attaches only what the model's own `Read` could read without asking**
+  (the working directories, an allow rule); a file it would ask about is named instead, so
+  the model's `Read` goes through approval. A channel's message is never expanded:
+  `deliver` now frames every message not framed yet (`source=`, `sender=`; `from_channel`
+  tells), as Claude Code's channel messages arrive. `~` is expanded only
+  with `FileTools(home=)` (set by the `noeta` command's front ends, never `serve` or
+  `worker`), and no `PreToolUse` hook command runs for the attachment. Before, any chat
+  member could have a worker read `~/.ssh` or `~/.noeta` into the conversation.
+- **The memory directory's write and read exceptions are judged where the file lands**: a
+  link planted in a project agent's memory directory no longer writes `.noeta/agents/`
+  without asking.
+- **An image over 50 million pixels is refused before it is decoded** (a small PNG could
+  take gigabytes); Bash and MCP images are decoded off the event loop.
+- **A skills directory git ignores (a dependency's) is never discovered**, and a skill found
+  below the working directory never replaces one of the same name.
 - The permissions plugin decides whether a workspace is trusted from each task's own working
   directory (`noeta trust`), as the MCP and skills plugins do. Before, the `noeta` command
   took the trust of the directory it started in for every task, so a server started in a

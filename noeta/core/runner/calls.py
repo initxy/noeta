@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -19,10 +20,11 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, child_task
+from noeta.core.large_output import ReplyBudget, bound_result
 from noeta.core.runner import closing, texts
 from noeta.core.store import NewTask, Post
 from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
-from noeta.core.types import Message, Text, ToolResult, ToolUse, user
+from noeta.core.types import Delta, Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
     from noeta.core.runner.task import TaskRun
@@ -178,9 +180,11 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     # A call whose tool declares ``run_last`` (delegation) runs after the
     # reply's ordinary calls, as 0.6 spawned only once they had finished.
     runnable.sort(key=lambda item: tool_flag(item[1], "run_last"))
+    budget = _reply_budget(run)
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
-        await _together([_run_one(run, u, t, outright=u.id in outright) for u, t in group])
+        await _together([_run_one(run, u, t, budget, outright=u.id in outright)
+                         for u, t in group])
     if asks and run.state.config.get("unattended"):
         # One-shot: the task ends. Otherwise the turn closes and the loop
         # goes on to wait for input (and gives the task back).
@@ -231,12 +235,20 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     async def task(task_id: str) -> Any:
         return await run.store.get(task_id)
 
+    sink, started = run.rt.on_delta, time.monotonic()
+
+    def progress(text: str) -> None:
+        if sink is not None:
+            sink(run.task_id, Delta(kind="tool", text=text, call_id=use.id, tool=use.name,
+                                    elapsed=time.monotonic() - started))
+
     root = run.state.root_id or run.task_id
     answer = run.state.answers.get(use.id)
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
                        tasks=tasks, task=task, count_tokens=run.counter(run.model),
+                       complete=run.complete, progress=progress if sink else None,
                        hold=lambda: run.rt.hold(root), by_model=True,
                        approved=answer is not None and answer.decision == "allow",
                        allowed_outright=outright, model=run.model,
@@ -315,7 +327,8 @@ def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:
     creates.clear()
 
 
-async def _run_one(run: TaskRun, use: ToolUse, tool: Tool, *, outright: bool = False) -> None:
+async def _run_one(run: TaskRun, use: ToolUse, tool: Tool, budget: ReplyBudget, *,
+                   outright: bool = False) -> None:
     records: list[Event] = []
     creates: list[NewTask] = []
     ctx = _context(run, use, records, creates, outright=outright)
@@ -327,7 +340,15 @@ async def _run_one(run: TaskRun, use: ToolUse, tool: Tool, *, outright: bool = F
         log.exception("tool %s failed", use.name)
         output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")], is_error=True)
         _drop_staged(records, creates)
+    output = await bound_result(output, tool, ctx, budget)
     await _finish(run, use, output, records, creates)
+
+
+def _reply_budget(run: TaskRun) -> ReplyBudget:
+    """The reply's result budget, counting the text its calls returned so
+    far."""
+    return ReplyBudget(used=sum(len(b.text) for c in run.state.calls if c.result is not None
+                                for b in c.result.content if isinstance(b, Text)))
 
 
 async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
@@ -359,9 +380,10 @@ async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             again.append((use, tool))
             continue
         await run.append([run.error_result(use.id, texts.INTERRUPTED_CALL_ERROR)])
+    budget = _reply_budget(run)
     for group in _groups(again):
         await run.append([ToolStarted(call=u) for u, _ in group])
-        await _together([_run_one(run, u, t) for u, t in group])
+        await _together([_run_one(run, u, t, budget) for u, t in group])
     return True
 
 

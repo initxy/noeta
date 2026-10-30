@@ -12,7 +12,7 @@ The files, lowest precedence first:
 A headless run's ``--settings`` adds a layer just below the managed one, and
 ``--setting-sources`` picks which of 1 to 3 are read (:func:`settings_layers`).
 
-A key a later file sets wins (``model``, ``outputStyle``, each ``env``
+A key a later file sets wins (``model``, ``agent``, ``outputStyle``, each ``env``
 variable, ``permissions.defaultMode``); permission rule lists and
 ``additionalDirectories`` add up across files, without repeats; the
 ``sandbox`` object merges as :func:`merge_sandbox` says. Hooks and
@@ -56,6 +56,8 @@ class FileSettings:
     files: list[Path] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     model: str | None = None
+    #: The agent front ends start with (Claude Code's ``agent``).
+    agent: str | None = None
     output_style: str | None = None
     #: ``allow`` / ``deny`` / ``ask`` rule lists (Claude Code's
     #: ``Tool(spec)`` strings, unparsed), ``defaultMode`` and
@@ -219,6 +221,8 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
                             if isinstance(v, (str, int, float, bool))})
         if isinstance(data.get("model"), str) and data["model"]:
             out.model = data["model"]
+        if isinstance(data.get("agent"), str) and data["agent"]:
+            out.agent = data["agent"]
         if isinstance(data.get("outputStyle"), str) and data["outputStyle"]:
             out.output_style = data["outputStyle"]
         perms = data.get("permissions")

@@ -53,6 +53,7 @@ counterpart is `Agent` (`noeta/plugins/subtasks/tool.py`, `descriptions/agent.md
 | `tool.Agent.20` | Model, effort and tools of an agent type come from its definition (the frontmatter of `.claude/agents/*.md`, or an agent defined through the SDK). | covered — `.noeta/agents/` (`deviations.md`) |
 | `tool.Agent.21` | `isolation: "worktree"` runs the agent in its own git worktree, removed automatically when left unchanged. | covered |
 | `tool.Agent.22` | Several independent agents go out as several `Agent` calls in one response so they run concurrently (stated in the agent-list message, not here). | covered (in the agent list) |
+| `tool.Agent.23` | One response may carry any number of `Agent` calls (no per-response cap in the bundle); only the 20 agents running at once are counted. | covered — `batch_refusal` (`noeta/plugins/subtasks/tool.py`) |
 
 ## Result shape
 

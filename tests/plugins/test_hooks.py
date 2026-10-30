@@ -67,8 +67,9 @@ async def test_user_prompt_submit_adds_context_and_sees_the_prompt(tmp_path: Pat
     hooks = {"UserPromptSubmit": _hook(f"cat > {seen}; echo 'The build is green.'")}
     provider, _client, _tid = await _run(tmp_path, hooks, [reply("a"), reply("b")],
                                          prompts=("first", "second"))
-    assert _system(provider, 0) == ["The build is green."]
-    assert _system(provider, 1) == ["The build is green.", "The build is green."]
+    green = "UserPromptSubmit hook additional context: The build is green."
+    assert _system(provider, 0) == [green]
+    assert _system(provider, 1) == [green, green]
     payload = json.loads(seen.read_text())
     assert payload["hook_event_name"] == "UserPromptSubmit"
     assert payload["prompt"] == "second"  # only the new message
@@ -138,7 +139,7 @@ class _MakeRoom(Extension):
 
     name = "room"
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
+    async def on_context_overflow(self, view: TaskView, request: Any) -> bool:
         view.compacted(Compacted(summary="(summary)", through=view.state.last_seq,
                                  lead=await view.residents(lead=True, keeps_tail=False),
                                  after=await view.residents(keeps_tail=False)))
@@ -319,7 +320,8 @@ async def test_post_tool_use_feedback_follows_the_result(tmp_path: Path) -> None
                                   [reply("", ("Read", {"file_path": "a.txt"})), reply("ok")])
     second = provider.requests[1].messages
     assert second[-1].origin == "system"
-    assert second[-1].text == "PostToolUse hook (Read): lint: 2 warnings"
+    assert second[-1].text == ("PostToolUse:Read hook blocking error from command: "
+                               "\"echo 'lint: 2 warnings' >&2; exit 2\": lint: 2 warnings")
     assert second[-2].role == "user" and second[-2].content[0].call_id  # type: ignore[union-attr]
 
 
@@ -330,7 +332,8 @@ async def test_stop_hook_keeps_the_model_going_then_lets_it_stop(tmp_path: Path)
     hooks = {"Stop": _hook(script)}
     provider, client, tid = await _run(tmp_path, hooks, [reply("done"), reply("tests pass")])
     assert len(provider.requests) == 2
-    assert provider.requests[1].messages[-1].text == "Run the tests before you stop."
+    assert provider.requests[1].messages[-1].text == (
+        f'Stop hook blocking error from command: "{script}": Run the tests before you stop.')
     assert (await client.get(tid)).status == "waiting"
 
 

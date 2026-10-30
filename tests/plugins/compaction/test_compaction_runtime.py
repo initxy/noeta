@@ -133,16 +133,34 @@ async def test_the_request_after_a_compaction_is_sent_as_it_is(store: SqliteStor
     await assert_rebuilds(store, a, tid)
 
 
-async def test_a_context_that_keeps_refilling_keeps_being_compacted(
+async def test_a_context_that_keeps_refilling_stops_after_three_rapid_refills(
         store: SqliteStore) -> None:
+    """Claude Code's rapid-refill breaker: a context that is over the
+    threshold again within 3 model calls of the previous compaction, 3
+    times in a row, ends the turn instead of summarizing on every step."""
     a = agent()
     model = Model([call(), *(big_call() for _ in range(7)), answer("done")])
     client, tid = await run(store, a, model)
-    # As Claude Code: every refill is compacted (the reply right after a
-    # compaction makes the next one summarize everything), the turn goes on.
-    assert len(await compactions(client, tid)) >= 4
+    assert len(await compactions(client, tid)) == 3
     last = (await events(client, tid))[-1]
-    assert isinstance(last, Waiting) and last.detail == {"answer": "done"}
+    assert last.detail["turn_failed"].startswith("autocompact_thrashing: Automatic compaction "
+                                                 "stopped")
+    recorded = [e.data["rapid_refills"] for e in await events(client, tid)
+                if isinstance(e, ExtensionRecorded) and e.kind == "compacted"]
+    assert recorded == [0, 1, 2]
+    await assert_rebuilds(store, a, tid)
+
+
+async def test_a_refill_in_a_new_turn_starts_the_count_again(store: SqliteStore) -> None:
+    a = agent()
+    model = Model([call(), *(big_call() for _ in range(3)), answer("one"),
+                   *(big_call() for _ in range(3)), answer("two")])
+    client, tid = await run(store, a, model)
+    await client.send(tid, "again")
+    await runtime(store, a, model).run_until_idle()
+    last = (await events(client, tid))[-1]
+    assert isinstance(last, Waiting) and last.detail == {"answer": "two"}
+    assert len(await compactions(client, tid)) >= 4  # two in each turn at least
 
 
 async def test_overflow_compacts_and_retries(store: SqliteStore) -> None:
@@ -156,6 +174,25 @@ async def test_overflow_compacts_and_retries(store: SqliteStore) -> None:
     recorded = [e for e in evs if isinstance(e, ExtensionRecorded) and e.kind == "compacted"]
     assert recorded[0].data["reason"] == "overflow"
     await assert_rebuilds(store, a, tid)
+
+
+async def test_overflow_summarizes_the_request_as_it_was_sent(store: SqliteStore) -> None:
+    import msgspec
+
+    class Route(Extension):
+        """Runs after compaction: compaction's own hook never sees this."""
+
+        name = "route"
+
+        async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+            return msgspec.structs.replace(request, model="routed")
+
+    a = Agent(name="a", model="m", tools=[Probe()],
+              extensions=(Compaction(auto_compact_window=None), Route()))
+    model = Model([call(), ContextOverflow("prompt is too long"), answer("done")])
+    client, tid = await run(store, a, model)
+    assert await compactions(client, tid)
+    assert [r.model for r in model.summarize_requests] == ["routed"]
 
 
 async def test_an_empty_reply_fails_the_turn(store: SqliteStore) -> None:

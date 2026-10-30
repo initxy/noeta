@@ -13,6 +13,10 @@ NAME = "permissions"
 _KEEP = 256
 #: Task config key a child reads its parent's remembered rules from.
 INHERITED_RULES_KEY = "permission_rules"
+#: Task config key a child of a planning task reads the parent's plan name
+#: from: its own plan file is ``<name>-agent-<child task id>.md`` (Claude
+#: Code's sub-agent plan file).
+PLAN_NAME_KEY = "plan_name"
 
 
 @dataclass(frozen=True)
@@ -23,8 +27,13 @@ class PermState:
     rules: tuple[str, ...] = ()
     #: The mode switched to during the task (``None``: the starting one).
     mode: str | None = None
-    #: Plan mode: ``{"path", "pre_mode", "entered_seq"}``, kept after it ends.
+    #: Plan mode: ``{"path", "pre_mode", "entered_seq", "by_command"}``,
+    #: kept after it ends.
     plan: dict[str, Any] | None = None
+    #: Plan-mode texts sent since planning began or the last compaction.
+    plan_reminders: int = 0
+    #: Plan mode was left since the task began (a later entry is a re-entry).
+    plan_left: bool = False
     steps: int = 0
     tool_calls: int = 0
     cost_usd: float = 0.0
@@ -39,7 +48,7 @@ class PermState:
     #: The classifier moved to the main model.
     demoted: bool = False
     #: Notes owed to the next request: ``auto_guidance``, ``plan_exited``,
-    #: ``plan_active``.
+    #: ``plan_active``, ``plan_reentry``.
     due: tuple[str, ...] = ()
     #: The seq of the newest prompt the plan-mode text was sent for.
     plan_noted: int = 0
@@ -83,21 +92,27 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
         due = st.due
         if mode == "auto" and st.mode != "auto":
             due = (*due, "auto_guidance")
-        plan = st.plan
+        plan, reminders = st.plan, st.plan_reminders
         if mode == "plan" and isinstance(d.get("plan"), dict):
-            plan = dict(d["plan"])
-            due = (*due, "plan_active")
-        return replace(st, mode=mode, plan=plan, due=due, consecutive_denials=0)
+            plan, reminders = dict(d["plan"]), 0
+            due = (*due, "plan_active", *(("plan_reentry",) if st.plan_left else ()))
+        return replace(st, mode=mode, plan=plan, due=due, consecutive_denials=0,
+                       plan_reminders=reminders,
+                       plan_left=st.plan_left or (st.mode == "plan" and mode != "plan"))
     if kind == "plan_exit":
         mode = str(d.get("mode") or "default")
         # No auto-mode note again: Claude Code sends only the plan-exit
         # note (r2 m1).
         due = (*st.due, "plan_exited")
-        return replace(st, mode=mode, due=due)
+        return replace(st, mode=mode, due=due, plan_left=True)
     if kind == "noted":
         sent = set(d.get("kinds") or ())
+        count = d.get("plan_reminders")
         return replace(st, due=tuple(k for k in st.due if k not in sent),
-                       plan_noted=int(d.get("plan_noted") or st.plan_noted))
+                       plan_noted=int(d.get("plan_noted") or st.plan_noted),
+                       plan_reminders=count if isinstance(count, int)
+                       else st.plan_reminders,
+                       plan_left=st.plan_left and "plan_reentry" not in sent)
     if kind == "compacted":
         extra: tuple[str, ...] = ("auto_guidance",) if d.get("auto") else ()
         extra += ("plan_active",) if d.get("plan") else ()

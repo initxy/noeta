@@ -309,6 +309,23 @@ async def test_a_foreground_command_ends_quietly_and_leaves_nothing(h: Harness) 
     assert list((h.tmp.parent / "logs" / f"w{os.getpid()}").iterdir()) == []
 
 
+async def test_a_running_foreground_command_shows_its_latest_output(h: Harness) -> None:
+    bash = h.tool("Bash")
+    bash.progress_after, bash.progress_every = 0.05, 0.05  # type: ignore[attr-defined]
+    shown: list[str] = []
+    ctx = h.ctx()
+    ctx.progress = shown.append
+    out = await bash.run({"command": "echo one; sleep 0.3; echo two; sleep 0.3"}, ctx)
+    assert text(out) == "one\ntwo"
+    assert "one\n" in shown and shown[-1] == "one\ntwo\n"
+    bash.progress_after = 30.0  # type: ignore[attr-defined]
+    quick: list[str] = []
+    ctx = h.ctx()
+    ctx.progress = quick.append
+    await bash.run({"command": "echo fast"}, ctx)
+    assert quick == []  # done before the first showing
+
+
 async def test_a_foreground_command_returns_when_its_shell_exits(h: Harness) -> None:
     # As Claude Code: a child left running with `&` (holding the output) does
     # not keep the call waiting.
@@ -425,3 +442,16 @@ async def test_a_hold_taken_for_a_command_that_ended_meanwhile_is_given_back(
     out = await h.tool("Bash").run({"command": "echo hi; sleep 1.2", "timeout": 1000}, ctx)
     assert not out.is_error and text(out) == "hi"
     assert released == ["hold"] and h.records == []
+
+
+async def test_progress_that_fails_never_fails_the_command(h: Harness) -> None:
+    bash = h.tool("Bash")
+    bash.progress_after, bash.progress_every = 0.05, 0.05  # type: ignore[attr-defined]
+    ctx = h.ctx()
+
+    def broken(_text: str) -> None:
+        raise RuntimeError("a front end went away")
+
+    ctx.progress = broken
+    out = await bash.run({"command": "echo one; sleep 0.3; echo two"}, ctx)
+    assert not out.is_error and text(out) == "one\ntwo"

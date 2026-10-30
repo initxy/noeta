@@ -16,7 +16,8 @@ It shows the parts most plugins use:
 
 ``pyproject.toml`` registers it under the ``noeta.plugins`` entry point
 group as ``hello``; that is all noeta needs to find it. (Copied into
-``~/.noeta/plugins/hello.py`` it works too, without packaging.)
+``~/.noeta/plugins/hello/`` it works too, without packaging; it joins an
+agent through ``add_plugins``, as it sets no ``add_to``.)
 """
 
 from __future__ import annotations

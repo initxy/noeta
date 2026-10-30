@@ -24,7 +24,6 @@ from noeta.toolkit.inline_commands import has_commands, neutralise
 
 __all__ = [
     "ARGUMENTS_PLACEHOLDER",
-    "DEFAULT_SKILL_PRIORITY",
     "SkillDescription",
     "SkillRegistry",
     "argument_names",
@@ -32,7 +31,6 @@ __all__ = [
     "load_registry",
     "parse_list",
     "path_patterns",
-    "render_activation",
     "render_body",
     "render_command_body",
     "strip_argument_placeholder",
@@ -42,9 +40,6 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-
-#: Render-order default when ``priority:`` is absent or unreadable.
-DEFAULT_SKILL_PRIORITY = 100
 
 #: Bound on one ``find`` listing of a skill directory.
 _LIST_OUTPUT_CAP = 8 * 1024 * 1024
@@ -66,7 +61,6 @@ class SkillDescription:
     description: str
     body: str
     version: str = "1"
-    priority: int = DEFAULT_SKILL_PRIORITY
     model_invocable: bool = True
     source_path: str | None = None
     metadata: tuple[tuple[str, str], ...] = ()
@@ -166,19 +160,11 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = ()) -> SkillDe
     if description is None:
         _log.warning("skill: %s: missing required key 'description'; skipped", path)
         return None
-    priority_raw = fields.get("priority", str(DEFAULT_SKILL_PRIORITY))
-    try:
-        priority = int(priority_raw)
-    except ValueError:
-        _log.warning("skill: %s: invalid 'priority' value %r (must be an integer); "
-                     "using the default %d", path, priority_raw, DEFAULT_SKILL_PRIORITY)
-        priority = DEFAULT_SKILL_PRIORITY
     return SkillDescription(
         name=name,
         description=description,
         body=body,
         version=fields.get("version", "1"),
-        priority=priority,
         model_invocable=not _parse_disabled_flag(fields.get("disable-model-invocation"), path),
         source_path=path,
         metadata=tuple(sorted((k, v) for k, v in fields.items()
@@ -331,21 +317,10 @@ def render_body(desc: SkillDescription, args: str | None = None,
     return substitute_arguments(body, args, desc.arguments, escape)
 
 
-def render_activation(desc: SkillDescription, args: str | None = None,
-                      project_dir: str | None = None) -> str:
-    """The text an activated skill puts in the conversation, its body
-    rendered by :func:`render_body`."""
-    base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
-    return (
-        f"Activated skill: {desc.name}\n\n"
-        f"{strip_argument_placeholder(desc.description)}\n\n"
-        f"{base}{render_body(desc, args, project_dir)}"
-    )
-
-
 def render_command_body(desc: SkillDescription, args: str | None = None,
                         project_dir: str | None = None) -> str:
-    """What ``/<name> <args>`` adds to the person's turn after the command
-    tags: the skill's directory and its rendered body."""
+    """What a skill puts in the conversation when it loads (after the
+    command tags of a typed ``/<name> <args>``, or after a ``Skill`` call's
+    result): the skill's directory and its rendered body."""
     base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
-    return f"{base}{render_body(desc, args, project_dir)}"
+    return base + render_body(desc, args, project_dir).lstrip("\n")

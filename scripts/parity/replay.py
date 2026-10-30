@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from noeta.plugins.compaction.estimate import text_tokens
 from scripts.parity import compare, facts, wire
 from scripts.parity.distill import session_prompts, step_marker
 from scripts.parity.project import NOETA_PLACES, write_project
@@ -227,6 +228,23 @@ class Replayer:
         return content, stop
 
 
+def _input_tokens(body: Mapping[str, Any]) -> int:
+    """What the fake model reports as the request's input tokens: noeta's
+    own estimate of its text (a real model reports its count, which
+    compaction's threshold check starts from)."""
+    def strings(value: Any) -> Iterator[str]:
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, Mapping):
+            for v in value.values():
+                yield from strings(v)
+        elif isinstance(value, list):
+            for v in value:
+                yield from strings(v)
+    return sum(text_tokens(s) for k in ("system", "messages", "tools")
+               for s in strings(body.get(k)))
+
+
 class Endpoint:
     """The fake Messages endpoint: serves the replayer's turns, keeps every request."""
 
@@ -283,7 +301,8 @@ class Endpoint:
                                      "stop_reason": stop, "usage": {"input_tokens": 0,
                                                                     "output_tokens": 1}})
                     return
-                self._send_sse(wire.sse(content, stop, model=str(body.get("model"))))
+                self._send_sse(wire.sse(content, stop, model=str(body.get("model")),
+                                        input_tokens=_input_tokens(body)))
 
             def _send_json(self, data: Any) -> None:
                 raw = json.dumps(data).encode()
@@ -373,6 +392,7 @@ class SessionReplay:
         from noeta.cli.config import Settings, from_settings
         from noeta.core.commands import expand_command
         from noeta.core.extension import CommandContext
+        from noeta.toolkit.local_env import local_timezone
 
         # The session's environment knobs (Claude Code's compaction window
         # and percentage) reach noeta's plugins under noeta's names.
@@ -405,6 +425,9 @@ class SessionReplay:
                 after = len(await app.client.events(task_id)) if task_id else 0
                 if task_id is None:
                     config = {"cwd": str(self.proj), "model": MODEL}
+                    # As the TUI does: the person's dates are in this machine's zone.
+                    if zone := local_timezone():
+                        config["timezone"] = zone
                     if self.spec.get("permission_mode"):
                         # The mode Claude Code was started in (``--permission-mode``).
                         config["permission_mode"] = self.spec["permission_mode"]

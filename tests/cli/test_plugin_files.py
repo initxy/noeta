@@ -266,3 +266,101 @@ async def test_the_machine_policy_allows_and_blocks_plugins(
     assert "waver" in names and "web" not in names and "shell" in names
     assert str(home / "plugins" / "other.py") not in registry.broken_plugin_files()
     await app.store.close()
+
+
+async def test_plugin_dir_loads_a_file_or_a_directory_for_this_run(home: Path,
+                                                                   tmp_path: Path) -> None:
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+    work = tmp_path / "work"
+    (work / "pkg").mkdir(parents=True)
+    _write_joining(work / "solo.py", "solo", '("main",)')
+    _write_joining(work / "pkg" / "__init__.py", "packaged", '("main",)')
+    app = from_settings(load_settings(), cwd=str(tmp_path),
+                        plugin_dirs=[str(work / "solo.py"), str(work / "pkg")])
+    assert {e.name for e in app.runtime.agents["main"].extensions} >= {"solo", "packaged"}
+    assert registry.sources(registry.PLUGINS)["packaged"] == str(work / "pkg")
+    assert app.reload_plugins is not None
+    app.reload_plugins()  # read again from the same places
+    assert "solo" in [e.name for e in app.runtime.agents["main"].extensions]
+    await app.store.close()
+
+
+async def test_plugin_dir_loads_a_claude_code_plugin(home: Path, tmp_path: Path) -> None:
+    plugin = tmp_path / "formatter"
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text('{"name": "formatter"}')
+    (plugin / "commands").mkdir()
+    (plugin / "commands" / "tidy.md").write_text("---\ndescription: Tidy\n---\nTidy up.\n")
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+    app = from_settings(load_settings(), cwd=str(tmp_path), plugin_dirs=[str(plugin)])
+    [commands] = [e for e in app.runtime.agents["main"].extensions
+                  if e.name == "markdown_commands"]
+    assert "formatter:tidy" in str(vars(commands))
+    await app.store.close()
+
+
+async def test_a_plugin_file_that_joins_no_agent_is_a_notice(home: Path, tmp_path: Path) -> None:
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'
+        '[plugins.off]\nenabled = false\n')
+    _write(home / "plugins" / "idle.py", "idle", cls="Idle")
+    _write(home / "plugins" / "off.py", "off", cls="Off")
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    [notice] = [n for n in app.notices if "joins no agent" in n]
+    assert "'idle'" in notice and 'add_plugins = ["idle"]' in notice
+    await app.store.close()
+
+
+def test_plugin_dir_is_a_flag_of_the_front_ends_not_an_ignored_one() -> None:
+    from noeta.cli import headless
+
+    args = main._front_parser().parse_args(
+        ["-p", "--plugin-dir", "a.py", "--plugin-dir", "b", "hi"])
+    assert args.plugin_dirs == ["a.py", "b"]
+    assert "--plugin-dir" not in headless._ignored(args)
+
+
+def test_plugin_dir_with_server_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(SystemExit, match="--plugin-dir"):
+        main.main(["--server", "http://127.0.0.1:1", "--plugin-dir", "x.py"])
+
+
+async def test_a_python_plugin_directory_ships_skills_commands_and_agents(
+        home: Path, tmp_path: Path) -> None:
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+    kit = home / "plugins" / "kit"
+    (kit / "skills" / "tidy").mkdir(parents=True)
+    _write_joining(kit / "__init__.py", "kit", '("main",)')
+    (kit / "skills" / "tidy" / "SKILL.md").write_text(
+        "---\nname: tidy\ndescription: Tidy up\n---\nTidy.\n")
+    (kit / "commands").mkdir()
+    (kit / "commands" / "hello.md").write_text("---\ndescription: Hi\n---\nSay hi.\n")
+    (kit / "agents").mkdir()
+    (kit / "agents" / "helper.md").write_text(
+        "---\nname: helper\ndescription: Helps\n---\nYou help.\n")
+    (kit / "hooks").mkdir()
+    (kit / "hooks" / "hooks.json").write_text(
+        '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}')
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    main_agent = app.runtime.agents["main"]
+    names = [e.name for e in main_agent.extensions]
+    assert "kit" in names and "helper" in app.runtime.agents
+    found = {e.name: vars(e) for e in main_agent.extensions}
+    assert "kit:hello" in str(found["markdown_commands"])
+    assert str(kit / "skills") in str(found["skills"])
+    assert "Stop" not in str(found.get("hooks", {}))  # only skills, commands and agents
+    await app.store.close()
+    plain = from_settings(load_settings(), cwd=str(tmp_path), plugin_dirs=[str(kit)])
+    assert "helper" in plain.runtime.agents
+    await plain.store.close()
+
+
+def test_an_init_file_in_a_plugin_place_hides_none_of_its_plugins(home: Path) -> None:
+    # Only a --plugin-dir path is read as one plugin; a stray __init__.py
+    # in ~/.noeta/plugins leaves the files beside it loading.
+    (home / "plugins" / "__init__.py").write_text("")
+    _write(home / "plugins" / "waver.py", "waver")
+    assert registry.load_plugin_files([home / "plugins"]) == ["waver"]

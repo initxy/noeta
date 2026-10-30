@@ -30,7 +30,16 @@ from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 from noeta.plugins.hooks.config import Matcher, parse_hooks, read_settings
-from noeta.plugins.hooks.dispatch import NAME, Dispatcher, HookState, Read, agent_fields, fold
+from noeta.plugins.hooks.dispatch import (
+    CONTEXT_LABEL,
+    NAME,
+    Dispatcher,
+    HookState,
+    Read,
+    agent_fields,
+    blocking_text,
+    fold,
+)
 from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
 from noeta.plugins.hooks.runners import Runner, run_command
 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -47,6 +56,11 @@ RETRY_NOTE = ("A PermissionDenied hook says the denied {tool} call may be retrie
               "if it is still needed.")
 #: The plugin whose ``cwd`` record says the shell changed directory.
 SHELL_PLUGIN = "shell"
+#: The plugin whose records (``start``, ``nested``, ``reread``) and state
+#: name the instruction files it showed.
+INSTRUCTIONS_PLUGIN = "instructions"
+#: Its file kinds as Claude Code's ``memory_type``.
+MEMORY_TYPES = {"user": "User", "project": "Project", "local": "Local", "managed": "Managed"}
 
 #: Turn failures that are a model call's (Claude Code's StopFailure fires on
 #: API errors, not on hooks or limits).
@@ -162,7 +176,8 @@ class Hooks(Extension):
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SubagentStart hook: {r.block}")
-            self._d.context(view, "context", "SubagentStart hook", [r.context for r in reads])
+            self._d.context(view, "context", f"SubagentStart{CONTEXT_LABEL}",
+                            [r.context for r in reads])
             return
         if "SessionStart" not in self.matchers or st.started:
             return
@@ -182,7 +197,7 @@ class Hooks(Extension):
         for r in reads:
             if r.block is not None:
                 view.notify(f"SessionStart hook: {r.block}")
-        self._d.context(view, "context", f"SessionStart hook ({source})",
+        self._d.context(view, "context", f"SessionStart{CONTEXT_LABEL}",
                         [r.context or r.text for r in reads])
 
     # ------------------------------------------------------------ reminders
@@ -201,7 +216,7 @@ class Hooks(Extension):
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SessionStart hook: {r.block}")
-            out.extend(Reminder(text=f"SessionStart hook (compact): {t}", kind="context")
+            out.extend(Reminder(text=f"SessionStart{CONTEXT_LABEL}: {t}", kind="context")
                        for t in (r.context or r.text for r in reads) if t)
         try:
             out.extend(await self._prompt_submit(view))
@@ -241,8 +256,10 @@ class Hooks(Extension):
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a PostToolBatch hook stopped "
                                                               "the turn")
-        return [Reminder(text=f"PostToolBatch hook: {t}", kind="context")
-                for r in reads for t in (r.block, r.context) if t]
+        out = [Reminder(text=blocking_text("PostToolBatch", r), kind="context")
+               for r in reads if r.block and r.block.strip()]
+        return out + [Reminder(text=f"PostToolBatch{CONTEXT_LABEL}: {r.context}", kind="context")
+                      for r in reads if r.context]
 
     async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
         # Before every model call, not only a turn's first: a message sent
@@ -281,8 +298,8 @@ class Hooks(Extension):
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "
                                                               "stopped the turn")
-        return [Reminder(text=t, kind="context") for t in (r.context or r.text for r in reads)
-                if t]
+        return [Reminder(text=f"UserPromptSubmit{CONTEXT_LABEL}: {t}", kind="context")
+                for t in (r.context or r.text for r in reads) if t]
 
     # ------------------------------------------------------------ tool calls
 
@@ -317,7 +334,7 @@ class Hooks(Extension):
         reads = await self._d.run(event, view, payload, call=call)
         notes: list[str] = []
         for r in reads:
-            notes.extend(n for n in (r.block, r.context) if n)
+            notes.extend(n for n in (r.context,) if n)
             if event == "PostToolUse":
                 replaced = r.specific.get("updatedToolOutput")
                 if replaced is None and call.name.startswith("mcp__"):
@@ -327,7 +344,8 @@ class Hooks(Extension):
                     output = msgspec.structs.replace(output, content=[Text(text=shown)])
             if r.stop is not None:
                 await self._d.stop_turn(view, r.stop)
-        self._d.context(view, "feedback", f"{event} hook ({call.name})", notes)
+        self._d.blocks(view, "feedback", f"{event}:{call.name}", reads)
+        self._d.context(view, "feedback", f"{event}:{call.name}{CONTEXT_LABEL}", notes)
         return output
 
     # ------------------------------------------------------------ compaction
@@ -356,6 +374,7 @@ class Hooks(Extension):
         if isinstance(event, Waiting) and event.on in ("approval", "question"):
             self._notify(view, event)
         elif isinstance(event, Compacted):
+            await self._instructions_loaded(view, "compact", self._shown_files(view))
             if "PostCompact" in self.matchers:
                 reads = await self._d.run("PostCompact", view, {
                     "trigger": self._d.state(view).compact_trigger,
@@ -368,6 +387,8 @@ class Hooks(Extension):
                 await self._denied(view, event.data)
             elif event.extension == SHELL_PLUGIN and event.kind == "cwd":
                 await self._cwd_changed(view, event.data)
+            elif event.extension == INSTRUCTIONS_PLUGIN:
+                await self._instructions_record(view, event.kind, event.data)
             elif event.extension == "core" and event.kind == "turn_failed":
                 data = event.data if isinstance(event.data, dict) else {}
                 await self._stop_failure(view, str(data.get("reason") or ""),
@@ -400,6 +421,60 @@ class Hooks(Extension):
         view.record(self.name, "cwd_seen", {"cwd": new})
         await self._d.run("CwdChanged", view, {"old_cwd": old, "new_cwd": new})
 
+    @staticmethod
+    def _shown_files(view: TaskView) -> list[dict[str, Any]]:
+        """The instruction files the instructions plugin showed so far."""
+        state = view.state.ext.get(INSTRUCTIONS_PLUGIN)
+        if not isinstance(state, dict):
+            return []
+        return [e for e in [*state.get("files", []), *state.get("nested", [])]
+                if isinstance(e, dict)]
+
+    async def _instructions_record(self, view: TaskView, kind: str, data: Any) -> None:
+        """InstructionsLoaded for the files an instructions record shows:
+        at the start, those a touched file brings, and those shown again
+        because they changed (Claude Code loads them again on a resume)."""
+        if "InstructionsLoaded" not in self.matchers or not isinstance(data, dict):
+            return
+        if kind in ("start", "nested"):
+            files = [e for e in data.get("files", []) if isinstance(e, dict)]
+            trigger = data.get("trigger") if kind == "nested" else None
+            await self._instructions_loaded(
+                view, "session_start" if kind == "start" else "nested_traversal", files,
+                trigger=trigger if isinstance(trigger, str) else None)
+        elif kind == "reread":
+            changed = data.get("digests") or {}
+            again = {e["path"]: e for e in self._shown_files(view) if e.get("path") in changed}
+            await self._instructions_loaded(view, "session_start", list(again.values()))
+
+    async def _instructions_loaded(self, view: TaskView, reason: str,
+                                   files: Sequence[dict[str, Any]], *,
+                                   trigger: str | None = None) -> None:
+        """InstructionsLoaded once per file, in order (observation only:
+        its answer is not read). A file another one imports loads as
+        ``include``; a ``paths:`` rule a touched file brings as
+        ``path_glob_match``."""
+        if "InstructionsLoaded" not in self.matchers:
+            return
+        for e in files:
+            memory_type = MEMORY_TYPES.get(str(e.get("kind")))
+            if memory_type is None or not e.get("path"):
+                continue
+            load_reason = reason
+            if reason != "compact" and e.get("parent"):
+                load_reason = "include"
+            elif reason == "nested_traversal" and e.get("globs"):
+                load_reason = "path_glob_match"
+            payload: dict[str, Any] = {"file_path": e["path"], "memory_type": memory_type,
+                                       "load_reason": load_reason}
+            if e.get("globs"):
+                payload["globs"] = list(e["globs"])
+            if trigger and reason == "nested_traversal":
+                payload["trigger_file_path"] = trigger
+            if e.get("parent"):
+                payload["parent_file_path"] = e["parent"]
+            await self._d.run("InstructionsLoaded", view, payload)
+
     async def _stop_failure(self, view: TaskView, reason: str, detail: str) -> None:
         """StopFailure, when a turn ends on a model call that failed (not a
         hook or a limit): side effects only, its answer is not read."""
@@ -427,7 +502,8 @@ class Hooks(Extension):
         reads = await self._d.run("PostModelSwitch", view, {
             "from_model": before or None, "to_model": to, "requested_model": to,
             "source": "sdk"})
-        self._d.context(view, "context", "PostModelSwitch hook", [r.context for r in reads])
+        self._d.context(view, "context", f"PostModelSwitch{CONTEXT_LABEL}",
+                        [r.context for r in reads])
 
     def _notify(self, view: TaskView, event: Waiting) -> None:
         """Notification, in the background (side effects only)."""
@@ -492,7 +568,8 @@ class Hooks(Extension):
         reads = await self._d.run(event, view, payload, transcript=_answered(view.state.messages))
         if any(r.stop is not None for r in reads):
             return None
-        reasons = [n for r in reads for n in (r.block, r.context) if n]
+        reasons = [n for r in reads for n in (
+            blocking_text(event, r) if r.block else None, r.context) if n]
         if not reasons:
             return None
         view.record(self.name, "stop_blocked", {"since": since, "event": event})

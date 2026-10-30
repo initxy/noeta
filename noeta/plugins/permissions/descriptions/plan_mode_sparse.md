@@ -1,0 +1,1 @@
+Plan mode is still on (the full instructions are earlier in the conversation). Everything is read-only except the plan file ({path}). Keep to the five planning steps. End each turn with AskUserQuestion (to clear something up) or ExitPlanMode (to ask for approval); never ask for approval in text or with AskUserQuestion.

@@ -1,5 +1,6 @@
-"""The quiet-stretch nudge: once, after five tool-only steps in a row since
-the user last spoke or the model last wrote text, as a system turn."""
+"""The quiet-stretch nudge: after five tool-only steps in a row since the
+user last spoke or the model last wrote text, as a system turn, and again
+after every five more, three times at most per stretch."""
 
 from __future__ import annotations
 
@@ -30,9 +31,9 @@ class Probe:
         return text_output("ok")
 
 
-async def test_nudged_once_after_five_quiet_steps(tmp_path: Path) -> None:
+async def test_nudged_every_five_quiet_steps_three_times_at_most(tmp_path: Path) -> None:
     store = SqliteStore(str(tmp_path / "t.db"))
-    steps = [reply("Looking.", ("Probe", {})), *(reply("", ("Probe", {})) for _ in range(7)),
+    steps = [reply("Looking.", ("Probe", {})), *(reply("", ("Probe", {})) for _ in range(20)),
              reply("done")]
     provider = ScriptedProvider(steps)
     agent = Agent(name="a", model="m", tools=[Probe()], extensions=[QuietNudge()])
@@ -45,9 +46,11 @@ async def test_nudged_once_after_five_quiet_steps(tmp_path: Path) -> None:
     def nudges(i: int) -> int:
         return sum(m.role == "system" and m.text == NUDGE for m in provider.requests[i].messages)
 
-    # Request 0 is the prompt; 1 follows the step with text; 2..6 follow
-    # quiet steps 1..5, so the fifth quiet step's results carry the nudge.
-    assert [nudges(i) for i in range(len(provider.requests))] == [0, 0, 0, 0, 0, 0, 1, 1, 1]
+    # Request 0 is the prompt; 1 follows the step with text; 2..21 follow
+    # quiet steps 1..20: the results of quiet steps 5, 10 and 15 carry a
+    # nudge, and the stretch gets no fourth.
+    assert [nudges(i) for i in range(len(provider.requests))] == [
+        sum(i >= k for k in (6, 11, 16)) for i in range(22)]
 
 
 def test_a_question_the_person_answered_starts_the_stretch_again() -> None:
@@ -61,4 +64,4 @@ def test_a_question_the_person_answered_starts_the_stretch_again() -> None:
 
     messages = [*step("Probe", 0), *step("ExitPlanMode", 1),
                 *(m for i in range(2, 6) for m in step("Probe", i))]
-    assert quiet_steps(messages, NUDGE) == 4
+    assert quiet_steps(messages, NUDGE) == (4, 0)

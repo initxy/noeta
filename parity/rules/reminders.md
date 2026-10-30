@@ -73,10 +73,10 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.instructions.4 | Sent again before the summary after compaction (see `compaction.md`); unchanged otherwise. |
 | rem.instructions.5 | Files, in order (Claude Code 2.1.312 bundle): the machine's managed `CLAUDE.md` and its `.claude/rules`; the user's `~/.claude/CLAUDE.md` and `~/.claude/rules`; then each directory from the outermost ancestor of the working directory (the filesystem root excluded) down to it: `CLAUDE.md`, `.claude/CLAUDE.md`, the `.claude/rules` files, `CLAUDE.local.md`; last the auto memory index. `AGENTS.md` is not read. |
 | rem.instructions.6 | Kinds named in the path line: managed policy, the user's global instructions, project instructions checked into the codebase, the user's private (not checked-in) project instructions, the auto memory. |
-| rem.instructions.7 | `@path` in a file's text (not in code blocks, inline code or HTML comments; `./`, `~/`, absolute or a plain relative name; a `#fragment` is cut) imports that file, listed right after the importing one with the same kind; a file is listed once; an import five levels below the first file is not read; an import outside the working directory from a repository file needs the user's approval. HTML comments are removed from the text, a rule file's frontmatter too. |
+| rem.instructions.7 | `@path` in a file's text (not in code blocks, inline code or HTML comments; `./`, `~/`, absolute or a plain relative name; a `#fragment` is cut) imports that file, listed right after the importing one with the same kind; a file is listed once; an import five levels below the first file is not read; an import outside the working directory from a repository file needs the user's approval. HTML comments are removed from the text, a rule file's frontmatter too. (bundle) An import whose extension is not on Claude Code's list of text extensions (markdown, plain text, config formats, source code, …) is skipped; a name without an extension is read. |
 | rem.instructions.8 | A rules file whose frontmatter has `paths:` (gitignore-style globs, relative to the directory holding `.claude/`; the user's relative to the working directory) is left out at the start and shown when a file it matches is touched. |
 | rem.instructions.9 | The auto memory index (`MEMORY.md`, cut to its line and byte limits) is the last file of this reminder, labelled as auto memory. |
-| rem.instructions.10 | When a tool touches a file below the working directory, the instruction files of each directory between them (and matching `paths:` rules) that were not shown yet follow as their own reminder, one per file: the path line (no kind) and the text, no preamble. |
+| rem.instructions.10 | When a tool touches a file below the working directory, the instruction files of each directory between them (and matching `paths:` rules) that were not shown yet follow as their own reminder, one per file: the path line (no kind) and the text, no preamble. (bundle) A nested file that is not managed policy and is longer than the larger of 40,000 characters and 5 % of the model's window in characters (3 characters a token, 4 for older Claude models) is cut at a line end and closed by a line saying only its start is shown and naming the path and line offset to `Read` the rest. noeta today: covered (the note in our words; also when the files are sent again after a compaction). |
 
 ## git-status
 
@@ -84,7 +84,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 |---|---|
 | rem.git-status.1 | Trigger: start of a conversation inside a git repository. Placement: second block of the first user message, after instructions, before attribution. |
 | rem.git-status.2 | Opens by offering the following as context, then a `# gitStatus` heading and a note that it is a snapshot from the start of the conversation that will not update. |
-| rem.git-status.3 | Fields in order, each separated by a blank line: current branch; main branch (labelled as the usual PR target); git user name; `Status:` with the short status or `(clean)`; `Recent commits:` as one-line `hash subject` entries. |
+| rem.git-status.3 | Fields in order, each separated by a blank line: current branch; main branch (labelled as the usual PR target); git user name; `Status:` with the short status or `(clean)`; `Recent commits:` as one-line `hash subject` entries. With no user name set the user line is left out; a repository without commits gets an empty list (2.1.312 bundle). |
 | rem.git-status.4 | Closes by saying the harness attached it automatically, the user did not write it, it is about the user's own account and checkout, and the model need not repeat it to them. |
 | rem.git-status.5 | Re-sent before the summary after compaction (see `compaction.md`). |
 
@@ -113,8 +113,8 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | id | rule |
 |---|---|
 | rem.quiet-nudge.1 | Content: the user has not heard from the model for a while; keep them updated when there is something worth telling (a finding, a change of plan). |
-| rem.quiet-nudge.2 | Trigger (observed twice in `m1`): after the fifth consecutive assistant step that produced tool calls but no text since the last user input (a prompt, or a plan approval). Whether the real trigger is step count or elapsed time cannot be told from the recordings. |
-| rem.quiet-nudge.3 | Placement: `role: "system"` message after the tool-result message, joined before the `<total_tokens>` line. Sent once per silent stretch; persists. |
+| rem.quiet-nudge.2 | Trigger (observed twice in `m1`): after the fifth consecutive assistant step that produced tool calls but no text since the last user input (a prompt, or a plan approval). The 2.1.312 bundle counts steps (`silent_turn_reminder`: 5 steps; a seconds-based form exists behind a setting). |
+| rem.quiet-nudge.3 | Placement: `role: "system"` message after the tool-result message, joined before the `<total_tokens>` line. Persists. A silent stretch is nudged again after five more tool-only steps since its last nudge, three times at most (2.1.312 bundle; the recordings' stretches were too short to show a second). |
 
 ## tool-loaded
 
@@ -178,6 +178,24 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.command.5 | `/compact` is preceded by a `<local-command-caveat>` block: the command was run directly by the user, not sent to the model as a request, its output went straight to the user, and it is kept only as context for later messages. `/plan` with arguments had no caveat and itself started a model turn. |
 | rem.command.6 | All command blocks persist; after `/compact` they appear in the first user message after the summary, ahead of the next prompt (see `compaction.md`). |
 
+## skill notes (bundle, not recorded)
+
+| id | rule |
+|---|---|
+| rem.skill-mention.1 | When a user message names a skill as `/<name>` anywhere but as its leading command (preceded by the start, whitespace or a CJK sentence mark, followed by whitespace or the end), a `<system-reminder>` after the message says it names that skill: call `Skill` with it (and the arguments given) if the user wants it run, and do not run it if they only mention it. One per skill named; only skills the model may invoke. noeta today: covered (`skills` plugin, `reminder/skill_mention`, our words). |
+| rem.nested-skills.1 | When a tool touches a file in a directory below the working directory that has its own skills directory (in a directory between the two), that directory's skills join the conversation and a `<system-reminder>` names the directory (relative) and lists the new skills by name, one `- <name>` line each; the next model call lists them with their descriptions (`main.env.16`). noeta today: covered for `.noeta/skills` and `.agents/skills` (noeta's places), in trusted workspaces; the found directories are recorded in the task log. |
+
+## list changes (bundle, not recorded)
+
+The recordings never changed a list mid-conversation; these rows come from the 2.1.312 bundle.
+Each note goes out with the next request after the change, as a `role: "system"` note.
+
+| id | rule |
+|---|---|
+| rem.deltas.1 | Deferred tools: names that join are listed under the deferred-tool lead-in (`main.env.6`); names announced earlier that return are named as available again (for MCP tools: their server reconnected), to be loaded with `ToolSearch` as before; names that leave are listed as no longer available (for MCP tools: their server disconnected), not to be searched for since `ToolSearch` will not find them. A note that names a removal closes with a line saying it is background context, not to be narrated to the user unless relevant. After a compaction the full list is sent again. noeta today: covered (`environment` plugin, our words; the last list named is in the task log). |
+| rem.deltas.2 | Agent types: types that join are listed under a lead-in saying new agent types are available, one line each in the agent list's format (`main.env.8`); types that leave are listed by name as no longer available, followed by the background-context line. A conversation that had no agent list gets the whole list once a type appears. noeta today: covered (`subtasks` plugin; the types last listed are in the task log). |
+| rem.deltas.3 | MCP server instructions (the `instructions` of a server's `initialize` result, cut to 4,096 characters and `… [truncated]`, bundle `u$`): a server that connects with instructions, or whose instructions changed, gets a `# MCP Server Instructions` heading, a lead-in saying these servers gave instructions for their tools and resources, and one `## <server>` block with the text; a server that disconnects is named under a line saying its instructions above no longer apply, followed by the background-context line. Sent again in full after a compaction. noeta today: covered (`mcp` plugin; the instructions ride in the recorded server listing and the last told set is in the task log). |
+
 ## plan mode
 
 | id | rule |
@@ -185,12 +203,16 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.plan-active.1 | Trigger: plan mode on. Placement: a `role: "system"` message after the user message. On the `/plan` turn itself (`m1/0053`) no plan-mode text was sent; it first appeared in the next request built (`m1/0059`, after `/compact`), where it was joined with the post-compaction attachments and appeared twice in that one message. |
 | rem.plan-active.2 | Restriction: the user does not want execution yet; no edits except the plan file, no non-read-only tools, no config changes or commits, no other changes; this overrides other instructions. |
 | rem.plan-active.3 | Plan file: its absolute path (under the config directory, `plans/<three-word-slug>.md`); whether it exists yet; create it with `Write` if not; build it incrementally with `Write`/`Edit`; it is the only editable file. |
-| rem.plan-active.4 | Phase 1, understanding: read code and ask questions; use only the `Explore` agent type; look for existing code to reuse; up to 3 `Explore` agents in parallel in one message, as few as possible (usually 1), each with a distinct focus when several. |
-| rem.plan-active.5 | Phase 2, design: launch `Plan` agent(s), at most 1 in parallel; at least one for most tasks, none only for trivial ones; the agent prompt carries the Phase 1 context (files, code paths), requirements and constraints, and asks for a detailed plan. |
+| rem.plan-active.4 | Phase 1, understanding: read code and ask questions; use only the `Explore` agent type; look for existing code to reuse rather than propose new code; up to 3 `Explore` agents in parallel in one message, as few as possible (usually 1): one for a task confined to known files, named files or a small change, several when the scope is uncertain, several areas are involved or existing patterns are needed first, each with a distinct focus. |
+| rem.plan-active.5 | Phase 2, design: launch `Plan` agent(s), at most 1 in parallel; at least one for most tasks, none only for trivial ones (typo, one-line change, simple rename); the agent prompt carries the Phase 1 context (files, code paths), requirements and constraints, and asks for a detailed plan. |
 | rem.plan-active.6 | Phase 3, review: read the critical files, check the plan matches the request, use `AskUserQuestion` for remaining questions. |
-| rem.plan-active.7 | Phase 4, final plan in the plan file: starts with a Context section (why, what prompted it, intended outcome); only the recommended approach; short enough to scan, detailed enough to execute; names critical files, describing a repeated pattern once with a few example paths; points to existing functions to reuse with paths; ends with an end-to-end verification section. |
-| rem.plan-active.8 | Phase 5: end the turn by calling `ExitPlanMode` once the plan is final; a plan-mode turn ends only with `AskUserQuestion` or `ExitPlanMode`. |
-| rem.plan-active.9 | Approval of the plan is requested only through `ExitPlanMode`, never as a text question or through `AskUserQuestion`; `AskUserQuestion` is only for requirements or choosing between approaches; questions are allowed at any phase. |
+| rem.plan-active.7 | Phase 4, final plan in the plan file: starts with a Context section (why, what prompted it, intended outcome); only the recommended approach; short enough to scan, detailed enough to execute; names critical files, describing a repeated pattern once with a few example paths, not every file or line number; points to existing functions to reuse with paths; ends with an end-to-end verification section (run the code, use MCP tools, run tests). |
+| rem.plan-active.8 | Phase 5: end the turn by calling `ExitPlanMode` once the plan is final, to say planning is done; this is critical: a plan-mode turn ends only with `AskUserQuestion` or `ExitPlanMode`, and for no other reason. |
+| rem.plan-active.9 | Approval of the plan is requested only through `ExitPlanMode`, never as a text question or through `AskUserQuestion`; `AskUserQuestion` is only for requirements or choosing between approaches; phrases such as "Is this plan okay?", "Should I proceed?", "How does this plan look?", "Any changes before we start?" go through `ExitPlanMode`; questions are allowed at any phase; do not make large assumptions about user intent, the goal is a well-researched plan with loose ends tied before implementation. |
+| rem.plan-active.10 | Cadence (bundle `hTn`: 5 and 5): after a plan-mode text, none is sent until 5 more user prompts have come; then with the next model call (checked before every call, so a prompt that arrives mid-turn counts at once). The first text after entering plan mode (or after a compaction) and every fifth after it is the full one; the others are a short form: plan mode is still on, the full instructions are earlier, read-only except the plan file (its path), keep to the five phases, end turns with `AskUserQuestion` or `ExitPlanMode`, never ask for approval in text. |
+| rem.plan-active.11 | A task or a session that starts in plan mode (`--permission-mode plan`) gets the full text with its first request, as a mode switched to before a prompt does; only a typed `/plan <request>` delays it to the call after the first (rem.plan-active.1). |
+| rem.plan-active.12 | A sub-agent of a planning conversation runs in plan mode too, with its own plan file (`<parent plan name>-agent-<agent id>.md`, bundle `nT`), and gets a sub-agent form of the text: the same restriction and plan-file lines, then answer the query you were given fully in the final message, asking any clarifying questions all at once; no phases, no `ExitPlanMode`. |
+| rem.plan-reentry.1 | Trigger: plan mode entered again after it was left earlier in the conversation (by any means), while the plan file from then exists. Placement: just ahead of the plan-mode text. Content: a `## Re-entering Plan Mode` heading; a plan file from the earlier planning session exists at its path; before planning, read it, compare the current request with it, then overwrite it for a different task (even a related one) or revise it (dropping outdated parts) for an explicit continuation of the same task; always edit it before `ExitPlanMode`; treat it as a fresh planning session. |
 | rem.plan-exited.1 | Trigger: `ExitPlanMode` approved. Placement: `role: "system"` message after its tool result, joined with the auto-mode guidance (the mode returns to `auto`) and `<total_tokens>`. |
 | rem.plan-exited.2 | Content: a `## Exited Plan Mode` heading; plan mode is over and edits, tools and actions are allowed again; the plan file's absolute path for reference. |
 | rem.plan-approved.1 | The `ExitPlanMode` tool result itself (see `tools/ExitPlanMode.md`) says the plan was approved, suggests starting with the todo list if applicable, gives the saved path, and repeats the plan under an approved-plan heading. |
@@ -223,6 +245,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 |---|---|
 | rem.instructions-reread.1 | Trigger: `--continue`/resume when an instruction file changed since it was last sent. Placement: `<system-reminder>` block at the start of the first new user message, before the prompt. |
 | rem.instructions-reread.2 | Content: instruction files were re-read when the session started; only files whose content changed are listed, and each listed text supersedes the version shown before; the earlier preamble (rem.instructions.2) still applies. Then per changed file the same path-and-kind line and full new text as rem.instructions.3. Unchanged files are not repeated. |
+| rem.instructions-reread.4 | noeta today: covered, with the trigger adapted to durable tasks: the files shown so far (start and nested) and the auto-memory index (`MEMORY.md`, also when it is new: the bundle's re-read lists a file not shown before and the memory index is one of its files, `AutoMem`) are read again with every new message from the person, and the changed ones are shown again, in our words; the note follows the person's message in the same turn (`parity/deviations.md`). The digests of what was shown live in the task log. |
 | rem.instructions-reread.3 | Observed defect, not to copy: the resumed prompt appears twice in that message (once with a trailing newline). |
 
 ## user answers through tools
@@ -232,12 +255,35 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.answers.1 | `AskUserQuestion` answers come back as its `tool_result` text, not as a user message: each question quoted, `=`, the chosen label quoted, the chosen option's preview when it had one, and a closing line inviting the model to proceed using them. Details in `tools/AskUserQuestion.md`. |
 | rem.answers.2 | Approvals in default mode (`m2`) add no reminder; an approved call simply returns its normal result. |
 
+## at-mention (file attachments)
+
+Not in the recordings; from the 2.1.312 bundle (`attachments` render map: `file`,
+`directory`, `at_mention_reference`, `pdf_reference`; the reader that builds them).
+
+| id | rule |
+|---|---|
+| rem.at-mention.1 | Trigger: the person's prompt names a path with `@path` (also `@"path with spaces"` and `@path#L<start>-<end>` for those lines). Each existing file or directory becomes meta user content (`<system-reminder>` blocks) in the person's turn, ahead of the person's text; a path that does not exist adds nothing. |
+| rem.at-mention.2 | A file is read through `Read` itself, so the file counts as read (a later `Edit` needs no new `Read`) and `Read`'s formats apply (image, notebook, PDF). Two blocks: `Called the Read tool with the following input: <the input as compact JSON>`, then `Result of calling the Read tool:` and the result text on the next line; an image result follows the first block as the image itself. |
+| rem.at-mention.3 | A text file over `Read`'s limit is attached by its first 2,000 lines (the input carries that limit), followed by a note that it was cut, needs no mention, and the rest is there for `Read`. One too large even for that is named instead: the user @-mentioned it (with its size), it was not attached, read it in parts with offset and limit or search it, and only if every line is needed read it whole. |
+| rem.at-mention.4 | A directory is shown as a `Bash` call, `{"command": "ls <path>", "description": "Lists files in <path>"}`, and its result, the entry names one per line. |
+| rem.at-mention.5 | A PDF the model must read by pages is named instead (its page count and size): none of it is in the conversation; before anything else call `Read` with a few pages, read on a few pages a call, describe only pages read and say which ones an answer rests on. |
+| rem.at-mention.6 | A path a deny rule keeps from `Read` is left out without a word. A path that could not be read is named: the user @-mentioned it, it was not attached, read it with the file tools before answering; without access to the files (a session that does not attach them) every mention is named the same way. (noeta: a path the model's `Read` would be asked about is named too: not attached, reading it needs the user's approval, which the model's own `Read` asks for.) |
+
+## hook context
+
+Not in the recordings (no hooks configured); from the 2.1.312 bundle (`hook_additional_context`,
+`hook_blocking_error`).
+
+| id | rule |
+|---|---|
+| rem.hook-context.1 | Text a hook adds for the model (`additionalContext`, or a `UserPromptSubmit` / `SessionStart` hook's plain output) is meta user content led by `<hook name> hook additional context: `; the hook name is the event (`UserPromptSubmit`, `SessionStart`, `SubagentStart`, `PostToolBatch`), or `<event>:<tool>` for a tool's events (`PreToolUse:Read`). A hook's blocking feedback (a tool's events, `PostToolBatch`, `Stop`, `SubagentStop`) is `<hook name> hook blocking error from command: "<command>": <reason>`, the command being the hook's command line, URL or prompt (bundle `hook_blocking_error`). |
+
 ## s1 only
 
 | id | rule |
 |---|---|
 | rem.file-changed.1 | **s1 only.** Trigger: a file the model has in context (here `CLAUDE.md`, changed by a Bash command) changed on disk. Placement: `role: "system"` message after the tool-result message of the step that changed it. |
-| rem.file-changed.2 | Content: the path changed on disk since last read; the change is usually deliberate, so treat it as the current state and do not revert; if it looks wrong say so instead of undoing it; otherwise no need to mention it; then the relevant lines with line numbers (`N<TAB>text`). |
+| rem.file-changed.2 | Content: the path changed on disk since last read; the change is usually deliberate, so treat it as the current state and do not revert; if it looks wrong say so instead of undoing it; otherwise no need to mention it; then the relevant lines with line numbers (`N<TAB>text`), or, when they cannot be shown, that they are not shown and `Read` gives the current content (2.1.312 bundle, `edited_text_file`). The lines: each change with 8 unchanged lines either side, one block after another; past 8,192 characters cut at a line end and followed by `... [N lines truncated] ...` (bundle `oKs`). No note for a file last read with an offset or a limit. |
 | rem.agent-list.1 | **s1 only.** A `general-purpose` sub-agent whose first environment message lacked the agent list received the "available agent types" list plus the auto-mode guidance as a `role: "system"` message after its first tool result. |
 
 ## Not observed in 2.1.312 baseline
@@ -245,4 +291,4 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | id | rule |
 |---|---|
 | rem.absent.1 | No todo/task-list nudge, no `TodoWrite`/`TaskCreate` reminder (neither tool is in the baseline tool set). |
-| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred list is fixed in the environment message and re-sent only after compaction), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. |
+| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred set never changed mid-conversation; see rem.deltas), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. |

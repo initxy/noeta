@@ -101,3 +101,17 @@ Rows tagged **s1 only** were seen only for the OAuth subscriber and are not part
 | side.suggest.4 | Never suggest: evaluations or thanks, questions, assistant-voice phrases, new ideas the user did not raise, more than one sentence. Prefer specific over generic. |
 | side.suggest.5 | Stay silent when the next step is not obvious, after an error or misunderstanding, or when a suggestion could touch anything sensitive or unsafe (including security work). |
 | side.suggest.6 | Output: 2–12 words in the user's style, or nothing; the suggestion only, no quotes or explanation. |
+
+## Memory recall (`side.recall`) — bundle, not recorded
+
+The baseline's memory directory was empty, so no selector call appears in the recordings; these
+rows come from the 2.1.312 bundle. noeta's counterpart is `noeta/plugins/memory` (off unless a
+`recall_model` is set).
+
+| id | rule |
+|---|---|
+| side.recall.1 | Selector: a system prompt, the memory files listed one per line (type, name, date, description), `max_tokens` 512, a JSON schema `{selected_memories: [string]}`, at most five files; files already recalled are not offered again. noeta today: covered. |
+| side.recall.2 | The selector picks by what the message is about, not by shared words, and is most careful with the broad user-profile and project-overview memories. noeta today: covered (`memory/recall`, our words). |
+| side.recall.3 | A recalled file shows its first 200 lines and at most 4,096 bytes; when cut, a closing line says so and names the path to `Read` for the rest. The shown text counts toward the 61,440-byte budget of the conversation. noeta today: covered. |
+| side.recall.4 | A recalled file last changed more than one day ago (whole days, rounded down) is preceded by a note giving its age and saying a memory is a snapshot from when it was written, so claims about code and `file:line` citations must be checked against the current code before being stated as fact. noeta today: covered (our words). |
+| side.recall.5 | Recall runs in the main conversation only, never in a sub-agent; it skips a message that is a single word (no whitespace) unless the text is CJK; files the conversation already read with `Read` are not offered. noeta today: covered. |

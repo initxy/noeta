@@ -33,6 +33,7 @@ from noeta.plugins.subtasks.tool import (
     LIST_WINDOW,
     TRANSCRIPT_KEY,
     AgentTool,
+    ListAgentsTool,
     SendMessageTool,
     agent_message,
     agent_schema,
@@ -337,7 +338,9 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
 
 
 async def test_list_agents_says_when_it_looked_at_the_newest_tasks_only(
-        store: SqliteStore) -> None:
+        store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The whole listing, not the runner's cut at ListAgents' result limit.
+    monkeypatch.setattr(ListAgentsTool, "max_result_chars", None)
     client = Client(store)
     for _ in range(LIST_WINDOW + 1):  # sessions no worker here runs
         await client.create("worker", "later", queue="elsewhere")
@@ -390,11 +393,11 @@ async def test_refusals(store: SqliteStore) -> None:
     assert len(await client.tasks(parent_id=tid)) == 1
 
 
-async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
+async def test_depth_cap_and_running_cap(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", agent("a")), reply("ok"),
                           reply("", agent("a"), agent("b"), agent("c")), reply("ok"),
                           reply("", agent("a"), agent("b")), reply("ok")])
-    rt = runtime(store, {"p": p}, parent(queue="kids", max_fanout=2, max_background=1),
+    rt = runtime(store, {"p": p}, parent(queue="kids", max_background=1),
                  worker())
     client = Client(store)
     tid = await client.create("main", "go", config={"subtask_depth": 3})
@@ -406,8 +409,9 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     await client.send(tid, "more")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[:3] == [(texts.FANOUT_TOO_BIG.format(n=3, limit=2), True)] * 3
-    assert out[3:] == [(texts.TOO_MANY_BACKGROUND.format(limit=1), True)] * 2
+    # No cap on the Agent calls of one reply (Claude Code has none): only
+    # the running agents are counted.
+    assert out == [(texts.TOO_MANY_BACKGROUND.format(limit=1), True)] * 5
 
 
 async def test_agent_calls_of_one_reply_count_once_against_the_cap(
@@ -444,7 +448,7 @@ async def test_task_is_the_old_name_and_exclusive_tools(store: SqliteStore) -> N
 
 async def test_model_and_effort_precedence(store: SqliteStore) -> None:
     def defined(model: str | None) -> Agent:
-        return Agent(name="fixer", model=model or "p", inherit_model=not model,
+        return Agent(name="fixer", model=model or "p", extra={} if model else {"model": "inherit"},
                      description="Fixes.", effort="low", extensions=[Subtasks()])
 
     main = Agent(name="main", model="p", extensions=[Subtasks(agents=["*"], queue="kids")])
@@ -932,3 +936,31 @@ async def test_a_sub_agent_inherits_its_callers_queue_unless_its_spec_names_one(
     await rt.run_once()
     [child] = await client.tasks(parent_id=tid)
     assert child.queue == lands
+
+
+async def test_agent_types_that_join_or_leave_mid_task_are_told(store: SqliteStore) -> None:
+    ext = Subtasks(ROSTER)
+    main = Agent(name="main", model="p", extensions=[ext])
+    p = ScriptedProvider([reply("one"), reply("two"), reply("three"), reply("four")])
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+    reviewer = SubagentSpec(name="reviewer", description="Reviews.", agent="worker")
+    ext._roster.specs = {**ext._roster.specs, "reviewer": reviewer}
+    await client.send(tid, "more")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+    ext._roster.specs = {"reviewer": reviewer}
+    await client.send(tid, "again")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+    await client.send(tid, "quiet")
+    await runtime(store, {"p": p}, main, worker()).run_until_idle()
+
+    def notes(i: int) -> list[str]:
+        return [m.text for m in p.requests[i].messages if m.role == "system"
+                and "agent types" in m.text.lower()]
+
+    assert notes(1)[-1] == ("New agent types the Agent tool can start:\n"
+                            "- reviewer: Reviews. (Tools: *)")
+    assert notes(2)[-1].startswith("These agent types are no longer available:\n"
+                                   "- general-purpose\n- scout\nThis is background information")
+    assert notes(3) == notes(2)

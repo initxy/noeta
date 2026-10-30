@@ -325,7 +325,7 @@ async def test_cancel_cascades_to_live_children(store: SqliteStore) -> None:
 class MakeRoom(Extension):
     name = "room"
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
+    async def on_context_overflow(self, view: TaskView, request: Any) -> bool:
         view.compacted(Compacted(summary="(summary)", through=view.state.last_seq))
         return True
 
@@ -338,4 +338,24 @@ async def test_overflow_lets_an_extension_make_room(store: SqliteStore) -> None:
     await rt.run_until_idle()
     second = provider.requests[1]
     assert second.messages[0].text == "(summary)"
+    assert (await client.get(tid)).waiting_on == "input"
+
+
+class OldMakeRoom(Extension):
+    """Written before ``on_context_overflow`` took the request."""
+
+    name = "old_room"
+
+    async def on_context_overflow(self, view: TaskView) -> bool:  # type: ignore[override]
+        view.compacted(Compacted(summary="(old summary)", through=view.state.last_seq))
+        return True
+
+
+async def test_an_overflow_hook_without_the_request_still_runs(store: SqliteStore) -> None:
+    provider = ScriptedProvider([ContextOverflow("too long"), reply("fits now")])
+    rt = runtime(store, provider, Agent(name="a", model="m", extensions=[OldMakeRoom()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert provider.requests[1].messages[0].text == "(old summary)"
     assert (await client.get(tid)).waiting_on == "input"

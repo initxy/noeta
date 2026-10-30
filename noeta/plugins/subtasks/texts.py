@@ -79,11 +79,6 @@ DEPTH_REACHED = (
 )
 FORK_IN_FORK = "a fork cannot start another fork."
 NO_REMOTE = "remote isolation is not available here; leave 'isolation' out or use \"worktree\"."
-MAX_FANOUT = 16
-FANOUT_TOO_BIG = (
-    "{n} Agent calls in one response is over the limit of {limit}. None were started; "
-    "re-issue them in batches of {limit} or fewer."
-)
 DUPLICATE_CALL_ID = (
     "Two Agent calls in this response share one call id, so their results could not be told "
     "apart. None were started; re-issue them as separate calls with distinct ids."
@@ -270,6 +265,9 @@ WORKTREE_IN_USE = ("Its worktree {path} is kept while a background command runs 
 
 # The agent list, recorded once when a task that can start agents begins.
 AGENT_LIST_HEAD = "Agent types the Agent tool can start:"
+#: Agent types that joined or left after the list went out.
+AGENT_LIST_ADDED = "New agent types the Agent tool can start:"
+AGENT_LIST_REMOVED = "These agent types are no longer available:"
 AGENT_LIST_TAIL = (
     "For independent pieces of work, start several agents in one message with several Agent "
     "calls so they run at the same time."

@@ -18,6 +18,7 @@ are left out and the text is cut to its head, marked at the end.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -25,11 +26,11 @@ import os
 import posixpath
 from typing import Any
 
+from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Image, Text
-from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
-from noeta.toolkit.tools import spill_path
+from noeta.toolkit.tools import save_spilled, spill_path
 
 __all__ = ["DEFAULT_MAX_OUTPUT_TOKENS", "IMAGE_TOKENS", "max_output_tokens", "render_result"]
 
@@ -103,11 +104,7 @@ async def _save(ctx: ToolContext, suffix: str, data: bytes) -> str | None:
         return None
     base = spill_path(ctx.spill_dir, ctx.task_id, ctx.call_id)
     path = posixpath.splitext(base)[0] + suffix
-    try:
-        await ctx.env.write_bytes(path, data)
-    except OSError:
-        return None
-    return path
+    return path if await save_spilled(ctx, path, data) else None
 
 
 def _saved_note(path: str, full: str, limit: int, *, as_json: bool) -> str:
@@ -138,7 +135,8 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
                     blocks.append(Text(text=t))
                 continue
             non_text += 1
-            line, image = _describe_block(block)
+            # Decoding a server's image is CPU work: off the event loop.
+            line, image = await asyncio.to_thread(_describe_block, block)
             if image is not None:
                 blocks.append(image)
             elif line:

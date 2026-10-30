@@ -20,7 +20,6 @@ from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills, UsageRank
 from noeta.plugins.skills.listing import (
-    ADDED_HEADER,
     ROSTER_HEADER,
     fit_menu_to_budget,
     listing_lines,
@@ -80,12 +79,12 @@ async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     h.provider.add(reply("", ("Skill", {"skill": "deploy", "args": "prod eu"})), reply("done"))
     tid = await h.start(agent())
     [result] = await h.results(tid)
-    assert result.result.text == ("Skill 'deploy' loaded; its instructions will appear in "
-                                  "your context from your next step.")
+    assert result.result.text == "Starting skill: deploy. Its instructions follow."
     msgs = h.provider.requests[1].messages
     body = msgs[-1]
-    assert body.text == (f"Activated skill: deploy\n\nShip now.\n\nBase directory for this "
-                         f"skill: {d}\n\nStep one.\n\nScope: prod eu\nStep two.\n")
+    # Claude Code's shape: the directory and the body, no name or description.
+    assert body.text == (f"Base directory for this skill: {d}\n\nStep one.\n\nScope: prod eu\n"
+                         f"Step two.\n")
     [act] = await h.records(tid, "skills", "activated")
     assert act.data["source"] == "model" and act.data["args"] == "prod eu"
 
@@ -200,13 +199,13 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
     await h.say(a, tid, "next")
     msgs = h.last_messages()
     assert msgs[-2].text == "next"
-    assert msgs[-1].text == f"{ADDED_HEADER}\n\n- review: Review code."
+    assert msgs[-1].text == f"{ROSTER_HEADER}\n\n- review: Review code."
     assert len(await h.records(tid, "skills", "listing")) == 2
 
 
 async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> None:
-    """Installed mid-turn, announced with the person's next message, with no
-    pick-up in between (the runner keeps the task)."""
+    """Installed mid-turn, listed with its description before the next model
+    call, as Claude Code lists a skill its watcher found."""
     from noeta.core.tool import text_output
 
     class Install:
@@ -218,7 +217,6 @@ async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> 
 
         async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
             write_skill(skills_dir(h), "review", "Review code.")
-            await h.client.send(ctx.task_id, "next", when="now")
             return text_output("installed")
 
     a = Agent(name="a", model="m", tools=[Install()], extensions=[FileTools(), Skills()])
@@ -227,7 +225,7 @@ async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> 
     first, second = h.provider.requests
     assert first.tools == second.tools  # the prefix does not move
     texts = [m.text for m in second.messages]
-    assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n\n- review: Review code."]
+    assert texts[-1] == f"{ROSTER_HEADER}\n\n- review: Review code."
 
 
 async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> None:
@@ -271,7 +269,7 @@ async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
     h.provider.add(reply("ok"))
     tid = await h.start(agent(global_dir=user_dir, preload=["lint"]))
     msgs = h.provider.requests[0].messages
-    assert msgs[0].text.startswith("Activated skill: lint")
+    assert msgs[0].text == f"Base directory for this skill: {user_dir / 'lint'}\n\nDo the thing.\n"
     assert msgs[1].text == "go"
     assert msgs[2].text == f"{ROSTER_HEADER}\n\n- deploy: Workspace deploy.\n- lint: Lint."
     assert (await h.records(tid, "skills", "activated"))[0].data["source"] == "preload"
@@ -435,7 +433,12 @@ def test_over_budget_goes_short_then_name_only() -> None:
 
 def test_long_summary_is_capped_with_a_marker() -> None:
     [(_, line)] = listing_lines(_registry(a="word " * 1000), budget_tokens=100_000)
-    assert line.endswith("… (truncated)") and estimate_tokens(line) <= 386
+    assert line == "- a: " + ("word " * 1000)[:1535] + "…"
+    # Characters, not tokens: a CJK summary keeps as many as a Latin one.
+    [(_, line)] = listing_lines(_registry(a="技能" * 1000), budget_tokens=100_000)
+    assert line == "- a: " + ("技能" * 1000)[:1535] + "…"
+    [(_, line)] = listing_lines(_registry(a="技" * 1536), budget_tokens=100_000)
+    assert line == "- a: " + "技" * 1536
 
 
 def test_allowed_tools_parsing() -> None:
@@ -584,7 +587,7 @@ async def test_a_skill_with_paths_is_offered_once_a_matching_file_is_touched(
     [unlocked] = await h.records(tid, "skills", "unlocked")
     assert unlocked.data == {"names": ["pyfix"]}
     texts = [m.text for m in h.provider.requests[3].messages]
-    assert f"{ADDED_HEADER}\n\n- pyfix: Python fixes." in texts
+    assert f"{ROSTER_HEADER}\n\n- pyfix: Python fixes." in texts
 
 
 async def test_the_skill_directories_are_scanned_once_a_turn_not_after_every_read(
@@ -715,3 +718,150 @@ def test_the_typed_and_forked_entries_kept_are_bounded() -> None:
         state = skills.reduce(state, "forked", {"call_id": f"c{seq}", "prompt": "p"})
     assert len(state["typed"]) <= 64 and "499" in state["typed"]
     assert len(state["forks"]) <= 64 and "c499" in state["forks"]
+
+
+def test_priority_is_no_skill_key() -> None:
+    from noeta.plugins.skills.listing import menu_keep_order
+    from noeta.plugins.skills.registry import parse_skill
+    # Claude Code has no ``priority:``; it is kept as plain metadata and
+    # orders nothing.
+    desc = parse_skill("/s/zed/SKILL.md", "---\nname: zed\ndescription: Z.\npriority: 1\n---\n")
+    assert desc is not None and desc.meta("priority") == "1"
+    other = SkillDescription(name="alpha", description="A.", body="")
+    registry = SkillRegistry({"zed": desc, "alpha": other})
+    assert menu_keep_order(registry, ["zed", "alpha"]) == ("alpha", "zed")
+
+
+def test_the_loaded_text_has_one_blank_line_before_the_body() -> None:
+    from noeta.plugins.skills.registry import parse_skill, render_command_body
+    desc = parse_skill("/s/notes/SKILL.md",
+                       "---\nname: notes\ndescription: N.\n---\n\nRun it.\n")
+    assert desc is not None
+    assert render_command_body(desc) == "Base directory for this skill: /s/notes\n\nRun it.\n"
+
+
+async def test_a_skill_edited_mid_turn_is_listed_again_before_the_next_call(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+
+    class Edit:
+        name = "Touch"
+        description = "touch"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = False
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            write_skill(skills_dir(h), "deploy", "Ship and tag.")
+            return text_output("done")
+
+    a = Agent(name="a", model="m", tools=[Edit()], extensions=[FileTools(), Skills()])
+    h.provider.add(reply("", ("Touch", {})), reply("", ("Touch", {})), reply("ok"))
+    tid = await h.start(a)
+    assert h.provider.requests[1].messages[-1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship and tag.")
+    # Written again with the same text: not listed again.
+    assert len(await h.records(tid, "skills", "listing")) == 2
+
+
+async def test_a_skill_whose_description_changed_is_listed_again(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "review", "Review code.")
+    a = agent()
+    h.provider.add(reply("ok"), reply("again"), reply("more"))
+    tid = await h.start(a)
+    write_skill(skills_dir(h), "deploy", "Ship to production, then tag.")
+    await h.say(a, tid, "next")
+    assert h.last_messages()[-1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship to production, then tag.")
+    # Unchanged since: nothing more; the state lives in the log, so a
+    # fresh runtime (another worker) agrees.
+    await h.say(a, tid, "and again")
+    assert h.last_messages()[-1].text == "and again"
+    listings = await h.records(tid, "skills", "listing")
+    assert [x.data["names"] for x in listings] == [["deploy", "review"], ["deploy"]]
+
+
+def test_mentions_are_slash_words_after_the_leading_command() -> None:
+    from noeta.plugins.skills.extension import mentioned_skills
+    assert mentioned_skills("please run /deploy now") == ["deploy"]
+    assert mentioned_skills("/notes v1 then /deploy") == ["deploy"]
+    assert mentioned_skills("/notes") == []
+    assert mentioned_skills("see /deploy. and /deploy") == ["deploy"]
+    assert mentioned_skills("a/b /x/y path") == []
+    assert mentioned_skills("用 /deploy 发布。/review") == ["deploy", "review"]
+    assert mentioned_skills("请/review") == []
+
+
+async def test_a_skill_named_mid_message_gets_a_note(h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    write_skill(skills_dir(h), "hidden", "User only.", **{"disable-model-invocation": "true"})
+    a = agent()
+    h.provider.add(reply("ok"))
+    tid = await h.start(a, "should I use /deploy or /hidden or /nothing here?")
+    texts = [m.text for m in h.provider.requests[0].messages]
+    note = [t for t in texts if t.startswith("The user's message names /")]
+    assert note == ["The user's message names /deploy, a skill. If they want it run, call the "
+                    "Skill tool with skill \"deploy\" and any arguments they gave as args; if "
+                    "they only mention it, do not run it."]
+    assert [x.data for x in await h.records(tid, "skills", "mentioned")] == [{"name": "deploy"}]
+
+
+async def test_skills_below_the_working_directory_join_when_a_file_there_is_touched(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    pkg = h.work / "apps" / "web"
+    write_skill(pkg / ".noeta" / "skills", "web-build", "Build the web app.")
+    (pkg / "src").mkdir()
+    (pkg / "src" / "main.ts").write_text("export {}\n")
+    a = agent()
+    h.provider.add(reply("", ("Read", {"file_path": str(pkg / "src" / "main.ts")})),
+                   reply("", ("Skill", {"skill": "web-build"})), reply("done"))
+    tid = await h.start(a)
+    texts = [m.text for m in h.provider.requests[1].messages]
+    # The names when found, then (as Claude Code's next listing) the
+    # description, before the very next call.
+    assert texts[-2:] == [
+        "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n"
+        "- web-build", f"{ROSTER_HEADER}\n\n- web-build: Build the web app."]
+    # Loadable now, and not listed again with the next message.
+    results = await h.results(tid)
+    assert results[-1].result.text == "Starting skill: web-build. Its instructions follow."
+    h.provider.add(reply("ok"))
+    await h.say(a, tid, "next")
+    assert h.last_messages()[-1].text == "next"
+    [nested] = await h.records(tid, "skills", "nested")
+    assert nested.data == {"dir": str(pkg / ".noeta" / "skills")}
+
+
+async def test_skills_in_a_directory_git_ignores_never_join(h: Harness) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(h.work)], check=True)
+    (h.work / ".gitignore").write_text("node_modules/\n")
+    pkg = h.work / "node_modules" / "pkg"
+    write_skill(pkg / ".agents" / "skills", "takeover", "Run me.")
+    (pkg / "index.js").write_text("module.exports = {}\n")
+    a = agent()
+    h.provider.add(reply("", ("Read", {"file_path": str(pkg / "index.js")})), reply("done"))
+    tid = await h.start(a)
+    assert await h.records(tid, "skills", "nested") == []
+    assert not any("takeover" in m.text for m in h.provider.requests[1].messages)
+
+
+async def test_a_skill_below_the_working_directory_never_shadows_one_of_the_same_name(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.", body="The workspace's own steps.\n")
+    pkg = h.work / "apps" / "web"
+    write_skill(pkg / ".noeta" / "skills", "deploy", "Ship differently.", body="Other steps.\n")
+    write_skill(pkg / ".noeta" / "skills", "web-build", "Build the web app.")
+    (pkg / "main.ts").write_text("export {}\n")
+    a = agent()
+    h.provider.add(reply("", ("Read", {"file_path": str(pkg / "main.ts")})),
+                   reply("", ("Skill", {"skill": "deploy"})), reply("done"))
+    await h.start(a)
+    texts = [m.text for m in h.provider.requests[1].messages]
+    assert "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n" \
+        "- web-build" in texts
+    later = "".join(m.text for m in h.provider.requests[2].messages)
+    assert "The workspace's own steps." in later and "Other steps." not in later

@@ -30,6 +30,29 @@ _CJK_CHAR = re.compile(
 )
 
 
+#: Claude models whose tokens Claude Code counts as four characters; it
+#: counts three for every other model.
+_FOUR_CHAR_MODELS = frozenset((
+    "claude-3-opus", "claude-3-sonnet", "claude-3-haiku", "claude-3-5-sonnet",
+    "claude-3-5-haiku", "claude-3-7-sonnet", "claude-opus-4-0", "claude-opus-4-1",
+    "claude-opus-4-5", "claude-opus-4-6", "claude-sonnet-4-0", "claude-sonnet-4-5",
+    "claude-sonnet-4-6", "claude-haiku-4-5"))
+
+
+def chars_per_token(model: str) -> int:
+    """Characters per token in Claude Code's size limits: 4 for its older
+    models (and an unknown one), 3 for the rest."""
+    name = model.rsplit("/", 1)[-1].lower().replace(".", "-").replace("_", "-")
+    if not name:
+        return 4
+    return 4 if any(name == m or name.startswith(m + "-") for m in _FOUR_CHAR_MODELS) else 3
+
+
+def has_cjk(text: str) -> bool:
+    """Whether ``text`` holds a CJK character (prose with no spaces)."""
+    return _CJK_CHAR.search(text) is not None
+
+
 def estimate_tokens(text: str) -> int:
     """Deterministic, CJK-aware token estimate: CJK characters count one
     each, the rest ``ceil(n / 4)``. A budgeting unit, not a billed count."""
