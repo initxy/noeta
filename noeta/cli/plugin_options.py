@@ -16,10 +16,10 @@ as that reference.
 ``${user_config.KEY}`` is substituted as Claude Code does: in MCP server
 configs and hook commands every value (a shell-form hook command may not use
 one, its ``args`` may), in commands and agent prompts the non-sensitive ones
-only. Hooks get each plain value as ``CLAUDE_PLUGIN_OPTION_<KEY>``, a secret
-only when they name it. What cannot be used on this machine (a key unset, a
-secret it cannot read) is decided per server and hook when the plugin is read
-(:mod:`noeta.cli.claude_plugins`), never by stopping noeta.
+only. Hooks get each value as ``CLAUDE_PLUGIN_OPTION_<KEY>``. What cannot be used
+on this machine (a key unset, a secret it cannot read) is decided per option,
+server and hook when the plugin is read (:mod:`noeta.cli.claude_plugins`),
+never by stopping noeta.
 """
 
 from __future__ import annotations
@@ -156,15 +156,17 @@ def _env_name(key: str) -> str:
     return "CLAUDE_PLUGIN_OPTION_" + re.sub(r"[^A-Za-z0-9_]", "_", key).upper()
 
 
-def hook_env(values: Mapping[str, Any], named_in: Any = None) -> dict[str, str]:
-    """``CLAUDE_PLUGIN_OPTION_<KEY>`` for a hook's environment: every plain
-    value, and a secret reference (``{env:…}``, ``{keyring:…}``) only when
-    ``named_in`` (the hook) names its key or variable, so a hook is never
-    handed, nor stopped by, a secret it does not use."""
-    text = json.dumps(named_in) if named_in is not None else ""
-    return {_env_name(k): _text(v) for k, v in values.items()
-            if not (isinstance(v, str) and _SECRET_REF.match(v))
-            or f"user_config.{k}}}" in text or _env_name(k) in text}
+def hook_env(values: Mapping[str, Any]) -> dict[str, str]:
+    """``CLAUDE_PLUGIN_OPTION_<KEY>`` for each value (a hook's environment;
+    a secret stays a reference until the hook is made)."""
+    return {_env_name(k): _text(v) for k, v in values.items()}
+
+
+def names(value: Any, key: str) -> bool:
+    """Whether ``value`` (a hook, any JSON) names option ``key``: as
+    ``${user_config.KEY}`` or ``CLAUDE_PLUGIN_OPTION_<KEY>``."""
+    text = json.dumps(value)
+    return f"user_config.{key}}}" in text or _env_name(key) in text
 
 
 def _parse(key: str, field: Mapping[str, Any], raw: str) -> Any:

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from noeta.toolkit.hook_env import without_env
 from noeta.toolkit.permission_rules import Rule, parse_rule
 
 log = logging.getLogger("noeta.hooks")
@@ -252,12 +253,4 @@ def read_settings(path: str | Path) -> Mapping[str, Any]:
         log.warning("hooks: cannot read %s: %s", p, exc)
         return {}
     hooks = data.get("hooks") if isinstance(data, dict) else None
-    if not isinstance(hooks, dict):
-        return {}
-    # ``env`` is noeta's, for a Claude Code plugin's options; not Claude
-    # Code's, so a settings file does not set it.
-    return {event: [{**g, "hooks": [{k: v for k, v in h.items() if k != "env"}
-                                    if isinstance(h, dict) else h for h in g["hooks"]]}
-                    if isinstance(g, dict) and isinstance(g.get("hooks"), list) else g
-                    for g in groups] if isinstance(groups, list) else groups
-            for event, groups in hooks.items()}
+    return without_env(hooks) if isinstance(hooks, dict) else {}

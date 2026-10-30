@@ -94,10 +94,10 @@ their `!` lines through the permission checks and pre-approve their `allowed-too
 substituted. Its manifest's `userConfig` is asked for on `noeta plugin add` (or
 `--config KEY=VALUE`; `noeta plugin configure` asks again), kept in `~/.noeta/settings.json`
 `pluginConfigs` with sensitive values in the OS keyring, and substituted as Claude Code does
-(not yet in skill bodies; a hook gets a secret's `CLAUDE_PLUGIN_OPTION_<KEY>` only when it names
-it). A secret a machine cannot read stops only what uses it, with a notice: an MCP server or
-hook is left out, a `PreToolUse` / `PermissionRequest` / `UserPromptSubmit` hook refuses. Its
-own files may name only its own keyring secrets. Its `settings.json` `agent` names the agent
+(not yet in skill bodies; each hook gets every value as `CLAUDE_PLUGIN_OPTION_<KEY>`). A secret
+a machine cannot read stops only what uses it, with a notice: hooks get no variable for it, an
+MCP server or hook naming it is left out, a `PreToolUse` / `PermissionRequest` /
+`UserPromptSubmit` hook naming it refuses. Its own files may name only its own keyring secrets. Its `settings.json` `agent` names the agent
 front ends start with. From a project, its MCP
 servers never start: noeta says to copy them into `.noeta/mcp.json`, which needs consent.
 Monitors, `bin/`, LSP servers, themes and output styles are not loaded (reasons [below](#compared-item-by-item)). noeta never

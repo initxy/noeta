@@ -222,14 +222,19 @@ def _refusing_hook(text: str) -> dict[str, Any]:
 
 
 def _hook_with_options(name: str, event: str, hook: dict[str, Any],
-                       values: Mapping[str, Any], notices: list[str]) -> dict[str, Any] | None:
+                       values: Mapping[str, Any], unreadable: Mapping[str, str],
+                       notices: list[str]) -> dict[str, Any] | None:
     """A plugin's hook with its option values filled into a command's
     ``args`` form (a shell-form command naming one cannot be: the shell
-    would read the value again), and the options it names as
-    ``CLAUDE_PLUGIN_OPTION_<KEY>`` (every plain one too). One that cannot run
-    as written here is left out with a notice, or for a :data:`GUARD_EVENTS`
-    event replaced by one that refuses."""
+    would read the value again), and every option this machine can read as
+    ``CLAUDE_PLUGIN_OPTION_<KEY>``, as Claude Code gives them. One that
+    cannot run as written here (it names an option that is unset or
+    ``unreadable`` here) is left out with a notice, or for a
+    :data:`GUARD_EVENTS` event replaced by one that refuses."""
     problem = _foreign_secret(name, hook)
+    for key, why in unreadable.items():
+        if problem is None and plugin_options.names(hook, key):
+            problem = f"it uses option {key!r}, which cannot be read here: {why}"
     if problem is None and hook.get("args") is None and plugin_options.uses(hook.get("command")):
         problem = "it names ${user_config.*} in a shell-form command (use args, or read " \
                   "$CLAUDE_PLUGIN_OPTION_<KEY>)"
@@ -239,7 +244,7 @@ def _hook_with_options(name: str, event: str, hook: dict[str, Any],
         except plugin_options.OptionError as exc:
             problem = str(exc)
     if problem is None and hook.get("type", "command") == "command":
-        env = plugin_options.hook_env(values, named_in=hook)
+        env = plugin_options.hook_env({k: v for k, v in values.items() if k not in unreadable})
         if env:
             hook = {**hook, "env": env}
     if problem is None:
@@ -257,6 +262,7 @@ def _hook_with_options(name: str, event: str, hook: dict[str, Any],
 
 
 def _hooks_with_options(name: str, events: Mapping[str, Any], values: Mapping[str, Any],
+                        unreadable: Mapping[str, str],
                         notices: list[str]) -> dict[str, list[Any]]:
     out: dict[str, list[Any]] = {}
     for event, groups in events.items():
@@ -264,7 +270,8 @@ def _hooks_with_options(name: str, events: Mapping[str, Any], values: Mapping[st
         for group in groups if isinstance(groups, list) else []:
             if not isinstance(group, dict):
                 continue
-            hooks = [h for h in (_hook_with_options(name, event, hook, values, notices)
+            hooks = [h for h in (_hook_with_options(name, event, hook, values, unreadable,
+                                                    notices)
                                  for hook in group.get("hooks") or [] if isinstance(hook, dict))
                      if h is not None]
             if hooks:
@@ -284,9 +291,17 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
              "CLAUDE_PLUGIN_DATA": str(data_home / re.sub(r"[^A-Za-z0-9_-]", "-", name))}
     fields = plugin_options.schema(manifest)
     values = dict(options) if options is not None else plugin_options.load(name, fields)
+    #: Options this machine cannot read (a secret its keyring lacks, a
+    #: variable not set): hooks get no variable for them, and what uses one
+    #: does not run.
+    unreadable = {k: why for k, v in values.items()
+                  if (why := _unreadable(name, v)) is not None}
+    notice_list = [f"plugin {name}: option {k!r} cannot be read here ({why}); its hooks get "
+                   f"no CLAUDE_PLUGIN_OPTION_{k.upper()}; run noeta plugin configure {name}"
+                   for k, why in unreadable.items()]
     plugin = ClaudePlugin(name=name, root=root, version=str(manifest.get("version") or ""),
                           project=project, user_config=fields,
-                          settings=_settings(root, manifest))
+                          settings=_settings(root, manifest), notices=notice_list)
 
     def text(body: str) -> str:
         return plugin_options.content(_substitute(body, names), values, fields)
@@ -335,7 +350,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
         events = source if isinstance(source, dict) else \
             (_json(source).get("hooks") or {}) if source.is_file() else {}
         for event, groups in _hooks_with_options(name, _substitute(events, names),
-                                                 values, plugin.notices).items():
+                                                 values, unreadable, plugin.notices).items():
             plugin.hooks.setdefault(event, []).extend(groups)
     mcp_sources: list[Any] = [root / ".mcp.json"]
     declared = manifest.get("mcpServers")

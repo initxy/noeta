@@ -96,9 +96,9 @@ async def test_values_are_substituted_as_claude_code_does(
     assert hooks[0].args == ("eu",) and hooks[1].block_on_failure
     assert any("PreToolUse hook cannot run" in n for n in app.notices)
     assert any("MCP server other does not start" in n for n in app.notices)
-    # Plain values reach every hook; a secret only one that names it.
+    # Every value this machine can read reaches every hook, as Claude Code gives them.
     assert dict(hooks[2].env)["CLAUDE_PLUGIN_OPTION_REGION"] == "eu"
-    assert "CLAUDE_PLUGIN_OPTION_TOKEN" not in dict(hooks[2].env)
+    assert dict(hooks[2].env)["CLAUDE_PLUGIN_OPTION_TOKEN"] == "s3cret"
     # Commands and agents: non-sensitive values only.
     assert ext(app, "main", "markdown_commands").render("deploy-tools:go", "") == (
         "Deploy to eu with [sensitive option 'token' not available in skill content]; "
@@ -228,6 +228,9 @@ async def test_a_secret_this_machine_lacks_stops_only_what_uses_it(
     refusing, plain = matcher.hooks
     # The guard naming the secret refuses, visibly; the other hook runs.
     assert refusing.command == sys.executable and plain.command == "plain"
+    # The other hook runs, without the variable this machine cannot fill.
+    assert "CLAUDE_PLUGIN_OPTION_TOKEN" not in dict(plain.env)
+    assert dict(plain.env)["CLAUDE_PLUGIN_OPTION_REGION"] == "eu"
     result = await run_command(refusing, {}, str(tmp_path))
     assert result.exit_code == 2 and "DEPLOY_TOKEN" in result.stderr \
         and "deploy-tools" in result.stderr
@@ -235,6 +238,7 @@ async def test_a_secret_this_machine_lacks_stops_only_what_uses_it(
     said = [n for n in app.notices if "deploy-tools" in n]
     assert any("PreToolUse hook cannot run" in n and "DEPLOY_TOKEN" in n for n in said)
     assert any("MCP server api does not start" in n for n in said)
+    assert any("option 'token' cannot be read here" in n for n in said)
     await app.store.close()
 
 
@@ -286,3 +290,46 @@ def test_a_settings_file_hook_sets_no_environment(tmp_path: Path) -> None:
     path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
         {"type": "command", "command": "x", "env": {"PATH": "/evil"}}]}]}}))
     assert read_settings(path) == {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}
+
+
+async def test_a_hook_script_reads_a_secret_from_its_environment(
+        home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Claude Code's usual shape: hooks.json names a script, which reads the
+    # option from CLAUDE_PLUGIN_OPTION_<KEY> itself.
+    from noeta.plugins.hooks.runners import run_command
+
+    root = make_plugin(home / "plugins" / "deploy")
+    script = root / "hooks" / "check.sh"
+    script.write_text('#!/bin/sh\nprintf %s "$CLAUDE_PLUGIN_OPTION_TOKEN"\n')
+    script.chmod(0o755)
+    (root / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/check.sh"}]}]}}))
+    plugin_options.configure("deploy-tools", FIELDS, ["token={env:DEPLOY_TOKEN}"],
+                             interactive=False)
+    monkeypatch.setenv("DEPLOY_TOKEN", "s3cret")
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    [matcher] = ext(app, "main", "hooks").matchers["PreToolUse"]
+    [hook] = matcher.hooks
+    assert (await run_command(hook, {}, str(tmp_path))).stdout == "s3cret"
+    await app.store.close()
+
+
+def test_a_failed_reinstall_keeps_the_options_kept_before(
+        home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin_options.configure("deploy-tools", FIELDS, ["token={env:T}"], interactive=False)
+    before = kept(home)
+    _no_keyring_backend(monkeypatch)
+    source = make_plugin(tmp_path / "src" / "deploy")
+    with pytest.raises(SystemExit) as done:
+        main.main(["plugin", "add", str(source), "--config", "token=abc"])
+    assert done.value.code == 1 and list((home / "plugins").iterdir()) == []
+    assert kept(home) == before
+
+
+def test_an_agent_files_hooks_set_no_environment() -> None:
+    from noeta.agents.agent_files import parse_agent_file, plugin_overlays
+
+    f = parse_agent_file("---\nname: a\ndescription: d\nhooks:\n  Stop:\n    - hooks:\n"
+                         "        - {type: command, command: x, env: {PATH: /evil}}\n---\nx\n")
+    [(plugin, args)] = plugin_overlays(f)
+    assert plugin == "hooks" and "env" not in json.dumps(args)

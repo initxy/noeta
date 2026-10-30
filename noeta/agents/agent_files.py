@@ -48,6 +48,7 @@ import yaml
 from noeta.core import models, registry
 from noeta.core.agent import Agent
 from noeta.core.extension import Extension
+from noeta.toolkit.hook_env import without_env
 
 __all__ = [
     "DEFAULT_IDENTITY",
@@ -215,7 +216,7 @@ def plugin_overlays(f: AgentFile) -> list[PluginEntry]:
             # as a sub-agent (Claude Code converts them); a main agent
             # never fires SubagentStop, a sub-agent never Stop.
             hooks["SubagentStop"] = [*(hooks.get("SubagentStop") or []), *hooks["Stop"]]
-        out.append(("hooks", {"hooks": hooks}))
+        out.append(("hooks", {"hooks": without_env(hooks)}))
     if x.get("memory"):
         out.append(("memory", {"agent_scope": x["memory"], "agent_name": f.name}))
     if x.get("autoCompactWindow") is not None:

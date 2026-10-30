@@ -389,11 +389,11 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   them again), keeps them in `~/.noeta/settings.json` `pluginConfigs` with sensitive ones in
   the OS keyring (a machine whose keyring cannot keep it is refused before anything is
   installed, with the `{env:NAME}` way instead), and substitutes `${user_config.KEY}` in MCP
-  servers, hook `args`, commands and agent prompts (not yet in skill bodies); a hook gets every
-  plain value as `CLAUDE_PLUGIN_OPTION_<KEY>`, a secret only when it names it. A secret a
-  machine cannot read (its keyring lacks it, a variable is not set) stops only what uses it,
-  with a notice naming the plugin: an MCP server or hook is left out, a `PreToolUse`,
-  `PermissionRequest` or `UserPromptSubmit` hook refuses instead. A plugin's own files may
+  servers, hook `args`, commands and agent prompts (not yet in skill bodies); every hook of the
+  plugin gets each value as `CLAUDE_PLUGIN_OPTION_<KEY>`. A secret a machine cannot read (its
+  keyring lacks it, a variable is not set) stops only what uses it, with a notice naming the
+  plugin: hooks get no variable for it, an MCP server or hook that names it is left out, and
+  a `PreToolUse`, `PermissionRequest` or `UserPromptSubmit` hook that names it refuses. A plugin's own files may
   name only its own keyring secrets. A plugin's `settings.json` `agent` (and the settings
   files' own `agent`) picks the agent front ends start with, and the TUI honours `--agent`.
 - **A running tool shows its progress** (`ToolContext.progress(text)`), as Claude Code's
