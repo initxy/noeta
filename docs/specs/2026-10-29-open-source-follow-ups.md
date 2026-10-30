@@ -63,6 +63,12 @@ its own spec before work starts.
 - [ ] `tests/plugins/test_hooks_events.py` sometimes (2 of about 14 runs) warns `PytestUnraisableExceptionWarning` from a garbage-collected asyncio subprocess transport; likely the same cause as the hooks runner's asyncio subprocesses above. Follow-up spec, with that item.
 - [ ] The `delegate_parallel_review` eval scenario runs into its 240 s trial timeout in every trial (it still scores); raise the timeout or shorten the scenario. Follow-up spec.
 
+- [ ] Pasted-image save: a file cut short by a crash mid-write is never written again (the script skips an existing file); write to a temporary name and rename. From the best-of-three A/B review.
+- [ ] Recall selector: the retry without `thinking` follows any HTTP 400 and then remembers the model as refusing it for good; retry only on the thinking refusal. The once-per-reason WARNING keys on the error text, which may hold a request id. A loose (non-JSON) reply picks any listed file it names, even one it calls irrelevant.
+- [ ] Git snapshot refresh: a turn woken by a timer does not record the HEAD at its end; the end-of-turn record has unit tests only, none through the runtime.
+- [ ] The memory recall selector fails on gateways that refuse `thinking: disabled` or ignore `output_schema` (found with DeepSeek V4.1); now retried and warned, but recall stays off by default as in Claude Code.
+- [ ] `delegate_parallel_review` scores 0.33 on DeepSeek V4.1 (7 of 9 trials hit the 600 s cap; the model reads 24 modules itself rather than delegating); `hook_block_adapts` 0.52 (the model probes for the hook after a block). Model behaviour under Claude Code's own wording; watch on the next model.
+
 ### Decided not to do (kept for the record)
 - [x] ACP over `--server` cannot pass the editor's MCP servers. Won't do: they hold the editor's credentials and stay in its process.
 - [x] MCP tools are never retry-safe on recovery. Won't do: a server's `idempotentHint` is not trusted.
