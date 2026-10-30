@@ -21,7 +21,6 @@ context).
 
 from __future__ import annotations
 
-import hashlib
 import os
 import platform
 import posixpath
@@ -161,8 +160,16 @@ async def capture_git(env: ExecEnv, cwd: str, *, when: str = SNAPSHOT_AT_START) 
                       status=status, commits=commits, when=when)
 
 
-def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+async def git_head(env: ExecEnv, cwd: str) -> str:
+    """The branch and the commit it is at (``""`` outside a repository): what
+    the person changes by switching branch or committing, which the model's
+    own edits do not."""
+    try:
+        if await env.stat(posixpath.join(cwd, ".git")) is None:
+            return ""
+    except Exception:  # noqa: BLE001 — capture is best-effort
+        return ""
+    return (await _git(env, cwd, "rev-parse", "--abbrev-ref", "HEAD", "HEAD")).strip()
 
 
 def render_git(*, branch: str, main: str, user: str, status: str | None,
@@ -437,8 +444,7 @@ class Environment(Extension):
             return state
         if kind == "git":
             text = data.get("text")
-            seen = data.get("seen") or (_digest(text) if isinstance(text, str) else None)
-            return {**state, "git": text, "git_seen": seen}
+            return {**state, "git": text, "git_head": data.get("head")}
         if kind == "attribution":
             return {**state, kind: data.get("text")}
         if kind == "sent":
@@ -489,7 +495,8 @@ class Environment(Extension):
         if self.git_status:
             snapshot = await capture_git(env, cwd)
             if snapshot:
-                view.record(self.name, "git", {"text": snapshot},
+                view.record(self.name, "git", {"text": snapshot,
+                                               "head": await git_head(env, cwd)},
                             message=user(snapshot, origin="system"))
         note = render_attribution(model) if self.attribution and model else None
         if note:
@@ -543,17 +550,19 @@ class Environment(Extension):
         return out
 
     async def _git_again(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
-        """At the start of a later turn, the snapshot taken again when it
-        differs from the one the model has (new commits, another branch)."""
+        """At the start of a later turn, the snapshot taken again when the
+        branch or its commit moved since the one the model has (the person
+        switched branch or committed; edits alone do not count)."""
         if not (self.git_status and self.git_refresh) or view.state.steps_in_turn \
-                or not isinstance(st.get("git"), str) or view.state.parent_id:
+                or not st.get("git_head") or view.state.parent_id:
             return []
         env = task_env(view.env, view.state.config)
-        plain = await capture_git(env, view.cwd or env.cwd)
-        if not plain or _digest(plain) == st.get("git_seen"):
+        cwd = view.cwd or env.cwd
+        head = await git_head(env, cwd)
+        if not head or head == st["git_head"]:
             return []
-        again = await capture_git(env, view.cwd or env.cwd, when=SNAPSHOT_AGAIN)
-        return [Reminder(text=again, kind="git", data={"text": again, "seen": _digest(plain)})]
+        again = await capture_git(env, cwd, when=SNAPSHOT_AGAIN)
+        return [Reminder(text=again, kind="git", data={"text": again, "head": head})]
 
     @staticmethod
     def _deferred_delta(view: TaskView, st: dict[str, Any]) -> list[Reminder]:

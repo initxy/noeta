@@ -404,6 +404,9 @@ async def test_a_changed_git_snapshot_is_given_again_at_a_later_turn(tmp_path: P
         return TaskView(state=state, env=LocalExecEnv(str(repo)))
 
     assert [r for r in await ext.reminders(later()) if r.kind == "git"] == []
+    # An edit (the model's own, say) changes the status, not the branch or commit.
+    (repo / "a.txt").write_text("edited\n")
+    assert [r for r in await ext.reminders(later()) if r.kind == "git"] == []
     subprocess.run([*git, "checkout", "-q", "-b", "fix/other"], check=True)
     subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "second"], check=True)
     again = [r for r in await ext.reminders(later()) if r.kind == "git"]
