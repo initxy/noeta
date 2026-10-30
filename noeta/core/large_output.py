@@ -177,4 +177,5 @@ async def bound_result(output: ToolOutput, tool: Tool, ctx: ToolContext,
     budget.used += min(len(text), limit + PERSISTED_PREVIEW_CHARS)  # reserved now
     bounded = await limit_output(text, limit, ctx)
     return ToolOutput(content=[Text(text=bounded)], meta={**output.meta, "persisted": True},
-                      display=output.display, end_turn=output.end_turn)
+                      display=output.display, end_turn=output.end_turn,
+                      block_list=output.block_list)
