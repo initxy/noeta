@@ -525,7 +525,8 @@ class TaskRun:
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
                         denied_tools=self.agent.denied_tools if self.agent else (),
                         count_tokens=self.counter(model), read_log=self._read_log,
-                        child_tasks=self._child_ids, serves_queue=self.serves_queue)
+                        child_tasks=self._child_ids, serves_queue=self.serves_queue,
+                        spill_dir=self.rt.spill_root)
 
     async def _read_log(self, task_id: str, after: int = 0) -> Sequence[Recorded]:
         """``TaskView.read_log``: an unknown task reads as empty."""

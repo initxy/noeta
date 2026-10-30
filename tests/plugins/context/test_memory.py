@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.agent import Agent
 from noeta.core.types import ModelRequest, ModelResponse
 from noeta.plugins.fs import FileTools
@@ -117,6 +118,62 @@ async def test_a_memory_file_read_through_a_link_out_of_it_asks(
     tid = await h.start(a)
     assert await h.results(tid) == []
     assert (await h.client.get(tid)).status == "waiting"
+
+
+class Elsewhere(LocalExecEnv):
+    """An exec env on another machine (a container every worker reaches):
+    its files are under ``jail`` here, out of this machine's paths."""
+
+    local = False
+
+    def __init__(self, cwd: str, jail: Path, mapped: Path) -> None:
+        super().__init__(cwd)
+        self.jail, self.mapped = str(jail), str(mapped)
+
+    def _p(self, path: str) -> str:
+        return self.jail + path if path.startswith(self.mapped) else path
+
+    async def read_bytes(self, path: str) -> bytes:
+        return await super().read_bytes(self._p(path))
+
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        await super().write_bytes(self._p(path), data)
+
+    async def stat(self, path: str) -> Any:
+        return await super().stat(self._p(path))
+
+    async def realpath(self, path: str) -> str:
+        return path
+
+    async def run(self, argv: Any, **kw: Any) -> Any:
+        return await super().run([self._p(a) for a in argv], **kw)
+
+
+async def test_with_a_remote_exec_env_memory_lives_in_it(h: Harness, tmp_path: Path) -> None:
+    """The model saves memories with its file tools, through the task's exec
+    env; the plugin reads them there too (not on the worker), so the index
+    and recall see them on any worker that reaches the env."""
+    home = tmp_path / "home"
+    jail = tmp_path / "jail"
+    h.env_for = lambda _s: Elsewhere(str(h.work), jail, home)
+    directory = memory_dir_for(str(h.work), home)
+    note = f"{directory}role.md"
+    a = Agent(name="a", model="m", extensions=[
+        Memory(home=str(home), recall_model="small"), FileTools()])
+    h.provider.add(
+        reply("", ("Write", {"file_path": note,
+                             "content": "---\ndescription: their job\n---\nchemist\n"})),
+        reply("saved"))
+    tid = await h.start(a)
+    assert not Path(note).exists()
+    assert (jail / note.lstrip("/")).read_text().endswith("chemist\n")
+    h.provider.add(reply(json.dumps({"selected_memories": ["role.md"]})),
+                   reply("you are a chemist"))
+    await h.say(a, tid, "what do I do for a living?")
+    selector, main = h.provider.requests[-2:]
+    assert "role.md (" in selector.messages[0].text and "): their job" in selector.messages[0].text
+    [recalled] = [m for m in main.messages if m.origin == "memory"]
+    assert recalled.text.endswith("chemist")
 
 
 async def test_the_section_goes_before_the_environment_section(

@@ -141,8 +141,13 @@ class RuleCheck:
                                     for_allow=True) is not None
         else:
             inside = scope.contains(literal)
+        plan = state_of(view).plan
         if inside or allowed or self.in_plans(literal) \
-                or await memory_file(view, literal, target, write=False):
+                or (plan is not None and literal == plan.get("path")) \
+                or await memory_file(view, literal, target, write=False) \
+                or await spilled_file(view, literal, target):
+            # Claude Code reads its plan, memory and tool-result files
+            # without asking too.
             return Decision("allow")
         return Decision("ask", w.ASK_READ_OUTSIDE.format(name=name, path=target),
                         why="read", always=(r.format_rule("Read", f"//{_dir_of(target)}/**"),),
@@ -231,3 +236,13 @@ async def memory_file(view: TaskView, path: str, real: str, *, write: bool) -> b
     if not _under(real, real_dir):
         return False
     return not write or not sc.is_protected("/" + posixpath.relpath(real, real_dir))
+
+
+async def spilled_file(view: TaskView, path: str, real: str) -> bool:
+    """Whether ``path`` (``real`` once its links are resolved) is a saved
+    tool output: both below the spill root as the env resolves it."""
+    root = view.spill_dir
+    if not root:
+        return False
+    root = posixpath.normpath(root)
+    return _under(path, root) and _under(real, await real_path(view, root))

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from noeta.core.execenv import ExecEnv
-from noeta.toolkit.context import read_local_text
+from noeta.toolkit.context import read_task_text
 
 #: The auto memory index a memory directory keeps, and how much of it is
 #: loaded (Claude Code's limits). The memory plugin points the model at the
@@ -47,10 +47,10 @@ def trim_memory_index(text: str) -> str:
 async def read_memory_index(env: ExecEnv, directory: str) -> tuple[str, str] | None:
     """``(path, trimmed text)`` of the memory directory's index, or ``None``
     when it is missing, unreadable or blank.
-    Read on this machine (:func:`~noeta.toolkit.context.read_local_text`):
-    the memory directory lives under noeta's home or the workspace."""
+    Read where the model's file tools write it
+    (:func:`~noeta.toolkit.context.read_task_text`)."""
     path = Path(directory) / MEMORY_INDEX_FILE
-    text = await read_local_text(env, str(path))
+    text = await read_task_text(env, str(path))
     if text is None or not text.strip():
         return None
     return str(path), trim_memory_index(text)

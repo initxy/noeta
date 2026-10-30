@@ -127,6 +127,8 @@ class LocalApp:
         self._stop = asyncio.Event()
         self._serving: asyncio.Task[None] | None = None
         self._listening: asyncio.Task[None] | None = None
+        #: Removes ended tasks' old saved tool outputs (``spill_sweep``).
+        self._sweeping: asyncio.Task[None] | None = None
         #: What the person should know about how this app was set up (a
         #: project's plugins left unloaded); front ends show them.
         self.notices: list[str] = []
@@ -209,16 +211,21 @@ class LocalApp:
 
         if worker and self._serving is None:
             self._serving = asyncio.create_task(self.runtime.serve(self._stop))
+            if self.runtime.spill_root and self._sweeping is None:
+                from noeta.host.spill_sweep import keep_spills_swept
+
+                self._sweeping = asyncio.create_task(
+                    keep_spills_swept(self.store, self.runtime.spill_root, self._stop))
         if self.channels and self._listening is None:
             self._listening = asyncio.create_task(
                 run_channels(self.channels, self.client, self._stop))
 
     async def stop(self) -> None:
         self._stop.set()
-        for running in (self._listening, self._serving, self._publishing):
+        for running in (self._listening, self._serving, self._publishing, self._sweeping):
             if running is not None:
                 await running
-        self._serving = self._listening = self._publishing = None
+        self._serving = self._listening = self._publishing = self._sweeping = None
         if self._hearing is not None:
             self._hearing()
             self._hearing = None
