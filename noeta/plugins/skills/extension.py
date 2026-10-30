@@ -67,7 +67,7 @@ from noeta.toolkit.inline_commands import (
     run_inline_commands,
     strip_commands,
 )
-from noeta.toolkit.tokens import estimate_tokens, prefix_within, resident_budget
+from noeta.toolkit.tokens import estimate_tokens, listing_budget_chars, prefix_within
 
 __all__ = [
     "SKILL_TOOL",
@@ -208,8 +208,8 @@ class Skills(Extension):
       (relative to the workspace), not trust-gated (0.6 ``skills_dir``).
     * ``trusted`` — ``trusted(workspace_path) -> bool`` gate for the
       repo-derived tiers; ``None`` = open (0.6 ``workspace_skills_trust``).
-    * ``budget_tokens`` — listing budget; ``None`` = 1 % of the task model's
-      window, at most 4,096 (0.6 ``menu_budget_tokens``).
+    * ``budget_chars`` — listing budget in characters; ``None`` = 1 % of the
+      task model's window times its characters per token (Claude Code's).
     * ``rank`` — ``rank(view) -> {skill: score}`` (sync or async), asked once
       when the listing is recorded; higher keeps more of its summary over
       budget (0.6 ``skill_menu_rank_resolver``). ``noeta.plugins.skills.usage``
@@ -241,7 +241,7 @@ class Skills(Extension):
         workspace: bool = True,
         skills_dir: str | Path | None = None,
         trusted: Callable[[str], bool] | None = None,
-        budget_tokens: int | None = None,
+        budget_chars: int | None = None,
         rank: Rank | None = None,
         usage_from: ClientAPI | None = None,
         preload: Sequence[str] = (),
@@ -251,8 +251,8 @@ class Skills(Extension):
         origin: Literal["system"] | None = "system",
         shell_commands: bool = True,
     ) -> None:
-        if budget_tokens is not None and budget_tokens <= 0:
-            raise ValueError("Skills: budget_tokens must be a positive int")
+        if budget_chars is not None and budget_chars <= 0:
+            raise ValueError("Skills: budget_chars must be a positive int")
         if tool_enforcement not in ("off", "approval", "deny"):
             raise ValueError(f"Skills: unknown tool_enforcement {tool_enforcement!r}")
         self.dirs = [os.path.expanduser(str(d)) for d in dirs]
@@ -262,7 +262,7 @@ class Skills(Extension):
         self.workspace = workspace
         self.skills_dir = str(skills_dir) if skills_dir is not None else None
         self.trusted = trusted
-        self.budget_tokens = budget_tokens
+        self.budget_chars = budget_chars
         self.rank = rank if rank is not None or usage_from is None else UsageRank(usage_from)
         self.preload = list(preload)
         self.scripts = scripts
@@ -432,7 +432,7 @@ class Skills(Extension):
         registry: SkillRegistry | None = None
         if not state.get("listings"):
             registry = await self.registry(env)
-            lines = listing_lines(registry, budget_tokens=self._budget(view),
+            lines = listing_lines(registry, budget_chars=self._budget(view),
                                   rank=await self._rank(view), unlocked=unlocked_skills(state))
             if lines:
                 # Held for the first request's system turn, after the prompt.
@@ -482,7 +482,7 @@ class Skills(Extension):
         # listing when the task started with none).
         if state.get("listings"):
             announced, digests = self.announced(state), self.digests(state)
-            lines = listing_lines(registry, budget_tokens=self._budget(view),
+            lines = listing_lines(registry, budget_chars=self._budget(view),
                                   unlocked=unlocked_skills(state))
             current = _digests(registry, lines)
             added = [(n, line) for n, line in lines if n not in announced
@@ -490,7 +490,7 @@ class Skills(Extension):
             if added:
                 self._record_listing(view, added, registry)
         else:
-            lines = listing_lines(registry, budget_tokens=self._budget(view),
+            lines = listing_lines(registry, budget_chars=self._budget(view),
                                   rank=await self._rank(view), unlocked=unlocked_skills(state))
             if lines:
                 self._record_listing(view, lines, registry)
@@ -566,9 +566,9 @@ class Skills(Extension):
     # ------------------------------------------------------------ helpers
 
     def _budget(self, view: TaskView) -> int:
-        if self.budget_tokens is not None:
-            return self.budget_tokens
-        return resident_budget(str(view.state.config.get("model") or ""))
+        if self.budget_chars is not None:
+            return self.budget_chars
+        return listing_budget_chars(str(view.state.config.get("model") or ""))
 
     async def _rank(self, view: TaskView) -> Mapping[str, float] | None:
         if self.rank is None:
@@ -666,7 +666,7 @@ class Skills(Extension):
                     continue
                 registry = await self.registry(env, state)
                 lines = [(n, line) for n, line in listing_lines(
-                    registry, budget_tokens=self._budget(view), unlocked=unlocked_skills(state))
+                    registry, budget_chars=self._budget(view), unlocked=unlocked_skills(state))
                     if n in names]
                 text = NESTED_SKILLS.format(dir=os.path.relpath(root, cwd)) + "\n" + "\n".join(
                     f"- {n}" for n in names)
@@ -699,7 +699,7 @@ class Skills(Extension):
         if not names:
             return
         view.record(self.name, "unlocked", {"names": names})
-        lines = listing_lines(registry, budget_tokens=self._budget(view),
+        lines = listing_lines(registry, budget_chars=self._budget(view),
                               unlocked={*unlocked, *names})
         fresh = [(n, line) for n, line in lines if n in names and n not in self.announced(state)]
         if fresh:

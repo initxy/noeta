@@ -30,7 +30,7 @@ from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import reply
 from noeta.toolkit.allowed_tools import allow_rule_texts, granted_tools
 from noeta.toolkit.inline_commands import DISABLED_MARKER
-from noeta.toolkit.tokens import estimate_tokens
+from noeta.toolkit.tokens import estimate_tokens, listing_budget_chars
 from tests.plugins.context.conftest import Harness
 
 
@@ -387,7 +387,7 @@ async def test_rank_resolver_is_asked_once_and_shapes_the_fit(h: Harness) -> Non
         return {"beta": 5.0}
 
     h.provider.add(reply("ok"))
-    await h.start(agent(rank=rank, budget_tokens=60))
+    await h.start(agent(rank=rank, budget_chars=240))
     listing = h.provider.requests[0].messages[-1].text.split("\n")
     assert asked == [1]
     assert listing[2] == "- alpha: Very long description sentence."
@@ -412,6 +412,13 @@ def _registry(**descs: str) -> SkillRegistry:
                           for n, d in descs.items()})
 
 
+def test_the_listing_budget_is_claude_codes_share_of_the_window_in_characters() -> None:
+    # 1 % of the window times characters per token, no ceiling: 30,000 at 1M.
+    assert listing_budget_chars("claude-opus-5-5") == 1_000_000 * 3 // 100
+    assert listing_budget_chars("claude-sonnet-4-5") == 128_000 * 4 // 100
+    assert listing_budget_chars("") == 200_000 * 4 // 100
+
+
 def test_cjk_estimate_counts_one_per_character() -> None:
     assert estimate_tokens("部署流程") == 4
     assert estimate_tokens("abcdefgh") == 2
@@ -426,19 +433,19 @@ def test_short_summary_takes_the_first_sentence_and_clips() -> None:
 
 def test_over_budget_goes_short_then_name_only() -> None:
     entries = [("a", "Alpha does things. " * 10), ("b", "Beta does things. " * 10)]
-    fitted = fit_menu_to_budget(entries, ["a", "b"], budget_tokens=20)
+    fitted = fit_menu_to_budget(entries, ["a", "b"], budget_chars=80)
     assert fitted == {"a": "Alpha does things.", "b": "Beta does things."}
-    fitted = fit_menu_to_budget(entries, ["b", "a"], budget_tokens=10)
+    fitted = fit_menu_to_budget(entries, ["b", "a"], budget_chars=40)
     assert fitted == {"a": "", "b": "Beta does things."}
 
 
 def test_long_summary_is_capped_with_a_marker() -> None:
-    [(_, line)] = listing_lines(_registry(a="word " * 1000), budget_tokens=100_000)
+    [(_, line)] = listing_lines(_registry(a="word " * 1000), budget_chars=100_000)
     assert line == "- a: " + ("word " * 1000)[:1535] + "…"
     # Characters, not tokens: a CJK summary keeps as many as a Latin one.
-    [(_, line)] = listing_lines(_registry(a="技能" * 1000), budget_tokens=100_000)
+    [(_, line)] = listing_lines(_registry(a="技能" * 1000), budget_chars=100_000)
     assert line == "- a: " + ("技能" * 1000)[:1535] + "…"
-    [(_, line)] = listing_lines(_registry(a="技" * 1536), budget_tokens=100_000)
+    [(_, line)] = listing_lines(_registry(a="技" * 1536), budget_chars=100_000)
     assert line == "- a: " + "技" * 1536
 
 

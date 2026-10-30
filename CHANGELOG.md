@@ -9,6 +9,10 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **The skill listing's budget is Claude Code's: 1 % of the window in characters, no
+  ceiling.** It was 1 % in estimated tokens capped at 4,096; at a 1M window that listed
+  about half of what Claude Code lists in full. `Skills(budget_tokens=)` is now
+  `Skills(budget_chars=)`.
 - **`Extension.on_context_overflow(view, request)` gets the request that overflowed.** An
   override written as `(view)` still runs. Compaction no longer keeps each task's last
   request in memory for it.

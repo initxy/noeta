@@ -1,17 +1,16 @@
-"""The CJK-aware token estimate budgets are counted in, and the 1 % of a
-model's window a resident listing may take."""
+"""The CJK-aware token estimate budgets are counted in, and the share of a
+model's window the skill listing may take."""
 
 from __future__ import annotations
 
 import re
 
-#: The 1 % of a model's window a resident listing (skills, memory index) may
-#: take, and its ceiling: at a 1M-token window the fraction alone would admit
-#: ~10K tokens of roster on every request.
-RESIDENT_BUDGET_FRACTION = 0.01
-RESIDENT_BUDGET_CEILING_TOKENS = 4096
-#: The budget when no model is known: 1 % of a 200k-token window.
-DEFAULT_RESIDENT_BUDGET_TOKENS = 2000
+#: The skill listing may take 1 % of the model's window, counted in
+#: characters as Claude Code counts it (window x characters per token), with
+#: no ceiling.
+LISTING_BUDGET_FRACTION = 0.01
+#: The window assumed when no model is known (Claude Code's).
+DEFAULT_LISTING_WINDOW = 200_000
 
 _CHARS_PER_TOKEN = 4
 #: One character = one token for these scripts; ``chars/4`` would undercount
@@ -74,11 +73,13 @@ def prefix_within(text: str, max_tokens: int, suffix: str = "") -> int:
     return lo
 
 
-def resident_budget(model: str) -> int:
-    """1 % of ``model``'s catalog window, capped at 4,096 tokens."""
-    if not model:
-        return DEFAULT_RESIDENT_BUDGET_TOKENS
-    from noeta.core.models import model_limits
+def listing_budget_chars(model: str) -> int:
+    """The skill listing's budget in characters: 1 % of ``model``'s catalog
+    window times its characters per token (Claude Code's), 200K when no
+    model is known."""
+    window = DEFAULT_LISTING_WINDOW
+    if model:
+        from noeta.core.models import model_limits
 
-    window, _ = model_limits(model)
-    return min(max(1, int(window * RESIDENT_BUDGET_FRACTION)), RESIDENT_BUDGET_CEILING_TOKENS)
+        window, _ = model_limits(model)
+    return max(1, int(window * chars_per_token(model) * LISTING_BUDGET_FRACTION))
