@@ -183,7 +183,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | id | rule |
 |---|---|
 | rem.skill-mention.1 | When a user message names a skill as `/<name>` anywhere but as its leading command (preceded by the start, whitespace or a CJK sentence mark, followed by whitespace or the end), a `<system-reminder>` after the message says it names that skill: call `Skill` with it (and the arguments given) if the user wants it run, and do not run it if they only mention it. One per skill named; only skills the model may invoke. noeta today: covered (`skills` plugin, `reminder/skill_mention`, our words). |
-| rem.nested-skills.1 | When a tool touches a file in a directory below the working directory that has its own skills directory (in a directory between the two), that directory's skills join the conversation and a `<system-reminder>` names the directory (relative) and lists the new skills by name, one `- <name>` line each. noeta today: covered for `.noeta/skills` and `.agents/skills` (noeta's places), in trusted workspaces; the found directories are recorded in the task log. |
+| rem.nested-skills.1 | When a tool touches a file in a directory below the working directory that has its own skills directory (in a directory between the two), that directory's skills join the conversation and a `<system-reminder>` names the directory (relative) and lists the new skills by name, one `- <name>` line each; the next model call lists them with their descriptions (`main.env.16`). noeta today: covered for `.noeta/skills` and `.agents/skills` (noeta's places), in trusted workspaces; the found directories are recorded in the task log. |
 
 ## list changes (bundle, not recorded)
 
