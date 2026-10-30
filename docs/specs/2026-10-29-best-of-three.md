@@ -75,6 +75,34 @@ and reported in the README.
 ### Smaller recorded differences
 - Mentioned directory listing capped at 1,000 entries; hook blocking feedback names no command; visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
 
+### Reply result budget order (S3)
+- Others: CC persists the largest fresh results of one user message once they pass 200,000 characters together (`Udr`), freezing each choice by `tool_use_id`; pi and dsh have no per-message budget.
+- noeta: the same budget and `<persisted-output>` form, decided per result as each call finishes (a running total shared by calls that run together), so the results that arrive past the budget are saved, not necessarily the largest; nothing is saved for the budget without a spill directory.
+- Why: each call's result is logged as it finishes (crash safety); a largest-first choice would have to hold every result of the reply unlogged, or rewrite logged ones.
+- Evidence: `tests/core/test_result_limits.py` (six 45K results: four inline, two saved, total ≤ 200K); `parity/deviations.md` row.
+
+### Fallback when a large result cannot be saved (S4)
+- Others: CC keeps only the first part ("only the first X are shown"); pi keeps the tail of a command's output; dsh keeps head and tail.
+- noeta: keeps the head and the tail around an elision (`<truncated-output>`).
+- Why: a build or test log's error is at its end; two of the three keep the end. Only a host without a spill directory reaches it (every built-in host sets one), so no eval was run for it.
+- Evidence: `parity/deviations.md` row; `tests/plugins/fs/test_output_limit.py`.
+
+### Sub-agent plan file (A6)
+- Others: CC gives a sub-agent of a planning conversation the plan-mode text in its sub-agent form with an agent-specific plan file name; pi and dsh have no plan mode in sub-agents.
+- noeta: the child inherits plan mode and is entered into it on start with its own plan file (a new three-word name under `<noeta home>/plans`), and gets the sub-agent text; no plan tools.
+- Why: the plan state lives in the child's own log, which can run on another worker; a name derived from the parent's would need the parent's state at the child's start.
+- Evidence: `test_a_sub_agent_of_a_planning_task_plans_too`.
+
+### Skill usage ranking wiring (owner, 2026-10-29)
+- Others: CC ranks the over-budget skill listing by decayed use across sessions, always on; pi and dsh do not rank.
+- noeta: on by default in the `noeta` command (every front end and server): the skills plugin gets `usage_from`, the store's client, and ranks by `UsageRank`; an SDK host that builds agents itself opts in with `usage_from` or `rank`.
+- Why: a plugin reads no other task by itself (`CONTEXT.md` Layers), and front ends import no plugin, so the client is passed as the plugin's argument where the store is opened.
+- Evidence: `tests/cli/test_skill_usage_rank.py`.
+
+### Parity replay usage
+- The replay's fake model reported zero input tokens; with the threshold now anchored on reported usage (C2) it would never compact. It reports noeta's own estimate of each request's text, as a real model reports its count; `make parity` stays at 0 mismatches.
+- The comparator names the opening of CC's too-large-file note (`names.json`), so it is split as its own kind instead of merging into the token-counter part, which is why the missing note (C9) went unseen; m3's contract re-distilled from the r2 recording changes only those layouts. A general "kind CC sends and noeta never does" check already existed (`diff_layout`); it could not fire on a part merged into another.
+
 ## Plan
 
 ### Phase 0: baseline
@@ -156,3 +184,13 @@ and reported in the README.
 - 2026-10-29 B6 (ctx-attach-env): file-changed note checked before every model call (so right after a Bash/formatter step), as a system turn (order 70), CC's meaning (current state, don't revert, say so if wrong, otherwise no mention) in own words, with the changed lines numbered (diff against the model's last whole Read still in the conversation; then the file counts as read) or a not-shown pointer to Read. Removed the 'Bash does not note a changed file' row from Not yet matched; rule `rem.file-changed.2` extended.
 - 2026-10-29 B9 (ctx-attach-env): hook text for the model is led by CC's labels: `<hook name> hook additional context: ` (UserPromptSubmit context had no label at all; SessionStart no longer names its source) and `<hook name> hook blocking error` for a tool hook's block; tool events name `<event>:<tool>`. Rule `rem.hook-context.1`.
 - 2026-10-29 ctx-attach-env gates: `make check` green (2443 passed, coverage 88.40%), `make parity` 0 mismatches (11 accepted deviations). DeepSeek V4.1, 13 scenarios x 9 (`--out` in the session scratchpad, ds41-ctx-attach-env.json): overall 0.927 vs 0.919 on main (ds41-main-37fd9997); every scenario within one trial of main except delegate_parallel_review 0.22 vs 0.11 (8 of 9 hit the 240 s trial timeout, as on main); 494 requests, 6.2M input tokens. Against the committed baseline (another model) `make eval` reports delegate_parallel_review as regressed, as main does.
+- 2026-10-29 C9 (ctx-compact-plan): a restored file that `Read` refuses whole for its size gets the too-large note (CC `compact_file_reference`) instead of nothing; candidates follow CC's read-file state, which a compaction resets to the files it restored in full (`restored_paths`, `seen_through` in the compaction record), so a noted file is not noted again. Comparator: `names.json` names the note's opening; m3 re-distilled from r2. Rules `compact.reattach.12-13`.
+- 2026-10-29 C3 (ctx-compact-plan): rapid-refill breaker (CC `J9t=3`): an auto-compaction needed again within 3 model calls of the last in the same turn is a refill; the third in a row ends the turn (`autocompact_thrashing`). Rule `compact.trigger.7`.
+- 2026-10-29 C2 (ctx-compact-plan): the threshold check is the newest reported usage plus the estimate since; the full estimate only before any usage. The parity replay's fake model now reports noeta's estimate of each request as its input tokens (it reported 0).
+- 2026-10-29 C11 (ctx-compact-plan): skills given again after a compaction: newest invoked first, each cut to 5,000 tokens with a note, 25,000 in all (CC `Far`, `O9e`). Rule `compact.reattach.14`.
+- 2026-10-29 S2/S3 (ctx-compact-plan): the runner caps every tool's text result at min(its `max_result_chars`, 50,000) and a reply's results at 200,000 together, saving the rest with `<persisted-output>` before logging; `Read` is exempt; WebSearch 100K -> 50K. Spill helpers moved to `noeta/core/large_output.py` (toolkit re-exports). S4 head+tail fallback kept with a deviations row. Rules `compact.results.1-2`.
+- 2026-10-29 Memory saving bug (ctx-compact-plan): permissions refused every write to the memory directory (outside the working dirs) and the file tools' fence would too; now CC's auto-memory carve-out: `.md` writes and any read under the memory plugin's `dir` are allowed in every mode, and the fs write roots include it. Rule `main.mem.20`.
+- 2026-10-29 Plan mode (ctx-compact-plan): a task created in plan mode now enters it on start with a plan file (it never got plan state, so no text and the model edited); a mode switch arriving with the prompt is told at once (only a typed `/plan <request>` waits a call, as m1); P1 cadence (CC `hTn` 5/5: full, none for 4 prompts, sparse, full every 5th); P2 re-entry note when planning again with the old plan file; A6 children inherit plan mode with the sub-agent form of the text. Rules `rem.plan-active.10-12`, `rem.plan-reentry.1`.
+- 2026-10-29 A5 (ctx-compact-plan): the 16-Agent-calls-per-reply cap is gone (no such cap in CC; no kernel reason: each call stages its child in its own append). Rule `tool.Agent.23`.
+- 2026-10-29 UsageRank (ctx-compact-plan, owner decision): the `noeta` command passes its store's client to every skills plugin (`usage_from`), so the listing ranks by use by default. Rule `main.env.17`.
+- 2026-10-29 ctx-compact-plan gates: `make check` green (2481 passed, coverage 88.51 %), `make parity` 0 mismatches (11 accepted deviations). DeepSeek V4.1, 9 trials (eval-coverage scenarios run from a local copy of that branch's `evals/`, not committed), this branch vs `best-of-three` @b9c7ca7a: memory_save 1.00 vs 0.07; plan_mode_started (local variant of plan_mode_read_only created with `permission_mode: plan`) 0.78 vs 0.00; plan_mode_read_only 1.00 vs 0.89; background_subagent_result, skill_activation 1.00 both; compaction_resume_edits 0.93 vs 1.00 (every trial ends on `autocompact_thrashing`: the scenario's 24K usable window refills within 3 calls of each summary, which is where CC's breaker stops too; at a 40K window the scenario never compacts, 0.00 by its rule, so the scenario needs a window between the two). Against `ds41-main-37fd9997`: compaction_continuity, parallel_independent_reads 1.00 (=); delegate_parallel_review 0.11 (= main, 600 s trial timeouts).
