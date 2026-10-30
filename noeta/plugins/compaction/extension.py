@@ -57,6 +57,18 @@ log = logging.getLogger("noeta.compaction")
 #: (``Reminder.order``): first, ahead of the invoked skills and the lists.
 RESTORED_ORDER = 10
 
+#: Claude Code's rapid-refill breaker: an automatic compaction needed again
+#: within this many model calls of the previous one, in the same turn, is
+#: a refill; this many refills in a row stop the turn instead.
+RAPID_REFILL_CALLS = 3
+RAPID_REFILLS_TO_STOP = 3
+THRASHING_REASON = "autocompact_thrashing"
+THRASHING_DETAIL = (
+    f"Automatic compaction stopped: the context filled up again within "
+    f"{RAPID_REFILL_CALLS} model calls of the previous compaction, "
+    f"{RAPID_REFILLS_TO_STOP} times in a row. A file or tool output is probably too large "
+    "for the context window; read it in smaller parts, or start a new conversation.")
+
 #: The ``/compact`` command and the text it puts in the conversation.
 COMMAND = "compact"
 COMMAND_DESCRIPTION = ("Summarize the conversation so far to free context "
@@ -87,6 +99,18 @@ class CompactionState:
     kept_replies: int = 0
     #: Files read again after the last compaction, owed to the next request.
     restored: tuple[str, ...] = ()
+    #: The newest history seq when the last compaction ran and the files it
+    #: restored in full: the next restore's candidates are the files touched
+    #: after that, then these (``None``: a log from before they were
+    #: recorded, where every touch counts).
+    seen_through: int | None = None
+    restored_paths: tuple[str, ...] | None = None
+    #: Where the last compaction ran (person turns so far, model calls in
+    #: that turn) and the automatic compactions in a row that each came
+    #: within ``RAPID_REFILL_CALLS`` calls of the one before.
+    turn: int = -1
+    step: int = 0
+    rapid_refills: int = 0
 
 
 def _user_turns(state: TaskState) -> int:
@@ -162,8 +186,13 @@ class Compaction(Extension):
             return replace(st, restored=())
         if kind != "compacted":
             return st
+        seen, paths = data.get("seen_through"), data.get("restored_paths")
         return replace(st, compactions=st.compactions + 1,
-                       kept_replies=int(data.get("kept_replies") or 0))
+                       turn=int(data.get("turn") or 0), step=int(data.get("step") or 0),
+                       rapid_refills=int(data.get("rapid_refills") or 0),
+                       kept_replies=int(data.get("kept_replies") or 0),
+                       seen_through=seen if isinstance(seen, int) else None,
+                       restored_paths=tuple(paths) if isinstance(paths, list) else None)
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The files read again after a compaction, first in the next
@@ -222,11 +251,16 @@ class Compaction(Extension):
         cut = self._cut(state, n, manual=False)
         if cut is None or self._through(state, cut) is None:
             return request
+        rapid = self._rapid_refills(state)
+        if rapid >= RAPID_REFILLS_TO_STOP:
+            log.warning("task %s: auto-compaction refilled %d times in a row; stopping",
+                        view.task_id, rapid)
+            raise TurnFailed(THRASHING_REASON, THRASHING_DETAIL)
         extra = await self._instructions(view, "auto", "")
         if extra is None:
             return request
         await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
-                            extra=extra)
+                            extra=extra, rapid_refills=rapid)
         # Every extension builds the request again from the compacted
         # conversation (betas and notes that depend on it included).
         raise RequestStale()
@@ -267,18 +301,18 @@ class Compaction(Extension):
     @staticmethod
     def _tokens(state: TaskState, request: ModelRequest, n: int) -> tuple[int, int]:
         """``(context, before)``: the context of the first ``n`` messages, and
-        of those up to and including the newest reply. Each is the reply's
-        reported usage plus the estimate of what came after it, or the
-        estimate of the whole when that is larger."""
+        of those up to and including the newest reply. As Claude Code's: the
+        newest reply's reported usage plus the estimate of what came after
+        it; the estimate of the whole only while no reply reported usage."""
         prefix = prefix_tokens(request.system, request.tools)
         messages = request.messages[:n]
         last = _last_reply(messages)
-        before = prefix + messages_tokens(messages[:last + 1])
         usage = state.last_usage
-        if usage is not None and last >= 0:
-            before = max(before, usage.input + usage.output)
-        since = messages_tokens(messages[last + 1:])
-        return max(prefix + messages_tokens(messages), before + since), before
+        if usage is None or last < 0:
+            return (prefix + messages_tokens(messages),
+                    prefix + messages_tokens(messages[:last + 1]))
+        before = usage.input + usage.output
+        return before + messages_tokens(messages[last + 1:]), before
 
     def _cut(self, state: TaskState, n: int, *, manual: bool) -> int | None:
         """How many leading messages the summary covers: everything before
@@ -293,6 +327,16 @@ class Compaction(Extension):
         if state.compaction is not None and replies == self._ext(state).kept_replies + 1:
             return n
         return last
+
+    def _rapid_refills(self, state: TaskState) -> int:
+        """The refill count an automatic compaction now would make: one more
+        than the last one's when that ran in this turn fewer than
+        ``RAPID_REFILL_CALLS`` model calls ago, else 0."""
+        ext = self._ext(state)
+        if not ext.compactions or ext.turn != _user_turns(state):
+            return 0
+        calls = state.steps_in_turn - ext.step
+        return ext.rapid_refills + 1 if 0 <= calls < RAPID_REFILL_CALLS else 0
 
     @staticmethod
     def _through(state: TaskState, cut: int) -> int | None:
@@ -324,7 +368,7 @@ class Compaction(Extension):
 
     async def _compact(self, view: TaskView, state: TaskState, request: ModelRequest,
                        cut: int, *, reason: str, estimated: int, extra: str = "",
-                       command_at: int | None = None) -> TaskState:
+                       command_at: int | None = None, rapid_refills: int = 0) -> TaskState:
         """Summarize the first ``cut`` messages, rebuild what follows the
         summary, record; returns the state as it is once the records are
         folded. ``command_at``: the index of the ``/compact`` message a
@@ -342,12 +386,17 @@ class Compaction(Extension):
         tail = kept and not manual
         lead = list(await view.residents(lead=True, keeps_tail=tail))
         after: list[Message] = []
+        full: list[str] = []
         read_tool = (self.read_tool or view.find_tool("Read")) if self.restore else None
         if read_tool is not None and view.env is not None:
             raw_cut = sum(1 for s in state.history_seqs if s <= through)
-            restored, records = await restore_files(
-                recent_files(state.history, raw_cut), read_tool,
-                self._restore_context(view, state))
+            ext = self._ext(state)
+            since, carried = 0, ext.restored_paths or ()
+            if ext.seen_through is not None and ext.restored_paths is not None:
+                since = sum(1 for s in state.history_seqs if s <= ext.seen_through)
+            restored, records, full = await restore_files(
+                recent_files(state.history, raw_cut, since=since, carried=carried),
+                read_tool, self._restore_context(view, state))
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
             if restored:
@@ -375,7 +424,12 @@ class Compaction(Extension):
                                  kept=after_summary, after=after, usage=usage))
         view.record(self.name, "compacted", {"reason": reason, "through": through,
                                              "estimated": estimated, "turn": _user_turns(state),
-                                             "kept_replies": kept_replies})
+                                             "step": state.steps_in_turn,
+                                             "rapid_refills": rapid_refills,
+                                             "kept_replies": kept_replies,
+                                             "restored_paths": full,
+                                             "seen_through": max(state.history_seqs,
+                                                                 default=0)})
         log.info("task %s: compacted through seq %s (%s)", view.task_id, through, reason)
         return view.folded({self.name: self.reduce})
 

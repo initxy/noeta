@@ -52,6 +52,30 @@ async def test_the_prompt_names_the_directory_and_it_exists(h: Harness, tmp_path
     assert [m.text for m in h.provider.requests[0].messages] == ["go"]
 
 
+@pytest.mark.parametrize("mode", ["default", "auto", "plan"])
+async def test_the_model_saves_a_memory_without_asking(
+        h: Harness, tmp_path: Path, mode: str) -> None:
+    """Claude Code's auto-memory carve-out: the memory directory lies
+    outside the working directory, yet its markdown files are written
+    without a prompt, in every mode (and the file tools' fence lets them)."""
+    from noeta.plugins.permissions import Permissions
+
+    home = tmp_path / "home"
+    directory = memory_dir_for(str(h.work), home)
+    note, other = f"{directory}role.md", f"{directory}notes.txt"
+    a = Agent(name="a", model="m", extensions=[
+        Memory(home=str(home)), FileTools(), Permissions(mode=mode)])
+    h.provider.add(reply("", ("Write", {"file_path": note, "content": "user is a chemist\n"})),
+                   reply("", ("Write", {"file_path": other, "content": "x\n"})),
+                   reply("saved"))
+    tid = await h.start(a, config={"unattended": True} if mode == "default" else None)
+    assert Path(note).read_text() == "user is a chemist\n"
+    first = (await h.results(tid))[0].result
+    assert not first.is_error, first.text
+    # Only markdown files are carved out.
+    assert not Path(other).exists()
+
+
 async def test_the_section_goes_before_the_environment_section(
         h: Harness, tmp_path: Path) -> None:
     a = Agent(name="a", model="m", extensions=[Memory(home=str(tmp_path / "home"))],

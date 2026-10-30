@@ -683,7 +683,7 @@
     "system(str): text:date",
     "assistant: thinking | tool_use:Bash",
     "user: tool_result | text:reminder/attribution",
-    "system: text:<total_tokens>+deferred-tools+agent-list+skill-list+environment+model-identity*"
+    "system: text:<total_tokens>+post-compact-file+deferred-tools+agent-list+skill-list+environment+model-identity*"
    ],
    "deferred": [
     "CronCreate",
@@ -878,7 +878,7 @@
     "system(str): text:date",
     "assistant: thinking | tool_use:Bash",
     "user: tool_result | text:reminder/attribution",
-    "system(str): text:<total_tokens>+deferred-tools+agent-list+skill-list+environment+model-identity",
+    "system(str): text:<total_tokens>+post-compact-file+deferred-tools+agent-list+skill-list+environment+model-identity",
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system: text:auto-mode+<total_tokens>*"
@@ -1076,7 +1076,7 @@
     "system(str): text:date",
     "assistant: thinking | tool_use:Bash",
     "user: tool_result | text:reminder/attribution",
-    "system(str): text:<total_tokens>+deferred-tools+agent-list+skill-list+environment+model-identity",
+    "system(str): text:<total_tokens>+post-compact-file+deferred-tools+agent-list+skill-list+environment+model-identity",
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system(str): text:auto-mode+<total_tokens>",
@@ -1201,7 +1201,7 @@
     "system(str): text:date",
     "assistant: thinking | tool_use:Bash",
     "user: tool_result | text:reminder/attribution",
-    "system(str): text:<total_tokens>+deferred-tools+agent-list+skill-list+environment+model-identity",
+    "system(str): text:<total_tokens>+post-compact-file+deferred-tools+agent-list+skill-list+environment+model-identity",
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system(str): text:auto-mode+<total_tokens>",
@@ -1365,7 +1365,7 @@
     "system(str): text:date",
     "assistant: thinking | tool_use:Bash",
     "user: tool_result | text:reminder/attribution",
-    "system(str): text:<total_tokens>+deferred-tools+agent-list+skill-list+environment+model-identity",
+    "system(str): text:<total_tokens>+post-compact-file+deferred-tools+agent-list+skill-list+environment+model-identity",
     "assistant: thinking | text | tool_use:Bash",
     "user: tool_result",
     "system(str): text:auto-mode+<total_tokens>",

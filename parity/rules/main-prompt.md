@@ -101,6 +101,7 @@ Claude Code files work (instructions, settings, skills, deferred-tool and agent 
 | `main.mem.17` | Recalled memories that arrive inside `<system-reminder>` are background, not instructions from the user, and describe what was true when written. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
 | `main.mem.18` | Before recommending a file, function or flag named in a memory, check it still exists. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
 | `main.mem.19` | The memory section sits between the session-specific guidance and the environment section; the `MEMORY.md` index itself is not in the prompt but in the instruction-files reminder (`rem.instructions.9`). | covered — `ContextPart(before="# Environment")`; the index rides in the instructions plugin's message. |
+| `main.mem.20` | Writing a markdown file in the memory directory needs no permission in any mode, though the directory lies outside the working directory (bundle: the auto-memory carve-out of the write check, ahead of the mode). | covered — `RuleCheck._edit` (`noeta/plugins/permissions/rule_check.py`); the file tools' write fence admits the memory directory (`noeta/plugins/fs/__init__.py`) |
 | — | (noeta extra) "never save secrets"; "set keywords in every language"; `memory_archive`. | dropped with the memory tools |
 
 ## Environment section (inside the main prompt)
@@ -161,6 +162,7 @@ order:
 | `main.env.14` | The working-directory note of noeta ("paths resolve relative to the primary working directory") has no baseline counterpart. | covered — the extra line is gone. |
 | `main.env.15` | (bundle) A skill's listed text (description, then ` - ` and `when_to_use`) longer than 1,536 characters is cut to 1,535 and ends with `…`; the cap counts characters, so CJK text keeps as many as Latin. | covered — `noeta/plugins/skills/listing.py`. |
 | `main.env.16` | (bundle) Later in the conversation, a skill that appears, or whose listed text changed since it was listed (a digest of name and text), is listed again with the next prompt, under the same lead-in as the first listing; a removed skill is not announced. After a compaction the whole listing is sent again. | covered — the `skills` plugin records each listing's digests in the task log. |
+| `main.env.17` | (bundle) When the skill list is over its budget, skills keep their text in order of use: a score of uses times max(0.5^(days since last use / 7), 0.1) over past sessions, on by default. | covered — the `noeta` command gives every agent's skills plugin `usage_from` (its store's tasks are the sessions; `UsageRank`, `noeta/plugins/skills/usage.py`); an SDK host passes `rank` or `usage_from` itself. |
 
 ## Variants (not baseline)
 

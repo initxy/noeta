@@ -275,6 +275,27 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     assert len(texts) == 4
 
 
+async def test_skills_given_again_are_capped_newest_first(h: Harness) -> None:
+    """Claude Code's caps: each skill body cut to 5,000 tokens, newest
+    invoked first, 25,000 in all; the oldest that does not fit is left out."""
+    for i in range(6):
+        skill = h.work / ".noeta" / "skills" / f"s{i}"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            f"---\nname: s{i}\ndescription: Skill {i}.\n---\nBODY{i} " + "word " * 6_000)
+    a = Agent(name="a", model="m", extensions=[Skills(), FileTools(), MakeRoom()])
+    h.provider.add(*(reply("", ("Skill", {"skill": f"s{i}"})) for i in range(6)),
+                   reply("done"), ContextOverflow("too long"), reply("fits"))
+    tid = await h.start(a)
+    await h.say(a, tid, "next")
+    [again] = [m.text for m in h.last_messages() if m.text.startswith("These skills were")]
+    names = [line.removeprefix("### Skill: ") for line in again.splitlines()
+             if line.startswith("### Skill: ")]
+    assert names == ["s5", "s4", "s3", "s2", "s1"]
+    assert again.count("[... the rest of this skill was cut at the summary") == 5
+    assert "BODY0" not in again
+
+
 async def test_an_import_of_a_non_text_file_is_skipped(h: Harness) -> None:
     (h.work / "NOETA.md").write_text("Logo @logo.png data @data.bin notes @notes.txt "
                                      "make @Makefile R @stats.R\n")

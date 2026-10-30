@@ -72,8 +72,9 @@ class FileTools(Extension):
     (default: all four, in the order Read, Write, Edit, NotebookEdit).
     ``write_roots``: directories outside the working directory the named
     tools may write (Claude Code's ``additionalDirectories``); plan mode's
-    plan directory is always one. ``mentions``: attach the files the person
-    names with ``@path`` (default on)."""
+    plan directory and the task's memory directory are always among them.
+    ``mentions``: attach the files the person names with ``@path`` (default
+    on)."""
 
     name = FS
 
@@ -87,8 +88,8 @@ class FileTools(Extension):
         extra = tuple(os.path.expanduser(d) for d in write_roots)
         self.mentions = mentions
 
-        def roots(_ctx: Any) -> list[str]:
-            return [*extra, str(plans_dir())]
+        def roots(ctx: Any) -> list[str]:
+            return [*extra, str(plans_dir()), *memory_dir(ctx.state)]
 
         self._tools: list[Tool] = [
             (_BY_NAME[t](write_roots=roots) if t != "Read" else _BY_NAME[t]())  # type: ignore[call-arg]
@@ -144,3 +145,11 @@ class FileTools(Extension):
                                 order=ORDER_FILE_CHANGED,
                                 data={"path": path, "digest": digest}))
         return out
+
+
+def memory_dir(state: Any) -> list[str]:
+    """The memory plugin's directory for the task (its ``dir`` record), as
+    a one-item list; empty when the task keeps no memory."""
+    memory = state.get("memory") if isinstance(state, dict) else None
+    directory = memory.get("dir") if isinstance(memory, dict) else None
+    return [directory] if isinstance(directory, str) and directory else []

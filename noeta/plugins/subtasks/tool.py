@@ -170,8 +170,6 @@ def batch_refusal(ext: Subtasks, state: TaskState, calls: Sequence[ToolUse]
         if u.name in ext.exclusive_with:
             return texts.EXCLUSIVE.format(name=u.name), True
     n = len(agents)
-    if n > ext.max_fanout:
-        return texts.FANOUT_TOO_BIG.format(n=n, limit=ext.max_fanout), False
     if len({u.id for u in agents}) != n:
         return texts.DUPLICATE_CALL_ID, False
     running = len(ext.running(state))

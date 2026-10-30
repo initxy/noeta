@@ -79,11 +79,6 @@ DEPTH_REACHED = (
 )
 FORK_IN_FORK = "a fork cannot start another fork."
 NO_REMOTE = "remote isolation is not available here; leave 'isolation' out or use \"worktree\"."
-MAX_FANOUT = 16
-FANOUT_TOO_BIG = (
-    "{n} Agent calls in one response is over the limit of {limit}. None were started; "
-    "re-issue them in batches of {limit} or fewer."
-)
 DUPLICATE_CALL_ID = (
     "Two Agent calls in this response share one call id, so their results could not be told "
     "apart. None were started; re-issue them as separate calls with distinct ids."

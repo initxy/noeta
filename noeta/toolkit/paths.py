@@ -9,6 +9,8 @@ import stat
 import tempfile
 from pathlib import Path
 
+from noeta.core.large_output import file_name_part as file_name_part
+
 #: Longest project slug kept whole; a longer one is cut and given a hash.
 PROJECT_SLUG_MAX = 200
 
@@ -65,15 +67,6 @@ def temp_root() -> str:
     ``<temp>/noeta-temp-<uid>`` (each worker process's sandbox directory,
     ``sandbox/``)."""
     return os.path.join(os.path.realpath(tempfile.gettempdir()), f"noeta-temp-{os.getuid()}")
-
-
-def file_name_part(text: str, default: str) -> str:
-    """``text`` as one file name: characters other than letters, digits,
-    ``_``, ``.`` and ``-`` replaced by ``_``; ``default`` when that leaves
-    no name or ``.`` / ``..``. For names built from ids a provider or
-    client picked."""
-    name = re.sub(r"[^A-Za-z0-9_.-]", "_", text)
-    return default if name in ("", ".", "..") else name
 
 
 def job_log_roots() -> list[str]:

@@ -199,3 +199,44 @@ def test_command_text() -> None:
     assert "<command-name>/compact</command-name>" in text
     assert "<command-args>keep tests</command-args>" in text
     assert text.endswith("</local-command-stdout>")
+
+
+def test_the_context_is_the_last_usage_plus_what_came_after() -> None:
+    """Claude Code's estimate: the newest reply's reported usage anchors it;
+    the character estimate (which over-counts CJK text) is used only while
+    no reply has reported usage."""
+    from noeta.core.loop.state import TaskState
+
+    cjk = "压缩" * 5_000  # 10,000 estimated tokens
+    messages = [user(cjk), Message(role="assistant", content=[Text(text="ok")]), user("more")]
+    request = ModelRequest(model="m", messages=messages)
+    state = TaskState(messages=messages)
+    full, _ = Compaction._tokens(state, request, len(messages))
+    assert full >= 10_000
+    state.last_usage = Usage(uncached=3_000, cache_read=1_000, output=20)
+    tokens, before = Compaction._tokens(state, request, len(messages))
+    assert before == 4_020
+    assert tokens == 4_020 + messages_tokens([user("more")])
+
+
+def _read(call: str, path: str) -> list[Message]:
+    return [Message(role="assistant", content=[
+                ToolUse(id=call, name="Read", input={"file_path": path})]),
+            Message(role="user", content=[ToolResult(call_id=call, content=[Text(text="x")])])]
+
+
+def test_restore_candidates_follow_the_read_state_a_compaction_resets() -> None:
+    """Claude Code clears its read-file state at a compaction and refills
+    it with the files restored in full: a file touched before the previous
+    compaction comes back only if that compaction restored it."""
+    from noeta.plugins.compaction.restore import recent_files
+
+    history = [user("go"), *_read("a", "/w/old.txt"), *_read("b", "/w/big.txt"),
+               *_read("c", "/w/kept.txt"), *_read("d", "/w/new.txt"), user("next")]
+    # Without a previous compaction every touch counts, newest first.
+    assert recent_files(history, len(history)) == [
+        "/w/new.txt", "/w/kept.txt", "/w/big.txt", "/w/old.txt"]
+    # The previous compaction ran after message 7 and restored only old.txt
+    # (big.txt got the too-large note, kept.txt sat in its kept messages).
+    assert recent_files(history, len(history), since=7, carried=["/w/old.txt"]) == [
+        "/w/new.txt", "/w/old.txt"]

@@ -248,14 +248,15 @@ class Permissions(Extension):
 
     def inherit(self, state: Any) -> dict[str, Any]:
         """A child task starts with this task's remembered rules and its
-        current mode (Claude Code's sub-agents run in their parent's)."""
+        current mode (Claude Code's sub-agents run in their parent's, plan
+        mode included)."""
         out: dict[str, Any] = {}
         rules = inherited_rules(state)
         if rules:
             out[INHERITED_RULES_KEY] = rules
         st = state.ext.get(NAME)
         mode = st.mode if isinstance(st, PermState) else None
-        if mode is not None and mode != "plan":
+        if mode is not None:
             out["permission_mode"] = mode
         return out
 
@@ -405,7 +406,9 @@ class Permissions(Extension):
 
     async def on_start(self, view: TaskView) -> None:
         st = state_of(view)
-        if st.mode is None:
+        if st.mode is None and self.mode_of(view) == "plan":
+            md.plan_start(view, "plan", default_mode=self.mode, plans_dir=self.plans_dir)
+        elif st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
         offered = pm.modes_record(self._modes)
         if st.offered != offered:
@@ -443,11 +446,12 @@ class Permissions(Extension):
                 view.notify(f"plan: {name}")
         elif isinstance(body, Say) and body.message.role == "user" and \
                 body.message.text.startswith(md.PLAN_COMMAND_HEAD):
-            self._switch(view, "plan", seq)
+            self._switch(view, "plan", seq, by_command=True)
 
-    def _switch(self, view: TaskView, mode: Any, seq: int) -> None:
+    def _switch(self, view: TaskView, mode: Any, seq: int, *, by_command: bool = False) -> None:
         md.switch(view, mode, seq, current=self.mode_of(view),
-                  disable_bypass=self.disable_bypass, plans_dir=self.plans_dir)
+                  disable_bypass=self.disable_bypass, plans_dir=self.plans_dir,
+                  by_command=by_command)
 
     def _enter_plan_mode(self, ctx: ToolContext) -> bool:
         return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir)

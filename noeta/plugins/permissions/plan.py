@@ -26,6 +26,7 @@ __all__ = [
     "plan_active_text",
     "plan_exited_text",
     "plan_name_request",
+    "plan_reentry_text",
 ]
 
 EXIT_PLAN_MODE = "ExitPlanMode"
@@ -35,6 +36,17 @@ NAME = "permissions"
 #: The plan-mode instructions (``rem.plan-active.*``); ``{path}`` is the
 #: plan file, ``{exists}`` says whether it is there yet.
 PLAN_ACTIVE = load_description("noeta.plugins.permissions", "plan_mode")
+#: The short form sent between full ones; ``{path}`` is the plan file.
+PLAN_ACTIVE_SPARSE = load_description("noeta.plugins.permissions", "plan_mode_sparse")
+#: A sub-agent's form (it plans read-only and answers in its final message).
+PLAN_ACTIVE_SUBAGENT = load_description("noeta.plugins.permissions", "plan_mode_subagent")
+#: Ahead of the plan-mode text when planning starts again with a plan file
+#: from an earlier planning session; ``{path}`` is the plan file.
+PLAN_REENTRY = load_description("noeta.plugins.permissions", "plan_mode_reentry")
+#: Claude Code's cadence: a plan-mode text no sooner than this many prompts
+#: after the last one, and the full text on every fifth (the first included).
+PLAN_TURNS_BETWEEN = 5
+PLAN_FULL_EVERY = 5
 
 PLAN_FILE_MISSING = ("The plan file does not exist yet; create it at {path} with the Write "
                      "tool.")
@@ -99,9 +111,17 @@ def new_plan_path(directory: str, rng: random.Random | None = None) -> str:
     return posixpath.join(directory, f"{first}-{second}-{r.choice(_NOUNS)}.md")
 
 
-def plan_active_text(path: str, exists: bool) -> str:
+def plan_active_text(path: str, exists: bool, *, sparse: bool = False,
+                     subagent: bool = False) -> str:
+    """The plan-mode text: the full one, the short one, or a sub-agent's."""
+    if sparse and not subagent:
+        return PLAN_ACTIVE_SPARSE.replace("{path}", path)
     where = (PLAN_FILE_PRESENT if exists else PLAN_FILE_MISSING).format(path=path)
-    return PLAN_ACTIVE.replace("{exists}", where)
+    return (PLAN_ACTIVE_SUBAGENT if subagent else PLAN_ACTIVE).replace("{exists}", where)
+
+
+def plan_reentry_text(path: str) -> str:
+    return PLAN_REENTRY.replace("{path}", path)
 
 
 def plan_exited_text(path: str) -> str:

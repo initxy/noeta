@@ -263,13 +263,11 @@
   "varies": false
  },
  "post-compact-file": {
-  "shas": {
-   "0ab98f6482": 253,
-   "677a2f7f3d": 3394,
-   "da986ce0d5": 1247,
-   "fda906170f": 1193
-  },
-  "varies": false
+  "len": [
+   186,
+   3394
+  ],
+  "varies": true
  },
  "post-compact-skills": {
   "shas": {

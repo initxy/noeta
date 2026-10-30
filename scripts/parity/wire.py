@@ -101,12 +101,13 @@ def script_turn(message: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def sse(content: list[dict[str, Any]], stop_reason: str | None, *, model: str,
-        message_id: str = "msg_replay") -> Iterable[bytes]:
-    """``content`` streamed as a Messages API SSE response."""
+        message_id: str = "msg_replay", input_tokens: int = 0) -> Iterable[bytes]:
+    """``content`` streamed as a Messages API SSE response, reporting
+    ``input_tokens`` as the request's size."""
     def ev(name: str, data: dict[str, Any]) -> bytes:
         return f"event: {name}\ndata: {json.dumps(data)}\n\n".encode()
 
-    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+    usage = {"input_tokens": input_tokens, "output_tokens": 0, "cache_read_input_tokens": 0,
              "cache_creation_input_tokens": 0}
     yield ev("message_start", {"type": "message_start", "message": {
         "id": message_id, "type": "message", "role": "assistant", "model": model,
