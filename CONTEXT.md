@@ -49,9 +49,9 @@ the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code plugins shar
 `noeta/core`. `|` siblings never import each other, nor do two plugins or two backends
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name
 (`TaskView.find_tool`), inherited config (`Extension.inherit`), runnable agents
-(`TaskView.agents`), or a record documented as read by others (memory's `dir` for
-instructions, shell's `cwd` and permissions' `mode` for permissions and hooks). Front ends
-import no plugin; they read what plugins publish (permissions' `modes`). SDK = all but `noeta/cli`.
+(`TaskView.agents`), or a record documented as read by others (memory's `dir`, shell's
+`cwd`, permissions' `mode`). Front ends import no plugin; they read what plugins publish
+(permissions' `modes`). SDK = all but `noeta/cli`.
 
 ## Ways in
 

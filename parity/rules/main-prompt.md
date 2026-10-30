@@ -101,6 +101,7 @@ Claude Code files work (instructions, settings, skills, deferred-tool and agent 
 | `main.mem.17` | Recalled memories that arrive inside `<system-reminder>` are background, not instructions from the user, and describe what was true when written. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
 | `main.mem.18` | Before recommending a file, function or flag named in a memory, check it still exists. | covered — `memory/section` (`noeta/plugins/memory/prompts/section.md`), a context part after the agent prompt |
 | `main.mem.19` | The memory section sits between the session-specific guidance and the environment section; the `MEMORY.md` index itself is not in the prompt but in the instruction-files reminder (`rem.instructions.9`). | covered — `ContextPart(before="# Environment")`; the index rides in the instructions plugin's message. |
+| `main.mem.20` | Writing a markdown file in the memory directory needs no permission in any mode, though the directory lies outside the working directory (bundle: the auto-memory carve-out of the write check, ahead of the mode). | covered — `RuleCheck._edit` (`noeta/plugins/permissions/rule_check.py`); the file tools' write fence admits the memory directory (`noeta/plugins/fs/__init__.py`) |
 | — | (noeta extra) "never save secrets"; "set keywords in every language"; `memory_archive`. | dropped with the memory tools |
 
 ## Environment section (inside the main prompt)

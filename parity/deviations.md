@@ -22,7 +22,7 @@ A row without an id is a difference the replay cannot see.
 
 | id | difference | reason |
 |---|---|---|
-| | A `Write` / `Edit` outside the working and additional directories (and the plan directory) is refused, not asked about. | The file tools fence writes below the permission layer, so a host without the permissions plugin stays fenced; a directory is opened with `additionalDirectories`. |
+| | A `Write` / `Edit` outside the working and additional directories (and the plan and memory directories) is refused, not asked about. | The file tools fence writes below the permission layer, so a host without the permissions plugin stays fenced; a directory is opened with `additionalDirectories`. |
 | | "Always" answers in a trusted project are kept in `.noeta/settings.local.json` (Claude Code's format), and `.noeta/` is protected the way Claude Code protects `.claude/`. | noeta reads and writes only its own places (owner, 2026-10-28). |
 | | Plan files live in `<noeta home>/plans/`. | noeta's own config directory. |
 

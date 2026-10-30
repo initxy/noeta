@@ -141,7 +141,7 @@ class RuleCheck:
                                     for_allow=True) is not None
         else:
             inside = scope.contains(literal)
-        if inside or allowed or self.in_plans(literal):
+        if inside or allowed or self.in_plans(literal) or in_memory(view, literal):
             return Decision("allow")
         return Decision("ask", w.ASK_READ_OUTSIDE.format(name=name, path=target),
                         why="read", always=(r.format_rule("Read", f"//{_dir_of(target)}/**"),),
@@ -154,6 +154,10 @@ class RuleCheck:
         target = scope.absolute(written) if written else scope.cwd
         plan = state_of(view).plan
         if mode == "plan" and plan and target == plan.get("path"):
+            return Decision("allow")
+        if target.endswith(".md") and in_memory(view, target):
+            # Claude Code's auto-memory carve-out: its markdown files are
+            # written without asking, in every mode.
             return Decision("allow")
         if not scope.contains(target) and not self.in_plans(target):
             return Decision("deny", w.OUTSIDE_WRITE.format(
@@ -192,3 +196,14 @@ def _with_path(args: Mapping[str, Any], path: str) -> dict[str, Any]:
 
 def _dir_of(path: str) -> str:
     return posixpath.dirname(path).lstrip("/") or ""
+
+
+def in_memory(view: TaskView, path: str) -> bool:
+    """Whether ``path`` lies in the task's memory directory (the memory
+    plugin's ``dir`` record)."""
+    memory = view.state.ext.get("memory")
+    directory = memory.get("dir") if isinstance(memory, dict) else None
+    if not isinstance(directory, str) or not directory:
+        return False
+    base = posixpath.normpath(directory).rstrip("/") + "/"
+    return posixpath.normpath(path).startswith(base)
