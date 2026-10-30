@@ -325,7 +325,7 @@ async def test_cancel_cascades_to_live_children(store: SqliteStore) -> None:
 class MakeRoom(Extension):
     name = "room"
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
+    async def on_context_overflow(self, view: TaskView, request: Any) -> bool:
         view.compacted(Compacted(summary="(summary)", through=view.state.last_seq))
         return True
 

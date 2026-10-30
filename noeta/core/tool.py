@@ -11,7 +11,15 @@ import msgspec
 from noeta.core.execenv import ExecEnv
 from noeta.core.holds import Release
 from noeta.core.records import CoreNotices
-from noeta.core.types import Display, Image, Struct, Text, ToolReference
+from noeta.core.types import (
+    Display,
+    Image,
+    ModelRequest,
+    ModelResponse,
+    Struct,
+    Text,
+    ToolReference,
+)
 
 
 class Park(Struct):
@@ -111,6 +119,10 @@ class ToolContext(CoreNotices):
     #: ``await count_tokens(text)``: the provider's exact token count of one
     #: user message holding ``text``; ``None`` when it cannot count.
     count_tokens: Callable[[str], Awaitable[int | None]] | None = None
+    #: ``await complete(request)``: call the model through the task's
+    #: providers (retried, not recorded as a step), as ``TaskView.complete``;
+    #: ``None`` where no runner runs the tool.
+    complete: Callable[[ModelRequest], Awaitable[ModelResponse]] | None = None
     #: ``serves_queue(queue)``: whether a child staged on ``queue`` could run
     #: now (``TaskView.serves_queue``); one that could not is dropped with
     #: the call's result. ``None`` takes every queue.

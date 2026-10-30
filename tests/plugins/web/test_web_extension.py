@@ -449,6 +449,22 @@ async def test_another_digest_model_gets_none_of_the_main_headers(
     assert seen == [{}]
 
 
+async def test_a_digest_needs_no_earlier_hook_in_this_process(tmp_path: Path) -> None:
+    # As on a worker that picks the task up just to run this call (after an
+    # approval, or again after a crash): nothing else ran here before.
+    seen: list[ModelRequest] = []
+
+    async def complete(request: ModelRequest) -> ModelResponse:
+        seen.append(request)
+        return reply("It costs 42.")
+
+    web = Web(fetch_transport=FakeFetch())
+    ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)), state={},
+                      record=lambda *_: None, model="main-model", complete=complete)
+    out = await web.fetch.run({"url": "https://e.com", "prompt": "price?"}, ctx)
+    assert text(out) == "It costs 42." and [r.model for r in seen] == ["main-model"]
+
+
 def test_per_task_bindings_are_bounded() -> None:
     from noeta.core.tool import ToolContext
     from noeta.plugins.web import TASKS_KEPT
@@ -469,7 +485,9 @@ async def test_digest_runs_through_the_runner(store: SqliteStore, tmp_path: Path
     def digest_reply(request: ModelRequest) -> ModelResponse:
         assert request.model == "main-model" and request.max_tokens == 4096
         assert not request.thinking and not request.tools
-        assert request.headers == {"x-request": "r1"}
+        # Like every call made beside the step (a title, a summary), the
+        # digest carries none of the headers a hook put on the main request.
+        assert request.headers == {}
         prompt = request.messages[0].text
         assert prompt.startswith("You are answering a request about a web page")
         assert "\nRequest: price?\n" in prompt and "Price is 42" in prompt

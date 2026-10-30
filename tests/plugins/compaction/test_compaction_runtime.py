@@ -158,6 +158,25 @@ async def test_overflow_compacts_and_retries(store: SqliteStore) -> None:
     await assert_rebuilds(store, a, tid)
 
 
+async def test_overflow_summarizes_the_request_as_it_was_sent(store: SqliteStore) -> None:
+    import msgspec
+
+    class Route(Extension):
+        """Runs after compaction: compaction's own hook never sees this."""
+
+        name = "route"
+
+        async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+            return msgspec.structs.replace(request, model="routed")
+
+    a = Agent(name="a", model="m", tools=[Probe()],
+              extensions=(Compaction(auto_compact_window=None), Route()))
+    model = Model([call(), ContextOverflow("prompt is too long"), answer("done")])
+    client, tid = await run(store, a, model)
+    assert await compactions(client, tid)
+    assert [r.model for r in model.summarize_requests] == ["routed"]
+
+
 async def test_an_empty_reply_fails_the_turn(store: SqliteStore) -> None:
     a = agent()
     empty = ModelResponse(

@@ -139,7 +139,7 @@ class _MakeRoom(Extension):
 
     name = "room"
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
+    async def on_context_overflow(self, view: TaskView, request: Any) -> bool:
         view.compacted(Compacted(summary="(summary)", through=view.state.last_seq,
                                  lead=await view.residents(lead=True, keeps_tail=False),
                                  after=await view.residents(keeps_tail=False)))

@@ -9,7 +9,7 @@ from noeta.core.agent import Agent
 from noeta.core.errors import ContextOverflow
 from noeta.core.events import Compacted
 from noeta.core.extension import Extension, TaskView
-from noeta.core.types import ToolResult
+from noeta.core.types import ModelRequest, ToolResult
 from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
 from noeta.plugins.instructions.files import matches
@@ -240,7 +240,7 @@ def test_globs_match_as_gitignore_does() -> None:
 class MakeRoom(Extension):
     name = "room"
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
+    async def on_context_overflow(self, view: TaskView, request: ModelRequest) -> bool:
         view.compacted(Compacted(summary="(summary)", through=view.state.last_seq,
                                  lead=await view.residents(lead=True, keeps_tail=False),
                                  after=await view.residents(keeps_tail=False)))

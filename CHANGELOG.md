@@ -361,6 +361,14 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **`ToolContext.complete`: a tool can call the model** through the task's providers
+  (retried, not recorded as a step), as hooks can with `TaskView.complete`.
+  `Extension.on_context_overflow(view, request)` now gets the request that overflowed (a
+  plugin overriding it adds the argument). `WebFetch` and compaction no longer keep each
+  task's model call, model and last request in process memory to stand in for these, which
+  went missing when another worker ran the call; `WebFetch`'s digest now goes out like every
+  other call made beside the step, without the headers a hook put on the main request (a
+  host that needs them on every call sets them on the provider, or passes `digest=`).
 - **`register_models` accepts a provider family beyond `anthropic` / `openai`** (also a
   models file's `family`), so a third-party provider package can declare its own; only those
   two carry noeta's conventions, and a near-miss like `antropic` is still refused.
