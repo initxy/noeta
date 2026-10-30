@@ -182,7 +182,7 @@ and reported in the README.
 - [x] DeepSeek V4.1 eval of the existing 13 scenarios on main, 9 trials, archived.
 
 ### Phase 1: context audit (branch `ctx-*`)
-- [ ] Per-area comparison CC / pi / dsh / noeta: system prompt, reminders, environment and
+- [x] Per-area comparison CC / pi / dsh / noeta: system prompt, reminders, environment and
       git snapshot, attachments and images, skills, memory, project files, tool definitions
       and deferred tools, compaction, sub-agents, plan mode, todos.
 - [ ] Revert every unexplained difference to CC; adopt pi/dsh where better, each with numbers.
@@ -195,10 +195,10 @@ and reported in the README.
 - [x] Plugin authoring steps no more than pi's.
 
 ### Phase 3: eval coverage (branch `eval-coverage`)
-- [ ] A scenario for each area: skills, reminders, memory, compaction continuation,
+- [x] A scenario for each area: skills, reminders, memory, compaction continuation,
       sub-agents and parallel, plan mode, todos, permissions and approval, hooks, MCP,
       prompt injection, tool selection, ask vs act.
-- [ ] 9 trials each on DeepSeek V4.1; results and baseline archived.
+- [x] 9 trials each on DeepSeek V4.1; results and baseline archived.
 
 ### Phase 4: benchmark
 - [x] Pick one or two current benchmarks, with reasons.
@@ -287,3 +287,5 @@ and reported in the README.
 - 2026-10-29 ctx-fix-fidelity (review-p1-fidelity fixes, from `best-of-three` @0d96a993): changed-file snippet with CC's 8 context lines and 8,192-character cut, no note after a windowed read; new, edited and nested-found skills listed with descriptions before the next model call (one checksum command over the SKILL.md files per call; nested ones no longer recorded as listed); sub-agent plan file `<parent plan name>-agent-<task id>.md`; hook blocking feedback names the command (deviation row removed); Bash 30,000, Monitor and ListAgents 10,000, ScheduleWakeup 1,000, ReportFindings 256 declared on the tools; plan-mode cadence checked per model call; MCP server instructions cut at 4,096 (read from the bundle); the memory index read again with each message; the plan-mode rules cut from the full text restored. Pending A/B section added to Decisions for S2, S4, B5, M7, C7, D6. The directory @-listing cap is left to ctx-fix-safety.
 - 2026-10-29 ctx-fix-fidelity gates: `make check` green (2523 passed, coverage 88.67 %), `make parity` 0 mismatches (11 accepted deviations, the hook-feedback row removed). DeepSeek V4.1, 9 trials, 9 scenarios (eval-coverage `evals/` run from a local copy, not committed), this branch vs `best-of-three` @0d96a993 (session scratchpad `fid/ds41-fix-fidelity*.json`): overall 0.919 vs 0.900; skill_activation, skill_follow, memory_save, memory_recall, plan_mode_read_only, plan_mode_started, mcp_tool_use 1.00 both; changed_file_reminder 0.73 vs 0.78 (every trial got the note and answered with the new value; the score differs only in whether the model also re-read the file, 3 vs 4 of 9); hook_block_adapts 0.53 vs 0.32 (PreToolUse text unchanged; base had more 420 s timeouts). 458 vs 515 requests, 5.6M vs 6.3M input tokens.
 - 2026-10-30 Phase 4 harness on branch `bench-2026` (`bench/compare.py`, `bench/harbor_adapter.py`): smoke 2+2 tasks both agents graded; gateway took 32 parallel calls with no 429; review fixes (own venv, CC context window, store usage, WebFetch preflight, run-owned builder and cleanup). Full run not started.
+- 2026-10-30 Phases 1–3 integrated on best-of-three (ctx-skills-memory, ctx-attach-env, ctx-compact-plan, ctx-fix-safety, ctx-fix-fidelity, ext-points, bench-2026; eval-coverage via main); each reviewed independently until no P0/P1. Gates @a461f768: `make check` 2563 passed; `make parity` 0 mismatches (11 accepted deviations); `make cluster` 14/14; `make e2e` 7 passed; DeepSeek V4.1 eval 29 scenarios x 9 trials overall 0.944 vs baseline 0.868 (`evals/results/ds41-best-of-three-19751ff9.json`, local), the known gaps memory_save and plan_mode_started 0→1.00; changed_file_reminder 1.00→0.64 traced to its scorer requiring a re-read the note now makes unnecessary (the note carries the changed lines, as CC's), rescored: 9/9 1.00.
+- 2026-10-30 Eval results stay local (`evals/results/`, git-ignored: they hold machine paths); the baseline (`evals/baseline.json`) and the per-scenario numbers in this log are the archive.
