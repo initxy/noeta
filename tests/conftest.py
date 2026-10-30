@@ -89,6 +89,14 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
 
 
 @pytest.fixture(autouse=True)
+def noeta_home_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+                      ) -> None:
+    """noeta's home is a fresh directory for each test, so what a task keeps
+    there (plans, pasted images, transcripts) never lands in the user's."""
+    monkeypatch.setenv("NOETA_HOME", str(tmp_path_factory.mktemp("noeta-home")))
+
+
+@pytest.fixture(autouse=True)
 def fold_snapshots_both_ways(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every task log any test loads is folded both ways and compared: from
     the start, and from a snapshot taken at several seqs plus the events
