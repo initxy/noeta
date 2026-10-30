@@ -13,6 +13,12 @@ All notable changes to Noeta are documented here. The format is based on
   ceiling.** It was 1 % in estimated tokens capped at 4,096; at a 1M window that listed
   about half of what Claude Code lists in full. `Skills(budget_tokens=)` is now
   `Skills(budget_chars=)`.
+- **A later turn gets the git snapshot again when the branch or its commit moved** (the
+  person switched branch or committed), as Claude Code re-announces a changed session
+  context; `Environment(git_refresh=False)` keeps the start snapshot only.
+- **A pasted image is also saved as a file and its path told**, so the model can copy it
+  into the project (Claude Code's pasted-image paths): `<noeta home>/image-cache/<task>/`
+  on a local exec env, `/tmp/noeta-image-cache/<task>/` inside any other.
 - **`Extension.on_context_overflow(view, request)` gets the request that overflowed.** An
   override written as `(view)` still runs. Compaction no longer keeps each task's last
   request in memory for it.
