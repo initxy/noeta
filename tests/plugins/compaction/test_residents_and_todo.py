@@ -105,6 +105,29 @@ async def test_a_file_too_large_to_restore_is_not_recorded_as_read(tmp_path: Pat
         return ToolContext(task_id="t", call_id=f"r{i}", env=env, state={},
                            record=record)  # type: ignore[arg-type]
 
-    kept, records = await restore_files([str(big), str(small)], ReadTool(), context)
+    kept, records, _full = await restore_files([str(big), str(small)], ReadTool(), context)
     assert kept[0].text.startswith(f"{big} was read before the summary, but it is too large")
     assert [data["path"] for _ext, _kind, data in records] == [str(small)]
+
+
+async def test_a_file_the_read_refuses_for_its_size_still_gets_the_note(tmp_path: Path) -> None:
+    """Claude Code's ``compact_file_reference``: a file over Read's
+    whole-file ceiling is named, not dropped; a missing file is dropped."""
+    from noeta.core.tool import ToolContext
+    from noeta.plugins.compaction.restore import restore_files
+    from noeta.plugins.fs.read import ReadTool
+
+    huge = tmp_path / "data.txt"
+    huge.write_text("y" * 99 + "\n" * 1 + ("z" * 99 + "\n") * 3200)  # > 256 KB
+    env = LocalExecEnv(str(tmp_path))
+
+    def context(i: int, record: object) -> ToolContext:
+        return ToolContext(task_id="t", call_id=f"r{i}", env=env, state={},
+                           record=record)  # type: ignore[arg-type]
+
+    kept, records, _full = await restore_files(
+        [str(huge), str(tmp_path / "gone.txt")], ReadTool(), context)
+    assert [m.text for m in kept] == [
+        f"{huge} was read before the summary, but it is too large to show again here; "
+        "read it with the Read tool if you need it."]
+    assert records == []

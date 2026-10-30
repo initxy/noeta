@@ -45,10 +45,16 @@ def _basename(path: str) -> str:
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def recent_files(history: Sequence[Message], boundary: int) -> list[str]:
+def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
+                 carried: Sequence[str] = ()) -> list[str]:
     """Paths to restore, newest first. ``history`` is the whole uncompacted
     history and ``boundary`` the number of its messages the new summary
-    covers."""
+    covers. As Claude Code's read-file state, which a compaction resets to
+    the files it restored: only touches from message ``since`` on (those
+    after the previous compaction) count, then the files that compaction
+    restored in full (``carried``); a file it could only name as too large,
+    or left to its kept messages, is not restored again unless touched
+    since."""
     succeeded = {
         b.call_id for m in history for b in m.content
         if isinstance(b, ToolResult) and not b.is_error
@@ -57,12 +63,13 @@ def recent_files(history: Sequence[Message], boundary: int) -> list[str]:
         path for m in history[boundary:] for path, tool in _touched(m, succeeded)
         if tool == READ_TOOL
     }
+    touched = [path for message in reversed(history[since:])
+               for path, _tool in reversed(_touched(message, succeeded))]
     recent: list[str] = []
-    for message in reversed(history):
-        for path, _tool in reversed(_touched(message, succeeded)):
-            if path in recent or path in kept_reads or _basename(path) in _INSTRUCTION_FILE_NAMES:
-                continue
-            recent.append(path)
+    for path in [*touched, *carried]:
+        if path in recent or path in kept_reads or _basename(path) in _INSTRUCTION_FILE_NAMES:
+            continue
+        recent.append(path)
     return recent[:POST_COMPACT_MAX_FILES_TO_RESTORE]
 
 
@@ -81,14 +88,17 @@ async def restore_files(
     paths: Sequence[str],
     read_tool: Tool,
     context: Callable[[int, Callable[[str, str, Any], None]], ToolContext],
-) -> tuple[list[Message], list[tuple[str, str, Any]]]:
-    """The restore turns for ``paths`` (host-injected user messages), and
-    what the reads of the restored files recorded (so ``Edit`` treats them
-    as read; not for a file too large to include). A read that fails, or
-    returns an image, is skipped."""
+) -> tuple[list[Message], list[tuple[str, str, Any]], list[str]]:
+    """The restore turns for ``paths`` (host-injected user messages), what
+    the reads of the restored files recorded (so ``Edit`` treats them as
+    read; not for a file too large to include), and the paths restored in
+    full. A read the ``Read`` tool
+    refuses for its size gets the too-large note too; one that fails
+    otherwise (the file is gone), or returns an image, is skipped."""
     budget = POST_COMPACT_TOKEN_BUDGET
     texts: list[str] = []
     records: list[tuple[str, str, Any]] = []
+    full: list[str] = []
     used = 0
     for i, path in enumerate(paths):
         arguments = {"file_path": path}
@@ -98,11 +108,12 @@ async def restore_files(
                 arguments, context(i, _sink(recorded)))
         except Exception:  # noqa: BLE001 — a failed restore is skipped
             continue
-        if result.is_error or result.park is not None or any(
-                isinstance(b, Image) for b in result.content):
+        refused_for_size = result.is_error and bool(result.meta.get("too_large"))
+        if not refused_for_size and (result.is_error or result.park is not None or any(
+                isinstance(b, Image) for b in result.content)):
             continue
         output = "".join(getattr(b, "text", "") for b in result.content)
-        too_large = _estimate(output) > POST_COMPACT_MAX_TOKENS_PER_FILE
+        too_large = refused_for_size or _estimate(output) > POST_COMPACT_MAX_TOKENS_PER_FILE
         if too_large:
             # The model never sees these contents, so the read is not
             # recorded: Edit / Write must Read the file again first.
@@ -119,4 +130,5 @@ async def restore_files(
         texts.append(text)
         if not too_large:
             records.extend(recorded)
-    return [user(t, origin="system") for t in texts], records
+            full.append(path)
+    return [user(t, origin="system") for t in texts], records, full

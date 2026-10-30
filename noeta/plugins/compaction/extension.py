@@ -88,6 +88,12 @@ class CompactionState:
     kept_replies: int = 0
     #: Files read again after the last compaction, owed to the next request.
     restored: tuple[str, ...] = ()
+    #: The newest history seq when the last compaction ran and the files it
+    #: restored in full: the next restore's candidates are the files touched
+    #: after that, then these (``None``: a log from before they were
+    #: recorded, where every touch counts).
+    seen_through: int | None = None
+    restored_paths: tuple[str, ...] | None = None
 
 
 def _user_turns(state: TaskState) -> int:
@@ -166,8 +172,11 @@ class Compaction(Extension):
             return replace(st, restored=())
         if kind != "compacted":
             return st
+        seen, paths = data.get("seen_through"), data.get("restored_paths")
         return replace(st, compactions=st.compactions + 1,
-                       kept_replies=int(data.get("kept_replies") or 0))
+                       kept_replies=int(data.get("kept_replies") or 0),
+                       seen_through=seen if isinstance(seen, int) else None,
+                       restored_paths=tuple(paths) if isinstance(paths, list) else None)
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The files read again after a compaction, first in the next
@@ -354,12 +363,17 @@ class Compaction(Extension):
         tail = kept and not manual
         lead = list(await view.residents(lead=True, keeps_tail=tail))
         after: list[Message] = []
+        full: list[str] = []
         read_tool = (self.read_tool or view.find_tool("Read")) if self.restore else None
         if read_tool is not None and view.env is not None:
             raw_cut = sum(1 for s in state.history_seqs if s <= through)
-            restored, records = await restore_files(
-                recent_files(state.history, raw_cut), read_tool,
-                self._restore_context(view, state))
+            ext = self._ext(state)
+            since, carried = 0, ext.restored_paths or ()
+            if ext.seen_through is not None and ext.restored_paths is not None:
+                since = sum(1 for s in state.history_seqs if s <= ext.seen_through)
+            restored, records, full = await restore_files(
+                recent_files(state.history, raw_cut, since=since, carried=carried),
+                read_tool, self._restore_context(view, state))
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
             if restored:
@@ -387,7 +401,10 @@ class Compaction(Extension):
                                  kept=after_summary, after=after, usage=usage))
         view.record(self.name, "compacted", {"reason": reason, "through": through,
                                              "estimated": estimated, "turn": _user_turns(state),
-                                             "kept_replies": kept_replies})
+                                             "kept_replies": kept_replies,
+                                             "restored_paths": full,
+                                             "seen_through": max(state.history_seqs,
+                                                                 default=0)})
         log.info("task %s: compacted through seq %s (%s)", view.task_id, through, reason)
         return view.folded({self.name: self.reduce})
 
