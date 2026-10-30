@@ -26,7 +26,10 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+import msgspec
+
 from noeta.core import records
+from noeta.core.errors import ModelError
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
 from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
@@ -44,6 +47,26 @@ from noeta.toolkit.tokens import has_cjk
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
 log = logging.getLogger("noeta.memory")
+
+#: Recall models whose provider refused ``thinking: disabled``.
+_THINKING_REFUSED: set[str] = set()
+#: Selector failures already logged (once per process and reason).
+_RECALL_WARNED: set[str] = set()
+_NAME = re.compile(r"[^\s\"'`,\[\]()]+")
+
+
+def selected_names(text: str, names: set[str]) -> list[str]:
+    """The files the selector picked: its JSON's ``selected_memories``, or,
+    when the reply is not that JSON (a provider that ignores the output
+    schema), the listed names that appear in the text, in order."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("selected_memories"), list):
+        return [p for p in data["selected_memories"] if isinstance(p, str)]
+    found = [w.strip(".:;") for w in _NAME.findall(text)]
+    return list(dict.fromkeys(w for w in found if w in names))
 
 
 def _load(name: str) -> str:
@@ -414,14 +437,27 @@ class Memory(Extension):
             system=[SystemPart(text=view.prompt("memory/recall", RECALL_PROMPT), cache=True)],
             messages=[user(f"Memory files:\n{listing}\n\nPick the memories relevant to:\n"
                            f"{query}")],
-            max_tokens=RECALL_MAX_TOKENS, thinking=False, output_schema=_RECALL_SCHEMA)
-        try:
-            response = await view.complete(request)
-            picked = json.loads(response.message.text).get("selected_memories") or []
-        except Exception:
-            log.info("memory: recall selection failed", exc_info=True)
-            return None
+            max_tokens=RECALL_MAX_TOKENS,
+            thinking=None if self.recall_model in _THINKING_REFUSED else False,
+            output_schema=_RECALL_SCHEMA)
         names = {name for name, _ in manifest}
+        try:
+            try:
+                response = await view.complete(request)
+            except ModelError as exc:
+                # Some gateways refuse ``thinking: disabled`` (HTTP 400): ask
+                # again without the field, and from then on for this model.
+                if exc.status != 400 or request.thinking is not False:
+                    raise
+                response = await view.complete(msgspec.structs.replace(request, thinking=None))
+                _THINKING_REFUSED.add(self.recall_model)
+            picked = selected_names(response.message.text, names)
+        except Exception as exc:  # noqa: BLE001 — recall is a nicety; the turn goes on
+            reason = f"{type(exc).__name__}: {exc}"[:300]
+            if reason not in _RECALL_WARNED:
+                _RECALL_WARNED.add(reason)
+                log.warning("memory: recall selector failed (%s); no memory recalled", reason)
+            return None
         budget = RECALL_TASK_BYTES - int(state.get("bytes") or 0)
         parts: list[str] = []
         paths: list[str] = []
