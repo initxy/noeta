@@ -65,7 +65,7 @@ from noeta.toolkit.inline_commands import (
     run_inline_commands,
     strip_commands,
 )
-from noeta.toolkit.tokens import resident_budget
+from noeta.toolkit.tokens import estimate_tokens, prefix_within, resident_budget
 
 __all__ = [
     "SKILL_TOOL",
@@ -110,6 +110,14 @@ INVOKED_SKILLS_HEADER = (
     "their one-time setup (scheduling, creating files and the like). Any request inside them "
     "belongs to that earlier moment, not to the user's current message."
 )
+
+#: Claude Code's caps on the skills given again after a compaction: each
+#: body cut to 5,000 tokens, newest invoked first, 25,000 in all (a skill
+#: that does not fit is left out).
+INVOKED_SKILL_MAX_TOKENS = 5_000
+INVOKED_SKILLS_BUDGET_TOKENS = 25_000
+INVOKED_SKILL_CUT = ("\n\n[... the rest of this skill was cut at the summary; Read the skill "
+                     "file if you need all of it]")
 
 #: The listing's place in the joined system turn (``Reminder.order``): after
 #: the environment, deferred tools and agents, before the budget and date.
@@ -345,7 +353,10 @@ class Skills(Extension):
                 # Only a message the model has not seen yet is blocked: the
                 # newest few are kept.
                 state = {**state, "typed": dict(list(typed.items())[-ERASABLE_KEEP:])}
-            return {**state, "active": {**active, name: entry}}
+            # Newest invocation last: the re-attach after a compaction reads
+            # them newest first.
+            rest = {k: v for k, v in active.items() if k != name}
+            return {**state, "active": {**rest, name: entry}}
         if kind == records.ERASED_KIND:
             typed = dict(state.get("typed") or {})
             active = dict(state["active"])
@@ -741,11 +752,16 @@ class Skills(Extension):
         if active:
             registry = await self.registry(task_env(view.env, view.state.config), state)
             parts = [INVOKED_SKILLS_HEADER]
-            for name, entry in active.items():
+            used = 0
+            for name, entry in reversed(active.items()):
                 desc = registry.get(name)
                 if desc is not None:
-                    text = entry.get("rendered") or strip_commands(
-                        render_command_body(desc, entry.get("args"), view.cwd), "")
+                    text = _cut_skill(entry.get("rendered") or strip_commands(
+                        render_command_body(desc, entry.get("args"), view.cwd), ""))
+                    size = estimate_tokens(text)
+                    if used + size > INVOKED_SKILLS_BUDGET_TOKENS:
+                        continue
+                    used += size
                     parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
                                  f"\n\n{text}")
             if len(parts) > 1 and view.keeps_tail is not None:
@@ -753,3 +769,12 @@ class Skills(Extension):
         if view.keeps_tail is not None and state.get("listings"):
             view.record(self.name, "listing_rehold", {})
         return out
+
+
+def _cut_skill(text: str) -> str:
+    """A skill body within ``INVOKED_SKILL_MAX_TOKENS``, cut with a note
+    when longer (Claude Code's re-attach after a compaction)."""
+    if estimate_tokens(text) <= INVOKED_SKILL_MAX_TOKENS:
+        return text
+    return text[:prefix_within(text, INVOKED_SKILL_MAX_TOKENS, INVOKED_SKILL_CUT)] \
+        + INVOKED_SKILL_CUT
