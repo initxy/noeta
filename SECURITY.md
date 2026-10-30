@@ -34,6 +34,14 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   `deny` rules; deny always wins, including over a hook or an approval). A way for model output
   to run a command, write a file, or reach a host that the rules and mode should have stopped
   is a vulnerability.
+- **`@path` mentions read only what the model could read without asking.** A file the
+  task owner mentions is attached only when the permission check would let the model's own
+  `Read` of it through without asking (inside the working directories, or under an allow
+  rule); otherwise the model is told which file was mentioned, and its `Read` goes through
+  the normal approval. A message a channel posted (framed with `noeta.core.channel.framed`)
+  is never expanded, and `~` is expanded only by a front end on the person's own machine,
+  never on a server. An attachment that reads something the rules would have asked about
+  is a vulnerability.
 - **The sandbox** (`sandbox.enabled` in settings: bubblewrap on Linux, Seatbelt on macOS)
   confines `Bash` to the working directory and allowed paths, with network only to allowed
   domains through a filtering proxy. Paths that would run code later without a person's

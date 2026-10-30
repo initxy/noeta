@@ -19,6 +19,7 @@ group, or a ``Channel`` subclass in a plugin file (``noeta.core.registry``).
 from __future__ import annotations
 
 import asyncio
+import re
 from html import escape
 from typing import Any
 
@@ -26,7 +27,7 @@ from noeta.core.client import ClientAPI, Input
 from noeta.core.errors import UnknownTask
 from noeta.core.store import TaskRow
 
-__all__ = ["Channel", "current_task", "deliver", "framed"]
+__all__ = ["Channel", "current_task", "deliver", "framed", "from_channel"]
 
 
 class Channel:
@@ -52,7 +53,9 @@ async def deliver(client: ClientAPI, *, task_id: str, agent: str, message: Input
     to. Idempotent: each task is created once however many replicas race,
     and the message is posted once per ``dedupe_key`` (the source's delivery
     id) to the conversation's current task; a delivery repeated after that
-    task ended reaches the continuation again."""
+    task ended reaches the continuation again. Frame what an outside sender
+    wrote with :func:`framed`: an unframed message is taken as the task
+    owner's own (its ``@path`` mentions are attached, :func:`from_channel`)."""
     n, row = await _newest(client, task_id)
     if row is None:
         await client.create(agent, task_id=task_id, config=config, queue=queue)
@@ -117,3 +120,12 @@ def framed(source: str, sender: str, text: str) -> str:
     Claude Code's channels frame it: the model can tell who speaks."""
     return (f'<channel source="{escape(source)}" sender="{escape(sender)}">\n'
             f"{text}\n</channel>")
+
+
+_FRAME = re.compile(r"<channel\s+source=")
+
+
+def from_channel(text: str) -> bool:
+    """Whether ``text`` carries a channel's frame (:func:`framed`): an
+    outside sender's words, not the task owner's, anywhere in it."""
+    return _FRAME.search(text) is not None

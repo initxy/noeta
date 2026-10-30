@@ -134,7 +134,8 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
         await app.add_image(Image(media_type="image/png", data=png.read_bytes()), "shot.png")
         await type_line(pilot, "look at @calc.py " + app.query_one(PromptInput).text)
         await settle(pilot, lambda: len(provider.requests) == 1 and not app.busy)
-        *_, sent, attached = provider.requests[0].messages
+        # The attachment goes ahead of the person's text, as Claude Code sends it.
+        *_, attached, sent = provider.requests[0].messages
         [prompt] = [b for b in sent.content if isinstance(b, Text)]
         assert prompt.text.startswith("look at @calc.py")
         assert [b.media_type for b in sent.content if isinstance(b, Image)] == ["image/png"]

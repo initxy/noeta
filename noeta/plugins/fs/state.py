@@ -70,6 +70,8 @@ KIND_NOTICE_SENT = "notice_sent"
 KIND_MENTIONS = "mentions"
 #: Files remembered as read at most: the oldest are forgotten past it.
 MAX_FILES = 1000
+#: Attachments remembered for placing ahead of the person's text.
+MAX_ATTACHMENTS = 200
 
 
 class FileRead(Struct):
@@ -95,6 +97,10 @@ class FsState(Struct):
     #: Log seq of the newest message of the person's whose mentions were
     #: attached.
     mentions_through: int = 0
+    #: Content digests of the attachments' messages (the newest
+    #: :data:`MAX_ATTACHMENTS`), which the request moves ahead of the
+    #: person's text.
+    attached: list[str] = msgspec.field(default_factory=list)
 
 
 def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
@@ -135,8 +141,12 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         through = data.get("through")
         if isinstance(through, bool) or not isinstance(through, int):
             return base
+        digest = data.get("digest")
+        attached = base.attached
+        if isinstance(digest, str) and digest:
+            attached = [*attached, digest][-MAX_ATTACHMENTS:]
         return msgspec.structs.replace(
-            base, mentions_through=max(base.mentions_through, through))
+            base, mentions_through=max(base.mentions_through, through), attached=attached)
     if kind == KIND_FORGET_RANGES:
         return msgspec.structs.replace(base, reads={
             p: msgspec.structs.replace(r, range=None) for p, r in base.reads.items()})

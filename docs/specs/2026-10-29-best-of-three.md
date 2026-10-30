@@ -56,9 +56,14 @@ and reported in the README.
   instructions.
 ### @-mention placement (D2)
 - Others: CC attaches the Read call and result as meta messages hoisted ahead of the person's text; pi's CLI inlines `<file>` text into the prompt; dsh attaches nothing and tells the model to read the path.
-- noeta: CC's two meta blocks, read in the task through `Read`, placed after the person's text in the same user turn.
-- Why: the attachment is made inside the task once the message is in its append-only log; moving it ahead would rewrite a logged message. The wire turn is the same; only the block order differs.
+- noeta: CC's two meta blocks, read in the task through `Read`, logged after the person's message and moved ahead of its text when the request is built (the fs plugin's `before_model`, by each attachment's content digest in its record), as CC sends them. (Review fix, 2026-10-29: first shipped after the text; the "can't move it" reason held only for the log, not the request.)
 - Evidence: `tests/plugins/fs/test_mentions.py`; DeepSeek V4.1, edit_not_write with and without `@shop/pricing.py`, 9 trials each: Read calls on the file 0.89 -> 0, requests 4.22 -> 2.89, input tokens 44.8k -> 30.9k, score 0.92 -> 1.00.
+
+### @-mentions read only what the model could read unasked (review-p1-safety P1)
+- Others: CC expands mentions only in what the person types into their own terminal, and checks only deny rules (`LYn(path, ctx, "person")`); no PreToolUse hook runs for an attachment. pi inlines what its CLI user names; dsh attaches nothing.
+- noeta: a file is attached only when the task's gates would let the model's `Read` of it through without asking; an Ask (outside the working directories, through a link out of them, a rule) names the file instead, so the model's own `Read` goes through approval; a deny leaves it out. A message carrying a channel's frame (`from_channel`, the `<channel source=` mark `framed` puts on what an outside sender wrote, anywhere in the text so a sender cannot close it early) is not expanded; there is no other origin mark (`deliver` posts strings as `human`), so an unframed channel message counts as the owner's, which `deliver`'s docstring and SECURITY.md say. `~` is expanded only with `FileTools(home=)`, which the `noeta` command sets for front ends (`own_tasks_only`), never for `serve` / `worker`. The hooks plugin's gate is not run for the attachment's `Read` (CC's behaviour): it runs the person's commands, and with the allow-only rule and owner-only expansion it can no longer be the only thing between a third party and a file, so skipping it opens nothing a hook guarded against for anyone but the owner, who can read the file anyway. Other plugins' gates still run (a host's own gate keeps its say).
+- Why: noeta takes messages from servers and channels; CC's deny-only check would let any chat member read the worker's files (`~/.ssh`, `~/.noeta`) with no one approving.
+- Evidence: `tests/plugins/fs/test_mentions.py` (outside / `../` / link in default, plan, acceptEdits; channel frame incl. an early `</channel>`; `~` with and without `home`; no hook command; directory listed whole), `tests/cli/test_config.py::test_only_a_front_end_names_the_persons_home_for_mentions`; `parity/deviations.md` Attachments row.
 
 ### Changed-file snippet source (B6)
 - Others: CC diffs against the content it keeps for every read file; pi and dsh send no such note.
@@ -73,7 +78,7 @@ and reported in the README.
 - Evidence: `tests/plugins/context/test_date_change.py`; the full DeepSeek V4.1 eval (which sends no zone, so every request carries the UTC form) scored 0.927 overall against 0.919 on main.
 
 ### Smaller recorded differences
-- Mentioned directory listing capped at 1,000 entries; hook blocking feedback names no command; visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
+- Hook blocking feedback names no command; visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
 
 ### Extension points (Phase 2)
 - Scope: the item-by-item review (pi e7a0df2, dsh f3803c96) found nine points to add (CC has them, multi-machine needs them, or they are the mechanism); the owner answered the open five on 2026-10-29: userConfig/`settings.json`, Python plugins shipping `skills/` `commands/` `agents/`, `InstructionsLoaded`, open model families yes; `statusLine` no (left to plugins). Every other row is have or won't, with its reason, in `docs/extending.md`.

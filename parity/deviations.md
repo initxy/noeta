@@ -114,8 +114,7 @@ file names. Each row is a name the model sees; the files themselves are product 
 
 | id | difference | reason |
 |---|---|---|
-| | A file the person @-mentions is attached after their text in the same turn; Claude Code moves its attachments ahead of the text (`rem.at-mention.1`). | The attachment is read inside the task once the message is in its log; the log is append-only, so it follows the message it answers (the same turn on the wire). |
-| | A mentioned directory lists at most 1,000 entries, then how many more. | The listing stays in the task's history for good; Claude Code lists every entry. |
+| | A file the person @-mentions is attached only when the model's own `Read` of it would pass without asking (in the working directory, or under an allow rule); one that would be asked about is named instead, so the model's `Read` asks (`rem.at-mention.6`). A message carrying a channel's frame is not expanded, `~` is expanded only by a front end on the person's machine, and no `PreToolUse` hook command runs for the attachment's `Read` (as in Claude Code). Claude Code attaches whatever no deny rule refuses. | Claude Code expands only what the person types into their own terminal; noeta also takes messages from servers and channels, where an attachment would read a worker's files with no one approving. |
 
 ## Reminders
 

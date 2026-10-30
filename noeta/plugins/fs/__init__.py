@@ -24,12 +24,15 @@ import os
 from collections.abc import Sequence
 from typing import Any
 
+import msgspec
+
 from noeta.core.events import Compacted, Recorded
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
+from noeta.core.types import ModelRequest
 from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
-from noeta.plugins.fs.mentions import attach_mentions
+from noeta.plugins.fs.mentions import attach_mentions, hoist_attachments
 from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import (
@@ -74,12 +77,15 @@ class FileTools(Extension):
     tools may write (Claude Code's ``additionalDirectories``); plan mode's
     plan directory and the task's memory directory are always among them.
     ``mentions``: attach the files the person names with ``@path`` (default
-    on)."""
+    on). ``home``: the person's home directory, which ``@~/…`` names (a
+    front end on the person's machine sets it; unset, as on a server, ``~``
+    is not expanded)."""
 
     name = FS
 
     def __init__(self, tools: Sequence[str | Tool] | None = None, *,
-                 write_roots: Sequence[str] = (), mentions: bool = True) -> None:
+                 write_roots: Sequence[str] = (), mentions: bool = True,
+                 home: str | None = None) -> None:
         if tools is None:
             tools = list(_BY_NAME)
         unknown = [t for t in tools if isinstance(t, str) and t not in _BY_NAME]
@@ -87,6 +93,7 @@ class FileTools(Extension):
             raise ValueError(f"FileTools: unknown tools {unknown}; known: {list(_BY_NAME)}")
         extra = tuple(os.path.expanduser(d) for d in write_roots)
         self.mentions = mentions
+        self.home = home
 
         def roots(ctx: Any) -> list[str]:
             return [*extra, str(plans_dir()), *memory_dir(ctx.state)]
@@ -106,9 +113,16 @@ class FileTools(Extension):
         if isinstance(recorded.event, Compacted):
             view.record(self.name, KIND_FORGET_RANGES, {})
 
+    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+        st = view.ext_state(self.name)
+        if not isinstance(st, FsState) or not st.attached:
+            return request
+        messages = hoist_attachments(request.messages, frozenset(st.attached))
+        return msgspec.structs.replace(request, messages=messages)
+
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         if self.mentions:
-            await attach_mentions(view)
+            await attach_mentions(view, self.home)
         st = view.ext_state(self.name)
         if not isinstance(st, FsState):
             return ()
