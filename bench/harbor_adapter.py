@@ -8,19 +8,27 @@ parse token usage back out of the final summary line.
 Credentials reach the sandbox as `NOETA_PROVIDER` / `NOETA_BASE_URL` /
 `NOETA_API_KEY` (read from harbor's environment). A gateway configured the 0.6
 way (`LLM_BASE_URL` / `LLM_API_KEY`, an OpenAI-Responses gateway) is mapped to
-`openai_responses` at `<LLM_BASE_URL>/responses`.
+`openai_responses` at `<LLM_BASE_URL>/responses`. The base URL's host is
+declared to harbor, so a task whose sandbox has no internet still lets the
+model calls through (harbor's `claude-code` agent does the same with
+`ANTHROPIC_BASE_URL`).
 
-    harbor run -d terminal-bench-2.1 -a bench.harbor_adapter:Noeta -m <model>
+    harbor run -d terminal-bench/terminal-bench@4.0.0 -a bench.harbor_adapter:Noeta \
+      -m <model> --effort high
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shlex
 from pathlib import Path
 from typing import Any
 
+from harbor.agents.agent_auth_resolution import ResolvedModelConnection
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
+from harbor.agents.installed.claude_code import ClaudeCode as HarborClaudeCode
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
@@ -64,27 +72,116 @@ _OUTPUT_FILENAME = "noeta.json"
 # keeps run() from having to re-derive which interpreter won.
 _REMOTE_BIN_MARKER = "/tmp/noeta_bin"
 
-# The product's model catalogue (`models.json`) declares each model's real
-# context_window / max_output_tokens. It is NOT bundled into the wheel (it is
-# gitignored — it carries deployment-specific ids), so a bare install inside the
-# sandbox has no catalogue and `noeta -p` degrades every model to conservative
-# fallbacks (context 200000, max_output 16384). That silently caps the model's
-# output far below the product (the gateway model is 128000), depressing scores
-# on tasks that
-# need a long answer/edit. To measure the product's real capability, upload the
-# catalogue and point the CLI at it via MODELS_CONFIG. Set NOETA_MODELS_CONFIG
-# to the local file; unset → the fallbacks apply and a warning is logged.
-# The catalogue is pure model metadata (no api_key/url), so uploading it into a
-# throwaway container leaks nothing.
-_MODELS_CONFIG = os.environ.get("NOETA_MODELS_CONFIG")
+# A model the shipped catalog does not know (any gateway id) runs at noeta's
+# conservative fallbacks (context 128000, max output 16384) unless a models
+# manifest names its real limits. The manifest is uploaded into the sandbox and
+# named by NOETA_MODELS_FILE. Two ways to give one:
+#   - NOETA_MODELS_CONFIG=<file>: `{"models": [{"id", "context_window",
+#     "max_output_tokens", "family"?, "efforts"?}]}`;
+#   - NOETA_MODEL_CONTEXT_WINDOW + NOETA_MODEL_MAX_OUTPUT_TOKENS: a one-row
+#     manifest for the `-m` model is written per trial.
+# `family` is the wire family (`anthropic` / `openai`), not the vendor: noeta
+# refuses any other value at start-up (a DeepSeek model behind an Anthropic
+# Messages gateway is `anthropic`). A row without one gets the family of
+# NOETA_PROVIDER's wire. The manifest is pure model metadata (no key or URL).
 _REMOTE_MODELS_CONFIG = "/tmp/noeta_models.json"
 _REMOTE_STORE = "sqlite:////tmp/noeta-bench/tasks.db"
+_WIRE_FAMILY = {"anthropic": "anthropic", "openai_compat": "openai",
+                "openai_responses": "openai"}
 
-# Reasoning effort passed to `noeta -p --effort`. Unset means the engine picks
-# its own depth — fine for a smoke, but a *scored* run should pin this so the
-# number is reproducible and not measured at an uncontrolled (often low) depth.
-# Set NOETA_EFFORT=high (or xhigh/max) for a scored run.
+# Reasoning effort passed to `noeta -p --effort`: harbor's `--effort` (the
+# same flag the claude-code agent takes), else NOETA_EFFORT. Unset, noeta's
+# Anthropic wire sends `medium`, which some gateway models refuse (DeepSeek
+# V4.1 takes low / high / xhigh / max) — pin it for a scored run.
 _EFFORT = os.environ.get("NOETA_EFFORT")
+
+
+def wire_family(provider: str | None) -> str:
+    """The models-manifest `family` for a noeta provider name."""
+    family = _WIRE_FAMILY.get(provider or "anthropic")
+    if family is None:
+        raise RuntimeError(f"NOETA_PROVIDER={provider!r}: expected one of {sorted(_WIRE_FAMILY)}")
+    return family
+
+
+def models_manifest(model: str, provider: str | None, effort: str | None,
+                    env: dict[str, str] | None = None) -> dict[str, Any] | None:
+    """The manifest to upload, rows checked and missing families filled in;
+    None when no manifest is configured."""
+    env = dict(os.environ) if env is None else env
+    family = wire_family(provider)
+    path = env.get("NOETA_MODELS_CONFIG")
+    if path:
+        source = Path(path).expanduser().resolve()
+        if not source.is_file():
+            raise RuntimeError(f"NOETA_MODELS_CONFIG does not exist: {source}")
+        data = json.loads(source.read_text("utf-8"))
+        rows = data.get("models", data) if isinstance(data, dict) else data
+    elif env.get("NOETA_MODEL_CONTEXT_WINDOW") and env.get("NOETA_MODEL_MAX_OUTPUT_TOKENS"):
+        rows = [{"id": model,
+                 "context_window": int(env["NOETA_MODEL_CONTEXT_WINDOW"]),
+                 "max_output_tokens": int(env["NOETA_MODEL_MAX_OUTPUT_TOKENS"]),
+                 "efforts": [effort] if effort else []}]
+    else:
+        return None
+    if not isinstance(rows, list) or not all(isinstance(r, dict) and r.get("id") for r in rows):
+        raise RuntimeError("models manifest: expected a list of rows with an `id`")
+    out = []
+    for row in rows:
+        row = {**row, "family": row.get("family") or family}
+        if row["family"] not in ("anthropic", "openai"):
+            raise RuntimeError(f"models manifest row {row['id']!r}: family {row['family']!r} is not "
+                               "a wire family (`anthropic` / `openai`)")
+        out.append(row)
+    return {"models": out}
+
+
+def usage_totals(lines: list[str]) -> tuple[dict[str, int], str] | None:
+    """Token totals from `noeta -p --output-format stream-json` output.
+
+    The final `result` line's `modelUsage` covers the task and its sub-agents.
+    A run harbor killed at its timeout has no `result` line; then the usage of
+    each `assistant` message is summed, once per message (a message may span
+    several lines). Returns `({input, cache_read, cache_creation, output},
+    source)` or None when nothing parses."""
+    result: dict[str, Any] | None = None
+    per_message: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for line in lines:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("type") == "result" and isinstance(payload.get("modelUsage"), dict):
+            result = payload["modelUsage"]
+        elif payload.get("type") == "assistant" and isinstance(payload.get("message"), dict):
+            message = payload["message"]
+            usage = message.get("usage")
+            if isinstance(usage, dict):
+                key = (payload.get("session_id"), payload.get("parent_tool_use_id"),
+                       message.get("id") or payload.get("uuid"))
+                per_message[key] = usage
+    if result is not None:
+        rows = [m for m in result.values() if isinstance(m, dict)]
+
+        def total(key: str) -> int:
+            return sum(int(m.get(key, 0) or 0) for m in rows)
+
+        return ({"input": total("inputTokens"), "cache_read": total("cacheReadInputTokens"),
+                 "cache_creation": total("cacheCreationInputTokens"),
+                 "output": total("outputTokens")}, "result")
+    if per_message:
+        def summed(key: str) -> int:
+            return sum(int(u.get(key, 0) or 0) for u in per_message.values())
+
+        return ({"input": summed("input_tokens"), "cache_read": summed("cache_read_input_tokens"),
+                 "cache_creation": summed("cache_creation_input_tokens"),
+                 "output": summed("output_tokens")}, "per_message")
+    return None
 
 
 def _proxy_env() -> dict[str, str]:
@@ -136,12 +233,75 @@ def _proxy_env() -> dict[str, str]:
     return env
 
 
+async def stop_agent_process(agent: BaseInstalledAgent, environment: BaseEnvironment,
+                             pattern: str) -> None:
+    """End the agent's CLI process inside the sandbox.
+
+    harbor's agent timeout cancels the `docker exec` client, not the process it
+    started: the agent keeps running — and editing the task — while the
+    verifier runs (SWE-rebench and TB2.1 verify in the same container). TERM,
+    then KILL after 5 s, every process whose command line matches `pattern`
+    (a grep regex written so it does not match this script itself), as the
+    end of a normal run would. Best-effort."""
+    script = (
+        f"pat={shlex.quote(pattern)}; "
+        'hit() { for p in /proc/[0-9]*; do tr "\\0" " " < "$p/cmdline" 2>/dev/null | grep -q -- "$pat" '
+        '&& echo "${p#/proc/}"; done; }; '
+        'for p in $(hit); do kill -TERM "$p" 2>/dev/null; done; sleep 5; '
+        'for p in $(hit); do kill -KILL "$p" 2>/dev/null; done; true'
+    )
+    try:
+        await asyncio.wait_for(agent.exec_as_root(environment, command=script), timeout=60)
+    except Exception as exc:  # noqa: BLE001 - the trial is already ending; never mask its error
+        agent.logger.warning("could not stop the agent process after the timeout: %s", exc)
+
+
+class ClaudeCode(HarborClaudeCode):
+    """harbor's claude-code agent, stopped at the agent timeout like `Noeta`
+    (so both get the same end of run); everything else is harbor's."""
+
+    @with_prompt_template
+    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        try:
+            await super().run(instruction, environment, context)
+        except asyncio.CancelledError:
+            await asyncio.shield(stop_agent_process(self, environment, "[c]laude --verbose --output-format"))
+            raise
+
+
 class Noeta(BaseInstalledAgent):
     """Noeta as a harbor installed agent."""
+
+    capabilities = AgentCapabilities(reasoning_effort=True)
+
+    def __init__(self, *args: Any, reasoning_effort: str | None = None, **kwargs: Any) -> None:
+        self._effort = reasoning_effort or _EFFORT
+        super().__init__(*args, **kwargs)
 
     @staticmethod
     def name() -> str:
         return "noeta"
+
+    def _credentials(self) -> dict[str, str]:
+        env: dict[str, str] = {}
+        for key in ("NOETA_PROVIDER", "NOETA_BASE_URL", "NOETA_API_KEY"):
+            value = self._get_env(key)
+            if value is not None:
+                env[key] = value
+        if "NOETA_BASE_URL" not in env and self._get_env("LLM_BASE_URL"):
+            env["NOETA_PROVIDER"] = "openai_responses"
+            env["NOETA_BASE_URL"] = str(self._get_env("LLM_BASE_URL")).rstrip("/") + "/responses"
+            env["NOETA_API_KEY"] = str(self._get_env("LLM_API_KEY") or "")
+        return env
+
+    @property
+    def model_connection(self) -> ResolvedModelConnection:
+        # Read by harbor's trial to allowlist the inference host in a sandbox
+        # without internet; noeta itself takes the URL from NOETA_BASE_URL.
+        base_url = self._credentials().get("NOETA_BASE_URL")
+        if not base_url and (self._credentials().get("NOETA_PROVIDER") or "anthropic") == "anthropic":
+            base_url = "https://api.anthropic.com"
+        return ResolvedModelConnection(inferred_base_url=base_url)
 
     def get_version_command(self) -> str | None:
         return "noeta --help >/dev/null 2>&1 && echo noeta-installed"
@@ -259,25 +419,23 @@ class Noeta(BaseInstalledAgent):
         the post-run hook parses. Credentials come from harbor's environment (see the module
         docstring)."""
         model = self.model_name or _DEFAULT_MODEL
-        env: dict[str, str] = _proxy_env()
-        for key in ("NOETA_PROVIDER", "NOETA_BASE_URL", "NOETA_API_KEY"):
-            value = self._get_env(key)
-            if value is not None:
-                env[key] = value
-        if "NOETA_BASE_URL" not in env and self._get_env("LLM_BASE_URL"):
-            env["NOETA_PROVIDER"] = "openai_responses"
-            env["NOETA_BASE_URL"] = str(self._get_env("LLM_BASE_URL")).rstrip("/") + "/responses"
-            env["NOETA_API_KEY"] = str(self._get_env("LLM_API_KEY") or "")
+        # No proxy here: the run sees the container's own environment, the
+        # same one harbor gives every agent; the proxy is for install only.
+        env = self._credentials()
         env["NOETA_STORE"] = _REMOTE_STORE
-        if _MODELS_CONFIG:
-            catalogue = Path(_MODELS_CONFIG).expanduser().resolve()
-            if not catalogue.is_file():
-                raise RuntimeError(f"NOETA_MODELS_CONFIG does not exist: {catalogue}")
-            await environment.upload_file(catalogue, _REMOTE_MODELS_CONFIG)
+        manifest = models_manifest(model, env.get("NOETA_PROVIDER"), self._effort)
+        if manifest is not None:
+            local = self.logs_dir / "noeta_models.json"
+            local.write_text(json.dumps(manifest, indent=1), "utf-8")
+            await environment.upload_file(local, _REMOTE_MODELS_CONFIG)
             env["NOETA_MODELS_FILE"] = _REMOTE_MODELS_CONFIG
+            if not any(row["id"] == model for row in manifest["models"]):
+                self.logger.warning("models manifest has no row for %s; noeta runs it at its fallbacks", model)
+        else:
+            self.logger.warning("no models manifest: %s runs at noeta's fallback limits", model)
 
         cwd_arg = shlex.quote(_WORKSPACE) if _WORKSPACE else '"$(pwd)"'
-        effort_arg = f"--effort {shlex.quote(_EFFORT)} " if _EFFORT else ""
+        effort_arg = f"--effort {shlex.quote(self._effort)} " if self._effort else ""
         command = (
             f'NOETA_BIN=$(cat {shlex.quote(_REMOTE_BIN_MARKER)} 2>/dev/null || echo noeta); '
             f'"$NOETA_BIN" -p {shlex.quote(instruction)} --output-format stream-json --verbose --permission-mode bypassPermissions '
@@ -286,43 +444,27 @@ class Noeta(BaseInstalledAgent):
             f"{effort_arg}"
             f"2>&1 | tee /logs/agent/{_OUTPUT_FILENAME}"
         )
-        await self.exec_as_agent(environment, command=command, env=env)
+        try:
+            await self.exec_as_agent(environment, command=command, env=env)
+        except asyncio.CancelledError:
+            await asyncio.shield(stop_agent_process(self, environment, "bin/[n]oeta -p"))
+            raise
 
     def populate_context_post_run(self, context: AgentContext) -> None:
-        """Read token usage from the CLI's JSON output.
-
-        `noeta -p --output-format stream-json` ends with Claude Code's `result`
-        message, whose `modelUsage` covers the task and its sub-agents; the tee
-        above may mix in log lines, so scan for the last parseable `result`
-        rather than assuming a clean stream. A run
-        that produced no parseable usage leaves the context counters at their
-        defaults — best-effort, exactly as `pi` tolerates a missing field.
-        """
+        """Token usage from the CLI's JSON output (see `usage_totals`), in
+        the same fields harbor's claude-code agent fills: `n_input_tokens`
+        counts every input token, cached or not. The tee above may mix in log
+        lines; those are skipped. No parseable usage leaves the counters
+        unset."""
         output_file = self.logs_dir / _OUTPUT_FILENAME
         if not output_file.exists():
             return
-
-        by_model: dict[str, Any] | None = None
-        for line in output_file.read_text().splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict) and payload.get("type") == "result":
-                by_model = payload.get("modelUsage")
-
-        if not isinstance(by_model, dict):
+        found = usage_totals(output_file.read_text(errors="replace").splitlines())
+        if found is None:
             return
-
-        def total(key: str) -> int:
-            return sum(int(m.get(key, 0) or 0) for m in by_model.values()
-                       if isinstance(m, dict))
-
-        cache_read = total("cacheReadInputTokens")
-        context.n_input_tokens = (total("inputTokens") + cache_read
-                                  + total("cacheCreationInputTokens"))
-        context.n_output_tokens = total("outputTokens")
-        context.n_cache_tokens = cache_read
+        totals, source = found
+        context.n_input_tokens = totals["input"] + totals["cache_read"] + totals["cache_creation"]
+        context.n_cache_tokens = totals["cache_read"]
+        context.n_output_tokens = totals["output"]
+        context.metadata = {**(context.metadata or {}), "usage_source": source,
+                            "effort": self._effort}

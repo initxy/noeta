@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run Noeta against a harbor benchmark (Terminal-Bench 2.0 / 2.1 or SWE-bench).
+# Run Noeta alone against a harbor benchmark (Terminal-Bench 4.0 / 2.1,
+# SWE-rebench, SWE-bench). For noeta next to Claude Code on the same job, use
+# bench/compare.py.
 #
 # This is the one command that turns "the adapter exists" into "a score comes
 # out". It does NOT run inside `make check`: it needs Docker, the `harbor` CLI,
@@ -10,18 +12,19 @@
 # The script sources .env and sets the sandbox plumbing (wheel, proxy, model
 # catalogue) itself, so a run is just the model + effort you want:
 #
-#     NOETA_MODEL=opus4.8 NOETA_EFFORT=xhigh \
-#       bench/run_benchmark.sh tb21-sample40
+#     NOETA_EFFORT=high bench/run_benchmark.sh tb4-full
 #
 # Everything below has a sane default; override any of it inline.
 #
 # ── Modes ─────────────────────────────────────────────────────────────────────
+#   tb4-full        Terminal-Bench 4.0, 63 of 66 tasks (the 3 GPU tasks excluded)
+#   swe-rebench     SWE-rebench 07-2026 window, 111 tasks
 #   smoke-tb        1 TB2.1 task         — prove the loop (cheap)
 #   smoke-swe       1 SWE-bench task     — prove the loop (cheap)
 #   tb-quick6       TB2.1 6-task quick model-comparison set (see QUICK6 below)
 #   tb21-sample40   TB2.1 pinned 40-task stratified sample
 #   tb21-full       TB2.1 full 89-set
-#   tb3-full        Terminal-Bench 3 full 75-set (harder terminal board)
+#   tb3-full        Terminal-Bench 3.0 full 74-set (superseded by 4.0)
 #   aider-full      Aider Polyglot full 225-set (multilingual code editing)
 #   swe-15          SWE-bench Verified pinned 15-instance subset
 #   swe-60          SWE-bench Verified pinned 62-instance subset (proportional)
@@ -30,10 +33,9 @@
 #   swe-subset      SWE-bench Verified, SWE_INCLUDE_GLOBS or first-N
 #
 # ── Knobs (all optional; env vars) ────────────────────────────────────────────
-#   NOETA_MODEL       model id passed to -m           (default: opus4.8)
-#   NOETA_EFFORT      reasoning effort: low|medium|high|xhigh|max
-#                     (default: high. The public TB2.1 board's leaders use
-#                      xhigh/max; match that for a leaderboard-comparable run.)
+#   NOETA_MODEL       model id passed to -m  (default: opensource/deepseek_v4_1_flash)
+#   NOETA_EFFORT      reasoning effort, passed as harbor's --effort
+#                     (default: high; DeepSeek V4.1 takes low|high|xhigh|max)
 #   NOETA_CONCURRENCY --n-concurrent                  (default: 3)
 #                     Keep ≤2 for SWE-bench: its images need a private 3.12 built
 #                     with uv, and parallel toolchain fetches trip setup timeouts.
@@ -41,13 +43,16 @@
 #                     for SWE-bench so the uv 3.12 provisioning fits).
 #   NOETA_WHEEL       local wheel to install in-sandbox (default: newest dist/*.whl)
 #   NOETA_PROXY       container-reachable proxy        (default: from env/.env)
-#   NOETA_MODELS_CONFIG  model catalogue to upload     (default: ./models.json)
+#   NOETA_MODELS_CONFIG  models manifest to upload     (default: ./models.json;
+#                     for the default model, a one-row manifest from
+#                     NOETA_MODEL_CONTEXT_WINDOW / NOETA_MODEL_MAX_OUTPUT_TOKENS)
 #   NOETA_JOBS_DIR    where harbor writes results      (default: bench/jobs)
-#   NOETA_ENV_FILE    dotenv with LLM_BASE_URL/LLM_API_KEY (default: ./.env)
-#   NOETA_PI_EXPORT   path to the pi usage exporter; when present and executable,
-#                     the run's per-trial token usage is exported to kaboo's pi
-#                     source at the end (best-effort, never fails the run).
-#                     (default: ~/.pi/exporter/pi_export.py; empty to skip)
+#   NOETA_ENV_FILE    dotenv with NOETA_BASE_URL/NOETA_API_KEY (or NOETA_LIVE_*,
+#                     or the 0.6 LLM_BASE_URL/LLM_API_KEY)   (default: ./.env)
+#   NOETA_PI_EXPORT   opt-in: path to the pi usage exporter; when set, the run's
+#                     per-trial token usage is exported to kaboo's pi source at
+#                     the end (best-effort). Unset by default: a benchmark run
+#                     sends nothing anywhere.
 #   TB21_DATASET / SWE_DATASET   dataset name@version overrides
 #   SWE_INCLUDE_GLOBS / SWE_SUBSET_SIZE       swe-subset selection
 set -euo pipefail
@@ -61,8 +66,18 @@ ENV_FILE="${NOETA_ENV_FILE:-${REPO_ROOT}/.env}"
 if [ -z "${NOETA_BASE_URL:-${LLM_BASE_URL:-}}" ] && [ -f "${ENV_FILE}" ]; then
   set -a; . "${ENV_FILE}"; set +a
 fi
+# The live-test names (NOETA_LIVE_*) are the same gateway, Anthropic wire.
+if [ -z "${NOETA_BASE_URL:-}" ] && [ -n "${NOETA_LIVE_BASE_URL:-}" ]; then
+  export NOETA_BASE_URL="${NOETA_LIVE_BASE_URL}" NOETA_API_KEY="${NOETA_LIVE_API_KEY:-}"
+fi
+if [ -n "${NOETA_BASE_URL:-}" ]; then export NOETA_PROVIDER="${NOETA_PROVIDER:-anthropic}"; fi
 
-MODEL="${NOETA_MODEL:-opus4.8}"
+# Nothing leaves this machine but model calls and image / package downloads:
+# harbor's anonymous usage telemetry is on unless this is 0.
+export HARBOR_TELEMETRY=0
+export PYTHONDONTWRITEBYTECODE=1
+
+MODEL="${NOETA_MODEL:-opensource/deepseek_v4_1_flash}"
 EFFORT="${NOETA_EFFORT:-high}"
 AGENT="bench.harbor_adapter:Noeta"
 CONCURRENCY="${NOETA_CONCURRENCY:-3}"
@@ -76,7 +91,15 @@ SWE_DATASET="${SWE_DATASET:-swe-bench/swe-bench-verified}"
 # Additional public benchmarks, all in the harbor registry (verified via
 # `harbor datasets download`): multilingual code editing, an anti-contamination
 # hard SWE set, and the harder terminal board.
-TB3_DATASET="${TB3_DATASET:-terminal-bench/terminal-bench-3}"
+TB3_DATASET="${TB3_DATASET:-terminal-bench/terminal-bench@3.0.0}"
+# TB4 / SWE-rebench default to the local copy `harbor download <id> -o
+# bench/datasets/<tb4|swe-rebench>` leaves, when it is there (no hub call).
+TB4_DATASET="${TB4_DATASET:-terminal-bench/terminal-bench@4.0.0}"
+[ -d "${REPO_ROOT}/bench/datasets/tb4/terminal-bench" ] && TB4_DATASET="${REPO_ROOT}/bench/datasets/tb4/terminal-bench"
+# The three TB4 tasks that need a GPU.
+TB4_GPU_TASKS=(math-eval-grader jax-speedrun-gpu fp8-rmsnorm-gemm)
+REBENCH_DATASET="${REBENCH_DATASET:-ibragim-badertdinov/swe-rebench-07-2026}"
+[ -d "${REPO_ROOT}/bench/datasets/swe-rebench/swe-rebench-07-2026" ] && REBENCH_DATASET="${REPO_ROOT}/bench/datasets/swe-rebench/swe-rebench-07-2026"
 AIDER_DATASET="${AIDER_DATASET:-aider/aider-polyglot}"
 SWEPRO_DATASET="${SWEPRO_DATASET:-scale-ai/swe-bench-pro}"
 
@@ -89,10 +112,20 @@ if [ -z "${NOETA_WHEEL:-}" ]; then
   _wheel="$(ls -t "${REPO_ROOT}"/dist/noeta-1*.whl 2>/dev/null | head -1 || true)"
   [ -n "${_wheel}" ] && export NOETA_WHEEL="${_wheel}"
 fi
-# Model catalogue: upload ./models.json so the gateway model runs at its real
-# 128k output instead of the sandbox fallback's 16k. Only if it exists.
+# Models manifest: ./models.json if present; for the default model, its real
+# limits (1M context, 64k output) instead of noeta's 128k / 16k fallbacks.
 if [ -z "${NOETA_MODELS_CONFIG:-}" ] && [ -f "${REPO_ROOT}/models.json" ]; then
   export NOETA_MODELS_CONFIG="${REPO_ROOT}/models.json"
+fi
+if [ -z "${NOETA_MODELS_CONFIG:-}" ] && [ "${MODEL}" = "opensource/deepseek_v4_1_flash" ]; then
+  export NOETA_MODEL_CONTEXT_WINDOW="${NOETA_MODEL_CONTEXT_WINDOW:-1000000}"
+  export NOETA_MODEL_MAX_OUTPUT_TOKENS="${NOETA_MODEL_MAX_OUTPUT_TOKENS:-65536}"
+fi
+# pip inside the sandbox needs a container-reachable proxy on a restricted
+# network: default to the one the Docker client hands containers.
+if [ -z "${NOETA_PROXY:-}" ] && [ -f "${HOME}/.docker/config.json" ]; then
+  _proxy="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])).get("proxies",{}).get("default",{}); print(p.get("httpsProxy") or p.get("httpProxy") or "")' "${HOME}/.docker/config.json" 2>/dev/null || true)"
+  [ -n "${_proxy}" ] && export NOETA_PROXY="${_proxy}"
 fi
 # Effort reaches the adapter through NOETA_EFFORT; export the resolved value.
 export NOETA_EFFORT="${EFFORT}"
@@ -119,7 +152,15 @@ preflight() {
 # run_harbor <dataset> <extra harbor args...>
 run_harbor() {
   local dataset="$1"; shift
-  harbor run -d "${dataset}" -a "${AGENT}" -m "${MODEL}" -o "${JOBS_DIR}" \
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in --upload|--launch) die "refusing ${arg}: results stay on this machine" ;; esac
+  done
+  # A local copy (a directory) runs without asking harbor's hub, which also
+  # records a download for every registry run.
+  local source=(-d "${dataset}")
+  [ -d "${dataset}" ] && source=(-p "${dataset}")
+  harbor run "${source[@]}" -a "${AGENT}" -m "${MODEL}" --effort "${EFFORT}" -o "${JOBS_DIR}" \
     --agent-setup-timeout-multiplier "${SETUP_TIMEOUT_MULT}" \
     --n-concurrent "${CONCURRENCY}" "$@"
 }
@@ -209,6 +250,18 @@ SWE_SUBSET60=(
 )
 
 case "${1:-}" in
+  tb4-full)
+    preflight
+    echo "== Terminal-Bench 4.0, 63 CPU tasks (8 h agent cap each) — spends real tokens =="
+    pre="terminal-bench/"; [ -d "${TB4_DATASET}" ] && pre=""   # local copies name tasks bare
+    mapfile -t exc < <(for t in "${TB4_GPU_TASKS[@]}"; do printf '%s\n' -x "${pre}${t}"; done)
+    run_harbor "${TB4_DATASET}" "${exc[@]}" "${@:2}"
+    ;;
+  swe-rebench)
+    preflight
+    echo "== SWE-rebench 07-2026, 111 tasks (50 min agent cap each) — spends real tokens =="
+    run_harbor "${REBENCH_DATASET}" "${@:2}"
+    ;;
   smoke-tb)
     preflight
     echo "== TB2.1 smoke: 1 task (fix-git) =="
@@ -285,7 +338,7 @@ case "${1:-}" in
     fi
     ;;
   *)
-    die "unknown mode '${1:-}'. One of: smoke-tb | smoke-swe | tb21-sample40 | tb21-full | tb3-full | aider-full | swe-15 | swe-60 | swe-full | swe-pro-full | swe-subset"
+    die "unknown mode '${1:-}'. One of: tb4-full | swe-rebench | smoke-tb | smoke-swe | tb21-sample40 | tb21-full | tb3-full | aider-full | swe-15 | swe-60 | swe-full | swe-pro-full | swe-subset"
     ;;
 esac
 
@@ -299,7 +352,7 @@ echo "done — results under ${JOBS_DIR}. Summarize into docs/benchmarks.md."
 # which kaboo collects. It is incremental (a per-label state file), so this
 # only ever exports trials not already reported. Kept best-effort: a missing
 # exporter or an export error must never turn a green benchmark red.
-PI_EXPORT="${NOETA_PI_EXPORT-${HOME}/.pi/exporter/pi_export.py}"
+PI_EXPORT="${NOETA_PI_EXPORT:-}"
 if [ -n "${PI_EXPORT}" ] && [ -f "${PI_EXPORT}" ]; then
   echo "exporting token usage to kaboo (pi source) ..."
   if python3 "${PI_EXPORT}" --jobs-dir "${JOBS_DIR}" --label noeta-bench; then
