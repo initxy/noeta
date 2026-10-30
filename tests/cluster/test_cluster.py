@@ -37,6 +37,7 @@ from noeta.core.events import ToolFinished, ToolStarted
 from noeta.core.store import HOLD_LOST
 from noeta.plugins.shell.tools import HELD_ELSEWHERE
 from tests.cluster.harness import (
+    SPILL_AGENT,
     Cluster,
     Faults,
     Outcome,
@@ -51,7 +52,13 @@ from tests.cluster.harness import (
     wait_until,
     watch_rows,
 )
-from tests.cluster.invariants import EpochWatch, jobs_of, lost_jobs_ended_late, taken_texts
+from tests.cluster.invariants import (
+    EpochWatch,
+    jobs_of,
+    last_reply,
+    lost_jobs_ended_late,
+    taken_texts,
+)
 
 pytestmark = pytest.mark.cluster
 
@@ -492,3 +499,39 @@ async def _all_finished(cluster: Cluster, roots: dict[str, str], specs: dict[str
     done = await asyncio.gather(*(root_finished(cluster, roots[s], spec)
                                   for s, spec in specs.items()))
     return all(done)
+
+
+async def test_a_saved_output_is_read_back_on_another_worker(tmp_path: Path,
+                                                              pg_url: str) -> None:
+    """A long ``Bash`` output is saved for the model; every worker is then
+    killed, and the task's next turn, on a worker that never ran it, reads
+    the saved file back through ``Read``, with no approval in default mode."""
+    cluster = Cluster(tmp_path, pg_url, workers=2, lease=LEASE)
+    await cluster.start()
+    try:
+        tid = await cluster.client.create(
+            SPILL_AGENT, 'CLUSTER-SPILL {"id": "s1", "lines": 4000}',
+            config={"cwd": str(cluster.work)})
+
+        async def replied(prefix: str) -> bool:
+            reply = last_reply(await cluster.client.events(tid)) or ""
+            row = await cluster.client.get(tid)
+            return reply.startswith(prefix) and row.inbox_read_seq == row.inbox_seq \
+                and row.status == "waiting"
+
+        assert await wait_until(lambda: replied("SPILLED s1"), 60), \
+            await cluster.client.events(tid)
+        ran_on = {p.pid for p in cluster.procs}
+        for i in range(len(cluster.procs)):
+            cluster.kill(i)
+        assert not ran_on & {p.pid for p in cluster.procs}
+        await cluster.client.send(tid, "CLUSTER-SPILL-READ s1")
+        assert await wait_until(lambda: replied("SPILL-READ s1"), 60), \
+            await cluster.client.events(tid)
+        records = await cluster.client.events(tid)
+        assert last_reply(records) == "SPILL-READ s1 ok", "\n".join(
+            str(r.event)[:400] for r in records if isinstance(r.event, ToolFinished))
+        saved = [r.event.result.text for r in records if isinstance(r.event, ToolFinished)]
+        assert "Full output saved to: " + str(cluster.home / "tool-results" / tid) in saved[0]
+    finally:
+        await cluster.close()

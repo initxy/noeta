@@ -46,6 +46,7 @@ NOETA = str(Path(sys.executable).parent / "noeta")
 MODEL = "cluster-scripted"
 ROOT_AGENT = "cluster"
 CHILD_AGENT = "cluster-child"
+SPILL_AGENT = "cluster-spill"
 INTERRUPTED = "outcome is unknown"
 #: Workers write fold snapshots this often, so claims under faults start
 #: from them (the runs' logs are a few dozen events).
@@ -82,6 +83,20 @@ plugins:
       agents: []
 ---
 The cluster test's scripted sub-agent.
+"""
+
+
+SPILL_FILE = """---
+name: cluster-spill
+description: The cluster test's agent whose long output is saved and read back.
+model: inherit
+plugins:
+  - shell
+  - fs
+  - permissions:
+      mode: default
+---
+The cluster test's scripted spill agent.
 """
 
 
@@ -141,6 +156,7 @@ class Cluster:
             ROOT_FILE.format(journal=self.journal, fire_after=fire_after, arm=self.arm))
         (self.home / "agents" / "cluster-child.md").write_text(
             CHILD_FILE.format(journal=self.journal))
+        (self.home / "agents" / "cluster-spill.md").write_text(SPILL_FILE)
         models = self.home / "models.json"
         models.write_text(json.dumps({"models": [
             {"id": MODEL, "context_window": 200_000, "max_output_tokens": 8_000}]}))
