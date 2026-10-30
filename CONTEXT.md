@@ -49,8 +49,8 @@ with `RemoteClient`, ACP) > `noeta/toolkit` (code plugins share) > `noeta/core`.
 import each other, nor do two plugins or two backends (`lint-imports`). One plugin reaches another
 only through the kernel: a tool by name (`TaskView.find_tool`), inherited config
 (`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
-others (memory's `dir` for instructions, shell's `cwd` and permissions' `mode` for permissions and
-hooks, instructions' files for hooks). Front ends import no plugin; they read permissions' `mode` /
+others (memory's `dir` for instructions, permissions and fs, shell's `cwd` and permissions'
+`mode` for permissions and hooks, instructions' files for hooks). Front ends import no plugin; they read permissions' `mode` /
 `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
 
 ## Ways in
@@ -73,7 +73,10 @@ infrastructure -> `backends`; it runs noeta or lets the outside in (a protocol) 
 an agent or the agent-file format -> `agents`; it is the `noeta` command or its terminal UI ->
 `cli`. Front ends in other languages (web, desktop) live outside the package and use HTTP.
 `scripts/lint-layout.py` (in `make check`) fails on any other top-level package and on a `core`
-module the kernel never imports, unless listed there as kernel surface with a reason.
+module the kernel never imports, unless listed there as kernel surface with a reason. Two
+rules for every tool and front end are the kernel's, not capabilities: the runner's result
+limits, saving through the task's exec env (`core/large_output.py`), and the client's image
+limits for every provider (`core/images.py`).
 
 ## Registry
 

@@ -409,6 +409,11 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
     base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
+    fs = base.get("fs")
+    if own_tasks_only and isinstance(fs, Mapping):
+        # A front end runs on the person's machine: an @-mention of a path
+        # under ~ is their home (never on a server, whose home is not theirs).
+        base["fs"] = {**fs, "home": str(Path.home())}
     store = open_store(settings.store_url)
     # Claude Code ranks the skill listing by use across its sessions; here
     # the store's tasks are the sessions (scanned in the background).

@@ -143,3 +143,23 @@ async def test_a_binary_resource_is_saved_and_its_place_named(tmp_path: Path) ->
     out = await tool.run({"server": "docs", "uri": "file:///a.pdf"}, ctx(tmp_path, spill=False))
     first = json.loads(texts(out)[0])["contents"][0]
     assert "blob" not in first and "could not be saved" in first["text"]
+
+
+async def test_a_server_image_is_decoded_off_the_event_loop(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from noeta.plugins.mcp import results
+
+    seen: list[bool] = []
+    real = results.fit_image
+
+    def fit(raw: bytes, media_type: str) -> Any:
+        seen.append(threading.current_thread() is threading.main_thread())
+        return real(raw, media_type)
+
+    monkeypatch.setattr(results, "fit_image", fit)
+    data = base64.b64encode(png(2, 2)).decode()
+    await render_result({"content": [{"type": "image", "mimeType": "image/png", "data": data}]},
+                        ctx(tmp_path))
+    assert seen == [False]

@@ -130,8 +130,9 @@ INVOKED_ORDER = 20
 #: The directories a workspace contributes, relative to its root.
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
 WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
-#: The tier of a skill directory found below the working directory: above
-#: the workspace's own.
+#: The keep-order tier of a skill directory found below the working
+#: directory. Such a skill never shadows another of the same name (Claude
+#: Code lists the others first and keeps the first of a name).
 NESTED_TIER = 5
 #: Announces the skills of a directory found below the working directory.
 NESTED_SKILLS = "Skills found in {dir}, now available through the Skill tool:"
@@ -284,8 +285,9 @@ class Skills(Extension):
     def tiers(self, cwd: str, nested: Sequence[str] = ()) -> list[tuple[str, int]]:
         """``(directory, keep-order tier)``, low precedence first; ``nested``
         are skill directories found below the working directory (deepest
-        last)."""
+        last), below every other."""
         out = [(d, 0) for d in self.dirs]
+        first: list[tuple[str, int]] = []
         if self.global_agents_dir is not None:
             out.append((self.global_agents_dir, 1))
         if self.global_dir is not None:
@@ -297,7 +299,7 @@ class Skills(Extension):
                      os.path.join(cwd, WORKSPACE_SKILLS_DIR)]
             if self.trusted is None or self.trusted(cwd):
                 out += [(gated[0], 3), (gated[1], 4)]
-                out += [(d, NESTED_TIER) for d in nested]
+                first = [(d, NESTED_TIER) for d in nested]
             elif cwd not in _warned_untrusted:
                 skipped = [d for d in gated if os.path.isdir(d)]
                 if skipped:  # nothing is skipped where the directories do not exist
@@ -306,7 +308,7 @@ class Skills(Extension):
                     _warned_untrusted[cwd] = None
                     _log.warning("workspace %s is not trusted; skipping its skill "
                                  "directories: %s", cwd, ", ".join(skipped))
-        return out
+        return first + out
 
     async def registry(self, env: ExecEnv, state: Any = None) -> SkillRegistry:
         """The skills ``env`` sees, with the nested directories ``state``
@@ -632,7 +634,8 @@ class Skills(Extension):
         """Skill directories (``.noeta/skills``, ``.agents/skills``) of the
         directories between the working directory and the file this call
         touched join the task, announced with their skills' names (Claude
-        Code's nested skill discovery)."""
+        Code's nested skill discovery). A directory git ignores (a
+        dependency's, a build's) is skipped, as Claude Code skips it."""
         path = next((call.input[k] for k in ("file_path", "notebook_path")
                      if isinstance(call.input.get(k), str) and call.input[k]), None)
         if path is None or self.skills_dir is not None or not self.workspace:
@@ -655,16 +658,19 @@ class Skills(Extension):
                 if root in known:
                     continue
                 found = await index_dir(env, root)
-                names = sorted(n for n, desc in found.items()
-                               if desc.model_invocable and not desc.paths)
-                if not found:
+                if not found or await _git_ignored(env, root, cwd):
                     continue
                 known.add(root)
                 view.record(self.name, "nested", {"dir": root})
                 state = {**state, "nested": [*nested_dirs(state), root]}
+                registry = await self.registry(env, state)
+                # Only the skills not shadowed by one of the same name.
+                names = sorted(n for n, desc in found.items()
+                               if desc.model_invocable and not desc.paths
+                               and (won := registry.get(n)) is not None
+                               and won.source_path == desc.source_path)
                 if not names:
                     continue
-                registry = await self.registry(env, state)
                 lines = [(n, line) for n, line in listing_lines(
                     registry, budget_tokens=self._budget(view), unlocked=unlocked_skills(state))
                     if n in names]
@@ -784,3 +790,14 @@ def _cut_skill(text: str) -> str:
         return text
     return text[:prefix_within(text, INVOKED_SKILL_MAX_TOKENS, INVOKED_SKILL_CUT)] \
         + INVOKED_SKILL_CUT
+
+
+async def _git_ignored(env: ExecEnv, path: str, cwd: str) -> bool:
+    """Whether git ignores ``path`` in the repository at ``cwd`` (``False``
+    outside a repository or without git)."""
+    try:
+        done = await env.run(["git", "check-ignore", "-q", "--", path], cwd=cwd, timeout=5,
+                             output_cap=4096)
+    except Exception:  # noqa: BLE001 — no git: nothing is ignored
+        return False
+    return done.exit_code == 0 and not done.timed_out

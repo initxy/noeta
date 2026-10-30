@@ -72,8 +72,12 @@ def test_size_labels_follow_claude_code() -> None:
 
 
 def test_spill_paths_are_a_function_of_task_and_call() -> None:
-    assert spill_path("/spill", "task/1", "toolu_01:x") == "/spill/task_1/toolu_01_x.txt"
-    assert spill_path("/spill", "", "") == "/spill/task/call.txt"
+    assert spill_path("/spill", "a1b2", "toolu_01:x") == "/spill/a1b2/toolu_01_x.txt"
+    # An id that is no file name gets a hash of it: two ids never share a directory.
+    odd = spill_path("/spill", "task/1", "c")
+    assert odd.startswith("/spill/task_1-") and odd.endswith("/c.txt")
+    assert odd != spill_path("/spill", "task:1", "c") != spill_path("/spill", "task_1", "c")
+    assert spill_path("/spill", "", "").startswith("/spill/task-")
 
 
 # ---------------------------------------------------------------------------

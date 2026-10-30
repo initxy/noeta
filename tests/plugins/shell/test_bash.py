@@ -89,6 +89,24 @@ async def test_an_image_data_uri_comes_back_as_an_image(h: Harness) -> None:
     assert block.data.startswith(b"\x89PNG")
 
 
+async def test_a_printed_image_is_decoded_off_the_event_loop(
+        h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from noeta.plugins.shell import output
+
+    seen: list[bool] = []
+    real = output.fit_image
+
+    def fit(raw: bytes, media_type: str) -> Any:
+        seen.append(threading.current_thread() is threading.main_thread())
+        return real(raw, media_type)
+
+    monkeypatch.setattr(output, "fit_image", fit)
+    await bash(h, f"echo 'data:image/png;base64,{_PNG_1X1}'")
+    assert seen == [False]
+
+
 async def test_a_broken_or_failing_image_uri_stays_text(h: Harness) -> None:
     out = await bash(h, "echo 'data:image/png;base64,@@@'")
     assert text_of(out) == "data:image/png;base64,@@@"

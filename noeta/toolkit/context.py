@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from noeta.core.execenv import ExecEnv
 from noeta.core.types import Message, ToolResult
+from noeta.toolkit.local_env import is_local
 
 if TYPE_CHECKING:
     from noeta.core.loop.state import TaskState
@@ -57,3 +58,45 @@ async def read_local_text(env: ExecEnv, path: str) -> str | None:
         return await asyncio.to_thread(Path(path).read_text, "utf-8")
     except (OSError, UnicodeDecodeError, ValueError):
         return None
+
+
+async def read_task_text(env: ExecEnv, path: str) -> str | None:
+    """``path`` as UTF-8 text where the task's own files are (its memory):
+    on this machine for a local env, else through ``env``, where the model's
+    file tools write them; ``None`` on any read fault."""
+    if is_local(env):
+        return await read_local_text(env, path)
+    return await read_text(env, path)
+
+
+def _local_files(directory: str, suffix: str) -> list[tuple[str, float]]:
+    out = []
+    for path in Path(directory).glob(f"*{suffix}"):
+        try:
+            if path.is_file():
+                out.append((path.name, path.stat().st_mtime))
+        except OSError:
+            continue
+    return out
+
+
+async def task_files(env: ExecEnv, directory: str, suffix: str) -> list[tuple[str, float]]:
+    """``(name, modification time)`` of the files directly in ``directory``
+    whose names end in ``suffix``, where the task's own files are (as
+    :func:`read_task_text`); empty when it cannot be listed."""
+    if is_local(env):
+        return await asyncio.to_thread(_local_files, directory, suffix)
+    try:
+        done = await env.run(["find", directory, "-maxdepth", "1", "-type", "f",
+                              "-name", f"*{suffix}", "-printf", "%T@ %f\\n"],
+                             timeout=10, output_cap=1024 * 1024)
+    except Exception:  # noqa: BLE001 — no such directory, or no find
+        return []
+    out = []
+    for line in done.stdout.decode("utf-8", "replace").splitlines():
+        mtime, _, name = line.partition(" ")
+        try:
+            out.append((name, float(mtime)))
+        except ValueError:
+            continue
+    return out if done.exit_code == 0 else []

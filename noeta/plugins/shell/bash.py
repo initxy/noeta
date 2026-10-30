@@ -20,6 +20,7 @@ background jobs; without them this tool refuses them.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -221,7 +222,7 @@ class BashTool:
             meta["timed_out"] = True
         ran_ok = not result.timed_out and result.exit_code == 0
         failed = result.timed_out or exit_fails(command, result.exit_code)
-        image = None if failed or notice else output_image(body)
+        image = None if failed or notice else await asyncio.to_thread(output_image, body)
         if image is not None:
             body = ""
         if not failed and not body and image is None:

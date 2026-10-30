@@ -288,6 +288,10 @@ class TaskView(records.CoreNotices):
     #: While a compaction asks for residents: whether the newest messages
     #: stay after its summary (``None`` outside a compaction).
     keeps_tail: bool | None = None
+    #: The spill root (``Runtime.spill_root``): tool outputs too long to
+    #: return inline are saved below it, in the task's exec env, for the
+    #: model to read (``None``: nothing is saved).
+    spill_dir: str | None = None
 
     @property
     def task_id(self) -> str:
