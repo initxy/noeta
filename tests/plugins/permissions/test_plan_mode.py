@@ -230,6 +230,41 @@ async def test_the_plan_text_follows_claude_codes_cadence(
                     26: "full"}
 
 
+async def test_a_prompt_that_arrives_mid_turn_counts_toward_the_cadence_at_once(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Checked before every model call (Claude Code's plan_mode attachment):
+    the fifth prompt since the full text, sent while a call runs, brings the
+    short text with the very next call."""
+    client = Client(store)
+
+    class Inject:
+        name = "Inject"
+        description = "send a message mid-turn"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = True
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            from noeta.core.tool import text_output
+            await client.send(ctx.task_id, "p6", when="now")
+            return text_output("sent")
+
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"),
+                        risk={"Inject": "low"})
+    provider = ScriptedProvider([*[reply("ok") for _ in range(4)],
+                                 reply("", ("Inject", {})), reply("ok")])
+    rt = runtime(store, provider, agent([perms], [Inject()]))
+    tid = await client.create("a", "p1", config={"cwd": str(tmp_path),
+                                                 "permission_mode": "plan"})
+    await rt.run_until_idle()
+    for i in range(2, 6):
+        await client.send(tid, f"p{i}")
+        await rt.run_until_idle()
+    texts = [plan_texts(r) for r in provider.requests]
+    assert [bool(t) for t in texts] == [True, False, False, False, False, True]
+    assert not texts[-1][0].startswith(FULL)
+
+
 async def test_planning_again_with_a_plan_file_reads_it_first(
         store: SqliteStore, tmp_path: Path) -> None:
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))

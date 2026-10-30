@@ -129,8 +129,9 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
             and newest == entered
         after = max(st.plan_noted, entered)
         due = "plan_active" in st.due and not held
-        cadence = not due and "plan_active" not in st.due \
-            and view.state.steps_in_turn == 0 and newest > after \
+        # Checked before every model call, as Claude Code's plan_mode
+        # attachment: a prompt that arrived mid-turn counts at once.
+        cadence = not due and "plan_active" not in st.due and newest > after \
             and _prompts_after(view, after) >= pl.PLAN_TURNS_BETWEEN
         if due or cadence:
             path = st.plan["path"]
