@@ -75,6 +75,17 @@ and reported in the README.
 ### Smaller recorded differences
 - Mentioned directory listing capped at 1,000 entries; hook blocking feedback names no command; visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
 
+### Extension points (Phase 2)
+- Scope: the item-by-item review (pi e7a0df2, dsh f3803c96) found nine points to add (CC has them, multi-machine needs them, or they are the mechanism); the owner answered the open five on 2026-10-29: userConfig/`settings.json`, Python plugins shipping `skills/` `commands/` `agents/`, `InstructionsLoaded`, open model families yes; `statusLine` no (left to plugins). Every other row is have or won't, with its reason, in `docs/extending.md`.
+- `--plugin-dir`: the person's own flag, so it loads for this run regardless of project trust (the machine policy still applies); refused with `--server`, whose plugins are the server's. A plugin file that joins no agent gets a notice, not an implicit `add_to`: one rule for every plugin place.
+- Side-call headers (ADD-2). Others: pi and dsh hand plugins a model registry; CC's WebFetch calls a small model. noeta: `ToolContext.complete` is `TaskView.complete`, so `WebFetch`'s digest no longer carries the headers a hook put on the main request, as title, recall and summary calls never did. Why: those headers exist only in the process that built the main request; a durable copy would put credentials in the log. A host that needs them on every call sets them on the provider or passes `digest=`. Verified before removing: WebFetch's cache fell back to the configured model with no headers on a worker that had not built the request (after an approval or a crash), and had no call at all without an earlier hook there; compaction's did not break across workers (overflow follows its request in the same step) but held the request as seen in its own `before_model`, before later extensions changed it (test `test_overflow_summarizes_the_request_as_it_was_sent`).
+- Tool progress (ADD-3) fits the live path: three `Delta` fields (`call_id`, `tool`, `elapsed`), one `ToolContext` field and a closure in the runner; nothing recorded. Across Postgres a progress text crosses as its tail (it replaces, so cutting it into pieces would show only the last). stream-json sends CC's `tool_progress` (no output in it, as CC's SDK) always, not only with `--include-partial-messages`. First user: foreground `Bash` (after 2 s, then every second, its output's last 4 KB), CC's live Bash output.
+- userConfig (5a). Others: CC asks when a plugin is enabled, keeps secrets in its credential store (`pluginSecrets`), fills non-sensitive values into skill text. noeta: asks on `noeta plugin add` / `noeta plugin configure` (or `--config KEY=VALUE`); values in `~/.noeta/settings.json` `pluginConfigs` (CC's key in noeta's copy of the file, ADR-004), a sensitive one in the OS keyring with only a `{keyring:}` reference stored; filled into commands, agent prompts, MCP servers and hook `args`, not skill bodies. Why: a reference keeps secrets out of the task's plugin record; skill bodies get neither this nor `${CLAUDE_PLUGIN_ROOT}` yet, so both wait for one change. A plugin's `settings.json` `agent` (and the person's own `agent`) picks the agent front ends start with; `statusLine` keys are skipped.
+- `InstructionsLoaded` (5c). A file shown again because it changed fires `session_start` (CC's reason when it reloads on a resume; noeta re-reads with each message). `compact` fires from `Compacted` and the instructions plugin's recorded files, so it fires even with re-attaching turned off. The hooks plugin reads the instructions plugin's records (CONTEXT "Layers").
+- Model families (5d): any lowercase identifier, not only registered provider names (those are wire names, `openai_compat`); a near-miss of a known family is still refused.
+- Python plugin parts (5b): only `skills/`, `commands/` (`/<directory>:<command>`) and `agents/`; hooks and MCP servers stay Claude Code plugins' (asked for three).
+- Maintenance: `Agent.inherit_model` / `permission_mode` / `isolation` move to `Agent.extra` in CC's spelling (`model: inherit`, `permissionMode`, `isolation`); only the subtasks plugin read them.
+
 ## Plan
 
 ### Phase 0: baseline
@@ -89,9 +100,9 @@ and reported in the README.
       when the replay can see it, marked in `parity/deviations.md`.
 
 ### Phase 2: extension points (branch `ext-*`)
-- [ ] Item-by-item table of pi and dsh extension points in `docs/extending.md`, each with a
+- [x] Item-by-item table of pi and dsh extension points in `docs/extending.md`, each with a
       verdict and reason.
-- [ ] Plugin authoring steps no more than pi's.
+- [x] Plugin authoring steps no more than pi's.
 
 ### Phase 3: eval coverage (branch `eval-coverage`)
 - [ ] A scenario for each area: skills, reminders, memory, compaction continuation,
@@ -156,3 +167,16 @@ and reported in the README.
 - 2026-10-29 B6 (ctx-attach-env): file-changed note checked before every model call (so right after a Bash/formatter step), as a system turn (order 70), CC's meaning (current state, don't revert, say so if wrong, otherwise no mention) in own words, with the changed lines numbered (diff against the model's last whole Read still in the conversation; then the file counts as read) or a not-shown pointer to Read. Removed the 'Bash does not note a changed file' row from Not yet matched; rule `rem.file-changed.2` extended.
 - 2026-10-29 B9 (ctx-attach-env): hook text for the model is led by CC's labels: `<hook name> hook additional context: ` (UserPromptSubmit context had no label at all; SessionStart no longer names its source) and `<hook name> hook blocking error` for a tool hook's block; tool events name `<event>:<tool>`. Rule `rem.hook-context.1`.
 - 2026-10-29 ctx-attach-env gates: `make check` green (2443 passed, coverage 88.40%), `make parity` 0 mismatches (11 accepted deviations). DeepSeek V4.1, 13 scenarios x 9 (`--out` in the session scratchpad, ds41-ctx-attach-env.json): overall 0.927 vs 0.919 on main (ds41-main-37fd9997); every scenario within one trial of main except delegate_parallel_review 0.22 vs 0.11 (8 of 9 hit the 240 s trial timeout, as on main); 494 requests, 6.2M input tokens. Against the committed baseline (another model) `make eval` reports delegate_parallel_review as regressed, as main does.
+- 2026-10-29 Phase 2 started on `ext-points` from `best-of-three` @b9c7ca7a; `make check` 2465 passed.
+- 2026-10-29 ADD-1: `--plugin-dir` (file, plugin directory, Claude Code plugin or a directory of them; TUI and `-p`) loads for this run; a plugin file that joins no agent is a notice; hello-plugin README fixed.
+- 2026-10-29 5d: `register_models` accepts any lowercase family; near-misses of anthropic/openai refused.
+- 2026-10-29 ADD-2: `ToolContext.complete`; `on_context_overflow(view, request)`; WebFetch's and compaction's per-process caches removed (what each broke: Decisions).
+- 2026-10-29 5c: `InstructionsLoaded` hooks fire per instruction file shown (five load reasons, CC's fields).
+- 2026-10-29 ADD-4: `Allow`, `Deny`, `Ask`, `Rewrite`, `ToolChanges`, `ToolUse`, `Recorded`, `TaskState` exported from `noeta`; the examples import from it.
+- 2026-10-29 ADD-3: `ToolContext.progress` on the live path; TUI, ACP `tool_call_update`, stream-json `tool_progress`; foreground Bash is the first user. A timing race in its test fixed in a follow-up commit.
+- 2026-10-29 5a: CC plugin `userConfig` (asked on `noeta plugin add`, `configure`, `--config`) and `settings.json` `agent`.
+- 2026-10-29 5b: a Python plugin directory ships `skills/`, `commands/`, `agents/`.
+- 2026-10-29 Maintenance: sub-agent fields into `Agent.extra`, `ToolContext.extras` dropped, the permissions/checkpoints record contract written down (CONTEXT "Layers", extending.md).
+- 2026-10-29 docs/extending.md: full item-by-item table (have / added / won't, each with a reason), new hook rows, step count next to pi's (4 and 4; 1 command for a file kept elsewhere).
+- 2026-10-29 Friction: an outside writer duplicated a block of `tests/plugins/context/test_date_change.py` in this worktree mid-run (F811 in `make lint`); not ours, restored, its diff kept in the session scratchpad.
+- 2026-10-29 ext-points gates: `make check` 2488 passed, coverage 88.53 %; `make parity` 0 mismatches (11 accepted deviations); `make cluster` 13/13. No model-facing prompt text changed, so no eval run.
