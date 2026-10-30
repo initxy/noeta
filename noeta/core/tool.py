@@ -98,7 +98,6 @@ class ToolContext(CoreNotices):
     #: ``await task(task_id)``: the store's row of one task, ``None`` when
     #: there is none.
     task: Callable[[str], Awaitable[Any]] | None = None
-    extras: dict[str, Any] = field(default_factory=dict)
     #: The model made this call (the runner's calls), so what earlier calls
     #: returned is in its conversation; ``False`` when an extension runs a
     #: tool itself.

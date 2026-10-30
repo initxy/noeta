@@ -60,6 +60,10 @@ The four examples are each one file, a short README and a test `make check` runs
 - [`examples/house-style`](../examples/house-style) — prompt and reminder text: an output style
   captured when the task starts, so a resumed task sends identical bytes.
 
+A plugin that replaces a built-in one front ends read keeps its name and records:
+`permissions` (`mode`, `modes`: the mode shown and cycled) and `checkpoints` (`snapshot`:
+rewind).
+
 ### A package
 
 Register the class in your `pyproject.toml` under `[project.entry-points."noeta.plugins"]`

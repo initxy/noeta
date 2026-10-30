@@ -9,6 +9,10 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **`Agent.inherit_model`, `permission_mode` and `isolation` are gone; `ToolContext.extras`
+  too.** Only the sub-agent plugin acted on the three: it reads them from `Agent.extra` as an
+  agent file spells them (`model: inherit`, `permissionMode`, `isolation`); an SDK host
+  building an `Agent` in code sets them there. `extras` was never used.
 - **Skills, memory recall, instruction files and list changes follow Claude Code 2.1.312.**
   A skill's listing line is capped at 1,536 characters (not 384 estimated tokens); a skill
   whose description changed is listed again; a loaded skill is its base-directory line and

@@ -494,9 +494,8 @@ def build_agents(
             allowed_tools=f.tools,
             denied_tools=f.denied_tools,
             step_budget=f.max_turns or Agent.step_budget,
-            inherit_model=not f.model,
-            permission_mode=f.permission_mode,
-            isolation=str(f.extra["isolation"]) if f.extra.get("isolation") else None,
-            extra=dict(f.extra),
+            # Claude Code's spelling: no model is "inherit" (the caller's).
+            extra={**f.extra, "model": f.model or "inherit",
+                   **({"permissionMode": f.permission_mode} if f.permission_mode else {})},
         ))
     return agents
