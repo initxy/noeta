@@ -152,21 +152,22 @@ def content(text: str, values: Mapping[str, Any],
     return _REF.sub(fill, text)
 
 
-def _env_name(key: str) -> str:
+def env_name(key: str) -> str:
+    """The hook variable a key's value goes in."""
     return "CLAUDE_PLUGIN_OPTION_" + re.sub(r"[^A-Za-z0-9_]", "_", key).upper()
 
 
 def hook_env(values: Mapping[str, Any]) -> dict[str, str]:
     """``CLAUDE_PLUGIN_OPTION_<KEY>`` for each value (a hook's environment;
     a secret stays a reference until the hook is made)."""
-    return {_env_name(k): _text(v) for k, v in values.items()}
+    return {env_name(k): _text(v) for k, v in values.items()}
 
 
 def names(value: Any, key: str) -> bool:
     """Whether ``value`` (a hook, any JSON) names option ``key``: as
     ``${user_config.KEY}`` or ``CLAUDE_PLUGIN_OPTION_<KEY>``."""
     text = json.dumps(value)
-    return f"user_config.{key}}}" in text or _env_name(key) in text
+    return f"user_config.{key}}}" in text or env_name(key) in text
 
 
 def _parse(key: str, field: Mapping[str, Any], raw: str) -> Any:

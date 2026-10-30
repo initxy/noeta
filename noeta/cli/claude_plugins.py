@@ -297,7 +297,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
     unreadable = {k: why for k, v in values.items()
                   if (why := _unreadable(name, v)) is not None}
     notice_list = [f"plugin {name}: option {k!r} cannot be read here ({why}); its hooks get "
-                   f"no CLAUDE_PLUGIN_OPTION_{k.upper()}; run noeta plugin configure {name}"
+                   f"no {plugin_options.env_name(k)}; run noeta plugin configure {name}"
                    for k, why in unreadable.items()]
     plugin = ClaudePlugin(name=name, root=root, version=str(manifest.get("version") or ""),
                           project=project, user_config=fields,
