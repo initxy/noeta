@@ -313,18 +313,18 @@ class Compaction(Extension):
     @staticmethod
     def _tokens(state: TaskState, request: ModelRequest, n: int) -> tuple[int, int]:
         """``(context, before)``: the context of the first ``n`` messages, and
-        of those up to and including the newest reply. Each is the reply's
-        reported usage plus the estimate of what came after it, or the
-        estimate of the whole when that is larger."""
+        of those up to and including the newest reply. As Claude Code's: the
+        newest reply's reported usage plus the estimate of what came after
+        it; the estimate of the whole only while no reply reported usage."""
         prefix = prefix_tokens(request.system, request.tools)
         messages = request.messages[:n]
         last = _last_reply(messages)
-        before = prefix + messages_tokens(messages[:last + 1])
         usage = state.last_usage
-        if usage is not None and last >= 0:
-            before = max(before, usage.input + usage.output)
-        since = messages_tokens(messages[last + 1:])
-        return max(prefix + messages_tokens(messages), before + since), before
+        if usage is None or last < 0:
+            return (prefix + messages_tokens(messages),
+                    prefix + messages_tokens(messages[:last + 1]))
+        before = usage.input + usage.output
+        return before + messages_tokens(messages[last + 1:]), before
 
     def _cut(self, state: TaskState, n: int, *, manual: bool) -> int | None:
         """How many leading messages the summary covers: everything before

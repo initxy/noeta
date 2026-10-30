@@ -201,6 +201,24 @@ def test_command_text() -> None:
     assert text.endswith("</local-command-stdout>")
 
 
+def test_the_context_is_the_last_usage_plus_what_came_after() -> None:
+    """Claude Code's estimate: the newest reply's reported usage anchors it;
+    the character estimate (which over-counts CJK text) is used only while
+    no reply has reported usage."""
+    from noeta.core.loop.state import TaskState
+
+    cjk = "压缩" * 5_000  # 10,000 estimated tokens
+    messages = [user(cjk), Message(role="assistant", content=[Text(text="ok")]), user("more")]
+    request = ModelRequest(model="m", messages=messages)
+    state = TaskState(messages=messages)
+    full, _ = Compaction._tokens(state, request, len(messages))
+    assert full >= 10_000
+    state.last_usage = Usage(uncached=3_000, cache_read=1_000, output=20)
+    tokens, before = Compaction._tokens(state, request, len(messages))
+    assert before == 4_020
+    assert tokens == 4_020 + messages_tokens([user("more")])
+
+
 def _read(call: str, path: str) -> list[Message]:
     return [Message(role="assistant", content=[
                 ToolUse(id=call, name="Read", input={"file_path": path})]),

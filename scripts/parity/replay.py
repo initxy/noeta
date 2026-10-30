@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from noeta.plugins.compaction.estimate import text_tokens
 from scripts.parity import compare, facts, wire
 from scripts.parity.distill import session_prompts, step_marker
 from scripts.parity.project import NOETA_PLACES, write_project
@@ -227,6 +228,23 @@ class Replayer:
         return content, stop
 
 
+def _input_tokens(body: Mapping[str, Any]) -> int:
+    """What the fake model reports as the request's input tokens: noeta's
+    own estimate of its text (a real model reports its count, which
+    compaction's threshold check starts from)."""
+    def strings(value: Any) -> Iterator[str]:
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, Mapping):
+            for v in value.values():
+                yield from strings(v)
+        elif isinstance(value, list):
+            for v in value:
+                yield from strings(v)
+    return sum(text_tokens(s) for k in ("system", "messages", "tools")
+               for s in strings(body.get(k)))
+
+
 class Endpoint:
     """The fake Messages endpoint: serves the replayer's turns, keeps every request."""
 
@@ -283,7 +301,8 @@ class Endpoint:
                                      "stop_reason": stop, "usage": {"input_tokens": 0,
                                                                     "output_tokens": 1}})
                     return
-                self._send_sse(wire.sse(content, stop, model=str(body.get("model"))))
+                self._send_sse(wire.sse(content, stop, model=str(body.get("model")),
+                                        input_tokens=_input_tokens(body)))
 
             def _send_json(self, data: Any) -> None:
                 raw = json.dumps(data).encode()
