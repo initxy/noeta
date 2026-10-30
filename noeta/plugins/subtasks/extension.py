@@ -99,7 +99,6 @@ class Subtasks(Extension):
       without delegation carries, so the child-side tools still apply.
     - ``max_depth``: a task at this depth may not delegate (root = 0).
     - ``max_background``: agents one task may have running at once.
-    - ``max_fanout``: Agent calls one reply may carry.
     - ``exclusive_with``: tool names an Agent call may not share a reply with.
     - ``inherit_config``: parent ``TaskCreated.config`` keys a child copies.
       ``model`` and ``effort`` are copied only when neither the call nor the
@@ -119,7 +118,6 @@ class Subtasks(Extension):
         agents: Sequence[str] = (),
         max_depth: int | None = 3,
         max_background: int = texts.MAX_BACKGROUND,
-        max_fanout: int = texts.MAX_FANOUT,
         exclusive_with: Collection[str] = (),
         inherit_config: Sequence[str] = ("cwd", "model", "effort"),
         queue: str | None = None,
@@ -137,7 +135,6 @@ class Subtasks(Extension):
         self._roster = Roster(self.roster, self.agents)
         self.max_depth = max_depth
         self.max_background = max_background
-        self.max_fanout = max_fanout
         self.exclusive_with = frozenset(exclusive_with)
         self.inherit_config = tuple(inherit_config)
         self.queue = queue

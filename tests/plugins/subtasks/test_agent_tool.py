@@ -390,11 +390,11 @@ async def test_refusals(store: SqliteStore) -> None:
     assert len(await client.tasks(parent_id=tid)) == 1
 
 
-async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
+async def test_depth_cap_and_running_cap(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", agent("a")), reply("ok"),
                           reply("", agent("a"), agent("b"), agent("c")), reply("ok"),
                           reply("", agent("a"), agent("b")), reply("ok")])
-    rt = runtime(store, {"p": p}, parent(queue="kids", max_fanout=2, max_background=1),
+    rt = runtime(store, {"p": p}, parent(queue="kids", max_background=1),
                  worker())
     client = Client(store)
     tid = await client.create("main", "go", config={"subtask_depth": 3})
@@ -406,8 +406,9 @@ async def test_depth_cap_and_fan_out(store: SqliteStore) -> None:
     await client.send(tid, "more")
     await rt.run_until_idle()
     out = await results(client, tid)
-    assert out[:3] == [(texts.FANOUT_TOO_BIG.format(n=3, limit=2), True)] * 3
-    assert out[3:] == [(texts.TOO_MANY_BACKGROUND.format(limit=1), True)] * 2
+    # No cap on the Agent calls of one reply (Claude Code has none): only
+    # the running agents are counted.
+    assert out == [(texts.TOO_MANY_BACKGROUND.format(limit=1), True)] * 5
 
 
 async def test_agent_calls_of_one_reply_count_once_against_the_cap(
