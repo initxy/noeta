@@ -361,6 +361,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **The names a plugin author uses come from `noeta`**: `Allow`, `Deny`, `Ask`, `Rewrite`,
+  `ToolChanges`, `ToolUse`, `Recorded` and `TaskState` join `Extension`, `Tool` and the rest,
+  so a plugin file needs one import line.
 - **`InstructionsLoaded` hooks fire as in Claude Code**: once per instruction file shown (at
   the start, nested, an `@import`, a `paths:` match, after a compaction, and a changed file
   shown again), with `file_path`, `memory_type`, `load_reason`, `globs`,

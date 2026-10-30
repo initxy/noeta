@@ -9,9 +9,17 @@ import shlex
 from collections.abc import Sequence
 from typing import Annotated, Any
 
-from noeta import Extension, Reminder, TaskView, Tool, ToolContext, ToolOutput, function_tool
+from noeta import (
+    Extension,
+    Reminder,
+    TaskView,
+    Tool,
+    ToolContext,
+    ToolOutput,
+    ToolUse,
+    function_tool,
+)
 from noeta import text_output as output
-from noeta.core.types import ToolUse
 
 
 class RunTests(Extension):
