@@ -27,6 +27,9 @@ Kinds:
 - ``mentions`` — ``{"through", "path"?}``: the person's messages up to log
   seq ``through`` had their ``@`` mentions attached (an attachment is
   recorded with its message and names its ``path``).
+- ``images`` — ``{"through", "paths"}``: the person's message at log seq
+  ``through`` had its pasted images saved as ``paths`` (recorded with the
+  note naming them).
 - ``notice`` — ``{"text"}``: a note for the model to get after this call's
   result (a cut read's paging hint); ``notice_sent`` (the reminder that
   carried it) clears it.
@@ -49,6 +52,7 @@ __all__ = [
     "FS",
     "KIND_CHANGED",
     "KIND_FORGET_RANGES",
+    "KIND_IMAGES",
     "KIND_MENTIONS",
     "KIND_NOTICE",
     "KIND_NOTICE_SENT",
@@ -68,6 +72,7 @@ KIND_FORGET_RANGES = "forget_ranges"
 KIND_NOTICE = "notice"
 KIND_NOTICE_SENT = "notice_sent"
 KIND_MENTIONS = "mentions"
+KIND_IMAGES = "images"
 #: Files remembered as read at most: the oldest are forgotten past it.
 MAX_FILES = 1000
 
@@ -95,6 +100,9 @@ class FsState(Struct):
     #: Log seq of the newest message of the person's whose mentions were
     #: attached.
     mentions_through: int = 0
+    #: Log seq of the newest message of the person's whose pasted images
+    #: were saved as files.
+    images_through: int = 0
 
 
 def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
@@ -137,6 +145,11 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
             return base
         return msgspec.structs.replace(
             base, mentions_through=max(base.mentions_through, through))
+    if kind == KIND_IMAGES:
+        through = data.get("through")
+        if isinstance(through, bool) or not isinstance(through, int):
+            return base
+        return msgspec.structs.replace(base, images_through=max(base.images_through, through))
     if kind == KIND_FORGET_RANGES:
         return msgspec.structs.replace(base, reads={
             p: msgspec.structs.replace(r, range=None) for p, r in base.reads.items()})

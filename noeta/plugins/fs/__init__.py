@@ -15,7 +15,8 @@ until the model reads it again.
 A tool's own note for the model (``notice``: the paging hint of a read cut
 to fit the token ceiling) is sent as a reminder right after that call's
 result, as Claude Code does. Files the person mentions with ``@path`` are
-attached through ``Read`` (:mod:`noeta.plugins.fs.mentions`)."""
+attached through ``Read`` (:mod:`noeta.plugins.fs.mentions`); images the person pastes
+are also saved as files the model is told of (:mod:`noeta.plugins.fs.pasted`)."""
 
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
 from noeta.plugins.fs.mentions import attach_mentions
 from noeta.plugins.fs.notebook import NotebookEditTool
+from noeta.plugins.fs.pasted import save_pasted_images
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import (
     FS,
@@ -109,6 +111,7 @@ class FileTools(Extension):
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         if self.mentions:
             await attach_mentions(view)
+        await save_pasted_images(view)
         st = view.ext_state(self.name)
         if not isinstance(st, FsState):
             return ()

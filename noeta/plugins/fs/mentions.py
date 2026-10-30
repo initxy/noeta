@@ -32,7 +32,7 @@ from noeta.plugins.fs.state import FS, KIND_MENTIONS, KIND_NOTICE, current_fs_st
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.tools import format_size, output_text
 
-__all__ = ["FIRST_LINES", "MENTION", "attach_mentions", "mentioned"]
+__all__ = ["FIRST_LINES", "MENTION", "attach_mentions", "mentioned", "new_prompts"]
 
 #: ``@path`` or ``@"path with spaces"``, not inside a word or an e-mail address.
 MENTION = re.compile(r'(?<![\w@])@("([^"]+)"|[^\s"]+)')
@@ -89,7 +89,7 @@ def mentioned(text: str) -> list[Mention]:
     return out
 
 
-def _new_prompts(view: TaskView, through: int) -> list[tuple[int, Message]]:
+def new_prompts(view: TaskView, through: int) -> list[tuple[int, Message]]:
     """The person's messages of the current exchange (after the model's
     last reply) newer than seq ``through``."""
     messages, seqs = view.state.messages, view.state.message_seqs
@@ -102,7 +102,7 @@ def _new_prompts(view: TaskView, through: int) -> list[tuple[int, Message]]:
 async def attach_mentions(view: TaskView) -> None:
     """Record an attachment for each new mention of the person's (once per
     message: what was handled is recorded, in the log)."""
-    prompts = _new_prompts(view, current_fs_state(view.state.ext).mentions_through)
+    prompts = new_prompts(view, current_fs_state(view.state.ext).mentions_through)
     found = [m for _, message in prompts for m in mentioned(message.text)]
     if not found:
         return
