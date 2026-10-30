@@ -18,6 +18,7 @@ are left out and the text is cut to its head, marked at the end.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -138,7 +139,8 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
                     blocks.append(Text(text=t))
                 continue
             non_text += 1
-            line, image = _describe_block(block)
+            # Decoding a server's image is CPU work: off the event loop.
+            line, image = await asyncio.to_thread(_describe_block, block)
             if image is not None:
                 blocks.append(image)
             elif line:
