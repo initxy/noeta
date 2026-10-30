@@ -515,7 +515,7 @@ def raise_timeout(ws: Path) -> None:
 # Compaction mid-edit: eight large files, one small change each
 # --------------------------------------------------------------------------- #
 
-STEP_FILES = tuple(f"steps/step{i}.py" for i in range(1, 9))
+STEP_FILES = tuple(f"steps/step{i}.py" for i in range(1, 13))
 
 _STEP_FILLER = (
     "# Record {n}: the reconciliation pass compares ledger totals against the\n"

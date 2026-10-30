@@ -797,14 +797,18 @@ SCENARIOS: list[Scenario] = [
         name="compaction_resume_edits",
         behavior="after a forced summarize, finishes the remaining edits without redoing done ones",
         goal=(
-            "In steps/step1.py through steps/step8.py, change the line STATUS = \"todo\" to "
+            "In steps/step1.py through steps/step12.py, change the line STATUS = \"todo\" to "
             "STATUS = \"done\". Do the files one at a time, in order: Read the file, then "
             "Edit it, then move on to the next. Do not use the shell or search tools, and "
-            "keep going until all eight are done."
+            "keep going until all twelve are done."
         ),
         setup=fx.steps,
         score=score_compaction_resume_edits,
         small_window=True,
+        # Enough room that a summary plus its restored files leaves space for
+        # more steps: at 24K every summary refilled within a step, which is
+        # the thrashing stop's case (Claude Code's, rightly), not continuation.
+        usable_window=32_000,
         # Several summaries on a slow model run past the default 420 s.
         timeout_s=600.0,
         tags=("compaction",),
@@ -826,12 +830,22 @@ SCENARIOS: list[Scenario] = [
         behavior="in plan mode, explores read-only and asks for approval with ExitPlanMode",
         goal="Add a clear() method to Cart in shop/cart.py that empties the cart, with a test.",
         setup=fx.shop,
-        # Switched into, not started in: a task created with
-        # permission_mode "plan" records the mode but no plan, so it is never
-        # told it is planning (the plan-mode reminder needs the plan state
-        # only a switch records).
+        # Switched into (a front end's mode toggle); plan_mode_started is the
+        # other way in.
         permission_mode="default",
         switch_mode="plan",
+        answer=plan_reviewer,
+        score=score_plan_mode,
+        tags=("plan_mode",),
+    ),
+    Scenario(
+        name="plan_mode_started",
+        behavior="a task created in plan mode explores read-only and ends with ExitPlanMode",
+        goal="Add a clear() method to Cart in shop/cart.py that empties the cart, with a test.",
+        setup=fx.shop,
+        # Created in plan mode, as `noeta -p --permission-mode plan` and the
+        # TUI create it.
+        permission_mode="plan",
         answer=plan_reviewer,
         score=score_plan_mode,
         tags=("plan_mode",),

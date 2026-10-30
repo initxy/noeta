@@ -6,6 +6,7 @@ and ``run_trial``.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import time
@@ -89,6 +90,18 @@ class TrialDirs:
     memory: Path
 
 
+#: What running code leaves behind (bytecode, test caches): no one's change.
+_BYPRODUCTS = frozenset({"__pycache__", ".pytest_cache"})
+
+
+def snapshot(ws: Path) -> dict[str, str]:
+    """Every file under ``ws`` by relative path, with its sha256 (byproducts
+    of running code left out)."""
+    return {str(p.relative_to(ws)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(ws.rglob("*"))
+            if p.is_file() and not _BYPRODUCTS.intersection(p.relative_to(ws).parts)}
+
+
 @dataclass
 class Trace:
     """What one trial did, in the shapes scoring needs."""
@@ -116,8 +129,7 @@ class Trace:
 
     def changed_files(self) -> list[str]:
         """Workspace files added, removed or changed since the task began."""
-        now = {str(p.relative_to(self.workspace)): hashlib.sha256(p.read_bytes()).hexdigest()
-               for p in sorted(self.workspace.rglob("*")) if p.is_file()}
+        now = snapshot(self.workspace)
         return sorted(k for k in now.keys() | self.before.keys()
                       if now.get(k) != self.before.get(k))
 
@@ -217,6 +229,9 @@ class Scenario:
     #: ``(trace, judge) -> (score in 0..1, named sub-checks)``.
     score: Callable[[Trace, Judge], tuple[float, dict[str, Any]]]
     small_window: bool = False
+    #: With ``small_window``: the history window left after the model's
+    #: reserves, so a handful of reads overflow it.
+    usable_window: int = 24_000
     #: Wall-clock cap; a trial past it is interrupted and scored as it stands.
     timeout_s: float = TRIAL_TIMEOUT_S
     tags: tuple[str, ...] = field(default_factory=tuple)
@@ -256,6 +271,10 @@ def time_trial(
             status=trace.status,
             error=trace.error,
             tools=[[c.tool_name for c in b] for b in trace.batches],
+            # Each call with its arguments (and whether it failed), so a
+            # zero can be diagnosed from the results file alone.
+            calls=[f"{'FAILED ' if trace.failed(c) else ''}{c.tool_name} "
+                   f"{json.dumps(c.arguments, ensure_ascii=False)[:240]}" for c in trace.calls],
             commands=[c[:300] for c in trace.bash_commands()],
             spawned=trace.spawned,
             compactions=trace.compactions,

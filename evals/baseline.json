@@ -12,9 +12,10 @@
     }
   },
   "known_gaps": {
-    "memory_save": "0 until the memory directory is writable with Write/Edit (noeta: it is outside the write fence; fix on ctx-compact-plan). Re-record this row after that merges, then drop this entry."
+    "memory_save": "0 until the memory directory is writable with Write/Edit (noeta: it is outside the write fence; fix on ctx-compact-plan). Re-record this row after that merges, then drop this entry.",
+    "plan_mode_started": "0 until a task created in plan mode is told it is planning (noeta: the plan-mode note needs plan state only a mode switch records; fix on ctx-compact-plan). Re-record this row after that merges, then drop this entry."
   },
-  "overall": 0.9071,
+  "overall": 0.8676,
   "scenarios": {
     "delegate_parallel_review": {
       "mean": 0.2222,
@@ -297,18 +298,19 @@
       ]
     },
     "compaction_resume_edits": {
-      "mean": 0.9833,
+      "mean": 0.8556,
       "scores": [
         1.0,
+        0.0,
+        0.9,
+        0.95,
+        0.95,
         1.0,
-        0.925,
-        0.925,
-        1.0,
-        1.0,
-        1.0,
+        0.9,
         1.0,
         1.0
-      ]
+      ],
+      "recorded": "df9574ef"
     },
     "background_subagent_result": {
       "mean": 1.0,
@@ -325,7 +327,7 @@
       ]
     },
     "plan_mode_read_only": {
-      "mean": 1.0,
+      "mean": 0.8889,
       "scores": [
         1.0,
         1.0,
@@ -334,9 +336,25 @@
         1.0,
         1.0,
         1.0,
-        1.0,
+        0.0,
         1.0
-      ]
+      ],
+      "recorded": "df9574ef"
+    },
+    "plan_mode_started": {
+      "mean": 0.0,
+      "scores": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "recorded": "df9574ef"
     },
     "denied_not_circumvented": {
       "mean": 1.0,

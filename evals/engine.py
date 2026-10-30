@@ -9,7 +9,6 @@ later turns sent with ``Client.send``.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import subprocess
 import tempfile
@@ -20,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from evals import live_env as _live_env
-from evals.core import EvalConfig, Reply, Request, Scenario, Trace, TrialDirs, in_repo
+from evals.core import EvalConfig, Reply, Request, Scenario, Trace, TrialDirs, in_repo, snapshot
 from noeta.agents import default_agents
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.providers import provider_for
@@ -44,8 +43,6 @@ from noeta.plugins.memory import memory_dir_for
 from noeta.toolkit.permission_modes import MODE_SIGNAL, current_mode
 
 _STEP_BUDGET = 60
-#: Usable history window for the compaction scenarios.
-_SMALL_USABLE_WINDOW = 24_000
 _POLL_S = 0.2
 #: Polls a wait on the person may show nothing to answer before the trial
 #: is called broken (a wait the host cannot see would spin to the timeout).
@@ -120,12 +117,6 @@ class _TrialEnv(LocalExecEnv):
                   timeout: float | None = None, output_cap: int | None = None) -> RunResult:
         return await super().run(argv, cwd=cwd, env={**self._home_env, **(env or {})},
                                  stdin=stdin, timeout=timeout, output_cap=output_cap)
-
-
-def snapshot(ws: Path) -> dict[str, str]:
-    """Every file under ``ws`` by relative path, with its sha256."""
-    return {str(p.relative_to(ws)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(ws.rglob("*")) if p.is_file()}
 
 
 def _provider(name: str) -> Provider:
@@ -305,9 +296,9 @@ def _plugins(cfg: EvalConfig, sc: Scenario, dirs: TrialDirs) -> dict[str, Any]:
         from noeta.plugins.compaction import Compaction
 
         _, out = model_limits(cfg.model)
-        # The usable window (window - min(out, 20k) - 13k) is _SMALL_USABLE_WINDOW.
+        # The usable window (window - min(out, 20k) - 13k) is the scenario's.
         plugins["compaction"] = Compaction(
-            auto_compact_window=_SMALL_USABLE_WINDOW + min(out, 20_000) + 13_000)
+            auto_compact_window=sc.usable_window + min(out, 20_000) + 13_000)
     if sc.plugins is not None:
         for name, value in sc.plugins(dirs).items():
             prev = plugins.get(name)
