@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-10-30
 branch: bench-fixes
 ---
@@ -141,3 +141,4 @@ Findings:
 (2579 passed, 88.75%); parity 0 mismatches; live A/B 20 vs 20 calls, no effect on output.
 2026-10-30: `make eval` (DeepSeek V4.1, 3 trials): 0.948 vs baseline 0.953, no regression.
 2026-10-30: review fixes: the prompt line is stripped wherever it sits; `gets_budget` matches Claude Code's id recognition (captured); capture summary committed.
+2026-10-30: `make eval` at f7eb911d (DeepSeek V4.1, 9 trials): 0.963 vs baseline 0.953, no regression; `make cluster` 14/14 at 7bba8c21; independent review: no blocker, its four points fixed in 7bba8c21. Open follow-ups moved to `2026-10-29-open-source-follow-ups.md`.
