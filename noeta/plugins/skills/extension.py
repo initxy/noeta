@@ -105,7 +105,7 @@ FORKS_KEEP = 32
 #: One checksum of every ``SKILL.md`` (paths and text) under the directories
 #: given as arguments: changes when a skill is added, removed or edited.
 _FINGERPRINT = ('for d in "$@"; do [ -d "$d" ] && find -L "$d" -type f -name SKILL.md '
-                '-print -exec cat {} \\; ; done 2>/dev/null | cksum')
+                '-print -exec cat {} + ; done 2>/dev/null | cksum')
 #: Calls whose file makes a skill with matching ``paths`` available.
 FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
 
@@ -349,9 +349,9 @@ class Skills(Extension):
         roots = [root for root, _tier in self.tiers(env.cwd, nested_dirs(
             view.ext_state(self.name)))]
         try:
-            out = await env.run(["sh", "-c", _FINGERPRINT, "sh", *roots], timeout=30,
+            out = await env.run(["sh", "-c", _FINGERPRINT, "sh", *roots], timeout=10,
                                 output_cap=256)
-        except (OSError, ValueError):
+        except Exception:  # noqa: BLE001 — any exec env failure skips the look, not the call
             return
         now = out.stdout.decode("ascii", errors="replace")
         cached = self._turn_registries.get(view.task_id)
