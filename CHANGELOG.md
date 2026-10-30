@@ -361,6 +361,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **`register_models` accepts a provider family beyond `anthropic` / `openai`** (also a
+  models file's `family`), so a third-party provider package can declare its own; only those
+  two carry noeta's conventions, and a near-miss like `antropic` is still refused.
 - **`--plugin-dir` loads a plugin for one run.** `noeta --plugin-dir ./x.py` (TUI and `-p`,
   repeatable) loads a plugin file, a plugin directory, a Claude Code plugin or a directory of
   them for this process only, as Claude Code's flag does; it was accepted and ignored. A

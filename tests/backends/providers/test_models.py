@@ -522,8 +522,22 @@ def test_alias_across_calls_targets_earlier_row() -> None:
 
 
 def test_unknown_family_refuses() -> None:
-    with pytest.raises(ValueError, match="unknown family"):
+    with pytest.raises(ValueError, match="did you mean 'anthropic'"):
         register_models({GATEWAY_ID: _gateway_spec(vendor="antropic")})
+    for bad in ("Gemini", "", "my family", 3):
+        with pytest.raises(ValueError, match="lowercase identifier"):
+            register_models({GATEWAY_ID: _gateway_spec(vendor=bad)})
+
+
+def test_a_third_party_family_registers_with_no_anthropic_or_openai_conventions() -> None:
+    from noeta.backends.providers.openai_compat import _output_cap_key
+    from noeta.plugins.environment import render_attribution
+
+    register_models({GATEWAY_ID: _gateway_spec(vendor="gemini", display_name="Gemini X")})
+    assert model_family(GATEWAY_ID) == "gemini"
+    assert spec_for(GATEWAY_ID).context_window == 1_000_000
+    assert _output_cap_key("auto", GATEWAY_ID) == "max_tokens"
+    assert render_attribution(GATEWAY_ID) is None
 
 
 def test_empty_model_id_refuses() -> None:
