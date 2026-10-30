@@ -358,3 +358,33 @@ async def test_a_changed_instruction_file_is_shown_again_with_the_next_message(
     assert reread == [f"{REREAD_HEAD}\n\n{h.work / 'NOETA.md'} {PROJECT}:\n\nUse spaces."]
     await h.say(a, tid, "unchanged since")
     assert len([m for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]) == 1
+
+
+async def test_the_memory_index_is_read_again_with_the_next_message(
+        h: Harness, tmp_path: Path) -> None:
+    """Claude Code's re-read covers the auto-memory index too, and a file
+    that was not there before: a memory saved this turn is in the index the
+    next message brings."""
+    from noeta.plugins.instructions.extension import REREAD_HEAD
+    (h.work / "NOETA.md").write_text("Use tabs.\n")
+    home = tmp_path / "home"
+    mem = Path(memory_dir_for(str(h.work), home))
+    a = Agent(name="a", model="m", extensions=[
+        FileTools(), Memory(home=str(home)), Instructions(walk=False)])
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "MEMORY.md").write_text("- [Tabs](tabs.md) — the user wants tabs\n")
+    await h.say(a, tid, "next")
+
+    def reread() -> list[str]:
+        return [m.text for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]
+
+    [note] = reread()
+    assert note.endswith(f"{mem / 'MEMORY.md'} (your auto memory index for this project, "
+                         "kept across conversations):\n\n- [Tabs](tabs.md) — the user wants tabs")
+    await h.say(a, tid, "unchanged")
+    assert len(reread()) == 1
+    (mem / "MEMORY.md").write_text("- [Spaces](spaces.md) — the user wants spaces\n")
+    await h.say(a, tid, "changed")
+    assert len(reread()) == 2 and reread()[-1].endswith("the user wants spaces")
