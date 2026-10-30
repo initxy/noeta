@@ -113,7 +113,11 @@ class RemoteClient:
                                 after, failures = rec.seq, 0
                                 yield rec
                             elif kind == "delta" and self.on_delta is not None:
-                                self.on_delta(task_id, msgspec.json.decode(data, type=Delta))
+                                try:
+                                    delta = msgspec.json.decode(data, type=Delta)
+                                except msgspec.ValidationError:
+                                    continue  # live output of a kind this version lacks
+                                self.on_delta(task_id, delta)
                             elif kind == "end":
                                 error = (msgspec.json.decode(data) or {}).get("error")
                                 if error:

@@ -481,6 +481,7 @@ class NoetaAcpAgent:
             elif isinstance(ev, ToolStarted):
                 out.put_nowait(acp.update_tool_call(ev.call.id, status="in_progress"))
             elif isinstance(ev, ToolFinished):
+                turn.finished.add(ev.result.call_id)
                 out.put_nowait(finish_update(ev, call))
                 if (plan := log.plan_update()) is not None:
                     out.put_nowait(plan)

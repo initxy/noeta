@@ -19,7 +19,9 @@ process-global and touches no returned value.
 
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -89,11 +91,14 @@ class ModelSpec:
     #: the image up front, while a model absent from the table is merely
     #: *unknown* and images are let through for the provider to judge.
     supports_vision: bool = False
-    #: Explicit vendor (``"anthropic"`` / ``"openai"``) for a row whose real
-    #: id carries no recognisable prefix — a gateway routing name that IS a
-    #: Claude behind a relay declares it here (``family`` in a models file).
-    #: Consumed by :func:`model_family` ahead of prefix inference and
-    #: validated at registration. ``None`` (every shipped row) falls back to
+    #: Explicit vendor for a row whose real id carries no recognisable
+    #: prefix — a gateway routing name that IS a Claude behind a relay
+    #: declares ``"anthropic"`` here (``family`` in a models file). Any
+    #: lowercase identifier is accepted (a third-party provider package
+    #: declares its own, e.g. ``"gemini"``); only ``"anthropic"`` and
+    #: ``"openai"`` carry conventions in noeta. Consumed by
+    #: :func:`model_family` ahead of prefix inference and validated at
+    #: registration. ``None`` (every shipped row) falls back to
     #: real-id prefix inference. Not the wire an adapter speaks
     #: (``Provider.family``).
     vendor: str | None = None
@@ -328,10 +333,23 @@ _EXTENSIONS: dict[str, ModelSpec] = {}
 _EXTENSION_ALIASES: dict[str, str] = {}
 _REGISTER_LOCK = threading.Lock()
 
-#: Families a row may declare explicitly. Validated at registration: a typo'd
-#: family silently picking the wrong conventions later is exactly the class of
-#: failure this module refuses up front.
+#: The families noeta has conventions for. A row may declare another (any
+#: lowercase identifier, e.g. one a third-party provider package declares for
+#: its own models); it gets none of these conventions.
 _KNOWN_FAMILIES = frozenset({"anthropic", "openai"})
+_FAMILY_NAME = re.compile(r"[a-z][a-z0-9_-]*")
+
+
+def _family_problem(family: object) -> str | None:
+    """Why ``family`` cannot be a row's declared family, or ``None``. A
+    near-miss of a known one (``antropic``) is refused: it would silently
+    lose that family's conventions."""
+    if not isinstance(family, str) or not _FAMILY_NAME.fullmatch(family):
+        return "a family is a lowercase identifier"
+    for known in sorted(_KNOWN_FAMILIES):
+        if family != known and difflib.SequenceMatcher(None, family, known).ratio() >= 0.8:
+            return f"did you mean {known!r}?"
+    return None
 
 
 def register_models(
@@ -369,10 +387,10 @@ def register_models(
                     f"extra model {name!r} collides with an existing catalog "
                     "row/alias; extensions never override existing data"
                 )
-            if spec.vendor is not None and spec.vendor not in _KNOWN_FAMILIES:
+            problem = None if spec.vendor is None else _family_problem(spec.vendor)
+            if problem is not None:
                 raise ValueError(
-                    f"extra model {name!r}: unknown family {spec.vendor!r}; "
-                    f"expected one of {sorted(_KNOWN_FAMILIES)}"
+                    f"extra model {name!r}: unknown family {spec.vendor!r}; {problem}"
                 )
             existing = _EXTENSIONS.get(name)
             if existing is not None:
@@ -451,7 +469,8 @@ def find_spec(model_id: str) -> ModelSpec | None:
 
 
 def model_family(model: str) -> str | None:
-    """Classify a model selector as ``"anthropic"``, ``"openai"`` or ``None``.
+    """Classify a model selector as ``"anthropic"``, ``"openai"``, another
+    family its row declares, or ``None``.
 
     The family comes from a **catalogued** model's declared ``vendor``, else
     its real-id prefix, so only a known model classifies at all. ``None`` — an

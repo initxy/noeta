@@ -48,6 +48,7 @@ import yaml
 from noeta.core import models, registry
 from noeta.core.agent import Agent
 from noeta.core.extension import Extension
+from noeta.toolkit.hook_env import without_env
 
 __all__ = [
     "DEFAULT_IDENTITY",
@@ -215,7 +216,7 @@ def plugin_overlays(f: AgentFile) -> list[PluginEntry]:
             # as a sub-agent (Claude Code converts them); a main agent
             # never fires SubagentStop, a sub-agent never Stop.
             hooks["SubagentStop"] = [*(hooks.get("SubagentStop") or []), *hooks["Stop"]]
-        out.append(("hooks", {"hooks": hooks}))
+        out.append(("hooks", {"hooks": without_env(hooks)}))
     if x.get("memory"):
         out.append(("memory", {"agent_scope": x["memory"], "agent_name": f.name}))
     if x.get("autoCompactWindow") is not None:
@@ -382,7 +383,11 @@ def _secret(kind: str, ref: str, where: str) -> str:
         import keyring  # type: ignore[import-not-found, unused-ignore]
     except ImportError:
         raise ValueError(f"{where}: {{keyring:{ref}}} needs the keyring package") from None
-    secret = keyring.get_password(service, account)
+    try:
+        secret = keyring.get_password(service, account)
+    except Exception as exc:  # noqa: BLE001 — NoKeyringError, a locked or broken backend
+        raise ValueError(f"{where}: this machine's keyring cannot be read for {ref!r} "
+                         f"({type(exc).__name__}: {exc})") from None
     if secret is None:
         raise ValueError(f"{where}: the keyring has no secret for {ref!r}")
     return str(secret)
@@ -494,9 +499,8 @@ def build_agents(
             allowed_tools=f.tools,
             denied_tools=f.denied_tools,
             step_budget=f.max_turns or Agent.step_budget,
-            inherit_model=not f.model,
-            permission_mode=f.permission_mode,
-            isolation=str(f.extra["isolation"]) if f.extra.get("isolation") else None,
-            extra=dict(f.extra),
+            # Claude Code's spelling: no model is "inherit" (the caller's).
+            extra={**f.extra, "model": f.model or "inherit",
+                   **({"permissionMode": f.permission_mode} if f.permission_mode else {})},
         ))
     return agents

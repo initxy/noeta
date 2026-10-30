@@ -550,8 +550,8 @@ class Extension:
         ``None``. The compacting extension asks every extension in order."""
         return None
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
-        """The model refused the request as too long. Return ``True`` after
+    async def on_context_overflow(self, view: TaskView, request: ModelRequest) -> bool:
+        """The model refused ``request`` as too long. Return ``True`` after
         making room (recording a compaction); the call is then retried.
         When no extension does, the turn fails with ``context_overflow``."""
         return False

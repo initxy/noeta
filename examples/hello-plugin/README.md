@@ -29,7 +29,10 @@ add_plugins = ["hello"]
 ```
 
 Without packaging, copy `src/noeta_hello/` to `~/.noeta/plugins/hello/` (or a trusted
-project's `.noeta/plugins/`); `noeta plugins` shows where each plugin comes from.
+project's `.noeta/plugins/`), or try it for one run with
+`noeta --plugin-dir src/noeta_hello`. `Hello` sets no `add_to`, so either way it joins an
+agent only through the `add_plugins` line above (noeta says so when it joins none);
+`noeta plugins` shows where each plugin comes from.
 
 `make example` at the repository root installs it in a throwaway environment and runs
 `tests/`.

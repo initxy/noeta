@@ -65,8 +65,9 @@ Events:
   reaches the model.
 * ``Notification`` (waiting on an approval or a question), ``SessionEnd``,
   ``StopFailure`` (a turn ended on a failed model call; ``error`` is Claude
-  Code's kind) and ``CwdChanged`` (a command left the shell elsewhere) —
-  side effects only.
+  Code's kind), ``CwdChanged`` (a command left the shell elsewhere) and
+  ``InstructionsLoaded`` (once per instruction file the instructions plugin
+  shows; matched on ``load_reason``) — side effects only.
 """
 
 from __future__ import annotations

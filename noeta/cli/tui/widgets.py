@@ -20,6 +20,8 @@ from noeta.host import feed
 
 #: Characters of a tool result shown when a call is expanded.
 RESULT_PREVIEW_CHARS = 6000
+#: Lines of a running call's latest output shown under it.
+PROGRESS_LINES = 5
 
 
 def tool_title(call: ToolUse) -> str:
@@ -49,6 +51,7 @@ class ToolCall(Collapsible):
     def __init__(self, call: ToolUse) -> None:
         self.call = call
         self.state = "pending"
+        self.progressed = False
         self.body = Static("", classes="tool-body")
         super().__init__(self.body, title=self._label(), collapsed=True, classes="tool-call")
 
@@ -61,6 +64,15 @@ class ToolCall(Collapsible):
         self.set_class(state == "error", "-error")
         self.set_class(state == "done", "-done")
 
+    def set_progress(self, text: str) -> None:
+        """While it runs: its latest output's last lines, shown open."""
+        if self.state in ("done", "error"):
+            return
+        self.body.update(RichText("\n".join(text.rstrip("\n").splitlines()[-PROGRESS_LINES:]),
+                                  style="dim"))
+        self.progressed = True
+        self.collapsed = False
+
     def set_result(self, text: str, *, is_error: bool, diff: str | None = None) -> None:
         self.set_state("error" if is_error else "done")
         if diff:
@@ -72,6 +84,8 @@ class ToolCall(Collapsible):
             self.body.update(RichText(shown))
             if is_error:
                 self.collapsed = False
+            elif self.progressed:
+                self.collapsed = True  # opened only to show it running
 
 
 #: ``decide(call_id, choice_id)``.

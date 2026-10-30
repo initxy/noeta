@@ -239,3 +239,38 @@ async def test_on_a_server_with_no_directory_asked_the_status_names_the_servers(
         await settle(pilot, app, lambda: app.task_id != "")
         status = str(app.query_one("#status").render())
         assert str(tmp_path) not in status and "server's directory" in status
+
+
+async def test_a_running_call_shows_its_latest_output_then_folds(tmp_path: Path) -> None:
+    import asyncio
+
+    release = asyncio.Event()
+
+    class Build:
+        name = "Bash"
+        description = "Run."
+        input_schema = {"type": "object"}
+        read_only = False
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            assert ctx.progress is not None
+            ctx.progress("".join(f"step {i}\n" for i in range(1, 9)))
+            await release.wait()
+            return text_output("built")
+
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "make"})), reply("done")])
+    agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Build()])
+    local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                     env_for=lambda _s: None)
+    app = NoetaApp(local, agent="main", model="claude-sonnet-4-5", cwd=str(tmp_path))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press(*"build it")
+        await pilot.press("enter")
+        await settle(pilot, app, lambda: any(c.progressed for c in app.query(ToolCall)))
+        [call] = list(app.query(ToolCall))
+        shown = str(call.body.render())
+        assert "step 8" in shown and "step 3" not in shown and not call.collapsed
+        release.set()
+        await settle(pilot, app, lambda: call.state == "done")
+        assert call.collapsed

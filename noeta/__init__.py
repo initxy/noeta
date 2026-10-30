@@ -17,18 +17,26 @@ if TYPE_CHECKING:
     from noeta.agents.agent_files import parse_agent_file, read_agent_dir
     from noeta.core.agent import Agent
     from noeta.core.client import Client
+    from noeta.core.events import Recorded
     from noeta.core.extension import (
+        Allow,
+        Ask,
         Command,
         CommandContext,
         ContextPart,
+        Deny,
         Extension,
         Reminder,
+        Rewrite,
         TaskView,
+        ToolChanges,
     )
+    from noeta.core.loop.state import TaskState
     from noeta.core.questions import ask, read_answer
     from noeta.core.registry import provider, store
     from noeta.core.runner import Runtime
     from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+    from noeta.core.types import ToolUse
     from noeta.host.local import LocalApp
     from noeta.host.remote import RemoteClient
     from noeta.toolkit.function_tool import function_tool
@@ -36,19 +44,27 @@ if TYPE_CHECKING:
 #: Public name -> the module that defines it.
 _EXPORTS = {
     "Agent": "noeta.core.agent",
+    "Allow": "noeta.core.extension",
+    "Ask": "noeta.core.extension",
     "Client": "noeta.core.client",
     "Command": "noeta.core.extension",
     "CommandContext": "noeta.core.extension",
     "ContextPart": "noeta.core.extension",
+    "Deny": "noeta.core.extension",
     "Extension": "noeta.core.extension",
     "LocalApp": "noeta.host.local",
+    "Recorded": "noeta.core.events",
     "Reminder": "noeta.core.extension",
     "RemoteClient": "noeta.host.remote",
+    "Rewrite": "noeta.core.extension",
     "Runtime": "noeta.core.runner",
+    "TaskState": "noeta.core.loop.state",
     "TaskView": "noeta.core.extension",
     "Tool": "noeta.core.tool",
+    "ToolChanges": "noeta.core.extension",
     "ToolContext": "noeta.core.tool",
     "ToolOutput": "noeta.core.tool",
+    "ToolUse": "noeta.core.types",
     "ask": "noeta.core.questions",
     "default_agents": "noeta.agents",
     "function_tool": "noeta.toolkit.function_tool",
@@ -62,19 +78,27 @@ _EXPORTS = {
 
 __all__ = [
     "Agent",
+    "Allow",
+    "Ask",
     "Client",
     "Command",
     "CommandContext",
     "ContextPart",
+    "Deny",
     "Extension",
     "LocalApp",
+    "Recorded",
     "Reminder",
     "RemoteClient",
+    "Rewrite",
     "Runtime",
+    "TaskState",
     "TaskView",
     "Tool",
+    "ToolChanges",
     "ToolContext",
     "ToolOutput",
+    "ToolUse",
     "ask",
     "connect",
     "default_agents",

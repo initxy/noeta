@@ -444,7 +444,7 @@ async def test_task_is_the_old_name_and_exclusive_tools(store: SqliteStore) -> N
 
 async def test_model_and_effort_precedence(store: SqliteStore) -> None:
     def defined(model: str | None) -> Agent:
-        return Agent(name="fixer", model=model or "p", inherit_model=not model,
+        return Agent(name="fixer", model=model or "p", extra={} if model else {"model": "inherit"},
                      description="Fixes.", effort="low", extensions=[Subtasks()])
 
     main = Agent(name="main", model="p", extensions=[Subtasks(agents=["*"], queue="kids")])

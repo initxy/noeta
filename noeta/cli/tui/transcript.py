@@ -141,7 +141,7 @@ class TranscriptView(App[None]):
     # ------------------------------------------------------------ rendering
 
     def _on_delta(self, task_id: str, delta: Delta) -> None:
-        if task_id == self.task_id and delta.kind == "text" and delta.text:
+        if task_id == self.task_id and delta.kind in ("text", "tool") and delta.text:
             self._deltas.put_nowait(delta)
 
     @work(exclusive=False, group="deltas", exit_on_error=False)
@@ -157,6 +157,10 @@ class TranscriptView(App[None]):
                 self._pumping = False
 
     async def _show_delta(self, delta: Delta) -> None:
+        if delta.kind == "tool":
+            if (block := self.calls.get(delta.call_id)) is not None:
+                block.set_progress(delta.text)
+            return
         key = (delta.call_seq, delta.attempt)
         if delta.attempt < self.attempts.get(delta.call_seq, 1):
             return  # the tail of an attempt that failed

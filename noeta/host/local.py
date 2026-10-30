@@ -130,6 +130,9 @@ class LocalApp:
         #: What the person should know about how this app was set up (a
         #: project's plugins left unloaded); front ends show them.
         self.notices: list[str] = []
+        #: The agent a front end starts new tasks with unless told another
+        #: (the settings' ``agent``).
+        self.main_agent = "main"
         #: Finds the plugins again and replaces the agents with ones made
         #: from them (``replace_agents``), returning notices for the person;
         #: set by a host that loads plugins from files (the ``noeta``

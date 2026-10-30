@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import logging
 import re
-from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -147,9 +146,6 @@ class Compaction(Extension):
         self.read_tool = read_tool
         self.transcripts = transcripts
         self.home = Path(home) if home else None
-        #: The newest request per task, for the overflow path (which is not
-        #: handed one). Only read within the same model step.
-        self._last: OrderedDict[str, ModelRequest] = OrderedDict()
 
     # ------------------------------------------------------------ state
 
@@ -199,14 +195,7 @@ class Compaction(Extension):
         except ValueError as exc:
             raise TurnFailed("compaction_config_invalid", str(exc)) from None
 
-    def _remember(self, task_id: str, request: ModelRequest) -> None:
-        self._last[task_id] = request
-        self._last.move_to_end(task_id)
-        while len(self._last) > 256:
-            self._last.popitem(last=False)
-
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        self._remember(view.task_id, request)
         state = view.state
         n = len(state.messages)
         command = self._command(state)
@@ -242,9 +231,8 @@ class Compaction(Extension):
         # conversation (betas and notes that depend on it included).
         raise RequestStale()
 
-    async def on_context_overflow(self, view: TaskView) -> bool:
-        request = self._last.pop(view.task_id, None)
-        if request is None or view.complete is None:
+    async def on_context_overflow(self, view: TaskView, request: ModelRequest) -> bool:
+        if view.complete is None:
             return False
         state = view.state
         n = len(state.messages)

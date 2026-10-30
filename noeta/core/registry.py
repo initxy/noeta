@@ -61,6 +61,7 @@ __all__ = [
     "missing_modules",
     "note_arguments",
     "pin",
+    "plugin_files",
     "provider",
     "sources",
     "store",
@@ -140,6 +141,11 @@ def added_by_files() -> dict[str, list[str]]:
     return out
 
 
+def plugin_files() -> dict[str, str]:
+    """The plugins plugin files registered: name -> path."""
+    return {name: path for name, (path, _cls) in sorted(_files.items())}
+
+
 def load(group: str, name: str) -> Any:
     """The object the entry point ``name`` in ``group`` points at (for
     plugins, else the class a plugin file defines)."""
@@ -159,8 +165,14 @@ def load(group: str, name: str) -> Any:
     raise UnknownName(msg)
 
 
-def _plugin_paths(directory: Path) -> list[Path]:
-    """``*.py`` files and directories with ``__init__.py``, one level down."""
+def _plugin_paths(directory: Path, *, given: bool = False) -> list[Path]:
+    """``*.py`` files and directories with ``__init__.py``, one level down;
+    with ``given`` (a ``--plugin-dir``), ``directory`` itself when it is one
+    of those."""
+    if given and directory.is_file():
+        return [directory] if directory.suffix == ".py" else []
+    if given and (directory / "__init__.py").is_file():
+        return [directory / "__init__.py"]
     if not directory.is_dir():
         return []
     out = []
@@ -206,9 +218,12 @@ def _import(path: Path) -> Any:
 
 
 def load_plugin_files(directories: Iterable[str | Path],
-                      admit: Callable[[str], bool] | None = None) -> list[str]:
+                      admit: Callable[[str], bool] | None = None, *,
+                      given: Iterable[str | Path] = ()) -> list[str]:
     """Register the plugins (and channels) of the files in ``directories``
-    (each loaded once per process); returns the names added. A file that
+    (each loaded once per process), then of ``given`` (each one plugin
+    file, one plugin directory, or a directory of them); returns the names
+    added. A file that
     fails to import is remembered and named when its plugin is asked for; a
     name an installed plugin already has is skipped with a warning.
     ``admit(name)``: whether a file (by its stem, a directory by its name)
@@ -217,8 +232,10 @@ def load_plugin_files(directories: Iterable[str | Path],
     from noeta.core.extension import Extension
 
     added: list[str] = []
-    for directory in directories:
-        for path in _plugin_paths(Path(directory).expanduser()):
+    places = [(Path(d).expanduser(), False) for d in directories]
+    places += [(Path(d).expanduser(), True) for d in given]
+    for directory, one in places:
+        for path in _plugin_paths(directory, given=one):
             key = str(path.resolve())
             stem = path.parent.name if path.name == "__init__.py" else path.stem
             if key in _loaded_paths or (admit is not None and not admit(stem)):

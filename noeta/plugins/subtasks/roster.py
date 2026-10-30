@@ -120,15 +120,17 @@ def _tools_column(agent: Any) -> str:
 
 def _definition_config(agent: Agent) -> dict[str, Any]:
     """Child config an agent's definition asks for: its own model and effort
-    (so the parent's are not inherited over them) and permission mode."""
+    (so the parent's are not inherited over them) and permission mode, from
+    its agent file's fields (``Agent.extra``): ``model: inherit`` runs on the
+    caller's model."""
     out: dict[str, Any] = {}
-    if not agent.inherit_model:
+    if agent.extra.get("model") != "inherit":
         out["model"] = models.resolve_alias(agent.model)
     if agent.effort:
         out["effort"] = agent.effort
-    if agent.permission_mode:
-        out["permission_mode"] = agent.permission_mode
-    if agent.isolation == "worktree":
+    if agent.extra.get("permissionMode"):
+        out["permission_mode"] = str(agent.extra["permissionMode"])
+    if agent.extra.get("isolation") == "worktree":
         out["isolation"] = "worktree"
     return out
 
