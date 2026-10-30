@@ -93,8 +93,12 @@ their `!` lines through the permission checks and pre-approve their `allowed-too
 `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` (`~/.noeta/plugin-data/<name>`) are
 substituted. Its manifest's `userConfig` is asked for on `noeta plugin add` (or
 `--config KEY=VALUE`; `noeta plugin configure` asks again), kept in `~/.noeta/settings.json`
-`pluginConfigs` with sensitive values in the OS keyring, and substituted as Claude Code does;
-its `settings.json` `agent` names the agent front ends start with. From a project, its MCP
+`pluginConfigs` with sensitive values in the OS keyring, and substituted as Claude Code does
+(not yet in skill bodies; a hook gets a secret's `CLAUDE_PLUGIN_OPTION_<KEY>` only when it names
+it). A secret a machine cannot read stops only what uses it, with a notice: an MCP server or
+hook is left out, a `PreToolUse` / `PermissionRequest` / `UserPromptSubmit` hook refuses. Its
+own files may name only its own keyring secrets. Its `settings.json` `agent` names the agent
+front ends start with. From a project, its MCP
 servers never start: noeta says to copy them into `.noeta/mcp.json`, which needs consent.
 Monitors, `bin/`, LSP servers, themes and output styles are not loaded (reasons [below](#compared-item-by-item)). noeta never
 reads `~/.claude` or `.claude/`.
@@ -207,7 +211,7 @@ worker resumes any task; pi and dsh run in one process, Claude Code in one local
 | A command drives the session | command context | `ctx.sessions` | built-ins only | the client API | won't | New, fork and reload belong to front ends over the client, not to code inside a task. |
 | Keybindings | `registerShortcut` | `shortcuts.register` | the person's `keybindings.json` | — | won't | Plugins never reach into front ends; Claude Code lets people, not plugins, bind keys. |
 | Plugin command-line flags | `registerFlag` | `cmdlineArgs` | — | `[plugins.<name>]`, agent-file arguments | won't | A flag lives in one process; arguments are pinned per task and the same on every worker. |
-| Load a plugin for one run | `pi -e` | `--patch` | `--plugin-dir` | `--plugin-dir` | added | Claude Code has it; it was accepted and ignored. |
+| Load a plugin for one run | `pi -e` | `--patch` (a config overlay that may add plugins) | `--plugin-dir` | `--plugin-dir` | added | Claude Code has it; it was accepted and ignored. |
 | **Context** | | | | | | |
 | System prompt text | `systemPromptOptions` | `systemPrompt.section` | output styles, `--append-system-prompt` | `ContextPart` | have | Inside the one cached block. |
 | Replace the system prompt | `SYSTEM.md` | `system-prompt/assemble` | `--system-prompt` | prompt override `system/<agent>`; agent file body | have | Overrides are recorded when a task starts, so a resumed task sends the same bytes. |

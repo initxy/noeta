@@ -285,7 +285,7 @@ def _configure(name: str, path: Path, given: list[str]) -> int:
     return 0
 
 
-def _remove(name: str) -> int:
+def _remove(name: str, *, quiet: bool = False) -> int:
     records = _records()
     plugins = (home_dir.HOME / "plugins").resolve()
     rec = records.pop(name, None)
@@ -299,6 +299,8 @@ def _remove(name: str) -> int:
         removed = True
     _save(records)
     plugin_options.forget(name)
+    if quiet:
+        return 0
     if not removed and rec is None:
         print(f"noeta: no plugin {name} in {plugins}", file=sys.stderr)
         return 1
@@ -324,12 +326,19 @@ def run(args: argparse.Namespace, cwd: str) -> int:
     except (PluginInstallError, OSError, ValueError) as exc:
         print(f"noeta: {exc}", file=sys.stderr)
         return 1
+    if path.is_dir() and _fields(path):
+        if _configure(name, path, args.config):
+            # Not left installed half configured.
+            _remove(name, quiet=True)
+            print(f"noeta: {name} was not installed; add it again once its options can be "
+                  "kept (--config KEY={env:NAME} keeps a secret in a variable)",
+                  file=sys.stderr)
+            return 1
+    elif args.config:
+        _remove(name, quiet=True)
+        print(f"noeta: --config was given but plugin {name!r} declares no userConfig options; "
+              "not installed", file=sys.stderr)
+        return 1
     print(f"installed {name} in {path}; it loads in front ends started from now "
           "(or /reload-plugins)")
-    if path.is_dir() and _fields(path):
-        return _configure(name, path, args.config)
-    if args.config:
-        print(f"noeta: --config was given but plugin {name!r} declares no userConfig options",
-              file=sys.stderr)
-        return 1
     return 0

@@ -9,6 +9,21 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **`Extension.on_context_overflow(view, request)` gets the request that overflowed.** An
+  override written as `(view)` still runs. Compaction no longer keeps each task's last
+  request in memory for it.
+- **`WebFetch`'s digest goes out like every other call beside the step**, through
+  `ToolContext.complete`: without the headers a hook put on the main request, which it used
+  to copy from process memory and lost when another worker ran the call. A host that needs
+  them on every call sets them on the provider, or passes `digest=`.
+- **Live output has a new kind, `Delta(kind="tool")`** (a running tool's progress), and
+  readers now skip a kind they do not know. A process from before this release does not: an
+  older `RemoteClient` watching a newer server loses its watch on the first progress, and on a
+  shared Postgres an older process drops the whole notification batch holding one. In a
+  rolling upgrade, upgrade the front ends and `noeta serve` before the workers; an SDK host on
+  `app.deltas` should ignore kinds it does not know.
+- **A settings file's hooks set no `env`**: that field is noeta's, for a Claude Code
+  plugin's options.
 - **`Agent.inherit_model`, `permission_mode` and `isolation` are gone; `ToolContext.extras`
   too.** Only the sub-agent plugin acted on the three: it reads them from `Agent.extra` as an
   agent file spells them (`model: inherit`, `permissionMode`, `isolation`); an SDK host
@@ -372,9 +387,15 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 - **Claude Code plugins' `userConfig` and `settings.json`.** `noeta plugin add` asks for a
   plugin's `userConfig` values (or takes `--config KEY=VALUE`; `noeta plugin configure` sets
   them again), keeps them in `~/.noeta/settings.json` `pluginConfigs` with sensitive ones in
-  the OS keyring, and substitutes `${user_config.KEY}` / `CLAUDE_PLUGIN_OPTION_<KEY>` as
-  Claude Code does; a plugin's `settings.json` `agent` (and the settings files' own `agent`)
-  picks the agent front ends start with, and the TUI honours `--agent`.
+  the OS keyring (a machine whose keyring cannot keep it is refused before anything is
+  installed, with the `{env:NAME}` way instead), and substitutes `${user_config.KEY}` in MCP
+  servers, hook `args`, commands and agent prompts (not yet in skill bodies); a hook gets every
+  plain value as `CLAUDE_PLUGIN_OPTION_<KEY>`, a secret only when it names it. A secret a
+  machine cannot read (its keyring lacks it, a variable is not set) stops only what uses it,
+  with a notice naming the plugin: an MCP server or hook is left out, a `PreToolUse`,
+  `PermissionRequest` or `UserPromptSubmit` hook refuses instead. A plugin's own files may
+  name only its own keyring secrets. A plugin's `settings.json` `agent` (and the settings
+  files' own `agent`) picks the agent front ends start with, and the TUI honours `--agent`.
 - **A running tool shows its progress** (`ToolContext.progress(text)`), as Claude Code's
   `tool_progress`: never recorded nor sent to the model, it streams with the model's live
   output (across machines on Postgres). A foreground `Bash` command shows its latest output
@@ -390,12 +411,6 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   `trigger_file_path` and `parent_file_path`; matched on `load_reason`.
 - **`ToolContext.complete`: a tool can call the model** through the task's providers
   (retried, not recorded as a step), as hooks can with `TaskView.complete`.
-  `Extension.on_context_overflow(view, request)` now gets the request that overflowed (a
-  plugin overriding it adds the argument). `WebFetch` and compaction no longer keep each
-  task's model call, model and last request in process memory to stand in for these, which
-  went missing when another worker ran the call; `WebFetch`'s digest now goes out like every
-  other call made beside the step, without the headers a hook put on the main request (a
-  host that needs them on every call sets them on the provider, or passes `digest=`).
 - **`register_models` accepts a provider family beyond `anthropic` / `openai`** (also a
   models file's `family`), so a third-party provider package can declare its own; only those
   two carry noeta's conventions, and a near-miss like `antropic` is still refused.

@@ -35,7 +35,8 @@ log = logging.getLogger("noeta.backends.stores.postgres")
 
 #: Bytes of one delta notification's payload (Postgres refuses 8000 and up).
 DELTA_PAYLOAD_BYTES = 7000
-_delta_batch = msgspec.json.Decoder(list[tuple[str, Delta]])
+_delta_batch = msgspec.json.Decoder(list[tuple[str, msgspec.Raw]])
+_delta = msgspec.json.Decoder(Delta)
 
 
 def delta_payloads(deltas: Sequence[tuple[str, Delta]]) -> list[str]:
@@ -162,7 +163,11 @@ class ChangeFeed:
         except msgspec.DecodeError:
             log.warning("dropped a malformed delta notification")
             return
-        for task_id, delta in items:
+        for task_id, raw in items:
+            try:
+                delta = _delta.decode(raw)
+            except msgspec.ValidationError:
+                continue  # a kind a newer worker sends and this version lacks
             for cb in list(self._delta_listeners):
                 try:
                     cb(task_id, delta)

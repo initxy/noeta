@@ -290,11 +290,16 @@ class PromptTurn:
         #: Calls whose failed attempt already showed text (the retry's text
         #: is set apart from it).
         self._shown: set[int] = set()
+        #: Calls whose result was shown: progress arriving late (it travels
+        #: apart from the log) never turns one back to in progress.
+        self.finished: set[str] = set()
 
     def on_delta(self, task_id: str, delta: Delta) -> None:
         if task_id != self.session_id or not delta.text or self.done:
             return
         if delta.kind == "tool":  # a running call's latest output
+            if delta.call_id in self.finished:
+                return
             self.out.put_nowait(acp.update_tool_call(
                 delta.call_id, status="in_progress",
                 content=[acp.tool_content(acp.text_block(delta.text))]))
@@ -320,6 +325,8 @@ class PromptTurn:
             return  # a failed attempt's tail
         if delta.attempt > live:
             self.retried(delta.attempt - 1, key)
+        if delta.kind not in ("text", "thinking"):
+            return  # a kind this version does not know
         if delta.kind == "text":
             if not self._text.get(key) and key in self._shown:
                 self._shown.discard(key)

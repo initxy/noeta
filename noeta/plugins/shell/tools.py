@@ -275,9 +275,9 @@ class BackgroundBash(BashTool):
                     take = min(size, PROGRESS_BYTES)
                     data = await job.env.read_range(job.out_path, size - take, take) \
                         if take else b""
-                except OSError:
-                    continue
-                ctx.progress(data.decode("utf-8", "replace"))
+                    ctx.progress(data.decode("utf-8", "replace"))
+                except Exception:  # noqa: BLE001 — showing progress never fails the call
+                    _log.debug("Bash: showing progress failed", exc_info=True)
 
     async def _foreground_result(self, job: Job) -> RunResult:
         """What a job waited for in the foreground printed (its last

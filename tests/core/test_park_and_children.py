@@ -339,3 +339,23 @@ async def test_overflow_lets_an_extension_make_room(store: SqliteStore) -> None:
     second = provider.requests[1]
     assert second.messages[0].text == "(summary)"
     assert (await client.get(tid)).waiting_on == "input"
+
+
+class OldMakeRoom(Extension):
+    """Written before ``on_context_overflow`` took the request."""
+
+    name = "old_room"
+
+    async def on_context_overflow(self, view: TaskView) -> bool:  # type: ignore[override]
+        view.compacted(Compacted(summary="(old summary)", through=view.state.last_seq))
+        return True
+
+
+async def test_an_overflow_hook_without_the_request_still_runs(store: SqliteStore) -> None:
+    provider = ScriptedProvider([ContextOverflow("too long"), reply("fits now")])
+    rt = runtime(store, provider, Agent(name="a", model="m", extensions=[OldMakeRoom()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert provider.requests[1].messages[0].text == "(old summary)"
+    assert (await client.get(tid)).waiting_on == "input"

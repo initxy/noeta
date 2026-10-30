@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import TYPE_CHECKING, Any
 
 import msgspec
@@ -135,13 +136,24 @@ async def _run_hooks(run: TaskRun, request: ModelRequest) -> ModelRequest | bool
     return request
 
 
+def _overflow_hook(ext: Any, view: TaskView, request: ModelRequest) -> Any:
+    """``ext.on_context_overflow``, also for one written before it took the
+    request (``(view)`` only)."""
+    hook = ext.on_context_overflow
+    try:
+        old = len(inspect.signature(hook).parameters) < 2
+    except (TypeError, ValueError):
+        old = False
+    return hook(view) if old else hook(view, request)
+
+
 async def _on_overflow(run: TaskRun, exc: ContextOverflow, request: ModelRequest) -> bool:
     """The model refused ``request`` as too long: an extension makes room
     and the next boundary calls again, or the turn fails."""
     overflow_view = run.view()
     try:
         for ext in run.exts:
-            if await ext.on_context_overflow(overflow_view, request):
+            if await _overflow_hook(ext, overflow_view, request):
                 await run.flush(overflow_view)
                 return True  # room was made; the next boundary calls again
     except TurnFailed as failed:

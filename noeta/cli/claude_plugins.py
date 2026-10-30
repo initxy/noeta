@@ -26,6 +26,7 @@ import dataclasses
 import json
 import logging
 import re
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,7 +34,12 @@ from typing import Any
 
 import yaml
 
-from noeta.agents.agent_files import AgentFile, AgentFileError, parse_agent_file
+from noeta.agents.agent_files import (
+    AgentFile,
+    AgentFileError,
+    parse_agent_file,
+    resolve_secrets,
+)
 from noeta.cli import plugin_options
 
 __all__ = ["ClaudePlugin", "find_claude_plugins", "is_claude_plugin", "plugin_settings",
@@ -94,6 +100,8 @@ class ClaudePlugin:
     user_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: The settings it brings (of Claude Code's plugin keys, ``agent``).
     settings: dict[str, Any] = field(default_factory=dict)
+    #: What the person should know: parts left out here, and why.
+    notices: list[str] = field(default_factory=list)
 
 
 def _paths(root: Path, value: Any, key: str) -> list[Path]:
@@ -175,35 +183,88 @@ def _settings(root: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _hook_with_options(name: str, hook: dict[str, Any],
-                       values: Mapping[str, Any]) -> dict[str, Any] | None:
-    """A plugin's hook with its option values: filled into a command's
-    ``args`` form (a shell-form command naming one is left out: the shell
-    would read the value again) and given as ``CLAUDE_PLUGIN_OPTION_<KEY>``
-    in a command's environment; ``None`` when it is left out."""
-    if hook.get("args") is None and plugin_options.uses(hook.get("command")):
-        log.warning("plugin %s: a hook names ${user_config.*} in a shell-form command "
-                    "(use args, or read $CLAUDE_PLUGIN_OPTION_<KEY>); skipped", name)
-        return None
+#: Events whose hooks decide whether something may happen: one that cannot
+#: run as written here refuses instead of being left out (fail closed).
+GUARD_EVENTS = frozenset({"PreToolUse", "PermissionRequest", "UserPromptSubmit"})
+_KEYRING_REF = re.compile(r"\{keyring:([^{}]+)\}")
+
+
+def _foreign_secret(name: str, value: Any) -> str | None:
+    """A ``{keyring:…}`` reference in what the plugin itself wrote that is
+    not one of its own option values' (``noeta-plugin/<name>/…``): a plugin
+    reads only its own secrets."""
+    own = f"{plugin_options.KEYRING_SERVICE}/{name}/"
+    for ref in _KEYRING_REF.findall(json.dumps(value)):
+        if not ref.startswith(own):
+            return f"it names the keyring secret {ref!r}, which is not one of its own options"
+    return None
+
+
+def _unreadable(name: str, value: Any) -> str | None:
+    """Why the secret references in ``value`` cannot be read on this
+    machine (a variable not set, no keyring backend, no such secret), or
+    ``None``: each plugin's are checked on their own, so one never stops
+    another, nor noeta."""
     try:
-        hook = plugin_options.substitute(hook, values)
-    except plugin_options.OptionError as exc:
-        log.warning("plugin %s: %s; a hook using it is skipped", name, exc)
-        return None
-    if values and hook.get("type", "command") == "command":
-        hook = {**hook, "env": plugin_options.hook_env(values)}
-    return hook
+        resolve_secrets(value, f"plugin {name}")
+    except ValueError as exc:
+        return str(exc).removeprefix(f"plugin {name}: ")
+    return None
 
 
-def _hooks_with_options(name: str, events: Mapping[str, Any],
-                        values: Mapping[str, Any]) -> dict[str, list[Any]]:
+def _refusing_hook(text: str) -> dict[str, Any]:
+    """A command hook that blocks with ``text`` (exit 2), standing in for a
+    guard hook that cannot run as written. A secret reference in ``text``
+    loses its braces: the hook's arguments are resolved later."""
+    text = re.sub(r"\{(env|keyring):([^{}]+)\}", r"\1:\2", text)
+    return {"type": "command", "command": sys.executable, "onFailure": "block",
+            "args": ["-c", "import sys; sys.stderr.write(sys.argv[1]); sys.exit(2)", text]}
+
+
+def _hook_with_options(name: str, event: str, hook: dict[str, Any],
+                       values: Mapping[str, Any], notices: list[str]) -> dict[str, Any] | None:
+    """A plugin's hook with its option values filled into a command's
+    ``args`` form (a shell-form command naming one cannot be: the shell
+    would read the value again), and the options it names as
+    ``CLAUDE_PLUGIN_OPTION_<KEY>`` (every plain one too). One that cannot run
+    as written here is left out with a notice, or for a :data:`GUARD_EVENTS`
+    event replaced by one that refuses."""
+    problem = _foreign_secret(name, hook)
+    if problem is None and hook.get("args") is None and plugin_options.uses(hook.get("command")):
+        problem = "it names ${user_config.*} in a shell-form command (use args, or read " \
+                  "$CLAUDE_PLUGIN_OPTION_<KEY>)"
+    if problem is None:
+        try:
+            hook = plugin_options.substitute(hook, values)
+        except plugin_options.OptionError as exc:
+            problem = str(exc)
+    if problem is None and hook.get("type", "command") == "command":
+        env = plugin_options.hook_env(values, named_in=hook)
+        if env:
+            hook = {**hook, "env": env}
+    if problem is None:
+        problem = _unreadable(name, hook)
+    if problem is None:
+        return hook
+    if event in GUARD_EVENTS:
+        text = (f"plugin {name}'s {event} hook cannot run on this machine ({problem}), so "
+                f"it refuses; run noeta plugin configure {name}")
+        notices.append(f"{text}.")
+        return _refusing_hook(text)
+    notices.append(f"plugin {name}: a {event} hook is left out: {problem}; run noeta "
+                   f"plugin configure {name}")
+    return None
+
+
+def _hooks_with_options(name: str, events: Mapping[str, Any], values: Mapping[str, Any],
+                        notices: list[str]) -> dict[str, list[Any]]:
     out: dict[str, list[Any]] = {}
     for event, groups in events.items():
         kept = []
         for group in groups if isinstance(groups, list) else []:
             if not isinstance(group, dict):
                 continue
-            hooks = [h for h in (_hook_with_options(name, hook, values)
+            hooks = [h for h in (_hook_with_options(name, event, hook, values, notices)
                                  for hook in group.get("hooks") or [] if isinstance(hook, dict))
                      if h is not None]
             if hooks:
@@ -274,7 +335,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
         events = source if isinstance(source, dict) else \
             (_json(source).get("hooks") or {}) if source.is_file() else {}
         for event, groups in _hooks_with_options(name, _substitute(events, names),
-                                                 values).items():
+                                                 values, plugin.notices).items():
             plugin.hooks.setdefault(event, []).extend(groups)
     mcp_sources: list[Any] = [root / ".mcp.json"]
     declared = manifest.get("mcpServers")
@@ -285,11 +346,18 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
         data = source if isinstance(source, dict) else _json(source) if source.is_file() else {}
         servers = data.get("mcpServers", data) if isinstance(data, dict) else {}
         for server, spec in _substitute(servers, names).items():
-            try:
-                plugin.mcp_servers[server] = plugin_options.substitute(spec, values)
-            except plugin_options.OptionError as exc:
-                log.warning("plugin %s: MCP server %s needs configuration before it can "
-                            "start (%s): noeta plugin configure %s", name, server, exc, name)
+            problem = _foreign_secret(name, spec)
+            if problem is None:
+                try:
+                    spec = plugin_options.substitute(spec, values)
+                except plugin_options.OptionError as exc:
+                    problem = str(exc)
+            problem = problem or _unreadable(name, spec)
+            if problem is None:
+                plugin.mcp_servers[server] = spec
+            else:
+                plugin.notices.append(f"plugin {name}: MCP server {server} does not start: "
+                                      f"{problem}; run noeta plugin configure {name}")
     return plugin
 
 

@@ -284,8 +284,8 @@ def load_plugin_files(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()) -
     notice = untrusted_notice(cwd, ".noeta/plugins")
     if cwd and notice is None and (Path(cwd).expanduser() / ".noeta" / "plugins").is_dir():
         dirs.append(Path(cwd).expanduser().resolve() / ".noeta" / "plugins")
-    dirs += [Path(d).expanduser().resolve() for d in plugin_dirs]
-    registry.load_plugin_files(dirs, admit=plugin_policy(managed_dir()).admits)
+    registry.load_plugin_files(dirs, admit=plugin_policy(managed_dir()).admits,
+                               given=[Path(d).expanduser().resolve() for d in plugin_dirs])
     return [notice] if notice else []
 
 
@@ -411,14 +411,21 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
     plugin_agent: dict[str, str] = {}
+    #: ``<plugin>:<agent>`` (Claude Code's name for a plugin's agent) -> its name here.
+    qualified: dict[str, str] = {}
 
     def make_agents() -> list[Agent]:
         """The agents from the agent files and plugins found now; a plugin
         whose code and arguments did not change is the one made before."""
         claude, found_notices = claude_plugins(cwd, plugin_dirs)
-        notices.extend(n for n in found_notices if n not in notices)
+        for notice in found_notices:
+            if notice not in notices:
+                notices.append(notice)
+                log.warning("%s", notice)  # a worker has no front end to show it
         plugin_agent.clear()
         plugin_agent.update(plugins_agent(claude))
+        qualified.clear()
+        qualified.update({f"{p.name}:{a.name}": a.name for p in claude for a in p.agents})
         files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
         if source("user"):
             files += read_agent_dir(home_dir.HOME / "agents")
@@ -461,7 +468,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         wanted = found.agent or plugin_agent.get("agent")
         known = app.runtime.agents
         # A plugin's agent is named <plugin>:<agent> in Claude Code.
-        name = wanted if not wanted or wanted in known else wanted.rpartition(":")[2]
+        name = wanted if not wanted or wanted in known else qualified.get(wanted, wanted)
         app.main_agent = name if name and name in known else "main"
         if wanted and name not in known:
             notice = (f"agent {wanted!r} (from the settings of "
@@ -538,8 +545,9 @@ def claude_plugins(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()
             else find_claude_plugins([(given, False)], data_home)
     policy = plugin_policy(managed_dir())
     found = [p for p in found if policy.admits(p.name)]
-    notices = [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
-               for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
+    notices = [n for p in found for n in p.notices]
+    notices += [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
+                for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
     return found, notices
 
 

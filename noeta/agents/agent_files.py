@@ -382,7 +382,11 @@ def _secret(kind: str, ref: str, where: str) -> str:
         import keyring  # type: ignore[import-not-found, unused-ignore]
     except ImportError:
         raise ValueError(f"{where}: {{keyring:{ref}}} needs the keyring package") from None
-    secret = keyring.get_password(service, account)
+    try:
+        secret = keyring.get_password(service, account)
+    except Exception as exc:  # noqa: BLE001 — NoKeyringError, a locked or broken backend
+        raise ValueError(f"{where}: this machine's keyring cannot be read for {ref!r} "
+                         f"({type(exc).__name__}: {exc})") from None
     if secret is None:
         raise ValueError(f"{where}: the keyring has no secret for {ref!r}")
     return str(secret)

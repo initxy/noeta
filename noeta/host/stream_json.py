@@ -368,7 +368,7 @@ class StreamJson(ControlRequests):
             self._put(self._message(type="tool_progress", tool_use_id=delta.call_id,
                                     tool_name=delta.tool, parent_tool_use_id=None,
                                     elapsed_time_seconds=int(delta.elapsed)))
-        elif self.options.include_partial_messages:
+        elif self.options.include_partial_messages and delta.kind in ("text", "thinking"):
             self._partial.delta(delta, self.options.model)
 
     def _stream_event(self, event: dict[str, Any]) -> None:

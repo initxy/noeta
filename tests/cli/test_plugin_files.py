@@ -356,3 +356,11 @@ async def test_a_python_plugin_directory_ships_skills_commands_and_agents(
     plain = from_settings(load_settings(), cwd=str(tmp_path), plugin_dirs=[str(kit)])
     assert "helper" in plain.runtime.agents
     await plain.store.close()
+
+
+def test_an_init_file_in_a_plugin_place_hides_none_of_its_plugins(home: Path) -> None:
+    # Only a --plugin-dir path is read as one plugin; a stray __init__.py
+    # in ~/.noeta/plugins leaves the files beside it loading.
+    (home / "plugins" / "__init__.py").write_text("")
+    _write(home / "plugins" / "waver.py", "waver")
+    assert registry.load_plugin_files([home / "plugins"]) == ["waver"]

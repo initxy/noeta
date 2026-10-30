@@ -14,16 +14,19 @@ reference, which is resolved only when the plugin that uses it is made
 as that reference.
 
 ``${user_config.KEY}`` is substituted as Claude Code does: in MCP server
-configs and hook commands every value (a server or hook whose key is unset is
-left out; a shell-form hook command may not use one, its ``args`` may), in
-commands and agent prompts the non-sensitive ones only. Hooks also get each
-value as ``CLAUDE_PLUGIN_OPTION_<KEY>`` in their environment.
+configs and hook commands every value (a shell-form hook command may not use
+one, its ``args`` may), in commands and agent prompts the non-sensitive ones
+only. Hooks get each plain value as ``CLAUDE_PLUGIN_OPTION_<KEY>``, a secret
+only when they name it. What cannot be used on this machine (a key unset, a
+secret it cannot read) is decided per server and hook when the plugin is read
+(:mod:`noeta.cli.claude_plugins`), never by stopping noeta.
 """
 
 from __future__ import annotations
 
 import getpass
 import json
+import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -77,8 +80,12 @@ def _read_settings() -> dict[str, Any]:
 
 
 def _write_settings(data: dict[str, Any]) -> None:
+    """Replace the settings file at once (it holds permission rules too)."""
     home_dir.ensure_home()
-    _settings_path().write_text(json.dumps(data, indent=2) + "\n", "utf-8")
+    path = _settings_path()
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", "utf-8")
+    os.replace(tmp, path)
 
 
 def stored(plugin: str) -> dict[str, Any]:
@@ -145,10 +152,19 @@ def content(text: str, values: Mapping[str, Any],
     return _REF.sub(fill, text)
 
 
-def hook_env(values: Mapping[str, Any]) -> dict[str, str]:
-    """``CLAUDE_PLUGIN_OPTION_<KEY>`` for each value (a hook's environment)."""
-    return {"CLAUDE_PLUGIN_OPTION_" + re.sub(r"[^A-Za-z0-9_]", "_", k).upper(): _text(v)
-            for k, v in values.items()}
+def _env_name(key: str) -> str:
+    return "CLAUDE_PLUGIN_OPTION_" + re.sub(r"[^A-Za-z0-9_]", "_", key).upper()
+
+
+def hook_env(values: Mapping[str, Any], named_in: Any = None) -> dict[str, str]:
+    """``CLAUDE_PLUGIN_OPTION_<KEY>`` for a hook's environment: every plain
+    value, and a secret reference (``{env:…}``, ``{keyring:…}``) only when
+    ``named_in`` (the hook) names its key or variable, so a hook is never
+    handed, nor stopped by, a secret it does not use."""
+    text = json.dumps(named_in) if named_in is not None else ""
+    return {_env_name(k): _text(v) for k, v in values.items()
+            if not (isinstance(v, str) and _SECRET_REF.match(v))
+            or f"user_config.{k}}}" in text or _env_name(k) in text}
 
 
 def _parse(key: str, field: Mapping[str, Any], raw: str) -> Any:
@@ -187,7 +203,13 @@ def _keep_secret(plugin: str, key: str, value: str) -> str:
     except ImportError:
         raise OptionError(f"{key} is sensitive and the keyring package is not installed: "
                           "install the keyring extra, or give the value as {env:NAME}") from None
-    keyring.set_password(KEYRING_SERVICE, f"{plugin}/{key}", value)
+    try:
+        keyring.set_password(KEYRING_SERVICE, f"{plugin}/{key}", value)
+    except Exception as exc:  # noqa: BLE001 — NoKeyringError, a locked or broken backend
+        raise OptionError(f"{key} is sensitive and this machine's keyring cannot keep it "
+                          f"({type(exc).__name__}: {exc}); give it as {{env:NAME}} instead "
+                          f"(--config {key}={{env:NAME}}, the variable set where noeta "
+                          "runs)") from None
     return f"{{keyring:{KEYRING_SERVICE}/{plugin}/{key}}}"
 
 
