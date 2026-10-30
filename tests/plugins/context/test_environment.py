@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.core.events import ExtensionRecorded
+from noeta.core.events import ExtensionRecorded, Recorded, Waiting
 from noeta.core.execenv import RunResult
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState
@@ -414,3 +414,22 @@ async def test_a_changed_git_snapshot_is_given_again_at_a_later_turn(tmp_path: P
     assert "second" in again[0].text and "replaces the earlier snapshot" in again[0].text
     st = ext.reduce(st, "git", again[0].data)
     assert [r for r in await ext.reminders(later()) if r.kind == "git"] == []
+    # The model's own commit, inside a turn: the turn's end notes where HEAD
+    # is, so the next turn has nothing new to tell.
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "by the model"], check=True)
+    ended = later()
+    await ext.on_event(ended, Recorded(seq=9, at=0.0, event=Waiting(on="input")))
+    [mark] = ended.pending
+    assert isinstance(mark, ExtensionRecorded) and mark.kind == "git_turn_end"
+    st = ext.reduce(st, mark.kind, mark.data)
+    assert [r for r in await ext.reminders(later()) if r.kind == "git"] == []
+    # Switched off: the start snapshot only.
+    subprocess.run([*git, "checkout", "-q", "trunk"], check=True)
+    assert [r for r in await Environment(git_refresh=False).reminders(later())
+            if r.kind == "git"] == []
+    [back] = [r for r in await ext.reminders(later()) if r.kind == "git"]
+    st = ext.reduce(st, "git", back.data)
+    # Someone commits on the same branch between turns: that counts.
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "between"], check=True)
+    [between] = [r for r in await ext.reminders(later()) if r.kind == "git"]
+    assert "between" in between.text
