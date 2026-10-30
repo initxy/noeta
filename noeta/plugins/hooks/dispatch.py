@@ -36,6 +36,10 @@ log = logging.getLogger("noeta.hooks")
 NAME = "hooks"
 #: Entries kept per cache (per call id).
 KEEP = 256
+#: How what a hook added for the model is led, after its hook name (the
+#: event, ``:<tool>`` for a tool's): Claude Code's labels.
+CONTEXT_LABEL = " hook additional context"
+BLOCK_LABEL = " hook blocking error"
 #: The plugin whose folded ``mode`` is the task's permission mode.
 PERMISSIONS_PLUGIN = "permissions"
 
@@ -324,6 +328,9 @@ class Dispatcher:
         return out
 
     def context(self, view: TaskView, kind: str, label: str, texts: Sequence[str]) -> None:
+        # ``label`` is ``<hook name> hook additional context`` (or ``blocking
+        # error``), Claude Code's lead, the hook name being the event and,
+        # for a tool's events, ``:<tool>``.
         """Record what hooks added for the model, as ``<label>: <text>``
         (after the open calls' results when calls are open)."""
         for text in texts:

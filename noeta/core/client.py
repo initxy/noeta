@@ -19,14 +19,21 @@ from noeta.core.events import (
     Say,
     TaskCreated,
 )
+from noeta.core.images import fit_message
 from noeta.core.store import NewTask, Post, Status, Store, TaskRow, pin_history
-from noeta.core.types import Message, user
+from noeta.core.types import Image, Message, user
 
 Input = Union[str, Message]
 
 
-def _message(value: Input) -> Message:
-    return user(value, origin="human") if isinstance(value, str) else value
+async def _message(value: Input) -> Message:
+    if isinstance(value, str):
+        return user(value, origin="human")
+    if not any(isinstance(b, Image) for b in value.content):
+        return value
+    # An image enters the history once and is sent with every later request,
+    # so it is made to fit here, where every front end's input passes.
+    return await asyncio.to_thread(fit_message, value)
 
 
 class ClientAPI(Protocol):
@@ -108,7 +115,7 @@ class Client:
             created=created,
             queue=queue,
             dedupe_key=dedupe_key,
-            inbox=[Say(message=_message(input))] if input is not None else [],
+            inbox=[Say(message=await _message(input))] if input is not None else [],
         )
         created_id, _ = await self.store.create(task)
         return created_id
@@ -124,7 +131,7 @@ class Client:
         """Send a message. ``now`` lands at the next step of the running
         turn; ``next_turn`` waits for the current turn to finish."""
         seq, _ = await self.store.post(
-            Post(task_id=task_id, body=Say(message=_message(input), when=when),
+            Post(task_id=task_id, body=Say(message=await _message(input), when=when),
                  dedupe_key=dedupe_key))
         return seq
 

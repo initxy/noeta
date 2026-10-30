@@ -144,23 +144,25 @@ async def _created_config(local: LocalApp, task_id: str) -> Any:
 
 
 async def test_acp_on_a_server_sends_neither_the_editors_directory_nor_a_model(
-        server: tuple[str, ScriptedProvider, LocalApp], tmp_path: Path) -> None:
+        server: tuple[str, ScriptedProvider, LocalApp], tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch) -> None:
     """The editor's directory is a path on its own machine (outside the
     server's: 403) and its model may be one the server lacks: the task runs
     in the server's directory, on the agent's model, unless asked."""
     url, _provider, local = server
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
     acp_agent = NoetaAcpAgent(RemoteApp(url, token="secret"), editor_cwd=False)
     acp_agent.on_connect(FakeEditor())
     await acp_agent.initialize(protocol_version=1)
     session = await acp_agent.new_session(cwd="/somewhere/only/the/editor/has")
     assert await _created_config(local, session.session_id) == {
-        "cwd": os.path.realpath(tmp_path)}
+        "cwd": os.path.realpath(tmp_path), "timezone": "Asia/Shanghai"}
 
     (tmp_path / "sub").mkdir()
     named = NoetaAcpAgent(RemoteApp(url, token="secret"), editor_cwd=False, cwd="sub")
     named.on_connect(FakeEditor())
     session = await named.new_session(cwd="/somewhere/only/the/editor/has")
     assert await _created_config(local, session.session_id) == {
-        "cwd": os.path.realpath(tmp_path / "sub")}
+        "cwd": os.path.realpath(tmp_path / "sub"), "timezone": "Asia/Shanghai"}
     await acp_agent.app.stop()
     await named.app.stop()

@@ -102,6 +102,10 @@ class ModelSpec:
     display_name: str | None = None
     #: The month its training data ends (``June 2026``), when published.
     knowledge_cutoff: str | None = None
+    #: The address of the commit co-author trailer; a Claude model (family
+    #: ``anthropic``) without one uses ``noreply@anthropic.com``, any other
+    #: model without one gets no attribution note.
+    coauthor_email: str | None = None
 
 
 

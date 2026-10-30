@@ -90,10 +90,13 @@ async def test_approval_with_a_key(tmp_path: Path) -> None:
         assert call.state == "done"
 
 
-async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path) -> None:
+async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     """Attached to a server, a new task names no directory or model of its
-    own: the server picks them."""
+    own: the server picks them. It names the person's time zone."""
     from noeta.core.events import TaskCreated
+
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
 
     agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
     local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
@@ -103,7 +106,7 @@ async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path) -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(pilot, app, lambda: app.task_id != "")
         first = (await local.client.events(app.task_id))[0].event
-        assert isinstance(first, TaskCreated) and first.config == {}
+        assert isinstance(first, TaskCreated) and first.config == {"timezone": "Asia/Shanghai"}
 
 
 async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
@@ -203,8 +206,7 @@ async def test_on_a_server_the_status_shows_the_tasks_directory_and_no_file_is_a
         tmp_path: Path) -> None:
     """Attached to a server, the task runs in the server's directory: the
     status line shows the one its task recorded, and an ``@`` mention is
-    not read from this machine's disk."""
-    from noeta.cli.tui.widgets import Notice
+    sent as typed, for the task to attach from its own files."""
     from noeta.core.types import Text
 
     (tmp_path / "calc.py").write_text("def add(a, b):\n    return a - b\n")
@@ -224,7 +226,6 @@ async def test_on_a_server_the_status_shows_the_tasks_directory_and_no_file_is_a
         await settle(pilot, app, lambda: len(provider.requests) == 1 and not app.busy)
         sent = provider.requests[0].messages[-1]
         assert [b.text for b in sent.content if isinstance(b, Text)] == ["look at @calc.py"]
-        assert any("not attached" in str(n.render()) for n in app.query(Notice))
 
 
 async def test_on_a_server_with_no_directory_asked_the_status_names_the_servers(

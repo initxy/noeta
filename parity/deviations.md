@@ -65,6 +65,7 @@ A row without an id is a difference the replay cannot see.
 |---|---|---|
 | | A `Stop` / `SubagentStop` hook that blocks the end of the turn 8 times in a row is let through (`MAX_STOP_CONTINUATIONS`); Claude Code sets no limit and leaves the loop to the hook (`stop_hook_active`). | A server runs unattended: a hook that always blocks would spend model calls until a budget or a person stopped it. `stop_hook_active` is still sent, so a hook written for Claude Code ends the loop itself first. |
 | | A hook's input carries an empty `transcript_path` (and `agent_transcript_path`): noeta writes no transcript file. | Durable tasks: the conversation is the task's event log in the store, which a hook reads through a client (`Client.events`), not a local JSONL file. |
+| | A tool hook's blocking feedback is led by `<hook name> hook blocking error:` without the command that gave it (`rem.hook-context.1`; Claude Code adds `from command: "<command>"`). | A hook's answer is folded per hook result, not per command line; the hook name tells the model where it came from. |
 
 ## Request envelope
 
@@ -82,7 +83,8 @@ A row without an id is a difference the replay cannot see.
 |---|---|---|
 | | The `!`-prefix rule (ask the user to run an interactive command as `! <command>`) is left out of the main prompt (`main.session.1`). | No noeta front end runs `!` commands yet; the rule returns with that front-end feature. |
 | | The environment section names noeta's own front ends instead of Claude Code's, and leaves out fast mode (`main.envp.2`, `main.envp.3`). | Product facts of Claude Code; noeta has no fast mode. |
-| | The attribution note's PR footer links to noeta, and is left out for a model the catalog gives no display name. | The footer names the tool that wrote the PR; the trailer needs the model's name. |
+| | For a task whose exec env is not the worker's machine (a container), the environment leaves out the shell and OS version lines and names the env's own platform (`main.env.2`). | Claude Code always runs commands on the machine it describes; a worker's shell and OS would be wrong facts about where noeta's commands run. |
+| | The attribution note's PR footer links to noeta, and is left out for a model the catalog gives no display name, or a model other than Claude with no co-author address (`ModelSpec.coauthor_email`); the trailer's address is that one, Claude's `noreply@anthropic.com` otherwise. | The footer names the tool that wrote the PR; the trailer needs the model's name. |
 
 ## noeta's own files
 
@@ -104,6 +106,20 @@ file names. Each row is a name the model sees; the files themselves are product 
 | | An `@path` import from a repository file that leaves the repository directory and the working directory is skipped, not asked about (`rem.instructions.7`). | No noeta front end has Claude Code's approval dialog for external imports; skipping is the safe side of it. |
 | | Changed instruction files are shown again with any new message from the person, not only when a conversation is resumed, and the note follows that message in its turn instead of preceding it (`rem.instructions-reread.1`). | A durable task has no resume moment: it sleeps between messages and may wake days later on another worker, so every message is a resume; a note recorded for a message lands after it in the append-only log. |
 
+## Attachments
+
+| id | difference | reason |
+|---|---|---|
+| | A file the person @-mentions is attached after their text in the same turn; Claude Code moves its attachments ahead of the text (`rem.at-mention.1`). | The attachment is read inside the task once the message is in its log; the log is append-only, so it follows the message it answers (the same turn on the wire). |
+| | A mentioned directory lists at most 1,000 entries, then how many more. | The listing stays in the task's history for good; Claude Code lists every entry. |
+
+## Reminders
+
+| id | difference | reason |
+|---|---|---|
+| | The note that a read file changed on disk shows the changed lines only while the model's last whole `Read` of it is still in the conversation (not after a compaction, a partial read or an edit of the model's since); otherwise it says they are not shown (`rem.file-changed.2`). Claude Code diffs against the content it keeps of every read file. | The task log is the only state a worker has; keeping a copy of every file read beside it would grow the log by the size of each file again. |
+| | The quiet nudge counts every reply without text as quiet; Claude Code also counts visible thinking it classifies as narration (by its signature) as speaking (`rem.quiet-nudge.2`). | The signature classification is Claude Code's own and not available to noeta; other providers' thinking carries no such mark. |
+
 ## Not yet matched
 
 Known differences that no kernel or product reason forces: follow-ups, not accepted deviations.
@@ -113,6 +129,5 @@ Known differences that no kernel or product reason forces: follow-ups, not accep
 | `AskUserQuestion` needs every question answered; Claude Code accepts unanswered questions and a note per question. | `noeta/plugins/ask_user` |
 | MCP result sizes are estimated (four characters a token, a CJK character one, 1,600 an image), not counted. | `noeta/plugins/mcp/results.py` |
 | `WebFetch` has no raw-markdown answer for known documentation sites. | `noeta/plugins/web` |
-| `Bash` does not note that a command changed a file the model has read. | `noeta/plugins/shell`, `noeta/plugins/fs` |
 | `Edit` and `Write` refuse to change an existing file that is not UTF-8 (UTF-16 or any other encoding), and `Read` shows such a file as UTF-8 with its invalid bytes replaced; Claude Code reads and writes UTF-16 and keeps a file's encoding. | `noeta/plugins/fs` |
 | Headless: SDK hook callbacks (`initialize.hooks`) are ignored with a warning; `--permission-prompt-tool` takes only `stdio`, not an MCP tool. | `noeta/host/_stream_json_control.py`, `noeta/cli/headless.py` |

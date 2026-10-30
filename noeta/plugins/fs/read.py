@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core.execenv import ExecEnv
+from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Image
 from noeta.plugins.fs._missing import missing_file_message
@@ -35,7 +36,6 @@ from noeta.plugins.fs._read_formats import (
     too_many_tokens,
 )
 from noeta.plugins.fs.state import FS, KIND_NOTICE, KIND_READ, current_fs_state
-from noeta.toolkit.images import ImageTooLarge, fit_image
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     Workspace,
@@ -69,7 +69,7 @@ _READ_CHUNK_BYTES = 1024 * 1024
 _SNIFF_BYTES = 16
 
 #: Largest image file read at all (Claude Code's); what is read is then made
-#: to fit a request by :func:`noeta.toolkit.images.fit_image`.
+#: to fit a request by :func:`noeta.core.images.fit_image`.
 IMAGE_MAX_BYTES = 128 * 1024 * 1024
 
 #: Extensions read as images (Claude Code's); a file without an extension is
@@ -405,6 +405,7 @@ class ReadTool:
                 f"{format_size(_READ_MAX_FILE_BYTES)} limit for a read of the whole "
                 "file. Read a part with offset and limit, or search the file for "
                 "what you need.",
+                too_large=True,
             )
 
         start = w.offset - 1
@@ -432,7 +433,7 @@ class ReadTool:
         if not scan.capped and tokens > max_tokens and w.offset <= 1 and w.explicit_limit is None:
             return self._first_page(ctx, w, scan, text, tokens, max_tokens)
         if scan.capped or tokens > max_tokens:
-            return tool_error(self.name, too_many_tokens(tokens, max_tokens))
+            return tool_error(self.name, too_many_tokens(tokens, max_tokens), too_large=True)
 
         # Keyed by the canonical path and digesting the raw bytes of the whole
         # file, so a later mutation check compares like with like.

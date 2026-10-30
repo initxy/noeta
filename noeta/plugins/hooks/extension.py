@@ -30,7 +30,16 @@ from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 from noeta.plugins.hooks.config import Matcher, parse_hooks, read_settings
-from noeta.plugins.hooks.dispatch import NAME, Dispatcher, HookState, Read, agent_fields, fold
+from noeta.plugins.hooks.dispatch import (
+    BLOCK_LABEL,
+    CONTEXT_LABEL,
+    NAME,
+    Dispatcher,
+    HookState,
+    Read,
+    agent_fields,
+    fold,
+)
 from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
 from noeta.plugins.hooks.runners import Runner, run_command
 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -162,7 +171,8 @@ class Hooks(Extension):
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SubagentStart hook: {r.block}")
-            self._d.context(view, "context", "SubagentStart hook", [r.context for r in reads])
+            self._d.context(view, "context", f"SubagentStart{CONTEXT_LABEL}",
+                            [r.context for r in reads])
             return
         if "SessionStart" not in self.matchers or st.started:
             return
@@ -182,7 +192,7 @@ class Hooks(Extension):
         for r in reads:
             if r.block is not None:
                 view.notify(f"SessionStart hook: {r.block}")
-        self._d.context(view, "context", f"SessionStart hook ({source})",
+        self._d.context(view, "context", f"SessionStart{CONTEXT_LABEL}",
                         [r.context or r.text for r in reads])
 
     # ------------------------------------------------------------ reminders
@@ -201,7 +211,7 @@ class Hooks(Extension):
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SessionStart hook: {r.block}")
-            out.extend(Reminder(text=f"SessionStart hook (compact): {t}", kind="context")
+            out.extend(Reminder(text=f"SessionStart{CONTEXT_LABEL}: {t}", kind="context")
                        for t in (r.context or r.text for r in reads) if t)
         try:
             out.extend(await self._prompt_submit(view))
@@ -241,8 +251,9 @@ class Hooks(Extension):
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a PostToolBatch hook stopped "
                                                               "the turn")
-        return [Reminder(text=f"PostToolBatch hook: {t}", kind="context")
-                for r in reads for t in (r.block, r.context) if t]
+        return [Reminder(text=f"PostToolBatch{label}: {t}", kind="context")
+                for r in reads for label, t in ((BLOCK_LABEL, r.block), (CONTEXT_LABEL, r.context))
+                if t]
 
     async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
         # Before every model call, not only a turn's first: a message sent
@@ -281,8 +292,8 @@ class Hooks(Extension):
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "
                                                               "stopped the turn")
-        return [Reminder(text=t, kind="context") for t in (r.context or r.text for r in reads)
-                if t]
+        return [Reminder(text=f"UserPromptSubmit{CONTEXT_LABEL}: {t}", kind="context")
+                for t in (r.context or r.text for r in reads) if t]
 
     # ------------------------------------------------------------ tool calls
 
@@ -315,9 +326,11 @@ class Hooks(Extension):
             event = "PostToolUse"
             payload = {**base, "tool_response": {"text": text, "is_error": False}}
         reads = await self._d.run(event, view, payload, call=call)
+        blocks: list[str] = []
         notes: list[str] = []
         for r in reads:
-            notes.extend(n for n in (r.block, r.context) if n)
+            blocks.extend(n for n in (r.block,) if n)
+            notes.extend(n for n in (r.context,) if n)
             if event == "PostToolUse":
                 replaced = r.specific.get("updatedToolOutput")
                 if replaced is None and call.name.startswith("mcp__"):
@@ -327,7 +340,8 @@ class Hooks(Extension):
                     output = msgspec.structs.replace(output, content=[Text(text=shown)])
             if r.stop is not None:
                 await self._d.stop_turn(view, r.stop)
-        self._d.context(view, "feedback", f"{event} hook ({call.name})", notes)
+        self._d.context(view, "feedback", f"{event}:{call.name}{BLOCK_LABEL}", blocks)
+        self._d.context(view, "feedback", f"{event}:{call.name}{CONTEXT_LABEL}", notes)
         return output
 
     # ------------------------------------------------------------ compaction
@@ -427,7 +441,8 @@ class Hooks(Extension):
         reads = await self._d.run("PostModelSwitch", view, {
             "from_model": before or None, "to_model": to, "requested_model": to,
             "source": "sdk"})
-        self._d.context(view, "context", "PostModelSwitch hook", [r.context for r in reads])
+        self._d.context(view, "context", f"PostModelSwitch{CONTEXT_LABEL}",
+                        [r.context for r in reads])
 
     def _notify(self, view: TaskView, event: Waiting) -> None:
         """Notification, in the background (side effects only)."""

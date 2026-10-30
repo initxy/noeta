@@ -63,6 +63,7 @@ from noeta.host.questions import next_question, typed_answer
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.stream_json import noeta_version
 from noeta.host.usage import context_text, cost_text, tree_usage
+from noeta.toolkit.local_env import local_timezone
 from noeta.toolkit.permission_modes import (
     MODE_SIGNAL,
     PERMISSION_MODES,
@@ -182,6 +183,9 @@ class NoetaAcpAgent:
             config["cwd"] = task_cwd
         if self.model:
             config["model"] = self.model
+        # The editor that starts this agent runs on the person's machine.
+        if zone := local_timezone():
+            config["timezone"] = zone
         task_id = await self.app.client.create(self.agent, None, config=config)
         if mcp_servers and self.servers is not None:
             self.servers.add(task_id, mcp_servers)

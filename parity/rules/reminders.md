@@ -84,7 +84,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 |---|---|
 | rem.git-status.1 | Trigger: start of a conversation inside a git repository. Placement: second block of the first user message, after instructions, before attribution. |
 | rem.git-status.2 | Opens by offering the following as context, then a `# gitStatus` heading and a note that it is a snapshot from the start of the conversation that will not update. |
-| rem.git-status.3 | Fields in order, each separated by a blank line: current branch; main branch (labelled as the usual PR target); git user name; `Status:` with the short status or `(clean)`; `Recent commits:` as one-line `hash subject` entries. |
+| rem.git-status.3 | Fields in order, each separated by a blank line: current branch; main branch (labelled as the usual PR target); git user name; `Status:` with the short status or `(clean)`; `Recent commits:` as one-line `hash subject` entries. With no user name set the user line is left out; a repository without commits gets an empty list (2.1.312 bundle). |
 | rem.git-status.4 | Closes by saying the harness attached it automatically, the user did not write it, it is about the user's own account and checkout, and the model need not repeat it to them. |
 | rem.git-status.5 | Re-sent before the summary after compaction (see `compaction.md`). |
 
@@ -113,8 +113,8 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | id | rule |
 |---|---|
 | rem.quiet-nudge.1 | Content: the user has not heard from the model for a while; keep them updated when there is something worth telling (a finding, a change of plan). |
-| rem.quiet-nudge.2 | Trigger (observed twice in `m1`): after the fifth consecutive assistant step that produced tool calls but no text since the last user input (a prompt, or a plan approval). Whether the real trigger is step count or elapsed time cannot be told from the recordings. |
-| rem.quiet-nudge.3 | Placement: `role: "system"` message after the tool-result message, joined before the `<total_tokens>` line. Sent once per silent stretch; persists. |
+| rem.quiet-nudge.2 | Trigger (observed twice in `m1`): after the fifth consecutive assistant step that produced tool calls but no text since the last user input (a prompt, or a plan approval). The 2.1.312 bundle counts steps (`silent_turn_reminder`: 5 steps; a seconds-based form exists behind a setting). |
+| rem.quiet-nudge.3 | Placement: `role: "system"` message after the tool-result message, joined before the `<total_tokens>` line. Persists. A silent stretch is nudged again after five more tool-only steps since its last nudge, three times at most (2.1.312 bundle; the recordings' stretches were too short to show a second). |
 
 ## tool-loaded
 
@@ -251,12 +251,35 @@ Each note goes out with the next request after the change, as a `role: "system"`
 | rem.answers.1 | `AskUserQuestion` answers come back as its `tool_result` text, not as a user message: each question quoted, `=`, the chosen label quoted, the chosen option's preview when it had one, and a closing line inviting the model to proceed using them. Details in `tools/AskUserQuestion.md`. |
 | rem.answers.2 | Approvals in default mode (`m2`) add no reminder; an approved call simply returns its normal result. |
 
+## at-mention (file attachments)
+
+Not in the recordings; from the 2.1.312 bundle (`attachments` render map: `file`,
+`directory`, `at_mention_reference`, `pdf_reference`; the reader that builds them).
+
+| id | rule |
+|---|---|
+| rem.at-mention.1 | Trigger: the person's prompt names a path with `@path` (also `@"path with spaces"` and `@path#L<start>-<end>` for those lines). Each existing file or directory becomes meta user content (`<system-reminder>` blocks) in the person's turn; a path that does not exist adds nothing. |
+| rem.at-mention.2 | A file is read through `Read` itself, so the file counts as read (a later `Edit` needs no new `Read`) and `Read`'s formats apply (image, notebook, PDF). Two blocks: `Called the Read tool with the following input: <the input as compact JSON>`, then `Result of calling the Read tool:` and the result text on the next line; an image result follows the first block as the image itself. |
+| rem.at-mention.3 | A text file over `Read`'s limit is attached by its first 2,000 lines (the input carries that limit), followed by a note that it was cut, needs no mention, and the rest is there for `Read`. One too large even for that is named instead: the user @-mentioned it (with its size), it was not attached, read it in parts with offset and limit or search it, and only if every line is needed read it whole. |
+| rem.at-mention.4 | A directory is shown as a `Bash` call, `{"command": "ls <path>", "description": "Lists files in <path>"}`, and its result, the entry names one per line. |
+| rem.at-mention.5 | A PDF the model must read by pages is named instead (its page count and size): none of it is in the conversation; before anything else call `Read` with a few pages, read on a few pages a call, describe only pages read and say which ones an answer rests on. |
+| rem.at-mention.6 | A path a deny rule keeps from `Read` is left out without a word. A path that could not be read is named: the user @-mentioned it, it was not attached, read it with the file tools before answering; without access to the files (a session that does not attach them) every mention is named the same way. |
+
+## hook context
+
+Not in the recordings (no hooks configured); from the 2.1.312 bundle (`hook_additional_context`,
+`hook_blocking_error`).
+
+| id | rule |
+|---|---|
+| rem.hook-context.1 | Text a hook adds for the model (`additionalContext`, or a `UserPromptSubmit` / `SessionStart` hook's plain output) is meta user content led by `<hook name> hook additional context: `; the hook name is the event (`UserPromptSubmit`, `SessionStart`, `SubagentStart`, `PostToolBatch`), or `<event>:<tool>` for a tool's events (`PreToolUse:Read`). A tool hook's blocking feedback is led by `<hook name> hook blocking error`. |
+
 ## s1 only
 
 | id | rule |
 |---|---|
 | rem.file-changed.1 | **s1 only.** Trigger: a file the model has in context (here `CLAUDE.md`, changed by a Bash command) changed on disk. Placement: `role: "system"` message after the tool-result message of the step that changed it. |
-| rem.file-changed.2 | Content: the path changed on disk since last read; the change is usually deliberate, so treat it as the current state and do not revert; if it looks wrong say so instead of undoing it; otherwise no need to mention it; then the relevant lines with line numbers (`N<TAB>text`). |
+| rem.file-changed.2 | Content: the path changed on disk since last read; the change is usually deliberate, so treat it as the current state and do not revert; if it looks wrong say so instead of undoing it; otherwise no need to mention it; then the relevant lines with line numbers (`N<TAB>text`), or, when they cannot be shown, that they are not shown and `Read` gives the current content (2.1.312 bundle, `edited_text_file`). |
 | rem.agent-list.1 | **s1 only.** A `general-purpose` sub-agent whose first environment message lacked the agent list received the "available agent types" list plus the auto-mode guidance as a `role: "system"` message after its first tool result. |
 
 ## Not observed in 2.1.312 baseline

@@ -7,6 +7,10 @@ would fail every turn after it. :func:`fit_image` shrinks an image to at most
 installed (the ``images`` extra), the way Claude Code does; without it, an
 image that is already small enough passes unchanged and any other is refused
 with :class:`ImageTooLarge` before it reaches the history.
+
+Every image a person sends goes through :func:`fit_message` once, in the
+client's create and send, so each front end (the TUI, ACP, stream-json, HTTP)
+is covered by the same code; tools fit the images they return themselves.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ import math
 import struct
 from dataclasses import dataclass
 from typing import Any
+
+from noeta.core.types import Image, Message, Text
 
 __all__ = [
     "MAX_BASE64_BYTES",
@@ -27,6 +33,7 @@ __all__ = [
     "ImageTooLarge",
     "base64_size",
     "fit_image",
+    "fit_message",
     "image_dimensions",
 ]
 
@@ -149,6 +156,26 @@ def fit_image(raw: bytes, media_type: str) -> FittedImage:
     except ImportError:
         return _pass_through(raw, media_type)
     return _shrink(raw, media_type)
+
+
+def fit_message(message: Message) -> Message:
+    """``message`` with every image made to fit; one that cannot be is
+    replaced by a line saying it was left out and why."""
+    if not any(isinstance(b, Image) for b in message.content):
+        return message
+    content: list[Any] = []
+    for block in message.content:
+        if not isinstance(block, Image):
+            content.append(block)
+            continue
+        try:
+            fitted = fit_image(block.data, block.media_type)
+        except ImageTooLarge as exc:
+            content.append(Text(text=f"[An attached image was left out: {exc}.]"))
+            continue
+        content.append(block if fitted.data == block.data and fitted.media_type == block.media_type
+                       else Image(media_type=fitted.media_type, data=fitted.data))
+    return Message(role=message.role, content=content, origin=message.origin)
 
 
 def _pass_through(raw: bytes, media_type: str) -> FittedImage:

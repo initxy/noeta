@@ -373,6 +373,7 @@ class SessionReplay:
         from noeta.cli.config import Settings, from_settings
         from noeta.core.commands import expand_command
         from noeta.core.extension import CommandContext
+        from noeta.toolkit.local_env import local_timezone
 
         # The session's environment knobs (Claude Code's compaction window
         # and percentage) reach noeta's plugins under noeta's names.
@@ -405,6 +406,9 @@ class SessionReplay:
                 after = len(await app.client.events(task_id)) if task_id else 0
                 if task_id is None:
                     config = {"cwd": str(self.proj), "model": MODEL}
+                    # As the TUI does: the person's dates are in this machine's zone.
+                    if zone := local_timezone():
+                        config["timezone"] = zone
                     if self.spec.get("permission_mode"):
                         # The mode Claude Code was started in (``--permission-mode``).
                         config["permission_mode"] = self.spec["permission_mode"]
