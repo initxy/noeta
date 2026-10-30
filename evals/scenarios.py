@@ -8,6 +8,7 @@ re-record the baseline (``make eval-baseline``) in the same change.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from evals import fixtures as fx
@@ -440,6 +441,35 @@ def score_plan_mode(t: Trace, judge: Judge) -> Result:
     if changed or ws_writes:
         return 0.0, checks
     return 0.6 * exited + 0.2 * bool(plan) + 0.2 * explored, checks
+
+
+#: The files retiring ``legacy_connect`` changes: its three callers (found
+#: only by looking) and the module that defines it.
+LEGACY_PLAN_FILES = (*fx.LEGACY_CALL_SITES, "shop/db.py")
+
+
+def score_plan_multi_file(t: Trace, judge: Judge) -> Result:
+    """A plan for a change across files: approval asked with ExitPlanMode,
+    and the plan file names every file that must change and how to verify."""
+    changed = t.changed_files()
+    ws_writes = [path_arg(c) for c in t.named("Edit", "Write", "NotebookEdit")
+                 if "/plans/" not in path_arg(c)]
+    exited = any(not t.failed(c) for c in t.named("ExitPlanMode"))
+    plans = [Path(p) for p in dict.fromkeys(path_arg(c) for c in t.named("Write", "Edit"))
+             if "/plans/" in p]
+    text = "\n".join(p.read_text(encoding="utf-8") for p in plans if p.is_file())
+    named = [f for f in LEGACY_PLAN_FILES if f.split("/")[-1] in text]
+    verify = bool(re.search(r"pytest|verif", text, re.I))
+    explore = [c for c in t.named("Agent", "Task")
+               if c.arguments.get("subagent_type") == "Explore"]
+    checks = {"workspace_changed": changed, "workspace_write_attempts": ws_writes,
+              "exit_plan_mode": exited, "plan_chars": len(text), "files_named": named,
+              "verification": verify, "explore_agents": len(explore),
+              "agents": [str(c.arguments.get("subagent_type")) for c in t.named("Agent", "Task")]}
+    if changed or ws_writes:
+        return 0.0, checks
+    return (0.5 * exited + 0.1 * bool(text) + 0.3 * len(named) / len(LEGACY_PLAN_FILES)
+            + 0.1 * verify), checks
 
 
 # --------------------------------------------------------------------------- #
@@ -894,6 +924,18 @@ SCENARIOS: list[Scenario] = [
         permission_mode="plan",
         answer=plan_reviewer,
         score=score_plan_mode,
+        tags=("plan_mode",),
+    ),
+    Scenario(
+        name="plan_mode_multi_file",
+        behavior="plans a change across files: names each file to change and a verification",
+        goal=("Retire the legacy database driver: every caller of legacy_connect should use "
+              "connect() instead, and legacy_connect should be removed from shop/db.py."),
+        setup=fx.shop,
+        permission_mode="default",
+        switch_mode="plan",
+        answer=plan_reviewer,
+        score=score_plan_multi_file,
         tags=("plan_mode",),
     ),
     Scenario(
