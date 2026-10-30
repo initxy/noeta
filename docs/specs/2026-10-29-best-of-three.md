@@ -75,6 +75,39 @@ and reported in the README.
 ### Smaller recorded differences
 - Mentioned directory listing capped at 1,000 entries; hook blocking feedback names no command; visible thinking does not count as speaking for the quiet nudge; a non-Claude model without `coauthor_email` gets no attribution note. Each has its `parity/deviations.md` row and reason.
 
+### Benchmark (Phase 4)
+- Benchmarks: Terminal-Bench 4.0 (63 of 66 tasks; 3 need a GPU) and SWE-rebench 07-2026 (111).
+  Why: TB4 is the current headline board with Claude Code as its reference agent and is not
+  saturated; SWE-rebench is fresh (issues after the model's data) and cheap per task. TB 2.1 is
+  the smoke loop only.
+- Comparison: noeta against harbor's `claude-code` agent (CC 2.1.312) in one harbor job — same
+  model (`opensource/deepseek_v4_1_flash`, gateway Anthropic endpoint), effort `high`, tasks,
+  timeouts, interleaved trials, concurrency split evenly. Recorded requests agree on
+  `max_tokens` 65536, `thinking` adaptive, `output_config.effort` high, no temperature; CC gets
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` = noeta's 1M window (2.1.312 honours it for non-Claude ids,
+  else it assumes 200k). The one wrapper over CC: both agents' process trees are stopped at
+  the agent timeout (harbor only cancels its `docker exec`; the agent kept editing during a
+  same-container verify).
+- Fairness of the environment: noeta installs into its own venv under `/opt/noeta-bench`
+  from uploaded static uv, rg and a python-build-standalone CPython; the task's interpreter
+  and packages are never touched.
+- Nothing uploaded: harbor telemetry off; CC telemetry, error reporting, auto-updater,
+  non-essential traffic and the WebFetch domain preflight off; local dataset copies (a
+  registry run records a download at harbor's hub); LiteLLM's price-map download off; network
+  logs of the smoke runs show only the gateway, the corp proxy (package and install
+  downloads) and task-driven traffic. The gateway key is redacted from job dirs.
+- Nothing else touched: each run builds every image through its own buildx builder, removed
+  with all it pulled at the end; prebuilt task images come in via a run-local dataset copy
+  whose Dockerfiles are `FROM <prebuilt>`, so they live in the trial's compose project;
+  leftovers are removed only when compose labels or container mounts prove them the run's.
+  Pulled images are never removed by name or digest: another program may hold the same one.
+  Cost of that: disk peaks per task in flight (SWE-rebench median ~2 GB on docker's disk with
+  the builder's state elsewhere), so concurrency is sized to free space.
+- Measures: pass rate (setup failures counted, infrastructure errors shown apart), paired
+  per-task difference with its standard error, tokens from each agent's own records
+  (noeta: its store — sub-agents and compaction included; side calls such as titles are in
+  neither agent's count), time, and cost at DeepSeek's own list price (read 2026-10-30).
+
 ## Plan
 
 ### Phase 0: baseline
@@ -100,7 +133,7 @@ and reported in the README.
 - [ ] 9 trials each on DeepSeek V4.1; results and baseline archived.
 
 ### Phase 4: benchmark
-- [ ] Pick one or two current benchmarks, with reasons.
+- [x] Pick one or two current benchmarks, with reasons.
 - [ ] Run noeta and, where possible, CC on DeepSeek V4.1; version, samples, runs and cost in
       the README.
 
@@ -156,3 +189,4 @@ and reported in the README.
 - 2026-10-29 B6 (ctx-attach-env): file-changed note checked before every model call (so right after a Bash/formatter step), as a system turn (order 70), CC's meaning (current state, don't revert, say so if wrong, otherwise no mention) in own words, with the changed lines numbered (diff against the model's last whole Read still in the conversation; then the file counts as read) or a not-shown pointer to Read. Removed the 'Bash does not note a changed file' row from Not yet matched; rule `rem.file-changed.2` extended.
 - 2026-10-29 B9 (ctx-attach-env): hook text for the model is led by CC's labels: `<hook name> hook additional context: ` (UserPromptSubmit context had no label at all; SessionStart no longer names its source) and `<hook name> hook blocking error` for a tool hook's block; tool events name `<event>:<tool>`. Rule `rem.hook-context.1`.
 - 2026-10-29 ctx-attach-env gates: `make check` green (2443 passed, coverage 88.40%), `make parity` 0 mismatches (11 accepted deviations). DeepSeek V4.1, 13 scenarios x 9 (`--out` in the session scratchpad, ds41-ctx-attach-env.json): overall 0.927 vs 0.919 on main (ds41-main-37fd9997); every scenario within one trial of main except delegate_parallel_review 0.22 vs 0.11 (8 of 9 hit the 240 s trial timeout, as on main); 494 requests, 6.2M input tokens. Against the committed baseline (another model) `make eval` reports delegate_parallel_review as regressed, as main does.
+- 2026-10-30 Phase 4 harness on branch `bench-2026` (`bench/compare.py`, `bench/harbor_adapter.py`): smoke 2+2 tasks both agents graded; gateway took 32 parallel calls with no 429; review fixes (own venv, CC context window, store usage, WebFetch preflight, run-owned builder and cleanup). Full run not started.

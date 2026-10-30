@@ -37,22 +37,43 @@ suite.
 ## Nothing is uploaded
 
 - harbor sends anonymous usage telemetry unless `HARBOR_TELEMETRY=0`; both
-  scripts set it themselves. They refuse `--upload` / `--launch`; never run
-  `harbor upload` or submit to a leaderboard.
+  scripts set it themselves, and `LITELLM_LOCAL_MODEL_COST_MAP=True` so the
+  LiteLLM harbor imports downloads no price map. They refuse `--upload` /
+  `--launch`; never run `harbor upload` or submit to a leaderboard.
+- Datasets are read from local copies only: a registry run (`-d`) asks harbor's
+  hub and records a download there. Fetch a copy once with
+  `HARBOR_TELEMETRY=0 harbor download <id> -o bench/datasets/<key>`.
 - Claude Code runs with `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`,
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_AUTOUPDATER=1`, and a
-  per-trial config dir inside the trial's logs; harbor's own process gets a
-  throwaway `CLAUDE_CONFIG_DIR` under the jobs dir, never `~/.claude`.
+  `--settings` layer with `skipWebFetchPreflight: true` — without it 2.1.312's
+  WebFetch asks `api.anthropic.com/api/web/domain_info` about every domain, and
+  no environment switch stops that. Its config dir is per trial, inside the
+  trial's logs; harbor's own process gets a throwaway `CLAUDE_CONFIG_DIR` under
+  the jobs dir, never `~/.claude`. The other Anthropic endpoints in the 2.1.312
+  binary are OAuth / claude.ai features (unused with an API key), event logging
+  and Datadog / GrowthBook (telemetry and non-essential traffic, off above), and
+  `downloads.claude.ai` (the auto-updater, off; harbor's install fetches CC from
+  there). Network logs of the smoke runs showed CC reaching only the gateway
+  and, during install, `downloads.claude.ai`.
 - noeta sends nothing but its model calls (no telemetry exists in the package);
   its `WebFetch` reaches the web only when the agent calls it for the task.
-- `run_benchmark.sh`'s export of token usage to kaboo is opt-in (`NOETA_PI_EXPORT`).
+- The gateway key: never printed; replaced by `<redacted>` in every file under
+  the job dir every two minutes and when the run ends (agents sometimes print
+  their environment). Still, a job dir is for this machine — do not share it or
+  attach it to a report; publish the summary.
 
 ## How the adapter works
 
-1. **Install** — install the `noeta` CLI into the sandbox from a local wheel
-   (`NOETA_WHEEL`; `compare.py` builds one from the checkout when unset), or
-   `NOETA_SPEC` from an index. pip runs through `NOETA_PROXY` (default: the
-   proxy the Docker client gives containers).
+1. **Install** — noeta goes into its own venv under `/opt/noeta-bench`, never
+   into the task's interpreter (a same-container verifier, SWE-rebench's and
+   TB2.1's, must test the environment the task built) and never with the
+   image's package manager. The adapter uploads a static uv and rg and a
+   python-build-standalone CPython 3.12 for the image's libc (`compare.py`
+   fetches them once, sha256-checked: `bench/compare.py tools <dir>`), makes
+   the venv and installs the wheel (`NOETA_WHEEL`; `compare.py` builds one from
+   the checkout) with its dependencies from PyPI through `NOETA_PROXY` (default:
+   the proxy the Docker client gives containers). Only `rg` goes on noeta's
+   `PATH`.
 2. **Run** — `noeta -p "<instruction>" --output-format stream-json --verbose
    --permission-mode bypassPermissions --cwd "$(pwd)" --model <id> --effort <e>`,
    with `NOETA_PROVIDER` / `NOETA_BASE_URL` / `NOETA_API_KEY` (or the 0.6
@@ -71,11 +92,17 @@ suite.
    so a task whose sandbox has no internet still allows the model calls (as
    harbor's `claude-code` agent does with `ANTHROPIC_BASE_URL`); no
    `--allow-agent-host` needed.
-5. **Usage** — token counts go into harbor's `n_input_tokens` (all input,
+5. **End of run** — at the agent timeout harbor only cancels its `docker exec`
+   client; the agent process tree is stopped too (STOP, TERM, KILL after 5 s,
+   descendants included), for noeta and for Claude Code alike.
+6. **Usage** — token counts go into harbor's `n_input_tokens` (all input,
    cached or not) / `n_cache_tokens` / `n_output_tokens`, the fields
-   `claude-code` fills. They come from the final `result` line; when harbor
-   kills the agent at its timeout there is none, and the per-message usage of
-   the `assistant` lines is summed instead (`metadata.usage_source` says which).
+   `claude-code` fills. After the run (a timed-out one too) the adapter reads
+   every model call of the task tree from noeta's own store: the main agent,
+   its sub-agents and compaction summaries (`metadata.usage_source=store`). The
+   stream is a fallback: its `result` line misses compaction, and without one
+   only the main agent's messages are in it. Side calls (session title) are in
+   neither agent's count.
 
 Unlike `pi`, the `-m` string is **not** split on `/` — Noeta model ids can
 contain a slash and the gateway decides routing.
@@ -90,8 +117,7 @@ export NOETA_ENV_FILE=/path/to/.env        # NOETA_BASE_URL / NOETA_API_KEY (or 
 
 ### Restricted-network setup
 
-On a machine that cannot reach the public internet directly, set up three things,
-in order:
+On a machine that cannot reach the public internet directly:
 
 1. **dockerd can't pull task images from docker.io.** Give the Docker *daemon*
    an HTTP proxy (this covers image pulls only):
@@ -119,14 +145,7 @@ in order:
    checkout; for `run_benchmark.sh`, `uv build --wheel` (it picks the newest
    `dist/noeta-1*.whl`) or set `NOETA_WHEEL`.
 
-4. **ripgrep in the task image.** noeta shells `Grep`/`Glob` out to
-   `rg`; without it those tools fail loud and the agent loses file search. Task
-   images usually ship neither `rg` nor python3, so the adapter's `install`
-   apt-get's `python3 python3-pip ripgrep` as root (best-effort — needs an
-   apt-based image and the proxy above). Nothing to set; noted so a non-Debian
-   task image is a known gap.
-
-5. **The *verifier* container also needs a proxy — not just the agent.** The
+4. **The *verifier* container also needs a proxy — not just the agent.** The
    adapter's `NOETA_PROXY` (point 2) only covers the *agent* exec. But harbor's
    verifier phase runs its own container step, and many TB2 tasks' `test.sh`
    downloads a toolchain at verify time (e.g. `curl -LsSf https://astral.sh/uv`
@@ -163,28 +182,11 @@ export PYTHONPATH="$(git rev-parse --show-toplevel):$PYTHONPATH"
 
 ### Task-image quirks the adapter handles
 
-TB2 task images are not uniform; the adapter absorbs three differences:
-
-- **PEP 668 "externally-managed" Python.** Some Debian-based images mark the
-  system Python as externally managed, so a bare `pip install` fails before the
-  agent runs. The adapter installs with `--break-system-packages` (safe in a
-  throwaway container).
-- **WORKDIR is not always `/app`.** Most images use `/app`, but a few use
-  `/workspace` or an `/app/<subdir>`. The adapter defaults the workspace to the
-  container's own `$(pwd)` (the image's WORKDIR), matching how harbor's `pi`
-  agent behaves; `NOETA_WORKSPACE` still overrides.
-- **Python older than 3.11 — handled via a private 3.12.** noeta requires
-  `>=3.11`, but some images ship older Python: a few TB2 images
-  (`python:3.11`/`3.10`) and **all** SWE-bench Verified images (conda envs on
-  Python 3.9–3.11). A bare `pip install` there fails ("requires a different
-  Python: 3.11.x not in '>=3.12'") before the agent runs. When `install` detects
-  `python3 < 3.12`, it `pip install`s `uv` with the image's own Python, has uv
-  fetch a prebuilt 3.12 into a venv (`/opt/noeta312`), and installs noeta there;
-  `run` invokes that venv's `noeta` by absolute path. **PATH is never touched**,
-  so the agent's own shell tools and the task's verifier keep using the image's
-  native interpreter — only the noeta CLI runs on 3.12. (uv, not
-  `conda create python=3.12`: conda's solver peaks over the trial container's
-  4 GB cap and gets OOM-killed; uv stays well under.)
+Task images are not uniform; the private install (own CPython, venv, `rg`)
+makes their Python version, PEP 668 marker, package manager and libc
+irrelevant to noeta. One more difference: **WORKDIR is not always `/app`** —
+the adapter defaults the workspace to the container's own `$(pwd)` (the
+image's WORKDIR), as harbor's `pi` agent does; `NOETA_WORKSPACE` overrides.
 
 ### Don't smoke-test with `-l 1`
 
@@ -201,8 +203,26 @@ bench/compare.py run tb21 --tasks fix-git --concurrency 2
 `compare.py` puts both agents in **one** harbor job: harbor interleaves their
 trials (attempt, task, agent), so both see the same gateway load over time, and
 `--concurrency` is split evenly between them (`--n-concurrent-agents`). Both
-get the same model, effort, tasks, timeouts and output cap
-(`CLAUDE_CODE_MAX_OUTPUT_TOKENS` = the manifest's `max_output_tokens`).
+get the same model, effort, tasks and timeouts, and the same context window
+and output cap: Claude Code gets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS` set to the manifest's `context_window` /
+`max_output_tokens` (2.1.312 assumes a 200k window for a model id it does not
+know and honours the first variable for any non-Claude id; the second is
+capped at 128k for such ids). Each job dir gets `provenance.json`: git commit
+and whether the tree was dirty, the wheel's sha256, harbor's and Claude Code's
+versions, the uploaded tools' sha256s, the price used.
+
+One real request from each agent, recorded through a local proxy with these
+settings (2026-10-30, `opensource/deepseek_v4_1_flash`):
+
+| Field | Claude Code 2.1.312 | noeta |
+|---|---|---|
+| `max_tokens` | 65536 | 65536 |
+| `thinking` | `adaptive`, display `updates` | `adaptive`, display `updates` |
+| `output_config.effort` | `high` | `high` |
+| `temperature` / `top_p` | not sent | not sent |
+| `context_management` | `clear_thinking_20251015`, keep all | same |
+| extra calls | none | a session-title call before the first turn (thinking off) |
 Datasets are read from local copies under `--datasets-dir`
 (`bench/datasets/<tb4|swe-rebench|tb21>`); fetch each once with the
 `harbor download` line the script prints when one is missing.
@@ -218,9 +238,11 @@ bench/compare.py run swe-rebench --tasks open-jarvis__OpenJarvis-465 \
   react-hook-form__react-hook-form-13464 --agent-max-timeout-sec 1500 --concurrency 4 --harbor $H
 
 # full runs: SWE-rebench at its real 50 min cap; TB4 with the agent capped
-# at 2 h of its 8 h (internal comparison, not board-comparable — say so)
-bench/compare.py run swe-rebench --k 2 --concurrency 16 --harbor $H
-bench/compare.py run tb4 --k 1 --concurrency 8 --agent-max-timeout-sec 7200 --harbor $H
+# at 2 h of its 8 h (internal comparison, not board-comparable — say so);
+# the builder's state on the larger disk; concurrency sized to the free space
+S=/data00/.../bench/jobs/.buildkit
+bench/compare.py run swe-rebench --k 1 --concurrency 10 --builder-state-dir $S --harbor $H
+bench/compare.py run tb4 --k 1 --concurrency 8 --agent-max-timeout-sec 7200 --builder-state-dir $S --harbor $H
 
 bench/compare.py summary bench/jobs/<job-name>     # re-summarize a finished job
 ```
@@ -235,45 +257,72 @@ a smoke trial passed that way after its timeout.
 `--dry-run` writes the job config (`<jobs-dir>/<job-name>.config.json`) and
 stops.
 
-### Disk: what a run removes, and only that
+### Docker: what a run creates, and what it removes
 
-A full TB4 or SWE-rebench pass pulls far more image data than a typical disk
-holds, and harbor removes only each trial's own compose project
-(`docker compose down --rmi local --volumes --remove-orphans`: the trial's
-containers, volumes and the image it built). So `compare.py` removes, task by
-task once every trial of the task has finished (and for all tasks when the job
-ends), what the run pulled for that task — and nothing else:
+A run removes only what it can prove it created, and never prunes anything
+unfiltered:
 
-- it records the host's image IDs and build-cache record IDs when the run
-  starts; anything already there is never touched;
-- a task's images are the `docker_image`s its `task.toml` names (TB4's agent
-  and verifier images) or, for a task harbor builds, the images its
-  Dockerfiles start `FROM` (SWE-rebench's base images, which arrive through
-  BuildKit and live in the build cache: the records whose description is the
-  pull of that image, plus records built on top of them);
-- removal is `docker rmi <id>` without `-f` (refused while a container uses
-  it) and `docker buildx prune --filter id=<record>` per record; never an
-  unfiltered `docker system prune` / `builder prune`.
+- **Builds** go through a buildx builder the run creates (`bench-<job>`,
+  `BUILDX_BUILDER` for harbor's compose builds). Everything it pulls and caches
+  is the run's; it is pruned as builds finish and removed whole when the run
+  ends. The host's default builder is not used; if the run's builder cannot be
+  created, the run stops.
+- **Prebuilt task images** (TB4's agent and verifier images) are not pulled
+  into the host's image store: the run reads a copy of the dataset
+  (`<jobs-dir>/<job>.tasks/`) whose Dockerfiles are just `FROM <prebuilt
+  image>`, so harbor builds each image inside the trial's own compose project —
+  the same bytes, plus compose's labels — and its `down --rmi local --volumes`
+  removes it with the trial.
+- **Leftovers**: an image two trials built alike can stay dangling, and
+  anonymous volumes outlive their containers. Removed once the trial has
+  finished, only when compose's `com.docker.compose.project` label (or the
+  image name) is one of this job's trial projects, or the volume was seen
+  mounted in this job's container; `docker rmi` / `docker volume rm` without
+  `-f`. Logged to `<jobs-dir>/<job>.cleanup.log`.
 
-Each removal is logged to `<jobs-dir>/<job-name>.cleanup.log`;
-`--keep-task-images` turns it off. Peak disk is then the images of the tasks
-in flight (TB4: up to ~4 GB per task with its verifier image).
+So disk use peaks at the images of the trials in flight plus the builder's
+cache, and returns to where it was (measured: within 0.1 GB). One daemon can
+run several `compare.py` jobs at once (each has its own builder and trial
+names). The buildkit image the builder runs (`moby/buildkit:buildx-stable-1`)
+stays: it is not provably this run's.
+
+`--builder-state-dir <dir>` puts the builder's state in `<dir>/<builder>` (a
+new directory, emptied and removed with the builder) through a buildkitd
+container the run starts — use a disk with room. Measured peak per task in
+flight, one trial, 60 s agent cap:
+
+| Task (compressed image size) | builder in a docker volume | builder state on another disk |
+|---|---|---|
+| SWE-rebench `cloudflare__vinext-1371` (0.89 GB) | 5.9 GB on docker's disk | 2.0 GB on docker's disk + 3.5 GB on the other |
+| TB4 `html-js-filter` (0.06 GB agent + 1.0 GB verifier image) | 1.8 GB | — |
+
+Two trials of one task share most of it (same layers). Size the concurrency
+to the free space on docker's disk: SWE-rebench images are 0.95 GB compressed
+at the median (p90 1.4 GB; seven tasks 2.4–6.5 GB), TB4 tasks 0.27 GB (agent +
+verifier; four tasks 4.2–7.5 GB).
 
 ### What the summary measures
 
-`summary.md` / `summary.json` in the job dir, per agent:
+`summary.md` / `summary.json` in the job dir (`summary --out` for several jobs),
+per agent:
 
-- **pass rate** — trials with reward > 0 over all trials; and over trials that
-  got a reward. A trial with no reward is an infrastructure error and is listed
-  as one; a trial that hit the agent timeout is still graded (as harbor does).
+- **pass rate** — trials with reward ≥ 1 over all trials. *setup failed*
+  (the agent did not install) counts in the denominator: it is the agent's
+  failure. *infra errors* (no grade for another reason) are shown apart, with
+  the pass rate without them. A trial that hit the agent timeout is graded.
+- **paired difference** — over tasks both agents ran, the mean of the
+  per-task pass-rate difference and its standard error.
 - **tokens** in (all input, cached or not) / cached / out, from harbor's trial
-  result: Claude Code's from its session file, noeta's from its stream (summed
-  per message when the agent was killed at the timeout).
-- **cost** at DeepSeek V4.1-Flash first-party list price, USD per 1M tokens:
-  cache hit 0.003, cache miss 0.15, output 0.60 off-peak, twice that at peak
-  (weekdays 01:00–04:00 and 06:00–10:00 UTC, by each trial's start). The agents'
-  own cost fields are meaningless here (Claude Code prices the model as Claude)
-  and the gateway's own pricing is unknown.
+  result: Claude Code's from its session files (sub-agents included), noeta's
+  from its store (sub-agents and compaction included). *no tokens* counts the
+  trials that reported none (their tokens are 0 in the totals).
+- **cost** at DeepSeek's own list price for DeepSeek-V4.1-Flash
+  (<https://api-docs.deepseek.com/quick_start/pricing/>, read 2026-10-30), USD
+  per 1M tokens off-peak: cache hit 0.003, cache miss 0.15, output 0.60; peak
+  (01:00–04:00 and 06:00–10:00 UTC, Monday to Friday, excluding Chinese public
+  holidays — holidays not modelled) is twice that, applied by the share of each
+  trial's agent time in peak hours. An estimate, not the gateway's bill; other
+  models get no cost.
 - **time** — wall time of the job, mean and summed agent time; setup, agent and
   verifier seconds per trial.
 - **429 / overload** — gateway rate-limit or overload signals in the agents'
@@ -301,7 +350,9 @@ shared.
 ## Running noeta alone
 
 `run_benchmark.sh` sources `.env`, sets the sandbox plumbing (wheel, proxy,
-models manifest, telemetry off) and runs one mode:
+models manifest, uploaded tools, telemetry off), reads datasets from
+`NOETA_DATASETS_DIR` (default `bench/datasets/<key>`; it refuses a registry id),
+redacts the key from the jobs dir after each run, and runs one mode:
 
 ```bash
 NOETA_EFFORT=high bench/run_benchmark.sh tb4-full
@@ -314,8 +365,9 @@ Modes: `tb4-full` · `swe-rebench` · `smoke-tb` · `smoke-swe` · `tb-quick6` �
 `swe-full` · `swe-pro-full` · `swe-subset`; `tb4-full` and `swe-rebench` pass any
 further arguments to `harbor run`. `preflight` prints the resolved model /
 effort / concurrency / wheel before it spends anything — check that line first.
-It removes no task images; for a full pass of noeta alone use
-`compare.py run … --agents noeta`, which does (see Disk above).
+It pulls prebuilt task images into the host's image store and removes none;
+for a full pass of noeta alone use `compare.py run … --agents noeta`, which
+builds them under the trials' own projects (see Docker above).
 
 ### Reading the result
 
@@ -349,6 +401,7 @@ run in full, so it needs no subset.
 After a scored run, summarize it in a results page under `docs/` (none is
 published for 1.0 yet): the score, the model
 id, the dataset **name@version**, the exact command, and — for SWE-bench — the
-pinned instance-id list. State honestly what was run and what was not; usage /
-cost in the JSON is token-derived and is approximate when the gateway model is
-not in the SDK's pricing catalog.
+pinned instance-id list, and `provenance.json`. State honestly what was run and
+what was not (TB4 "63/66"; an agent cap below the task's own is not
+board-comparable). Publish the summary, never a job dir: agents' logs can hold
+anything they printed.
