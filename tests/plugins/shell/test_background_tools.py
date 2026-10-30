@@ -318,6 +318,7 @@ async def test_a_running_foreground_command_shows_its_latest_output(h: Harness) 
     out = await bash.run({"command": "echo one; sleep 0.3; echo two; sleep 0.3"}, ctx)
     assert text(out) == "one\ntwo"
     assert "one\n" in shown and shown[-1] == "one\ntwo\n"
+    bash.progress_after = 30.0  # type: ignore[attr-defined]
     quick: list[str] = []
     ctx = h.ctx()
     ctx.progress = quick.append
