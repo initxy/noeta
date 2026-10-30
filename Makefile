@@ -57,12 +57,14 @@ e2e:
 
 ## prompt-regression eval against a real model (opt-in, never in check);
 ## exits 1 when a scenario falls below evals/baseline.json by more than its tolerance
+## the model the baseline is recorded on
+EVAL_MODEL ?= opensource/deepseek_v4_1_flash
 eval:
-	uv run python -m evals
+	uv run python -m evals --model $(EVAL_MODEL)
 
 ## rewrite evals/baseline.json from a 9-trial run (a steadier mean than eval's 3)
 eval-baseline:
-	uv run python -m evals --trials 9 --write-baseline
+	uv run python -m evals --model $(EVAL_MODEL) --trials 9 --write-baseline
 
 ## noeta replayed through Claude Code's recorded scenarios (scripts/parity/README.md),
 ## offline; writes parity/report.md and exits 1 while any mismatch is left (never in check).
