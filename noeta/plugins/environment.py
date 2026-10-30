@@ -3,7 +3,10 @@ same places: a git snapshot and the commit-attribution note in the first
 user turn, the environment (with the model line, the deferred tools, the
 token budget and today's date) as a system turn right after it, and a
 ``<total_tokens>`` budget note after every prompt and tool result (a
-sub-agent's after its tool results).
+sub-agent's after its tool results). As in Claude Code, only a model Claude
+Code knows as a Claude model gets the budget (:func:`gets_budget`): for any
+other model, and with ``token_budget=0``, no note is sent and the prompt's
+budget line is taken out wherever it sits.
 
 Everything is captured through the task's ExecEnv (``view.env``), never by a
 host subprocess: on a container the facts describe the container's checkout and platform,
@@ -27,18 +30,21 @@ from __future__ import annotations
 import os
 import platform
 import posixpath
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import msgspec
+
 from noeta.core import models
 from noeta.core.events import Recorded, Waiting
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
-from noeta.core.types import Message, ToolResult, system_message, user
+from noeta.core.types import Message, ModelRequest, ToolResult, system_message, user
 from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
 from noeta.toolkit.deltas import AMBIENT_NOTE, changed
@@ -360,6 +366,37 @@ def budget_note(left: int) -> str:
     return f"<total_tokens>{left} tokens left</total_tokens>"
 
 
+#: A budget line of a system prompt (``main.md``'s last line), with the
+#: blank lines before it; an appended prompt may follow it.
+_PROMPT_BUDGET_LINE = re.compile(r"\n*^<total_tokens>\d+ tokens left</total_tokens>[ \t]*$",
+                                 re.MULTILINE)
+
+#: Claude Code 2.1.312's Claude models: every row of its catalog has the
+#: ``total_tokens_reminder`` capability. It recognizes a model id that
+#: contains one of these (case-insensitive: ``claude-opus-5-5[1m]``,
+#: ``us.anthropic.claude-opus-5-5-v1:0``, a dated id), or the dated
+#: first-party id of a 4.0 model.
+_CLAUDE_CODE_MODELS = (
+    "claude-3-5-haiku", "claude-3-5-sonnet", "claude-3-7-sonnet",
+    "claude-haiku-4-5", "claude-haiku-5-5",
+    "claude-sonnet-4-0", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-5",
+    "claude-sonnet-5-5",
+    "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
+    "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5",
+    "claude-fable-5", "claude-fable-5-1", "claude-mythos-5", "claude-mythos-5-1",
+    "claude-opus-4-2025", "claude-sonnet-4-2025",
+)
+
+
+def gets_budget(model: str) -> bool:
+    """Whether ``model`` is told the ``<total_tokens>`` budget: Claude Code
+    tells exactly the Claude models it knows (:data:`_CLAUDE_CODE_MODELS`)
+    and nothing else (a gateway id like ``auto_model/x`` gets none). An
+    alias resolves first."""
+    real = models.resolve_alias(model).lower()
+    return any(known in real for known in _CLAUDE_CODE_MODELS)
+
+
 def date_line(today: str, *, utc: bool = False) -> str:
     """Today's date for the environment turn; ``utc`` when the user's time
     zone is not known, so the date is UTC's and said to be."""
@@ -409,7 +446,7 @@ class Environment(Extension):
       stand-in for Claude Code's re-announce on resume).
     * ``attribution`` — put the commit / PR attribution note there.
     * ``token_budget`` — the ``<total_tokens>`` budget a turn starts with
-      (``0``: no budget notes).
+      (``0``: no budget notes, and the prompt's budget line taken out).
     * ``date_change`` — tell the model, at the start of a turn, when the date
       is no longer the one it was given (the prompt
       ``reminder/date_changed``, or ``reminder/date_changed_utc`` for UTC
@@ -547,14 +584,23 @@ class Environment(Extension):
                 out.append(Reminder(text=text.replace("{date}", today), kind="date",
                                     data={"date": today}, role="system", order=ORDER_DATE))
         # A sub-agent's task prompt gets none; its tool results do.
-        if self.token_budget and _owes_budget_note(view.state.messages,
-                                                   prompts=not view.state.parent_id):
+        if self.token_budget and gets_budget(self._model(view)) and _owes_budget_note(
+                view.state.messages, prompts=not view.state.parent_id):
             spent = view.state.usage.output
             base = spent if not view.state.steps_in_turn else st.get("turn_base", 0)
             left = max(self.token_budget - (spent - base), 0)
             out.append(Reminder(text=budget_note(left), kind="budget", data={"base": base},
                                 role="system", order=ORDER_BUDGET))
         return out
+
+    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+        """A model that is told no budget is not shown the prompt's budget
+        line either."""
+        if self.token_budget and gets_budget(request.model):
+            return request
+        system = [msgspec.structs.replace(p, text=_PROMPT_BUDGET_LINE.sub("", p.text))
+                  for p in request.system]
+        return msgspec.structs.replace(request, system=system)
 
     async def _git_again(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
         """At the start of a later turn, the snapshot taken again when the
