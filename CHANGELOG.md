@@ -361,6 +361,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **A Python plugin directory may ship `skills/`, `commands/` and `agents/`** in Claude Code's
+  format next to its `__init__.py`, as pi's and dsh's plugins add resources; they load as a
+  Claude Code plugin's do (commands as `/<directory>:<command>`). Before, a directory was
+  either Python or a Claude Code plugin.
 - **Claude Code plugins' `userConfig` and `settings.json`.** `noeta plugin add` asks for a
   plugin's `userConfig` values (or takes `--config KEY=VALUE`; `noeta plugin configure` sets
   them again), keeps them in `~/.noeta/settings.json` `pluginConfigs` with sensitive ones in

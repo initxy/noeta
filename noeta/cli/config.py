@@ -39,9 +39,8 @@ from noeta.cli import home_dir
 from noeta.cli.claude_plugins import (
     ClaudePlugin,
     find_claude_plugins,
-    is_claude_plugin,
     plugin_settings,
-    read_claude_plugin,
+    read_plugin_dir,
 )
 from noeta.cli.plugin_policy import plugin_policy
 from noeta.cli.settings_files import (
@@ -534,7 +533,8 @@ def claude_plugins(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()
     data_home = home_dir.HOME / "plugin-data"
     found = find_claude_plugins(places, data_home)
     for given in (Path(d).expanduser().resolve() for d in plugin_dirs):
-        found += [read_claude_plugin(given, data_home)] if is_claude_plugin(given) \
+        one = read_plugin_dir(given, data_home)
+        found += [one] if one is not None else [] if (given / "__init__.py").is_file() \
             else find_claude_plugins([(given, False)], data_home)
     policy = plugin_policy(managed_dir())
     found = [p for p in found if policy.admits(p.name)]

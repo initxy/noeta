@@ -16,6 +16,8 @@ manifest's ``userConfig`` values as Claude Code does (:mod:`noeta.cli.plugin_opt
 The plugin's ``settings.json`` (else the manifest's ``settings``) may name
 the ``agent`` front ends start with, below the person's own settings.
 Monitors, ``bin/``, LSP servers, themes and output styles are not loaded.
+A Python plugin directory may ship ``skills/``, ``commands/`` and ``agents/``
+beside its code; those load the same way.
 """
 
 from __future__ import annotations
@@ -35,11 +37,13 @@ from noeta.agents.agent_files import AgentFile, AgentFileError, parse_agent_file
 from noeta.cli import plugin_options
 
 __all__ = ["ClaudePlugin", "find_claude_plugins", "is_claude_plugin", "plugin_settings",
-           "read_claude_plugin"]
+           "read_claude_plugin", "read_plugin_dir", "ships_parts"]
 
 log = logging.getLogger("noeta.cli")
 
 _PARTS = ("skills", "commands", "agents", "hooks/hooks.json", ".mcp.json")
+#: What a Python plugin directory may ship besides its code.
+_PYTHON_PARTS = ("skills", "commands", "agents")
 
 
 def is_claude_plugin(directory: Path) -> bool:
@@ -48,6 +52,27 @@ def is_claude_plugin(directory: Path) -> bool:
         return False
     return (directory / ".claude-plugin" / "plugin.json").is_file() or any(
         (directory / part).exists() for part in _PARTS)
+
+
+def ships_parts(directory: Path) -> bool:
+    """A Python plugin directory that also ships Claude Code's ``skills/``,
+    ``commands/`` or ``agents/``."""
+    return (directory / "__init__.py").is_file() and any(
+        (directory / part).is_dir() for part in _PYTHON_PARTS)
+
+
+def read_plugin_dir(directory: Path, data_home: Path, *,
+                    project: bool = False) -> ClaudePlugin | None:
+    """What a plugin directory brings in Claude Code's formats: all of a
+    Claude Code plugin, only ``skills/``, ``commands/`` and ``agents/`` of a
+    Python one (its code is loaded as a plugin file); ``None`` for neither."""
+    if is_claude_plugin(directory):
+        return read_claude_plugin(directory, data_home, project=project)
+    if not ships_parts(directory):
+        return None
+    plugin = read_claude_plugin(directory, data_home, project=project)
+    return dataclasses.replace(plugin, hooks={}, mcp_servers={}, user_config={},
+                               settings={})
 
 
 @dataclass
@@ -271,14 +296,16 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
 def find_claude_plugins(directories: Iterable[tuple[Path, bool]],
                         data_home: Path) -> list[ClaudePlugin]:
     """The Claude Code plugins in ``directories`` (each with whether it is a
-    project's), by directory name."""
+    project's), by directory name, and what Python plugin directories there
+    ship in Claude Code's formats (:func:`read_plugin_dir`)."""
     out = []
     for directory, project in directories:
         if not directory.is_dir():
             continue
         for entry in sorted(directory.iterdir()):
-            if not entry.name.startswith((".", "_")) and is_claude_plugin(entry):
-                out.append(read_claude_plugin(entry, data_home, project=project))
+            if not entry.name.startswith((".", "_")) and \
+                    (plugin := read_plugin_dir(entry, data_home, project=project)) is not None:
+                out.append(plugin)
     return out
 
 

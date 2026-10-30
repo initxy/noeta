@@ -325,3 +325,34 @@ def test_plugin_dir_is_a_flag_of_the_front_ends_not_an_ignored_one() -> None:
 def test_plugin_dir_with_server_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit, match="--plugin-dir"):
         main.main(["--server", "http://127.0.0.1:1", "--plugin-dir", "x.py"])
+
+
+async def test_a_python_plugin_directory_ships_skills_commands_and_agents(
+        home: Path, tmp_path: Path) -> None:
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+    kit = home / "plugins" / "kit"
+    (kit / "skills" / "tidy").mkdir(parents=True)
+    _write_joining(kit / "__init__.py", "kit", '("main",)')
+    (kit / "skills" / "tidy" / "SKILL.md").write_text(
+        "---\nname: tidy\ndescription: Tidy up\n---\nTidy.\n")
+    (kit / "commands").mkdir()
+    (kit / "commands" / "hello.md").write_text("---\ndescription: Hi\n---\nSay hi.\n")
+    (kit / "agents").mkdir()
+    (kit / "agents" / "helper.md").write_text(
+        "---\nname: helper\ndescription: Helps\n---\nYou help.\n")
+    (kit / "hooks").mkdir()
+    (kit / "hooks" / "hooks.json").write_text(
+        '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}')
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    main_agent = app.runtime.agents["main"]
+    names = [e.name for e in main_agent.extensions]
+    assert "kit" in names and "helper" in app.runtime.agents
+    found = {e.name: vars(e) for e in main_agent.extensions}
+    assert "kit:hello" in str(found["markdown_commands"])
+    assert str(kit / "skills") in str(found["skills"])
+    assert "Stop" not in str(found.get("hooks", {}))  # only skills, commands and agents
+    await app.store.close()
+    plain = from_settings(load_settings(), cwd=str(tmp_path), plugin_dirs=[str(kit)])
+    assert "helper" in plain.runtime.agents
+    await plain.store.close()
