@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +23,7 @@ from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, chil
 from noeta.core.runner import closing, texts
 from noeta.core.store import NewTask, Post
 from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
-from noeta.core.types import Message, Text, ToolResult, ToolUse, user
+from noeta.core.types import Delta, Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
     from noeta.core.runner.task import TaskRun
@@ -231,13 +232,20 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     async def task(task_id: str) -> Any:
         return await run.store.get(task_id)
 
+    sink, started = run.rt.on_delta, time.monotonic()
+
+    def progress(text: str) -> None:
+        if sink is not None:
+            sink(run.task_id, Delta(kind="tool", text=text, call_id=use.id, tool=use.name,
+                                    elapsed=time.monotonic() - started))
+
     root = run.state.root_id or run.task_id
     answer = run.state.answers.get(use.id)
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
                        tasks=tasks, task=task, count_tokens=run.counter(run.model),
-                       complete=run.complete,
+                       complete=run.complete, progress=progress if sink else None,
                        hold=lambda: run.rt.hold(root), by_model=True,
                        approved=answer is not None and answer.decision == "allow",
                        allowed_outright=outright, model=run.model,

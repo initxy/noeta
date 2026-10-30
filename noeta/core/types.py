@@ -224,9 +224,14 @@ class Delta(Struct):
     ``kind="block"`` is not a fragment: it hands the runner a reasoning block
     the provider finished streaming (in ``block``, continuation token and
     all), so a reply stopped before it ends can keep it. The runner does not
-    pass it on to front ends."""
+    pass it on to front ends.
 
-    kind: Literal["text", "thinking", "block"]
+    ``kind="tool"`` is a running tool call's progress
+    (``ToolContext.progress``): ``text`` is its latest output, replacing the
+    one before, for the call ``call_id`` of tool ``tool``, ``elapsed``
+    seconds after the call started."""
+
+    kind: Literal["text", "thinking", "block", "tool"]
     text: str = ""
     index: int = 0
     block: Thinking | None = None
@@ -235,6 +240,9 @@ class Delta(Struct):
     #: front end drops the fragments of an earlier attempt).
     call_seq: int = 0
     attempt: int = 1
+    call_id: str = ""
+    tool: str = ""
+    elapsed: float = 0.0
 
 
 # --------------------------------------------------------------------------

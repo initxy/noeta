@@ -294,6 +294,11 @@ class PromptTurn:
     def on_delta(self, task_id: str, delta: Delta) -> None:
         if task_id != self.session_id or not delta.text or self.done:
             return
+        if delta.kind == "tool":  # a running call's latest output
+            self.out.put_nowait(acp.update_tool_call(
+                delta.call_id, status="in_progress",
+                content=[acp.tool_content(acp.text_block(delta.text))]))
+            return
         if self.input_seq is None:
             self._early.append(delta)  # sorted out once the turn's start is known
             return

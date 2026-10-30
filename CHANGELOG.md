@@ -361,6 +361,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Added
 
+- **A running tool shows its progress** (`ToolContext.progress(text)`), as Claude Code's
+  `tool_progress`: never recorded nor sent to the model, it streams with the model's live
+  output (across machines on Postgres). A foreground `Bash` command shows its latest output
+  after 2 seconds, then every second: the TUI shows its last lines under the call, ACP sends a
+  `tool_call_update`, and `-p` / stream-json a `tool_progress` message (always, not only with
+  `--include-partial-messages`).
 - **The names a plugin author uses come from `noeta`**: `Allow`, `Deny`, `Ask`, `Rewrite`,
   `ToolChanges`, `ToolUse`, `Recorded` and `TaskState` join `Extension`, `Tool` and the rest,
   so a plugin file needs one import line.

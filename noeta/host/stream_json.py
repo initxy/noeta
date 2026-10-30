@@ -247,8 +247,7 @@ class StreamJson(ControlRequests):
             # records it; that is where the task runs, so say so.
             o.cwd = await self._recorded_cwd()
         self._put(await self._init_message())
-        if self.options.include_partial_messages:
-            self._unsubscribe = self.app.deltas(self._on_delta)
+        self._unsubscribe = self.app.deltas(self._on_delta)
         after = (await self.client.get(self.task_id)).last_seq
         self._follower = asyncio.create_task(self._follow(after))
         if prompt is not None:
@@ -362,7 +361,14 @@ class StreamJson(ControlRequests):
     # ------------------------------------------------------------ following
 
     def _on_delta(self, task_id: str, delta: Delta) -> None:
-        if task_id == self.task_id:
+        if task_id != self.task_id:
+            return
+        if delta.kind == "tool":
+            # Claude Code's tool_progress: which call, and how long it has run.
+            self._put(self._message(type="tool_progress", tool_use_id=delta.call_id,
+                                    tool_name=delta.tool, parent_tool_use_id=None,
+                                    elapsed_time_seconds=int(delta.elapsed)))
+        elif self.options.include_partial_messages:
             self._partial.delta(delta, self.options.model)
 
     def _stream_event(self, event: dict[str, Any]) -> None:

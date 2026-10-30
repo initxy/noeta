@@ -42,9 +42,12 @@ def delta_payloads(deltas: Sequence[tuple[str, Delta]]) -> list[str]:
     """``deltas`` as JSON payloads under the notification limit, in order;
     a fragment too long for one is cut into several."""
     pieces: list[tuple[str, Delta]] = []
+    step = DELTA_PAYLOAD_BYTES // 8  # a character takes at most 6 bytes as JSON
     for task_id, d in deltas:
         text = d.text
-        step = DELTA_PAYLOAD_BYTES // 8  # a character takes at most 6 bytes as JSON
+        if d.kind == "tool":  # the latest output replaces the one before: its tail
+            pieces.append((task_id, msgspec.structs.replace(d, text=text[-step:])))
+            continue
         for i in range(0, max(len(text), 1), step):
             pieces.append((task_id, msgspec.structs.replace(d, text=text[i:i + step])))
     out: list[str] = []

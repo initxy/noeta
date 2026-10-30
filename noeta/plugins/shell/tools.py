@@ -35,6 +35,10 @@ DEFAULT_MONITOR_TIMEOUT_MS = 300_000
 MIN_MONITOR_TIMEOUT_MS = 1_000
 MAX_MONITOR_TIMEOUT_MS = 3_600_000
 MONITOR_TIMEOUT_CAP_MS = 1_800_000
+#: A foreground command's output is shown live (``ToolContext.progress``)
+#: once it has run this long, then every ``PROGRESS_EVERY`` seconds: its
+#: last ``PROGRESS_BYTES``.
+PROGRESS_AFTER, PROGRESS_EVERY, PROGRESS_BYTES = 2.0, 1.0, 4096
 
 #: A ``cd`` among the command's words: a background launch then says the
 #: session's directory did not move.
@@ -152,6 +156,7 @@ class BackgroundBash(BashTool):
     instead of killed, as Claude Code does."""
 
     refuses_long_sleep = True
+    progress_after, progress_every = PROGRESS_AFTER, PROGRESS_EVERY
 
     def __init__(self, registry: Registry, *, ends_with_turn: bool = False,
                  **kwargs: Any) -> None:
@@ -210,7 +215,7 @@ class BackgroundBash(BashTool):
         held: Release | None = None
         refused = False
         try:
-            await asyncio.wait({job.proc}, timeout=float(timeout_s))
+            await self._wait_showing(ctx, job, float(timeout_s))
             if ctx.hold is not None and not job.proc.done():
                 try:
                     held = await ctx.hold()
@@ -250,6 +255,29 @@ class BackgroundBash(BashTool):
             if confined is not None:
                 await confined.close()
             await self.registry.discard(job)
+
+    async def _wait_showing(self, ctx: ToolContext, job: Job, timeout: float) -> None:
+        """Wait up to ``timeout`` seconds for ``job``, showing its latest
+        output meanwhile (as Claude Code shows a running command's)."""
+        assert job.proc is not None
+        if ctx.progress is None:
+            await asyncio.wait({job.proc}, timeout=timeout)
+            return
+        loop = asyncio.get_running_loop()
+        deadline, step = loop.time() + timeout, self.progress_after
+        while not job.proc.done() and (left := deadline - loop.time()) > 0:
+            await asyncio.wait({job.proc}, timeout=min(step, left))
+            step = self.progress_every
+            if not job.proc.done() and loop.time() < deadline:
+                try:
+                    st = await job.env.stat(job.out_path)
+                    size = st.size if st is not None else 0
+                    take = min(size, PROGRESS_BYTES)
+                    data = await job.env.read_range(job.out_path, size - take, take) \
+                        if take else b""
+                except OSError:
+                    continue
+                ctx.progress(data.decode("utf-8", "replace"))
 
     async def _foreground_result(self, job: Job) -> RunResult:
         """What a job waited for in the foreground printed (its last

@@ -123,6 +123,10 @@ class ToolContext(CoreNotices):
     #: providers (retried, not recorded as a step), as ``TaskView.complete``;
     #: ``None`` where no runner runs the tool.
     complete: Callable[[ModelRequest], Awaitable[ModelResponse]] | None = None
+    #: ``progress(text)``: show front ends watching live what the call is
+    #: doing (its latest output, replacing the one before). Never recorded
+    #: nor sent to the model; best effort. ``None`` where nobody watches.
+    progress: Callable[[str], None] | None = None
     #: ``serves_queue(queue)``: whether a child staged on ``queue`` could run
     #: now (``TaskView.serves_queue``); one that could not is dropped with
     #: the call's result. ``None`` takes every queue.

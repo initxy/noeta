@@ -355,3 +355,36 @@ async def test_questions_interrupts_max_turns_and_rewind(tmp_path: Path) -> None
         assert "Total cost" in acks["cost"]["text"]
         await c.inbox.put(None)
         await asyncio.wait_for(running, 10)
+
+
+class Busy:
+    name = "Busy"
+    description = "b"
+    input_schema = {"type": "object"}
+    read_only = False
+    clearable = False
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        assert ctx.progress is not None
+        ctx.progress("working")
+        return text_output("busy done")
+
+
+async def test_a_running_tool_reports_claude_codes_tool_progress(tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", ("Busy", {})), reply("all done")])
+    app = local(tmp_path, provider, Agent(name="main", model=MODEL, tools=[Busy()]))
+    c = Client()
+    async with app:
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path)), c.emit)
+        running = asyncio.create_task(drive(conv, lines=c.lines()))
+        c.say("be busy")
+        await c.until(lambda m: m["type"] == "result")
+        [progress] = [m for m in c.out if m["type"] == "tool_progress"]
+        [call] = [b for m in c.out if m["type"] == "assistant"
+                  for b in m["message"]["content"] if b["type"] == "tool_use"]
+        assert progress["tool_use_id"] == call["id"] and progress["tool_name"] == "Busy"
+        assert progress["parent_tool_use_id"] is None
+        assert progress["elapsed_time_seconds"] == 0 and progress["session_id"]
+        assert not [m for m in c.out if m["type"] == "stream_event"]  # no partials asked
+        await c.inbox.put(None)
+        await running
