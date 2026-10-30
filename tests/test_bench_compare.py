@@ -170,18 +170,98 @@ def test_leftovers_only_touch_finished_trials_of_this_job(tmp_path: Path, monkey
     assert "sha256:3" not in removed and "someone/else:1" not in removed and "sha256:5" not in removed
 
 
-def test_a_builder_that_cannot_be_created_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+def docker_stub(monkeypatch: pytest.MonkeyPatch, ok: set[str]) -> list[list[str]]:
+    """subprocess.run stub: a command succeeds when its first three words
+    joined by spaces are in `ok`; every call is recorded."""
     calls: list[list[str]] = []
 
     def run(cmd: list[str], **_: Any) -> SimpleNamespace:
         calls.append(cmd)
-        return SimpleNamespace(stdout="", stderr="no buildx", returncode=1)
+        return SimpleNamespace(stdout="", stderr="refused", returncode=0 if " ".join(cmd[:3]) in ok else 1)
 
     monkeypatch.setattr(subprocess, "run", run)
+    return calls
+
+
+def removals(calls: list[list[str]]) -> list[list[str]]:
+    return [c for c in calls if c[1:3] in (["buildx", "rm"], ["rm", "-f"], ["buildx", "prune"]) or c[1] == "rmi"]
+
+
+def test_a_builder_that_cannot_be_created_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = docker_stub(monkeypatch, {"docker image inspect"})
     builder = compare.RunBuilder("bench-x")
     with pytest.raises(SystemExit):  # never fall back to the host's default builder
         builder.create()
     builder.prune()
     builder.remove()
-    # only the builder this run tried to create is cleaned up; nothing else is pruned
-    assert calls[1:] == [["docker", "buildx", "rm", "bench-x"]]
+    assert removals(calls) == []  # nothing was made, so nothing is removed
+
+
+def test_a_taken_name_stops_the_run_and_touches_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = docker_stub(monkeypatch, {"docker buildx inspect", "docker image inspect"})
+    with pytest.raises(SystemExit):
+        compare.RunBuilder("bench-x").create()
+    calls2 = docker_stub(monkeypatch, {"docker container inspect", "docker image inspect"})
+    builder = compare.RunBuilder("bench-y", tmp_path / "state")
+    with pytest.raises(SystemExit):
+        builder.create()
+    builder.remove()
+    assert removals(calls) == [] and removals(calls2) == []
+    assert not (tmp_path / "state").exists()
+
+
+def test_a_failed_buildkitd_start_rolls_back_only_its_own_state_dir(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = docker_stub(monkeypatch, {"docker image inspect"})  # `docker run -d` fails
+    builder = compare.RunBuilder("bench-z", tmp_path / "state")
+    with pytest.raises(SystemExit):
+        builder.create()
+    assert not (tmp_path / "state").exists()  # the dir this run made is gone
+    assert [c for c in removals(calls) if c[1:3] == ["rm", "-f"] or c[1:3] == ["buildx", "rm"]] == []
+
+
+def test_mirror_keeps_every_compose_service_and_builds_their_images(tmp_path: Path) -> None:
+    import yaml
+
+    src = tmp_path / "src" / "t"
+    (src / "environment").mkdir(parents=True)
+    (src / "environment" / "Dockerfile").write_text("FROM python:3.11\n")
+    compose = {"services": {
+        "main": {"image": "org/env:tag@sha256:aa", "depends_on": {"db": {"condition": "service_healthy"}},
+                 "environment": {"DB_HOST": "db", "TOKEN": "${TOKEN}"}},
+        "db": {"image": "org/db:1@sha256:bb", "healthcheck": {"test": ["CMD", "true"]}, "pull_policy": "always"},
+        "cache": {"image": "redis:7-alpine", "command": ["redis-server"]},
+        "built": {"build": {"context": "./built"}, "image": "org/should-not-tag:1"},
+    }, "volumes": {"data": {}}}
+    (src / "environment" / "docker-compose.yaml").write_text(yaml.safe_dump(compose))
+    (src / "task.toml").write_text('[environment]\ndocker_image = "org/env:tag@sha256:aa"\n')
+    images = compare.mirror_dataset(tmp_path / "src", tmp_path / "dst", ["t"])["t"]
+    env = tmp_path / "dst" / "t" / "environment"
+    mirrored = yaml.safe_load((env / "docker-compose.yaml").read_text())
+    assert sorted(mirrored["services"]) == sorted(compose["services"])  # no service lost
+    assert mirrored["volumes"] == {"data": {}}
+    assert all("image" not in svc for svc in mirrored["services"].values())
+    assert mirrored["services"]["main"]["depends_on"] == compose["services"]["main"]["depends_on"]
+    assert mirrored["services"]["main"]["environment"]["TOKEN"] == "${TOKEN}"
+    assert mirrored["services"]["db"]["build"] == {"context": "./.bench-images/db"}
+    assert "pull_policy" not in mirrored["services"]["db"]
+    assert mirrored["services"]["built"]["build"] == {"context": "./built"}
+    assert (env / ".bench-images" / "db" / "Dockerfile").read_text() == "FROM org/db:1@sha256:bb\n"
+    assert (env / ".bench-images" / "cache" / "Dockerfile").read_text() == "FROM redis:7-alpine\n"
+    assert (env / "Dockerfile").read_text() == "FROM org/env:tag@sha256:aa\n"
+    assert sorted(images) == ["org/db:1@sha256:bb", "org/env:tag@sha256:aa", "redis:7-alpine"]
+
+
+def test_volumes_count_only_when_mounted_in_this_jobs_containers(tmp_path: Path) -> None:
+    job = tmp_path / "job"
+    trial(job, "Task__AbC1234", "noeta", "task", reward=1.0)
+    leftovers = compare.TrialLeftovers(job)
+    ev = [{"Type": "container", "Action": "create", "Actor": {"ID": "c1", "Attributes": {"name": "task__abc1234__env-db-1"}}},
+          {"Type": "container", "Action": "create", "Actor": {"ID": "c2", "Attributes": {"name": "noeta-test-123"}}},
+          {"Type": "volume", "Action": "mount", "Actor": {"ID": "v-ours", "Attributes": {"container": "c1"}}},
+          {"Type": "volume", "Action": "mount", "Actor": {"ID": "v-theirs", "Attributes": {"container": "c2"}}},
+          {"Type": "volume", "Action": "mount", "Actor": {"ID": "v-unknown", "Attributes": {"container": "c9"}}}]
+    for e in ev:
+        leftovers.event(json.dumps(e))
+    leftovers.event("not json")
+    assert leftovers.volumes == {"v-ours": "task__abc1234"}

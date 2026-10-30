@@ -302,12 +302,45 @@ def selected_tasks(dataset_dir: Path, wanted: list[str] | None, excluded: list[s
 _DOCKER_IMAGE_LINE = re.compile(r"^\s*docker_image\s*=")
 
 
+_COMPOSE_FILES = ("docker-compose.yaml", "docker-compose.yml")
+_SIDECAR_DIR = ".bench-images"
+
+
+def mirror_compose(path: Path) -> list[str]:
+    """Rewrite a task's compose file in place so every service is built in
+    the trial's project instead of pulled: a service's `image: X` becomes a
+    build of `<dir>/.bench-images/<service>/Dockerfile` = `FROM X`. `main`
+    loses its `image` (harbor builds it from the environment's Dockerfile);
+    a service that both builds and names an image loses the name (compose
+    would tag the build with it). Everything else is kept. Returns the
+    images now built from."""
+    import yaml
+
+    config = yaml.safe_load(path.read_text("utf-8")) or {}
+    images: list[str] = []
+    for name, service in (config.get("services") or {}).items():
+        if not isinstance(service, dict) or "image" not in service:
+            continue
+        image = str(service.pop("image"))
+        if name == "main" or "build" in service:
+            continue
+        context = path.parent / _SIDECAR_DIR / name
+        context.mkdir(parents=True, exist_ok=True)
+        (context / "Dockerfile").write_text(f"FROM {image}\n", "utf-8")
+        service["build"] = {"context": f"./{_SIDECAR_DIR}/{name}"}
+        service.pop("pull_policy", None)
+        images.append(image)
+    path.write_text(yaml.safe_dump(config, sort_keys=False), "utf-8")
+    return images
+
+
 def mirror_task(src: Path, dst: Path) -> list[str]:
     """Copy one task so that harbor builds, not pulls, its images: each
     `docker_image` in task.toml becomes a Dockerfile `FROM <that image>` (the
-    agent environment's in `environment/`, the verifier's in `tests/`), so the
-    image lives in the trial's compose project and goes with it. Returns the
-    prebuilt images it now builds from (empty for a task harbor builds anyway)."""
+    agent environment's in `environment/`, the verifier's in `tests/`), and
+    each compose service's image a build of `FROM <that image>`
+    (`mirror_compose`), so every image lives in the trial's compose project
+    and goes with it. Returns the images it now builds from."""
     import tomllib
 
     shutil.copytree(src, dst, symlinks=True)
@@ -316,17 +349,19 @@ def mirror_task(src: Path, dst: Path) -> list[str]:
         "environment": (config.get("environment") or {}).get("docker_image"),
         "tests": ((config.get("verifier") or {}).get("environment") or {}).get("docker_image"),
     }
-    if not any(images.values()):
-        return []
-    lines = (src / "task.toml").read_text("utf-8").splitlines(keepends=True)
-    (dst / "task.toml").write_text("".join(x for x in lines if not _DOCKER_IMAGE_LINE.match(x)), "utf-8")
+    built: list[str] = [i for i in images.values() if i]
+    if built:
+        lines = (src / "task.toml").read_text("utf-8").splitlines(keepends=True)
+        (dst / "task.toml").write_text("".join(x for x in lines if not _DOCKER_IMAGE_LINE.match(x)), "utf-8")
     for subdir, image in images.items():
         if image:
             (dst / subdir).mkdir(exist_ok=True)
-            for name in ("Dockerfile", "docker-compose.yaml", "docker-compose.yml"):
-                (dst / subdir / name).unlink(missing_ok=True)
             (dst / subdir / "Dockerfile").write_text(f"FROM {image}\n", "utf-8")
-    return [i for i in images.values() if i]
+    for subdir in ("environment", "tests"):
+        for name in _COMPOSE_FILES:
+            if (dst / subdir / name).is_file():
+                built += mirror_compose(dst / subdir / name)
+    return built
 
 
 def mirror_dataset(src: Path, dst: Path, tasks: list[str]) -> dict[str, list[str]]:
@@ -347,15 +382,21 @@ class RunBuilder:
     own). With `state_dir` (a new directory, e.g. on a disk with more room than
     docker's) the run starts its own buildkitd container with that directory
     as its state and attaches a remote builder to it; the directory is emptied
-    and removed with the builder."""
+    and removed with the builder. A name already taken (builder, container,
+    directory) stops the run: nothing of that name is touched. The buildkit
+    image is removed at the end only if it was not on the host before."""
 
     IMAGE = "moby/buildkit:buildx-stable-1"
 
     def __init__(self, name: str, state_dir: Path | None = None) -> None:
         self.name = name
         self.state_dir = state_dir
-        self.created = False
-        self.container: str | None = None
+        self.container = f"{name}-buildkitd" if state_dir is not None else None
+        self.made: set[str] = set()  # "builder", "container", "state_dir", "image"
+
+    @property
+    def created(self) -> bool:
+        return "builder" in self.made
 
     def _proxy_env(self) -> list[tuple[str, str]]:
         proxies = docker_proxies()
@@ -363,33 +404,52 @@ class RunBuilder:
                 (("httpProxy", "http_proxy"), ("httpsProxy", "https_proxy"), ("noProxy", "no_proxy"))
                 if proxies.get(key)]
 
+    @staticmethod
+    def _ok(*cmd: str) -> bool:
+        return subprocess.run(list(cmd), capture_output=True).returncode == 0
+
+    def _fail(self, why: str) -> None:
+        self.remove()  # only what this run made so far
+        sys.exit(f"could not create buildx builder {self.name}: {why}")
+
     def create(self) -> None:
+        if self._ok("docker", "buildx", "inspect", self.name):
+            sys.exit(f"a buildx builder named {self.name} exists; pick another --job-name")
+        if self.container and self._ok("docker", "container", "inspect", self.container):
+            sys.exit(f"a container named {self.container} exists; pick another --job-name")
+        if self.state_dir is not None and self.state_dir.exists():
+            sys.exit(f"builder state dir {self.state_dir} exists: it must be new (it is removed after)")
+        image_was_here = self._ok("docker", "image", "inspect", self.IMAGE)
         if self.state_dir is None:
             cmd = ["docker", "buildx", "create", "--name", self.name, "--driver", "docker-container",
                    "--bootstrap"]
             for opt, value in self._proxy_env():
                 cmd += ["--driver-opt", f'"env.{opt}={value}"']
-            done = subprocess.run(cmd, capture_output=True, text=True)
         else:
-            if self.state_dir.exists():
-                sys.exit(f"builder state dir {self.state_dir} exists: it must be new (it is removed after)")
+            assert self.container is not None
             self.state_dir.mkdir(parents=True)
-            self.container = f"{self.name}-buildkitd"
+            self.made.add("state_dir")
             run = ["docker", "run", "-d", "--name", self.container, "--privileged",
                    "-v", f"{self.state_dir}:/var/lib/buildkit"]
             for opt, value in self._proxy_env():
                 run += ["-e", f"{opt}={value}"]
-            done = subprocess.run([*run, self.IMAGE], capture_output=True, text=True)
-            if done.returncode == 0:
-                done = subprocess.run(["docker", "buildx", "create", "--name", self.name, "--driver", "remote",
-                                       f"docker-container://{self.container}", "--bootstrap"],
-                                      capture_output=True, text=True)
+            started = subprocess.run([*run, self.IMAGE], capture_output=True, text=True)
+            if not image_was_here and self._ok("docker", "image", "inspect", self.IMAGE):
+                self.made.add("image")
+            if started.returncode != 0:
+                self._fail(started.stderr.strip())
+            self.made.add("container")
+            cmd = ["docker", "buildx", "create", "--name", self.name, "--driver", "remote",
+                   f"docker-container://{self.container}", "--bootstrap"]
+        done = subprocess.run(cmd, capture_output=True, text=True)
+        if not image_was_here and self._ok("docker", "image", "inspect", self.IMAGE):
+            self.made.add("image")
         if done.returncode != 0:
             # Never fall back to the default builder: its cache is the host's.
-            self.created = True
-            self.remove()
-            sys.exit(f"could not create buildx builder {self.name}: {done.stderr.strip()}")
-        self.created = True
+            if self._ok("docker", "buildx", "inspect", self.name):
+                self.made.add("builder")  # half-made by this call: ours to remove
+            self._fail(done.stderr.strip())
+        self.made.add("builder")
 
     def prune(self) -> None:
         """Drop what no build of this run is using right now."""
@@ -397,17 +457,19 @@ class RunBuilder:
             subprocess.run(["docker", "buildx", "prune", "--builder", self.name, "-f"], capture_output=True)
 
     def remove(self) -> None:
-        if not self.created:
-            return
-        subprocess.run(["docker", "buildx", "rm", self.name], capture_output=True)
-        if self.container:
+        if "builder" in self.made:
+            subprocess.run(["docker", "buildx", "rm", self.name], capture_output=True)
+        if "container" in self.made and self.container:
             subprocess.run(["docker", "rm", "-f", self.container], capture_output=True)
-        if self.state_dir is not None and self.state_dir.is_dir():
+        if "state_dir" in self.made and self.state_dir is not None and self.state_dir.is_dir():
             # buildkitd wrote it as root: empty it from a container, then drop it.
             subprocess.run(["docker", "run", "--rm", "-v", f"{self.state_dir}:/state", "--entrypoint", "sh",
                             self.IMAGE, "-c", "rm -rf /state/* /state/.[!.]*"], capture_output=True)
             shutil.rmtree(self.state_dir, ignore_errors=True)
-        self.created = False
+        if "image" in self.made:
+            # pulled by this run; docker refuses while anything uses it
+            subprocess.run(["docker", "rmi", self.IMAGE], capture_output=True)
+        self.made.clear()
 
 
 class TrialLeftovers:
@@ -427,6 +489,8 @@ class TrialLeftovers:
     def __init__(self, job_dir: Path) -> None:
         self.job_dir = job_dir
         self.volumes: dict[str, str] = {}  # volume -> trial
+        self.names: dict[str, str] = {}  # container id -> name, from docker events
+        self.lock = threading.Lock()
         self.log = job_dir.parent / f"{job_dir.name}.cleanup.log"
 
     def _note(self, text: str) -> None:
@@ -449,21 +513,46 @@ class TrialLeftovers:
     def owner(name: str, trials: dict[str, bool]) -> str | None:
         return next((t for t in trials if name.startswith(f"{t}__")), None)
 
-    def watch(self) -> None:
-        trials = self.trials()
-        names = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"],
-                               capture_output=True, text=True).stdout.split()
-        for name in names:
-            trial = self.owner(name, trials)
-            if trial is None:
-                continue
-            mounts = subprocess.run(
-                ["docker", "inspect", "-f", '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}', name],
-                capture_output=True, text=True).stdout.split()
-            for volume in mounts:
-                self.volumes.setdefault(volume, trial)
+    def event(self, line: str) -> None:
+        """One `docker events` JSON line: remember container names, and every
+        volume mounted into one of this job's containers — even a container
+        that lives a second."""
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            return
+        attributes = (ev.get("Actor") or {}).get("Attributes") or {}
+        if ev.get("Type") == "container" and ev.get("Action") == "create":
+            self.names[(ev.get("Actor") or {}).get("ID", "")] = attributes.get("name", "")
+        elif ev.get("Type") == "volume" and ev.get("Action") == "mount":
+            name = self.names.get(attributes.get("container", ""), "")
+            trial = self.owner(name, self.trials()) if name else None
+            if trial is not None:
+                with self.lock:
+                    self.volumes.setdefault((ev.get("Actor") or {}).get("ID", ""), trial)
+
+    def follow(self, stop: threading.Event) -> subprocess.Popen[str]:
+        """Read `docker events` (container creates, volume mounts) until stopped."""
+        proc = subprocess.Popen(
+            ["docker", "events", "--format", "{{json .}}", "--filter", "type=container",
+             "--filter", "type=volume", "--filter", "event=create", "--filter", "event=mount"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+        def read() -> None:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if stop.is_set():
+                    break
+                self.event(line)
+
+        threading.Thread(target=read, daemon=True).start()
+        return proc
 
     def clean(self, *, everything: bool = False) -> None:
+        with self.lock:
+            self._clean(everything)
+
+    def _clean(self, everything: bool) -> None:
         trials = self.trials()
         done = {t for t, finished in trials.items() if finished or everything}
         listed = subprocess.run(
@@ -489,15 +578,22 @@ class TrialLeftovers:
                     del self.volumes[volume]
 
 
+def free_gb(path: str = "/var/lib/docker") -> float:
+    try:
+        return shutil.disk_usage(path).free / 1e9
+    except OSError:
+        return shutil.disk_usage("/").free / 1e9
+
+
 def background(stop: threading.Event, builder: RunBuilder, leftovers: TrialLeftovers, job_dir: Path,
-               secrets: list[str], every_s: float = 30) -> None:
-    ticks = 0
+               secrets: list[str], prune_below_gb: float, every_s: float = 120) -> None:
+    """Every two minutes: remove finished trials' leftovers, redact the key,
+    and prune the run's builder only when docker's disk runs low (a pruned
+    cache makes the next trial of a task pull its image again)."""
     while not stop.wait(every_s):
-        ticks += 1
-        leftovers.watch()
-        if ticks % 4 == 0:
-            leftovers.clean()
-            redact_tree(job_dir, secrets)
+        leftovers.clean()
+        redact_tree(job_dir, secrets)
+        if free_gb() < prune_below_gb:
             builder.prune()
 
 
@@ -509,6 +605,9 @@ def job_config(args: argparse.Namespace, harbor: str, env: dict[str, str], datas
            "--effort", args.effort, "-k", str(args.k), "-n", str(args.concurrency),
            "--n-concurrent-agents", str(per_agent),
            "--agent-setup-timeout-multiplier", str(args.setup_timeout_mult),
+           # every image is built (FROM a prebuilt one, pulled by the run's builder):
+           # the same longer build allowance for both agents
+           "--environment-build-timeout-multiplier", str(args.build_timeout_mult),
            "--max-retries", "0", "-o", str(args.jobs_dir), "--job-name", args.job_name,
            "--print-config"]
     if args.agent_timeout_mult is not None:
@@ -533,6 +632,9 @@ def job_config(args: argparse.Namespace, harbor: str, env: dict[str, str], datas
                 row["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(context_window)
             if max_output:
                 row["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output)
+        elif agent == "oracle":
+            # harbor's reference solution: checks that a task (and its mirror) grades
+            row = {"name": "oracle"}
         else:
             row["import_path"] = "bench.harbor_adapter:Noeta"
         if args.agent_max_timeout_sec:
@@ -580,7 +682,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     builder.create()
     leftovers = TrialLeftovers(job_dir)
     stop = threading.Event()
-    worker = threading.Thread(target=background, args=(stop, builder, leftovers, job_dir, secrets),
+    events = leftovers.follow(stop)
+    worker = threading.Thread(target=background,
+                              args=(stop, builder, leftovers, job_dir, secrets, args.prune_below_gb),
                               daemon=True)
     worker.start()
     try:
@@ -590,8 +694,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         stop.set()
         worker.join(timeout=600)  # one cleaner at a time
         builder.remove()
-        leftovers.watch()
         leftovers.clean(everything=True)
+        events.terminate()
         if job_dir.is_dir():
             (job_dir / "provenance.json").write_text(json.dumps(record, indent=1), "utf-8")
             redact_tree(job_dir, secrets)
@@ -768,6 +872,7 @@ def summarize(jobs: list[Path], model: str = DEFAULT_MODEL, out_dir: Path | None
     out += ["", "A pass is reward ≥ 1; a trial that hit the agent timeout is still graded. *setup failed*: "
             "the agent did not install (its failure, counted in the pass rate's denominator). *infra errors*: "
             "no grade for another reason. *no tokens*: trials that reported no usage (their tokens count as 0). "
+            "noeta's agent time includes reading its usage from its store after the run (seconds). "
             f"Cost: DeepSeek list price ({PRICE_SOURCE}), peak hours at twice the rate, by the share of each trial's "
             "agent time in them; an estimate, not the gateway's bill.", "",
             "## Per task", "",
@@ -807,6 +912,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--agent-timeout-mult", type=float, help="scale each task's agent timeout")
     run.add_argument("--agent-max-timeout-sec", type=float, help="cap each task's agent timeout")
     run.add_argument("--setup-timeout-mult", type=float, default=3.0)
+    run.add_argument("--build-timeout-mult", type=float, default=3.0,
+                     help="environment build timeout multiplier (pulls of large images)")
+    run.add_argument("--prune-below-gb", type=float, default=6.0,
+                     help="prune the run's builder cache when docker's disk has less free")
     run.add_argument("--jobs-dir", default=str(REPO / "bench" / "jobs"))
     run.add_argument("--datasets-dir", default=str(REPO / "bench" / "datasets"))
     run.add_argument("--job-name")
@@ -838,9 +947,9 @@ def main(argv: list[str] | None = None) -> int:
                 for k in ("NOETA_API_KEY", "NOETA_LIVE_API_KEY", "LLM_API_KEY", "ANTHROPIC_API_KEY")]
         redact_tree(args.dir, keys)
         return 0
-    unknown = set(args.agents) - {"noeta", "claude-code"}
+    unknown = set(args.agents) - {"noeta", "claude-code", "oracle"}
     if unknown:
-        parser.error(f"unknown agents {sorted(unknown)}; use noeta and/or claude-code")
+        parser.error(f"unknown agents {sorted(unknown)}; use noeta, claude-code and/or oracle")
     return cmd_run(args)
 
 

@@ -94,7 +94,8 @@ suite.
    `--allow-agent-host` needed.
 5. **End of run** — at the agent timeout harbor only cancels its `docker exec`
    client; the agent process tree is stopped too (STOP, TERM, KILL after 5 s,
-   descendants included), for noeta and for Claude Code alike.
+   descendants included, also those reparented to PID 1 once their parent
+   died), for noeta and for Claude Code alike.
 6. **Usage** — token counts go into harbor's `n_input_tokens` (all input,
    cached or not) / `n_cache_tokens` / `n_output_tokens`, the fields
    `claude-code` fills. After the run (a timed-out one too) the adapter reads
@@ -264,27 +265,35 @@ unfiltered:
 
 - **Builds** go through a buildx builder the run creates (`bench-<job>`,
   `BUILDX_BUILDER` for harbor's compose builds). Everything it pulls and caches
-  is the run's; it is pruned as builds finish and removed whole when the run
-  ends. The host's default builder is not used; if the run's builder cannot be
-  created, the run stops.
-- **Prebuilt task images** (TB4's agent and verifier images) are not pulled
-  into the host's image store: the run reads a copy of the dataset
-  (`<jobs-dir>/<job>.tasks/`) whose Dockerfiles are just `FROM <prebuilt
-  image>`, so harbor builds each image inside the trial's own compose project —
+  is the run's; it is pruned only when docker's disk drops below
+  `--prune-below-gb` (default 6; a pruned cache makes the next trial of a task
+  pull again) and removed whole when the run ends. The host's default builder
+  is not used. A builder, container or state directory of the same name
+  already there stops the run without touching it; a failed creation undoes
+  only the steps that succeeded. The buildkit image the builder runs is
+  removed at the end if it was not on the host before.
+- **Prebuilt task images** are not pulled into the host's image store: the run
+  reads a copy of the dataset (`<jobs-dir>/<job>.tasks/`) in which TB4's agent
+  and verifier images are Dockerfiles of one line, `FROM <prebuilt image>`,
+  and every compose service's `image: X` (the databases, queues and services
+  of the 11 TB4 tasks with a `docker-compose.yaml`) is a build of `FROM X`
+  under `.bench-images/<service>/` — every service and every other setting
+  kept. So harbor builds each image inside the trial's own compose project —
   the same bytes, plus compose's labels — and its `down --rmi local --volumes`
-  removes it with the trial.
+  removes it with the trial. Builds take longer than pulls; both agents get
+  `--build-timeout-mult` (default 3) on the environment build timeout.
 - **Leftovers**: an image two trials built alike can stay dangling, and
   anonymous volumes outlive their containers. Removed once the trial has
   finished, only when compose's `com.docker.compose.project` label (or the
-  image name) is one of this job's trial projects, or the volume was seen
-  mounted in this job's container; `docker rmi` / `docker volume rm` without
-  `-f`. Logged to `<jobs-dir>/<job>.cleanup.log`.
+  image name) is one of this job's trial projects, or `docker events` showed
+  the volume mounted into this job's container (however short-lived);
+  `docker rmi` / `docker volume rm` without `-f`. Logged to
+  `<jobs-dir>/<job>.cleanup.log`.
 
 So disk use peaks at the images of the trials in flight plus the builder's
 cache, and returns to where it was (measured: within 0.1 GB). One daemon can
 run several `compare.py` jobs at once (each has its own builder and trial
-names). The buildkit image the builder runs (`moby/buildkit:buildx-stable-1`)
-stays: it is not provably this run's.
+names).
 
 `--builder-state-dir <dir>` puts the builder's state in `<dir>/<builder>` (a
 new directory, emptied and removed with the builder) through a buildkitd

@@ -98,7 +98,8 @@ and reported in the README.
   downloads) and task-driven traffic. The gateway key is redacted from job dirs.
 - Nothing else touched: each run builds every image through its own buildx builder, removed
   with all it pulled at the end; prebuilt task images come in via a run-local dataset copy
-  whose Dockerfiles are `FROM <prebuilt>`, so they live in the trial's compose project;
+  whose Dockerfiles are `FROM <prebuilt>` (compose sidecars' `image:` too, every service kept),
+  so they live in the trial's compose project;
   leftovers are removed only when compose labels or container mounts prove them the run's.
   Pulled images are never removed by name or digest: another program may hold the same one.
   Cost of that: disk peaks per task in flight (SWE-rebench median ~2 GB on docker's disk with

@@ -237,7 +237,8 @@ def stop_tree_script(pattern: str) -> str:
     """Shell that stops every process whose command line matches `pattern`
     (a grep regex written so it does not match this script itself) and all
     their descendants: freeze the tree (STOP) so nothing forks away, TERM it,
-    let it run, KILL what is left after 5 s."""
+    let it run, KILL what is left after 5 s (the first round's processes and
+    anything new in the tree)."""
     return (
         f"pat={shlex.quote(pattern)}; "
         'hit() { for p in /proc/[0-9]*; do tr "\\0" " " < "$p/cmdline" 2>/dev/null | grep -q -- "$pat" '
@@ -249,7 +250,9 @@ def stop_tree_script(pattern: str) -> str:
         'all="$all $next"; front="$next"; done; echo $all; }; '
         'pids=$(tree); [ -n "$pids" ] || exit 0; '
         'kill -STOP $pids 2>/dev/null; kill -TERM $pids 2>/dev/null; kill -CONT $pids 2>/dev/null; '
-        'sleep 5; kill -KILL $(tree) 2>/dev/null; true'
+        # the first round's processes too: a child whose parent died is now
+        # PID 1's and no longer in the tree
+        'sleep 5; kill -KILL $pids $(tree) 2>/dev/null; true'
     )
 
 
