@@ -319,7 +319,7 @@ async def test_post_tool_use_failure(tmp_path: Path) -> None:
     assert payload["hook_event_name"] == "PostToolUseFailure" and payload["error"]
     assert payload["is_interrupt"] is False and "tool_response" not in payload
     assert s.provider.requests[1].messages[-1].text == \
-        "PostToolUseFailure:Read hook blocking error: Check the path first."
+        'PostToolUseFailure:Read hook blocking error from command: "failed": Check the path first.'
 
 
 async def test_updated_mcp_tool_output_only_for_mcp_tools(tmp_path: Path) -> None:
@@ -550,7 +550,8 @@ async def test_sub_agent_start_and_stop(tmp_path: Path) -> None:
     assert second["stop_hook_active"] is True and second["agent_type"] == "scout"
     [denied] = c.requests[1].messages[-1].content
     assert isinstance(denied, ToolResult) and denied.is_error
-    assert denied.content == [Text(text="Run the tests first.")]
+    assert denied.content == [Text(
+        text='SubagentStop hook blocking error from command: "stop": Run the tests first.')]
     end = [r.event for r in await client.events(child.task_id)][-1]
     assert isinstance(end, TaskEnded) and end.answer == "1 2 3"
 
@@ -582,7 +583,8 @@ async def test_a_sub_agent_stop_prompt_hook_sees_no_unanswered_call(tmp_path: Pa
         answered = {b.call_id for m in request.messages for b in m.content
                     if isinstance(b, ToolResult)}
         assert all(u.id in answered for m in request.messages for u in m.tool_uses)
-    assert c.requests[2].messages[-1].content[0].text == "Run the tests."  # type: ignore[union-attr]
+    assert c.requests[2].messages[-1].content[0].text == (  # type: ignore[union-attr]
+        'SubagentStop hook blocking error from command: "Were tests run?": Run the tests.')
 
 
 async def test_agent_hook_looks_with_read_only_tools_then_answers(tmp_path: Path) -> None:
@@ -600,7 +602,8 @@ async def test_agent_hook_looks_with_read_only_tools_then_answers(tmp_path: Path
     assert "Was b.txt read?" in look.messages[-1].text
     seen = s.provider.requests[2].messages[-1].content
     assert isinstance(seen[0], ToolResult) and "other" in seen[0].text
-    assert s.provider.requests[3].messages[-1].text == "b.txt says other"
+    assert s.provider.requests[3].messages[-1].text == (
+        'Stop hook blocking error from command: "Was b.txt read?": b.txt says other')
     assert len(s.provider.requests) == 5
 
 

@@ -490,6 +490,8 @@ class MonitorTool:
     read_only = False
     clearable = False
     deferred = True
+    #: Claude Code's Monitor result limit.
+    max_result_chars = 10_000
 
     def __init__(self, shell: BackgroundBash) -> None:
         self.shell = shell

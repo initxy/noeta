@@ -107,7 +107,7 @@ summary, so their hash is specific to this recording; review them for the templa
 
 | id | rule |
 |---|---|
-| compact.results.1 | Every tool's text result has a ceiling of the tool's own limit and at most 50,000 characters; past it the result is saved to a file and replaced by the `<persisted-output>` block (size, path, 2 KB preview). `Read` has no such limit (it bounds itself); `WebSearch`'s own limit (100,000) is cut to 50,000 by the ceiling. |
+| compact.results.1 | Every tool's text result has a ceiling of the tool's own limit and at most 50,000 characters; past it the result is saved to a file and replaced by the `<persisted-output>` block (size, path, 2 KB preview). `Read` has no such limit (it bounds itself); `WebSearch`'s own limit (100,000) is cut to 50,000 by the ceiling. Tools whose own limit is lower (bundle `maxResultSizeChars`): `Bash` 30,000, `Monitor` and `ListAgents` 10,000, `ScheduleWakeup` 1,000, `ReportFindings` 256. |
 | compact.results.2 | The results that answer one reply's calls together hold at most 200,000 characters inline: past it, fresh results are saved the same way (Claude Code picks the largest first), and the choice for each call never changes afterwards. |
 
 ## Manual `/compact`

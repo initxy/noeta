@@ -69,7 +69,6 @@ A row without an id is a difference the replay cannot see.
 | | A hook's input carries an empty `transcript_path` (and `agent_transcript_path`): noeta writes no transcript file. | Durable tasks: the conversation is the task's event log in the store, which a hook reads through a client (`Client.events`), not a local JSONL file. |
 | | A Claude Code plugin's `PreToolUse`, `PermissionRequest` or `UserPromptSubmit` hook that names a `userConfig` option this machine cannot fill (unset, or a secret its keyring or environment lacks) refuses, exit 2, naming the plugin; Claude Code leaves an unfilled hook out. | Any worker may run the task, and pluginConfigs and keyrings are per machine: a guard that silently disappears on one worker lets through what it exists to stop. Other events' hooks are left out with a notice, as Claude Code does. |
 | | A Claude Code plugin's own `hooks.json` / `.mcp.json` may name only its own keyring entries (`{keyring:noeta-plugin/<plugin>/…}`); another reference leaves that hook or server out with a notice. Claude Code has no keyring references in plugin files. | noeta resolves `{keyring:}` references in plugin arguments; without the limit a data-only plugin could read and send any secret in the person's keyring. |
-| | A tool hook's blocking feedback is led by `<hook name> hook blocking error:` without the command that gave it (`rem.hook-context.1`; Claude Code adds `from command: "<command>"`). | A hook's answer is folded per hook result, not per command line; the hook name tells the model where it came from. |
 
 ## Request envelope
 
@@ -120,7 +119,7 @@ file names. Each row is a name the model sees; the files themselves are product 
 
 | id | difference | reason |
 |---|---|---|
-| | The note that a read file changed on disk shows the changed lines only while the model's last whole `Read` of it is still in the conversation (not after a compaction, a partial read or an edit of the model's since); otherwise it says they are not shown (`rem.file-changed.2`). Claude Code diffs against the content it keeps of every read file. | The task log is the only state a worker has; keeping a copy of every file read beside it would grow the log by the size of each file again. |
+| | The note that a read file changed on disk shows the changed lines only while the model's last whole `Read` of it is still in the conversation (not after a compaction or an edit of the model's since); otherwise it says they are not shown (`rem.file-changed.2`). Claude Code diffs against the content it keeps of every read file. The lines are numbered as in the file now; Claude Code numbers each block from where it began in the old file, which is off after an earlier block that added or removed lines. | The task log is the only state a worker has; keeping a copy of every file read beside it would grow the log by the size of each file again. A line number the model can find in the file is the point of numbering them. |
 | | The quiet nudge counts every reply without text as quiet; Claude Code also counts visible thinking it classifies as narration (by its signature) as speaking (`rem.quiet-nudge.2`). | The signature classification is Claude Code's own and not available to noeta; other providers' thinking carries no such mark. |
 
 ## Not yet matched

@@ -188,6 +188,8 @@ def _object(properties: dict[str, Any], required: Sequence[str] = ()) -> dict[st
 
 class WakeupTool(_Base):
     name = texts.WAKEUP_TOOL
+    #: Claude Code's ScheduleWakeup result limit.
+    max_result_chars = 1_000
     description = load_description("noeta.plugins.schedule", "schedule_wakeup")
     input_schema = _object({
         "delaySeconds": {"type": "number", "description": (

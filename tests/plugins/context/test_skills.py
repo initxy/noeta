@@ -204,8 +204,8 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
 
 
 async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> None:
-    """Installed mid-turn, announced with the person's next message, with no
-    pick-up in between (the runner keeps the task)."""
+    """Installed mid-turn, listed with its description before the next model
+    call, as Claude Code lists a skill its watcher found."""
     from noeta.core.tool import text_output
 
     class Install:
@@ -217,7 +217,6 @@ async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> 
 
         async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
             write_skill(skills_dir(h), "review", "Review code.")
-            await h.client.send(ctx.task_id, "next", when="now")
             return text_output("installed")
 
     a = Agent(name="a", model="m", tools=[Install()], extensions=[FileTools(), Skills()])
@@ -226,7 +225,7 @@ async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> 
     first, second = h.provider.requests
     assert first.tools == second.tools  # the prefix does not move
     texts = [m.text for m in second.messages]
-    assert texts[-2:] == ["next", f"{ROSTER_HEADER}\n\n- review: Review code."]
+    assert texts[-1] == f"{ROSTER_HEADER}\n\n- review: Review code."
 
 
 async def test_slash_command_activates_even_a_user_only_skill(h: Harness) -> None:
@@ -741,6 +740,30 @@ def test_the_loaded_text_has_one_blank_line_before_the_body() -> None:
     assert render_command_body(desc) == "Base directory for this skill: /s/notes\n\nRun it.\n"
 
 
+async def test_a_skill_edited_mid_turn_is_listed_again_before_the_next_call(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+
+    class Edit:
+        name = "Touch"
+        description = "touch"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = False
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            write_skill(skills_dir(h), "deploy", "Ship and tag.")
+            return text_output("done")
+
+    a = Agent(name="a", model="m", tools=[Edit()], extensions=[FileTools(), Skills()])
+    h.provider.add(reply("", ("Touch", {})), reply("", ("Touch", {})), reply("ok"))
+    tid = await h.start(a)
+    assert h.provider.requests[1].messages[-1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship and tag.")
+    # Written again with the same text: not listed again.
+    assert len(await h.records(tid, "skills", "listing")) == 2
+
+
 async def test_a_skill_whose_description_changed_is_listed_again(h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.")
     write_skill(skills_dir(h), "review", "Review code.")
@@ -796,8 +819,11 @@ async def test_skills_below_the_working_directory_join_when_a_file_there_is_touc
                    reply("", ("Skill", {"skill": "web-build"})), reply("done"))
     tid = await h.start(a)
     texts = [m.text for m in h.provider.requests[1].messages]
-    assert "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n" \
-        "- web-build" in texts
+    # The names when found, then (as Claude Code's next listing) the
+    # description, before the very next call.
+    assert texts[-2:] == [
+        "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n"
+        "- web-build", f"{ROSTER_HEADER}\n\n- web-build: Build the web app."]
     # Loadable now, and not listed again with the next message.
     results = await h.results(tid)
     assert results[-1].result.text == "Starting skill: web-build. Its instructions follow."

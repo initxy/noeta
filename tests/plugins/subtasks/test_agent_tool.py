@@ -33,6 +33,7 @@ from noeta.plugins.subtasks.tool import (
     LIST_WINDOW,
     TRANSCRIPT_KEY,
     AgentTool,
+    ListAgentsTool,
     SendMessageTool,
     agent_message,
     agent_schema,
@@ -337,7 +338,9 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
 
 
 async def test_list_agents_says_when_it_looked_at_the_newest_tasks_only(
-        store: SqliteStore) -> None:
+        store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The whole listing, not the runner's cut at ListAgents' result limit.
+    monkeypatch.setattr(ListAgentsTool, "max_result_chars", None)
     client = Client(store)
     for _ in range(LIST_WINDOW + 1):  # sessions no worker here runs
         await client.create("worker", "later", queue="elsewhere")

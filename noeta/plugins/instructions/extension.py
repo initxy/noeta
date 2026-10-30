@@ -201,7 +201,7 @@ class Instructions(Extension):
         state = {**self.initial_state(), **(state or {})}
         if kind == "start":
             return {**state, "files": list(data["files"]), "root": True,
-                    "digests": _digests(data["files"])}
+                    "digests": {**_digests(data["files"]), **(data.get("memory") or {})}}
         if kind == "nested":
             return {**state, "nested": [*state["nested"], *data["files"]],
                     "digests": {**(state.get("digests") or {}), **_digests(data["files"])}}
@@ -283,7 +283,10 @@ class Instructions(Extension):
         if not rendered:
             return
         entries = [_entry(f, await _real(reader.env_for(f.kind), f.path)) for f in files]
-        view.record(self.name, "start", {"files": entries},
+        data: dict[str, Any] = {"files": entries}
+        if memory is not None:
+            data["memory"] = {memory[0]: text_digest(memory[2])}
+        view.record(self.name, "start", data,
                     message=user(render_instructions(rendered), origin=self.origin))
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
@@ -320,10 +323,12 @@ class Instructions(Extension):
 
     async def _reread_changed(self, view: TaskView) -> None:
         """The files shown so far, read again: those whose text changed are
-        shown again under :data:`REREAD_HEAD` (a missing file is not)."""
+        shown again under :data:`REREAD_HEAD` (a missing file is not); the
+        memory index too, also when it is new (Claude Code's re-read covers
+        its auto-memory index, and a file that was not there before)."""
         state = view.ext_state(self.name) or {}
         digests: dict[str, str] = state.get("digests") or {}
-        if not digests:
+        if not self.root:
             return
         reader, _cwd = self._reader(view)
         limit = nested_max_chars(self._model(view))
@@ -341,6 +346,10 @@ class Instructions(Extension):
             if path in nested and e["kind"] != MANAGED:
                 text = cut_nested(path, text, limit)
             changed.append((path, e["kind"], text))
+        memory = await self._memory_index(view, pending=False)
+        if memory is not None and digests.get(memory[0]) != text_digest(memory[2]):
+            fresh[memory[0]] = text_digest(memory[2])
+            changed.append(memory)
         if changed:
             body = "\n\n".join([REREAD_HEAD, *(render_file(*f) for f in changed)])
             view.record(self.name, "reread", {"digests": fresh},
@@ -389,6 +398,7 @@ class Instructions(Extension):
         if memory is not None:
             start.append(memory)
         out = [user(render_instructions(start), origin=self.origin)] if start else []
+        index = {memory[0]: text_digest(memory[2])} if memory is not None else {}
         limit = nested_max_chars(self._model(view))
         for e in state.get("nested", []):
             text = await _reread(reader.env_for(e["kind"]), e["path"])
@@ -399,6 +409,7 @@ class Instructions(Extension):
                 out.append(user(render_file(e["path"], e["kind"], text), origin=self.origin))
         known = state.get("digests") or {}
         sent = {p: d for p, d in sent.items() if p in known and known[p] != d}
+        sent.update({p: d for p, d in index.items() if known.get(p) != d})
         if sent:
             view.record(self.name, "sent", {"digests": sent})
         return out

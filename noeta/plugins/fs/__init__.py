@@ -8,7 +8,8 @@ modification time moved is hashed, and if its bytes are neither what the
 model read nor what it was already told about, the model is told once, in a
 system turn (the prompt ``reminder/file_changed``; ``{path}`` is the file),
 with the changed lines when the model's last whole view of the file is still
-in the conversation (:mod:`noeta.plugins.fs.changes`). With those lines shown
+in the conversation (:mod:`noeta.plugins.fs.changes`). A file last read with
+an offset or a limit is not checked, as in Claude Code. With those lines shown
 the file counts as read as it is now; otherwise ``Edit`` and ``Write`` refuse
 until the model reads it again.
 
@@ -132,6 +133,8 @@ class FileTools(Extension):
         if view.env is None:
             return out
         for path, read in list(st.reads.items())[-CHANGED_FILES_CHECKED:]:
+            if read.window:
+                continue
             try:
                 stat = await view.env.stat(path)
                 if stat is None or stat.is_dir or stat.mtime == read.mtime:
