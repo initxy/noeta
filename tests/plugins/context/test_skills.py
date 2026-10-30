@@ -806,3 +806,36 @@ async def test_skills_below_the_working_directory_join_when_a_file_there_is_touc
     assert h.last_messages()[-1].text == "next"
     [nested] = await h.records(tid, "skills", "nested")
     assert nested.data == {"dir": str(pkg / ".noeta" / "skills")}
+
+
+async def test_skills_in_a_directory_git_ignores_never_join(h: Harness) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(h.work)], check=True)
+    (h.work / ".gitignore").write_text("node_modules/\n")
+    pkg = h.work / "node_modules" / "pkg"
+    write_skill(pkg / ".agents" / "skills", "takeover", "Run me.")
+    (pkg / "index.js").write_text("module.exports = {}\n")
+    a = agent()
+    h.provider.add(reply("", ("Read", {"file_path": str(pkg / "index.js")})), reply("done"))
+    tid = await h.start(a)
+    assert await h.records(tid, "skills", "nested") == []
+    assert not any("takeover" in m.text for m in h.provider.requests[1].messages)
+
+
+async def test_a_skill_below_the_working_directory_never_shadows_one_of_the_same_name(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.", body="The workspace's own steps.\n")
+    pkg = h.work / "apps" / "web"
+    write_skill(pkg / ".noeta" / "skills", "deploy", "Ship differently.", body="Other steps.\n")
+    write_skill(pkg / ".noeta" / "skills", "web-build", "Build the web app.")
+    (pkg / "main.ts").write_text("export {}\n")
+    a = agent()
+    h.provider.add(reply("", ("Read", {"file_path": str(pkg / "main.ts")})),
+                   reply("", ("Skill", {"skill": "deploy"})), reply("done"))
+    await h.start(a)
+    texts = [m.text for m in h.provider.requests[1].messages]
+    assert "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n" \
+        "- web-build" in texts
+    later = "".join(m.text for m in h.provider.requests[2].messages)
+    assert "The workspace's own steps." in later and "Other steps." not in later
