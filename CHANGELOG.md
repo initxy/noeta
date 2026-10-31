@@ -19,6 +19,9 @@ All notable changes to Noeta are documented here. The format is based on
   worker without them, or list them in the sandbox's `credentials.envVars`.
   `LocalExecEnv(inherit_env=)` is gone; `noeta.toolkit.local_env.scrub_env` /
   `ENV_ALLOWLIST` are now `child_env` / `OWN_SECRETS`.
+- **`Bash`, background jobs and `Monitor` commands get `GIT_EDITOR=true`**, as in Claude
+  Code: it replaces an inherited `GIT_EDITOR`, so `git commit` / `rebase` never wait for an
+  editor; a host's `ShellEnv` variables still override it.
 - **The skill listing's budget is Claude Code's: 1 % of the window in characters, no
   ceiling.** It was 1 % in estimated tokens capped at 4,096; at a 1M window that listed
   about half of what Claude Code lists in full. On a 200K model counted at 3 characters a

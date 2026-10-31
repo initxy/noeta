@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-10-30
 branch: bench-env
 ---
@@ -15,8 +15,8 @@ reports it and exits 0.
 
 ## Non-goals
 
-- Claude Code's added variables (`CLAUDECODE=1`, `CLAUDE_CODE_SESSION_ID`, `GIT_EDITOR=true`,
-  `CLAUDE_PID`, `AI_AGENT`): a separate question (open, see Progress log).
+- Claude Code's session markers (`CLAUDECODE=1`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+  `AI_AGENT`, `CLAUDE_EFFORT`): no need for a noeta equivalent (owner, 2026-10-30).
 - Claude Code's opt-in `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (on by default only in GitHub Actions):
   noeta's sandbox `credentials.envVars` already unsets named variables per command.
 - `ContainerExecEnv`: a command there runs with the image's environment (`docker exec`), never
@@ -64,6 +64,22 @@ What the others do (read from their code, 2026-10-30):
   multi-machine risk Claude Code does not have); the rest are noeta's credentials, which a
   project never needs. A host that wants a provider key out of commands sets it through
   `NOETA_API_KEY` / the config file, or lists it in sandbox `credentials.envVars`.
+- **No name-pattern filter on servers.** Others: Claude Code passes every other secret in its
+  environment (cloud keys, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`) and offers an opt-in scrub;
+  pi passes everything; DeepSeek Harness drops names matching `KEY|PASSWORD|SECRET|TOKEN`.
+  noeta: Claude Code's behaviour on a worker too — only `OWN_SECRETS` are withheld. Why: a
+  pattern drops variables the person's commands need (`GITHUB_TOKEN`, `NPM_TOKEN`,
+  `HF_TOKEN`) and keeps secrets with other names, so it is neither safe nor compatible; an
+  operator keeps a secret out with a clean worker environment or sandbox
+  `credentials.envVars` (owner, 2026-10-30).
+- **`GIT_EDITOR=true` on every command.** Others: Claude Code sets it on `Bash` (and its
+  background and `Monitor` commands) over the inherited environment, so a user-set
+  `GIT_EDITOR` is replaced; only its own per-command overrides (session variables hooks
+  export) win; hooks and MCP servers do not get it. noeta: `shell.bash.COMMAND_ENV` laid under
+  the host's `ShellEnv` variables on `Bash`, background jobs and `Monitor`; on a container exec
+  env it travels as `docker exec -e` like any call variable (Claude Code's sandboxed commands
+  get it the same way). Why: a command has no terminal, so `git commit` / `rebase -i` must not
+  wait for an editor (owner, 2026-10-30).
 - **One function for every local spawn.** `child_env()` replaces `scrub_env()`; `LocalExecEnv`,
   command hooks, stdio MCP servers and `headersHelper` all use it. `LocalExecEnv(inherit_env=)`
   is removed (nothing left to widen).
@@ -80,6 +96,7 @@ What the others do (read from their code, 2026-10-30):
       `NOETA_STORE`.
 - [x] `StreamJson` keeps the turn open until its result is delivered; test with slow usage.
 - [x] `parity/deviations.md` row; CHANGELOG.
+- [x] `GIT_EDITOR=true` on shell commands (owner's call); test.
 - [x] Gates: `make check`, `make parity`, `make cluster`.
 
 ## Acceptance criteria
@@ -101,4 +118,5 @@ What the others do (read from their code, 2026-10-30):
 2026-10-30 pydantic-ai-5842 (gpu-cn `jobs/rb-ds41/pydantic__pydantic-ai-5842__guPatib`): the stream ends with the final reply and the price warning, no `result`; harbor's `AgentSafetyRefusalError` is its regex matching the task's own text (`ContentFilterError` is a pydantic-ai class), not anything noeta printed. Race reproduced by a test with a 1.2 s usage read (fails before the fix).
 2026-10-30 Container exec env unchanged in behaviour: its `docker` client now inherits the host environment (it is a command noeta starts), commands in the container still get only the image's plus explicit `-e`; `CLIENT_ENV` keeps the old names.
 2026-10-30 Gates: `make check` green (2596 passed, 89 %), `make parity` 0 mismatches, `make cluster` 14/14.
-Open: whether noeta should set markers like Claude Code's (`GIT_EDITOR=true` keeps `git commit`/`rebase` from opening an editor; a `NOETA_SESSION_ID`-style marker) — owner's call.
+2026-10-30 After `GIT_EDITOR`: `make check` green (2596 passed, 89 %), `make parity` 0 mismatches, `make cluster` 14/14; archived.
+2026-10-30 Owner: add `GIT_EDITOR=true` as Claude Code does, no session markers, no name-pattern filter. Claude Code's precedence read from its `Bash` env builder: `{...env, SHELL, GIT_EDITOR: "true", ...envOverrides, ...sandboxEnv, ...markers}`, `envOverrides` being the shell's session variables.

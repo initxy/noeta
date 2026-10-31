@@ -708,10 +708,16 @@ async def test_a_broken_resolver_or_bad_entries_never_fail_the_command(h: Harnes
     assert text_of(out).strip() == "<unset>"
 
 
-async def test_no_resolver_adds_nothing(ws: Path) -> None:
+async def test_every_command_gets_git_editor_true_and_a_host_may_override_it(
+        ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Claude Code sets GIT_EDITOR=true over the inherited value (the person's
+    # own editor included); only per-call variables override it.
+    monkeypatch.setenv("GIT_EDITOR", "vim")
     rec = _RecordingEnv(str(ws))
     await bash(Harness(env=rec), "true")
-    assert rec.envs == [{}]
+    assert rec.envs == [{"GIT_EDITOR": "true"}]
+    await bash(Harness(env=rec), "true", BashTool(shell_env=lambda ctx: {"GIT_EDITOR": "ed"}))
+    assert rec.envs[-1] == {"GIT_EDITOR": "ed"}
 
 
 # -- the tool's surface ----------------------------------------------------------------
