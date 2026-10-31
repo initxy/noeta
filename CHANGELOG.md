@@ -550,6 +550,9 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **`noeta -p` no longer ends without its result.** The result's usage is read from the
+  store after the turn closes; a read slower than half a second let the run end with no
+  `result` line and exit 1, though the task had finished.
 - **A long output a tool saved itself is never saved over.** Past one reply's 200,000
   character budget the runner saved a `Bash` / MCP / web result's preview to the tool's own
   file, losing the full output; the runner writes `<call>.result.txt` and leaves an already

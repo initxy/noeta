@@ -171,6 +171,8 @@ class StreamJson(ControlRequests):
         self.task_id = ""
         self._out: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._turn: _Turn | None = None
+        #: Results being put together: their turn is closed, but not done.
+        self._finishing = 0
         self._done: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._requests = 0
         #: Our ``can_use_tool`` requests waiting for the client: id -> pending.
@@ -504,7 +506,13 @@ class StreamJson(ControlRequests):
         if outcome.get("subtype") == "success" and self.options.output_schema is not None:
             with contextlib.suppress(ValueError):
                 result["structured_output"] = json.loads(str(result["result"]))
-        await self._complete(result, turn)
+        # Gathering the usage awaits the store: until the result is out, the
+        # work stays open, or ``settled`` would return without it.
+        self._finishing += 1
+        try:
+            await self._complete(result, turn)
+        finally:
+            self._finishing -= 1
 
     async def _complete(self, result: dict[str, Any], turn: _Turn | None) -> None:
         total = await tree_usage(self.client, self.task_id)
@@ -532,7 +540,8 @@ class StreamJson(ControlRequests):
 
     @property
     def busy(self) -> bool:
-        return self._turn is not None or bool(self._asked) or bool(self._queued)
+        return (self._turn is not None or self._finishing > 0 or bool(self._asked)
+                or bool(self._queued))
 
     async def settled(self) -> None:
         """Wait until no prompt's work is open (or the task has ended)."""

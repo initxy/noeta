@@ -312,6 +312,30 @@ async def test_a_lost_event_stream_reports_no_raw_error_text(
     assert "Expecting property name" not in json.dumps(result)
 
 
+async def test_a_result_slow_to_put_together_is_still_reported(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Its usage is read from the store after the turn closes; a read slower
+    # than ``settled``'s poll once ended the run with no result (exit 1).
+    import noeta.host.stream_json as sj
+
+    real = sj.tree_usage
+
+    async def slow(*a: Any, **k: Any) -> Any:
+        await asyncio.sleep(1.2)
+        return await real(*a, **k)
+
+    monkeypatch.setattr(sj, "tree_usage", slow)
+    app = local(tmp_path, ScriptedProvider([reply("all done")]), Agent(name="main", model=MODEL))
+    c = Client()
+    async with app:
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path)), c.emit)
+        from noeta.core.types import Message, Text
+        result = await asyncio.wait_for(drive(conv, prompt=Message(
+            role="user", content=[Text(text="go")], origin="human")), 10)
+    assert result is not None and result["result"] == "all done"
+    assert [r["result"] for r in results(c)] == ["all done"]
+
+
 async def test_questions_interrupts_max_turns_and_rewind(tmp_path: Path) -> None:
     question = {"questions": [{"question": "Which database?", "header": "DB",
                                "multiSelect": False,
