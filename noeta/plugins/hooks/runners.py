@@ -32,7 +32,7 @@ from noeta.core.types import (
     user,
 )
 from noeta.plugins.hooks.config import HookCommand
-from noeta.toolkit.local_env import scrub_env
+from noeta.toolkit.local_env import child_env
 
 log = logging.getLogger("noeta.hooks")
 
@@ -86,10 +86,11 @@ def _project_vars(text: str, cwd: str | None) -> str:
 async def run_command(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
     """Run a command hook: ``sh -c command`` (or, with ``args``, the
     program ``command`` with those arguments and no shell), the payload as
-    JSON on stdin, a scrubbed environment plus the hook's ``env``,
+    JSON on stdin, this process's environment (minus noeta's own
+    credentials, ``child_env``) plus the hook's ``env``,
     ``NOETA_PROJECT_DIR`` and ``CLAUDE_PROJECT_DIR``; killed after its
     timeout."""
-    env = scrub_env()
+    env = child_env()
     env.update(hook.env)
     if cwd:
         env["NOETA_PROJECT_DIR"] = env["CLAUDE_PROJECT_DIR"] = cwd

@@ -14,8 +14,8 @@ Hook types (``config.py`` has the fields and defaults):
 
 * ``command`` — ``sh -c`` on this machine (``args``: the program run
   directly, no shell), in the task's working directory when it exists here,
-  the event as JSON on stdin, a scrubbed environment plus
-  ``NOETA_PROJECT_DIR`` (and ``CLAUDE_PROJECT_DIR`` for Claude Code's
+  the event as JSON on stdin, noeta's environment (minus its own
+  credentials) plus ``NOETA_PROJECT_DIR`` (and ``CLAUDE_PROJECT_DIR`` for Claude Code's
   scripts). ``async`` ones run in the background, unread.
 * ``http`` — the event POSTed as JSON; ``$VAR`` in ``headers`` is filled
   only for names in ``allowedEnvVars``; the response body is read like

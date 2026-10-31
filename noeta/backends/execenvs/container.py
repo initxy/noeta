@@ -156,8 +156,7 @@ class ContainerExecEnv:
         self.env = dict(env or {})
         self.docker = docker
         self.kill_grace = kill_grace
-        self._host = LocalExecEnv(tempfile.gettempdir(), inherit_env=DOCKER_ENV,
-                                  kill_grace=kill_grace)
+        self._host = LocalExecEnv(tempfile.gettempdir(), kill_grace=kill_grace)
 
     def _abs(self, path: str) -> str:
         return path if posixpath.isabs(path) else posixpath.join(self.cwd, path)

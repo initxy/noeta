@@ -640,7 +640,7 @@ async def test_credentials_are_hidden(tmp_path: Path, home: Path,
     (home / "tool-results").mkdir()
     (home / "tool-results" / "out.txt").write_text("spilled")
     monkeypatch.setenv("API_TOKEN", "hunter2")
-    env = LocalExecEnv(str(tmp_path), inherit_env=["API_TOKEN"], sandbox={
+    env = LocalExecEnv(str(tmp_path), sandbox={
         "enabled": True,
         "credentials": {"envVars": [{"name": "API_TOKEN", "mode": "deny"}]}})
     _, out, _ = await _run(env, f"cat {home}/token; cat {home}/tool-results/out.txt; "

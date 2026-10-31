@@ -383,3 +383,12 @@ async def test_a_command_hook_keeps_only_the_head_of_a_flood(tmp_path: Path) -> 
     result = await run_command(hook, {"big": "x" * 200_000}, str(tmp_path))
     assert result.exit_code == 0
     assert result.stdout == "x" * OUTPUT_CAP and result.stderr == "oops\n"
+
+
+async def test_a_command_hook_inherits_the_environment_but_noetas_credentials(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JAVA_HOME", "/opt/jdk")
+    monkeypatch.setenv("NOETA_SERVER_TOKEN", "t")
+    hook = HookCommand(command='printf "%s|%s" "$JAVA_HOME" "${NOETA_SERVER_TOKEN:-unset}"')
+    result = await run_command(hook, {}, str(tmp_path))
+    assert result.stdout == "/opt/jdk|unset"

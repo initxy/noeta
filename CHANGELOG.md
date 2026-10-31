@@ -9,6 +9,16 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Commands inherit noeta's environment, as in Claude Code.** `Bash`, background jobs,
+  command hooks, stdio MCP servers and MCP `headersHelper`s started on this machine get the
+  whole process environment except noeta's own credentials (`NOETA_API_KEY`, `NOETA_STORE`,
+  `NOETA_SERVER_TOKEN`, `NOETA_MCP_CLIENT_SECRET`, `NOETA_WEB_SEARCH_API_KEY`); they used to
+  get only `PATH`, `HOME`, the locale and a few Python variables, so toolchain settings
+  (`CARGO_HOME`, `RUSTUP_HOME`, `JAVA_HOME`, `GOPATH`, …) were lost. Other secrets in a
+  worker's environment (cloud keys, `ANTHROPIC_API_KEY`) now reach commands too: start the
+  worker without them, or list them in the sandbox's `credentials.envVars`.
+  `LocalExecEnv(inherit_env=)` is gone; `noeta.toolkit.local_env.scrub_env` /
+  `ENV_ALLOWLIST` are now `child_env` / `OWN_SECRETS`.
 - **The skill listing's budget is Claude Code's: 1 % of the window in characters, no
   ceiling.** It was 1 % in estimated tokens capped at 4,096; at a 1M window that listed
   about half of what Claude Code lists in full. On a 200K model counted at 3 characters a

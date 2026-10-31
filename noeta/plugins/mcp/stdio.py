@@ -33,7 +33,7 @@ from noeta.plugins.mcp.client import (
     initialize_params,
 )
 from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpError
-from noeta.toolkit.local_env import scrub_env
+from noeta.toolkit.local_env import child_env
 
 __all__ = [
     "LINE_CAP",
@@ -78,7 +78,7 @@ class StdioClient(StreamClient):
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
-                env={**scrub_env(), **self.extra_env},
+                env={**child_env(), **self.extra_env},
                 limit=self.line_cap + 1,
                 start_new_session=True,
             )

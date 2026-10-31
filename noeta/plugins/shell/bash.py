@@ -1,7 +1,7 @@
 """``Bash``: run a command through ``bash -c`` in the foreground.
 
-Every command gets a bounded timeout, a scrubbed environment (the env
-backend's job), stdout and stderr merged in the order printed, a capture cap
+Every command gets a bounded timeout, the environment its exec env gives
+it, stdout and stderr merged in the order printed, a capture cap
 that keeps the tail, and — in a root task, after a command that succeeds —
 the directory it left the shell in, tracked with an EXIT trap and recorded as
 ``shell`` / ``cwd``. A command that ends outside the workspace sends the next
@@ -66,7 +66,7 @@ SHELL_OUTPUT_LIMIT = 30_000
 NO_OUTPUT = "(Bash completed with no output)"
 
 #: ``ctx -> variables`` a host adds to this call's command on top of the
-#: scrubbed environment. Asked per command; never recorded.
+#: exec env's environment. Asked per command; never recorded.
 ShellEnv = Callable[[ToolContext], Mapping[str, str]]
 
 #: What a host variable name must look like: a POSIX shell name.

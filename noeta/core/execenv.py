@@ -53,7 +53,7 @@ class ExecEnv(Protocol):
         """Run a program and wait. On timeout or cancellation the whole process
         group is killed.
 
-        ``env`` is laid over the backend's own (scrubbed) environment, never
+        ``env`` is laid over the backend's own environment, never
         a replacement for it. ``output_cap`` bounds each captured stream while
         it is read: only its last ``output_cap`` bytes are kept and the
         ``*_truncated`` flag says the head was dropped. A timed-out run

@@ -112,8 +112,10 @@ async def test_stdio_timeout_cancels_the_call_not_the_connection(tmp_path: Path)
     assert client.proc is not None and client.proc.returncode is not None
 
 
-async def test_stdio_env_is_scrubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_stdio_env_is_inherited_without_noetas_credentials(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SECRET_TOKEN", "x")
+    monkeypatch.setenv("NOETA_STORE", "postgresql://noeta:pw@db/noeta")
     log = tmp_path / "env.txt"
     script = tmp_path / "s.py"
     script.write_text("import os,sys\nopen(sys.argv[1],'w').write(repr(sorted(os.environ)))\n")
@@ -122,7 +124,7 @@ async def test_stdio_env_is_scrubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         await client.start()
     await client.close()
     names = log.read_text()
-    assert "SECRET_TOKEN" not in names and "MINE" in names
+    assert "SECRET_TOKEN" in names and "MINE" in names and "NOETA_STORE" not in names
 
 
 async def test_spawn_failure_is_an_mcp_error() -> None:

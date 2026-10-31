@@ -4,37 +4,27 @@ is this machine."""
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable
 
-#: The only parent-environment variables a spawned command inherits, so a
-#: child never picks up the host's credentials by accident. A host that needs
-#: more names them in ``LocalExecEnv(inherit_env=...)``.
-ENV_ALLOWLIST = frozenset(
+#: noeta's own credentials: variables only noeta reads (its provider key,
+#: its store's DSN, its server and MCP client secrets, its search key). A
+#: process noeta starts never gets them; everything else it inherits, as in
+#: Claude Code, which likewise withholds only its own credential variables.
+OWN_SECRETS = frozenset(
     {
-        "PATH",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "TERM",
-        "TMPDIR",
-        # Python + uv interpreter discovery
-        "PYTHONHASHSEED",
-        "PYTHONPATH",
-        "VIRTUAL_ENV",
+        "NOETA_API_KEY",
+        "NOETA_STORE",
+        "NOETA_SERVER_TOKEN",
+        "NOETA_MCP_CLIENT_SECRET",
+        "NOETA_WEB_SEARCH_API_KEY",
     }
 )
 
 
-def scrub_env(
-    allowlist: Iterable[str] | None = None,
-    *,
-    inherit: Iterable[str] = (),
-) -> dict[str, str]:
-    """A minimal environment built from the parent's: :data:`ENV_ALLOWLIST`
-    (or ``allowlist``) plus the ``inherit`` names, nothing else."""
-    parent = os.environ
-    keys = set(ENV_ALLOWLIST if allowlist is None else allowlist) | set(inherit)
-    return {key: parent[key] for key in sorted(keys) if key in parent}
+def child_env() -> dict[str, str]:
+    """The environment a process noeta starts on this machine (a command, a
+    hook, a stdio MCP server) begins with: this process's, without
+    :data:`OWN_SECRETS`."""
+    return {key: value for key, value in os.environ.items() if key not in OWN_SECRETS}
 
 
 def is_local(env: object) -> bool:
