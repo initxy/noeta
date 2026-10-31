@@ -324,6 +324,17 @@ async def test_a_failing_headers_helper_gives_no_headers(command: str) -> None:
     assert await helper_headers(server) == {}
 
 
+async def test_a_headers_helper_inherits_the_environment_but_noetas_credentials(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NOETA_API_KEY", "sk")
+    monkeypatch.setenv("NOETA_STORE", "postgresql://noeta:pw@db/noeta")
+    monkeypatch.setenv("SSO_TOKEN", "t")
+    script = ("printf '{\"a\": \"%s|%s|%s\"}' \"$SSO_TOKEN\" "
+              "\"${NOETA_API_KEY:-unset}\" \"${NOETA_STORE:-unset}\"")
+    server = McpServer(alias="h", url="http://x", headers_helper=script)
+    assert await helper_headers(server) == {"a": "t|unset|unset"}
+
+
 async def test_a_slow_headers_helper_is_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("noeta.plugins.mcp.pool.HELPER_TIMEOUT_S", 0.2)
     assert await helper_headers(McpServer(alias="h", url="http://x",

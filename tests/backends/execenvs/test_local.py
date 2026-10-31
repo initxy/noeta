@@ -250,6 +250,21 @@ def test_child_env_drops_only_noetas_credentials(monkeypatch: pytest.MonkeyPatch
     assert child["ANTHROPIC_API_KEY"].startswith("passed")
 
 
+def test_libpq_credentials_are_withheld_once_noetas_store_is_postgres(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("psycopg")
+    from noeta.backends.stores.postgres import PostgresStore
+    from noeta.toolkit import local_env
+
+    monkeypatch.setattr(local_env, "_withheld", set())
+    monkeypatch.setenv("PGPASSWORD", "pw")
+    monkeypatch.setenv("PGHOST", "db")
+    assert child_env()["PGPASSWORD"] == "pw"  # the person's own psql, no noeta store on it
+    PostgresStore("postgresql://noeta@db/noeta")
+    env = child_env()
+    assert "PGPASSWORD" not in env and env["PGHOST"] == "db"
+
+
 # -- send_group_signal ---------------------------------------------------------
 
 

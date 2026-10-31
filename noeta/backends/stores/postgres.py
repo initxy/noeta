@@ -81,6 +81,7 @@ from noeta.core.store import (
     next_row_state,
 )
 from noeta.core.types import Delta
+from noeta.toolkit.local_env import POSTGRES_SECRETS, withhold
 
 Conn = psycopg.AsyncConnection[Any]
 
@@ -188,6 +189,8 @@ class PostgresStore:
     ) -> None:
         if not _NAME.match(schema):
             raise ValueError(f"schema must match {_NAME.pattern}: {schema!r}")
+        # libpq logs in with these too: noeta's store credentials from now on.
+        withhold(POSTGRES_SECRETS)
         self.dsn = dsn
         self.schema = schema
         self.connect_timeout = connect_timeout

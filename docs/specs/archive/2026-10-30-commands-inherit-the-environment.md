@@ -18,7 +18,7 @@ reports it and exits 0.
 - Claude Code's session markers (`CLAUDECODE=1`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
   `AI_AGENT`, `CLAUDE_EFFORT`): no need for a noeta equivalent (owner, 2026-10-30).
 - Claude Code's opt-in `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (on by default only in GitHub Actions):
-  noeta's sandbox `credentials.envVars` already unsets named variables per command.
+  noeta's sandbox `credentials.envVars` already unsets named variables for sandboxed commands.
 - `ContainerExecEnv`: a command there runs with the image's environment (`docker exec`), never
   the host's; unchanged.
 
@@ -63,15 +63,30 @@ What the others do (read from their code, 2026-10-30):
   Code. Why: `NOETA_STORE` on a worker opens every task of the shared store to a command (a
   multi-machine risk Claude Code does not have); the rest are noeta's credentials, which a
   project never needs. A host that wants a provider key out of commands sets it through
-  `NOETA_API_KEY` / the config file, or lists it in sandbox `credentials.envVars`.
+  `NOETA_API_KEY` / the config file. `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` pass even when
+  noeta falls back to one as its own key, as Claude Code passes `ANTHROPIC_API_KEY`.
+- **Secrets noeta's config hands to its plugins and channels** (review, 2026-10-30). Others:
+  Claude Code has no such config; its plugins' own hook and MCP `{env:}` references pass.
+  noeta: every variable an `{env:NAME}` names in `config.toml`'s `[plugins.*]`,
+  `[channels.*]` and `[agents.*]` tables (read in `load_settings`) and in noeta's own agent
+  files (`~/.noeta/agents`, a trusted project's `.noeta/agents`, `--agents`; read when the
+  agents are made) is withheld too (`local_env.withhold_env_refs`); a Claude Code plugin's
+  bundled hook / MCP references still pass, as in Claude Code. Why: these are noeta's own
+  credentials — a chat channel's shared secret (`CHAT_HOOK_TOKEN`) in a command's environment
+  lets an injected command forge the chat app's requests, approvals among them.
+- **libpq's credentials when the store is Postgres** (review, 2026-10-30). Others: no shared
+  store. noeta: `PGPASSWORD`, `PGPASSFILE`, `PGSERVICE`, `PGSERVICEFILE` withheld once a
+  `PostgresStore` is made in the process (`PGHOST`, `PGUSER`… pass); without a Postgres store
+  they pass, so the person's own `psql` keeps working. Why: libpq logs in to noeta's store with
+  them, the same exposure as `NOETA_STORE`.
 - **No name-pattern filter on servers.** Others: Claude Code passes every other secret in its
   environment (cloud keys, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`) and offers an opt-in scrub;
   pi passes everything; DeepSeek Harness drops names matching `KEY|PASSWORD|SECRET|TOKEN`.
   noeta: Claude Code's behaviour on a worker too — only `OWN_SECRETS` are withheld. Why: a
   pattern drops variables the person's commands need (`GITHUB_TOKEN`, `NPM_TOKEN`,
   `HF_TOKEN`) and keeps secrets with other names, so it is neither safe nor compatible; an
-  operator keeps a secret out with a clean worker environment or sandbox
-  `credentials.envVars` (owner, 2026-10-30).
+  operator keeps a secret out with a clean worker environment, the reliable way (sandbox
+  `credentials.envVars` covers sandboxed `Bash` commands only) (owner, 2026-10-30).
 - **`GIT_EDITOR=true` on every command.** Others: Claude Code sets it on `Bash` (and its
   background and `Monitor` commands) over the inherited environment, so a user-set
   `GIT_EDITOR` is replaced; only its own per-command overrides (session variables hooks
@@ -109,8 +124,9 @@ What the others do (read from their code, 2026-10-30):
 ## Risks
 
 - A host that relied on the allowlist to keep other secrets (cloud keys in the worker's
-  environment) out of commands now passes them, as Claude Code does. Mitigation: sandbox
-  `credentials.envVars`, or start the worker with a clean environment; CHANGELOG says so.
+  environment) out of commands now passes them, as Claude Code does. Mitigation: start the
+  worker with a clean environment (sandbox `credentials.envVars` covers sandboxed `Bash` only);
+  CHANGELOG says so.
 
 ## Progress log
 2026-10-30 Claude Code 2.1.312 read from its bundle (`~/.local/share/claude/versions/2.1.312` strings): Bash/hooks/MCP env builders quoted in Context; pi-mono `utils/shell.ts`, DeepSeek Harness `subprocess/src/index.ts`.
@@ -120,3 +136,4 @@ What the others do (read from their code, 2026-10-30):
 2026-10-30 Gates: `make check` green (2596 passed, 89 %), `make parity` 0 mismatches, `make cluster` 14/14.
 2026-10-30 After `GIT_EDITOR`: `make check` green (2596 passed, 89 %), `make parity` 0 mismatches, `make cluster` 14/14; archived.
 2026-10-30 Owner: add `GIT_EDITOR=true` as Claude Code does, no session markers, no name-pattern filter. Claude Code's precedence read from its `Bash` env builder: `{...env, SHELL, GIT_EDITOR: "true", ...envOverrides, ...sandboxEnv, ...markers}`, `envOverrides` being the shell's session variables.
+2026-10-30 Review fixes: `{env:}` secrets of noeta's config and own agent files withheld; libpq credentials withheld with a Postgres store; a prompt sent while a result is being put together queues (test: its replayed `user` line comes after the result); tests for `headersHelper`, the config/agent-file secrets and libpq; stale texts (`parity/rules/tools/Bash.md` `tool.Bash.6`, `mcp/stdio.py`, the deviations row) and the mitigation text fixed.

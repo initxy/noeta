@@ -4,8 +4,9 @@ The stdio transport is newline-delimited JSON-RPC 2.0 on the server's
 stdin/stdout; its logs go to stderr, which is discarded so a chatty server can
 never fill a pipe.
 
-* The server is launched from an argv list (never a shell) with a scrubbed
-  environment plus the spec's ``env``, in its own process group.
+* The server is launched from an argv list (never a shell) with noeta's
+  environment minus its own credentials (``child_env``) plus the spec's
+  ``env``, in its own process group.
 * A pooled connection is shared by every task that names the server:
   requests are multiplexed by id (:class:`~noeta.plugins.mcp.client.StreamClient`),
   so one slow call (or one waiting on the person) never holds up another.
