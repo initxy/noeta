@@ -273,3 +273,29 @@ def test_serve_refuses_bypass_in_the_plugin_itself(
         perms = exts["permissions"]
         assert perms.disable_bypass is not allow
         assert (perms.mode == "bypassPermissions") is allow
+
+
+def test_secrets_noetas_config_hands_its_plugins_stay_out_of_commands(
+        home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A chat channel's shared secret in a command's environment would let an
+    # injected command forge the chat app's requests.
+    from noeta.toolkit import local_env
+
+    monkeypatch.setattr(local_env, "_withheld", set())
+    for name in ("CHAT_HOOK_TOKEN", "SEARCH_KEY", "HOOK_SECRET", "AGENT_SECRET", "GITHUB_TOKEN"):
+        monkeypatch.setenv(name, "x")
+    (home / "config.toml").write_text(
+        'model = "m"\nprovider = "anthropic"\napi_key = "k"\n'
+        f'store = "sqlite:///{home / "t.db"}"\n'
+        '[channels.chat_approvals]\ntoken = "{env:CHAT_HOOK_TOKEN}"\n'
+        '[plugins.web]\nsearch_api_key = "{env:SEARCH_KEY}"\n'
+        '[agents.main]\nadd_plugins = [{hooks = {secret = "Bearer {env:HOOK_SECRET}"}}]\n')
+    s = load_settings()
+    (home / "agents").mkdir()
+    (home / "agents" / "helper.md").write_text(
+        "---\nname: helper\nplugins:\n  - web: {search_api_key: '{env:AGENT_SECRET}'}\n"
+        "---\nHelp.\n")
+    from_settings(s, cwd=str(home))
+    env = local_env.child_env()
+    assert not {"CHAT_HOOK_TOKEN", "SEARCH_KEY", "HOOK_SECRET", "AGENT_SECRET"} & set(env)
+    assert env["GITHUB_TOKEN"] == "x"  # the person's own, as Claude Code passes it

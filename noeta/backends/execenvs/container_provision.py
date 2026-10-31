@@ -15,16 +15,18 @@ from collections.abc import Mapping, Sequence
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.execenvs.sandbox_proxy import Listeners, default_proxy
 from noeta.core.execenv import RunResult
-from noeta.toolkit.local_env import ENV_ALLOWLIST
 from noeta.toolkit.sandbox import SandboxSettings, sandbox_settings
 
-#: Host variables the ``docker`` CLI itself may need (which daemon, which
-#: config). They reach the CLI only, never a command in the container.
+#: Host variables the ``docker`` CLI itself reads (which daemon, which
+#: config). Like every host variable they reach the CLI only, never a command
+#: in the container.
 DOCKER_ENV = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH",
               "DOCKER_TLS_VERIFY")
-#: Variables the ``docker`` client's own environment carries; a command's
-#: value for one of these is passed as ``-e KEY=VALUE`` instead.
-CLIENT_ENV = frozenset({*ENV_ALLOWLIST, *DOCKER_ENV})
+#: Variables the ``docker`` client itself reads (``PATH`` finds ``docker``);
+#: a command's value for one of these is passed as ``-e KEY=VALUE`` rather
+#: than through the client's environment.
+CLIENT_ENV = frozenset({"PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "PYTHONHASHSEED",
+                        "PYTHONPATH", "VIRTUAL_ENV", *DOCKER_ENV})
 
 #: Budget for one file operation (a ``docker exec`` of ``cat``, ``stat``…).
 FILE_OP_TIMEOUT_S = 120.0
@@ -36,7 +38,7 @@ class ContainerError(OSError):
 
 async def _docker(docker: str, *args: str, timeout: float = FILE_OP_TIMEOUT_S,
                   env: Mapping[str, str] | None = None) -> RunResult:
-    host = LocalExecEnv(tempfile.gettempdir(), inherit_env=DOCKER_ENV)
+    host = LocalExecEnv(tempfile.gettempdir())
     try:
         return await host.run([docker, *args], timeout=timeout, env=env)
     except FileNotFoundError as exc:

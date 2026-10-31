@@ -1,7 +1,7 @@
 """``Bash``: run a command through ``bash -c`` in the foreground.
 
-Every command gets a bounded timeout, a scrubbed environment (the env
-backend's job), stdout and stderr merged in the order printed, a capture cap
+Every command gets a bounded timeout, its exec env's environment plus
+``GIT_EDITOR=true``, stdout and stderr merged in the order printed, a capture cap
 that keeps the tail, and — in a root task, after a command that succeeds —
 the directory it left the shell in, tracked with an EXIT trap and recorded as
 ``shell`` / ``cwd``. A command that ends outside the workspace sends the next
@@ -65,8 +65,13 @@ SHELL_OUTPUT_LIMIT = 30_000
 #: The result of a command that succeeds and prints nothing.
 NO_OUTPUT = "(Bash completed with no output)"
 
+#: Set on every command over the inherited environment, as Claude Code does:
+#: ``git commit`` / ``rebase`` must not wait for an editor nobody can use. A
+#: host's per-call variables (``ShellEnv``) still win.
+COMMAND_ENV = {"GIT_EDITOR": "true"}
+
 #: ``ctx -> variables`` a host adds to this call's command on top of the
-#: scrubbed environment. Asked per command; never recorded.
+#: exec env's environment. Asked per command; never recorded.
 ShellEnv = Callable[[ToolContext], Mapping[str, str]]
 
 #: What a host variable name must look like: a POSIX shell name.
@@ -285,17 +290,18 @@ class BashTool:
         return result, refused
 
     def _command_env(self, ctx: ToolContext) -> dict[str, str]:
-        """The host's per-call variables. Fails soft — a resolver that raises
-        or a malformed entry only costs the command that variable."""
+        """:data:`COMMAND_ENV`, then the host's per-call variables. Fails
+        soft — a resolver that raises or a malformed entry only costs the
+        command that variable."""
         if self.shell_env is None:
-            return {}
+            return dict(COMMAND_ENV)
         try:
             raw = self.shell_env(ctx)
         except Exception:  # noqa: BLE001 - a broken resolver must not fail the command
-            return {}
+            return dict(COMMAND_ENV)
         if not isinstance(raw, Mapping):
-            return {}
-        return {
+            return dict(COMMAND_ENV)
+        return COMMAND_ENV | {
             name: value
             for name, value in raw.items()
             if isinstance(name, str)

@@ -20,7 +20,7 @@ import pytest
 from noeta.backends.execenvs import local as local_mod
 from noeta.backends.execenvs.local import LocalExecEnv, send_group_signal
 from noeta.core.execenv import ExecEnv, FileStat, RunResult
-from noeta.toolkit.local_env import ENV_ALLOWLIST, scrub_env
+from noeta.toolkit.local_env import OWN_SECRETS, child_env
 
 
 def _alive(pid: int) -> bool:
@@ -224,33 +224,45 @@ async def test_exactly_at_the_cap_is_not_truncated(env: LocalExecEnv) -> None:
     assert result.stdout == b"abcd" and not result.stdout_truncated
 
 
-async def test_environment_is_scrubbed(
-    env: LocalExecEnv, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+async def test_commands_inherit_the_environment_but_noetas_credentials(
+    env: LocalExecEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("SECRET_TOKEN", "s3cr3t")
-    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:1")
-    code = "import os; print(os.environ.get('SECRET_TOKEN', '-'), os.environ.get('HTTPS_PROXY', '-'), os.environ.get('JOB', '-'))"
-    plain = await env.run([sys.executable, "-c", code])
-    assert plain.stdout.decode().split() == ["-", "-", "-"]
-    widened = LocalExecEnv(str(tmp_path), inherit_env=("HTTPS_PROXY", "NOT_SET_HERE"))
-    out = await widened.run([sys.executable, "-c", code], env={"JOB": "j1"})
-    assert out.stdout.decode().split() == ["-", "http://proxy:1", "j1"]
-    # ``env`` wins over an inherited value.
+    # As in Claude Code: a toolchain's variables reach the command; only
+    # noeta's own credentials stay behind.
+    monkeypatch.setenv("CARGO_HOME", "/opt/cargo")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh")
+    monkeypatch.setenv("NOETA_STORE", "postgresql://noeta:pw@db/noeta")
+    monkeypatch.setenv("NOETA_API_KEY", "sk-noeta")
     monkeypatch.setenv("JOB", "from-host")
-    both = LocalExecEnv(str(tmp_path), inherit_env=("JOB",))
-    won = await both.run([sys.executable, "-c", code], env={"JOB": "from-call"})
-    assert won.stdout.decode().split()[2] == "from-call"
+    code = ("import os; print(*(os.environ.get(k, '-') for k in "
+            "('CARGO_HOME', 'GITHUB_TOKEN', 'NOETA_STORE', 'NOETA_API_KEY', 'JOB')))")
+    out = await env.run([sys.executable, "-c", code], env={"JOB": "from-call"})
+    assert out.stdout.decode().split() == ["/opt/cargo", "gh", "-", "-", "from-call"]
 
 
-def test_scrub_env_is_an_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PATH", "/bin")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
-    scrubbed = scrub_env()
-    assert set(scrubbed) <= ENV_ALLOWLIST
-    assert scrubbed["PATH"] == "/bin"
-    assert "AWS_SECRET_ACCESS_KEY" not in scrubbed
-    assert scrub_env(["PATH"]) == {"PATH": "/bin"}
-    assert scrub_env([], inherit=["AWS_SECRET_ACCESS_KEY"]) == {"AWS_SECRET_ACCESS_KEY": "x"}
+def test_child_env_drops_only_noetas_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in OWN_SECRETS:
+        monkeypatch.setenv(name, "x")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "passed, as Claude Code passes it")
+    child = child_env()
+    assert not OWN_SECRETS & set(child)
+    assert {k: v for k, v in os.environ.items() if k not in OWN_SECRETS} == child
+    assert child["ANTHROPIC_API_KEY"].startswith("passed")
+
+
+def test_libpq_credentials_are_withheld_once_noetas_store_is_postgres(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("psycopg")
+    from noeta.backends.stores.postgres import PostgresStore
+    from noeta.toolkit import local_env
+
+    monkeypatch.setattr(local_env, "_withheld", set())
+    monkeypatch.setenv("PGPASSWORD", "pw")
+    monkeypatch.setenv("PGHOST", "db")
+    assert child_env()["PGPASSWORD"] == "pw"  # the person's own psql, no noeta store on it
+    PostgresStore("postgresql://noeta@db/noeta")
+    env = child_env()
+    assert "PGPASSWORD" not in env and env["PGHOST"] == "db"
 
 
 # -- send_group_signal ---------------------------------------------------------

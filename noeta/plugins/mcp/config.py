@@ -144,7 +144,7 @@ class McpServer:
     Exactly one of ``command`` (a local stdio server: argv, never a shell
     line) and ``url`` (a remote endpoint) is set. ``type`` is the transport
     (:data:`TRANSPORTS`; default ``stdio`` for a command, ``http`` for a
-    url). ``env`` is laid over the scrubbed environment of a stdio server;
+    url). ``env`` is laid over a stdio server's inherited environment;
     ``headers`` are sent with every request to a remote one, under the
     headers ``headers_helper`` (a shell command printing a JSON object)
     gives when a connection opens. All of them are credentials: they live

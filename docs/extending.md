@@ -58,7 +58,8 @@ file that joins no agent is named in a notice.
 
 Arguments come from `~/.noeta/config.toml` `[plugins.<name>]`; `enabled = false` turns a plugin
 off everywhere; `[agents.<name>] add_plugins` adds one without `add_to`. A secret is written as
-`"{env:NAME}"` or `"{keyring:service/user}"` and resolved only when the plugin is made.
+`"{env:NAME}"` or `"{keyring:service/user}"` and resolved only when the plugin is made; a
+variable named this way never reaches a command, hook or MCP server noeta starts.
 
 The four examples are each one file, a short README and a test `make check` runs:
 

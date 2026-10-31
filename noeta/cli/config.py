@@ -60,6 +60,7 @@ from noeta.cli.trust import trust_project as trust_project
 from noeta.core import models, registry
 from noeta.core.execenv import ExecEnv
 from noeta.core.provider import Provider
+from noeta.toolkit.local_env import withhold_env_refs
 from noeta.toolkit.sandbox import SandboxSettings
 
 if TYPE_CHECKING:
@@ -170,6 +171,8 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
     data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
+    # The secrets this config hands to noeta's plugins and channels are its own.
+    withhold_env_refs([data["plugins"], data["channels"], data["add_plugins"]])
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
     if settings.models_file:
@@ -439,11 +442,15 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         qualified.clear()
         qualified.update({f"{p.name}:{a.name}": a.name for p in claude for a in p.agents})
         files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
+        own: list[AgentFile] = []
         if source("user"):
-            files += read_agent_dir(home_dir.HOME / "agents")
+            own += read_agent_dir(home_dir.HOME / "agents")
         if cwd and project_trusted(cwd) and source("project"):
-            files += read_agent_dir(Path(cwd) / ".noeta" / "agents")
-        files += agent_files
+            own += read_agent_dir(Path(cwd) / ".noeta" / "agents")
+        own += agent_files
+        # Secrets noeta's own agent files hand to plugins are noeta's too.
+        withhold_env_refs([f.plugins for f in own])
+        files += own
         from_plugins, plugin_notices = plugin_settings(claude)
         notices.extend(n for n in plugin_notices if n not in notices)
         table = merge_plugin_settings(base, from_plugins, settings.plugins, plugins or {})

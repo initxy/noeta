@@ -44,6 +44,7 @@ from noeta.plugins.mcp.oauth import OAuth, store_for
 from noeta.plugins.mcp.sse_client import SseClient
 from noeta.plugins.mcp.stdio import StdioClient
 from noeta.plugins.mcp.ws_client import WsClient
+from noeta.toolkit.local_env import child_env
 
 __all__ = ["DEFAULT_IDLE_TTL_S", "HELPER_TIMEOUT_S", "McpPool", "connect", "default_pool",
            "helper_headers"]
@@ -67,7 +68,7 @@ async def helper_headers(server: McpServer) -> dict[str, str]:
     stdout must be a JSON object of strings within :data:`HELPER_TIMEOUT_S`.
     A helper that fails is logged and gives no headers (the static ones
     still apply)."""
-    env = {**os.environ, "NOETA_MCP_SERVER_NAME": server.alias,
+    env = {**child_env(), "NOETA_MCP_SERVER_NAME": server.alias,
            "NOETA_MCP_SERVER_URL": server.url}
     try:
         proc = await asyncio.create_subprocess_shell(

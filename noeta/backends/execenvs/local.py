@@ -1,8 +1,10 @@
 """``LocalExecEnv``: the host machine as an ``ExecEnv``.
 
 Commands run as child processes, each leading its own process group, with
-a scrubbed environment and stdin closed. On timeout or cancellation the whole
-group is sent SIGTERM, given a grace period, then SIGKILL — signalling the
+this process's environment minus noeta's own credentials
+(``noeta.toolkit.local_env.child_env``) and stdin closed. On timeout or
+cancellation the whole group is sent SIGTERM, given a grace period, then
+SIGKILL — signalling the
 group is what reaps backgrounded grandchildren (``bash -c "server & wait"``)
 that a single-PID kill would orphan. Captured output is bounded while it is
 read, so a command printing hundreds of MB is never buffered whole.
@@ -29,7 +31,7 @@ from typing import BinaryIO
 
 from noeta.backends.execenvs.sandbox import LocalSandbox
 from noeta.core.execenv import FileStat, RunResult
-from noeta.toolkit.local_env import scrub_env
+from noeta.toolkit.local_env import child_env
 from noeta.toolkit.sandbox import SandboxSettings, sandbox_settings
 
 __all__ = ["LocalExecEnv", "send_group_signal"]
@@ -236,8 +238,7 @@ class LocalExecEnv:
     """The default ``ExecEnv``: the local filesystem and subprocesses.
 
     ``cwd`` is the workspace directory relative paths resolve against.
-    ``inherit_env`` names host variables commands inherit past
-    :data:`ENV_ALLOWLIST`. ``kill_grace`` is the SIGTERM -> SIGKILL window.
+    ``kill_grace`` is the SIGTERM -> SIGKILL window.
     ``sandbox`` — Claude Code's ``sandbox`` settings (a mapping, or
     :class:`SandboxSettings`); when they enable it, :attr:`sandbox` confines
     the commands the shell tools run.
@@ -250,13 +251,11 @@ class LocalExecEnv:
         self,
         cwd: str,
         *,
-        inherit_env: Sequence[str] = (),
         kill_grace: float = KILL_GRACE_S,
         sandbox: SandboxSettings | Mapping[str, object] | None = None,
     ) -> None:
         self.cwd = os.path.abspath(cwd)
         settings = sandbox_settings(sandbox, base_dir=self.cwd)
-        self.inherit_env = tuple(inherit_env)
         self.kill_grace = kill_grace
         self.sandbox: LocalSandbox | None = (
             LocalSandbox(settings, self.cwd) if settings is not None and settings.enabled
@@ -279,7 +278,7 @@ class LocalExecEnv:
     ) -> RunResult:
         if not argv:
             raise ValueError("argv must not be empty")
-        full_env = {**scrub_env(inherit=self.inherit_env), **(env or {})}
+        full_env = {**child_env(), **(env or {})}
         out_r, out_w = os.pipe()
         err_r, err_w = os.pipe()
         in_r, in_w = os.pipe() if stdin is not None else (None, None)

@@ -104,7 +104,7 @@ def _last_written(directory: str) -> float:
 async def prepare_log_dir(env: ExecEnv, log_dir: str) -> str:
     """Make or check ``env``'s private log directory (``log_dir``, empty for
     the per-user default) and return this worker's directory in it."""
-    # The env's own variables may be scrubbed: on this machine, ours.
+    # On this machine the env's TMPDIR is ours.
     base = (os.environ.get("TMPDIR") or "") if is_local(env) else ""
     result = await env.run(["sh", "-c", _PREPARE_DIR, "sh", log_dir, base,
                             worker_dir()], timeout=10, output_cap=8192)
