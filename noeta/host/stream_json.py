@@ -320,7 +320,7 @@ class StreamJson(ControlRequests):
         """A prompt from the client. One that arrives while another's work
         is open waits for its result, so every prompt gets its own (as
         Claude Code queues them)."""
-        if self._turn is not None or self._queued:
+        if self._turn is not None or self._finishing or self._queued:
             self._queued.append((message, prompt_uuid))
             return
         await self._send_now(message, prompt_uuid)
