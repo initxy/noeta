@@ -489,6 +489,17 @@ async def test_session_end_and_notification(tmp_path: Path) -> None:
     assert note["message"] == "Noeta needs your permission to use Read"
 
 
+async def test_stop_runs_when_a_turn_ends_on_an_empty_reply(tmp_path: Path) -> None:
+    # Claude Code 2.1.312 runs Stop once the asked-again reply is empty too,
+    # with no last_assistant_message.
+    s = await Setup(tmp_path, {"Stop": hook("stop")}, [reply(""), reply("")],
+                    answers={"stop": HookResult(0)}).start()
+    assert len(s.provider.requests) == 2
+    [payload] = s.runner.payloads("stop")
+    assert payload["stop_hook_active"] is False
+    assert "last_assistant_message" not in payload
+
+
 async def test_http_hook_end_to_end(tmp_path: Path) -> None:
     seen: list[dict[str, Any]] = []
 

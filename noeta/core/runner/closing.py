@@ -1,6 +1,7 @@
-"""Closing a turn or the task: stop a turn, fail it, end the task, and
-continue a reply cut at the output cap. Every way out answers the calls
-still open, so the conversation never keeps a call without a result."""
+"""Closing a turn or the task: stop a turn, fail it, end the task,
+continue a reply cut at the output cap, and ask again after an empty one.
+Every way out answers the calls still open, so the conversation never keeps
+a call without a result."""
 
 from __future__ import annotations
 
@@ -117,4 +118,22 @@ async def continue_after_cap(run: TaskRun, *, thinking_only: bool = False) -> bo
         else texts.OUTPUT_LIMIT_RESUME_NUDGE
     await run.append([core_records.event(core_records.Continue(),
                                          message=user(nudge, origin="system"))])
+    return True
+
+
+async def after_empty_reply(run: TaskRun) -> bool:
+    """The model ended its reply with no text and no tool call (reasoning
+    alone counts as nothing). The reply is not recorded; the model is asked
+    to go on, once per step: asked already since its last reply or the
+    last input, the turn ends without an answer, as in Claude Code. The
+    nudge is plain text in the user's turn, as Claude Code sends it."""
+    for m in reversed(run.state.messages):
+        if m.role == "user" and m.origin == "inline" and m.text == texts.EMPTY_REPLY_NUDGE:
+            await run.append([core_records.event(
+                core_records.TurnDone(reason=core_records.EMPTY_REPLY))])
+            return True
+        if m.role == "assistant" or m.from_person:
+            break
+    await run.append([core_records.event(core_records.Continue(),
+                                         message=user(texts.EMPTY_REPLY_NUDGE, origin="inline"))])
     return True

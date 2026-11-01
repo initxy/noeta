@@ -73,7 +73,8 @@ class Retry(Struct):
 
 
 class Continue(Struct):
-    """The model hit its output limit; the entry's message asks it to go on."""
+    """The model hit its output limit, or replied with nothing; the entry's
+    message asks it to go on."""
 
     kind: ClassVar[str] = "continue"
 
@@ -134,17 +135,25 @@ class TurnFailed(Struct):
         return f"{self.reason}: {self.detail}" if self.detail else str(self.reason)
 
 
+#: ``TurnDone.reason`` of a turn the model ended with nothing, asked to go on.
+EMPTY_REPLY = "empty_reply"
+
+
 class TurnDone(Struct):
-    """A ``before_model`` ended the turn without a model call."""
+    """The turn ended without a reply: a ``before_model`` ended it, or
+    (``reason`` ``empty_reply``) the model replied with nothing again after
+    it was asked to go on."""
 
     kind: ClassVar[str] = "turn_done"
+    reason: str | None = None
 
-    def data(self) -> None:
-        return None
+    def data(self) -> dict[str, Any] | None:
+        return {"reason": self.reason} if self.reason else None
 
     @classmethod
     def parse(cls, data: Any) -> TurnDone:
-        return cls()
+        reason = _fields(data).get("reason")
+        return cls(reason=reason if isinstance(reason, str) else None)
 
 
 class Erased(Struct):

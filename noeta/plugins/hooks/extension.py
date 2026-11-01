@@ -13,6 +13,7 @@ from typing import Any, Literal
 import httpx
 import msgspec
 
+from noeta.core import records
 from noeta.core.errors import TurnFailed
 from noeta.core.events import (
     Compacted,
@@ -389,6 +390,10 @@ class Hooks(Extension):
                 await self._cwd_changed(view, event.data)
             elif event.extension == INSTRUCTIONS_PLUGIN:
                 await self._instructions_record(view, event.kind, event.data)
+            elif event.extension == "core" and event.kind == "turn_done":
+                data = event.data if isinstance(event.data, dict) else {}
+                if data.get("reason") == records.EMPTY_REPLY:
+                    await self._turn_ended(view, None)
             elif event.extension == "core" and event.kind == "turn_failed":
                 data = event.data if isinstance(event.data, dict) else {}
                 await self._stop_failure(view, str(data.get("reason") or ""),
@@ -543,12 +548,17 @@ class Hooks(Extension):
         response = event.response
         if response.message.tool_uses or response.stop_reason != "end_turn":
             return
+        await self._turn_ended(view, _text(response.message))
+
+    async def _turn_ended(self, view: TaskView, last: str | None) -> None:
+        """Stop (SubagentStop in a sub-agent) at the end of a turn; ``last``
+        is ``None`` when the turn ended on an empty reply."""
         name = "SubagentStop" if view.state.parent_id is not None else "Stop"
-        reason = await self._stop(name, view, _text(response.message))
+        reason = await self._stop(name, view, last)
         if reason is not None and view.post is not None:
             await view.post(Say(message=user(reason, origin="system"), when="now"))
 
-    async def _stop(self, event: str, view: TaskView, last: str) -> str | None:
+    async def _stop(self, event: str, view: TaskView, last: str | None) -> str | None:
         """Run Stop / SubagentStop hooks; the reason to go on, or ``None``."""
         if event not in self.matchers:
             return None
@@ -561,8 +571,9 @@ class Hooks(Extension):
             log.warning("task %s: %s hooks blocked %d times in a row; letting it stop",
                         view.task_id, event, blocks)
             return None
-        payload: dict[str, Any] = {"stop_hook_active": blocks > 0,
-                                   "last_assistant_message": last}
+        payload: dict[str, Any] = {"stop_hook_active": blocks > 0}
+        if last is not None:
+            payload["last_assistant_message"] = last
         if event == "SubagentStop":
             payload.update(agent_fields(view), agent_transcript_path="")
         reads = await self._d.run(event, view, payload, transcript=_answered(view.state.messages))

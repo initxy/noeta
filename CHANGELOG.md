@@ -9,6 +9,15 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **An empty reply no longer fails the turn; the model is asked to go on, as in Claude Code.**
+  A reply that ends (`end_turn`) with no text and no tool call (no content, empty text, or
+  reasoning only) is still not recorded; the next request ends with Claude Code's one-line
+  nudge as plain text in the user's turn, once per step (again after each tool round). An empty
+  reply after the nudge ends the turn quietly: no `llm_empty_response`, the answer is empty,
+  `-p` reports `success` and exits 0, and Stop / SubagentStop hooks run without
+  `last_assistant_message` (the log gets `turn_done` with `reason: "empty_reply"`). Other stop
+  reasons with an empty reply still fail with `llm_empty_response`. Three Terminal-Bench 4.0
+  trials on DeepSeek V4.1 Flash had ended mid-task on one empty reply.
 - **Commands inherit noeta's environment, as in Claude Code.** `Bash`, background jobs,
   command hooks, stdio MCP servers and MCP `headersHelper`s started on this machine get the
   whole process environment except noeta's own credentials (`NOETA_API_KEY`, `NOETA_STORE`,
