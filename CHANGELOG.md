@@ -9,6 +9,55 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Context audit closure: what the model sees follows Claude Code 2.1.312 where it differed
+  without a written reason** (spec `2026-11-02-context-audit-closure`; kept differences are rows
+  in `parity/deviations.md`, which now has a pi / dsh column and no "Not yet matched" section).
+  - Environment: the git checkout is found from a working directory below its top ("Is a git
+    repository" true, git snapshot sent); the status is cut at 2,000 characters with a note; the
+    Shell line names the `bash` commands run in (plus the login shell when it differs); the
+    date-change note is checked before every model call; after a compaction the git snapshot is
+    taken again.
+  - Files: the changed-file note watches every remembered read file (up to 5,000) in one batch
+    (new optional `ExecEnv.stat_many`; one `docker exec` per ~100 KB of paths on a container);
+    UTF-16LE files are read and written in their encoding and a UTF-8 byte-order mark is kept;
+    not-text files (UTF-16BE, early NUL bytes, invalid UTF-8) are shown by `Read` with a note and
+    refused by `Edit` / `Write` / `NotebookEdit`; a file a read-only `Bash` command showed (`cat`,
+    `head`, `tail`, `sed -n`, a matching `grep`) counts as read and is restored after a compaction.
+  - MCP: tool descriptions are cut at 4,096 characters plus `… [truncated]` (16,384 once loaded
+    through `ToolSearch`; `NOETA_MAX_MCP_DESCRIPTION_LENGTH`); prompts, resources and the resource
+    tools are no longer cut at 64 KB; a result between half and four times its budget is counted by
+    the provider where it can; prompt commands keep embedded resource text.
+  - `WebFetch` asks for Markdown first and returns a preapproved documentation site's Markdown
+    without a digest; the digest request follows Claude Code's order and rules (quote cap, no
+    verbatim copying, no legality remarks, no lyrics; looser rules for documentation sites).
+  - Side requests (title, plan name, digest) open with the identity line, use the model's output
+    ceiling and the task's effort, and leave `thinking` out on Anthropic models; a plan is named
+    once approved.
+  - Headless: `-p` and stream-json tasks are not interactive (task config `interactive`,
+    `permission_prompt_tool`): no title request, `AskUserQuestion` only when the client answers
+    prompts. `per-turn-control-2026-07-01` goes only to models with per-turn effort. A stream-json
+    client's `initialize.hooks` run (`hook_callback`), and `--permission-prompt-tool
+    mcp__<server>__<tool>` answers permission requests.
+  - **Breaking:** structured output goes through a `StructuredOutput` tool (`--json-schema`,
+    `initialize.jsonSchema`, the HTTP `output_schema`, workflow `agent({schema})`), with one
+    reminder and a cap of five refused calls (`error_max_structured_output_retries`); the main
+    conversation no longer sends the provider's `output_schema`, `Agent.output_schema` needs the
+    `structured_output` plugin (every agent built from agent files has it), and
+    `structured_answer()` returns the accepted call's value instead of parsing each turn's text.
+  - `AskUserQuestion` may be left partly or wholly unanswered.
+  - Skills: a Claude Code plugin's skills are `<plugin>:<skill directory>`, its agents and commands
+    `<plugin>:[<subdir>:]<name>` (the settings `agent` key needs the full name); a nested skill that
+    shares a name is offered as `<dir>:<name>`; in auto mode a skill's `` !`cmd` `` that would be
+    asked about is left to the model; a typed `/<name>` of a `context: fork` skill starts its agent
+    with no model call; a skill given again after a compaction names its source.
+  - Sub-agents: prompts end with the token budget line; general-purpose sees its caller's
+    `MEMORY.md` index; the auto-mode classifier for a sub-agent without instructions sees its root
+    task's; an agent file's `omitClaudeMd` keeps the managed instruction files.
+  - A background job's notice that arrives during a turn is a system turn after the tool results;
+    Anthropic requests add Claude Code's newline where two user messages are joined.
+  - Providers: an Anthropic stream that breaks after it began goes on as a non-streaming call
+    (`max_tokens` at most 64,000, 300 s), as Claude Code does for every call; a summarize call that
+    is too long drops only as many old rounds as the error says it is over.
 - **An empty reply no longer fails the turn; the model is asked to go on, as in Claude Code.**
   A reply that ends (`end_turn`) with no text and no tool call (no content, empty text, or
   reasoning only) is still not recorded; the next request carries Claude Code's one-line
