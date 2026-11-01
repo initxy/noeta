@@ -986,3 +986,22 @@ async def test_only_scoped_skills_of_a_name_are_named_when_the_bare_name_is_call
         "There is no skill named deploy. Skills of that name scoped to directories exist: "
         "apps/api:deploy, apps/web:deploy. Call the one whose directory holds the files you "
         "are working on.")
+
+
+def test_a_skill_given_again_after_a_compaction_says_where_it_comes_from() -> None:
+    """Claude Code's ``Path: <source>:<name>`` in the re-attached skills."""
+    skills = Skills(plugin_dirs={"/plug/skills": "tools"})
+
+    def desc(name: str, path: str) -> SkillDescription:
+        return SkillDescription(name=name, description="d", body="b", source_path=path)
+
+    found = {"ws": (desc("ws", "/w/.noeta/skills/ws/SKILL.md"), 4),
+             "below": (desc("below", "/w/apps/.noeta/skills/below/SKILL.md"), 5),
+             "mine": (desc("mine", "/home/u/.agents/skills/mine/SKILL.md"), 1),
+             "tools:p": (desc("tools:p", "/plug/skills/p/SKILL.md"), 0),
+             "given": (desc("given", "/host/skills/given/SKILL.md"), 0)}
+    registry = SkillRegistry({n: d for n, (d, _) in found.items()},
+                             {n: t for n, (_, t) in found.items()})
+    assert {n: skills._source(d, registry) for n, (d, _) in found.items()} == {
+        "ws": "workspace", "below": "workspace", "mine": "user", "tools:p": "plugin",
+        "given": "host"}

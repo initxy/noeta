@@ -948,13 +948,29 @@ class Skills(Extension):
                     if used + size > INVOKED_SKILLS_BUDGET_TOKENS:
                         continue
                     used += size
-                    parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
-                                 f"\n\n{text}")
+                    parts.append(f"### Skill: {desc.name}\n"
+                                 f"Path: {self._source(desc, registry)}:{desc.name}\n\n{text}")
             if len(parts) > 1 and view.keeps_tail is not None:
                 view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
         if view.keeps_tail is not None and state.get("listings"):
             view.record(self.name, "listing_rehold", {})
         return out
+
+    def _source(self, desc: SkillDescription, registry: SkillRegistry) -> str:
+        """Where a skill comes from, the label ahead of its name when it is
+        given again after a compaction (Claude Code's ``<source>:<name>``):
+        ``workspace`` (the workspace's own directories and those below the
+        working directory), ``user`` (the user's directories), ``plugin``
+        or ``host`` (the directories the host passed)."""
+        tier = registry.tier_of(desc.name)
+        if tier >= 3:
+            return "workspace"
+        if tier >= 1:
+            return "user"
+        source = desc.source_path or ""
+        if any(source.startswith(d.rstrip("/") + "/") for d in self.plugin_dirs):
+            return "plugin"
+        return "host"
 
 
 def _cut_skill(text: str) -> str:
