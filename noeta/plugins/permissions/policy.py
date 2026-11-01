@@ -61,7 +61,7 @@ DEFAULT_RISK: Mapping[str, str] = {
     "ScheduleWakeup": "low",
     "ReportFindings": "low",
     "Workflow": "low",
-    "structured_output": "low",
+    "StructuredOutput": "low",
 }
 
 #: Tools auto mode lets through without the classifier (they read, or only
@@ -71,8 +71,13 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
     "Read", "Glob", "Grep", "LS", "NotebookRead", "ToolSearch", "Skill", "AskUserQuestion",
     "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
     "ListAgents", "TaskStop",
-    "structured_output", "ReportFindings", "ScheduleWakeup",
+    "StructuredOutput", "ReportFindings", "ScheduleWakeup",
 })
+
+#: Tools an allowlist (``--tools``, ``allowed_tools``) never removes: how the
+#: harness takes the answer, not a capability (Claude Code adds
+#: ``StructuredOutput`` after filtering its tools).
+HARNESS_TOOLS: frozenset[str] = frozenset({"StructuredOutput"})
 
 #: Tools that run or manage shell commands alongside ``Bash``; disallowing
 #: ``Bash`` removes them too.

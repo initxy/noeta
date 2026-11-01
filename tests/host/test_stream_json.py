@@ -24,6 +24,8 @@ from noeta.core.types import ToolUse, Usage
 from noeta.host.local import LocalApp
 from noeta.host.stream_json import HeadlessOptions, StreamJson, drive
 from noeta.plugins.ask_user import AskUser
+from noeta.plugins.structured_output import StructuredOutput
+from noeta.plugins.title import Title
 from noeta.testing import ScriptedProvider, reply
 
 MODEL = "claude-opus-5-5"
@@ -118,19 +120,34 @@ def test_the_sdk_command_line_over_stdin(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_print_mode_text_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                   capsys: pytest.CaptureFixture[str]) -> None:
-    agent = Agent(name="main", model=MODEL)
+    agent = Agent(name="main", model=MODEL, extensions=[StructuredOutput()])
     monkeypatch.setenv("NOETA_HOME", str(tmp_path / "home"))
-    provider = ScriptedProvider([reply("plain answer"), reply('{"n": 3}')])
+    provider = ScriptedProvider([reply("plain answer"),
+                                 reply("", ("StructuredOutput", {"n": 3})),
+                                 reply("counted", ("StructuredOutput", {"n": 4}))])
     monkeypatch.setattr(cli, "_app", lambda s, cwd=None, **kw: local(tmp_path, provider, agent))
     with pytest.raises(SystemExit) as done:
         cli.main(["-p", "what?", "--model", MODEL, "--cwd", str(tmp_path)])
     assert done.value.code == 0 and capsys.readouterr().out.strip() == "plain answer"
+    assert "StructuredOutput" not in [t.name for t in provider.requests[0].tools]
+    schema = {"type": "object", "properties": {"n": {"type": "integer"}}}
     with pytest.raises(SystemExit) as done:
-        cli.main(["-p", "--output-format", "json", "--json-schema", '{"type": "object"}',
+        cli.main(["-p", "--output-format", "json", "--json-schema", json.dumps(schema),
                   "count", "--model", MODEL, "--cwd", str(tmp_path)])
     result = json.loads(capsys.readouterr().out)
     assert done.value.code == 0 and result["structured_output"] == {"n": 3}
-    assert provider.requests[-1].output_schema == {"type": "object"}
+    # Claude Code's: the reply's text, else the value's compact JSON.
+    assert result["result"] == '{"n":3}' and result["subtype"] == "success"
+    [tool] = [t for t in provider.requests[-1].tools if t.name == "StructuredOutput"]
+    assert tool.input_schema == schema and provider.requests[-1].output_schema is None
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "--json-schema", json.dumps(schema), "count again", "--model", MODEL,
+                  "--cwd", str(tmp_path)])
+    assert done.value.code == 0 and capsys.readouterr().out.strip() == "counted"
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "--json-schema", "{not json", "x", "--model", MODEL])
+    assert done.value.code == 1
+    assert "--json-schema is not a valid JSON Schema" in capsys.readouterr().err
     with pytest.raises(SystemExit) as done:
         cli.main(["-p", "--output-format", "stream-json", "x", "--model", MODEL])
     assert done.value.code == 1 and "requires --verbose" in capsys.readouterr().err
@@ -442,3 +459,89 @@ async def test_a_running_tool_reports_claude_codes_tool_progress(tmp_path: Path)
         assert not [m for m in c.out if m["type"] == "stream_event"]  # no partials asked
         await c.inbox.put(None)
         await running
+
+
+# ------------------------------------------------------------ not interactive
+
+
+def _tool_names(request: Any) -> list[str]:
+    return [t.name for t in request.tools]
+
+
+async def test_a_headless_task_is_not_interactive(tmp_path: Path) -> None:
+    """As Claude Code's print and SDK sessions: no title side request, and
+    ``AskUserQuestion`` only when the client answers prompts."""
+    from noeta.core.types import Message, Text
+
+    provider = ScriptedProvider([reply("first"), reply("second")])
+    agent = Agent(name="main", model=MODEL, extensions=[AskUser(), Title()])
+    app = local(tmp_path, provider, agent)
+    prompt = Message(role="user", content=[Text(text="name this task please")],
+                     origin="human")
+    async with app:
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path)), Client().emit)
+        await asyncio.wait_for(drive(conv, prompt=prompt), 10)
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path), ask_client=True),
+                          Client().emit)
+        await asyncio.wait_for(drive(conv, prompt=prompt), 10)
+    # Two main requests and no title request.
+    assert len(provider.requests) == 2
+    assert "AskUserQuestion" not in _tool_names(provider.requests[0])
+    assert "AskUserQuestion" in _tool_names(provider.requests[1])
+
+
+async def test_resuming_headless_sets_this_runs_config(tmp_path: Path) -> None:
+    from noeta.core.types import Message, Text
+
+    provider = ScriptedProvider([reply("in the terminal"),
+                                 reply("", ("StructuredOutput", {"a": 1})), reply("plain")])
+    agent = Agent(name="main", model=MODEL, extensions=[AskUser(), StructuredOutput()])
+    app = local(tmp_path, provider, agent)
+    prompt = Message(role="user", content=[Text(text="go")], origin="human")
+    async with app:
+        tid = await app.client.create("main", "start", config={"cwd": str(tmp_path)})
+        await app.client.wait(tid, timeout=10)
+        options = HeadlessOptions(model=MODEL, cwd=str(tmp_path), resume=tid,
+                                  output_schema={"type": "object"})
+        result = await asyncio.wait_for(drive(StreamJson(app, options, Client().emit),
+                                              prompt=prompt), 10)
+        assert result is not None and result["structured_output"] == {"a": 1}
+        options = HeadlessOptions(model=MODEL, cwd=str(tmp_path), resume=tid, ask_client=True)
+        result = await asyncio.wait_for(drive(StreamJson(app, options, Client().emit),
+                                              prompt=prompt), 10)
+        assert result is not None and "structured_output" not in result
+    names = [_tool_names(r) for r in provider.requests]
+    assert "AskUserQuestion" in names[0] and "StructuredOutput" not in names[0]
+    assert "AskUserQuestion" not in names[1] and "StructuredOutput" in names[1]
+    assert "AskUserQuestion" in names[2] and "StructuredOutput" not in names[2]
+
+
+async def test_structured_output_over_the_protocol(tmp_path: Path) -> None:
+    """The client's ``initialize`` ``jsonSchema`` (the SDK's ``outputFormat``),
+    and Claude Code's result when the model keeps failing the schema."""
+    schema = {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}
+    bad = [reply("", ("StructuredOutput", {"n": "x"})) for _ in range(5)]
+    provider = ScriptedProvider([reply("ok", ("StructuredOutput", {"n": 1})), *bad])
+    app = local(tmp_path, provider, Agent(name="main", model=MODEL,
+                                          extensions=[StructuredOutput()]))
+    c = Client()
+    async with app:
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path)), c.emit)
+        running = asyncio.create_task(drive(conv, lines=c.lines()))
+        c.control("init", subtype="initialize", jsonSchema=schema)
+        c.say("count")
+        first = await c.until(lambda m: m["type"] == "result")
+        assert first["structured_output"] == {"n": 1} and first["result"] == "ok"
+        c.say("count badly")
+        last = await c.until(lambda m: m["type"] == "result" and m["is_error"])
+        assert last["subtype"] == "error_max_structured_output_retries"
+        assert last["errors"][0].startswith("StructuredOutput was called 5 times")
+        assert "structured_output" not in last
+        c.control("bad", subtype="initialize", jsonSchema=[1])
+        await c.until(lambda m: m.get("response", {}).get("request_id") == "bad")
+        await c.inbox.put(None)
+        await asyncio.wait_for(running, 10)
+    [refused] = [m["response"] for m in c.out if m["type"] == "control_response"
+                 and m["response"]["request_id"] == "bad"]
+    assert refused["subtype"] == "error" and "jsonSchema" in refused["error"]
+    assert len(provider.requests) == 6

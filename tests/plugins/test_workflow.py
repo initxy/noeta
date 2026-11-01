@@ -22,6 +22,7 @@ from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, TaskCreated, ToolFinished
 from noeta.core.runner import Runtime
 from noeta.core.types import ModelRequest, ModelResponse
+from noeta.plugins.structured_output import StructuredOutput
 from noeta.plugins.workflow import Orchestration
 from noeta.plugins.workflow import engine as engine_module
 from noeta.plugins.workflow.engine import Engine
@@ -54,21 +55,25 @@ async def _no_sleep(_: float) -> None:
 
 
 class Model:
-    """The parent's turns are scripted; a workflow agent answers its prompt."""
+    """The parent's turns are scripted; a workflow agent answers its prompt
+    (a counting one through ``StructuredOutput``, unless ``text_counts``)."""
 
     family = "scripted"
 
-    def __init__(self, *main: ModelResponse) -> None:
+    def __init__(self, *main: ModelResponse, text_counts: bool = False) -> None:
         self.main = list(main)
         self.parent: list[ModelRequest] = []
         self.children: list[ModelRequest] = []
+        self.text_counts = text_counts
 
     async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
         first = request.messages[0].text if request.messages else ""
         if first.startswith("count "):
             self.children.append(request)
             word = first.split()[1]
-            return reply(json.dumps({"n": len(word)}))
+            if self.text_counts:
+                return reply(json.dumps({"n": len(word)}))
+            return reply("", ("StructuredOutput", {"n": len(word)}))
         if first.startswith("sum "):
             self.children.append(request)
             nums = first.split()[1].split(",")
@@ -80,7 +85,8 @@ class Model:
 def runtime(store: SqliteStore, model: Model, ext: Orchestration,
             env: Any = None) -> Runtime:
     main = Agent(name="main", model="m", extensions=[ext])
-    worker = Agent(name="general-purpose", model="m", description="worker")
+    worker = Agent(name="general-purpose", model="m", description="worker",
+                   extensions=[StructuredOutput()])
     return Runtime(store=store, agents={"main": main, "general-purpose": worker},
                    provider_for=lambda _m: model, env_for=lambda _s: env,
                    sleep=_no_sleep)
@@ -124,11 +130,14 @@ async def test_a_workflow_runs_its_agents_and_notifies_its_end(store: SqliteStor
     events = [r.event for r in await client.events(tid)]
     started = next(e for e in events if isinstance(e, ToolFinished))
     assert "started in the background as wf_" in started.result.text
-    # Two counting agents (schema-typed: output_schema in their config), then the sum.
+    # Two counting agents (schema-typed: StructuredOutput takes their answer), then the sum.
     assert len(model.children) == 3
-    assert model.children[0].output_schema == {"type": "object",
-                                               "properties": {"n": {"type": "number"}},
-                                               "required": ["n"]}
+    [tool] = [t for t in model.children[0].tools if t.name == "StructuredOutput"]
+    assert tool.input_schema == {"type": "object", "properties": {"n": {"type": "number"}},
+                                 "required": ["n"]}
+    assert model.children[0].output_schema is None
+    assert "calling the StructuredOutput tool once" in model.children[0].messages[0].text
+    assert not any(t.name == "StructuredOutput" for t in model.children[2].tools)
     assert model.children[2].messages[0].text.startswith("sum 2,4")
     notice = model.parent[-1].messages[-1].text
     assert "<task-notification>" in notice and "<status>completed</status>" in notice
@@ -161,6 +170,24 @@ async def test_resume_reuses_finished_agents(store: SqliteStore) -> None:
     # Only the new item's count and the new sum ran.
     assert [c.messages[0].text.split("\n")[0] for c in model.children[before:]] == [
         "count xyz", "sum 2,4,3"]
+
+
+async def test_a_schema_agent_that_never_calls_structured_output_fails(
+        store: SqliteStore) -> None:
+    script = ("export const meta = {name: 'one', description: 'd'}\n"
+              "return await agent('count ab', {schema: {type: 'object', properties: {n: {type: 'number'}}}})\n")
+    model = Model(reply("", ("Workflow", {"script": script})),
+                  reply("started"), reply("done"), text_counts=True)
+    rt = runtime(store, model, Orchestration(engine=Engine()))
+    client = Client(store)
+    tid = await client.create("main", "use a workflow")
+    await rt.run_until_idle()
+    # The JSON in its text is not taken: it was reminded once, then failed.
+    counts = [c for c in model.children if c.messages[0].text.startswith("count ")]
+    assert len(counts) == 2 and "[structured-output-enforce]" in counts[1].messages[-1].text
+    failed = [e for e in (r.event for r in await client.events(tid))
+              if isinstance(e, ExtensionRecorded) and e.kind == "agent_failed"]
+    assert len(failed) == 1
 
 
 class _RemoteEnv(LocalExecEnv):

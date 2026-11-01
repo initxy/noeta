@@ -223,13 +223,42 @@ async def test_api_key_request_settings_follow_claude_code() -> None:
     root = uuid.uuid4().hex
     await _provider(device_id="d" * 64).complete(_req(model=_VISION_MODEL, root_id=root))
     sent = json.loads(route.calls.last.request.content)
-    assert route.calls.last.request.headers["anthropic-beta"] == ",".join(DEFAULT_BETAS)
+    # claude-opus-4-8 has no per-turn effort: Claude Code leaves that beta out.
+    assert route.calls.last.request.headers["anthropic-beta"] == ",".join(
+        b for b in DEFAULT_BETAS if b != "per-turn-control-2026-07-01")
     assert sent["thinking"] == {"type": "adaptive", "display": "updates"}
     assert sent["context_management"] == {
         "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
     assert sent["output_config"] == {"effort": "medium"}
     assert json.loads(sent["metadata"]["user_id"]) == {
         "device_id": "d" * 64, "account_uuid": "", "session_id": str(uuid.UUID(root))}
+
+
+@respx.mock
+@pytest.mark.parametrize(("model", "sent"), [
+    ("claude-opus-5-5", True), ("claude-opus-5-5[1m]", True),
+    ("us.anthropic.claude-sonnet-5-5-v1:0", True), ("claude-haiku-5-5", True),
+    ("claude-fable-5-1", True), ("claude-opus-5", False), ("claude-sonnet-4-6", False),
+    ("auto_model/alwaysday1_max", False), ("gpt-5.4", False)])
+async def test_the_per_turn_beta_goes_only_with_models_that_have_per_turn_effort(
+        model: str, sent: bool) -> None:
+    from noeta.backends.providers.anthropic import DEFAULT_BETAS, PER_TURN_BETA
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    await _provider().complete(_req(model=model, max_tokens=100))
+    betas = route.calls.last.request.headers["anthropic-beta"].split(",")
+    assert (PER_TURN_BETA in betas) is sent
+    assert [b for b in betas if b != PER_TURN_BETA] == [
+        b for b in DEFAULT_BETAS if b != PER_TURN_BETA]
+
+
+@respx.mock
+async def test_a_beta_set_the_host_chose_is_sent_as_given() -> None:
+    from noeta.backends.providers.anthropic import PER_TURN_BETA
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    await _provider(betas=("one", PER_TURN_BETA)).complete(_req(model="gpt-5.4", max_tokens=9))
+    assert route.calls.last.request.headers["anthropic-beta"] == f"one,{PER_TURN_BETA}"
 
 
 # ---------------------------------------------------------------------------

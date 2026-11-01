@@ -30,10 +30,13 @@ from noeta.core.events import Answer
 from noeta.core.extension import Extension, TaskView
 from noeta.core.questions import AnswerValidationError, normalize_answer
 from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
+from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY, can_ask
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
+
+    from noeta.core.loop.state import TaskState
 
 __all__ = [
     "ASK_USER_QUESTION_TOOL",
@@ -371,7 +374,10 @@ class AskUserQuestionTool:
 
 
 class AskUser(Extension):
-    """Offers ``AskUserQuestion``. No constructor arguments."""
+    """Offers ``AskUserQuestion`` where a question can be answered: in a task
+    a person follows, or whose client answers prompts (Claude Code offers it
+    in a non-interactive session only with a permission prompt tool). Child
+    tasks inherit the task's say on that. No constructor arguments."""
 
     name = "ask_user"
 
@@ -379,4 +385,8 @@ class AskUser(Extension):
         self._tools: list[Tool] = [AskUserQuestionTool()]
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        return self._tools
+        return self._tools if can_ask(view.state.config) else ()
+
+    def inherit(self, state: TaskState) -> Mapping[str, Any]:
+        return {k: state.config[k] for k in (INTERACTIVE_KEY, PROMPT_TOOL_KEY)
+                if k in state.config}

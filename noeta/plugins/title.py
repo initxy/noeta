@@ -1,6 +1,8 @@
 """A task's title, asked of the model as Claude Code names a session: once,
 from the first prompt that says something (at least 10 characters), in a
-side request sent beside the main one.
+side request sent beside the main one. A task nobody follows live
+(``interactive: false``, the headless protocol) is not named, as Claude Code
+names no session in print mode.
 
 The title is recorded as ``("title", "title", {"title": ...})``; front ends
 read it from the task's events. A failed request leaves the task untitled.
@@ -17,6 +19,7 @@ from typing import Any
 from noeta.core.events import External, InputTaken, Recorded, Say
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ModelRequest, SystemPart, user
+from noeta.toolkit.interactive import interactive
 
 __all__ = ["PROMPT", "Title", "title_of"]
 
@@ -73,7 +76,8 @@ class Title(Extension):
                 if title and not title_of(st):
                     view.record(self.name, "title", {"title": title})
             elif isinstance(body, Say) and body.message.origin in (None, "human") \
-                    and not st.get("asked") and not view.state.parent_id:
+                    and not st.get("asked") and not view.state.parent_id \
+                    and interactive(view.state.config):
                 text = body.message.text.strip()
                 if len(text) < MIN_PROMPT_CHARS or view.complete is None or view.post is None:
                     continue

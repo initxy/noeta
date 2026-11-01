@@ -60,7 +60,7 @@ from noeta.core.errors import Fatal
 from noeta.core.provider import OnDelta
 from noeta.core.types import ModelRequest, ModelResponse
 
-__all__ = ["DEFAULT_BETAS", "FAMILY", "AnthropicProvider"]
+__all__ = ["DEFAULT_BETAS", "FAMILY", "PER_TURN_BETA", "AnthropicProvider", "per_turn_model"]
 
 _API_VERSION_DEFAULT = "2023-06-01"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
@@ -82,6 +82,21 @@ DEFAULT_BETAS: tuple[str, ...] = (
     "effort-2025-11-24",
     "thinking-display-updates-2026-08-18",
 )
+#: Claude Code sends this beta of its set only for a model whose catalog row
+#: has the ``per_turn_effort`` capability (2.1.312: the four below, matched
+#: in the id as it matches its Claude models: ``claude-opus-5-5[1m]``,
+#: ``us.anthropic.claude-opus-5-5-v1:0``).
+PER_TURN_BETA = "per-turn-control-2026-07-01"
+PER_TURN_MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5",
+                   "claude-fable-5-1")
+
+
+def per_turn_model(model: str) -> bool:
+    """Whether Claude Code sends :data:`PER_TURN_BETA` with ``model``."""
+    real = models.resolve_alias(model).lower()
+    return any(known in real for known in PER_TURN_MODELS)
+
+
 #: Effort sent with adaptive thinking when the request names none.
 _DEFAULT_EFFORT = "medium"
 
@@ -142,6 +157,10 @@ class AnthropicProvider:
         if extra_headers:
             headers.update(extra_headers)
         self._betas = headers.get("anthropic-beta", "")
+        #: Claude Code's set, so its per-model rule applies (a set the host
+        #: chose is sent as given).
+        self._default_betas = tuple(betas) == DEFAULT_BETAS \
+            and "anthropic-beta" not in (extra_headers or {})
         self._client = httpx.AsyncClient(
             base_url=(base_url or "https://api.anthropic.com").rstrip("/"),
             headers=headers,
@@ -156,10 +175,14 @@ class AnthropicProvider:
         """The per-call headers: the request's own, and the beta header
         widened by ``request.betas``."""
         headers = dict(request.headers)
-        if request.betas:
-            have = [b for b in headers.get("anthropic-beta", self._betas).split(",") if b]
-            headers["anthropic-beta"] = ",".join(
-                [*have, *(b for b in request.betas if b not in have)])
+        given = headers.get("anthropic-beta", self._betas)
+        have = [b for b in given.split(",") if b]
+        if self._default_betas and "anthropic-beta" not in request.headers \
+                and not per_turn_model(request.model):
+            have = [b for b in have if b != PER_TURN_BETA]
+        have += [b for b in request.betas if b not in have]
+        if ",".join(have) != given:
+            headers["anthropic-beta"] = ",".join(have)
         return headers
 
     async def complete(

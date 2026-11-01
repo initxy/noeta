@@ -171,6 +171,25 @@ def _json_or_file(value: str, flag: str) -> Any:
         raise FlagError(f"{flag}: not JSON: {exc}") from None
 
 
+def json_schema(value: str) -> dict[str, Any]:
+    """``--json-schema``: the schema, a JSON object. One whose root is no
+    object type still runs, with a warning, as in Claude Code: the model's
+    tool input is always an object."""
+    from noeta.toolkit.json_schema import schema_problem
+
+    try:
+        schema = json.loads(value)
+    except ValueError as exc:
+        raise FlagError(f"--json-schema is not a valid JSON Schema: not JSON: {exc}") from None
+    problem = schema_problem(schema)
+    if problem is not None:
+        raise FlagError(f"--json-schema is not a valid JSON Schema: {problem}")
+    if schema.get("type") != "object":
+        print("noeta: --json-schema: the root schema should declare type \"object\" (a tool's "
+              "input is an object; wrap other values in an object property)", file=sys.stderr)
+    return dict(schema)
+
+
 def setting_sources(args: argparse.Namespace) -> tuple[str, ...] | None:
     """``--setting-sources``: the settings layers read (``None``: all; the
     empty value Claude Code's SDK passes: none but the managed one)."""
@@ -316,7 +335,13 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str,
     if output == "stream-json" and not args.verbose:
         print("noeta: --output-format=stream-json requires --verbose", file=sys.stderr)
         return 1
-    schema = json.loads(args.json_schema) if args.json_schema else None
+    schema = None
+    if args.json_schema:
+        try:
+            schema = json_schema(args.json_schema)
+        except FlagError as exc:
+            print(f"noeta: {exc}", file=sys.stderr)
+            return 1
     mode = args.permission_mode
     if args.dangerously_skip_permissions:
         mode = "bypassPermissions"

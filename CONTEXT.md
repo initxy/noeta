@@ -50,8 +50,8 @@ import each other, nor do two plugins or two backends (`lint-imports`). One plug
 only through the kernel: a tool by name (`TaskView.find_tool`), inherited config
 (`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
 others (memory's `dir` for instructions, permissions and fs, shell's `cwd` and permissions'
-`mode` for permissions and hooks, instructions' files for hooks). Front ends import no plugin; they read permissions' `mode` /
-`modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
+`mode` for permissions and hooks, instructions' files for hooks, structured_output's `answer` for workflow
+and front ends). Front ends import no plugin; they read permissions' `mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
 
 ## Ways in
 

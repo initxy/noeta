@@ -31,6 +31,9 @@ class Agent:
     #: End the task when the first turn ends (a one-shot job) instead of
     #: waiting for the next message. A sub-agent's task always ends so.
     one_shot: bool = False
+    #: The JSON Schema the agent's answers follow when the task's config
+    #: sets none; read by the ``structured_output`` plugin, which offers the
+    #: ``StructuredOutput`` tool the answer comes through.
     output_schema: dict[str, Any] | None = None
     #: Model calls allowed in one turn; the next one asks for the turn's
     #: final answer with tools switched off (the agent file's ``maxTurns``).
