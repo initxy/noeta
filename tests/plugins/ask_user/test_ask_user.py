@@ -242,3 +242,23 @@ def test_offered_only_where_a_question_can_be_answered() -> None:
                       config={"interactive": False, "cwd": "/w"})
     assert plugin.inherit(state) == {"interactive": False}
     assert plugin.inherit(TaskState(task_id="t", agent="main")) == {}
+
+
+async def test_a_question_asked_before_the_task_stopped_asking_still_takes_its_answer(
+        store: SqliteStore) -> None:
+    """A task parked on a question, then resumed by a headless run that
+    answers no prompts (``AskUserQuestion`` no longer offered): the answer
+    still reaches the call, and the tool is not offered afterwards."""
+    from noeta.core.loop.state import CONFIG_SIGNAL
+
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", {"questions": [q()]})),
+                                 reply("thanks")])
+    client, tid, rt = await start(store, provider)
+    [item] = pending(await client.events(tid), tid)
+    await client.signal(tid, CONFIG_SIGNAL, {"interactive": False})
+    await answer_question(client, tid, item.request_id,
+                          {"answers": {"0": {"selected": ["API key"]}}})
+    await rt.run_until_idle()
+    [result] = finished(await events(client, tid))
+    assert not result.is_error and '"Which auth?"="API key"' in result.text
+    assert "AskUserQuestion" not in [t.name for t in provider.requests[-1].tools]

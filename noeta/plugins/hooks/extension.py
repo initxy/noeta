@@ -27,7 +27,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.extension import Ask, Deny, Extension, Gate, Reminder, TaskView
-from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.loop.state import CONFIG_SIGNAL, TaskState
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 from noeta.plugins.hooks.config import HookCommand, Matcher, parse_hooks, read_settings
@@ -43,7 +43,7 @@ from noeta.plugins.hooks.dispatch import (
 )
 from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
 from noeta.plugins.hooks.runners import Runner, run_command
-from noeta.toolkit.hook_callbacks import HookCallbacks
+from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
 __all__ = ["HANDBACK_TOOL", "MAX_STOP_CONTINUATIONS", "RETRY_NOTE", "Hooks"]
@@ -194,6 +194,13 @@ class Hooks(Extension):
         self._d.http_transport = transport
 
     # ------------------------------------------------------------ state
+
+    def inherit(self, state: TaskState) -> Mapping[str, Any]:
+        """A headless client's hook callbacks judge its child tasks too: they
+        carry the record, so a worker that cannot ask the client refuses
+        what they would judge."""
+        record = state.config.get(CLIENT_HOOKS_KEY)
+        return {CLIENT_HOOKS_KEY: record} if record is not None else {}
 
     def initial_state(self) -> HookState:
         return HookState()

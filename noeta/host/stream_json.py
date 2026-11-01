@@ -63,7 +63,7 @@ from noeta.host.pending import Pending, pending_tree
 from noeta.host.pending import follow_tree as _follow_tree
 from noeta.host.pending import tree_busy as _tree_busy
 from noeta.host.usage import TreeUsage, add_events, tree_usage
-from noeta.toolkit.hook_callbacks import HookCallbacks
+from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
 from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -257,6 +257,10 @@ class StreamJson(ControlRequests):
             # This run's say on the schema and on who answers, whatever the
             # task had before (``None`` takes a key away).
             changes = {k: config.get(k) for k in (SCHEMA_KEY, INTERACTIVE_KEY, PROMPT_TOOL_KEY)}
+            if o.hook_callbacks is not None:
+                # An earlier client's hook callbacks end with it; this one's
+                # are recorded when it registers them (``initialize``).
+                changes[CLIENT_HOOKS_KEY] = None
             changes.update({k: config[k] for k in ("model", "max_turns") if k in config})
             await self.client.signal(self.task_id, CONFIG_SIGNAL, changes)
             if "permission_mode" in config:

@@ -31,7 +31,9 @@ Hook types (``config.py`` has the fields and defaults):
 
 Two more come from a front end, not from settings: ``callback`` hooks a
 connected client registers and answers (``Hooks(callbacks=...)``, Claude
-Code's SDK hook callbacks), and the MCP tool that answers every permission
+Code's SDK hook callbacks; a worker that cannot reach the client refuses a
+call such a PreToolUse or PermissionRequest hook would judge), and the MCP
+tool that answers every permission
 request (``Hooks(permission_prompt_tool=...)``, Claude Code's
 ``--permission-prompt-tool``).
 

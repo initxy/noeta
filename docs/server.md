@@ -92,11 +92,15 @@ A request may set only the task config a client may (`model`, `effort`, `max_tur
 only in the server's directory and its `--allow-root` paths. Host code embedding the API uses
 `create_app(client, token=...)` (or `token_sha256=`). `timezone` is the person's IANA zone
 (`Europe/Berlin`), which noeta's own front ends send: without it the model is given the UTC
-date, marked as UTC's, never the server's local one. With `output_schema` (a JSON Schema) the
-model answers through a `StructuredOutput` tool, as Claude Code's `--json-schema`; the value is
-the task's `structured_output` `answer` record (`noeta.toolkit.structured_output.structured_answer`).
-`interactive: false` marks a task nobody follows live (no title, no `AskUserQuestion` unless
-`permission_prompt_tool` is set), as the headless protocol does.
+date, marked as UTC's, never the server's local one. With `output_schema` (a JSON Schema whose
+root is `"type": "object"`; another is refused) the model answers through a `StructuredOutput`
+tool, as Claude Code's `--json-schema`; the value is the task's `structured_output` `answer`
+record (`noeta.toolkit.structured_output.structured_answer`). `interactive: false` marks a task
+nobody follows live (no title, no `AskUserQuestion` unless `permission_prompt_tool` is set), as
+the headless protocol does; the keys stay until a client sets them again (a config signal; the
+terminal UI and ACP take them away when they reopen a task). A config signal may remove, never
+set, `client_hooks`: the record of a headless client's hook callbacks
+(`noeta.toolkit.hook_callbacks`).
 
 ## Several parties
 

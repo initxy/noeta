@@ -68,6 +68,8 @@ class StructuredOutputTool:
     clearable = False
     #: Pure: a call a crash cut short runs again.
     retry_safe = True
+    #: Offered with a schema whatever an agent's ``tools:`` list says.
+    past_agent_lists = True
 
     def __init__(self, schema: Mapping[str, Any]) -> None:
         self.schema = dict(schema)
@@ -101,16 +103,21 @@ def _since_prompt(messages: Sequence[Message]) -> list[Message]:
 
 
 def _attempts(messages: Sequence[Message]) -> tuple[int, str]:
-    """``StructuredOutput`` calls since the person's last message, and the
-    last refused one's error."""
+    """``StructuredOutput`` calls since the person's last message and the
+    last accepted call (Claude Code counts the calls of the run, which an
+    accepted one ends), and the last refused one's error."""
     calls: set[str] = set()
     last_error = ""
     for m in _since_prompt(messages):
         if m.role == "assistant":
             calls.update(u.id for u in m.tool_uses if u.name == TOOL)
         for b in m.content:
-            if isinstance(b, ToolResult) and b.call_id in calls and b.is_error:
-                last_error = b.text
+            if isinstance(b, ToolResult) and b.call_id in calls:
+                if b.is_error:
+                    last_error = b.text
+                else:
+                    calls.clear()
+                    last_error = ""
     return len(calls), last_error
 
 

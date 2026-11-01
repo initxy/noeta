@@ -162,6 +162,10 @@ class Tool(Protocol):
       changing set of tools at the end of the cached prefix).
     * ``run_last: bool = False`` — runs after the reply's other calls
       (delegation).
+    * ``past_agent_lists: bool = False`` — offered whenever its extension
+      offers it, whatever the agent's tool allow and deny lists say: the task
+      cannot finish without it (the answer tool a requested answer schema
+      adds, as Claude Code adds it to every agent's tools).
     * ``async resume(input, ctx, outcome) -> ToolOutput`` — required of a
       tool that parks: ``outcome`` is the ``Answer`` for a question, or
       ``{child_id: ChildEnded}`` for children; ``None`` means the wait was
@@ -209,7 +213,8 @@ MAX_ATTEMPTS = 3
 
 
 def tool_flag(tool: Tool,
-              name: Literal["deferred", "listed_last", "run_last", "retry_safe"]) -> bool:
+              name: Literal["deferred", "listed_last", "run_last", "retry_safe",
+                            "past_agent_lists"]) -> bool:
     """One of ``tool``'s optional flags (see :class:`Tool`); ``False`` when
     the tool leaves it out."""
     return bool(getattr(tool, name, False))

@@ -172,21 +172,17 @@ def _json_or_file(value: str, flag: str) -> Any:
 
 
 def json_schema(value: str) -> dict[str, Any]:
-    """``--json-schema``: the schema, a JSON object. One whose root is no
-    object type still runs, with a warning, as in Claude Code: the model's
-    tool input is always an object."""
-    from noeta.toolkit.json_schema import schema_problem
+    """``--json-schema``: the schema, a JSON object whose root is an object
+    type (it becomes the ``StructuredOutput`` tool's input schema)."""
+    from noeta.toolkit.structured_output import answer_schema_problem
 
     try:
         schema = json.loads(value)
     except ValueError as exc:
         raise FlagError(f"--json-schema is not a valid JSON Schema: not JSON: {exc}") from None
-    problem = schema_problem(schema)
+    problem = answer_schema_problem(schema)
     if problem is not None:
         raise FlagError(f"--json-schema is not a valid JSON Schema: {problem}")
-    if schema.get("type") != "object":
-        print("noeta: --json-schema: the root schema should declare type \"object\" (a tool's "
-              "input is an object; wrap other values in an object property)", file=sys.stderr)
     return dict(schema)
 
 

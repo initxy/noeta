@@ -187,3 +187,42 @@ async def test_a_reminder_lost_to_a_crash_is_given_on_the_next_pickup(
     waited = TaskView(state=fold(events, reducers))
     await plugin.on_start(waited)
     assert waited.enqueued == []
+
+
+async def test_only_refusals_since_the_last_accepted_answer_count(store: SqliteStore) -> None:
+    """Turns opened by notices, with no message of the person's between
+    them: each accepted answer starts the count again (Claude Code counts the
+    calls of one run, which an accepted call ends)."""
+    from noeta.core.types import user
+
+    accepted = [reply("", ("StructuredOutput", {"a": n})) for n in range(3)]
+    provider = ScriptedProvider([reply("", ("StructuredOutput", {"a": "no"})), *accepted])
+    agent = Agent(name="s", model="m", extensions=[StructuredOutput(max_retries=2)])
+    client, tid = await run(store, provider, agent, {"output_schema": SCHEMA})
+    rt = _runtime(store, provider, agent)
+    for n in range(2):
+        await client.send(tid, user(f"a background job ended ({n})", origin="system"))
+        await rt.run_until_idle()
+    events = await client.events(tid)
+    assert not [r for r in events if isinstance(r.event, ExtensionRecorded)
+                and r.event.kind == "turn_failed"]
+    assert structured_answer(events) == {"a": 2} and len(provider.requests) == 4
+
+
+async def test_an_agents_tool_list_does_not_take_the_answer_tool_away(
+        store: SqliteStore) -> None:
+    """A schema-typed task of an agent whose ``tools:`` list (or deny list)
+    leaves ``StructuredOutput`` out is still offered it: it could not finish
+    otherwise (Claude Code adds the tool to the agent's tools)."""
+    for agent in (Agent(name="s", model="m", allowed_tools=["Read"],
+                        extensions=[StructuredOutput()]),
+                  Agent(name="s", model="m", denied_tools=["StructuredOutput"],
+                        extensions=[StructuredOutput()])):
+        provider = ScriptedProvider([reply("", ("StructuredOutput", {"a": 1}))])
+        client, tid = await run(store, provider, agent, {"output_schema": SCHEMA})
+        assert "StructuredOutput" in _tools(provider.requests[0])
+        assert structured_answer(await client.events(tid)) == {"a": 1}
+    provider = ScriptedProvider([reply("plain")])
+    await run(store, provider, Agent(name="s", model="m", allowed_tools=["Read"],
+                                     extensions=[StructuredOutput()]))
+    assert _tools(provider.requests[0]) == {}

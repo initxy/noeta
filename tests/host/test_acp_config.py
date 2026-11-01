@@ -104,3 +104,27 @@ async def test_picking_a_model_and_a_mode_switches_the_task(tmp_path: Path) -> N
     assert current(loaded.config_options) == {"model": "claude-sonnet-5-5",
                                               "mode": "acceptEdits"}
     await app.stop()
+
+
+async def test_loading_a_session_a_headless_run_had_makes_it_interactive_again(
+        tmp_path: Path) -> None:
+    """A task ``noeta -p --resume`` marked not interactive (no
+    ``AskUserQuestion``) offers it again once an editor loads it."""
+    from noeta.core.loop.state import CONFIG_SIGNAL
+    from noeta.plugins.ask_user import AskUser
+
+    provider = ScriptedProvider([reply("ok")])
+    agent = Agent(name="main", model="m", extensions=[AskUser()])
+    app = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                   env_for=lambda _s: None)
+    acp_agent = NoetaAcpAgent(app)
+    acp_agent.on_connect(Editor())
+    await acp_agent.initialize(protocol_version=1)
+    sid = (await acp_agent.new_session(cwd=str(tmp_path))).session_id
+    await app.client.signal(sid, CONFIG_SIGNAL, {"interactive": False})
+    again = NoetaAcpAgent(app)
+    again.on_connect(Editor())
+    await again.load_session(cwd=str(tmp_path), session_id=sid)
+    await again.prompt(sid, text("hi"))
+    assert "AskUserQuestion" in [t.name for t in provider.requests[-1].tools]
+    await app.stop()

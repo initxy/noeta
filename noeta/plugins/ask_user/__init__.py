@@ -385,7 +385,13 @@ class AskUser(Extension):
         self._tools: list[Tool] = [AskUserQuestionTool()]
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        return self._tools if can_ask(view.state.config) else ()
+        # A question already asked stays answerable (its call resumes through
+        # the offered tool) when the task's say on asking changed meanwhile.
+        if can_ask(view.state.config) or any(
+                c.parked and c.result is None and (c.ran or c.use).name == ASK_USER_QUESTION_TOOL
+                for c in view.state.calls):
+            return self._tools
+        return ()
 
     def inherit(self, state: TaskState) -> Mapping[str, Any]:
         return {k: state.config[k] for k in (INTERACTIVE_KEY, PROMPT_TOOL_KEY)

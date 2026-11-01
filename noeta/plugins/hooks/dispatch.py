@@ -29,7 +29,7 @@ from noeta.plugins.hooks.runners import (
     run_mcp_tool,
     run_prompt,
 )
-from noeta.toolkit.hook_callbacks import HookCallbacks
+from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
 from noeta.toolkit.inline_commands import refusal
 from noeta.toolkit.permission_rules import RuleContext, match
 
@@ -42,6 +42,10 @@ KEEP = 256
 #: event, ``:<tool>`` for a tool's): Claude Code's labels.
 CONTEXT_LABEL = " hook additional context"
 BLOCK_LABEL = " hook blocking error"
+#: Why a call is refused on a worker that cannot ask the client whose hook
+#: callback would judge it.
+UNREACHED = ("a {event} hook of the client that runs this task cannot be asked from the "
+             "worker running this step, so the call is refused")
 
 
 def blocking_text(name: str, read: Read) -> str:
@@ -225,6 +229,19 @@ class Dispatcher:
                 st = fold(st, ev.kind, ev.data)
         return st
 
+    def unreached(self, event: str, view: TaskView, subject: str | None) -> bool:
+        """Whether the task records a client hook callback for ``event``
+        matching ``subject`` that this process cannot ask (the client is
+        held by another process: ``noeta.toolkit.hook_callbacks``)."""
+        record = view.state.config.get(CLIENT_HOOKS_KEY)
+        if not isinstance(record, Mapping) or (
+                self.callbacks is not None and self.callbacks.answers(record)):
+            return False
+        events = record.get("events")
+        patterns = events.get(event) if isinstance(events, Mapping) else None
+        return isinstance(patterns, list) and any(
+            Matcher(str(p), ()).matches(subject) for p in patterns)
+
     @staticmethod
     def cwd(view: TaskView) -> str | None:
         return view.cwd or None
@@ -314,6 +331,12 @@ class Dispatcher:
         person is told about failures and ``systemMessage``s, and ``once``
         hooks are remembered (off where records cannot be made)."""
         hooks = self._select(event, view, payload, call)
+        subject = payload.get(SUBJECT.get(event, ""))
+        if self.unreached(event, view, subject if isinstance(subject, str) else None):
+            # The tool gates refuse the call; any other event goes on without
+            # the client's say.
+            log.warning("hooks: the client's %s hook callbacks of task %s cannot be asked "
+                        "from this worker; skipped", event, view.task_id)
         if not hooks:
             return []
         full = self.payload(event, view, payload)
