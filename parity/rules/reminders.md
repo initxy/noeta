@@ -190,7 +190,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 No baseline session got an empty reply; these rows come from the 2.1.312 bundle (the
 `thinking_only_retry` path of the query loop) and from running 2.1.312 against a fake Messages
 endpoint that answered with an empty reply, in `-p` and interactive mode
-(`docs/specs/2026-11-01-empty-turn.md`).
+(`docs/specs/archive/2026-11-01-empty-turn.md`).
 
 | id | rule |
 |---|---|
