@@ -182,6 +182,35 @@ async def test_a_message_sent_mid_turn_rides_with_the_tool_results() -> None:
 
 
 @respx.mock
+async def test_the_empty_reply_nudge_joins_the_user_turn_before_the_steps_notes() -> None:
+    # Claude Code 2.1.312: the nudge rides in the tool results' turn, and the
+    # step's system note still ends the request (and carries the cache mark).
+    from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
+    from noeta.core.types import system_message
+
+    wire = await _wire_messages(
+        [user("q"), _call(k="x"), _result(),
+         system_message("<total_tokens>9 tokens left</total_tokens>"),
+         user(EMPTY_REPLY_NUDGE, origin="inline")],
+        cache_after=[4])
+    assert [m["role"] for m in wire] == ["user", "assistant", "user", "system"]
+    assert [b["type"] for b in wire[2]["content"]] == ["tool_result", "text"]
+    assert wire[2]["content"][1] == {"type": "text", "text": EMPTY_REPLY_NUDGE}
+    assert wire[3]["content"][-1]["cache_control"] == EPHEMERAL
+
+
+@respx.mock
+async def test_the_empty_reply_nudge_joins_the_prompt_before_the_environment() -> None:
+    from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
+    from noeta.core.types import system_message
+
+    wire = await _wire_messages([user("q"), system_message("# Environment"),
+                                 user(EMPTY_REPLY_NUDGE, origin="inline")])
+    assert [m["role"] for m in wire] == ["user", "system"]
+    assert [b["text"] for b in wire[0]["content"]] == ["q", EMPTY_REPLY_NUDGE]
+
+
+@respx.mock
 async def test_api_key_request_settings_follow_claude_code() -> None:
     import uuid
 

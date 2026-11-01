@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Union
 import msgspec
 
 from noeta.core.events import Event, ExtensionRecorded
-from noeta.core.types import Message, Struct, Thinking
+from noeta.core.types import Message, Struct, Thinking, Usage
 
 #: The extension name the core records its own entries under.
 CORE = "core"
@@ -72,18 +72,49 @@ class Retry(Struct):
         return cls(attempt=d.get("attempt"), delay=d.get("delay"), error=d.get("error"))
 
 
+#: ``reason`` of the ``continue`` that asks the model to go on after an empty
+#: reply, and of the ``turn_done`` that ends the turn on a second one.
+EMPTY_REPLY = "empty_reply"
+
+
+def _dropped_data(out: dict[str, Any], model: str | None, usage: Usage | None) -> None:
+    if usage is not None:
+        out["model"] = model or ""
+        out["usage"] = msgspec.to_builtins(usage)
+
+
+def _str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _dropped_usage(d: dict[str, Any]) -> Usage | None:
+    try:
+        return msgspec.convert(d["usage"], Usage) if "usage" in d else None
+    except msgspec.ValidationError:
+        return None
+
+
 class Continue(Struct):
-    """The model hit its output limit, or replied with nothing; the entry's
-    message asks it to go on."""
+    """The model hit its output limit, or (``reason`` ``empty_reply``)
+    replied with nothing; the entry's message asks it to go on. ``model``
+    and ``usage`` are those of a reply that was dropped (not recorded)."""
 
     kind: ClassVar[str] = "continue"
+    reason: str | None = None
+    model: str | None = None
+    usage: Usage | None = None
 
-    def data(self) -> None:
-        return None
+    def data(self) -> dict[str, Any] | None:
+        out: dict[str, Any] = {"reason": self.reason} if self.reason else {}
+        _dropped_data(out, self.model, self.usage)
+        return out or None
 
     @classmethod
     def parse(cls, data: Any) -> Continue:
-        return cls()
+        d = _fields(data)
+        reason = d.get("reason")
+        return cls(reason=_str(reason),
+                   model=_str(d.get("model")), usage=_dropped_usage(d))
 
 
 class TurnStopped(Struct):
@@ -135,25 +166,27 @@ class TurnFailed(Struct):
         return f"{self.reason}: {self.detail}" if self.detail else str(self.reason)
 
 
-#: ``TurnDone.reason`` of a turn the model ended with nothing, asked to go on.
-EMPTY_REPLY = "empty_reply"
-
-
 class TurnDone(Struct):
     """The turn ended without a reply: a ``before_model`` ended it, or
     (``reason`` ``empty_reply``) the model replied with nothing again after
-    it was asked to go on."""
+    it was asked to go on; ``model`` and ``usage`` are that reply's."""
 
     kind: ClassVar[str] = "turn_done"
     reason: str | None = None
+    model: str | None = None
+    usage: Usage | None = None
 
     def data(self) -> dict[str, Any] | None:
-        return {"reason": self.reason} if self.reason else None
+        out: dict[str, Any] = {"reason": self.reason} if self.reason else {}
+        _dropped_data(out, self.model, self.usage)
+        return out or None
 
     @classmethod
     def parse(cls, data: Any) -> TurnDone:
-        reason = _fields(data).get("reason")
-        return cls(reason=reason if isinstance(reason, str) else None)
+        d = _fields(data)
+        reason = d.get("reason")
+        return cls(reason=_str(reason),
+                   model=_str(d.get("model")), usage=_dropped_usage(d))
 
 
 class Erased(Struct):

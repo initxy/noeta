@@ -98,8 +98,12 @@ class TaskState:
     turn_open: bool = False
     steps_in_turn: int = 0
     last_stop: StopReason | None = None
-    #: Consecutive ``ModelCalled`` without a reply (crash/retry loop guard).
+    #: Consecutive ``ModelCalled`` without a reply (crash/retry loop guard);
+    #: a deliberate ``continue`` (output cap, empty reply) starts it again.
     model_attempts: int = 0
+    #: The model was asked to go on after an empty reply and has not replied
+    #: since, nor has a new message come in: another empty reply ends the turn.
+    empty_nudged: bool = False
     #: Texts of the replies that make up the current answer: one reply, or a
     #: reply plus its continuations after hitting the output cap.
     answer_parts: list[str] = field(default_factory=list)
@@ -255,6 +259,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
 def _on_model_replied(state: TaskState, ev: ModelReplied, seq: int) -> None:
     resp = ev.response
     state.model_attempts = 0
+    state.empty_nudged = False
     state.usage = state.usage + resp.usage
     state.last_usage = resp.usage
     state.last_stop = resp.stop_reason
@@ -336,7 +341,15 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
         state.prompt_files = core.files
     elif isinstance(core, records.Plugins):
         state.plugins = core.pins
+    elif isinstance(core, records.Continue):
+        state.model_attempts = 0
+        if core.usage is not None:
+            state.usage = state.usage + core.usage
+        if core.reason == records.EMPTY_REPLY:
+            state.empty_nudged = True
     elif isinstance(core, records.TurnDone):
+        if core.usage is not None:
+            state.usage = state.usage + core.usage
         if core.reason == records.EMPTY_REPLY:
             state.answer_parts = []  # the turn ended on nothing: it has no answer
         _end_turn(state, seq)
@@ -464,6 +477,7 @@ def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> 
         state.queued.append(message)
         return False
     into_open = state.turn_open
+    state.empty_nudged = False
     if state.calls:
         state.held.append(message)
     else:
@@ -525,6 +539,7 @@ def _close_turn(state: TaskState, seq: int) -> None:
         state.queued = []
         state.turn_open = True
         state.steps_in_turn = 0
+        state.empty_nudged = False
 
 
 def _compact(state: TaskState, ev: Compacted) -> None:

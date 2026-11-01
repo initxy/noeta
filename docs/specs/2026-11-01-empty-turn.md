@@ -64,8 +64,24 @@ Runs against the fake endpoint (scripts and logs in the session scratchpad, `cc/
 | empty, empty, then a new prompt | interactive (tmux) | 3 | nothing shown for the empty turn; the next prompt's request still holds the nudge |
 | tool, empty, empty + Stop hook | `-p` | 3 | the Stop hook runs once, at the end, with no `last_assistant_message` |
 
-On the wire the nudge is plain text (no `<system-reminder>`), merged into the user turn that
-precedes it (after the prompt, or after the tool results); it persists in later requests.
+On the wire the nudge is plain text (no `<system-reminder>`), added to the user turn that
+precedes it (after the prompt, or after the tool results); it persists in later requests. With
+the model the parity baseline uses (`--model claude-opus-5-5`, which gets `role: "system"`
+notes) the step's system note (`<total_tokens>`) still ends the request, after the user turn
+that now holds `tool_result | nudge` (runs `p-opus-mid`, `p-opus-first`); with
+`claude-sonnet-4-5` the note rides inside the tool result instead.
+
+Two more conditions in the bundle skip the nudge: `nLr(H)` is true when the newest tool results
+(since the last real prompt) include a successful call of a tool named in
+`CLAUDE_CODE_TERMINAL_MCP_TOOLS` (MCP tools whose result is meant to end the turn), and `Me(H)`
+is true when the model called `StructuredOutput` since the last real prompt (the answer was
+given through the tool). noeta needs neither: a tool that ends the turn
+(`ToolOutput.end_turn`) ends it without another model call, and structured output is the
+provider's `output_schema`, not a tool (`rem.empty-reply.5`).
+
+A dropped reply still counts in Claude Code's usage: tool, empty, empty reports `num_turns: 3`
+(`p-opus-mid2`). Its `-p` result also carries `terminal_reason: "completed"`, which noeta's
+headless result does not have for any turn (not specific to this change).
 
 ### pi (pi-mono, `packages/coding-agent` 1.4.0, local checkout)
 
@@ -93,9 +109,19 @@ empty text is a normal `stop` and ends the turn.
 
 - Copy Claude Code. On `end_turn` with no text and no tool call (no content, empty text, or
   reasoning only): do not record the reply; record a `continue` entry whose message is Claude
-  Code's nudge text (ADR-020), origin `inline` so it goes out as plain text in the user's turn,
-  as Claude Code sends it. Once per step: the nudge is asked again only if an assistant reply or
-  a person's message (tool results included) came after the last one.
+  Code's nudge text (ADR-020), origin `inline` so it goes out as plain text; the Anthropic
+  adapter adds it to the user turn before the step's system notes, where Claude Code puts it.
+  The entry has `reason: "empty_reply"`; folding it sets `TaskState.empty_nudged`, which a
+  recorded reply or any new message (prompt, notice, sub-agent end, mid-turn message) clears.
+  So "asked already" is folded from the log (another worker or a restart sees it, and a
+  compaction that drops the nudge text changes nothing), not found by searching the messages.
+- A deliberate `continue` (output-cap continuation or this nudge) starts `model_attempts`, the
+  crash-loop guard, again: it was meant for calls without any reply, and two reasoning-only cuts
+  plus an empty reply used to trip it before the nudge was answered. Claude Code keeps its
+  output-cap and empty-reply counters apart from each other.
+- A dropped reply's `model` and `usage` ride on its `continue` / `turn_done` entry (also for a
+  reasoning-only cut), and `noeta/host/usage.py` counts them, so `/cost`, the headless
+  `usage` / `total_cost_usd` / `num_turns` and the per-turn token count match Claude Code's.
 - An empty reply right after the nudge ends the turn quietly, as Claude Code does: a
   `turn_done` entry with `reason: "empty_reply"` (old readers parse `turn_done` ignoring its
   data); the turn's answer is empty (the preamble before an earlier call is no answer); `-p`
@@ -109,8 +135,15 @@ empty text is a normal `stop` and ends the turn.
 - Why not keep failing after the nudge: Claude Code ends quietly (its error path is behind a flag
   that is off), and a failed turn and a quiet end lose the task alike; the difference left is the
   exit code, which follows Claude Code.
-- No deviation entry: the behavior matches Claude Code; the rules are
-  `rem.empty-reply.1`–`3` in `parity/rules/reminders.md`.
+- Rules `rem.empty-reply.1`–`5` in `parity/rules/reminders.md`. One accepted deviation
+  (`parity/deviations.md`, Reminders): a blocking Stop hook after the quiet end starts the
+  count again (one more nudge), where Claude Code keeps the flag; the hook's reason reaches the
+  task as a new message like any other, and the kernel's fold cannot tell it apart without the
+  hooks plugin's state.
+- Mixed versions: a worker without this change reads the new entries' known part only. It
+  folds `turn_done` as before (the turn ends) but keeps the earlier answer of that turn and runs
+  no Stop hook; it ignores `continue`'s reason, so it would fail an empty reply after the nudge
+  (its old behavior) rather than end quietly; and it does not count a dropped reply's usage.
 
 ## Plan
 
@@ -121,6 +154,9 @@ empty text is a normal `stop` and ends the turn.
       `tests/plugins/test_hooks_events.py`); noeta `-p` against the same fake endpoint.
 - [x] Parity rules, CHANGELOG.
 - [x] Gates: `make check`, `make parity`, `make cluster`, eval vs `evals/baseline.json`.
+- [x] Review fixes: per-step flag folded from the log, `continue` resets the crash guard,
+      dropped replies counted, nudge placed in the user turn before the step's notes, tests for
+      the review's repros, SubagentStop, entry decoding; gates and eval again.
 
 ## Acceptance criteria
 
@@ -141,9 +177,10 @@ empty text is a normal `stop` and ends the turn.
 
 2026-11-01: CC 2.1.312 bundle read and run against a fake endpoint (8 scripts, `-p` and
 interactive); pi and dsh read from local checkouts.
-2026-11-01: implemented; noeta `-p` against the same fake endpoint gives the same requests and
-outcomes (3 requests, `success`, empty result, exit 0 for tool/empty/empty; "All done." for
-tool/empty/text).
+2026-11-01: implemented; noeta `-p` against the same fake endpoint gives the same outcomes
+(3 requests, `success`, empty result, exit 0 for tool/empty/empty; "All done." for
+tool/empty/text). The request layout then differed (nudge as its own user message after the
+step's system note); fixed after review, see below.
 2026-11-01: gates. `make check` green (2606 passed, 60 skipped; coverage 89 %; mypy and lint
 clean; check-docs green). `make parity` 0 mismatches (11 accepted deviations), own-words none.
 `make cluster` 14 passed. Eval (`opensource/deepseek_v4_1_flash`, 9 trials, concurrency 8):
@@ -152,3 +189,9 @@ Moves beyond 0.06: `delegate_parallel_review` 0.00 vs 0.33 (4 timeouts; known-no
 `compaction_resume_edits` 1.00 vs 0.78 (known-noisy), `compaction_continuity` 0.89 vs 1.00
 (one trial ended its turn with text after six of eight parts: a normal `end_turn` reply, not an
 empty one), `hook_block_adapts` 0.47 vs 0.52 (known-noisy).
+2026-11-01: review (no P0/P1). Fixed: P2 `model_attempts` counted cap continuations and the
+nudge (two reasoning-only cuts + empty → `llm_error`); P2 the nudge search crossed into a turn
+opened by a notice (no nudge there); usage of dropped replies; wire placement; mixed-version and
+`nLr`/`Me` notes. Rebased onto main cdc2cb2e. noeta `-p` vs the fake endpoint now: tool, empty,
+text → request 3 is `[assistant][user: tool_result | nudge][system: total_tokens]`, as Claude
+Code's Opus run; tool, empty, empty → `num_turns: 3`, `result: ""`, exit 0, as Claude Code.

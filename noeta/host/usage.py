@@ -8,9 +8,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from noeta.core import models
+from noeta.core import models, records
 from noeta.core.client import ClientAPI
-from noeta.core.events import ModelCalled, ModelReplied, TaskCreated
+from noeta.core.events import ExtensionRecorded, ModelCalled, ModelReplied, TaskCreated
 from noeta.core.extension import ToolOffer
 from noeta.core.runner import Runtime, TaskRun
 from noeta.core.store import Claim
@@ -73,6 +73,13 @@ def add_events(total: TreeUsage, events: list[Any], *, after: int = 0) -> None:
         elif isinstance(ev, ModelReplied) and rec.seq > after:
             total.add(ev.response.model or model, ev.response.usage,
                       rec.at - called_at if called_at else 0.0)
+        elif isinstance(ev, ExtensionRecorded) and rec.seq > after:
+            # A reply the kernel dropped (empty, or only reasoning cut at
+            # the cap) still cost a call.
+            core = records.decode(ev)
+            if isinstance(core, (records.Continue, records.TurnDone)) and core.usage is not None:
+                total.add(core.model or model, core.usage,
+                          rec.at - called_at if called_at else 0.0)
 
 
 async def tree_usage(client: ClientAPI, task_id: str) -> TreeUsage:

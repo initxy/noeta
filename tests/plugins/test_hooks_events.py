@@ -567,6 +567,32 @@ async def test_sub_agent_start_and_stop(tmp_path: Path) -> None:
     assert isinstance(end, TaskEnded) and end.answer == "1 2 3"
 
 
+async def test_sub_agent_stop_runs_when_it_ends_on_an_empty_reply(tmp_path: Path) -> None:
+    runner = FakeRunner({"stop": HookResult(0)})
+    hooks = Hooks(hooks={"SubagentStop": hook("stop")}, runner=runner)
+    roster = [SubagentSpec(name="scout", description="Looks around.", agent="worker")]
+    parent = Agent(name="main", model="p", extensions=[Subtasks(roster), hooks])
+    worker = Agent(name="worker", model="c", extensions=[Subtasks(()), hooks])
+    p = ScriptedProvider([reply("", ("Agent", {"description": "look", "prompt": "count",
+                                               "subagent_type": "scout"})),
+                          reply("it said nothing")])
+    c = ScriptedProvider([reply(""), reply("")])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    providers = {"p": p, "c": c}
+    rt = Runtime(store=store, agents={"main": parent, "worker": worker},
+                 provider_for=lambda m: providers[m], env_for=lambda _s: LocalExecEnv(str(tmp_path)),
+                 sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    [payload] = runner.payloads("stop")
+    assert payload["agent_id"] == child.task_id and "last_assistant_message" not in payload
+    end = [r.event for r in await client.events(child.task_id)][-1]
+    assert isinstance(end, TaskEnded) and end.status == "done" and end.answer == ""
+    await store.close()
+
+
 async def test_a_sub_agent_stop_prompt_hook_sees_no_unanswered_call(tmp_path: Path) -> None:
     hooks = Hooks(hooks={"SubagentStop": [{"hooks": [{"type": "prompt",
                                                       "prompt": "Were tests run?"}]}]})
