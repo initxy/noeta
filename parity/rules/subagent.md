@@ -57,7 +57,7 @@ The `Agent` tool's own schema and description are in `tools/Agent.md`.
 | sub.common.4 | No emojis. | covered (`explore.md`, `general-purpose.md`) |
 | sub.common.5 | No colon right before a tool call ("Let me read the file." not "...file:"). | covered (`explore.md`, `general-purpose.md`) |
 | sub.common.6 | Do not produce report, summary or findings files — the caller reads the final message; a file that another tool needs as input is allowed. | covered (`explore.md`, `general-purpose.md`) |
-| sub.common.7 | The system prompt ends with the token-budget counter (`<total_tokens>… tokens left</total_tokens>`); the main agent gets that counter as a per-turn system message instead. | missing — `explore.md`, `general-purpose.md` and `plan.md` end without the `<total_tokens>` line (only `main.md` has it); the sub-agent gets budget notes after its tool results only (`environment.py`). `make parity` does not see it (system blocks are compared by kind, not text). |
+| sub.common.7 | The system prompt ends with the token-budget counter (`<total_tokens>… tokens left</total_tokens>`); the main agent gets that counter as a per-turn system message instead. | covered (the three agent files end with the budget line) |
 | sub.common.8 | (bundle) A sub-agent's instruction context is the session's, auto-memory index (`MEMORY.md`) included; agents that omit instruction files (Explore, Plan) keep only the managed ones; a sub-agent prompt has no memory section. | covered for general-purpose (the instructions plugin shows the caller's index); Explore and Plan: see `sub.classifier.2` |
 
 ## general-purpose system prompt (from s1)
@@ -70,7 +70,7 @@ The `Agent` tool's own schema and description are in `tools/Agent.md`.
 | sub.gp.4 | Search broadly when the location is unknown; Read when the path is known; start broad then narrow; try several strategies; check multiple locations and naming conventions. | covered (`general-purpose.md`) |
 | sub.gp.5 | Create files only when necessary, prefer editing existing ones; never create documentation or README files unless asked. | covered (`general-purpose.md`) |
 | sub.gp.6 | It is the dedicated agent for its task: do the work, do not hand the whole assignment to another single sub-agent. | covered (`general-purpose.md`) |
-| sub.gp.7 | Followed by the common tail (sub.common.1–7). | covered, except the budget line (sub.common.7) |
+| sub.gp.7 | Followed by the common tail (sub.common.1–7). | covered |
 
 ## Tool set
 
@@ -118,7 +118,7 @@ The `Agent` tool's own schema and description are in `tools/Agent.md`.
 |---|---|---|
 | sub.side.1 | While the sub-agent runs, Claude Code forks its latest request to ask for a 3–5 word present-tense progress label (m1/0034, see `side-requests.md` side.progress). The answer never enters the sub-agent's transcript. | covered — `before_model` beside the third call, posted as a signal, never in the transcript (`subtasks/extension.py`; `PROGRESS_INSTRUCTION`). |
 | sub.classifier.1 | Each sub-agent shell call goes through the same two-stage auto-mode classifier as the parent's (m1/0032, 0035); `Read` calls were not classified. | covered — Explore and general-purpose run the `permissions` plugin; reads inside the working directory are allowed without classifying. |
-| sub.classifier.2 | The classifier transcript for a sub-agent call starts from the sub-agent's own task (its prompt rendered as the user turn) followed by its tool calls; the parent's conversation is not included. The project-instruction context block is still sent. | missing in part — the transcript is the sub-agent's own messages (`permissions/auto.py` `_transcript`), but the instruction block comes from `lead_resident` of the task's own plugins (`_instructions`), so Explore, which has no `instructions` plugin, sends none. |
+| sub.classifier.2 | The classifier transcript for a sub-agent call starts from the sub-agent's own task (its prompt rendered as the user turn) followed by its tool calls; the parent's conversation is not included. The project-instruction context block is still sent. | covered — the transcript is the sub-agent's own messages; a sub-agent without instructions takes its root task's instructions `start` message (`permissions/auto.py` `_root_instructions`) |
 | sub.classifier.3 | For sub-agent calls the classifier's block rules gain a "user deny rules" item naming the tools the agent type is denied (observed: three artifact tools), with the instruction to block attempts to reach the same effect through another tool. | covered — the agent's denied tools join the deny-rule item (`auto.py` `_deny_texts`, `classifier.py` `DENY_RULES`). |
 
 ## s1 (subscriber) differences — not baseline
