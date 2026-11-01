@@ -27,6 +27,7 @@ from noeta.core.events import (
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import Tool, ToolOutput, tool_flag
 from noeta.core.types import (
+    Effort,
     Message,
     ModelRequest,
     ModelResponse,
@@ -292,6 +293,12 @@ class TaskView(records.CoreNotices):
     #: return inline are saved below it, in the task's exec env, for the
     #: model to read (``None``: nothing is saved).
     spill_dir: str | None = None
+    #: The identity line the task's requests open with (``identity/<agent>``):
+    #: a side request (a title, a page digest) opens with it too.
+    identity: str = ""
+    #: The task's effort (its config's, else its agent's); ``None`` for the
+    #: provider's default.
+    effort: Effort | None = None
 
     @property
     def task_id(self) -> str:

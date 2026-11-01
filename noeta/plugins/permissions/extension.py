@@ -16,7 +16,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from noeta.core import records
 from noeta.core.events import (
     Answer,
     Compacted,
@@ -230,7 +229,6 @@ class Permissions(Extension):
                                         deny_rules=self.deny_rules, trusted=self.trusts)
         self._exit_plan = pl.ExitPlanModeTool()
         self._enter_plan = pl.EnterPlanModeTool(self._enter_plan_mode)
-        self._background: set[asyncio.Future[Any]] = set()
 
     def trusts(self, view: TaskView) -> bool:
         """Whether this task's working directory is a trusted workspace."""
@@ -440,8 +438,6 @@ class Permissions(Extension):
             mode = self.mode_of(view)
             view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan",
                                             "seq": recorded.seq})
-        elif isinstance(parked := records.decode(ev), records.Parked):
-            md.name_plan(view, parked, self._background)
 
     async def _on_input(self, view: TaskView, body: Any, seq: int) -> None:
         if isinstance(body, Answer):

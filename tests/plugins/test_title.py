@@ -46,7 +46,8 @@ class Provider(ScriptedProvider):
 
 async def test_the_first_real_prompt_names_the_task_once(store: SqliteStore) -> None:
     provider = Provider(reply("hello"), reply("looking"), reply("again"))
-    agent = Agent(name="a", model="m", extensions=[Title()])
+    agent = Agent(name="a", model="claude-opus-5-5", identity="You are x.",
+                  extensions=[Title()])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
     client = Client(store)
@@ -58,9 +59,12 @@ async def test_the_first_real_prompt_names_the_task_once(store: SqliteStore) -> 
     await client.send(tid, "and on tabs?")
     await rt.run_until_idle()
     [asked] = provider.titles
-    assert asked.system[0].text == PROMPT and not asked.tools and not asked.thinking
+    # Claude Code 2.1.312 (m2/0001): identity line then the prompt, no tools,
+    # no thinking field, the model's ceiling and the session's effort.
+    assert [p.text for p in asked.system] == ["You are x.", PROMPT] and not asked.tools
+    assert (asked.thinking, asked.effort, asked.max_tokens) == (None, "medium", 128_000)
     assert asked.messages[0].text == ("<session>\nwhy does lexer.py crash on empty input?\n"
-                                      f"</session>\n{LANGUAGE}")
+                                      f"</session>\n\n{LANGUAGE}")
     titles = [e.data["title"] for e in (r.event for r in await client.events(tid))
               if isinstance(e, ExtensionRecorded) and e.extension == "title"
               and e.kind == "title"]

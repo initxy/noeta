@@ -252,6 +252,7 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
                        hold=lambda: run.rt.hold(root), by_model=True,
                        approved=answer is not None and answer.decision == "allow",
                        allowed_outright=outright, model=run.model,
+                       identity=run.identity, effort=run.effort,
                        serves_queue=run.serves_queue)
 
 

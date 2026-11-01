@@ -20,11 +20,13 @@ from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import ModelRequest, ModelResponse, user
 from noeta.plugins.web.fetch import (
     DIGEST_INSTRUCTIONS,
+    DOCS_DIGEST_INSTRUCTIONS,
     Digest,
     FetchTransport,
     HttpFetchTransport,
     PageCache,
     WebFetchTool,
+    preapproved,
     render_digest_prompt,
 )
 from noeta.plugins.web.search import (
@@ -33,11 +35,10 @@ from noeta.plugins.web.search import (
     SearchTransport,
     WebSearchTool,
 )
+from noeta.toolkit.side_requests import side_request
 
 __all__ = ["Web"]
 
-#: Ceiling on the digest answer.
-DIGEST_MAX_TOKENS = 4096
 #: Tasks whose page cache is kept.
 TASKS_KEPT = 256
 
@@ -111,12 +112,13 @@ class Web(Extension):
         complete: Complete = call
 
         async def digest(url: str, title: str, page: str, prompt: str) -> str:
-            text = render_digest_prompt(
-                url=url, title=title, page_markdown=page, prompt=prompt,
-                instructions=ctx.prompt("web/fetch_digest", DIGEST_INSTRUCTIONS))
-            request = ModelRequest(model=model, messages=[user(text)],
-                                   max_tokens=DIGEST_MAX_TOKENS, thinking=False)
-            response = await complete(request)
+            instructions = (ctx.prompt("web/fetch_digest_docs", DOCS_DIGEST_INSTRUCTIONS)
+                            if preapproved(url)
+                            else ctx.prompt("web/fetch_digest", DIGEST_INSTRUCTIONS))
+            text = render_digest_prompt(page_markdown=page, prompt=prompt,
+                                        instructions=instructions)
+            response = await complete(side_request(
+                model=model, identity=ctx.identity, messages=[user(text)], effort=ctx.effort))
             return response.message.text.strip()
 
         return digest

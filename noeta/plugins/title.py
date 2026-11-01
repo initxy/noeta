@@ -16,7 +16,8 @@ from typing import Any
 
 from noeta.core.events import External, InputTaken, Recorded, Say
 from noeta.core.extension import Extension, TaskView
-from noeta.core.types import ModelRequest, SystemPart, user
+from noeta.core.types import user
+from noeta.toolkit.side_requests import side_request
 
 __all__ = ["PROMPT", "Title", "title_of"]
 
@@ -85,11 +86,11 @@ class Title(Extension):
 
     async def _ask(self, view: TaskView, text: str) -> None:
         assert view.complete is not None and view.post is not None
-        request = ModelRequest(
-            model=self.model or view.model,
-            system=[SystemPart(text=view.prompt("title/name", PROMPT))],
-            messages=[user(f"<session>\n{text}\n</session>\n{LANGUAGE}")],
-            thinking=False, output_schema=SCHEMA)
+        request = side_request(
+            model=self.model or view.model, identity=view.identity,
+            prompt=view.prompt("title/name", PROMPT),
+            messages=[user(f"<session>\n{text}\n</session>\n\n{LANGUAGE}")],
+            effort=view.effort, output_schema=SCHEMA)
         try:
             response = await view.complete(request)
             title = json.loads(response.message.text).get("title")
