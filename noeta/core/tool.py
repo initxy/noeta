@@ -149,6 +149,10 @@ class Tool(Protocol):
     * ``deferred: bool = False`` — named to the model by name only
       (``TaskView.deferred_tool_names``) and sent with ``defer_loading``; the
       ``tool_search`` plugin withholds it until the model loads it.
+    * ``loaded_description: str`` — the description sent instead of
+      ``description`` while the tool goes with ``defer_loading`` (the model
+      loaded it through ``ToolSearch``), as Claude Code gives such a tool a
+      longer one.
     * ``listed_last: bool = False`` — sent after the other tools (keeps a
       changing set of tools at the end of the cached prefix).
     * ``run_last: bool = False`` — runs after the reply's other calls

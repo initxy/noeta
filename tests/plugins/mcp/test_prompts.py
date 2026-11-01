@@ -15,7 +15,7 @@ from noeta.plugins.mcp import (
     list_resources,
     read_resource,
 )
-from noeta.plugins.mcp.config import INJECTION_MAX_BYTES, McpError, cap_injected
+from noeta.plugins.mcp.config import McpError
 from noeta.plugins.mcp.prompts import flatten_prompt, flatten_resource
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
@@ -53,10 +53,10 @@ async def test_an_unreachable_server_raises() -> None:
         await list_prompts([McpServer(alias="x", command=["/no/such"])], pool=pool)
 
 
-def test_injected_text_is_capped_with_a_marker() -> None:
-    big = "a" * (INJECTION_MAX_BYTES + 10)
-    out = cap_injected(big, kind="prompt")
-    assert out.endswith(f"[truncated: MCP prompt exceeded {INJECTION_MAX_BYTES} bytes]")
+def test_prompt_and_resource_text_goes_in_whole() -> None:
+    big = "a" * 200_000
+    assert flatten_prompt({"messages": [{"role": "user", "content": big}]}) == big
+    assert flatten_resource({"contents": [{"text": big}]}) == big
     assert flatten_prompt({"messages": [{"role": "user", "content": "plain"},
                                         {"role": "user", "content": [
                                             {"type": "image", "data": ""},
