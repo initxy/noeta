@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-10-29
 branch: best-of-three
 ---
@@ -220,8 +220,8 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - [x] Per-area comparison CC / pi / dsh / noeta: system prompt, reminders, environment and
       git snapshot, attachments and images, skills, memory, project files, tool definitions
       and deferred tools, compaction, sub-agents, plan mode, todos.
-- [ ] Revert every unexplained difference to CC; adopt pi/dsh where better, each with numbers.
-- [ ] Every remaining difference recorded below (others / noeta / why better / evidence) and,
+- [x] Revert every unexplained difference to CC; adopt pi/dsh where better, each with numbers.
+- [x] Every remaining difference recorded below (others / noeta / why better / evidence) and,
       when the replay can see it, marked in `parity/deviations.md`.
 
 ### Phase 2: extension points (branch `ext-*`)
@@ -243,7 +243,7 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
       README update.
 
 ### Phase 5: wrap-up
-- [ ] `make check`, `make parity`, `make cluster`, `make e2e` green on main.
+- [x] `make check`, `make parity`, `make cluster`, `make e2e` green on main.
 
 ## Acceptance criteria
 
@@ -334,3 +334,4 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - 2026-11-01 Bench reruns with 34f8acee: SWE-rebench fix run 51.4 %; same-time run noeta 49.5 % vs CC 42.3 % (+7.2, SE 3.8); pooled k=2 +5.4 (SE 3.6), +7.1 (SE 3.6) without the 20 leaked tasks. TB4 near zero for both (`bench/README.md`). a larger private gateway model pre-fix -20 (SE 11.7, n=20); its 34f8acee rerun in progress.
 - 2026-11-01 `compare.py summary` counts CC `api_retry` events (429/529) instead of every stream line matching "429".
 - 2026-11-02 Larger private model, noeta 34f8acee rerun on the same 20 tasks: 10/20, the same as Claude Code's run 1 (0, SE 10.3; pre-fix noeta was -20, SE 11.7); output per model call 810 -> 533 tokens (CC 540); 4 retries, all unresolved containers.
+- 2026-11-02 Final gates on local main @06f1fc99 (all phases merged, incl. empty-turn and bench-ad1max): `make check` green (2620 passed, 60 skipped, coverage 88.83 %, check-docs green); `make parity` 0 mismatches (11 accepted deviations, each with its reason in `parity/deviations.md`); `make cluster` 14 passed; `make e2e` 7 passed. Phase 1's last two items are closed by the Decisions above and the review fixes logged here; open follow-ups live in `docs/specs/2026-10-29-open-source-follow-ups.md`. Done; archived.
