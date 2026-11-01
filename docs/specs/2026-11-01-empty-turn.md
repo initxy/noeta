@@ -203,3 +203,7 @@ which merging resolves). `make parity` 0 mismatches (11 accepted deviations), ow
 (four answers added a second sentence), `hook_block_adapts` 0.39 vs 0.52 (two 420 s timeouts),
 `compaction_resume_edits` 0.88 vs 0.78; `delegate_parallel_review` 0.33 as the baseline (6
 timeouts).
+2026-11-01: confirm-review follow-ups. The eval counts dropped replies in `requests` and records
+per-trial `empty_nudges` (`evals/engine.py`, `trial_usage`; `tests/test_eval_usage.py`); the
+one-byte `"\n"` gap when Claude Code joins user text blocks went to the open-source follow-ups
+spec. `make check` green (2620 passed), `make parity` 0 mismatches.
