@@ -479,9 +479,13 @@ def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> 
         return False
     into_open = state.turn_open
     if into_open and message.role == "user" and message.origin == "system" \
-            and all(isinstance(b, Text) for b in message.content):
+            and all(isinstance(b, Text) for b in message.content) \
+            and (state.calls or not _after_reply(state)):
         # Host text taken between steps (a background job's end notice) is a
-        # step note: a system turn, as Claude Code sends it mid-turn.
+        # step note: a system turn after the tool results, as Claude Code
+        # sends it mid-turn. Right after a reply (one cut at its output
+        # limit, which the turn goes on from) it stays in the user turn: a
+        # system turn there would follow the reply directly.
         message = Message(role="system", content=message.content, origin="system")
     state.empty_nudged = False
     if state.calls:
@@ -496,6 +500,11 @@ def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> 
     return into_open
 
 
+def _after_reply(state: TaskState) -> bool:
+    """The conversation's last message is the model's reply."""
+    return bool(state.messages) and state.messages[-1].role == "assistant"
+
+
 def _end_turn(state: TaskState, seq: int) -> None:
     """A turn stopped or failed. Messages taken during it that the model has
     not answered (held behind its calls, or sent with the stop) join the
@@ -505,6 +514,10 @@ def _end_turn(state: TaskState, seq: int) -> None:
     state.notes = []
     reopen = bool(state.held) or state.reopen_after_stop or state.held_unseen
     for m in state.held:
+        if m.role == "system" and _after_reply(state):
+            # Its tool results never came: a step note right after the
+            # reply goes back into the user turn.
+            m = Message(role="user", content=m.content, origin="system")
         state._add(m, seq)
     state.held = []
     state.reopen_after_stop = False
