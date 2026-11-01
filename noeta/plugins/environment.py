@@ -31,6 +31,7 @@ import os
 import platform
 import posixpath
 import re
+import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -51,8 +52,11 @@ from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.shell import harden_git
 
-#: Git status beyond this is cut at a line boundary and marked.
-GIT_STATUS_MAX_BYTES = 2048
+#: Git status longer than this many characters is cut there (Claude Code's
+#: cut), and the note below follows.
+GIT_STATUS_MAX_CHARS = 2000
+GIT_STATUS_CUT_NOTE = ("\n... (cut here: the status runs past 2,000 characters; for the "
+                       "full list run `git status` with Bash)")
 #: Commits listed in the git snapshot.
 RECENT_COMMITS = 5
 #: The snapshot's second line: taken at the start, or again for a message.
@@ -124,17 +128,9 @@ async def _git_status(env: ExecEnv, cwd: str) -> str | None:
     # Not inside submodules: their own config's filters are not checked.
     status = (await _git(env, cwd, "status", "--short",
                          "--ignore-submodules=dirty")).rstrip("\n")
-    encoded = status.encode("utf-8")
-    if len(encoded) <= GIT_STATUS_MAX_BYTES:
+    if len(status) <= GIT_STATUS_MAX_CHARS:
         return status
-    kept = encoded[:GIT_STATUS_MAX_BYTES].decode("utf-8", errors="ignore")
-    newline = kept.rfind("\n")
-    kept = kept[:newline] if newline >= 0 else ""
-    marker = (
-        f"({len(kept.splitlines())} of {len(status.splitlines())} changed "
-        "paths shown; the status is truncated — run `git status` for the rest.)"
-    )
-    return f"{kept}\n{marker}" if kept else marker
+    return status[:GIT_STATUS_MAX_CHARS] + GIT_STATUS_CUT_NOTE
 
 
 async def _main_branch(env: ExecEnv, cwd: str) -> str:
@@ -150,17 +146,37 @@ async def _main_branch(env: ExecEnv, cwd: str) -> str:
     return ""
 
 
+async def git_root(env: ExecEnv, cwd: str) -> str | None:
+    """The top of the git checkout ``cwd`` is in: the nearest of ``cwd`` and
+    its parents holding a ``.git`` (a directory, or a linked worktree's
+    file), looked up through ``env``; ``None`` outside any checkout."""
+    path = posixpath.normpath(cwd)
+    while True:
+        try:
+            if await env.stat(posixpath.join(path, ".git")) is not None:
+                return path
+        except Exception:  # noqa: BLE001 — capture is best-effort
+            return None
+        parent = posixpath.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+
+
 def _shell() -> str:
-    shell = os.environ.get("SHELL") or "unknown"
-    return "zsh" if "zsh" in shell else "bash" if "bash" in shell else shell
+    """The shell noeta's commands run in (``Bash`` runs ``bash -c`` from
+    ``PATH``), as Claude Code names the one its commands run in; the user's
+    login shell follows when it is another."""
+    bash = shutil.which("bash") or "bash"
+    login = os.environ.get("SHELL")
+    if not login or os.path.realpath(login) == os.path.realpath(bash):
+        return bash
+    return f"{bash} (the user's login shell is {login})"
 
 
 async def capture_git(env: ExecEnv, cwd: str, *, when: str = SNAPSHOT_AT_START) -> str:
     """The git snapshot for the first user turn (``""`` outside a repository)."""
-    try:
-        if await env.stat(posixpath.join(cwd, ".git")) is None:
-            return ""
-    except Exception:  # noqa: BLE001 — capture is best-effort
+    if await git_root(env, cwd) is None:
         return ""
     branch = (await _git(env, cwd, "rev-parse", "--abbrev-ref", "HEAD")).strip()
     status = await _git_status(env, cwd)
@@ -174,10 +190,7 @@ async def git_head(env: ExecEnv, cwd: str) -> str:
     """The branch and the commit it is at (``""`` outside a repository): what
     the person changes by switching branch or committing, which the model's
     own edits do not."""
-    try:
-        if await env.stat(posixpath.join(cwd, ".git")) is None:
-            return ""
-    except Exception:  # noqa: BLE001 — capture is best-effort
+    if await git_root(env, cwd) is None:
         return ""
     return (await _git(env, cwd, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")).strip()
 
@@ -209,10 +222,7 @@ def render_git(*, branch: str, main: str, user: str, status: str | None,
 
 async def capture_environment(env: ExecEnv, cwd: str, model: str) -> str:
     """The environment message's facts for ``cwd`` as ``env`` sees it."""
-    try:
-        is_git = await env.stat(posixpath.join(cwd, ".git")) is not None
-    except Exception:  # noqa: BLE001 — capture is best-effort
-        is_git = False
+    is_git = await git_root(env, cwd) is not None
     local = is_local(env)
     return render_environment(cwd, model, is_git=is_git, local=local,
                               platform_name=sys.platform if local else await _env_platform(env))
@@ -447,7 +457,7 @@ class Environment(Extension):
     * ``attribution`` — put the commit / PR attribution note there.
     * ``token_budget`` — the ``<total_tokens>`` budget a turn starts with
       (``0``: no budget notes, and the prompt's budget line taken out).
-    * ``date_change`` — tell the model, at the start of a turn, when the date
+    * ``date_change`` — tell the model, before any model call, when the date
       is no longer the one it was given (the prompt
       ``reminder/date_changed``, or ``reminder/date_changed_utc`` for UTC
       dates; ``{date}`` is today).
@@ -574,8 +584,9 @@ class Environment(Extension):
         else:
             out += self._deferred_delta(view, st)
             out += await self._git_again(view, st)
-        if not st.get("held") and self.date_change and not view.state.steps_in_turn \
-                and st.get("date"):
+        # Checked before every model call, as Claude Code does, so a long
+        # turn that runs past midnight is told too.
+        if not st.get("held") and self.date_change and st.get("date"):
             today, _ = self._today(view)
             if st["date"] != today:
                 text = view.prompt("reminder/date_changed_utc", DATE_CHANGED_UTC_REMINDER) \
