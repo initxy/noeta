@@ -186,3 +186,10 @@ def test_checked_times_follow_the_remembered_files() -> None:
     # A new read of the file starts over from its own time.
     state = reduce_fs(state, KIND_READ, {"path": "/a", "digest": "e", "mtime": 3})
     assert state.checked == {}
+
+
+def test_a_read_marked_as_a_window_without_a_range_is_one() -> None:
+    state = reduce_fs(None, KIND_READ, {"path": "/p", "digest": "d", "window": True})
+    assert state.reads["/p"].window and state.reads["/p"].range is None
+    plain = reduce_fs(None, KIND_READ, {"path": "/p", "digest": "d"})
+    assert not plain.reads["/p"].window

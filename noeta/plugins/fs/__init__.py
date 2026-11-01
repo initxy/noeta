@@ -15,6 +15,9 @@ an offset or a limit is not checked, as in Claude Code. With those lines shown
 the file counts as read as it is now; otherwise ``Edit`` and ``Write`` refuse
 until the model reads it again.
 
+Files a ``Bash`` command showed (``cat``, ``head``, ``sed -n`` and the
+like) count as read too, as in Claude Code (:mod:`noeta.plugins.fs.shell_reads`).
+
 A tool's own note for the model (``notice``: the paging hint of a read cut
 to fit the token ceiling) is sent as a reminder right after that call's
 result, as Claude Code does. Files the person mentions with ``@path`` are
@@ -33,8 +36,8 @@ import msgspec
 from noeta.core.events import Compacted, Recorded
 from noeta.core.execenv import stat_many
 from noeta.core.extension import Extension, Reminder, TaskView
-from noeta.core.tool import Tool
-from noeta.core.types import ModelRequest
+from noeta.core.tool import Tool, ToolOutput
+from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.fs._encoding import decode, not_text
 from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
@@ -42,6 +45,7 @@ from noeta.plugins.fs.mentions import attach_mentions, hoist_attachments
 from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.pasted import remove_task_images, save_pasted_images
 from noeta.plugins.fs.read import ReadTool
+from noeta.plugins.fs.shell_reads import record_shell_reads
 from noeta.plugins.fs.state import (
     FS,
     KIND_CHANGED,
@@ -113,6 +117,10 @@ class FileTools(Extension):
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return self._tools
+
+    async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
+        await record_shell_reads(view, call, output)
+        return output
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         # The earlier Read results are gone: a re-read must return content.

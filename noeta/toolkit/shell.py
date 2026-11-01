@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from typing import NamedTuple
 
 __all__ = [
     "LONG_SLEEP_S",
@@ -17,12 +18,14 @@ __all__ = [
     "SHELL_EXPANSION_CHARS",
     "SHELL_META_CHARS",
     "WRAPPER_PROGRAMS",
+    "ShellRead",
     "harden_git",
     "has_shell_meta",
     "has_unquoted_expansion",
     "long_leading_sleep",
     "parse_argv",
     "read_files",
+    "shell_reads",
     "subcommands",
 ]
 
@@ -174,6 +177,72 @@ def long_leading_sleep(command: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+class ShellRead(NamedTuple):
+    """One file a command showed (:func:`shell_reads`): lines ``start`` to
+    ``end`` (``head``, ``sed -n``), the last ``tail`` lines (``tail``), or
+    the whole file. ``numbered``: each line came with its number (``cat
+    -n``, ``nl``). ``grep``: only the matching lines were shown, and only
+    when the command found a match (it exited 0)."""
+
+    path: str
+    start: int | None = None
+    end: int | None = None
+    tail: int | None = None
+    numbered: bool = False
+    grep: bool = False
+
+    def view(self, text: str) -> tuple[str, int, int] | None:
+        """The part of the file ``text`` (``\\n`` line ends) this read
+        showed, with its first line and line count (``0, 0``: the whole
+        file); ``None`` when it showed nothing of it (a start past the end,
+        a ``tail`` of an empty file)."""
+        if self.tail is not None:
+            lines = text.split("\n")
+            if lines[-1] == "":
+                lines.pop()
+            if not lines:
+                return None
+            count = min(self.tail, len(lines))
+            return "\n".join(lines[-count:]), len(lines) - count + 1, count
+        if self.start is None:
+            return text, 0, 0
+        lines = text.split("\n")
+        first = max(1, self.start)
+        last = max(first, self.end or first)
+        if first > len(lines):
+            return None
+        return "\n".join(lines[first - 1:last]), first, last - first + 1
+
+    def shown_in(self, output: str, content: str) -> bool:
+        """Whether ``output`` (what the command printed) holds ``content``,
+        leading blank lines and trailing white space aside; for a numbered
+        read, also once the line numbers are taken off."""
+        wanted = re.sub(r"^(\s*\n)+", "", content).rstrip()
+        output = output.replace("\r\n", "\n")
+        if wanted in output:
+            return True
+        return self.numbered and wanted in "\n".join(
+            _unnumbered_line(line) for line in output.split("\n"))
+
+
+    def file_text(self, output: str) -> str:
+        """What a whole-file read printed (``output``) as the file's text:
+        without its line numbers when it was numbered."""
+        output = output.replace("\r\n", "\n")
+        if not self.numbered:
+            return output
+        return "\n".join(_unnumbered_line(line) for line in output.split("\n"))
+
+
+def _unnumbered_line(line: str) -> str:
+    numbered = re.match(r"^[ \t]*\d+[ \t]", line)
+    if numbered is not None:
+        return line[numbered.end():]
+    return "" if re.fullmatch(r"[ \t]*", line) else line
+
+
+#: Lines ``head`` and ``tail`` show when not told how many.
+_DEFAULT_LINES = 10
 #: Subcommands that may sit between reads without spoiling them.
 _READ_FILLER = re.compile(r"^\s*(echo|printf|true|:)\b")
 #: ``cat``-like programs and the flags each may carry.
@@ -197,7 +266,7 @@ _RG_LONG = frozenset({
     "--no-filename", "--multiline", "--pcre2"})
 
 
-def _sed_read(argv: list[str]) -> str | None:
+def _sed_read(argv: list[str]) -> ShellRead | None:
     quiet, words = False, []
     for word in argv[1:]:
         if word.startswith("--"):
@@ -210,12 +279,14 @@ def _sed_read(argv: list[str]) -> str | None:
             quiet = quiet or "n" in word
         else:
             words.append(word)
-    if not quiet or len(words) != 2 or not _SED_RANGE.match(words[0]):
+    lines = _SED_RANGE.match(words[0]) if quiet and len(words) == 2 else None
+    if lines is None:
         return None
-    return words[1]
+    start = int(lines.group(1))
+    return ShellRead(words[1], start=start, end=int(lines.group(3) or start))
 
 
-def _cat_read(argv: list[str]) -> str | None:
+def _cat_read(argv: list[str]) -> ShellRead | None:
     flags = _CAT_FLAGS[argv[0]]
     path = None
     for word in argv[1:]:
@@ -226,10 +297,12 @@ def _cat_read(argv: list[str]) -> str | None:
             return None
         else:
             path = word
-    return None if path in (None, "-") else path
+    if path is None or path == "-":
+        return None
+    return ShellRead(path, numbered=argv[0] == "nl" or "-n" in argv or "--number" in argv)
 
 
-def _head_tail_read(argv: list[str]) -> str | None:
+def _head_tail_read(argv: list[str]) -> ShellRead | None:
     path, count = None, None
     words = iter(argv[1:])
     for word in words:
@@ -249,9 +322,12 @@ def _head_tail_read(argv: list[str]) -> str | None:
             return None
         else:
             path = word
-    if path in (None, "-") or (count is not None and int(count) == 0):
+    if path is None or path == "-" or (count is not None and int(count) == 0):
         return None
-    return path
+    lines = _DEFAULT_LINES if count is None else int(count)
+    if argv[0] == "head":
+        return ShellRead(path, start=1, end=lines)
+    return ShellRead(path, tail=lines)
 
 
 def _grep_read(argv: list[str]) -> str | None:
@@ -277,38 +353,35 @@ def _grep_read(argv: list[str]) -> str | None:
     return words[1]
 
 
-def _one_read(part: str, alone: bool) -> tuple[str, bool] | None:
+def _one_read(part: str, alone: bool) -> ShellRead | None:
     argv = parse_argv(part)
     if not argv:
         return None
     name = argv[0]
     if name == "sed":
-        path = _sed_read(argv)
-    elif name in _CAT_FLAGS:
-        path = _cat_read(argv)
-    elif name in ("head", "tail"):
-        path = _head_tail_read(argv)
-    elif alone and name in ("grep", "egrep", "fgrep", "rg"):
+        return _sed_read(argv)
+    if name in _CAT_FLAGS:
+        return _cat_read(argv)
+    if name in ("head", "tail"):
+        return _head_tail_read(argv)
+    if alone and name in ("grep", "egrep", "fgrep", "rg"):
         path = _grep_read(argv)
-        return None if path is None else (path, True)
-    else:
-        return None
-    return None if path is None else (path, False)
+        return None if path is None else ShellRead(path, grep=True)
+    return None
 
 
-def read_files(command: str) -> list[tuple[str, bool]]:
+def shell_reads(command: str) -> list[ShellRead]:
     """The files ``command`` shows the model, as Claude Code counts a
     ``Bash`` call among the files read: ``cat`` / ``nl`` / ``bat`` of one
     file, ``head`` / ``tail`` of one file, ``sed -n 'N[,M]p' file``, and,
     as the whole command, ``grep`` / ``rg`` of a pattern in one file; joined
     by ``&&`` / ``;`` with nothing but ``echo`` / ``printf`` / ``true`` /
     ``:`` between them. A pipe or a redirection counts nothing. Each path
-    is given as written, with whether it counts only when the command found
-    a match (``grep`` exits 0 only then)."""
+    is given as written, with the part of the file the command showed."""
     if any(c in command for c in "|<>"):
         return []
     parts = subcommands(command)
-    out: list[tuple[str, bool]] = []
+    out: list[ShellRead] = []
     for part in parts:
         read = _one_read(part, alone=len(parts) == 1)
         if read is not None:
@@ -316,6 +389,12 @@ def read_files(command: str) -> list[tuple[str, bool]]:
         elif len(parts) > 1 and not _READ_FILLER.match(part):
             return []
     return out
+
+
+def read_files(command: str) -> list[tuple[str, bool]]:
+    """:func:`shell_reads` as ``(path, counts only when the command found a
+    match)`` pairs (``grep`` exits 0 only then)."""
+    return [(read.path, read.grep) for read in shell_reads(command)]
 
 
 # ---------------------------------------------------------------------------

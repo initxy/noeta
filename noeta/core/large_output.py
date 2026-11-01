@@ -35,6 +35,7 @@ __all__ = [
     "large_output_message",
     "limit_output",
     "mark_spill_dir",
+    "output_cut",
     "result_spill_path",
     "save_spilled",
     "spill_path",
@@ -181,6 +182,12 @@ def result_spill_path(spill_dir: str, task_id: str, call_id: str) -> str:
     """Where the runner saves one call's whole result: beside the call's own
     file (:func:`spill_path`, a tool's), never over it."""
     return spill_path(spill_dir, task_id, call_id).removesuffix(".txt") + ".result.txt"
+
+
+def output_cut(text: str) -> bool:
+    """Whether ``text`` is a tool's output cut to fit (:func:`large_output_message`):
+    the model saw only part of what the tool printed."""
+    return _persisted(text) or "<truncated-output>\nOutput too large (" in text
 
 
 def _persisted(text: str) -> bool:

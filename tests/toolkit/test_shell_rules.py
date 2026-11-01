@@ -14,6 +14,7 @@ from noeta.toolkit.shell import (
     long_leading_sleep,
     parse_argv,
     read_files,
+    shell_reads,
     subcommands,
 )
 
@@ -96,3 +97,33 @@ def test_files_a_command_shows(command: str, files: list[tuple[str, bool]]) -> N
     """Claude Code's count of the files a ``Bash`` call read (its
     read-file state takes them in, so a compaction restores them)."""
     assert read_files(command) == files
+
+
+@pytest.mark.parametrize(("command", "shown"), [
+    ("cat f", ("a\nb\nc\n", 0, 0)),
+    ("head -n 2 f", ("a\nb", 1, 2)),
+    ("head f", ("a\nb\nc\n", 1, 10)),
+    ("tail -n 2 f", ("b\nc", 2, 2)),
+    ("tail -9 f", ("a\nb\nc", 1, 3)),
+    ("sed -n 2,3p f", ("b\nc", 2, 2)),
+    ("sed -n 3,2p f", ("c", 3, 1)),
+    ("sed -n 9p f", None),
+])
+def test_the_part_of_a_file_a_command_shows(command: str,
+                                            shown: tuple[str, int, int] | None) -> None:
+    """Claude Code's view of the file for its read-file entry: the lines
+    shown, the first of them and how many were asked for."""
+    [read] = shell_reads(command)
+    assert read.view("a\nb\nc\n") == shown
+
+
+def test_what_a_command_printed_holds_the_view() -> None:
+    [cat] = shell_reads("cat f")
+    assert cat.shown_in("x\r\na\r\nb\r\n", "\n\na\nb\n  ")
+    assert not cat.shown_in("a\nc", "a\nb")
+    [numbered] = shell_reads("cat -n f")
+    assert numbered.numbered and numbered.shown_in("     1\ta\n     2\t\n     3\tb", "a\n\nb")
+    assert numbered.file_text("     1\ta\n     2\tb") == "a\nb"
+    assert not cat.numbered and cat.file_text("a\r\nb") == "a\nb"
+    [grep] = shell_reads("grep -n x f")
+    assert grep.grep and not grep.numbered
