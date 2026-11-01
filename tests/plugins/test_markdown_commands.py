@@ -96,13 +96,12 @@ async def test_a_command_that_would_ask_does_not_run(run: Harness) -> None:
     assert "The command could not run" in run.sent() and "touch made.txt" in run.sent()
 
 
-async def test_in_auto_mode_a_command_that_would_ask_is_left_to_the_model(
+async def test_in_auto_mode_a_command_that_would_ask_does_not_run_either(
         run: Harness) -> None:
     run.provider.add(reply("ok"))
     await run.start([{"name": "p:mk", "body": "Made: !`touch made.txt`"}], "/p:mk", "auto")
     assert not (run.work / "made.txt").exists()
-    assert "Made: [Before going on, run this command yourself, as written, and use what it " \
-        "prints: `touch made.txt`]" in run.sent()
+    assert "The command could not run" in run.sent() and "yourself" not in run.sent()
 
 
 async def test_allowed_tools_pre_approve_the_models_calls(run: Harness) -> None:

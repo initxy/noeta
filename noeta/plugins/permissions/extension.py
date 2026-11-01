@@ -338,10 +338,7 @@ class Permissions(Extension):
             "by": NAME, "tool": name, "reason": decision.reason,
             "title": w.TITLES.get(name, name),
             "always": rules or None, "always_label": decision.always_label,
-            "choices": choices(decision), "classify": decision.classify,
-            # In auto mode: a skill's inline command that would ask is left
-            # to the model (``noeta.toolkit.inline_commands``).
-            "auto": self.mode_of(view) == "auto"})
+            "choices": choices(decision), "classify": decision.classify})
 
     def _guards(self, view: TaskView, st: PermState, call: ToolUse) -> Gate | None:
         """noeta's own guards: the budget, the risk ceiling, the repetition

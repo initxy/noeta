@@ -196,7 +196,8 @@ def _typed_command(text: str) -> tuple[str, str] | None:
     tagged = parse_command_message(text)
     if tagged is not None:
         return tagged[0], tagged[1].strip()
-    m = re.match(r"/([a-z0-9][a-z0-9-]*|[A-Za-z0-9][A-Za-z0-9_.-]*:[A-Za-z0-9_-]+)"
+    # A scoped name's directory may hold a "/" (``/apps/web:deploy``).
+    m = re.match(r"/([a-z0-9][a-z0-9-]*|[A-Za-z0-9][A-Za-z0-9_./-]*:[A-Za-z0-9_-]+)"
                  r"(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
     return (m.group(1), m.group(2).strip()) if m else None
 
@@ -528,8 +529,7 @@ class Skills(Extension):
                     continue
                 data = activation_data(desc, "preload", cwd=view.cwd)
                 try:
-                    data = await self._expand(view, data, f"skill-preload-{name}",
-                                              hand_off=True)
+                    data = await self._expand(view, data, f"skill-preload-{name}")
                 except InlineCommandError as exc:
                     _log.warning("skills: preload %r skipped: %s", name, exc)
                     continue
@@ -579,8 +579,7 @@ class Skills(Extension):
                 # the command's tags (Claude Code's slash-command shape).
                 data["text"] = render_command_body(desc, typed[1], view.cwd)
                 try:
-                    data = await self._expand(view, data, f"skill-{recorded.seq}",
-                                              hand_off=True)
+                    data = await self._expand(view, data, f"skill-{recorded.seq}")
                 except InlineCommandError as exc:
                     view.notify(str(exc))
                     view.record(self.name, "load_failed", {"name": desc.name},
@@ -601,8 +600,7 @@ class Skills(Extension):
         data = activation_data(desc, "user", args, view.cwd)
         data["text"] = render_body(desc, args, view.cwd)
         try:
-            prompt = (await self._expand(view, data, call_id, hand_off=desc.agent is None))[
-                "text"]
+            prompt = (await self._expand(view, data, call_id))["text"]
         except InlineCommandError as exc:
             view.notify(str(exc))
             view.record(self.name, "load_failed", {"name": desc.name},
@@ -708,7 +706,7 @@ class Skills(Extension):
             return output
         prior = ((view.ext_state(self.name) or {}).get("active") or {}).get(data["name"])
         try:
-            data = await self._expand(view, data, call.id, hand_off=True)
+            data = await self._expand(view, data, call.id)
         except InlineCommandError as exc:
             return text_output(str(exc), is_error=True)
         self._record_invocation(view, data, prior, self.origin)
@@ -777,10 +775,9 @@ class Skills(Extension):
             if has_commands(prompt) and self.shell_commands:
                 # Run once the rewritten call is gated: a deny of this
                 # ``Skill`` call (any plugin's) has stopped it by then.
-                due = {**data, "hand_off": desc.agent is None}
+                due = data
             else:
-                prompt = (await self._expand(view, data, call.id,
-                                             hand_off=desc.agent is None))["text"]
+                prompt = (await self._expand(view, data, call.id))["text"]
                 view.record(self.name, "forked", {"call_id": call.id, "name": name,
                                                   "prompt": prompt})
         agent_input = {"description": FORK_DESCRIPTION.format(name=name), "prompt": prompt,
@@ -795,8 +792,7 @@ class Skills(Extension):
                            data: dict[str, Any]) -> Gate:
         """A fork skill's commands, run now that its ``Skill`` call passed."""
         try:
-            prompt = (await self._expand(view, data, call.id,
-                                         hand_off=data.get("hand_off", False)))["text"]
+            prompt = (await self._expand(view, data, call.id))["text"]
         except InlineCommandError as exc:
             return Deny(reason=str(exc))
         view.record(self.name, "forked", {"call_id": call.id, "name": data["name"],
@@ -883,13 +879,12 @@ class Skills(Extension):
         if fresh:
             self._record_listing(view, fresh, registry)
 
-    async def _expand(self, view: TaskView, data: dict[str, Any], call_id: str, *,
-                      hand_off: bool = False) -> dict[str, Any]:
+    async def _expand(self, view: TaskView, data: dict[str, Any],
+                      call_id: str) -> dict[str, Any]:
         """``data`` with the commands of its text run (or blanked when the
         host turned them off); the text they produced is kept as
         ``rendered`` so a compaction re-attaches it without running them
-        again. ``hand_off``: in auto mode a command that would be asked
-        about is left to the model (``run_inline_commands``)."""
+        again."""
         text = data["text"]
         if not has_commands(text):
             return data
@@ -897,8 +892,7 @@ class Skills(Extension):
             text = strip_commands(text)
         else:
             text = await run_inline_commands(view, text, skill=data["name"], call_id=call_id,
-                                             approve_rules=data.get("allow_rules") or (),
-                                             hand_off=hand_off)
+                                             approve_rules=data.get("allow_rules") or ())
         return {**data, "text": text, "rendered": text}
 
     def _record_listing(self, view: TaskView, lines: Sequence[tuple[str, str]],
@@ -940,7 +934,7 @@ class Skills(Extension):
             parts = [INVOKED_SKILLS_HEADER]
             used = 0
             for name, entry in reversed(active.items()):
-                desc = registry.get(name)
+                desc = registry.recorded(name)
                 if desc is not None:
                     text = _cut_skill(entry.get("rendered") or strip_commands(
                         render_command_body(desc, entry.get("args"), view.cwd), ""))

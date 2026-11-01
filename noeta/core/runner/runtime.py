@@ -99,6 +99,11 @@ class Runtime:
     #: hold a share of its bytes (``noeta.core.runner.snapshotting.SNAPSHOT_GROWTH``);
     #: ``0`` never reads or writes snapshots.
     snapshot_every: int = 100
+    #: An agent's former name -> its name now, for the tasks a log records
+    #: under the former one (a host that renamed agents, e.g. a Claude Code
+    #: plugin's ``<agent>`` that is now ``<plugin>:<agent>``). Never offered
+    #: to a model; only a task's recorded agent is looked up through it.
+    agent_aliases: dict[str, str] = field(default_factory=dict)
     #: Serve only the task trees whose root ids are in this set (a front end
     #: adds each task it creates or resumes); ``None`` serves every task.
     roots: set[str] | None = None
@@ -131,6 +136,14 @@ class Runtime:
                 snapshots.pin(agent.all_extensions())
             except ValueError:  # a misconfigured agent fails when its task loads
                 continue
+
+    def agent(self, name: str) -> Agent | None:
+        """The agent a task's log names: by its name, else by a former one
+        (:attr:`agent_aliases`)."""
+        found = self.agents.get(name)
+        if found is None and name in self.agent_aliases:
+            found = self.agents.get(self.agent_aliases[name])
+        return found
 
     @property
     def hold_seconds(self) -> float:

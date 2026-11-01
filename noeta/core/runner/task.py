@@ -350,7 +350,7 @@ class TaskRun:
         self.state = fold(records, self.reducers, state=base)
 
     def _use_agent(self, name: str) -> None:
-        self.agent = self.rt.agents.get(name)
+        self.agent = self.rt.agent(name)
         self.exts = self.agent.all_extensions() if self.agent is not None else []
         self.reducers = {e.name: e.reduce for e in self.exts}
 

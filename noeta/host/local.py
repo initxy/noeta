@@ -88,7 +88,7 @@ class LocalClient(Client):
         """An agent file's ``initialPrompt`` (Claude Code's): the first
         message of a new top-level conversation with that agent, ahead of
         what the person sent with it. Sub-agents never read it."""
-        found = self.runtime.agents.get(agent)
+        found = self.runtime.agent(agent)
         initial = found.extra.get("initialPrompt") if found is not None else None
         if not isinstance(initial, str) or not initial.strip():
             return input
@@ -99,6 +99,19 @@ class LocalClient(Client):
         if input.role == "user" and input.origin == "human":
             return msgspec.structs.replace(input, content=[Text(text=initial), *input.content])
         return input
+
+
+def former_agent_names(names: Sequence[str]) -> dict[str, str]:
+    """``<agent>`` -> ``<plugin>:<agent>`` for each Claude Code plugin agent
+    whose bare name no other agent has: the name tasks made before plugin
+    agents were named so recorded (``Runtime.agent_aliases``)."""
+    owners: dict[str, list[str]] = {}
+    for name in names:
+        parts = name.split(":")
+        if len(parts) == 2 and all(parts):
+            owners.setdefault(parts[1], []).append(name)
+    return {bare: found[0] for bare, found in owners.items()
+            if len(found) == 1 and bare not in names}
 
 
 class LocalApp:
@@ -116,6 +129,7 @@ class LocalApp:
         if own_tasks_only:
             runtime_kw.setdefault("roots", set())
         runtime_kw.setdefault("spill_root", default_spill_root())
+        runtime_kw.setdefault("agent_aliases", former_agent_names([a.name for a in agents]))
         self.runtime = Runtime(store=store, agents={a.name: a for a in agents},
                                provider_for=provider_for,  # type: ignore[arg-type]
                                on_delta=self._fan_out, poll_interval=0.2, **runtime_kw)
@@ -147,6 +161,8 @@ class LocalApp:
         finishes with the agent it started with."""
         self.runtime.agents.clear()
         self.runtime.agents.update({a.name: a for a in agents})
+        self.runtime.agent_aliases.clear()
+        self.runtime.agent_aliases.update(former_agent_names([a.name for a in agents]))
 
     def _fan_out(self, task_id: str, delta: Delta) -> None:
         self._deliver(task_id, delta)
@@ -180,10 +196,15 @@ class LocalApp:
         return sorted(self.runtime.agents)
 
     async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
-        return await agent_commands(self.runtime.agents, agent, ctx)
+        return await agent_commands(self.runtime.agents, self._named(agent), ctx)
 
     async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
-        return await agent_run_command(self.runtime.agents, agent, ctx, text)
+        return await agent_run_command(self.runtime.agents, self._named(agent), ctx, text)
+
+    def _named(self, agent: str) -> str:
+        """``agent`` as named now (a task's log may hold a former name)."""
+        found = self.runtime.agent(agent)
+        return found.name if found is not None else agent
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
         from noeta.host.usage import task_context
@@ -198,7 +219,7 @@ class LocalApp:
         row = await self.store.get(task_id)
         root = await self.store.get(row.root_id) if row is not None else None
         for r in (row, root):
-            if r is not None and r.agent not in self.runtime.agents:
+            if r is not None and self.runtime.agent(r.agent) is None:
                 raise UnknownAgent(
                     f"task {r.task_id} runs agent {r.agent!r}, which this front end does not "
                     f"have (it has: {', '.join(sorted(self.runtime.agents)) or 'none'})")

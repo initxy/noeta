@@ -165,6 +165,11 @@ async def test_a_plugins_agent_setting_picks_the_agent_front_ends_start_with(
     app = from_settings(load_settings(), cwd=str(tmp_path))
     assert app.main_agent == "Explore"
     await app.store.close()
+    # Settings written before plugin agents were named <plugin>:<agent>.
+    (home / "settings.json").write_text(json.dumps({"agent": "deployer"}))
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    assert app.main_agent == "deploy-tools:deployer"
+    await app.store.close()
     (home / "settings.json").write_text(json.dumps({"agent": "nobody"}))
     app = from_settings(load_settings(), cwd=str(tmp_path))
     assert app.main_agent == "main"
