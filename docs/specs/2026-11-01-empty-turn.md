@@ -120,7 +120,7 @@ empty text is a normal `stop` and ends the turn.
 - [x] Tests through the runtime with a scripted provider (`tests/core/test_loop_behaviors.py`,
       `tests/plugins/test_hooks_events.py`); noeta `-p` against the same fake endpoint.
 - [x] Parity rules, CHANGELOG.
-- [ ] Gates: `make check`, `make parity`, `make cluster`, eval vs `evals/baseline.json`.
+- [x] Gates: `make check`, `make parity`, `make cluster`, eval vs `evals/baseline.json`.
 
 ## Acceptance criteria
 
@@ -144,3 +144,11 @@ interactive); pi and dsh read from local checkouts.
 2026-11-01: implemented; noeta `-p` against the same fake endpoint gives the same requests and
 outcomes (3 requests, `success`, empty result, exit 0 for tool/empty/empty; "All done." for
 tool/empty/text).
+2026-11-01: gates. `make check` green (2606 passed, 60 skipped; coverage 89 %; mypy and lint
+clean; check-docs green). `make parity` 0 mismatches (11 accepted deviations), own-words none.
+`make cluster` 14 passed. Eval (`opensource/deepseek_v4_1_flash`, 9 trials, concurrency 8):
+overall 0.945 vs baseline 0.953, "no regression"; no trial ended on `llm_empty_response`.
+Moves beyond 0.06: `delegate_parallel_review` 0.00 vs 0.33 (4 timeouts; known-noisy),
+`compaction_resume_edits` 1.00 vs 0.78 (known-noisy), `compaction_continuity` 0.89 vs 1.00
+(one trial ended its turn with text after six of eight parts: a normal `end_turn` reply, not an
+empty one), `hook_block_adapts` 0.47 vs 0.52 (known-noisy).
