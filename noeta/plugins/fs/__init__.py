@@ -47,7 +47,7 @@ from noeta.plugins.fs.edit import EditTool
 from noeta.plugins.fs.mentions import attach_mentions, hoist_attachments
 from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.pasted import remove_task_images, save_pasted_images
-from noeta.plugins.fs.read import ReadTool
+from noeta.plugins.fs.read import _READ_MAX_FILE_BYTES, ReadTool
 from noeta.plugins.fs.shell_reads import record_shell_reads
 from noeta.plugins.fs.shell_writes import note_modified_reads
 from noeta.plugins.fs.state import (
@@ -78,6 +78,12 @@ CHANGES_SHOWN = " These are the changed lines, numbered as in the file now:\n{sn
 CHANGES_NOT_SHOWN = " The changes are not shown here; read the file if you need what it holds now."
 #: Its place in a joined system turn: after the quiet nudge, before the budget note.
 ORDER_FILE_CHANGED = 70
+#: A changed file larger than this is not read back and gets no note
+#: (Claude Code reads it back through ``Read``, which refuses it whole).
+CHANGED_FILE_MAX_BYTES = _READ_MAX_FILE_BYTES
+#: Characters of changed lines one check shows in all; past them a note
+#: names the file without its lines (Claude Code's 16,384).
+CHANGED_LINES_BUDGET = 16_384
 
 _BY_NAME: dict[str, type[Tool]] = {
     "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "NotebookEdit": NotebookEditTool,
@@ -157,8 +163,10 @@ class FileTools(Extension):
             stats = await stat_many(view.env, [path for path, _ in watched])
         except OSError:
             return out
+        shown = 0
         for (path, read), stat in zip(watched, stats, strict=True):
-            if stat is None or stat.is_dir or stat.mtime in (read.mtime, st.checked.get(path)):
+            if stat is None or stat.is_dir or stat.mtime in (read.mtime, st.checked.get(path)) \
+                    or stat.size > CHANGED_FILE_MAX_BYTES:
                 continue
             try:
                 raw = await view.env.read_bytes(path)
@@ -173,9 +181,11 @@ class FileTools(Extension):
                 "{path}", path)
             before = seen_text(view.state.messages, path, view.cwd or view.env.cwd)
             snippet = None
-            if before is not None and not_text(raw) in (None, "not_utf8"):
+            if before is not None and not_text(raw) in (None, "not_utf8") \
+                    and shown < CHANGED_LINES_BUDGET:
                 snippet = changed_lines(before, decode(raw).removeprefix("\ufeff"))
             if snippet is not None:
+                shown += len(snippet)
                 text += CHANGES_SHOWN.format(snippet=snippet)
                 # The model now has the file as it is: an edit needs no re-read.
                 view.record(FS, KIND_READ, {"path": path, "digest": digest,
