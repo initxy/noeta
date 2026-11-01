@@ -6,7 +6,7 @@ the same model. Current targets:
 
 | Benchmark | harbor dataset | Tasks | Agent cap |
 |---|---|---|---|
-| Terminal-Bench 4.0 | `terminal-bench/terminal-bench@4.0.0` | 63 of 66 (`math-eval-grader`, `jax-speedrun-gpu`, `fp8-rmsnorm-gemm` need a GPU and are excluded; report "63/66") | 8 h |
+| Terminal-Bench 4.0 | `terminal-bench/terminal-bench@4.0.0` | 63 of 66 (`math-eval-grader`, `jax-speedrun-gpu`, `fp8-rmsnorm-gemm` need a GPU and are excluded; report "63/66"; the 2026-10 run scored 54, see [Results](#results-2026-10-30-to-2026-11-01)) | 8 h |
 | SWE-rebench, July 2026 window | `ibragim-badertdinov/swe-rebench-07-2026` | 111 | 50 min |
 | Terminal-Bench 2.1 (cheap loop, smoke) | `terminal-bench/terminal-bench-2-1` | 89 | 10 min – 3 h |
 
@@ -265,7 +265,7 @@ unfiltered:
 
 - **Builds** go through a buildx builder the run creates (`bench-<job>`,
   `BUILDX_BUILDER` for harbor's compose builds). Everything it pulls and caches
-  is the run's; it is pruned only when docker's disk drops below
+  is the run's; it is pruned only when the disk holding it (its state dir's, else docker's) drops below
   `--prune-below-gb` (default 6; a pruned cache makes the next trial of a task
   pull again) and removed whole when the run ends. The host's default builder
   is not used. A builder, container or state directory of the same name
@@ -335,7 +335,10 @@ per agent:
 - **time** — wall time of the job, mean and summed agent time; setup, agent and
   verifier seconds per trial.
 - **429 / overload** — gateway rate-limit or overload signals in the agents'
-  logs (Claude Code's retry notices, noeta's stderr).
+  logs: Claude Code's `api_retry` events for HTTP 429 / 529, error results
+  naming one, and plain stderr lines. noeta's stream has no retry event; a
+  retry counts only when noeta prints it on stderr, so its count is a lower
+  bound.
 
 ### Gateway concurrency
 
@@ -404,6 +407,187 @@ bench/run_benchmark.sh swe-subset
 Each id becomes a `-i/--include-task-name` filter. Record the full id list with
 the score when publishing (below). TB2.1 is small enough (89 tasks) to
 run in full, so it needs no subset.
+
+## Results (2026-10-30 to 2026-11-01)
+
+One machine (16 cores, 62 GB, an NVIDIA T4 the GPU tasks could not use), harbor 0.25.0,
+Claude Code **2.1.312** (harbor's `claude-code` agent, telemetry off, process
+tree stopped at the cap), model `opensource/deepseek_v4_1_flash` through the
+gateway's Anthropic endpoint for both agents, effort `high`, 1M context window
+and 65,536 output tokens for both. Each run is one graded attempt per task
+(k=1; harbor may retry an attempt that ended without a grade, below);
+noeta and Claude Code trials of one job are interleaved, so they share the
+gateway's load over time. Two noeta commits:
+
+- **54121930** — the commit first benchmarked. Its `Bash` handed commands only a
+  short allowlist of environment variables (`PATH`, `HOME`, `LANG`, …), so the
+  image's `CARGO_HOME`, `RUSTUP_HOME`, `JAVA_HOME` and the like were lost; Claude
+  Code passes the whole environment.
+- **34f8acee** — main after the fixes found by these runs. Two changes the model
+  sees: commands inherit the environment minus noeta's own credentials
+  (`GIT_EDITOR=true` as Claude Code), and the `<total_tokens>` budget notes go
+  only to Claude models, as Claude Code 2.1.312 does (784c0cd8; DeepSeek got
+  them at 54121930). Also a `-p` race that could drop the final result line.
+  The gains below are those two changes together; only the first is traced to
+  individual tasks.
+
+Cost is DeepSeek's list price for DeepSeek-V4.1-Flash
+(<https://api-docs.deepseek.com/quick_start/pricing/>, read 2026-10-30; see
+[What the summary measures](#what-the-summary-measures)); every run below fell
+in off-peak hours, so list and off-peak cost agree.
+
+Rate limits are Claude Code's `api_retry` events (HTTP 429 / 529). noeta
+retries inside its provider client without logging it, so its rate-limit
+count cannot be observed (it is not zero, it is unknown). No trial failed on a
+rate limit.
+
+Harbor retried a trial that ended without a grade (up to 3 times, 5 / 10 /
+20 min apart; a timeout is graded and never retried); a retried trial starts
+over in a new container, so a retry gives the agent a second attempt. Most
+causes were the environment: Claude Code's install (`apt-get install nodejs`
+through the proxy failing, or the install timing out), containers harbor could
+not resolve, and network errors. Not all: in TB4, 9 of noeta's 13 retries were
+the same failure mid-run — the model returned a turn with neither text nor a
+tool call and noeta ended the turn as an error (exit 1): `sglang-qwen-burst` in
+run 1 (after 6.8 min, 23 rounds) and in the rerun (43 min, 45 rounds), and
+`vllm-deepseek-streaming` in the rerun (25 min, 54 rounds), each retried 3
+times; a fix is open separately. Claude Code's `gotd__td-1759` in SWE-rebench
+run 1 exited non-zero after writing its trajectory and passed on the retry;
+noeta's `kestra-io__kestra-16119` and `intellectronica__ruler-556` (run 1)
+exited non-zero for a reason the logs do not show.
+
+| run | retries, noeta | retries, Claude Code | passed only after a retry |
+|---|---|---|---|
+| SWE-rebench 1 | 2 (non-zero exit) | 2 (install timeout, non-zero exit) | noeta `kestra-io__kestra-16119`; Claude Code `floci-io__floci-1142`, `gotd__td-1759` |
+| SWE-rebench fix | 0 | — | — |
+| SWE-rebench r2 | 8 (container not resolved 7, non-zero exit 1) | 19 (install non-zero exit 10, install timeout 5, container not resolved 4) | noeta `oxc-project__oxc-22623`, `pydantic__pydantic-ai-5580`, `react-hook-form__react-hook-form-13464`, `vuejs__core-14877`; Claude Code `helidon-io__helidon-11979`, `pydantic__pydantic-ai-5580`, `react-hook-form__react-hook-form-13464`, `vuejs__core-14877` |
+| TB4 1 | 7 (non-zero exit 5, network 1, container 1) | 10 (network 5, non-zero exit 3, install timeout 2) | — |
+| TB4 fix | 7 (non-zero exit 6, container 1) | — | — |
+| larger model | 0 | 0 | — |
+
+### SWE-rebench 07-2026 (111 tasks, 50 min cap)
+
+All 111 tasks of `ibragim-badertdinov/swe-rebench-07-2026`, at the dataset's
+own 50-minute agent cap.
+
+**Headline — noeta 34f8acee against Claude Code, two attempts per task each
+(k=2, pooled):**
+
+| | noeta 34f8acee | Claude Code 2.1.312 | paired difference (SE) |
+|---|---|---|---|
+| all 111 tasks | 50.5 % | 45.0 % | **+5.4 (3.6)** |
+| same-time pair only (run r2, k=1) | 49.5 % | 42.3 % | +7.2 (3.8) |
+| 91 tasks without leaked answers, k=2 | 51.1 % | 44.0 % | +7.1 (3.6) |
+| 91 tasks without leaked answers, r2 only | 50.5 % | 42.9 % | +7.7 (3.9) |
+
+The paired difference is the mean over tasks of noeta's pass rate minus Claude
+Code's, with its standard error. Pooled k=2: Claude Code's trials of runs 1 and
+r2, noeta's of runs fix and r2. One k=1 run moves by about ±5 points (Claude
+Code scored 47.7 % in run 1 and 42.3 % in r2), so read the pooled row.
+
+Runs:
+
+| run | agents (noeta commit) | started (UTC) | wall | passed | 50-min timeouts | tokens in / cached / out | cost |
+|---|---|---|---|---|---|---|---|
+| 1 `rb-ds41` | noeta 54121930 | 10-30 14:37 | 11.6 h | 50 (45.0 %) | 59 | 326M / 317M / 5.4M | $5.58 |
+| | Claude Code | | | 53 (47.7 %) | 63 | 381M / 370M / 6.0M | $6.25 |
+| fix `rb-ds41-fix` | noeta 34f8acee | 10-31 03:52 | 5.4 h | 57 (51.4 %) | 43 | 390M / 381M / 5.5M | $5.77 |
+| r2 `rb-ds41-r2` | noeta 34f8acee | 10-31 21:29 | 11.6 h | 55 (49.5 %) | 49 | 300M / 292M / 4.9M | $5.01 |
+| | Claude Code | | | 47 (42.3 %) | 66 | 319M / 309M / 5.6M | $5.70 |
+
+Concurrency 16 trials in each run; every trial was graded. Run 1 shared the gateway with the
+larger-model run (1 trial) and, from 17:08, the TB4 run (8); run fix was started
+while those two still ran so the gateway load matched; r2 ran beside the TB4
+noeta rerun (8).
+Rate limits: Claude Code 0 in every run; noeta's are not logged.
+
+Paired differences per run: run 1 (noeta 54121930) −2.7 (SE 4.3); noeta
+34f8acee of run fix against run 1's Claude Code +3.6 (SE 5.1); r2 +7.2 (SE 3.8).
+
+What the fix changed (noeta, run 1 → run fix): trials that set toolchain
+variables by hand 22 → 5 (the rest are deliberate, such as `GOFLAGS=-mod=mod`),
+trials that hit "toolchain not found" 7 → 2, trials that timed out without
+changing a file 17 → 7, timeouts 59 → 43. The original losses it explains:
+`gleam-lang__gleam-5797` (cargo could not find its toolchain; a hand-set
+`CARGO_HOME` sent it to the network; it submitted code that did not compile) and
+`helidon-io__helidon-11979`, both passed after the fix. Claude Code never set
+such variables in run 1.
+
+**Leaked answers.** Agents may reach the internet, and the upstream fix is
+public. A trial counts as leaked when one of these calls returned lines of
+the reference fix: a `WebFetch` / `WebSearch` or a shell `curl`, `wget`, `gh`,
+`git ls-remote` / `show` / `log` on a pull-request, commit, compare, `.patch`
+or `.diff` URL of the task's own upstream repo; a web call naming the PR
+number and the repo; a `git clone` / `fetch` / `pull` of that repo; or any
+shell command that names the path of such a clone (`cat`, `grep`, `git log
+-p`, …). Lines counted are the fix's
+distinct added lines of at least 20 characters; the trial is leaked when at
+least min(3, max(1, a quarter of them)) came back. A task is left out when
+either agent leaked in any run. Both agents do it; across the three runs 20
+tasks are affected:
+`HKUDS__nanobot-4129`, `Martian-Engineering__lossless-claw-814`,
+`apache__dubbo-go-3357`, `cloudflare__vinext-1837`, `floci-io__floci-1325`,
+`kubernetes-sigs__kueue-11559`, `kubernetes-sigs__kueue-11619`,
+`langchain4j__langchain4j-5315`, `langchain4j__langchain4j-5367`,
+`marimo-team__marimo-9766`, `matrixorigin__matrixone-24632`,
+`mikro-orm__mikro-orm-7799`, `mui__base-ui-4849`,
+`pydantic__pydantic-ai-5580`, `pydantic__pydantic-ai-5842`,
+`ubugeeei-prod__vize-1508`, `ubugeeei-prod__vize-774`,
+`vuejs__core-14897`, `withcoral__coral-1186`,
+`woodpecker-ci__woodpecker-6623`. Claude Code had the gateway's server-side
+`WebSearch`; noeta had no search key, only `WebFetch`.
+
+**Project instruction files differ.** Claude Code reads the repository's
+`CLAUDE.md` (and `.claude/rules`) and `AGENTS.md`; noeta reads `NOETA.md` and,
+in a directory without one, `AGENTS.md`, never `CLAUDE.md`. In run 1 Claude
+Code loaded project instructions in 73 of 111 tasks: 56 had a `CLAUDE.md` (22
+of them also an `AGENTS.md`, which noeta reads too), 17 only an `AGENTS.md`.
+So in 34 tasks Claude Code read project instructions and noeta read none;
+in the 22 with both files Claude Code also read `CLAUDE.md` on top of the
+`AGENTS.md` noeta saw. It cuts both ways: on `Soju06__codex-lb-744` the repo's
+OpenSpec workflow was in `CLAUDE.md`, and on `kubernetes-sigs__kueue-11619`
+Claude Code followed the repo's instructions, stopped after 37 s to wait for
+an acknowledgement and scored 0. Not equalized in these runs.
+
+### Terminal-Bench 4.0 (54 tasks, 2 h cap)
+
+`terminal-bench/terminal-bench@4.0.0`, 54 of 66 tasks scored: the 3 GPU tasks
+(`math-eval-grader`, `jax-speedrun-gpu`, `fp8-rmsnorm-gemm`; they need CUDA
+≥ 13.2, which the machine's driver cannot provide), 8 compose tasks whose own
+reference solution fails the tests (on the mirror and on the original images:
+`cumulative-layout-shift`, `heat-pump-warranty`, `intrastat-meldung`,
+`payments-pipeline-fix`, `legacy-utility-triage`, `live-database-cutover`,
+`freight-dispatch-shift`, `medical-claims-processing`) and `cad-model`
+(reference solution fails on this machine) are left out. The agent cap is
+2 h, below the tasks' own caps, so the numbers are not leaderboard-comparable.
+Concurrency 8 trials, k=1.
+
+| run | agent (noeta commit) | wall | passed | 2-h timeouts | tokens in / cached / out | cost |
+|---|---|---|---|---|---|---|
+| `tb4-ds41` | noeta 54121930 | 28.3 h | 2 (3.7 %) | 39 | 308M / 303M / 9.1M | $7.10 |
+| | Claude Code | | 1 (1.9 %) | 41 | 287M / 283M / 8.3M | $6.50 |
+| `tb4-ds41-fix` | noeta 34f8acee | 13.8 h | 2 (3.7 %) | 37 | 176M / 172M / 6.9M | $5.23 |
+
+Run 1 started 10-30 17:08 beside SWE-rebench run 1; the rerun started 10-31
+21:28 beside SWE-rebench run r2. Paired difference, run 1: +1.9 (SE 1.9); the
+rerun's noeta against run 1's Claude Code: +1.9 (SE 3.2). Ungraded trials,
+counted as fails: in run 1 Claude Code's `wdm-design` never ran (its install
+failed on all 4 attempts: `apt-get` through the proxy got HTTP 500) and its `distributed-dedup` timed out with
+no grade; in the rerun noeta's `distributed-dedup`, `uefi-bootkit` and
+`vba-userform-port` timed out with no grade (their verifier did not finish). Both agents are near zero: on this model at a 2-hour cap Terminal-Bench 4.0 does not separate them.
+The failures that did not time out are graded fails (some tests pass, some do
+not); every scored task passes with its reference solution.
+
+### A larger private model (20 SWE-rebench tasks, pre-fix)
+
+A larger private gateway model (1M window, 128K output cap for both), 20 tasks
+drawn with seed 0 from the 104 SWE-rebench tasks whose image is not large,
+concurrency 1, noeta **54121930** (before the fix). Claude Code passed 10 of
+20, noeta 6: paired difference −20 points (SE 11.7, n=20). Claude Code hit 20
+rate-limit retries (HTTP 429, in 2 trials, both failed); noeta's retries are
+not logged, so its count is unknown. No trial failed on a rate limit. No leaked answers. 29.7 h wall; no list price for this model.
+A rerun of noeta 34f8acee on the same 20 tasks (paired against these Claude
+Code trials) is in progress.
 
 ## Publishing
 

@@ -588,12 +588,14 @@ def free_gb(path: str = "/var/lib/docker") -> float:
 def background(stop: threading.Event, builder: RunBuilder, leftovers: TrialLeftovers, job_dir: Path,
                secrets: list[str], prune_below_gb: float, every_s: float = 120) -> None:
     """Every two minutes: remove finished trials' leftovers, redact the key,
-    and prune the run's builder only when docker's disk runs low (a pruned
-    cache makes the next trial of a task pull its image again)."""
+    and prune the run's builder only when the disk holding its cache runs
+    low — its state dir's, else docker's (a pruned cache makes the next
+    trial of a task pull its image again)."""
+    cache_disk = str(builder.state_dir) if builder.state_dir is not None else "/var/lib/docker"
     while not stop.wait(every_s):
         leftovers.clean()
         redact_tree(job_dir, secrets)
-        if free_gb() < prune_below_gb:
+        if free_gb(cache_disk) < prune_below_gb:
             builder.prune()
 
 
@@ -742,28 +744,43 @@ def cost(n_in: int, n_cache: int, n_out: int, model: str, peak_share: float) -> 
     return base * (1 + peak_share)
 
 
-_ERROR_LINE = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded", re.IGNORECASE)
+_ERROR_LINE = re.compile(r"\b(429|529)\b|rate[ _-]?limit(?!er\b|ers\b)|too many requests|overloaded", re.IGNORECASE)
 
 
 def api_errors(agent_dir: Path) -> int:
     """Gateway rate-limit / overload signals in an agent's logs: Claude Code's
-    retry notices, noeta's stderr. Tool output is not counted."""
+    `api_retry` events for HTTP 429 / 529 (or a rate-limit / overload error),
+    an error result whose error text names one when no retry event came before
+    it (a retry exhaustion is counted once, by its retries), and plain (non-JSON)
+    stderr lines. Other stream events are not counted: their text holds token
+    counts and the model's thinking, where "429" is just a number. noeta's
+    retries are not logged, so its count covers only what it printed on stderr
+    and is not a measurement of its retries."""
     count = 0
     for path in list(agent_dir.glob("*.txt")) + list(agent_dir.glob("*.json")):
         if path.name in ("trajectory.json", "noeta-usage.json"):
             continue
+        retries = 0
         for line in path.read_text(errors="replace").splitlines():
-            if not _ERROR_LINE.search(line):
+            if not line.lstrip().startswith("{"):
+                count += bool(_ERROR_LINE.search(line))
                 continue
-            if line.lstrip().startswith("{"):
-                try:
-                    payload = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(payload, dict) or (payload.get("type") != "system"
-                                                     and not payload.get("is_error")):
-                    continue
-            count += 1
+            if '"api_retry"' not in line and '"is_error"' not in line:
+                continue
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("type") == "system" and payload.get("subtype") == "api_retry":
+                status = payload.get("error_status")
+                if status in (429, 529) or _ERROR_LINE.search(str(payload.get("error") or "")):
+                    retries += 1
+                    count += 1
+            elif payload.get("type") == "result" and payload.get("is_error") and not retries:
+                error_text = json.dumps([payload.get("result"), payload.get("errors")])
+                count += bool(_ERROR_LINE.search(error_text))
     return count
 
 
@@ -915,7 +932,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--build-timeout-mult", type=float, default=3.0,
                      help="environment build timeout multiplier (pulls of large images)")
     run.add_argument("--prune-below-gb", type=float, default=6.0,
-                     help="prune the run's builder cache when docker's disk has less free")
+                     help="prune the run's builder cache when the disk holding it has less free")
     run.add_argument("--jobs-dir", default=str(REPO / "bench" / "jobs"))
     run.add_argument("--datasets-dir", default=str(REPO / "bench" / "datasets"))
     run.add_argument("--job-name")
