@@ -111,8 +111,10 @@ def test_the_command_line_passes_the_flags_on(home: Path, tmp_path: Path,
         cli.main(["-p", "go", "--setting-sources=", "--strict-mcp-config",
                   "--agents", '{"rev": {"description": "d", "prompt": "p"}}',
                   "--cwd", str(tmp_path)])
-    assert seen["setting_sources"] == () and seen["plugins"] == {
-        "mcp": {"servers": {}, "settings_files": [], "project": False}}
+    plugins = seen["plugins"]
+    assert seen["setting_sources"] == () and plugins["mcp"] == {
+        "servers": {}, "settings_files": [], "project": False}
+    assert set(plugins["hooks"]) == {"callbacks"}  # the client's initialize hooks go there
     assert [a.name for a in seen["agent_files"]] == ["rev"]
     assert "ignored" not in capsys.readouterr().err
     with pytest.raises(SystemExit) as bad:

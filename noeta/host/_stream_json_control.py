@@ -1,10 +1,14 @@
 """The control half of Claude Code's headless protocol for
 :class:`~noeta.host.stream_json.StreamJson`: the client's ``control_request``
-s (``initialize``, ``interrupt``, ``set_permission_mode`` …), and the
-permission prompts sent to the client as ``can_use_tool`` requests."""
+s (``initialize``, ``interrupt``, ``set_permission_mode`` …), and ours:
+the permission prompts sent to the client as ``can_use_tool`` requests,
+and ``hook_callback`` requests when a hook the client registered in
+``initialize`` fires (``HeadlessOptions.hook_callbacks``; only in the
+process holding the client, see ``noeta.toolkit.hook_callbacks``)."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -19,6 +23,7 @@ from noeta.host.pending import Pending, card_title
 from noeta.host.questions import typed_answer
 from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
 from noeta.host.usage import cost_text, tree_usage
+from noeta.toolkit.hook_callbacks import parse_callbacks
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL, PERMISSION_MODES
 
 if TYPE_CHECKING:
@@ -40,6 +45,8 @@ class ControlRequests:
     _requests: int
     #: Our ``can_use_tool`` requests waiting for the client: id -> pending.
     _asked: dict[str, Pending]
+    #: Our ``hook_callback`` requests waiting for the client: id -> its reply.
+    _hook_replies: dict[str, asyncio.Future[dict[str, Any]]]
     _shown: set[tuple[str, str]]
     #: Prompt uuid -> inbox seq of its message (0: the first prompt).
     _uuids: dict[str, int]
@@ -77,10 +84,29 @@ class ControlRequests:
 
     async def _on_initialize(self, request: dict[str, Any]) -> dict[str, Any]:
         if request.get("hooks"):
-            log.warning("hook callbacks from the client are not supported; ignored")
+            hooks = parse_callbacks(request["hooks"])
+            if self.options.hook_callbacks is None:
+                log.warning("hook callbacks from the client cannot run here; ignored")
+            else:
+                self.options.hook_callbacks.register(hooks, self._hook_callback)
         return {"commands": await self._commands(), "output_style": "default",
                 "available_output_styles": ["default"], "models": self._models(),
                 "account": {}, "pid": os.getpid()}
+
+    async def _hook_callback(self, callback_id: str, payload: dict[str, Any],
+                             tool_use_id: str | None) -> dict[str, Any]:
+        """A client's hook fired: ask the client (``hook_callback``) and wait
+        for its reply, the hook's JSON output."""
+        reply: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        fields: dict[str, Any] = {"callback_id": callback_id, "input": payload}
+        if tool_use_id:
+            fields["tool_use_id"] = tool_use_id
+        request_id = await self.request("hook_callback", **fields)
+        self._hook_replies[request_id] = reply
+        try:
+            return await reply
+        finally:
+            self._hook_replies.pop(request_id, None)
 
     def _models(self) -> list[dict[str, Any]]:
         out = [{"value": alias, "displayName": alias.capitalize(), "description": real}
@@ -187,6 +213,16 @@ class ControlRequests:
         await self.client.answer(p.task_id, p.request_id, "deny", data=data)
 
     async def _answered(self, response: dict[str, Any]) -> None:
+        waiting = self._hook_replies.get(str(response.get("request_id") or ""))
+        if waiting is not None:
+            if waiting.done():
+                return
+            if response.get("subtype") == "success":
+                body = response.get("response")
+                waiting.set_result(body if isinstance(body, dict) else {})
+            else:
+                waiting.set_exception(RuntimeError(str(response.get("error") or "failed")))
+            return
         p = self._asked.pop(str(response.get("request_id") or ""), None)
         if p is None:
             return
@@ -218,3 +254,9 @@ class ControlRequests:
         asked, self._asked = list(self._asked.values()), {}
         for p in asked:
             await self._refuse(p, "")
+        if self.options.hook_callbacks is not None:
+            # Its hooks end with it, as a Claude Code session's do.
+            self.options.hook_callbacks.register({}, self._hook_callback)
+        for waiting in self._hook_replies.values():
+            if not waiting.done():
+                waiting.set_exception(RuntimeError("the client is gone"))

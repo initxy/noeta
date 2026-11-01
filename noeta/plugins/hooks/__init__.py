@@ -29,6 +29,12 @@ Hook types (``config.py`` has the fields and defaults):
   ``input`` (``${tool_input.file_path}``-style paths filled from the event);
   its text answer is read like stdout, an error result is a failure.
 
+Two more come from a front end, not from settings: ``callback`` hooks a
+connected client registers and answers (``Hooks(callbacks=...)``, Claude
+Code's SDK hook callbacks), and the MCP tool that answers every permission
+request (``Hooks(permission_prompt_tool=...)``, Claude Code's
+``--permission-prompt-tool``).
+
 Exit 0 is success (stdout plain text, or a JSON object: ``continue`` /
 ``stopReason``, ``decision`` / ``reason``, ``systemMessage``,
 ``hookSpecificOutput``); exit 2 blocks with stderr as the reason; anything

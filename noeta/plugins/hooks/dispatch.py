@@ -24,10 +24,12 @@ from noeta.plugins.hooks.runners import (
     Runner,
     RunTool,
     run_agent,
+    run_callback,
     run_http,
     run_mcp_tool,
     run_prompt,
 )
+from noeta.toolkit.hook_callbacks import HookCallbacks
 from noeta.toolkit.inline_commands import refusal
 from noeta.toolkit.permission_rules import RuleContext, match
 
@@ -208,6 +210,8 @@ class Dispatcher:
         self.matchers = matchers
         self.runner = runner
         self.http_transport = http_transport
+        #: The connected client ``callback`` hooks ask (none: they fail).
+        self.callbacks: HookCallbacks | None = None
         self._background: set[asyncio.Future[Any]] = set()
 
     def state(self, view: TaskView) -> HookState:
@@ -286,6 +290,9 @@ class Dispatcher:
                 return await run_agent(hook, payload, view.complete, view.model,
                                        _read_only_tools(view),
                                        _tool_runner(view, "agent", checked=True), transcript)
+            if hook.type == "callback":
+                return await run_callback(
+                    hook, payload, self.callbacks.call if self.callbacks is not None else None)
             if hook.type == "mcp_tool":
                 return await run_mcp_tool(hook, payload, _mcp_tool(view, hook),
                                           _tool_runner(view, "mcp"))
