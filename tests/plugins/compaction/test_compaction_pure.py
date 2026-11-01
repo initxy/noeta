@@ -261,3 +261,31 @@ def test_restore_candidates_follow_the_read_state_a_compaction_resets() -> None:
     # (big.txt got the too-large note, kept.txt sat in its kept messages).
     assert recent_files(history, len(history), since=7, carried=["/w/old.txt"]) == [
         "/w/new.txt", "/w/old.txt"]
+
+
+def _shell(call: str, command: str, output: str = "x", *, failed: bool = False
+           ) -> list[Message]:
+    return [Message(role="assistant", content=[
+                ToolUse(id=call, name="Bash", input={"command": command})]),
+            Message(role="user", content=[ToolResult(call_id=call, content=[Text(text=output)],
+                                                     is_error=failed)])]
+
+
+def test_files_a_shell_command_showed_are_restored_too() -> None:
+    """Claude Code's read-file state takes in what a ``Bash`` command
+    printed of a file (``cat``, ``head``, ``sed -n`` ...), so a compaction
+    restores it like a ``Read``; relative paths are taken from the task's
+    directory."""
+    from noeta.plugins.compaction.restore import recent_files
+    from noeta.toolkit.shell import NO_OUTPUT
+
+    history = [user("go"), *_read("a", "/w/read.txt"),
+               *_shell("b", "cat skills/x/SKILL.md"),
+               *_shell("c", "cat gone.txt", "No such file", failed=True),
+               *_shell("d", "grep -n nothing quiet.txt", NO_OUTPUT),
+               *_shell("e", "grep -n TODO found.txt", "3:TODO"),
+               *_shell("f", "cat a.txt | wc -l"),
+               *_shell("g", "head -n 5 ./src/a.py && echo --- && sed -n '1,9p' /abs/b.py"),
+               user("next")]
+    assert recent_files(history, len(history), cwd="/w") == [
+        "/abs/b.py", "/w/src/a.py", "/w/found.txt", "/w/skills/x/SKILL.md", "/w/read.txt"]

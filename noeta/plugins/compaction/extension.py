@@ -395,7 +395,8 @@ class Compaction(Extension):
             if ext.seen_through is not None and ext.restored_paths is not None:
                 since = sum(1 for s in state.history_seqs if s <= ext.seen_through)
             restored, records, full = await restore_files(
-                recent_files(state.history, raw_cut, since=since, carried=carried),
+                recent_files(state.history, raw_cut, since=since, carried=carried,
+                             cwd=view.cwd),
                 read_tool, self._restore_context(view, state))
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)

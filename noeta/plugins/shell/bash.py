@@ -34,7 +34,7 @@ from noeta.plugins.shell.output import capture_notice, exit_fails, output_image,
 from noeta.plugins.shell.sandbox import confine
 from noeta.plugins.shell.state import SHELL
 from noeta.toolkit.sandbox import violations_block
-from noeta.toolkit.shell import long_leading_sleep
+from noeta.toolkit.shell import NO_OUTPUT, long_leading_sleep
 from noeta.toolkit.tools import SCHEMA_DIALECT as SCHEMA_DIALECT
 from noeta.toolkit.tools import (
     Workspace,
@@ -62,8 +62,6 @@ MAX_SHELL_TIMEOUT_MS = 600_000
 DEFAULT_SHELL_OUTPUT_CAP = 256 * 1024
 #: Claude Code's ``maxResultSizeChars`` for Bash.
 SHELL_OUTPUT_LIMIT = 30_000
-#: The result of a command that succeeds and prints nothing.
-NO_OUTPUT = "(Bash completed with no output)"
 
 #: Set on every command over the inherited environment, as Claude Code does:
 #: ``git commit`` / ``rebase`` must not wait for an editor nobody can use. A
