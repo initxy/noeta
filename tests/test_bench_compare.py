@@ -66,6 +66,23 @@ def test_partial_reward_is_not_a_pass(tmp_path: Path) -> None:
     assert compare.trial_rows(job, MODEL)[0]["outcome"] == "fail"
 
 
+def test_rate_limits_count_retry_events_not_numbers_in_the_stream(tmp_path: Path) -> None:
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    lines = [
+        {"type": "system", "subtype": "api_retry", "error_status": 429, "attempt": 1},
+        {"type": "system", "subtype": "api_retry", "error_status": 529, "attempt": 2},
+        {"type": "system", "subtype": "api_retry", "error_status": 500, "attempt": 3},
+        {"type": "system", "subtype": "thinking_tokens", "tokens": 4290},
+        {"type": "system", "subtype": "thinking_tokens", "text": "status 429 in the code"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "HTTP 429 handling"}]}},
+        {"type": "result", "is_error": True, "result": "API Error: 429 rate limit"},
+    ]
+    (agent / "claude-code.txt").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\nError: 429 Too Many Requests, retrying\n")
+    assert compare.api_errors(agent) == 4
+
+
 def test_cost_uses_the_list_price_and_peak_share() -> None:
     off = compare.cost(1_000_000, 900_000, 10_000, MODEL, 0.0)
     assert off == pytest.approx((100_000 * 0.15 + 900_000 * 0.003 + 10_000 * 0.60) / 1e6)

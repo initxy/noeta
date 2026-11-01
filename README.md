@@ -112,6 +112,25 @@ can override, and Claude Code plugin directories load from noeta's own places. H
 ship each kind, and how it compares with pi, DeepSeek Harness and Claude Code:
 [docs/extending.md](docs/extending.md).
 
+## Benchmarks
+
+noeta next to Claude Code 2.1.312 on the same model (`opensource/deepseek_v4_1_flash`, effort
+`high`), same tasks, caps and machine, run through harbor (2026-10-30 to 2026-11-01):
+
+| Benchmark | noeta | Claude Code | noeta − Claude Code (SE) |
+|---|---|---|---|
+| SWE-rebench 07-2026, 111 tasks, 50 min, k=2 pooled | 50.5 % | 45.0 % | +5.4 (3.6) |
+| same, 91 tasks without leaked answers | 51.1 % | 44.0 % | +7.1 (3.6) |
+| same, one same-time run (k=1) | 49.5 % | 42.3 % | +7.2 (3.8) |
+| Terminal-Bench 4.0, 54 of 66 tasks, 2 h cap, k=1 | 3.7 % | 1.9 % | +1.9 (3.2) |
+
+noeta at 34f8acee. The first run, at 54121930, scored −2.7 (SE 4.3) on SWE-rebench; it showed
+that noeta's `Bash` dropped the image's environment variables (`CARGO_HOME`, `JAVA_HOME`, …),
+fixed in 34f8acee. Terminal-Bench
+4.0 is near zero for both on this model and does not separate them. Versions, every run, cost,
+the leaked-answer tasks, what each agent reads from the repo, and a second model:
+[bench/README.md](bench/README.md#results-2026-10-30-to-2026-11-01).
+
 ## Privacy
 
 noeta sends nothing anywhere except requests to the model provider you configure: no

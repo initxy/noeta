@@ -749,21 +749,30 @@ _ERROR_LINE = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded", re
 
 def api_errors(agent_dir: Path) -> int:
     """Gateway rate-limit / overload signals in an agent's logs: Claude Code's
-    retry notices, noeta's stderr. Tool output is not counted."""
+    `api_retry` events for HTTP 429 / 529 (or a rate-limit / overload error
+    text), an error result naming one, and plain (non-JSON) stderr lines.
+    Other stream events are not counted: their text holds token counts and
+    the model's thinking, where "429" is just a number. noeta's own retries
+    are not in its stream, so its count covers only what it printed."""
     count = 0
     for path in list(agent_dir.glob("*.txt")) + list(agent_dir.glob("*.json")):
         if path.name in ("trajectory.json", "noeta-usage.json"):
             continue
         for line in path.read_text(errors="replace").splitlines():
-            if not _ERROR_LINE.search(line):
+            if not _ERROR_LINE.search(line) and '"api_retry"' not in line:
                 continue
             if line.lstrip().startswith("{"):
                 try:
                     payload = json.loads(line)
                 except ValueError:
                     continue
-                if not isinstance(payload, dict) or (payload.get("type") != "system"
-                                                     and not payload.get("is_error")):
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("type") == "system" and payload.get("subtype") == "api_retry":
+                    status = payload.get("error_status")
+                    if status not in (429, 529) and not _ERROR_LINE.search(str(payload.get("error") or "")):
+                        continue
+                elif not (payload.get("type") == "result" and payload.get("is_error")):
                     continue
             count += 1
     return count
