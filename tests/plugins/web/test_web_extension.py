@@ -23,6 +23,7 @@ from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import ModelRequest, ModelResponse, Text
 from noeta.plugins.web import Web
 from noeta.plugins.web.fetch import (
+    DOCS_DIGEST_INSTRUCTIONS,
     CrossHostRedirect,
     HttpFetchTransport,
     PageCache,
@@ -520,6 +521,27 @@ async def test_a_digest_needs_no_earlier_hook_in_this_process(tmp_path: Path) ->
     assert text(out) == "It costs 42." and [r.model for r in seen] == ["main-model"]
 
 
+async def test_a_documentation_site_gets_the_looser_digest_rules(tmp_path: Path) -> None:
+    # Claude Code 2.1.312: a preapproved documentation host's page may be
+    # answered with code samples and passages of it; other pages get the
+    # quoting rules.
+    seen: list[str] = []
+
+    async def complete(request: ModelRequest) -> ModelResponse:
+        seen.append(request.messages[0].text)
+        return reply("ok")
+
+    web = Web(fetch_transport=FakeFetch())
+    ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)), state={},
+                      record=lambda *_: None, model="m", complete=complete)
+    for url in ("https://docs.python.org/3/x.html", "https://e.com"):
+        await web.fetch.run({"url": url, "prompt": "how?"}, ctx)
+    docs, other = seen
+    assert docs.endswith(f"\n\nhow?\n\n{DOCS_DIGEST_INSTRUCTIONS.strip()}\n")
+    assert "125 characters" in other and "125 characters" not in docs
+    assert "song" in other
+
+
 def test_per_task_bindings_are_bounded() -> None:
     from noeta.core.tool import ToolContext
     from noeta.plugins.web import TASKS_KEPT
@@ -538,14 +560,18 @@ def test_the_user_agent_points_at_the_project() -> None:
 
 async def test_digest_runs_through_the_runner(store: SqliteStore, tmp_path: Path) -> None:
     def digest_reply(request: ModelRequest) -> ModelResponse:
-        assert request.model == "main-model" and request.max_tokens == 4096
-        assert not request.thinking and not request.tools
+        # Claude Code 2.1.312 (m1/0025): the identity line only, no tools, no
+        # thinking field, the model's ceiling and the session's effort.
+        assert request.model == "claude-opus-5-5" and request.max_tokens == 128_000
+        assert [p.text for p in request.system] == ["You are x."]
+        assert request.thinking is None and request.effort == "high" and not request.tools
         # Like every call made beside the step (a title, a summary), the
         # digest carries none of the headers a hook put on the main request.
         assert request.headers == {}
         prompt = request.messages[0].text
-        assert prompt.startswith("You are answering a request about a web page")
-        assert "\nRequest: price?\n" in prompt and "Price is 42" in prompt
+        assert prompt.startswith("\nFetched page:\n---\n# Top\n\nPrice is 42")
+        assert "\n---\n\nprice?\n\nAnswer the request briefly" in prompt
+        assert prompt.endswith("what it does hold.\n")
         return reply("The price is 42.")
 
     provider = ScriptedProvider([LOAD, reply("", ("WebFetch", {"url": "https://e.com",
@@ -560,7 +586,7 @@ async def test_digest_runs_through_the_runner(store: SqliteStore, tmp_path: Path
 
             return msgspec.structs.replace(request, headers={"x-request": "r1"})
 
-    agent = Agent(name="a", model="main-model",
+    agent = Agent(name="a", model="claude-opus-5-5", identity="You are x.", effort="high",
                   extensions=[Headers(), Web(fetch_transport=FakeFetch())])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  sleep=_no_sleep)

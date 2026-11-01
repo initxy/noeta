@@ -10,8 +10,6 @@ import posixpath
 from collections.abc import Sequence
 from typing import Any
 
-from noeta.core import records
-from noeta.core.events import External
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.tool import ToolContext
 from noeta.core.types import ToolResult
@@ -23,7 +21,7 @@ from noeta.plugins.permissions.state import NAME, PermState, state_of
 log = logging.getLogger("noeta.permissions")
 
 #: The signal the plan-name side request answers with.
-PLAN_NAME_SIGNAL = "plan_name"
+PLAN_NAME_SIGNAL = pl.PLAN_NAME_SIGNAL
 #: Places in the joined system turn (``Reminder.order``): before the token
 #: budget, after the skill list.
 ORDER_PLAN = 64
@@ -82,34 +80,6 @@ def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str) -> bool:
     ctx.record(NAME, "mode", {"mode": "plan", "plan": {
         "path": path, "pre_mode": current, "entered_seq": 0}})
     return True
-
-
-def name_plan(view: TaskView, parked: records.Parked,
-              background: set[asyncio.Future[Any]]) -> None:
-    """The plan-name side request, when ``ExitPlanMode`` shows the plan."""
-    call = next((cl.use for cl in view.state.calls
-                 if cl.use.id == parked.call_id), None)
-    if call is None or call.name != pl.EXIT_PLAN_MODE or view.complete is None \
-            or view.post is None:
-        return
-    questions = (parked.detail or {}).get("questions") or [{}]
-    text = str(questions[0].get("question") or "")
-    complete, post = view.complete, view.post
-    model = view.model or str(view.state.config.get("model") or "")
-
-    async def name_it() -> None:
-        try:
-            response = await complete(pl.plan_name_request(model, text))
-            name = pl.parse_plan_name(response.message.text)
-            if name:
-                await post(External(name=PLAN_NAME_SIGNAL, data={"name": name}),
-                           dedupe_key=f"{PLAN_NAME_SIGNAL}:{call.id}")
-        except Exception:
-            log.debug("plan name failed", exc_info=True)
-
-    job = asyncio.ensure_future(name_it())
-    background.add(job)
-    job.add_done_callback(background.discard)
 
 
 async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:

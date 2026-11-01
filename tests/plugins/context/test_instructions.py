@@ -115,6 +115,24 @@ async def test_layers_in_claude_codes_order(h: Harness, tmp_path: Path) -> None:
     assert "ts" not in text.split("always")[1].split("local")[0]
 
 
+async def test_managed_only_reads_just_the_machines_files(h: Harness, tmp_path: Path) -> None:
+    # An agent file's omitClaudeMd: Claude Code keeps only the managed
+    # policy files.
+    managed, user_dir = tmp_path / "managed", tmp_path / "noeta-home"
+    managed.mkdir()
+    (managed / "NOETA.md").write_text("policy\n")
+    user_dir.mkdir()
+    (user_dir / "NOETA.md").write_text("user\n")
+    (h.work / "NOETA.md").write_text("project\n")
+    a = agent(user_dir=str(user_dir), managed_dir=str(managed), managed_only=True)
+    h.provider.add(reply("ok"))
+    tid = await h.start(a)
+    [rec] = await h.records(tid, "instructions")
+    assert [f["kind"] for f in rec.data["files"]] == ["managed"]
+    text = h.provider.requests[0].messages[0].text
+    assert "policy" in text and "project\n" not in text and "user\n" not in text
+
+
 async def test_imports_follow_the_file_naming_them(h: Harness, tmp_path: Path) -> None:
     (h.work / "docs").mkdir()
     (h.work / "NOETA.md").write_text(

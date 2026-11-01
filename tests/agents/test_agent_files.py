@@ -153,7 +153,11 @@ def test_claude_code_fields_map_onto_the_agent(caplog: pytest.LogCaptureFixture)
     [agent] = build_agents([f], model="host", plugins={"skills": False, "tool_search": False, "structured_output": False},
                            default_plugins=[("instructions", {})])
     assert agent.model == "claude-haiku-5-5" and agent.denied_tools == ("Write",)
-    assert agent.step_budget == 7 and agent.extensions == ()
+    # omitClaudeMd keeps only the managed instructions (Claude Code 2.1.312).
+    [instructions] = agent.extensions
+    assert instructions.name == "instructions"
+    assert instructions.managed_only and not instructions.discovery  # type: ignore[attr-defined]
+    assert agent.step_budget == 7
     # What only the sub-agent plugin acts on stays in the file's fields.
     assert agent.extra["permissionMode"] == "acceptEdits"
     assert agent.extra["model"] == "haiku"

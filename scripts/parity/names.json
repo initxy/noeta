@@ -66,7 +66,7 @@
     "^<system-reminder>\\s*Below are instructions from the codebase": "reminder/instructions",
     "^<system-reminder>\\s*Here is context from the workspace": "reminder/context",
     "^<system-reminder>\\s*From here on, end the git commit": "reminder/attribution",
-    "^You are answering a request about a web page": "webfetch-page",
+    "^\\s*Fetched page:": "webfetch-page",
     "^The tools below are deferred": "deferred-tools",
     "^The following skills are available via the `Skill` tool": "skill-list",
     "^<system-reminder>\\s*The following skills are available via the `Skill` tool": "skill-list",

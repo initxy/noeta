@@ -87,7 +87,7 @@ async def results(client: Client, tid: str) -> list[tuple[str, bool]]:
 
 
 def texts_of(request: ModelRequest) -> list[str]:
-    return [m.text for m in request.messages if m.role == "user" and m.text]
+    return [m.text for m in request.messages if m.role != "assistant" and m.text]
 
 
 class AskEverything(Extension):

@@ -91,10 +91,13 @@ def messages_to_wire(
                 prev_injected = injected
                 continue
         last_block.append(wire["content"][-1] if wire["content"] else previous)
+        # The tool results' turn, possibly behind a step note taken with the
+        # message (a background job's end notice, a system turn).
+        results_turn = next((t for t in reversed(outbound) if t["role"] != "system"), None)
         mid_turn = (
-            message.role == "user" and message.origin == "human" and outbound
-            and outbound[-1]["role"] == "user"
-            and any(b.get("type") == "tool_result" for b in outbound[-1]["content"])
+            message.role == "user" and message.origin == "human" and results_turn is not None
+            and results_turn["role"] == "user"
+            and any(b.get("type") == "tool_result" for b in results_turn["content"])
             and not any(b.get("type") == "tool_result" for b in wire["content"])
         )
         after_stop = (
@@ -114,6 +117,11 @@ def messages_to_wire(
             for block in wire["content"]:
                 if block.get("type") == "text":
                     block["text"] = MID_TURN_MESSAGE.format(text=block["text"])
+            if results_turn is not outbound[-1]:
+                assert results_turn is not None
+                results_turn["content"] = [*results_turn["content"], *wire["content"]]
+                prev_injected = injected
+                continue
         # Host text meant to read as part of the person's turn rides in it, plain.
         inline = message.role == "user" and message.origin == "inline"
         # A local command's message is no turn of its own: the next

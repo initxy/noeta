@@ -478,6 +478,11 @@ def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> 
         state.queued.append(message)
         return False
     into_open = state.turn_open
+    if into_open and message.role == "user" and message.origin == "system" \
+            and all(isinstance(b, Text) for b in message.content):
+        # Host text taken between steps (a background job's end notice) is a
+        # step note: a system turn, as Claude Code sends it mid-turn.
+        message = Message(role="system", content=message.content, origin="system")
     state.empty_nudged = False
     if state.calls:
         state.held.append(message)

@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import Allow, Ask, Deny, Gate, TaskView
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import classifier as c
@@ -27,6 +29,10 @@ MAX_TOTAL_DENIALS = 20
 #: classifier one, until its first compaction (as recorded).
 AUTO_BETAS = ("afk-mode-2026-01-31",)
 MAIN_AUTO_BETAS = ("dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31")
+#: The plugin whose ``start`` record holds the instructions a task was shown.
+INSTRUCTIONS_PLUGIN = "instructions"
+#: Root tasks whose instructions are kept for their sub-agents' classifier.
+ROOTS_KEPT = 256
 
 
 class Classifier:
@@ -40,6 +46,8 @@ class Classifier:
         self.deny_rules = deny_rules
         self.trusted = trusted
         self._template: str | None = None
+        #: Root task id -> the instructions it was shown, for its sub-agents.
+        self._roots: OrderedDict[str, str] = OrderedDict()
 
     async def answer(self, view: TaskView, call: ToolUse, ask: Ask) -> Gate | None:
         st = state_of(view)
@@ -133,8 +141,32 @@ class Classifier:
         return c.chunks(entries, [k for k in st.classified if k != call.id])
 
     async def _instructions(self, view: TaskView) -> str:
+        """The project instructions the classifier is shown: the task's own,
+        or, for a sub-agent that runs without them (Explore, Plan), those its
+        root task was shown (Claude Code's classifier always has them)."""
         texts = [m.text for m in await view.residents(lead=True) if m.text.strip()]
-        return "\n\n".join(texts)
+        if texts or view.state.parent_id is None:
+            return "\n\n".join(texts)
+        return await self._root_instructions(view)
+
+    async def _root_instructions(self, view: TaskView) -> str:
+        root = view.state.root_id
+        if not root or view.read_log is None:
+            return ""
+        text = self._roots.get(root)
+        if text is None:
+            text = ""
+            for rec in await view.read_log(root):
+                ev = rec.event
+                if (isinstance(ev, ExtensionRecorded) and ev.extension == INSTRUCTIONS_PLUGIN
+                        and ev.kind == "start" and ev.message is not None):
+                    text = ev.message.text
+                    break
+            self._roots[root] = text
+            while len(self._roots) > ROOTS_KEPT:
+                self._roots.popitem(last=False)
+        self._roots.move_to_end(root)
+        return text
 
     def _deny_texts(self, view: TaskView) -> list[str]:
         return [x.text for x in self.deny_rules] + list(view.denied_tools)

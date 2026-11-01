@@ -13,6 +13,7 @@ from noeta.core.holds import Release
 from noeta.core.records import CoreNotices
 from noeta.core.types import (
     Display,
+    Effort,
     Image,
     ModelRequest,
     ModelResponse,
@@ -111,6 +112,10 @@ class ToolContext(CoreNotices):
     allowed_outright: bool = False
     #: The model the task runs on (``""`` when not known).
     model: str = ""
+    #: The identity line the task's requests open with (``TaskView.identity``).
+    identity: str = ""
+    #: The task's effort (``TaskView.effort``).
+    effort: Effort | None = None
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)

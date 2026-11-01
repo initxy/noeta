@@ -327,3 +327,33 @@ def test_file_tools_render_as_claude_code_renders_them() -> None:
     assert [e.text for e in c.transcript_entries(msgs, "3", shown=["2"])] == [
         '{"Write":"c: d"}', '{"Bash":"sh a"}']
 
+
+
+async def test_a_sub_agent_without_instructions_shows_the_classifier_its_roots() -> None:
+    # Claude Code 2.1.312 (m1/0032, 0035): the classifier of an Explore call
+    # carries the project instructions block, though Explore runs without
+    # them; noeta takes the ones its root task was shown, read once.
+    from noeta.core.events import Recorded
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import new_state
+    from noeta.plugins.permissions.auto import Classifier
+
+    reads: list[str] = []
+
+    async def read_log(task_id: str, after: int = 0) -> list[Recorded]:
+        reads.append(task_id)
+        start = ExtensionRecorded(extension="instructions", kind="start", data={"files": []},
+                                  message=user("NOETA.md: run make check", origin="system"))
+        return [Recorded(seq=1, at=0, event=start)]
+
+    classifier = Classifier(model=None, auto_mode={}, deny_rules=[], trusted=lambda _v: True)
+    child = new_state()
+    child.parent_id, child.root_id = "p", "root"
+    view = TaskView(state=child, read_log=read_log)
+    assert await classifier._instructions(view) == "NOETA.md: run make check"
+    assert await classifier._instructions(view) == "NOETA.md: run make check"
+    assert reads == ["root"]
+    # A task with instructions of its own (or a root task) uses its own.
+    own = TaskView(state=child, read_log=read_log, extensions=[_ProjectInstructions()])
+    assert (await classifier._instructions(own)).startswith("NOETA.md: the user approves")
+    assert await classifier._instructions(TaskView(state=new_state(), read_log=read_log)) == ""

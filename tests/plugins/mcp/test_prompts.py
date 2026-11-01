@@ -60,5 +60,21 @@ def test_prompt_and_resource_text_goes_in_whole() -> None:
     assert flatten_prompt({"messages": [{"role": "user", "content": "plain"},
                                         {"role": "user", "content": [
                                             {"type": "image", "data": ""},
-                                            {"type": "text", "text": "two"}]}]}) == "plain\n\ntwo"
+                                            {"type": "text", "text": "two"}]}]}) == (
+        "plain\n\n[image (unknown type) in the prompt: not shown, a command's message is "
+        "text]\n\ntwo")
     assert flatten_resource({"contents": [{"text": "x"}, {"blob": "AA=="}]}) == "x"
+
+
+def test_a_prompts_other_blocks_become_text_as_claude_code_carries_them() -> None:
+    # Claude Code 2.1.312 converts a prompt's blocks as a tool result's: an
+    # embedded resource's text under a line naming it, a link as a line.
+    text = flatten_prompt({"messages": [{"role": "user", "content": [
+        {"type": "resource", "resource": {"uri": "file:///a.md", "text": "notes"}},
+        {"type": "resource_link", "uri": "file:///b", "name": "b"},
+        {"type": "audio", "mimeType": "audio/wav", "data": "AAAA"},
+        {"type": "mystery"}]}]}, "fake")
+    assert text.split("\n\n") == [
+        "[resource file:///a.md from fake]\nnotes",
+        "[resource link: b <file:///b> (unknown type)]",
+        "[audio (audio/wav, 3 bytes): not shown]"]

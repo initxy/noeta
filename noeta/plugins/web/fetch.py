@@ -45,6 +45,7 @@ from noeta.toolkit.tools import (
 )
 
 __all__ = [
+    "DOCS_DIGEST_INSTRUCTIONS",
     "PREAPPROVED_SITES",
     "CrossHostRedirect",
     "Digest",
@@ -135,16 +136,18 @@ def preapproved(url: str) -> bool:
     return False
 
 
+#: The digest's answering rules (``web/fetch_digest``), and the looser ones
+#: for a page from a preapproved documentation site (``web/fetch_digest_docs``).
 DIGEST_INSTRUCTIONS = load_description("noeta.plugins.web", "webfetch_digest")
+DOCS_DIGEST_INSTRUCTIONS = load_description("noeta.plugins.web", "webfetch_digest_docs")
 
 
-def render_digest_prompt(*, url: str, title: str, page_markdown: str, prompt: str,
+def render_digest_prompt(*, page_markdown: str, prompt: str,
                          instructions: str = DIGEST_INSTRUCTIONS) -> str:
-    """The one user message the digest model sees."""
-    return "\n".join([
-        instructions.strip(), "", f"Request: {prompt}", "", f"Page title: {title}",
-        f"Page URL: {url}", "", "Page content (Markdown):", page_markdown,
-    ])
+    """The one user message the digest model sees, in Claude Code's order:
+    the page between ``---`` lines, the request, then the answering rules."""
+    return (f"\nFetched page:\n---\n{page_markdown}\n---\n\n{prompt}\n\n"
+            f"{instructions.strip()}\n")
 
 
 #: ``(url, title, page_markdown, prompt) -> answer``; raises on failure.

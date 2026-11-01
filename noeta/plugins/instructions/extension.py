@@ -164,6 +164,9 @@ class Instructions(Extension):
     * ``rehang`` — put the files (read again) ahead of a compaction's
       summary (``lead_resident``).
     * ``origin`` — origin of the recorded messages (``"system"``).
+    * ``managed_only`` — read only the managed directory's files: no user,
+      project or local ones, no memory index, nothing shown for a touched
+      file (an agent file's ``omitClaudeMd``).
     """
 
     name = "instructions"
@@ -181,6 +184,7 @@ class Instructions(Extension):
         walk: bool = True,
         rehang: bool = True,
         origin: Literal["system"] | None = "system",
+        managed_only: bool = False,
     ) -> None:
         if file is not None and not root:
             raise ValueError("Instructions: file is read only when root=True")
@@ -194,6 +198,9 @@ class Instructions(Extension):
         self.walk = walk
         self.rehang = rehang
         self.origin = origin
+        self.managed_only = managed_only
+        if managed_only:
+            self.discovery = False
 
     # ------------------------------------------------------------ state
 
@@ -244,6 +251,8 @@ class Instructions(Extension):
         if self.managed_dir:
             out += await reader.file(posixpath.join(self.managed_dir, PROJECT_FILES[0]), MANAGED)
             out += await reader.rules(posixpath.join(self.managed_dir, RULES_DIR), MANAGED)
+        if self.managed_only:
+            return out
         if self.user_dir:
             out += await reader.file(posixpath.join(self.user_dir, PROJECT_FILES[0]), USER)
             out += await reader.rules(posixpath.join(self.user_dir, "rules"), USER)
@@ -275,7 +284,7 @@ class Instructions(Extension):
 
     async def _memory_index(self, view: TaskView, *,
                             pending: bool) -> tuple[str, str, str] | None:
-        directory = self._memory_dir(view, pending=pending)
+        directory = None if self.managed_only else self._memory_dir(view, pending=pending)
         env = task_env(view.env, view.state.config)
         found = await read_memory_index(env, directory) if directory else None
         return (found[0], MEMORY, found[1]) if found else None
