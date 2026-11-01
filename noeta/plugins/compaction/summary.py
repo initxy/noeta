@@ -121,7 +121,12 @@ def summary_request(main: ModelRequest, history: Sequence[Message], text: str, *
         at = len(messages) - 1
     else:
         m = messages[at]
-        messages[at] = Message(role="user", content=[*m.content, Text(text=text)],
+        content = list(m.content)
+        if content and isinstance(content[-1], Text):
+            # Claude Code sends the instruction as a message of its own,
+            # joined to this one: the text it follows gains a newline.
+            content[-1] = Text(text=content[-1].text + "\n")
+        messages[at] = Message(role="user", content=[*content, Text(text=text)],
                                origin=m.origin)
     betas = [*(b for b in main.betas if b not in SUMMARY_DROPPED_BETAS),
              *(b for b in SUMMARY_BETAS if b not in main.betas)]

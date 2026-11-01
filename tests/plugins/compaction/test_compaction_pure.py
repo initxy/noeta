@@ -111,7 +111,7 @@ def test_a_trailing_system_turn_stays_after_the_instruction() -> None:
     # Claude Code (m3/0009): the prompt and the instruction share the user
     # message; the token-count system turn follows unchanged.
     assert [b.text for b in req.messages[0].content] == [  # type: ignore[union-attr]
-        "read it", "SUMMARIZE"]
+        "read it\n", "SUMMARIZE"]  # joined as Claude Code joins two messages
     assert req.messages[0].origin == "human" and req.messages[1].role == "system"
 
 
