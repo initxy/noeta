@@ -68,7 +68,8 @@ async def _no_sleep(_: float) -> None:
 def _normalize(text: str, tmp: str) -> str:
     text = text.replace(tmp, "<TMP>").replace(project_slug(tmp), "<TMP-SLUG>")
     text = re.sub(r"\d{4}-\d{2}-\d{2}", "<DATE>", text)
-    text = re.sub(r"(?m)^ - (Platform|Shell|OS Version): .*$", r" - \1: <X>", text)
+    # The machine's lines, in a JSON string (an escaped newline ends them).
+    text = re.sub(r"(\\n - (?:Platform|Shell|OS Version): )(?:(?!\\n)[^\"])*", r"\1<X>", text)
     text = re.sub(r"<duration_ms>\d+</duration_ms>", "<duration_ms>N</duration_ms>", text)
     return re.sub(r"\b[0-9a-f]{32}\b", "<ID>", text)
 
