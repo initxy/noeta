@@ -15,10 +15,13 @@ prompt or a resource itself.
   static resources with their ``alias:uri`` mention token;
   :func:`read_resource` returns the text snapshot to send the same way.
 
-The text goes in whole, as Claude Code sends a prompt's or a mentioned
-resource's text uncut; a prompt's other blocks become text as a tool
-result's do (:func:`flatten_prompt`). A server without prompts or resources lists none; a
-connection fault raises ``McpError``.
+A prompt's blocks become text as a tool result's do (:func:`flatten_prompt`).
+Claude Code sends that text uncut; here it is cut at
+:data:`INJECTION_MAX_BYTES` with a marker, because it enters a durable task
+as a user message that no tool-result limit bounds and compaction cannot
+shrink, so one oversized reply would break every later request of the task.
+A server without prompts or resources lists none; a connection fault raises
+``McpError``.
 """
 
 from __future__ import annotations
@@ -31,8 +34,10 @@ from noeta.core.extension import Command
 from noeta.plugins.mcp.config import McpError, McpServer, make_tool_name
 from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.results import describe_block
+from noeta.toolkit.tools import truncate_bytes
 
 __all__ = [
+    "INJECTION_MAX_BYTES",
     "McpPrompt",
     "McpResource",
     "expand_prompt",
@@ -42,6 +47,20 @@ __all__ = [
     "list_resources",
     "read_resource",
 ]
+
+
+#: Cap on a prompt's or a resource's text: it enters the conversation as a
+#: user message and stays for the rest of the task.
+INJECTION_MAX_BYTES = 64 * 1024
+
+
+def cap_injected(text: str, *, kind: str) -> str:
+    """``text`` cut at :data:`INJECTION_MAX_BYTES` with a marker naming
+    ``kind``."""
+    if len(text.encode("utf-8")) <= INJECTION_MAX_BYTES:
+        return text
+    return (truncate_bytes(text, INJECTION_MAX_BYTES)
+            + f"\n\n[truncated: MCP {kind} exceeded {INJECTION_MAX_BYTES} bytes]")
 
 
 @dataclass(frozen=True)
@@ -140,14 +159,15 @@ def _prompt_block(block: object, alias: str) -> str:
 
 def flatten_prompt(result: dict[str, Any], alias: str = "") -> str:
     """A ``prompts/get`` result's messages as one text: each block in order
-    (:func:`_prompt_block`), joined by blank lines."""
+    (:func:`_prompt_block`), joined by blank lines, capped
+    (:func:`cap_injected`)."""
     parts: list[str] = []
     messages = result.get("messages")
     for msg in messages if isinstance(messages, list) else []:
         if not isinstance(msg, dict):
             continue
         parts += [_prompt_block(block, alias) for block in _blocks(msg.get("content"))]
-    return "\n\n".join(p for p in parts if p)
+    return cap_injected("\n\n".join(p for p in parts if p), kind="prompt")
 
 
 async def expand_prompt(server: McpServer, name: str, arguments: dict[str, Any], *,
@@ -178,11 +198,12 @@ async def list_resources(servers: Sequence[McpServer], *, scope: str | None = No
 
 
 def flatten_resource(result: dict[str, Any]) -> str:
-    """The text contents of a ``resources/read`` result (binary skipped)."""
+    """The text contents of a ``resources/read`` result (binary skipped),
+    capped (:func:`cap_injected`)."""
     contents = result.get("contents")
     parts = [c["text"] for c in (contents if isinstance(contents, list) else [])
              if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"]]
-    return "\n\n".join(parts)
+    return cap_injected("\n\n".join(parts), kind="resource")
 
 
 async def read_resource(server: McpServer, uri: str, *, scope: str | None = None,

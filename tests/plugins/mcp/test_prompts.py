@@ -16,7 +16,7 @@ from noeta.plugins.mcp import (
     read_resource,
 )
 from noeta.plugins.mcp.config import McpError
-from noeta.plugins.mcp.prompts import flatten_prompt, flatten_resource
+from noeta.plugins.mcp.prompts import INJECTION_MAX_BYTES, flatten_prompt, flatten_resource
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
 SERVER = McpServer(alias="fake", command=[sys.executable, FAKE])
@@ -53,10 +53,18 @@ async def test_an_unreachable_server_raises() -> None:
         await list_prompts([McpServer(alias="x", command=["/no/such"])], pool=pool)
 
 
-def test_prompt_and_resource_text_goes_in_whole() -> None:
-    big = "a" * 200_000
-    assert flatten_prompt({"messages": [{"role": "user", "content": big}]}) == big
-    assert flatten_resource({"contents": [{"text": big}]}) == big
+def test_prompt_and_resource_text_is_capped_with_a_marker() -> None:
+    """The text sits in a durable task's history as a user message, so it is
+    cut at 64 KiB (a deviation: Claude Code sends it uncut)."""
+    fits = "a" * INJECTION_MAX_BYTES
+    assert flatten_prompt({"messages": [{"role": "user", "content": fits}]}) == fits
+    big = "é" * 200_000
+    prompt = flatten_prompt({"messages": [{"role": "user", "content": big}]})
+    assert prompt.endswith(f"\n\n[truncated: MCP prompt exceeded {INJECTION_MAX_BYTES} bytes]")
+    assert prompt.startswith("é" * (INJECTION_MAX_BYTES // 2))
+    assert len(prompt.encode()) < INJECTION_MAX_BYTES + 100
+    resource = flatten_resource({"contents": [{"text": big}]})
+    assert resource.endswith(f"[truncated: MCP resource exceeded {INJECTION_MAX_BYTES} bytes]")
     assert flatten_prompt({"messages": [{"role": "user", "content": "plain"},
                                         {"role": "user", "content": [
                                             {"type": "image", "data": ""},
