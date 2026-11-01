@@ -62,12 +62,17 @@ def messages_to_wire(
     last_block: list[dict[str, Any] | None] = []
     blocks_of: list[list[dict[str, Any]]] = []
     prev_injected = False
+    #: Every message so far is host context in the user channel: Claude Code
+    #: sends that opening context as one message of several blocks.
+    opening = True
     for message in messages:
         if message.role == "system" and not system_turns:
             message = Message(role="user", content=message.content, origin="system")
         wire = _message_to_wire(message, vision)
         blocks_of.append(list(wire["content"]))
         injected = is_host_injected(message)
+        in_opening = opening and injected and wire["role"] == "user"
+        opening = in_opening
         previous = last_block[-1] if last_block else None
         if (wire["role"] == "system" and wire["content"] and outbound
                 and outbound[-1]["role"] == "system"):
@@ -81,7 +86,7 @@ def messages_to_wire(
             if turn is not None and turn["role"] == "user":
                 # Claude Code adds the empty-reply nudge to the user turn
                 # before the step's notes; the request still ends with them.
-                turn["content"] = [*turn["content"], *wire["content"]]
+                _join(turn, wire["content"])
                 last_block.append(previous)
                 prev_injected = injected
                 continue
@@ -100,7 +105,7 @@ def messages_to_wire(
         if after_stop:
             # The turn stopped at a declined call or mid-reply: the next
             # prompt joins the marker's turn, unframed (Claude Code).
-            outbound[-1]["content"] = [*outbound[-1]["content"], *wire["content"]]
+            _join(outbound[-1], wire["content"])
             prev_injected = injected
             continue
         if mid_turn:
@@ -124,11 +129,24 @@ def messages_to_wire(
             and outbound
             and outbound[-1]["role"] == "user"
         ):
-            outbound[-1]["content"] = [*outbound[-1]["content"], *wire["content"]]
+            _join(outbound[-1], wire["content"], newline=not in_opening)
         else:
             outbound.append(wire)
         prev_injected = injected
     return outbound, last_block, blocks_of
+
+
+def _join(turn: dict[str, Any], blocks: list[dict[str, Any]], *, newline: bool = True) -> None:
+    """``blocks`` added to the user ``turn`` as Claude Code joins two user
+    messages: where text meets text, the earlier text gains a newline
+    (``newline=False``: blocks of what is one message to Claude Code)."""
+    content = turn["content"]
+    if newline and content and blocks and content[-1].get("type") == "text" \
+            and blocks[0].get("type") == "text" \
+            and content[-1]["text"] not in (REJECTED_MARKER, INTERRUPTED_MARKER):
+        # The two markers are recorded with that newline already.
+        content[-1]["text"] += "\n"
+    turn["content"] = [*content, *blocks]
 
 
 def thinking_param(request: ModelRequest) -> dict[str, str] | None:
@@ -231,7 +249,8 @@ _COMMAND_TAGS = ("<local-command-caveat>", "<command-name>", "<local-command-std
 
 def _command_parts(text: str) -> list[str]:
     """A local command's message cut into one part per tag; any other text
-    whole."""
+    whole. Each tag is a message of its own to Claude Code, joined to the
+    next: all but the last part end with that join's newline."""
     if not text.startswith(_COMMAND_TAGS):
         return [text]
     parts: list[str] = []
@@ -240,7 +259,7 @@ def _command_parts(text: str) -> list[str]:
             parts[-1] += "\n\n" + para
         else:
             parts.append(para)
-    return parts
+    return [p + "\n" for p in parts[:-1]] + parts[-1:]
 
 
 def _wrap_system_reminder(text: str) -> str:

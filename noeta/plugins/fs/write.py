@@ -13,6 +13,7 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Text
+from noeta.plugins.fs._encoding import decode, encode, not_text, refusal
 from noeta.plugins.fs._globs import compile_glob, glob_matches
 from noeta.plugins.fs._mutate import (
     WriteRoots,
@@ -37,7 +38,6 @@ __all__ = ["WRITE_FILE_MAX_BYTES", "WriteTool"]
 
 #: Hard cap on one ``Write`` body — a runaway-file guard.
 WRITE_FILE_MAX_BYTES = 8 * 1024 * 1024
-_BOM = b"\xef\xbb\xbf"
 
 
 
@@ -137,14 +137,13 @@ class WriteTool:
             )
             if refused is not None:
                 return refused
-            try:
-                before_text = existing.decode("utf-8")
-            except UnicodeDecodeError:
-                return tool_error(self.name, f"{path!r} is not utf-8 text")
+            reason = not_text(existing)
+            if reason is not None:
+                return tool_error(self.name, refusal(reason))
+            before_text = decode(existing)
             # Read never shows a byte-order mark, so new content lacks it;
-            # the file keeps its own (Claude Code's).
-            if existing.startswith(_BOM) and content and not content.startswith("\ufeff"):
-                body = _BOM + body
+            # the file keeps its own, and its encoding (Claude Code's).
+            body = encode(content, existing)
 
         diff, added, removed = await file_diff(before_text, content, rel)
         skipped = not diff and before_text != content

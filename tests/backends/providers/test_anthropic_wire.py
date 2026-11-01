@@ -66,7 +66,8 @@ async def test_origin_system_wrapped_and_merged_into_prev_user_turn() -> None:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "real human words"},
+                # Claude Code joins two user messages with a newline.
+                {"type": "text", "text": "real human words\n"},
                 {"type": "text", "text": "<system-reminder>\nhost says hi\n</system-reminder>"},
             ],
         }
@@ -80,7 +81,8 @@ async def test_origin_memory_before_user_merges_into_next_user_turn() -> None:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "<system-reminder>\nrecalled note\n</system-reminder>"},
+                {"type": "text",
+                 "text": "<system-reminder>\nrecalled note\n</system-reminder>\n"},
                 {"type": "text", "text": "the actual ask"},
             ],
         }
@@ -116,8 +118,8 @@ async def test_a_local_commands_tags_go_as_blocks_and_the_next_prompt_joins_them
     wire = await _wire_messages([user(command), user("go on")])
     assert len(wire) == 1
     assert [b["text"] for b in wire[0]["content"]] == [
-        "<command-name>/plan</command-name>\n<command-message>plan</command-message>",
-        "<local-command-stdout>Enabled plan mode</local-command-stdout>", "go on"]
+        "<command-name>/plan</command-name>\n<command-message>plan</command-message>\n",
+        "<local-command-stdout>Enabled plan mode</local-command-stdout>\n", "go on"]
     # Other text that holds a tag later stays whole.
     plain = await _wire_messages([user("see\n\n<command-name>x</command-name>")])
     assert isinstance(plain[0]["content"], str) or len(plain[0]["content"]) == 1
@@ -166,7 +168,7 @@ async def test_system_turns_can_ride_in_the_user_turn_instead() -> None:
     body, _ = await _send(_req(messages=[user("q"), system_message("note")]),
                           system_turns=False)
     assert body["messages"] == [{"role": "user", "content": [
-        {"type": "text", "text": "q"},
+        {"type": "text", "text": "q\n"},
         {"type": "text", "text": "<system-reminder>\nnote\n</system-reminder>"}]}]
 
 
@@ -207,7 +209,8 @@ async def test_the_empty_reply_nudge_joins_the_prompt_before_the_environment() -
     wire = await _wire_messages([user("q"), system_message("# Environment"),
                                  user(EMPTY_REPLY_NUDGE, origin="inline")])
     assert [m["role"] for m in wire] == ["user", "system"]
-    assert [b["text"] for b in wire[0]["content"]] == ["q", EMPTY_REPLY_NUDGE]
+    # Claude Code 2.1.312 sends ``q\n`` there (run p-opus-first, request 2).
+    assert [b["text"] for b in wire[0]["content"]] == ["q\n", EMPTY_REPLY_NUDGE]
 
 
 @respx.mock
@@ -627,3 +630,17 @@ async def test_side_request_knobs_reach_the_wire() -> None:
     stamped = [b.get("cache_control") for b in body["messages"][1]["content"]]
     assert stamped == [None, EPHEMERAL, None]
 
+
+
+@respx.mock
+async def test_the_opening_context_is_one_message_to_claude_code() -> None:
+    # Claude Code sends the opening context (instructions, workspace context,
+    # attribution) as blocks of one message: no newline between them; the
+    # prompt joined after them adds one, as a later reminder does.
+    wire = await _wire_messages([
+        _injected("instructions", "system"), _injected("context", "system"),
+        user("hi"), _injected("later note", "system"), user("again")])
+    assert [b["text"] for b in wire[0]["content"]] == [
+        "<system-reminder>\ninstructions\n</system-reminder>",
+        "<system-reminder>\ncontext\n</system-reminder>\n", "hi\n",
+        "<system-reminder>\nlater note\n</system-reminder>\n", "again"]

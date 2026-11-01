@@ -111,7 +111,7 @@ def test_a_trailing_system_turn_stays_after_the_instruction() -> None:
     # Claude Code (m3/0009): the prompt and the instruction share the user
     # message; the token-count system turn follows unchanged.
     assert [b.text for b in req.messages[0].content] == [  # type: ignore[union-attr]
-        "read it", "SUMMARIZE"]
+        "read it\n", "SUMMARIZE"]  # joined as Claude Code joins two messages
     assert req.messages[0].origin == "human" and req.messages[1].role == "system"
 
 
@@ -180,6 +180,27 @@ def test_drop_oldest_rounds() -> None:
     assert shorter is not None and shorter[0].text != "go"
     assert not any(isinstance(b, ToolResult) for b in shorter[0].content)
     assert summary.drop_oldest_rounds([user("only")]) is None
+
+
+def test_a_named_gap_drops_just_enough_rounds() -> None:
+    # Claude Code drops rounds until their tokens cover the gap the error
+    # names, keeping at least the last.
+    rounds = [user("x" * 400), Message(role="assistant", content=[Text(text="y" * 400)])] * 5
+    over = ContextOverflow("prompt is too long: 1010 tokens > 1000 maximum")
+    gap = summary.overflow_gap(over)
+    assert gap == 10
+    shorter = summary.drop_oldest_rounds(rounds, gap)
+    assert shorter is not None and len(shorter) == len(rounds)  # one round out, a stand-in in
+    assert shorter[0].text == summary.EARLIER_LEFT_OUT
+    # The stand-in from an earlier retry is not a round of its own.
+    again = summary.drop_oldest_rounds(shorter, gap)
+    assert again is not None and again[0].text != summary.EARLIER_LEFT_OUT
+    assert len(again) == len(shorter) - 2
+    # Never the last round (here a reply, behind its stand-in).
+    assert len(summary.drop_oldest_rounds(rounds, 10**9) or []) == 2
+    assert summary.overflow_gap(ContextOverflow("context window exceeded")) is None
+    assert summary.overflow_gap(ContextOverflow("x", body="Prompt is too long: 5 tokens > 9")) \
+        is None
 
 
 def test_summary_failure() -> None:

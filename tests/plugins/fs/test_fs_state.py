@@ -13,6 +13,7 @@ from noeta.plugins.fs import EditTool, ReadTool
 from noeta.plugins.fs.state import (
     FS,
     KIND_CHANGED,
+    KIND_CHECKED,
     KIND_READ,
     MAX_FILES,
     FileRead,
@@ -172,3 +173,16 @@ async def test_the_read_is_recorded_under_the_canonical_path(h: Harness, ws: Pat
     assert data["path"] == str(ws / "a.py")
     assert len(data["digest"]) == 64
     assert data["mtime"] == (ws / "a.py").stat().st_mtime
+
+
+def test_checked_times_follow_the_remembered_files() -> None:
+    state = reduce_fs(None, KIND_READ, {"path": "/a", "digest": "d", "mtime": 1})
+    assert reduce_fs(state, KIND_CHECKED, {"path": "/b", "mtime": 2}) is state  # never read
+    assert reduce_fs(state, KIND_CHECKED, {"path": "/a", "mtime": True}) is state
+    state = reduce_fs(state, KIND_CHECKED, {"path": "/a", "mtime": 2})
+    assert state.checked == {"/a": 2.0}
+    state = reduce_fs(state, KIND_CHANGED, {"path": "/a", "digest": "e", "mtime": 3})
+    assert state.checked == {"/a": 3.0} and state.noticed == {"/a": "e"}
+    # A new read of the file starts over from its own time.
+    state = reduce_fs(state, KIND_READ, {"path": "/a", "digest": "e", "mtime": 3})
+    assert state.checked == {}

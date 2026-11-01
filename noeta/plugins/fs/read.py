@@ -13,6 +13,7 @@ short note instead of the content again (Claude Code's dedupe).
 from __future__ import annotations
 
 import asyncio
+import codecs
 import hashlib
 import math
 import posixpath
@@ -25,6 +26,13 @@ from noeta.core.execenv import ExecEnv
 from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Image
+from noeta.plugins.fs._encoding import (
+    NUL_PROBE_BYTES,
+    UTF16BE_BOM,
+    NotText,
+    encoding_of,
+    read_note,
+)
 from noeta.plugins.fs._missing import missing_file_message
 from noeta.plugins.fs._read_formats import (
     MAX_READ_TOKENS,
@@ -135,12 +143,6 @@ def detect_image(raw: bytes) -> tuple[str, str] | None:
     return None
 
 
-def _note(text: str) -> str:
-    """A tool's own inline note, parenthesised. Deliberately not a
-    ``<system-reminder>``: that tag belongs to the host."""
-    return f"({text})"
-
-
 def _decode_line(raw: bytes) -> tuple[str, bool]:
     """One line's text (a trailing ``\\r`` dropped) and whether invalid
     UTF-8 was replaced. A line is never cut short (Claude Code's)."""
@@ -159,27 +161,61 @@ class _Scan:
 
     Lines split on ``\\n`` only — the boundary ``rg`` uses — so a
     form feed or U+2028 inside a line never shifts the numbering. A trailing
-    segment without ``\\n`` is the last line. A NUL byte stops the scan (the
-    file is binary)."""
+    segment without ``\\n`` is the last line. ``head`` (the file's first
+    bytes) picks the encoding (:mod:`noeta.plugins.fs._encoding`): a UTF-16LE
+    file is turned into UTF-8 before it is split; the hash is of the bytes on
+    disk."""
 
     start: int
     limit: int
+    head: bytes = b""
     max_served: int = _READ_MAX_SERVED_BYTES
     hasher: Any = field(default_factory=hashlib.sha256)
     window: list[str] = field(default_factory=list)
     served: int = 0
     capped: bool = False
     bytes_replaced: bool = False
-    has_nul: bool = False
+    #: A NUL byte within the first ``NUL_PROBE_BYTES`` bytes.
+    early_nul: bool = False
+    #: Every byte so far decodes as UTF-8.
+    valid_utf8: bool = True
+    _seen: int = 0
+    _utf16: Any = None
+    _utf8: Any = None
     #: The file's last byte is a newline (Read then shows a final empty line).
     ends_with_newline: bool = False
     total_lines: int = 0  # completed lines so far; final after ``finish``
     _cur: bytearray = field(default_factory=bytearray)
     _cur_len: int = 0
 
+    def __post_init__(self) -> None:
+        if encoding_of(self.head) == "utf-16-le":
+            self._utf16 = codecs.getincrementaldecoder("utf-16-le")("replace")
+        else:
+            self._utf8 = codecs.getincrementaldecoder("utf-8")("strict")
+
     @property
     def digest(self) -> str:
         return str(self.hasher.hexdigest())
+
+    def not_text(self) -> NotText | None:
+        """Why the file is not text (after ``finish``), as
+        :func:`noeta.plugins.fs._encoding.not_text` would say."""
+        if self._utf16 is not None:
+            return None
+        if self.head.startswith(UTF16BE_BOM):
+            return "utf16be"
+        if self.early_nul:
+            return "nul"
+        return None if self.valid_utf8 else "not_utf8"
+
+    def _check_utf8(self, chunk: bytes, final: bool = False) -> None:
+        if self._utf8 is None or not self.valid_utf8:
+            return
+        try:
+            self._utf8.decode(chunk, final)
+        except UnicodeDecodeError:
+            self.valid_utf8 = False
 
     def window_text(self) -> str:
         return "\n".join(self.window)
@@ -202,12 +238,18 @@ class _Scan:
         self.served += cost
         self.bytes_replaced = self.bytes_replaced or replaced
 
-    def feed(self, chunk: bytes) -> bool:
-        """Take one chunk; ``False`` once the file proved binary."""
-        if b"\x00" in chunk:
-            self.has_nul = True
-            return False
+    def feed(self, chunk: bytes) -> None:
+        """Take the file's next chunk."""
         self.hasher.update(chunk)
+        if self._seen < NUL_PROBE_BYTES and b"\0" in chunk[:NUL_PROBE_BYTES - self._seen]:
+            self.early_nul = True
+        self._seen += len(chunk)
+        if self._utf16 is not None:
+            chunk = self._utf16.decode(chunk).encode("utf-8")
+        self._check_utf8(chunk)
+        self._split(chunk)
+
+    def _split(self, chunk: bytes) -> None:
         if chunk:
             self.ends_with_newline = chunk.endswith(b"\n")
         pos, n = 0, len(chunk)
@@ -225,9 +267,11 @@ class _Scan:
             self._cur.clear()
             self._cur_len = 0
             pos = nl + 1
-        return True
 
     def finish(self) -> None:
+        if self._utf16 is not None:
+            self._split(self._utf16.decode(b"", True).encode("utf-8"))
+        self._check_utf8(b"", True)
         if self._cur_len:
             if self._take(self.total_lines):
                 self._finish_line(bytes(self._cur), self._cur_len > self.max_served)
@@ -301,6 +345,8 @@ class _Window:
     limit: int
     explicit_limit: int | None
     large: bool
+    #: The file's first bytes, which pick its encoding.
+    head: bytes = b""
 
 
 class ReadTool:
@@ -392,7 +438,7 @@ class ReadTool:
         return await self._read_text(
             ctx, _Window(path=path, resolved=resolved, display=display, size=size,
                          mtime=st.mtime, offset=offset, limit=limit,
-                         explicit_limit=explicit_limit, large=large), chunks)
+                         explicit_limit=explicit_limit, large=large, head=head), chunks)
 
     async def _read_text(self, ctx: ToolContext, w: _Window,
                          chunks: Callable[[], AsyncIterator[bytes]]) -> ToolOutput:
@@ -412,17 +458,13 @@ class ReadTool:
 
         start = w.offset - 1
         max_tokens = MAX_READ_TOKENS * (_LARGE_FACTOR if w.large else 1)
-        scan = _Scan(start=start, limit=w.limit,
+        scan = _Scan(start=start, limit=w.limit, head=w.head,
                      max_served=_READ_MAX_SERVED_BYTES * (_LARGE_FACTOR if w.large else 1))
         try:
             async for chunk in chunks():
-                if not scan.feed(chunk):
-                    break
+                scan.feed(chunk)
         except OSError as exc:
             return tool_error(self.name, f"read failed: {exc}")
-        # A NUL byte marks real binary regardless of decodability.
-        if scan.has_nul:
-            return tool_error(self.name, f"{w.path!r} is not utf-8 text")
         scan.finish()
         # Claude Code's token ceiling on what one read returns. A window the
         # scan had to stop is past it by construction.
@@ -472,6 +514,9 @@ class ReadTool:
         _record_read(ctx, w.resolved, scan.digest, w.mtime, [1, shown], partial=True)
         ctx.record(FS, KIND_NOTICE, {"text": banner})
         rendered = "\n".join(f"{i}\t{line}" for i, line in enumerate(page.split("\n"), 1))
+        reason = scan.not_text()
+        if reason is not None:
+            rendered += "\n\n" + read_note(reason)
         return text_output(rendered, path=w.display, total_lines=scan.total_lines,
                            lines=[1, shown], truncated=True)
 
@@ -526,6 +571,9 @@ def _render(scan: _Scan, w: _Window) -> ToolOutput:
     meta: dict[str, Any] = {"path": w.display, "total_lines": total}
     if scan.bytes_replaced:
         meta["bytes_replaced"] = True
+    reason = scan.not_text()
+    if reason is not None:
+        meta["not_text"] = reason
     if total == 0:
         return text_output("Warning: the file is there but holds no content.", **meta)
     # Claude Code counts a final newline as starting one more, empty, line.
@@ -544,8 +592,9 @@ def _render(scan: _Scan, w: _Window) -> ToolOutput:
         lines.append("")
     rendered = "\n".join(f"{start + i + 1}\t{line}" for i, line in enumerate(lines))
     shown_end = start + len(scan.window)
-    if scan.bytes_replaced:
-        rendered += "\n\n" + _note("Non-utf8 bytes were replaced with U+FFFD.")
+    if reason is not None:
+        # Claude Code's note: why Edit and Write will refuse the file.
+        rendered += "\n\n" + read_note(reason)
     return text_output(rendered, lines=[start + 1, shown_end], **meta)
 
 

@@ -279,8 +279,9 @@ async def test_a_command_in_its_tags_puts_the_body_in_the_persons_turn(h: Harnes
     request = h.provider.requests[0]
     assert request.messages[1].text == f"Base directory for this skill: {d}\n\nNotes for v0.2.\n"
     wire = AnthropicProvider(api_key="k").build_body(request)["messages"]
-    # The tags and the body share the person's turn, both plain.
-    assert [b["text"] for b in wire[0]["content"]] == [text, request.messages[1].text]
+    # The tags and the body share the person's turn, both plain, joined as
+    # Claude Code joins two messages.
+    assert [b["text"] for b in wire[0]["content"]] == [text + "\n", request.messages[1].text]
 
 
 async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:

@@ -176,11 +176,12 @@ async def test_read_reaches_outside_the_workspace(h: Harness, ws: Path) -> None:
     assert out.meta["path"] == str(outside)  # shown absolute
 
 
-async def test_read_binary_rejected(h: Harness, ws: Path) -> None:
+async def test_read_shows_a_binary_file_with_a_note(h: Harness, ws: Path) -> None:
+    # Claude Code shows it, telling the model Edit and Write will refuse it.
     (ws / "blob.xyz").write_bytes(b"\x00\x01\x02")
     out = await h.call(ReadTool(), file_path="blob.xyz")
-    assert out.is_error
-    assert text_of(out) == "Read: 'blob.xyz' is not utf-8 text"
+    assert not out.is_error and out.meta["not_text"] == "nul"
+    assert text_of(out).startswith("1\t\x00\x01\x02\n\n[Not text to the file tools: ")
 
 
 @pytest.mark.parametrize("name", ["blob.bin", "Archive.ZIP", "lib.so", "data.sqlite", "x.pyc"])
@@ -199,7 +200,7 @@ async def test_read_stray_invalid_bytes_decoded_leniently(h: Harness, ws: Path) 
     assert not out.is_error
     text = text_of(out)
     assert "caf� latte" in text
-    assert "(Non-utf8 bytes were replaced with U+FFFD.)" in text
+    assert "Bytes that could not be decoded are shown as U+FFFD." in text
 
 
 _PNG = png(4, 3)
