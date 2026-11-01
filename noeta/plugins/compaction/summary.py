@@ -18,6 +18,7 @@ import msgspec
 
 from noeta.core.errors import ContextOverflow, Fatal, ModelError, RateLimited, Transient
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolResult, ToolUse, user
+from noeta.plugins.compaction.estimate import messages_tokens
 
 
 def load_prompt(name: str) -> str:
@@ -194,10 +195,33 @@ def _is_tool_results(message: Message) -> bool:
     return any(isinstance(b, ToolResult) for b in message.content)
 
 
-def drop_oldest_rounds(messages: Sequence[Message]) -> list[Message] | None:
-    """``messages`` less the oldest fifth (at least one) of its rounds;
-    ``None`` when no round is left to drop. A round opens at every message
-    that is not a tool result, so no result loses its call."""
+#: Stands in for the rounds a retry left out, when the rest opens with a reply.
+EARLIER_LEFT_OUT = "(earlier conversation left out)"
+#: "prompt is too long: 210000 tokens > 200000 maximum" (Anthropic's wording).
+_OVERFLOW_GAP = re.compile(r"prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)",
+                           re.IGNORECASE)
+
+
+def overflow_gap(error: ModelError) -> int | None:
+    """How many tokens over the window a request was, when the provider's
+    error says so; ``None`` otherwise."""
+    found = _OVERFLOW_GAP.search(f"{error} {error.body}")
+    if found is None:
+        return None
+    gap = int(found.group(1)) - int(found.group(2))
+    return gap if gap > 0 else None
+
+
+def drop_oldest_rounds(messages: Sequence[Message], gap: int | None = None
+                       ) -> list[Message] | None:
+    """``messages`` less their oldest rounds: as many as it takes to cover
+    ``gap`` tokens (estimated) when the error named it, else the oldest
+    fifth, at least one and never the last (Claude Code's); ``None`` when no
+    round is left to drop. A round opens at every message that is not a tool
+    result, so no result loses its call. A stand-in left by an earlier retry
+    is not a round."""
+    if messages and messages[0].role == "user" and messages[0].text == EARLIER_LEFT_OUT:
+        messages = messages[1:]
     rounds: list[list[Message]] = []
     for message in messages:
         if _is_tool_results(message) and rounds:
@@ -206,10 +230,19 @@ def drop_oldest_rounds(messages: Sequence[Message]) -> list[Message] | None:
             rounds.append([message])
     if len(rounds) < 2:
         return None
-    kept = rounds[max(1, len(rounds) // 5):]
+    if gap is None:
+        drop = max(1, len(rounds) // 5)
+    else:
+        drop, covered = 0, 0
+        for r in rounds:
+            covered += messages_tokens(r)
+            drop += 1
+            if covered >= gap:
+                break
+    kept = rounds[min(drop, len(rounds) - 1):]
     out = [m for r in kept for m in r]
     if out and out[0].role == "assistant":
-        out.insert(0, user("(earlier conversation left out)"))
+        out.insert(0, user(EARLIER_LEFT_OUT))
     return out
 
 

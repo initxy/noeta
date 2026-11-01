@@ -487,7 +487,7 @@ class Compaction(Extension):
         for _ in range(summary.MAX_SUMMARY_OVERFLOW_RETRIES):
             if not isinstance(outcome, ContextOverflow):
                 break
-            shorter = summary.drop_oldest_rounds(attempt)
+            shorter = summary.drop_oldest_rounds(attempt, summary.overflow_gap(outcome))
             if shorter is None:
                 break
             attempt, dropped = shorter, True
