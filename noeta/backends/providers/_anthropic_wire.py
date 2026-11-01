@@ -142,7 +142,9 @@ def _join(turn: dict[str, Any], blocks: list[dict[str, Any]], *, newline: bool =
     (``newline=False``: blocks of what is one message to Claude Code)."""
     content = turn["content"]
     if newline and content and blocks and content[-1].get("type") == "text" \
-            and blocks[0].get("type") == "text":
+            and blocks[0].get("type") == "text" \
+            and content[-1]["text"] not in (REJECTED_MARKER, INTERRUPTED_MARKER):
+        # The two markers are recorded with that newline already.
         content[-1]["text"] += "\n"
     turn["content"] = [*content, *blocks]
 
