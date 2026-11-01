@@ -17,6 +17,11 @@ in the conversation, lets ``Edit`` say the file is in view; a view of some
 lines (``head``, ``tail``, ``sed -n``) keeps its line range, so a ``Read``
 of the same range is answered as unchanged, and is not watched. Every one
 of them lets ``Edit`` and ``Write`` through the read-first check.
+
+The record names the command's tool (``"by": "Bash"``), so a plugin that
+acts on files the model looked at (the instructions plugin: the nested
+instruction files and ``paths:`` rules of the file's directories) can take
+it as a ``Read`` of that file, as Claude Code does.
 """
 
 from __future__ import annotations
@@ -103,7 +108,7 @@ async def _entry(view: TaskView, path: str, read: ShellRead, printed: str, *,
     whole = in_context and (first == 0 or (
         first <= 1 and content != "" and content.count("\n") + 1 < count))
     data: dict[str, Any] = {"path": path, "digest": hashlib.sha256(raw).hexdigest(),
-                            "mtime": st.mtime}
+                            "mtime": st.mtime, "by": SHELL_TOOL}
     if first:
         if in_context:
             data["range"] = [first, count]

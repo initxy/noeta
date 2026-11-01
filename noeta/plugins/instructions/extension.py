@@ -22,8 +22,9 @@ its text):
 
 A rule whose frontmatter has ``paths:`` is left out there. When a ``Read``,
 ``Edit``, ``Write`` or ``NotebookEdit`` touches a file inside the working
-directory, the files that apply to it and were not shown yet follow the
-tool's result, one message each: the instruction files of every directory
+directory (or a ``Bash`` command shows one, ``cat`` or ``head`` and the like:
+the file tools record it as read), the files that apply to it and were not
+shown yet follow the tool's result, one message each: the instruction files of every directory
 between the working directory and the file, and the ``paths:`` rules (the
 user's, the working directory's and its ancestors', and those directories')
 whose globs match it. A compaction puts them all, read again, ahead of its
@@ -40,7 +41,7 @@ import posixpath
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from noeta.core.events import Recorded, ToolFinished
+from noeta.core.events import ExtensionRecorded, Recorded, ToolFinished
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState
@@ -98,6 +99,10 @@ NESTED_CUT_NOTE = ("> Only the start of this file is shown here; Read {path} fro
 #: Tools whose touching a file brings the instructions that apply to it.
 FILE_TOOLS = {"Read": "file_path", "Edit": "file_path", "Write": "file_path",
               "NotebookEdit": "notebook_path"}
+#: The file tools' record of a file a ``Bash`` command showed (extension,
+#: kind, its ``by``): it brings the file's instructions as a ``Read`` would,
+#: as in Claude Code.
+SHELL_READ = ("fs", "read", "Bash")
 
 
 def render_file(path: str, kind: str, text: str) -> str:
@@ -304,13 +309,8 @@ class Instructions(Extension):
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         if new_user_messages(view.state, recorded.seq):
             await self._reread_changed(view)
-        event = recorded.event
-        if not self.discovery or not isinstance(event, ToolFinished) or event.result.is_error:
-            return
-        call = _find_call(view, event.result.call_id)
-        key = FILE_TOOLS.get(call.name) if call is not None else None
-        target = call.input.get(key) if call is not None and key else None
-        if not isinstance(target, str) or not target:
+        target = _touched(view, recorded.event) if self.discovery else None
+        if target is None:
             return
         reader, cwd = self._reader(view)
         env = reader.env
@@ -446,6 +446,25 @@ async def _reread(env: ExecEnv, path: str) -> str | None:
         return None
     text, _globs = clean(raw)
     return text or None
+
+
+def _touched(view: TaskView, event: Any) -> str | None:
+    """The file ``event`` shows the model touched: the path a successful
+    file tool's call names, or one a ``Bash`` command showed (the file
+    tools' ``read`` record of it, :data:`SHELL_READ`)."""
+    if isinstance(event, ExtensionRecorded):
+        data = event.data
+        if (event.extension, event.kind) != SHELL_READ[:2] or not isinstance(data, dict) \
+                or data.get("by") != SHELL_READ[2]:
+            return None
+        path = data.get("path")
+        return path if isinstance(path, str) and path else None
+    if not isinstance(event, ToolFinished) or event.result.is_error:
+        return None
+    call = _find_call(view, event.result.call_id)
+    key = FILE_TOOLS.get(call.name) if call is not None else None
+    target = call.input.get(key) if call is not None and key else None
+    return target if isinstance(target, str) and target else None
 
 
 def _find_call(view: TaskView, call_id: str) -> ToolUse | None:

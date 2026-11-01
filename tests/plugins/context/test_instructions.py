@@ -14,6 +14,7 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
 from noeta.plugins.instructions.files import matches
 from noeta.plugins.memory import Memory, memory_dir_for
+from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills
 from noeta.testing import reply
 from tests.plugins.context.conftest import Harness
@@ -225,6 +226,37 @@ async def test_a_touched_file_brings_what_applies_to_it(h: Harness) -> None:
     assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
     assert msgs[5].text == f"{pkg / 'NOETA.md'} {PROJECT}:\n\npkg rules"
     assert len(h.provider.requests[2].messages) == len(msgs) + 2
+
+
+async def test_a_file_a_shell_command_showed_brings_what_applies_to_it(h: Harness) -> None:
+    # As Claude Code: ``cat`` of a file is a read of it for the nested files.
+    pkg = h.work / "src" / "pkg"
+    pkg.mkdir(parents=True)
+    rules = h.work / ".noeta" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "py.md").write_text("---\npaths: src/**/*.py\n---\npython rule\n")
+    (pkg / "NOETA.md").write_text("pkg rules\n")
+    (pkg / "a.py").write_text("x = 1\n")
+    (h.work / "other").mkdir()
+    (h.work / "other" / "NOETA.md").write_text("other rules\n")
+    (h.work / "other" / "b.py").write_text("y = 2\n")
+    h.provider.add(
+        reply("", ("Bash", {"command": "cat src/pkg/a.py"})),
+        # Not a shell read (a pipe), and a grep that found nothing: no read.
+        reply("", ("Bash", {"command": "cat other/b.py | wc -l"})),
+        reply("", ("Bash", {"command": "grep zzz other/b.py"})),
+        reply("done"),
+    )
+    shell_agent = Agent(name="a", model="m",
+                        extensions=[FileTools(), Shell(), Instructions(walk=False)])
+    tid = await h.start(shell_agent)
+    recs = await h.records(tid, "instructions", "nested")
+    assert [Path(r.data["files"][0]["path"]).relative_to(h.work).as_posix() for r in recs] == [
+        ".noeta/rules/py.md", "src/pkg/NOETA.md"]
+    assert {r.data["trigger"] for r in recs} == {str(pkg / "a.py")}
+    msgs = h.provider.requests[1].messages
+    assert isinstance(msgs[2].content[0], ToolResult)
+    assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
 
 
 async def test_reads_outside_the_workspace_or_failing_discover_nothing(h: Harness) -> None:
