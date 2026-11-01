@@ -1,6 +1,7 @@
-"""Closing a turn or the task: stop a turn, fail it, end the task, and
-continue a reply cut at the output cap. Every way out answers the calls
-still open, so the conversation never keeps a call without a result."""
+"""Closing a turn or the task: stop a turn, fail it, end the task,
+continue a reply cut at the output cap, and ask again after an empty one.
+Every way out answers the calls still open, so the conversation never keeps
+a call without a result."""
 
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ from noeta.core.errors import InboxUnread
 from noeta.core.events import Cancel, ChildEnded, Event, TaskEnded
 from noeta.core.runner import texts
 from noeta.core.store import Post
-from noeta.core.types import user
+from noeta.core.types import ModelResponse, user
 
 if TYPE_CHECKING:
     from noeta.core.runner.task import TaskRun
@@ -102,7 +103,11 @@ async def fail_turn(run: TaskRun, reason: str, detail: str = "") -> bool:
     return True
 
 
-async def continue_after_cap(run: TaskRun, *, thinking_only: bool = False) -> bool:
+async def continue_after_cap(run: TaskRun, *, dropped: ModelResponse | None = None) -> bool:
+    """Ask the model to go on after a reply cut at the output cap; ``dropped``
+    is a cut reply that held only reasoning, which is not recorded (its
+    usage is)."""
+    thinking_only = dropped is not None
     recoveries = 0
     for m in reversed(run.state.messages):
         if m.role == "user" and m.origin == "system" and m.text in (
@@ -115,6 +120,25 @@ async def continue_after_cap(run: TaskRun, *, thinking_only: bool = False) -> bo
                                "the response kept hitting the output token limit")
     nudge = texts.OUTPUT_LIMIT_THINKING_NUDGE if thinking_only \
         else texts.OUTPUT_LIMIT_RESUME_NUDGE
-    await run.append([core_records.event(core_records.Continue(),
-                                         message=user(nudge, origin="system"))])
+    record = core_records.Continue() if dropped is None else core_records.Continue(
+        model=dropped.model or run.model, usage=dropped.usage)
+    await run.append([core_records.event(record, message=user(nudge, origin="system"))])
+    return True
+
+
+async def after_empty_reply(run: TaskRun, response: ModelResponse) -> bool:
+    """The model ended its reply with no text and no tool call (reasoning
+    alone counts as nothing). The reply is not recorded (its usage is); the
+    model is asked to go on, once per step: asked already, with no reply and
+    no new message since, the turn ends without an answer, as in Claude
+    Code. The nudge is plain text in the user's turn, as Claude Code sends
+    it."""
+    model, usage = response.model or run.model, response.usage
+    if run.state.empty_nudged:
+        await run.append([core_records.event(core_records.TurnDone(
+            reason=core_records.EMPTY_REPLY, model=model, usage=usage))])
+        return True
+    await run.append([core_records.event(
+        core_records.Continue(reason=core_records.EMPTY_REPLY, model=model, usage=usage),
+        message=user(texts.EMPTY_REPLY_NUDGE, origin="inline"))])
     return True

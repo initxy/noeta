@@ -91,7 +91,8 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 def _usage_totals(records: list[dict[str, Any]], judge: Any) -> dict[str, Any]:
     tot: dict[str, Any] = {"requests": 0, "input_tokens": 0, "cache_read_tokens": 0,
-                           "cache_write_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+                           "cache_write_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+                           "empty_nudges": 0}
     for r in records:
         for k in tot:
             tot[k] += r.get("usage", {}).get(k, 0)
@@ -219,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wall {wall}s; {usage['requests']} agent requests, "
           f"{usage['input_tokens']:,} input tokens "
           f"({usage['cache_read_tokens']:,} cached), {usage['output_tokens']:,} output; "
+          f"empty-reply nudges {usage['empty_nudges']}; "
           f"judge {usage['judge_requests']} requests; catalog cost ${usage['cost_usd']}")
     leaks = [f"{r['scenario']}#{r['trial']}" for r in records if r.get("repo_access")]
     print(f"calls naming the repo (a leak out of the trial): "

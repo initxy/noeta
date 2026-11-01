@@ -67,3 +67,42 @@ async def test_a_tool_writing_an_unknown_core_kind_fails_and_the_task_goes_on(
                 if isinstance(r.event, ToolFinished)]
     assert result.is_error and "not_a_core_kind" in result.text
     assert (await client.get(tid)).waiting_on == "input"
+
+
+def test_continue_and_turn_done_decode_old_and_new_entries() -> None:
+    from noeta.core import records
+    from noeta.core.events import ExtensionRecorded
+    from noeta.core.types import Usage
+
+    def decode(kind: str, data: Any) -> Any:
+        return records.decode(ExtensionRecorded(extension=CORE, kind=kind, data=data))
+
+    # Entries written before they carried data.
+    assert decode("continue", None) == records.Continue()
+    assert decode("turn_done", None) == records.TurnDone()
+    usage = Usage(uncached=10, output=5)
+    for cls in (records.Continue, records.TurnDone):
+        rec = cls(reason=records.EMPTY_REPLY, model="m", usage=usage)
+        assert decode(rec.kind, rec.data()) == rec
+        assert cls().data() is None
+    # A malformed usage is dropped, the rest stands.
+    bad = decode("turn_done", {"reason": "empty_reply", "usage": {"output": "x"}})
+    assert bad.reason == "empty_reply" and bad.usage is None
+
+
+def test_the_nudge_is_folded_from_the_log() -> None:
+    # Whichever worker folds the log knows the model was asked already.
+    from noeta.core import records
+    from noeta.core.events import ModelReplied, Recorded
+    from noeta.core.loop.state import apply
+    from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
+    from noeta.core.types import user
+
+    state = TaskState()
+    nudge = records.event(records.Continue(reason=records.EMPTY_REPLY),
+                          message=user(EMPTY_REPLY_NUDGE, origin="inline"))
+    state.model_attempts = 2
+    apply(state, Recorded(seq=1, at=0.0, event=nudge), {})
+    assert state.empty_nudged and state.model_attempts == 0
+    apply(state, Recorded(seq=2, at=0.0, event=ModelReplied(response=reply("ok"))), {})
+    assert not state.empty_nudged

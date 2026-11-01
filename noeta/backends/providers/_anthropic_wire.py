@@ -14,7 +14,7 @@ from noeta.backends.providers._common import (
     tool_result_text,
 )
 from noeta.core import models
-from noeta.core.runner.texts import INTERRUPTED_MARKER, REJECTED_MARKER
+from noeta.core.runner.texts import EMPTY_REPLY_NUDGE, INTERRUPTED_MARKER, REJECTED_MARKER
 from noeta.core.types import (
     Image,
     Message,
@@ -75,6 +75,16 @@ def messages_to_wire(
             joined["text"] += "\n\n" + "\n\n".join(b["text"] for b in wire["content"])
             last_block.append(joined)
             continue
+        if (message.role == "user" and message.origin == "inline"
+                and message.text == EMPTY_REPLY_NUDGE):
+            turn = next((t for t in reversed(outbound) if t["role"] != "system"), None)
+            if turn is not None and turn["role"] == "user":
+                # Claude Code adds the empty-reply nudge to the user turn
+                # before the step's notes; the request still ends with them.
+                turn["content"] = [*turn["content"], *wire["content"]]
+                last_block.append(previous)
+                prev_injected = injected
+                continue
         last_block.append(wire["content"][-1] if wire["content"] else previous)
         mid_turn = (
             message.role == "user" and message.origin == "human" and outbound

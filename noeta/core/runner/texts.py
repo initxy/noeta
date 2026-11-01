@@ -48,6 +48,12 @@ OUTPUT_LIMIT_THINKING_NUDGE = (
 )
 #: Consecutive output-cap recoveries before the turn fails (Claude Code's limit).
 MAX_OUTPUT_TOKENS_RECOVERY = 3
+#: Asked once per step when a reply ends with no text and no tool call
+#: (Claude Code 2.1.312's text).
+EMPTY_REPLY_NUDGE = (
+    "[Your previous response had no visible output. Please continue and "
+    "produce a user-visible response.]"
+)
 
 #: The trailing user turn of the step-limit round (not recorded).
 STEP_LIMIT_PROMPT = (

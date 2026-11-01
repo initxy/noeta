@@ -9,6 +9,23 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **An empty reply no longer fails the turn; the model is asked to go on, as in Claude Code.**
+  A reply that ends (`end_turn`) with no text and no tool call (no content, empty text, or
+  reasoning only) is still not recorded; the next request carries Claude Code's one-line
+  nudge as plain text in the user's turn (the `continue` entry, `reason: "empty_reply"`), once
+  per step: again after a tool round, a new prompt or a notice. An empty reply after the nudge
+  ends the turn quietly: no `llm_empty_response`, the answer is empty, `-p` reports `success`
+  and exits 0, and Stop / SubagentStop hooks run without `last_assistant_message` (the log
+  gets `turn_done` with `reason: "empty_reply"`). Other stop reasons with an empty reply still
+  fail with `llm_empty_response`. Three Terminal-Bench 4.0 trials on DeepSeek V4.1 Flash had
+  ended mid-task on one empty reply.
+- **A dropped reply counts as a model call.** An empty reply, and a reply cut at the output
+  cap while it held only reasoning, are not recorded, but their tokens and cost now count in
+  `/cost`, the headless `result` (`usage`, `total_cost_usd`, `num_turns`) and the per-turn
+  token count (the `continue` / `turn_done` entry carries the reply's `model` and `usage`);
+  and a `continue` no longer counts toward the "model call kept being interrupted" limit.
+  An older worker reading these entries ignores the new fields: it keeps the earlier answer
+  of a turn that ended on an empty reply and runs no Stop hook for it.
 - **Commands inherit noeta's environment, as in Claude Code.** `Bash`, background jobs,
   command hooks, stdio MCP servers and MCP `headersHelper`s started on this machine get the
   whole process environment except noeta's own credentials (`NOETA_API_KEY`, `NOETA_STORE`,

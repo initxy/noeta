@@ -185,6 +185,21 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.skill-mention.1 | When a user message names a skill as `/<name>` anywhere but as its leading command (preceded by the start, whitespace or a CJK sentence mark, followed by whitespace or the end), a `<system-reminder>` after the message says it names that skill: call `Skill` with it (and the arguments given) if the user wants it run, and do not run it if they only mention it. One per skill named; only skills the model may invoke. noeta today: covered (`skills` plugin, `reminder/skill_mention`, our words). |
 | rem.nested-skills.1 | When a tool touches a file in a directory below the working directory that has its own skills directory (in a directory between the two), that directory's skills join the conversation and a `<system-reminder>` names the directory (relative) and lists the new skills by name, one `- <name>` line each; the next model call lists them with their descriptions (`main.env.16`). noeta today: covered for `.noeta/skills` and `.agents/skills` (noeta's places), in trusted workspaces; the found directories are recorded in the task log. |
 
+## empty reply (bundle and fake-endpoint runs, not recorded)
+
+No baseline session got an empty reply; these rows come from the 2.1.312 bundle (the
+`thinking_only_retry` path of the query loop) and from running 2.1.312 against a fake Messages
+endpoint that answered with an empty reply, in `-p` and interactive mode
+(`docs/specs/archive/2026-11-01-empty-turn.md`).
+
+| id | rule |
+|---|---|
+| rem.empty-reply.1 | Trigger: a main-loop reply whose stop reason is `end_turn` (or `stop_sequence`) with no tool call and no text that is more than whitespace: no content blocks, only empty text, or only reasoning. A cut at the output limit is the output-limit recovery's, not this. noeta today: covered (`noeta/core/runner/closing.py`, `after_empty_reply`). |
+| rem.empty-reply.2 | The reply is not kept; the next request ends with a fixed one-line nudge (the previous response had no visible output; continue and produce a user-visible response, in square brackets) as plain text, unwrapped, added to the user turn before it (after the prompt or the tool results) ahead of that step's `role: "system"` notes, which still end the request and carry its last cache mark (2.1.312 on the Opus 5.5 configuration). It persists. noeta today: covered (`EMPTY_REPLY_NUDGE`, Claude Code's text under ADR-020; the Anthropic adapter places it). |
+| rem.empty-reply.3 | Once per step: the nudge is sent again only after a tool round, or a new prompt or notification, since the last one (not after a Stop-hook continuation). An empty reply after the nudge ends the turn quietly: no error, `-p` reports `success` with an empty `result` and exits 0, and Stop hooks run without `last_assistant_message`. (A flag that is off by default turns a second empty reply to a bare prompt into an API error instead.) noeta today: covered (the turn ends with `turn_done` reason `empty_reply`; its answer is empty), except after a Stop-hook continuation (`parity/deviations.md`). |
+| rem.empty-reply.4 | A dropped reply is still a model call: its tokens and cost count, and `-p`'s `num_turns` includes it (tool, empty, empty gives 3). noeta today: covered (the `continue` / `turn_done` entry carries the dropped reply's model and usage). |
+| rem.empty-reply.5 | Not nudged either: a reply right after a successful call of a tool listed in `CLAUDE_CODE_TERMINAL_MCP_TOOLS` (an MCP tool whose result is meant to end the turn), or after a `StructuredOutput` call since the last prompt (the answer was already given through the tool). noeta today: n/a: a tool that ends the turn (`ToolOutput.end_turn`) ends it without another model call, and structured output is the provider's `output_schema`, not a tool. |
+
 ## list changes (bundle, not recorded)
 
 The recordings never changed a list mid-conversation; these rows come from the 2.1.312 bundle.

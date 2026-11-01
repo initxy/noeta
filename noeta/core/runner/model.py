@@ -214,7 +214,9 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
     if response.stop_reason == "max_tokens" and _empty(message):
         # Cut while still reasoning: nothing to record (an empty assistant
         # turn is a provider 400 on every later request).
-        return await closing.continue_after_cap(run, thinking_only=True)
+        return await closing.continue_after_cap(run, dropped=response)
+    if response.stop_reason == "end_turn" and _empty(message):
+        return await closing.after_empty_reply(run, response)
     if _empty(message):
         return await closing.fail_turn(run, texts.LLM_EMPTY_RESPONSE,
                                    f"the model returned no text and no tool call "

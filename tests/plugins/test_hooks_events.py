@@ -489,6 +489,17 @@ async def test_session_end_and_notification(tmp_path: Path) -> None:
     assert note["message"] == "Noeta needs your permission to use Read"
 
 
+async def test_stop_runs_when_a_turn_ends_on_an_empty_reply(tmp_path: Path) -> None:
+    # Claude Code 2.1.312 runs Stop once the asked-again reply is empty too,
+    # with no last_assistant_message.
+    s = await Setup(tmp_path, {"Stop": hook("stop")}, [reply(""), reply("")],
+                    answers={"stop": HookResult(0)}).start()
+    assert len(s.provider.requests) == 2
+    [payload] = s.runner.payloads("stop")
+    assert payload["stop_hook_active"] is False
+    assert "last_assistant_message" not in payload
+
+
 async def test_http_hook_end_to_end(tmp_path: Path) -> None:
     seen: list[dict[str, Any]] = []
 
@@ -554,6 +565,32 @@ async def test_sub_agent_start_and_stop(tmp_path: Path) -> None:
         text='SubagentStop hook blocking error from command: "stop": Run the tests first.')]
     end = [r.event for r in await client.events(child.task_id)][-1]
     assert isinstance(end, TaskEnded) and end.answer == "1 2 3"
+
+
+async def test_sub_agent_stop_runs_when_it_ends_on_an_empty_reply(tmp_path: Path) -> None:
+    runner = FakeRunner({"stop": HookResult(0)})
+    hooks = Hooks(hooks={"SubagentStop": hook("stop")}, runner=runner)
+    roster = [SubagentSpec(name="scout", description="Looks around.", agent="worker")]
+    parent = Agent(name="main", model="p", extensions=[Subtasks(roster), hooks])
+    worker = Agent(name="worker", model="c", extensions=[Subtasks(()), hooks])
+    p = ScriptedProvider([reply("", ("Agent", {"description": "look", "prompt": "count",
+                                               "subagent_type": "scout"})),
+                          reply("it said nothing")])
+    c = ScriptedProvider([reply(""), reply("")])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    providers = {"p": p, "c": c}
+    rt = Runtime(store=store, agents={"main": parent, "worker": worker},
+                 provider_for=lambda m: providers[m], env_for=lambda _s: LocalExecEnv(str(tmp_path)),
+                 sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    [payload] = runner.payloads("stop")
+    assert payload["agent_id"] == child.task_id and "last_assistant_message" not in payload
+    end = [r.event for r in await client.events(child.task_id)][-1]
+    assert isinstance(end, TaskEnded) and end.status == "done" and end.answer == ""
+    await store.close()
 
 
 async def test_a_sub_agent_stop_prompt_hook_sees_no_unanswered_call(tmp_path: Path) -> None:

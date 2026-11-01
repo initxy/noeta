@@ -1,5 +1,5 @@
 """Core-loop behaviors kept from 0.6: failed turns park, empty replies are
-never recorded, cut replies still run their complete calls, the step limit
+never recorded (the model is asked once per step to go on), cut replies still run their complete calls, the step limit
 ends with a report, retries are visible."""
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from noeta.core.events import (
 )
 from noeta.core.runner import OUTPUT_LIMIT_THINKING_NUDGE, Runtime, texts
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import Message, ModelResponse, Thinking
+from noeta.core.types import Message, ModelResponse, Thinking, user
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -100,12 +100,135 @@ async def test_model_error_ends_a_one_shot_task(store: SqliteStore) -> None:
     assert end.error.startswith(texts.LLM_ERROR)
 
 
-async def test_empty_reply_is_never_recorded(store: SqliteStore) -> None:
-    provider = ScriptedProvider([reply("")])
+def _nudges(request: Any) -> int:
+    return sum(m.text == texts.EMPTY_REPLY_NUDGE for m in request.messages)
+
+
+async def test_empty_reply_is_never_recorded_and_is_asked_to_go_on(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply(""), reply("hello")])
+    client, tid = await run(store, provider, Agent(name="a", model="m"))
+    evs = await events(client, tid)
+    replies = [e.response.message.text for e in evs if isinstance(e, ModelReplied)]
+    assert replies == ["hello"]
+    nudge = provider.requests[1].messages[-1]
+    assert nudge.role == "user" and nudge.text == texts.EMPTY_REPLY_NUDGE
+    assert [m.role for m in provider.requests[1].messages[-2:]] == ["user", "user"]
+    assert isinstance(evs[-1], Waiting) and evs[-1].detail == {"answer": "hello"}
+
+
+async def test_reasoning_only_reply_is_empty(store: SqliteStore) -> None:
+    only = ModelResponse(message=Message(role="assistant", content=[Thinking(text="hmm")]),
+                         stop_reason="end_turn")
+    provider = ScriptedProvider([only, reply("hello")])
+    await run(store, provider, Agent(name="a", model="m"))
+    assert provider.requests[1].messages[-1].text == texts.EMPTY_REPLY_NUDGE
+    assert not any(isinstance(b, Thinking) for m in provider.requests[1].messages
+                   for b in m.content)
+
+
+async def test_empty_again_after_the_nudge_ends_the_turn_quietly(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply(""), reply("")])
+    client, tid = await run(store, provider, Agent(name="a", model="m"))
+    evs = await events(client, tid)
+    assert len(provider.requests) == 2
+    assert not any(isinstance(e, ModelReplied) for e in evs)
+    last = evs[-1]
+    assert isinstance(last, Waiting) and last.detail == {"answer": ""}
+    # The next message opens a turn as usual; the nudge stays in the history.
+    provider.add(reply("back"))
+    await client.send(tid, "again")
+    await Runtime(store=store, agents={"a": Agent(name="a", model="m")},
+                  provider_for=lambda _m: provider, env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                  sleep=_no_sleep).run_until_idle()
+    assert _nudges(provider.requests[2]) == 1
+    assert provider.requests[2].messages[-1].text == "again"
+
+
+async def test_one_shot_task_ends_done_after_two_empty_replies(store: SqliteStore) -> None:
+    probe = Probe()
+    provider = ScriptedProvider([reply("Looking.", ("Probe", {})), reply(""), reply("")])
+    client, tid = await run(store, provider,
+                            Agent(name="a", model="m", tools=[probe], one_shot=True))
+    end = (await events(client, tid))[-1]
+    # The preamble before the call is no answer: the turn ended on nothing.
+    assert isinstance(end, TaskEnded) and end.status == "done" and not end.error
+    assert end.answer == ""
+
+
+async def test_the_nudge_is_asked_again_after_each_step(store: SqliteStore) -> None:
+    probe = Probe()
+    provider = ScriptedProvider([reply("", ("Probe", {})), reply(""),
+                                 reply("", ("Probe", {})), reply(""), reply("done")])
+    client, tid = await run(store, provider,
+                            Agent(name="a", model="m", tools=[probe], one_shot=True))
+    assert probe.runs == 2
+    assert [_nudges(r) for r in provider.requests] == [0, 0, 1, 1, 2]
+    end = (await events(client, tid))[-1]
+    assert isinstance(end, TaskEnded) and end.status == "done" and end.answer == "done"
+
+
+async def test_empty_reply_with_another_stop_still_fails(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("", stop="refusal")])
     client, tid = await run(store, provider, Agent(name="a", model="m"))
     evs = await events(client, tid)
     assert not any(isinstance(e, ModelReplied) for e in evs)
     assert evs[-1].detail["turn_failed"].startswith(texts.LLM_EMPTY_RESPONSE)
+
+
+async def _again(store: SqliteStore, provider: ScriptedProvider, agent: Agent) -> None:
+    await Runtime(store=store, agents={agent.name: agent}, provider_for=lambda _m: provider,
+                  env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
+                  sleep=_no_sleep).run_until_idle()
+
+
+async def test_cut_and_empty_replies_are_no_crash_attempts(store: SqliteStore) -> None:
+    # Two reasoning-only cuts, then an empty reply: three model calls without
+    # a recorded reply, none of them a crash; the nudge still goes out.
+    cut = ModelResponse(message=Message(role="assistant", content=[Thinking(text="hmm")]),
+                        stop_reason="max_tokens")
+    provider = ScriptedProvider([cut, cut, reply(""), reply("answer")])
+    client, tid = await run(store, provider, Agent(name="a", model="m"))
+    assert len(provider.requests) == 4
+    assert [_nudges(r) for r in provider.requests] == [0, 0, 0, 1]
+    last = (await events(client, tid))[-1]
+    assert isinstance(last, Waiting) and last.detail == {"answer": "answer"}
+
+
+async def test_a_new_turn_opened_by_a_notice_is_nudged_again(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply(""), reply("")])
+    agent = Agent(name="a", model="m")
+    client, tid = await run(store, provider, agent)
+    provider.add(reply(""), reply("the job is done"))
+    await client.send(tid, user("Background job finished.", origin="agent"))
+    await _again(store, provider, agent)
+    assert [_nudges(r) for r in provider.requests] == [0, 1, 1, 2]
+    last = (await events(client, tid))[-1]
+    assert isinstance(last, Waiting) and last.detail == {"answer": "the job is done"}
+
+
+async def test_quiet_end_then_a_prompt_then_empty_again(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply(""), reply("")])
+    agent = Agent(name="a", model="m")
+    client, tid = await run(store, provider, agent)
+    provider.add(reply(""), reply(""))
+    await client.send(tid, "and again")
+    await _again(store, provider, agent)
+    assert [_nudges(r) for r in provider.requests] == [0, 1, 1, 2]
+    evs = await events(client, tid)
+    assert not any(isinstance(e, ModelReplied) for e in evs)
+    assert isinstance(evs[-1], Waiting) and evs[-1].detail == {"answer": ""}
+
+
+async def test_dropped_replies_count_in_the_usage(store: SqliteStore) -> None:
+    from noeta.host.usage import tree_usage
+
+    probe = Probe()
+    provider = ScriptedProvider([reply("", ("Probe", {})), reply(""), reply("")])
+    client, tid = await run(store, provider,
+                            Agent(name="a", model="m", tools=[probe], one_shot=True))
+    total = await tree_usage(client, tid)
+    assert sum(m.calls for m in total.by_model.values()) == 3
+    assert total.usage.output == 15
 
 
 async def test_thinking_only_cut_is_not_recorded_and_nudges(store: SqliteStore) -> None:

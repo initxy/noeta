@@ -24,6 +24,7 @@ from noeta.agents import default_agents
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.providers import provider_for
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.core import records
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import (
@@ -337,24 +338,18 @@ def run_trial(cfg: EvalConfig, sc: Scenario) -> tuple[Trace, dict[str, Any], Pat
     results: dict[str, Any] = {}
     texts: list[str] = []
     turn = -1
-    usage = {"requests": 0, "input_tokens": 0, "cache_read_tokens": 0,
-             "cache_write_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    usage = trial_usage(events)
     for ev in events:
         if isinstance(ev, InputTaken) and any(
                 isinstance(i.body, Say) and i.body.message.from_person for i in ev.items):
             turn += 1
         elif isinstance(ev, ModelReplied):
-            msg, u = ev.response.message, ev.response.usage
+            msg = ev.response.message
             if msg.tool_uses:
                 batches.append([_Call(c.id, c.name, dict(c.input)) for c in msg.tool_uses])
                 batch_turns.append(max(turn, 0))
             if msg.text.strip():
                 texts.append(msg.text)
-            usage["requests"] += 1
-            usage["input_tokens"] += u.input
-            usage["cache_read_tokens"] += u.cache_read
-            usage["cache_write_tokens"] += u.cache_write
-            usage["output_tokens"] += u.output
         elif isinstance(ev, ToolFinished):
             r = ev.result
             results[r.call_id] = _Result(r.call_id, not r.is_error, r.text)
@@ -370,6 +365,35 @@ def run_trial(cfg: EvalConfig, sc: Scenario) -> tuple[Trace, dict[str, Any], Pat
         before=before,
     )
     return trace, usage, root
+
+
+def trial_usage(events: list[Any]) -> dict[str, Any]:
+    """A trial's model calls and tokens: every recorded reply, and every
+    reply the kernel dropped (an empty one, or one cut at the output cap
+    while it held only reasoning), whose usage rides on its ``continue`` /
+    ``turn_done`` entry. ``empty_nudges`` counts the times the model was
+    asked to go on after an empty reply."""
+    usage: dict[str, Any] = {"requests": 0, "input_tokens": 0, "cache_read_tokens": 0,
+                             "cache_write_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+                             "empty_nudges": 0}
+    for ev in events:
+        if isinstance(ev, ModelReplied):
+            u = ev.response.usage
+        else:
+            core = records.decode(ev)
+            if not isinstance(core, (records.Continue, records.TurnDone)):
+                continue
+            if isinstance(core, records.Continue) and core.reason == records.EMPTY_REPLY:
+                usage["empty_nudges"] += 1
+            if core.usage is None:
+                continue
+            u = core.usage
+        usage["requests"] += 1
+        usage["input_tokens"] += u.input
+        usage["cache_read_tokens"] += u.cache_read
+        usage["cache_write_tokens"] += u.cache_write
+        usage["output_tokens"] += u.output
+    return usage
 
 
 class Judge:
