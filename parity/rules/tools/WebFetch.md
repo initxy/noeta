@@ -43,6 +43,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.WebFetch.6` | Responses are cached for 15 minutes per URL. | covered |
 | `tool.WebFetch.7` | The description does not mention `WebSearch`. | covered |
 | `tool.WebFetch.8` | A URL over 2,000 characters, or carrying a user name or password, is refused as invalid before anything is fetched; a fetch gives up after 60 s and refuses a body over 10 MB (2.1.312 bundle). | covered |
+| `tool.WebFetch.9` | (bundle) Fetches ask for Markdown first (`Accept: text/markdown, text/html, */*`); a `text/markdown` body from a preapproved documentation site (a fixed host and path-prefix list, with GitHub rules) whose text from the offset is under 100,000 characters is the result itself, with no digest. | covered (the preapproved sites are still asked about per domain: owner question in spec 2026-11-02-context-audit-closure) |
 
 ## Result shape
 

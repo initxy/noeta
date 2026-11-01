@@ -198,7 +198,7 @@ endpoint that answered with an empty reply, in `-p` and interactive mode
 | rem.empty-reply.2 | The reply is not kept; the next request ends with a fixed one-line nudge (the previous response had no visible output; continue and produce a user-visible response, in square brackets) as plain text, unwrapped, added to the user turn before it (after the prompt or the tool results) ahead of that step's `role: "system"` notes, which still end the request and carry its last cache mark (2.1.312 on the Opus 5.5 configuration). It persists. | covered — `EMPTY_REPLY_NUDGE`, Claude Code's text under ADR-020; the Anthropic adapter places it |
 | rem.empty-reply.3 | Once per step: the nudge is sent again only after a tool round, or a new prompt or notification, since the last one (not after a Stop-hook continuation). An empty reply after the nudge ends the turn quietly: no error, `-p` reports `success` with an empty `result` and exits 0, and Stop hooks run without `last_assistant_message`. (A flag that is off by default turns a second empty reply to a bare prompt into an API error instead.) | deviation — `parity/deviations.md` Reminders row (a blocking Stop hook starts the count again); otherwise covered: the turn ends with `turn_done` reason `empty_reply`, its answer empty |
 | rem.empty-reply.4 | A dropped reply is still a model call: its tokens and cost count, and `-p`'s `num_turns` includes it (tool, empty, empty gives 3). | covered — the `continue` / `turn_done` entry carries the dropped reply's model and usage |
-| rem.empty-reply.5 | Not nudged either: a reply right after a successful call of a tool listed in `CLAUDE_CODE_TERMINAL_MCP_TOOLS` (an MCP tool whose result is meant to end the turn), or after a `StructuredOutput` call since the last prompt (the answer was already given through the tool). | pending (T3) — the `StructuredOutput` half; a tool that ends the turn (`ToolOutput.end_turn`) ends it without another model call |
+| rem.empty-reply.5 | Not nudged either: a reply right after a successful call of a tool listed in `CLAUDE_CODE_TERMINAL_MCP_TOOLS` (an MCP tool whose result is meant to end the turn), or after a `StructuredOutput` call since the last prompt (the answer was already given through the tool). | partly covered — an accepted `StructuredOutput` call ends the turn (`ToolOutput.end_turn`), so no reply follows it; after a refused call an empty reply is still nudged, where Claude Code skips the nudge after any `StructuredOutput` call since the prompt |
 
 ## list changes (bundle, not recorded)
 
@@ -267,7 +267,7 @@ Each note goes out with the next request after the change, as a `role: "system"`
 
 | id | rule | noeta today |
 |---|---|---|
-| rem.answers.1 | `AskUserQuestion` answers come back as its `tool_result` text, not as a user message: each question quoted, `=`, the chosen label quoted, the chosen option's preview when it had one, and a closing line inviting the model to proceed using them. Details in `tools/AskUserQuestion.md`. | pending (T4) |
+| rem.answers.1 | `AskUserQuestion` answers come back as its `tool_result` text, not as a user message: each question quoted, `=`, the chosen label quoted, the chosen option's preview when it had one, and a closing line inviting the model to proceed using them. Details in `tools/AskUserQuestion.md`. | covered (`ask_user`; unanswered questions left out, none answered said so; no per-question notes: `deviations.md`) |
 | rem.answers.2 | Approvals in default mode (`m2`) add no reminder; an approved call simply returns its normal result. | covered — an approved call returns its normal result, no note |
 
 ## at-mention (file attachments)
@@ -293,11 +293,22 @@ Not in the recordings (no hooks configured); from the 2.1.312 bundle (`hook_addi
 |---|---|---|
 | rem.hook-context.1 | Text a hook adds for the model (`additionalContext`, or a `UserPromptSubmit` / `SessionStart` hook's plain output) is meta user content led by `<hook name> hook additional context: `; the hook name is the event (`UserPromptSubmit`, `SessionStart`, `SubagentStart`, `PostToolBatch`), or `<event>:<tool>` for a tool's events (`PreToolUse:Read`). A hook's blocking feedback (a tool's events, `PostToolBatch`, `Stop`, `SubagentStop`) is `<hook name> hook blocking error from command: "<command>": <reason>`, the command being the hook's command line, URL or prompt (bundle `hook_blocking_error`). | covered — `hooks/dispatch.py` `CONTEXT_LABEL` / `BLOCK_LABEL` |
 
+## Checked in the bundle (not recorded)
+
+| id | rule | noeta today |
+|---|---|---|
+| rem.date-change.1 | When today's date differs from the last one the conversation was given, a meta note gives the new date and says not to announce it; checked before every model call (mid-turn included), sub-agents too. | covered (`environment` plugin) |
+| rem.quiet-nudge.4 | The quiet nudge is for the main conversation only; sub-agents never get it. | covered (the plugin is only in `main.md`) |
+| rem.file-changed.3 | Files checked: every entry of the read-file state (an LRU of 5,000 entries / 25 MiB), all at once, each compared by modification time first. | covered (`stat_many`, one batch) |
+| rem.join.1 | Where two user messages are joined and a text block meets a text block, the earlier one gets a trailing newline; the opening context blocks (instructions, git status, attribution) are one message and get none. | covered (Anthropic adapter `_join`) |
+| rem.git-status.6 | The repository is found by walking up from the working directory for `.git`; a status over 2,000 characters is cut there and followed by a note to run `git status` with the shell tool. | covered (`environment` plugin, note in noeta's words) |
+| rem.skill-handoff.1 | In auto mode a skill's or command's inline shell command that would be asked about is left to the model to run (its place says to run it first, exactly as written); a denied one still fails the skill. | covered (`toolkit/inline_commands.py`) |
+
 ## s1 only
 
 | id | rule | noeta today |
 |---|---|---|
-| rem.file-changed.1 | **s1 only.** Trigger: a file the model has in context (here `CLAUDE.md`, changed by a Bash command) changed on disk. Placement: `role: "system"` message after the tool-result message of the step that changed it. | pending (R1) |
+| rem.file-changed.1 | **s1 only.** Trigger: a file the model has in context (here `CLAUDE.md`, changed by a Bash command) changed on disk. Placement: `role: "system"` message after the tool-result message of the step that changed it. | covered (`fs` plugin: every remembered whole read, up to 5,000, checked in one `stat_many` batch per model call) |
 | rem.file-changed.2 | Content: the path changed on disk since last read; the change is usually deliberate, so treat it as the current state and do not revert; if it looks wrong say so instead of undoing it; otherwise no need to mention it; then the relevant lines with line numbers (`N<TAB>text`), or, when they cannot be shown, that they are not shown and `Read` gives the current content (2.1.312 bundle, `edited_text_file`). The lines: each change with 8 unchanged lines either side, one block after another; past 8,192 characters cut at a line end and followed by `... [N lines truncated] ...` (bundle `oKs`). No note for a file last read with an offset or a limit. | deviation — `parity/deviations.md` Reminders row: lines shown only while the last whole `Read` is in the conversation, numbered as the file is now; 8 context lines and the 8,192-character cut covered (`fs/changes.py`) |
 | rem.agent-list.1 | **s1 only.** A `general-purpose` sub-agent whose first environment message lacked the agent list received the "available agent types" list plus the auto-mode guidance as a `role: "system"` message after its first tool result. | covered — a sub-agent's second request carries the agent list and the auto-mode note (`subtasks` `reminders`) |
 
@@ -306,4 +317,4 @@ Not in the recordings (no hooks configured); from the 2.1.312 bundle (`hook_addi
 | id | rule | noeta today |
 |---|---|---|
 | rem.absent.1 | No todo/task-list nudge, no `TodoWrite`/`TaskCreate` reminder (neither tool is in the baseline tool set). | covered — noeta has no todo tool and no todo nudge |
-| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred set never changed mid-conversation; see rem.deltas), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. | pending (R2) — the date-change note; the rest covered: no diagnostics or context-window warning, MCP instructions and deferred-tool notes only on a change |
+| rem.absent.2 | No MCP server-instructions block (the fixture server declares none), no deferred-tool delta reminder (the deferred set never changed mid-conversation; see rem.deltas), no diagnostics, no token-usage or context-window warning, no date-change reminder outside the environment message and compaction. | covered — the date-change note is checked before every model call (`environment`); no diagnostics or context-window warning, MCP instructions and deferred-tool notes only on a change |

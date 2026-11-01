@@ -41,7 +41,7 @@ property carries its own `description`.
 | `tool.Bash.3` | When a command ends outside the working directories, the next call starts back in the starting folder; otherwise the directory carries over. | covered (resets to workspace root, adds a reset note) |
 | `tool.Bash.4` | Absolute paths are preferred; a `cd` inside a compound command may trigger a permission prompt. | covered |
 | `tool.Bash.5` | Environment variables and shell functions do not persist between calls. | covered |
-| `tool.Bash.6` | The shell is initialized from the user's login profile. | contradicts: noeta runs `bash -c` without the login profile, in noeta's own environment minus its credentials (`child_env`) |
+| `tool.Bash.6` | The shell is initialized from the user's login profile. | deviation — no rc snapshot or login profile; `bash -c` with noeta's environment minus its credentials (`deviations.md`) |
 | `tool.Bash.7` | Command output goes to the model; the user may not see it, so anything the user needs must be restated. | covered |
 | `tool.Bash.8` | `timeout` is in milliseconds, default 120000, maximum 600000 for a foreground command. | covered |
 | `tool.Bash.9` | `run_in_background` detaches the command; it keeps running across turns and wakes the model when it exits. No trailing `&` is needed. | covered |

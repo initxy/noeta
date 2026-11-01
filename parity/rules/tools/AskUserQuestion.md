@@ -56,6 +56,7 @@ position 2 of 13 in the baseline list. noeta's counterpart is `AskUserQuestion`
 | `tool.AskUserQuestion.r.2` | noeta today: r.1, in our wording. |
 | `tool.AskUserQuestion.r.3` | (bundle, not recorded) When an answer is not made of listed labels (the user typed their own "Other" text), the lead and closing change: the model is told the reply may ask for clarification, changes or a stop, and to follow what it actually says. noeta today: covered, in our wording. |
 | `tool.AskUserQuestion.r.4` | (bundle, not recorded) A call with a question of fewer than 2 options is refused with a steer: nothing was shown; do not retry or invent a second option; state the single path as the approach and continue; re-ask only the questions with 2–4 distinct options. Repeated question texts, or repeated labels within a question, are refused. No length limit applies to any text (the 12-character header is guidance). noeta today: covered, in our wording; noeta also refuses an empty question or label and texts far past what a dialog shows (`deviations.md`). |
+| `tool.AskUserQuestion.r.5` | (bundle) Unanswered questions are left out of the result; when none was answered the result says only that, with no error. A question with only notes is listed as having no option selected, plus its notes. | covered, except notes (no front end sends them: `deviations.md`) |
 
 ## Variants
 

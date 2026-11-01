@@ -58,6 +58,7 @@ The `Agent` tool's own schema and description are in `tools/Agent.md`.
 | sub.common.5 | No colon right before a tool call ("Let me read the file." not "...file:"). | covered (`explore.md`, `general-purpose.md`) |
 | sub.common.6 | Do not produce report, summary or findings files — the caller reads the final message; a file that another tool needs as input is allowed. | covered (`explore.md`, `general-purpose.md`) |
 | sub.common.7 | The system prompt ends with the token-budget counter (`<total_tokens>… tokens left</total_tokens>`); the main agent gets that counter as a per-turn system message instead. | missing — `explore.md`, `general-purpose.md` and `plan.md` end without the `<total_tokens>` line (only `main.md` has it); the sub-agent gets budget notes after its tool results only (`environment.py`). `make parity` does not see it (system blocks are compared by kind, not text). |
+| sub.common.8 | (bundle) A sub-agent's instruction context is the session's, auto-memory index (`MEMORY.md`) included; agents that omit instruction files (Explore, Plan) keep only the managed ones; a sub-agent prompt has no memory section. | covered for general-purpose (the instructions plugin shows the caller's index); Explore and Plan: see `sub.classifier.2` |
 
 ## general-purpose system prompt (from s1)
 
