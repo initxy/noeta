@@ -183,7 +183,8 @@ agent's framed message (a sub-agent's hand-back, sent as plain text), or `inline
 joined into the person's turn as plain text (a typed command's skill body, the interrupted
 marker). Providers render `system` / `memory` as
 `<system-reminder>` blocks (Anthropic) or with a preamble saying it is not the user (OpenAI
-shapes); user text cannot forge the tag.
+shapes); user text cannot forge the tag. `system` text taken into a running turn (a job's end
+notice) folds as a system turn.
 
 ## Naming: Session is a scope, never an identity
 

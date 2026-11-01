@@ -625,6 +625,25 @@ def test_held_messages_join_the_conversation_when_a_turn_closes(kind: str) -> No
     assert isinstance(decide.next_action(st, one_shot=False, max_steps=100), decide.CallModel)
 
 
+def test_host_text_taken_mid_turn_is_a_system_turn_after_the_results() -> None:
+    # Claude Code 2.1.312 (m1/0019): a background job's end notice that
+    # arrives while a turn runs is a system message after the tool results;
+    # one that starts a turn, or a person's message, stays in the user turn.
+    recs, _ = _running_call()
+    recs.append(_rec(5, InputTaken(items=[
+        InboxItem(seq=2, at=0, body=Say(message=user("job ended", origin="system"), when="now")),
+        InboxItem(seq=3, at=0, body=Say(message=user("also this"), when="now"))], through=3)))
+    done = ToolFinished(result=ToolResult(call_id="c1", content=[Text(text="ok")]))
+    st = fold([*recs, _rec(6, done)], {})
+    assert [(m.role, m.origin) for m in st.messages[-3:]] == [
+        ("user", None), ("system", "system"), ("user", None)]
+    assert st.messages[-2].text == "job ended"
+    idle = fold([_rec(1, TaskCreated(agent="a")), _rec(2, InputTaken(items=[InboxItem(
+        seq=1, at=0, body=Say(message=user("job ended", origin="system"), when="now"))],
+        through=1))], {})
+    assert (idle.messages[-1].role, idle.messages[-1].origin) == ("user", "system")
+
+
 def test_an_answer_applies_only_to_its_own_batch() -> None:
     recs, _call = _running_call()
     recs.append(_rec(5, InputTaken(items=[

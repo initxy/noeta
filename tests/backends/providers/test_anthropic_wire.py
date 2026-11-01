@@ -182,6 +182,22 @@ async def test_a_message_sent_mid_turn_rides_with_the_tool_results() -> None:
 
 
 @respx.mock
+async def test_a_mid_turn_message_joins_the_results_ahead_of_a_notice_taken_with_it() -> None:
+    # Claude Code 2.1.312: the person's message rides in the tool results'
+    # turn, a background job's end notice taken in the same step is the system
+    # turn after it (with the step's notes).
+    from noeta.core.types import system_message
+
+    wire = await _wire_messages([user("q"), _call(k="x"), _result(), system_message("job ended"),
+                                 _injected("also check y", "human"),
+                                 system_message("<total_tokens>9 tokens left</total_tokens>")])
+    assert [m["role"] for m in wire] == ["user", "assistant", "user", "system"]
+    assert [b["type"] for b in wire[2]["content"]] == ["tool_result", "text"]
+    assert wire[2]["content"][1]["text"].startswith("While you were working")
+    assert wire[3]["content"] == "job ended\n\n<total_tokens>9 tokens left</total_tokens>"
+
+
+@respx.mock
 async def test_the_empty_reply_nudge_joins_the_user_turn_before_the_steps_notes() -> None:
     # Claude Code 2.1.312: the nudge rides in the tool results' turn, and the
     # step's system note still ends the request (and carries the cache mark).
