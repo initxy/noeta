@@ -15,8 +15,9 @@ prompt or a resource itself.
   static resources with their ``alias:uri`` mention token;
   :func:`read_resource` returns the text snapshot to send the same way.
 
-Injected text is capped at 64 KiB with a marker. A server without prompts or
-resources lists none; a connection fault raises ``McpError``.
+The text goes in whole, as Claude Code sends a prompt's or a mentioned
+resource's text uncut. A server without prompts or resources lists none; a
+connection fault raises ``McpError``.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from noeta.core.extension import Command
-from noeta.plugins.mcp.config import McpError, McpServer, cap_injected, make_tool_name
+from noeta.plugins.mcp.config import McpError, McpServer, make_tool_name
 from noeta.plugins.mcp.pool import McpPool, default_pool
 
 __all__ = [
@@ -113,7 +114,7 @@ def _blocks(content: object) -> list[Any]:
 
 def flatten_prompt(result: dict[str, Any]) -> str:
     """The text blocks of a ``prompts/get`` result, in order, joined by blank
-    lines (other blocks skipped), capped."""
+    lines (other blocks skipped)."""
     parts: list[str] = []
     messages = result.get("messages")
     for msg in messages if isinstance(messages, list) else []:
@@ -123,7 +124,7 @@ def flatten_prompt(result: dict[str, Any]) -> str:
             if isinstance(block, dict) and block.get("type") == "text" \
                     and isinstance(block.get("text"), str):
                 parts.append(block["text"])
-    return cap_injected("\n\n".join(p for p in parts if p), kind="prompt")
+    return "\n\n".join(p for p in parts if p)
 
 
 async def expand_prompt(server: McpServer, name: str, arguments: dict[str, Any], *,
@@ -154,12 +155,11 @@ async def list_resources(servers: Sequence[McpServer], *, scope: str | None = No
 
 
 def flatten_resource(result: dict[str, Any]) -> str:
-    """The text contents of a ``resources/read`` result (binary skipped),
-    capped."""
+    """The text contents of a ``resources/read`` result (binary skipped)."""
     contents = result.get("contents")
     parts = [c["text"] for c in (contents if isinstance(contents, list) else [])
              if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"]]
-    return cap_injected("\n\n".join(parts), kind="resource")
+    return "\n\n".join(parts)
 
 
 async def read_resource(server: McpServer, uri: str, *, scope: str | None = None,

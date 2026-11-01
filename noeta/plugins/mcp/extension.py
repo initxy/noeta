@@ -253,6 +253,7 @@ class Mcp(Extension):
                     continue
                 tools.append(McpTool(name=t["name"], alias=server["alias"], remote=t["remote"],
                                      description=t["description"],
+                                     loaded_description=t.get("loaded_description"),
                                      input_schema=t["input_schema"], invoke=self._invoke,
                                      deferred=deferred, resume=self._resume))
         if (st["servers"] or st.get("down")) and view.state.parent_id is None:
@@ -683,9 +684,11 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]],
         schema = r.get("inputSchema")
         if not isinstance(schema, dict):
             schema = {"type": "object", "additionalProperties": True}
-        tools[name] = {"name": name, "remote": remote,
-                       "description": describe_tool(r.get("description")),
+        listed, loaded = describe_tool(r.get("description"))
+        tools[name] = {"name": name, "remote": remote, "description": listed,
                        "input_schema": schema}
+        if loaded != listed:
+            tools[name]["loaded_description"] = loaded
     entry: dict[str, Any] = {"alias": server.alias, "deferred": server.deferred,
                              "tools": [tools[n] for n in sorted(tools)]}
     if instructions:

@@ -304,11 +304,29 @@ def test_tool_names_are_provider_safe_and_stable() -> None:
     assert len(set(names.values())) == 3
 
 
-def test_descriptions_are_the_servers_own_capped() -> None:
-    assert describe_tool(None) == ""
-    assert describe_tool("Echo.") == "Echo."
-    text = describe_tool("é" * 2000)
-    assert text.endswith("[truncated: description exceeded 1024 bytes]")
+def test_descriptions_are_the_servers_own_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert describe_tool(None) == ("", "")
+    assert describe_tool("Echo.") == ("Echo.", "Echo.")
+    listed, loaded = describe_tool("é" * 5000)
+    assert listed == "é" * 4096 + "… [truncated]"  # characters, not bytes
+    assert loaded == "é" * 5000
+    listed, loaded = describe_tool("x" * 20_000)
+    assert loaded == "x" * 16_384 + "… [truncated]"
+    monkeypatch.setenv("NOETA_MAX_MCP_DESCRIPTION_LENGTH", "10")
+    assert describe_tool("y" * 50) == ("y" * 10 + "… [truncated]",) * 2
+    monkeypatch.setenv("NOETA_MAX_MCP_DESCRIPTION_LENGTH", "nonsense")
+    assert describe_tool("y" * 50) == ("y" * 50,) * 2
+
+
+def test_a_long_description_is_recorded_in_both_forms() -> None:
+    from noeta.plugins.mcp.config import McpServer
+    from noeta.plugins.mcp.extension import _server_entry
+    entry = _server_entry(McpServer(alias="s", command=["x"]),
+                          [{"name": "big", "description": "d" * 5000},
+                           {"name": "small", "description": "Echo."}])
+    big, small = entry["tools"]
+    assert big["description"].endswith("… [truncated]") and big["loaded_description"] == "d" * 5000
+    assert "loaded_description" not in small
 
 
 def test_mcp_results_are_not_clearable() -> None:
@@ -473,7 +491,7 @@ async def test_server_instructions_are_told_and_withdrawn(
 
 
 def test_long_server_instructions_are_cut() -> None:
-    from noeta.plugins.mcp.instructions import INSTRUCTIONS_MAX_CHARS, cap_instructions
+    from noeta.plugins.mcp.instructions import cap_instructions
     assert cap_instructions("short") == "short"
     cut = cap_instructions("x" * 5000)
-    assert cut == "x" * INSTRUCTIONS_MAX_CHARS + "… [truncated]"
+    assert cut == "x" * 4096 + "… [truncated]"

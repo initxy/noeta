@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.mcp.config import McpError, McpServer, cap_injected, make_tool_name
+from noeta.plugins.mcp.config import McpError, McpServer, make_tool_name
 from noeta.toolkit.tools import format_size, load_description, save_spilled, spill_path
 
 __all__ = [
@@ -65,11 +65,12 @@ class McpTool:
 
     def __init__(self, *, name: str, alias: str, remote: str, description: str,
                  input_schema: dict[str, Any], invoke: Invoke, deferred: bool = True,
-                 resume: Resume | None = None) -> None:
+                 resume: Resume | None = None, loaded_description: str | None = None) -> None:
         self.name = name
         self.alias = alias
         self.remote = remote
         self.description = description
+        self.loaded_description = loaded_description or description
         self.input_schema = input_schema
         self.deferred = deferred
         self._invoke = invoke
@@ -183,7 +184,7 @@ Parameters:
         if not out:
             return text_output("No resources found on the configured MCP servers (they may "
                                "still offer tools).")
-        return text_output(cap_injected(_compact(out), kind="resource listing"))
+        return text_output(_compact(out))
 
 
 class ReadMcpResourceTool:
@@ -233,7 +234,7 @@ Parameters:
                 await _save_blob(ctx, server.alias, entry, i) if isinstance(entry, dict)
                 and isinstance(entry.get("blob"), str) else entry
                 for i, entry in enumerate(result["contents"])]}
-        return text_output(cap_injected(_compact(result), kind="resource"))
+        return text_output(_compact(result))
 
 
 async def _save_blob(ctx: ToolContext, alias: str, entry: dict[str, Any],
@@ -318,4 +319,4 @@ with an error.
         if not lines:
             return text_output(f"The directory {uri} is empty.")
         head = f"{len(lines)} {'entry' if len(lines) == 1 else 'entries'} in {uri}:"
-        return text_output(cap_injected("\n".join([head, *lines]), kind="directory listing"))
+        return text_output("\n".join([head, *lines]))

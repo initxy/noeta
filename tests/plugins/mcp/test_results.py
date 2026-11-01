@@ -144,6 +144,12 @@ async def test_a_binary_resource_is_saved_and_its_place_named(tmp_path: Path) ->
     first = json.loads(texts(out)[0])["contents"][0]
     assert "blob" not in first and "could not be saved" in first["text"]
 
+    # A large text resource is the tool's whole result: the runner's result
+    # limit saves it to a file, as for any tool (Claude Code caps it nowhere else).
+    result = {"contents": [{"uri": "file:///big.md", "text": "z" * 100_000}]}
+    out = await tool.run({"server": "docs", "uri": "file:///big.md"}, ctx(tmp_path))
+    assert json.loads(texts(out)[0])["contents"][0]["text"] == "z" * 100_000
+
 
 async def test_a_server_image_is_decoded_off_the_event_loop(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
