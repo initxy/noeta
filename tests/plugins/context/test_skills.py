@@ -66,6 +66,28 @@ async def test_listing_is_recorded_once_and_offers_the_skill_tool(h: Harness) ->
     assert len(await h.records(tid, "skills", "listing")) == 1
 
 
+async def test_a_plugins_skills_are_named_plugin_colon_directory(h: Harness) -> None:
+    plugin = h.work.parent / "deploy-plugin" / "skills"
+    write_skill(plugin, "ship", "Ship the app.", body="Ship it.\n")
+    (plugin / "check it").mkdir()
+    (plugin / "check it" / "SKILL.md").write_text("---\ndescription: Check.\n---\nCheck.\n")
+    a = agent(plugin_dirs={str(plugin): "deploy-tools"})
+    h.provider.add(reply("", ("Skill", {"skill": "ship"})),
+                   reply("", ("Skill", {"skill": "deploy-tools:ship"})), reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    assert h.provider.requests[0].messages[1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy-tools:check-it: Check.\n"
+        "- deploy-tools:ship: Ship the app.")
+    bare, full = await h.results(tid)
+    # The bare name is not the plugin's skill (Claude Code's): it is named.
+    assert bare.result.is_error and bare.result.text == (
+        "There is no skill named ship. Did you mean deploy-tools:ship? Call it by that full "
+        "name.")
+    assert full.result.text == "Starting skill: deploy-tools:ship. Its instructions follow."
+    await h.say(a, tid, "/deploy-tools:ship now")
+    assert h.provider.requests[-1].messages[-1].text.endswith("Ship it.\n\nARGUMENTS: now")
+
+
 async def test_no_skills_means_no_listing_but_the_tool_stays(h: Harness) -> None:
     h.provider.add(reply("ok"))
     tid = await h.start(agent())
@@ -554,6 +576,44 @@ async def test_a_command_that_would_ask_stops_the_skill(h: Harness) -> None:
     assert await h.records(tid, "skills", "activated") == []
 
 
+async def test_in_auto_mode_a_command_that_would_ask_is_left_to_the_model(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.",
+                body="Made: !`touch made.txt`\nBranch: !`echo main-line`\n")
+    write_skill(skills_dir(h), "two", "Two.", body="A: !`touch a.txt`\nB: !`touch b.txt`\n")
+    a = Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="auto", plans_dir=str(h.work.parent / "p")),
+        Skills()])
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("", ("Skill", {"skill": "two"})),
+                   reply("done"))
+    tid = await h.start(a)
+    first, second = await h.results(tid)
+    assert not first.result.is_error and not second.result.is_error
+    assert not (h.work / "made.txt").exists()
+    body = h.provider.requests[1].messages[-1].text
+    assert body.endswith(
+        "Made: [Before going on, run this command yourself, as written, and use what it "
+        "prints: `touch made.txt`]\nBranch: main-line\n")
+    two = h.provider.requests[2].messages[-1].text
+    assert two.startswith(
+        "[Before going on, run these 2 commands yourself, as written, and use what each prints "
+        "where it is named below: one Bash call each, or one call joining them with &&.]\n"
+        "1. `touch a.txt`\n2. `touch b.txt`\nBase directory for this skill: ")
+    assert two.endswith("A: [what command 1 prints, `touch a.txt`]\n"
+                        "B: [what command 2 prints, `touch b.txt`]\n")
+
+
+async def test_in_auto_mode_a_denied_command_still_stops_the_skill(h: Harness) -> None:
+    write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n")
+    a = Agent(name="a", model="m", extensions=[
+        FileTools(), Shell(), Permissions(mode="auto", plans_dir=str(h.work.parent / "p"),
+                                          deny=["Bash(touch:*)"]), Skills()])
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
+    tid = await h.start(a)
+    [result] = await h.results(tid)
+    assert result.result.is_error and "touch made.txt" in result.result.text
+
+
 async def test_allowed_tools_let_a_skill_command_run(h: Harness) -> None:
     write_skill(skills_dir(h), "mk", "Make.", body="Made: !`touch made.txt`\n",
                 **{"allowed-tools": "Bash(touch:*)"})
@@ -642,6 +702,30 @@ async def test_a_fork_skill_runs_in_a_sub_agent(h: Harness) -> None:
         "Run the review skill")
     assert any(m.text.endswith("Review a.py closely.\n")
                for r in h.provider.requests for m in r.messages)
+    assert await h.records(tid, "skills", "activated") == []
+
+
+async def test_a_typed_fork_skill_starts_its_agent_and_gets_no_model_call(
+        h: Harness) -> None:
+    write_skill(skills_dir(h), "review", "Review.", body="Review $ARGUMENTS closely.\n",
+                context="fork", agent="scout")
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Subtasks([SubagentSpec(name="scout", description="Looks.", agent="w")]),
+        Skills()])
+    worker = Agent(name="w", model="m", extensions=[])
+    h.provider.add(reply("child report"), reply("thanks"))
+    tid = await h.client.create("a", "/review a.py")
+    await h.runtime(main, worker).run_until_idle()
+    # The child's request first: the typed message itself got no model call.
+    child, answer = h.provider.requests
+    assert child.messages[-1].text.endswith("Review a.py closely.\n")
+    [launched] = await h.records(tid, "subtasks", "launched")
+    assert launched.data["type"] == "scout"
+    texts = [m.text for m in answer.messages]
+    assert texts[0] == "/review a.py"
+    assert texts[1] == ("<local-command-stdout>The review skill is running in the background "
+                        f"as agent {launched.data['agent_id']}.</local-command-stdout>")
+    assert any("child report" in t for t in texts[2:])
     assert await h.records(tid, "skills", "activated") == []
 
 
@@ -830,7 +914,8 @@ async def test_skills_below_the_working_directory_join_when_a_file_there_is_touc
     # description, before the very next call.
     assert texts[-2:] == [
         "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n"
-        "- web-build", f"{ROSTER_HEADER}\n\n- web-build: Build the web app."]
+        "- web-build", f"{ROSTER_HEADER}\n\n- web-build: Build the web app. "
+        "(from apps/web/.noeta/skills; meant for files under apps/web/)"]
     # Loadable now, and not listed again with the next message.
     results = await h.results(tid)
     assert results[-1].result.text == "Starting skill: web-build. Its instructions follow."
@@ -856,7 +941,7 @@ async def test_skills_in_a_directory_git_ignores_never_join(h: Harness) -> None:
     assert not any("takeover" in m.text for m in h.provider.requests[1].messages)
 
 
-async def test_a_skill_below_the_working_directory_never_shadows_one_of_the_same_name(
+async def test_a_skill_below_the_working_directory_sharing_a_name_is_scoped_to_it(
         h: Harness) -> None:
     write_skill(skills_dir(h), "deploy", "Ship.", body="The workspace's own steps.\n")
     pkg = h.work / "apps" / "web"
@@ -865,10 +950,38 @@ async def test_a_skill_below_the_working_directory_never_shadows_one_of_the_same
     (pkg / "main.ts").write_text("export {}\n")
     a = agent()
     h.provider.add(reply("", ("Read", {"file_path": str(pkg / "main.ts")})),
-                   reply("", ("Skill", {"skill": "deploy"})), reply("done"))
-    await h.start(a)
+                   reply("", ("Skill", {"skill": "deploy"})),
+                   reply("", ("Skill", {"skill": "apps/web:deploy"})), reply("done"))
+    tid = await h.start(a)
     texts = [m.text for m in h.provider.requests[1].messages]
     assert "Skills found in apps/web/.noeta/skills, now available through the Skill tool:\n" \
-        "- web-build" in texts
-    later = "".join(m.text for m in h.provider.requests[2].messages)
-    assert "The workspace's own steps." in later and "Other steps." not in later
+        "- apps/web:deploy\n- web-build" in texts
+    listing = texts[-1]
+    assert "- apps/web:deploy: Ship differently. (for files under apps/web/: when your " \
+        "changes are there, use it rather than the plain \"deploy\" skill)" in listing
+    # The bare name is the unscoped skill, followed by a note naming the scoped one.
+    later = [m.text for m in h.provider.requests[2].messages]
+    assert any("The workspace's own steps." in t for t in later)
+    assert not any("Other steps." in t for t in later)
+    assert "- `apps/web:deploy`: for files under apps/web/" in later[-1]
+    last = "".join(m.text for m in h.provider.requests[3].messages)
+    assert "Other steps." in last
+    [variants] = await h.records(tid, "skills", "variants")
+    assert variants.data == {"name": "deploy"}
+
+
+async def test_only_scoped_skills_of_a_name_are_named_when_the_bare_name_is_called(
+        h: Harness) -> None:
+    for scope in ("apps/web", "apps/api"):
+        write_skill(h.work / scope / ".noeta" / "skills", "deploy", f"Ship {scope}.")
+        (h.work / scope / "main.ts").write_text("export {}\n")
+    h.provider.add(reply("", ("Read", {"file_path": str(h.work / "apps/web/main.ts")})),
+                   reply("", ("Read", {"file_path": str(h.work / "apps/api/main.ts")})),
+                   reply("", ("Skill", {"skill": "deploy"})), reply("done"))
+    tid = await h.start(agent())
+    *_, refused = await h.results(tid)
+    assert refused.result.is_error
+    assert refused.result.text == (
+        "There is no skill named deploy. Skills of that name scoped to directories exist: "
+        "apps/api:deploy, apps/web:deploy. Call the one whose directory holds the files you "
+        "are working on.")

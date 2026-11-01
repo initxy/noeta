@@ -52,10 +52,11 @@ class Harness:
         self.client = Client(store)
         self.provider = ScriptedProvider()
 
-    async def start(self, commands: list[dict[str, Any]], typed: str) -> str:
+    async def start(self, commands: list[dict[str, Any]], typed: str,
+                    mode: str = "default") -> str:
         ext = MarkdownCommands(commands)
         agent = Agent(name="a", model="m", extensions=[
-            FileTools(), Shell(), Permissions(mode="default", plans_dir=str(self.work / "p")),
+            FileTools(), Shell(), Permissions(mode=mode, plans_dir=str(self.work / "p")),
             ext])
         goal = await expand_with([ext], CommandContext(cwd=str(self.work)), typed)
         assert goal
@@ -93,6 +94,15 @@ async def test_a_command_that_would_ask_does_not_run(run: Harness) -> None:
     await run.start([{"name": "p:mk", "body": "Made: !`touch made.txt`"}], "/p:mk")
     assert not (run.work / "made.txt").exists()
     assert "The command could not run" in run.sent() and "touch made.txt" in run.sent()
+
+
+async def test_in_auto_mode_a_command_that_would_ask_is_left_to_the_model(
+        run: Harness) -> None:
+    run.provider.add(reply("ok"))
+    await run.start([{"name": "p:mk", "body": "Made: !`touch made.txt`"}], "/p:mk", "auto")
+    assert not (run.work / "made.txt").exists()
+    assert "Made: [Before going on, run this command yourself, as written, and use what it " \
+        "prints: `touch made.txt`]" in run.sent()
 
 
 async def test_allowed_tools_pre_approve_the_models_calls(run: Harness) -> None:
