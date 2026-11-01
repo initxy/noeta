@@ -173,8 +173,8 @@ and reported in the README.
 
 - Runs (2026-10-30 to 11-01, one machine): SWE-rebench all 111 at the dataset's 50 min
   cap; TB4 54 of 66 at a 2 h cap (3 GPU tasks need CUDA >= 13.2; 8 compose tasks and
-  `cad-model` fail their own reference solution); alwaysday1_max on 20 SWE-rebench tasks
-  (seed 0, large images left out). k=1 per run, k=2 pooled where two runs exist.
+  `cad-model` fail their own reference solution); a larger private gateway model on 20
+  SWE-rebench tasks (seed 0, large images left out). k=1 per run, k=2 pooled where two runs exist.
 - Headline is the pooled k=2 SWE-rebench difference, beside the same-time pair and the
   leak-excluded variant: one k=1 run moves by about 5 points (CC 47.7 % then 42.3 %).
 - Leaked answers are judged by content, not by URL: a trial is leaked when a fetch, search,
@@ -239,8 +239,8 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - [x] Pick one or two current benchmarks, with reasons.
 - [x] Run noeta and, where possible, CC on DeepSeek V4.1; version, samples, runs and cost in
       the README (`bench/README.md` Results, summary in `README.md`).
-- [ ] alwaysday1_max rerun of noeta 34f8acee on the same 20 tasks (in progress), then
-      README update.
+- [ ] Rerun of noeta 34f8acee on the same 20 tasks of the larger private model (in progress),
+      then README update.
 
 ### Phase 5: wrap-up
 - [ ] `make check`, `make parity`, `make cluster`, `make e2e` green on main.
@@ -331,5 +331,5 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - 2026-10-30 B5 A/B on `ab-plan-text` (Decisions "A/B results"): noeta's own-words plan-mode full text kept (tie at 1.000, 351 tokens shorter per copy, uncached input 2.3k lower per trial); no context item is left pending. New eval scenario `plan_mode_multi_file`; `plan_mode_started` baseline re-recorded.
 - 2026-10-30 Final gates on best-of-three @bc170424 (all branches merged, incl. ab-context and ab-plan-text): `make check` green; `make parity` 0 mismatches (11 accepted deviations); `make cluster` 14/14; `make e2e` 7 passed; DeepSeek V4.1 eval 32 scenarios x 9 trials overall 0.953 vs baseline 0.911, no regression (`evals/results/ds41-final-bc170424.json`, local). `evals/baseline.json` re-recorded from that run (known gaps cleared: memory_save and plan_mode_started 1.00). Run cost: 1,665 agent requests, 23.0M input tokens (18.5M cached), 0.32M output.
 - 2026-10-31 Bench run 1 (noeta 54121930 vs CC 2.1.312): SWE-rebench 45.0 % vs 47.7 % (-2.7, SE 4.3); noeta's `Bash` dropped the image's environment (22 of 111 trials set `CARGO_HOME`/`JAVA_HOME` by hand, 7 hit toolchain-not-found; CC 0). Fixed on main 34f8acee.
-- 2026-11-01 Bench reruns with 34f8acee: SWE-rebench fix run 51.4 %; same-time run noeta 49.5 % vs CC 42.3 % (+7.2, SE 3.8); pooled k=2 +5.4 (SE 3.6), +7.1 (SE 3.6) without the 20 leaked tasks. TB4 near zero for both (`bench/README.md`). alwaysday1_max pre-fix -20 (SE 11.7, n=20); its 34f8acee rerun in progress.
+- 2026-11-01 Bench reruns with 34f8acee: SWE-rebench fix run 51.4 %; same-time run noeta 49.5 % vs CC 42.3 % (+7.2, SE 3.8); pooled k=2 +5.4 (SE 3.6), +7.1 (SE 3.6) without the 20 leaked tasks. TB4 near zero for both (`bench/README.md`). a larger private gateway model pre-fix -20 (SE 11.7, n=20); its 34f8acee rerun in progress.
 - 2026-11-01 `compare.py summary` counts CC `api_retry` events (429/529) instead of every stream line matching "429".

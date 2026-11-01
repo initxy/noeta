@@ -744,37 +744,43 @@ def cost(n_in: int, n_cache: int, n_out: int, model: str, peak_share: float) -> 
     return base * (1 + peak_share)
 
 
-_ERROR_LINE = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded", re.IGNORECASE)
+_ERROR_LINE = re.compile(r"\b(429|529)\b|rate[ _-]?limit(?!er)|too many requests|overloaded", re.IGNORECASE)
 
 
 def api_errors(agent_dir: Path) -> int:
     """Gateway rate-limit / overload signals in an agent's logs: Claude Code's
-    `api_retry` events for HTTP 429 / 529 (or a rate-limit / overload error
-    text), an error result naming one, and plain (non-JSON) stderr lines.
-    Other stream events are not counted: their text holds token counts and
-    the model's thinking, where "429" is just a number. noeta's own retries
-    are not in its stream, so its count covers only what it printed."""
+    `api_retry` events for HTTP 429 / 529 (or a rate-limit / overload error),
+    an error result whose error text names one when no retry event came before
+    it (a retry exhaustion is counted once, by its retries), and plain (non-JSON)
+    stderr lines. Other stream events are not counted: their text holds token
+    counts and the model's thinking, where "429" is just a number. noeta's
+    retries are not logged, so its count covers only what it printed on stderr
+    and is not a measurement of its retries."""
     count = 0
     for path in list(agent_dir.glob("*.txt")) + list(agent_dir.glob("*.json")):
         if path.name in ("trajectory.json", "noeta-usage.json"):
             continue
+        retries = 0
         for line in path.read_text(errors="replace").splitlines():
-            if not _ERROR_LINE.search(line) and '"api_retry"' not in line:
+            if not line.lstrip().startswith("{"):
+                count += bool(_ERROR_LINE.search(line))
                 continue
-            if line.lstrip().startswith("{"):
-                try:
-                    payload = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                if payload.get("type") == "system" and payload.get("subtype") == "api_retry":
-                    status = payload.get("error_status")
-                    if status not in (429, 529) and not _ERROR_LINE.search(str(payload.get("error") or "")):
-                        continue
-                elif not (payload.get("type") == "result" and payload.get("is_error")):
-                    continue
-            count += 1
+            if '"api_retry"' not in line and '"is_error"' not in line:
+                continue
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("type") == "system" and payload.get("subtype") == "api_retry":
+                status = payload.get("error_status")
+                if status in (429, 529) or _ERROR_LINE.search(str(payload.get("error") or "")):
+                    retries += 1
+                    count += 1
+            elif payload.get("type") == "result" and payload.get("is_error") and not retries:
+                error_text = json.dumps([payload.get("result"), payload.get("errors")])
+                count += bool(_ERROR_LINE.search(error_text))
     return count
 
 

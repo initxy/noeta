@@ -114,21 +114,27 @@ ship each kind, and how it compares with pi, DeepSeek Harness and Claude Code:
 
 ## Benchmarks
 
-noeta next to Claude Code 2.1.312 on the same model (`opensource/deepseek_v4_1_flash`, effort
-`high`), same tasks, caps and machine, run through harbor (2026-10-30 to 2026-11-01):
+noeta 1.0.0.dev0 at commit 34f8acee next to Claude Code 2.1.312 on the same model
+(`opensource/deepseek_v4_1_flash`, effort `high`), same tasks, caps and machine, run through
+harbor (2026-10-30 to 2026-11-01). Each run is one attempt per task; cost is DeepSeek's list
+price (read 2026-10-30) per run, off-peak throughout:
 
 | Benchmark | noeta | Claude Code | noeta − Claude Code (SE) |
 |---|---|---|---|
-| SWE-rebench 07-2026, 111 tasks, 50 min, k=2 pooled | 50.5 % | 45.0 % | +5.4 (3.6) |
+| SWE-rebench 07-2026, 111 tasks, 50 min, 2 runs each pooled | 50.5 % | 45.0 % | +5.4 (3.6) |
 | same, 91 tasks without leaked answers | 51.1 % | 44.0 % | +7.1 (3.6) |
-| same, one same-time run (k=1) | 49.5 % | 42.3 % | +7.2 (3.8) |
-| Terminal-Bench 4.0, 54 of 66 tasks, 2 h cap, k=1 | 3.7 % | 1.9 % | +1.9 (3.2) |
+| same, one same-time run | 49.5 % | 42.3 % | +7.2 (3.8) |
+| Terminal-Bench 4.0, 54 of 66 tasks, 2 h cap, 1 run | 3.7 % | 1.9 % | +1.9 (3.2) |
 
-noeta at 34f8acee. The first run, at 54121930, scored −2.7 (SE 4.3) on SWE-rebench; it showed
-that noeta's `Bash` dropped the image's environment variables (`CARGO_HOME`, `JAVA_HOME`, …),
-fixed in 34f8acee. Terminal-Bench
-4.0 is near zero for both on this model and does not separate them. Versions, every run, cost,
-the leaked-answer tasks, what each agent reads from the repo, and a second model:
+Cost per run of 111 SWE-rebench tasks: noeta $5.01–$5.77, Claude Code $5.70–$6.25; per
+Terminal-Bench run of 54 tasks: noeta $5.23, Claude Code $6.50.
+
+The first run, at 54121930, scored −2.7 (SE 4.3) on SWE-rebench. 34f8acee differs in two
+ways the model sees: `Bash` keeps the image's environment variables (54121930 dropped
+`CARGO_HOME`, `JAVA_HOME`, …), and the token-budget notes go only to Claude models (784c0cd8);
+the gain is the two together. Terminal-Bench 4.0 is near zero for both on this model and does
+not separate them. Versions, every run, retries, the leaked-answer tasks, what each agent reads
+from the repo, and a second model:
 [bench/README.md](bench/README.md#results-2026-10-30-to-2026-11-01).
 
 ## Privacy

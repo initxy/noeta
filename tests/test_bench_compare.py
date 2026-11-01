@@ -66,21 +66,44 @@ def test_partial_reward_is_not_a_pass(tmp_path: Path) -> None:
     assert compare.trial_rows(job, MODEL)[0]["outcome"] == "fail"
 
 
-def test_rate_limits_count_retry_events_not_numbers_in_the_stream(tmp_path: Path) -> None:
+def _agent_log(tmp_path: Path, lines: list[dict[str, Any]], tail: str = "") -> Path:
     agent = tmp_path / "agent"
-    agent.mkdir()
-    lines = [
+    agent.mkdir(parents=True)
+    (agent / "claude-code.txt").write_text("\n".join(json.dumps(x) for x in lines) + "\n" + tail)
+    return agent
+
+
+def test_rate_limits_count_retry_events_not_numbers_in_the_stream(tmp_path: Path) -> None:
+    agent = _agent_log(tmp_path, [
         {"type": "system", "subtype": "api_retry", "error_status": 429, "attempt": 1},
-        {"type": "system", "subtype": "api_retry", "error_status": 529, "attempt": 2},
+        {"type": "system", "subtype": "api_retry", "error_status": 529, "error": "server_error", "attempt": 2},
         {"type": "system", "subtype": "api_retry", "error_status": 500, "attempt": 3},
+        {"type": "system", "subtype": "thinking_tokens", "text": "HTTP 429 is handled in client.py"},
         {"type": "system", "subtype": "thinking_tokens", "tokens": 4290},
-        {"type": "system", "subtype": "thinking_tokens", "text": "status 429 in the code"},
-        {"type": "assistant", "message": {"content": [{"type": "text", "text": "HTTP 429 handling"}]}},
-        {"type": "result", "is_error": True, "result": "API Error: 429 rate limit"},
-    ]
-    (agent / "claude-code.txt").write_text(
-        "\n".join(json.dumps(x) for x in lines) + "\nError: 429 Too Many Requests, retrying\n")
-    assert compare.api_errors(agent) == 4
+        {"type": "system", "subtype": "status", "text": "port 4429 or 429?"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "returns 429 when rate limited"}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "content": "test_429_retry PASSED"}]}},
+    ], tail="Error: 429 Too Many Requests\n")
+    # the 429 and 529 retries and the stderr line; not the numbers in thinking, text or tool output
+    assert compare.api_errors(agent) == 3
+
+
+def test_an_error_result_counts_only_for_its_error_text_and_not_after_retries(tmp_path: Path) -> None:
+    turns = _agent_log(tmp_path / "a", [
+        {"type": "result", "is_error": True, "num_turns": 429, "result": "tool failed"},
+        {"type": "result", "is_error": True, "result": "configure the rate limiter in settings.py"},
+    ])
+    assert compare.api_errors(turns) == 0
+    exhausted = _agent_log(tmp_path / "b", [
+        {"type": "system", "subtype": "api_retry", "error_status": 429, "attempt": 1},
+        {"type": "system", "subtype": "api_retry", "error_status": 429, "attempt": 2},
+        {"type": "result", "is_error": True, "result": "API Error: 429 rate limit exceeded"},
+    ])
+    assert compare.api_errors(exhausted) == 2  # one exhaustion: counted by its retries
+    alone = _agent_log(tmp_path / "c", [
+        {"type": "result", "is_error": True, "result": "API Error: 529 overloaded"},
+    ])
+    assert compare.api_errors(alone) == 1
 
 
 def test_cost_uses_the_list_price_and_peak_share() -> None:
@@ -282,3 +305,24 @@ def test_volumes_count_only_when_mounted_in_this_jobs_containers(tmp_path: Path)
         leftovers.event(json.dumps(e))
     leftovers.event("not json")
     assert leftovers.volumes == {"v-ours": "task__abc1234"}
+
+
+@pytest.mark.parametrize("state_dir, measured", [("/data/buildkit", "/data/buildkit"), (None, "/var/lib/docker")])
+def test_the_builder_is_pruned_by_the_disk_that_holds_its_cache(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, state_dir: str | None, measured: str) -> None:
+    asked: list[str] = []
+    prunes: list[int] = []
+
+    stop = compare.threading.Event()
+
+    def free_gb(path: str = "/var/lib/docker") -> float:
+        asked.append(path)
+        stop.set()  # one round is enough
+        return 1.0 if path == measured else 100.0
+
+    monkeypatch.setattr(compare, "free_gb", free_gb)
+    monkeypatch.setattr(compare, "redact_tree", lambda *a: None)
+    builder = SimpleNamespace(state_dir=state_dir and Path(state_dir), prune=lambda: prunes.append(1))
+    leftovers = SimpleNamespace(clean=lambda: None)
+    compare.background(stop, builder, leftovers, tmp_path, [], prune_below_gb=6.0, every_s=0.001)
+    assert asked == [measured] and prunes == [1]
