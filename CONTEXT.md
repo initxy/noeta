@@ -42,17 +42,16 @@ hears with its next message); a hold's epoch fences its old holder.
 
 ## Layers
 
-Top to bottom, imports only downward: `noeta/cli` (the `noeta` command, the TUI, `~/.noeta`
-config) > `noeta/agents` (agent files, the built-in agents) > `noeta/plugins/<name>` (capabilities) |
-`noeta/backends` (providers, exec envs, stores) | `noeta/host` (`LocalApp`, and the ways in: HTTP
-with `RemoteClient`, ACP) > `noeta/toolkit` (code plugins share) > `noeta/core`. `|` siblings never
-import each other, nor do two plugins or two backends (`lint-imports`). One plugin reaches another
-only through the kernel: a tool by name (`TaskView.find_tool`), inherited config (`Extension.inherit`),
-runnable agents (`TaskView.agents`), or a record documented as read by others (memory's `dir` for
-instructions, permissions and fs, shell's `cwd` and permissions' `mode` for permissions and hooks,
-instructions' files for hooks and its `start` for the classifier, structured_output's `answer`
-for workflow and front ends). Front ends import no plugin; they
-read permissions' `mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
+Top to bottom, imports only downward: `noeta/cli` (the `noeta` command, TUI, config) > `noeta/agents` (agent
+files, built-in agents) > `noeta/plugins/<name>` (capabilities) | `noeta/backends` (providers, exec envs,
+stores) | `noeta/host` (`LocalApp`, and the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code
+plugins share) > `noeta/core`. `|` siblings never import each other, nor do two plugins or two backends
+(`lint-imports`). One plugin reaches another only through the kernel: a tool by name (`TaskView.find_tool`),
+inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
+others (memory's `dir` for instructions, permissions and fs, shell's `cwd` (permissions, hooks, fs),
+permissions' `mode` (permissions, hooks), instructions' files for hooks and its `start` for the classifier,
+structured_output's `answer` for workflow and front ends). Front ends import no plugin; they read permissions'
+`mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
 
 ## Ways in
 
