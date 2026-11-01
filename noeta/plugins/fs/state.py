@@ -17,8 +17,8 @@ Kinds:
   the whole file (a window, or an edit made without the file in view), which
   takes the file-state note off ``Edit``'s result; ``window: true`` marks a
   view of some lines without a ``range`` to answer from (a command's output
-  cut to fit). A ``Bash`` command that showed a file records one too
-  (:mod:`noeta.plugins.fs.shell_reads`). ``Edit`` and ``Write``
+  cut to fit). A ``Bash`` command that showed a file records one too,
+  with ``"by": "Bash"`` (:mod:`noeta.plugins.fs.shell_reads`). ``Edit`` and ``Write``
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
