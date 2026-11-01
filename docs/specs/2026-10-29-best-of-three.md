@@ -239,8 +239,8 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - [x] Pick one or two current benchmarks, with reasons.
 - [x] Run noeta and, where possible, CC on DeepSeek V4.1; version, samples, runs and cost in
       the README (`bench/README.md` Results, summary in `README.md`).
-- [ ] Rerun of noeta 34f8acee on the same 20 tasks of the larger private model (in progress),
-      then README update.
+- [x] Rerun of noeta 34f8acee on the same 20 tasks of the larger private model, then
+      README update.
 
 ### Phase 5: wrap-up
 - [ ] `make check`, `make parity`, `make cluster`, `make e2e` green on main.
@@ -333,3 +333,4 @@ Owner rule: where it was unclear whether noeta's way or CC 2.1.312's is better, 
 - 2026-10-31 Bench run 1 (noeta 54121930 vs CC 2.1.312): SWE-rebench 45.0 % vs 47.7 % (-2.7, SE 4.3); noeta's `Bash` dropped the image's environment (22 of 111 trials set `CARGO_HOME`/`JAVA_HOME` by hand, 7 hit toolchain-not-found; CC 0). Fixed on main 34f8acee.
 - 2026-11-01 Bench reruns with 34f8acee: SWE-rebench fix run 51.4 %; same-time run noeta 49.5 % vs CC 42.3 % (+7.2, SE 3.8); pooled k=2 +5.4 (SE 3.6), +7.1 (SE 3.6) without the 20 leaked tasks. TB4 near zero for both (`bench/README.md`). a larger private gateway model pre-fix -20 (SE 11.7, n=20); its 34f8acee rerun in progress.
 - 2026-11-01 `compare.py summary` counts CC `api_retry` events (429/529) instead of every stream line matching "429".
+- 2026-11-02 Larger private model, noeta 34f8acee rerun on the same 20 tasks: 10/20, the same as Claude Code's run 1 (0, SE 10.3; pre-fix noeta was -20, SE 11.7); output per model call 810 -> 533 tokens (CC 540); 4 retries, all unresolved containers.
