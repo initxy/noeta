@@ -58,7 +58,9 @@ COMMAND_TIMEOUT_S = 600.0
 PROMPT_TIMEOUT_S = 30.0
 AGENT_TIMEOUT_S = 60.0
 
-HookType = Literal["command", "http", "prompt", "agent", "mcp_tool"]
+HookType = Literal["command", "http", "prompt", "agent", "mcp_tool", "callback"]
+#: The types a settings file may use; ``callback`` hooks come only from a
+#: connected client (``noeta.toolkit.hook_callbacks``).
 HOOK_TYPES = ("command", "http", "prompt", "agent", "mcp_tool")
 
 
@@ -68,7 +70,9 @@ class HookCommand:
     ``args``: run directly, no shell), ``url`` / ``headers`` /
     ``allowed_env_vars`` (``http``), ``prompt`` / ``model`` /
     ``continue_on_block`` (``prompt``; ``agent`` without the last),
-    ``server`` / ``tool`` / ``arguments`` (``mcp_tool``)."""
+    ``server`` / ``tool`` / ``arguments`` (``mcp_tool``; ``permission_prompt``:
+    the tool answers permission requests as ``--permission-prompt-tool``
+    does), ``callback_id`` (``callback``)."""
 
     command: str = ""
     timeout: float = COMMAND_TIMEOUT_S
@@ -94,6 +98,8 @@ class HookCommand:
     #: More environment for a ``command`` hook: a Claude Code plugin's
     #: option values (``CLAUDE_PLUGIN_OPTION_<KEY>``), set by noeta.
     env: tuple[tuple[str, str], ...] = ()
+    permission_prompt: bool = False
+    callback_id: str = ""
 
     @property
     def key(self) -> str:
@@ -108,6 +114,8 @@ class HookCommand:
     def label(self) -> str:
         if self.type == "mcp_tool":
             return f"{self.server}/{self.tool}"
+        if self.type == "callback":
+            return f"callback {self.callback_id}"
         return {"command": self.command, "http": self.url, "prompt": self.prompt,
                 "agent": self.prompt}[self.type]
 
@@ -149,9 +157,15 @@ def _strings(value: Any, where: str, name: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _hook(event: str, h: Mapping[str, Any]) -> HookCommand | None:
+def _hook(event: str, h: Mapping[str, Any], *, callbacks: bool = False) -> HookCommand | None:
     where = f"hooks.{event}"
     kind = h.get("type", "command")
+    if callbacks:
+        if kind != "callback" or not isinstance(h.get("callback_id"), str):
+            raise ValueError(f"{where}: a client's hook needs a 'callback_id'")
+        timeout = _number(h["timeout"], where) if h.get("timeout") is not None \
+            else COMMAND_TIMEOUT_S
+        return HookCommand(type="callback", callback_id=h["callback_id"], timeout=timeout)
     if kind not in HOOK_TYPES:
         log.warning("%s: %r hooks do not run in noeta; skipped", where, kind)
         return None
@@ -210,10 +224,12 @@ def _hook(event: str, h: Mapping[str, Any]) -> HookCommand | None:
                        **common)
 
 
-def parse_hooks(config: Mapping[str, Any]) -> dict[str, list[Matcher]]:
+def parse_hooks(config: Mapping[str, Any], *,
+                callbacks: bool = False) -> dict[str, list[Matcher]]:
     """Claude Code's ``hooks`` object -> matchers per event. Events noeta
     does not fire and hook types it does not run are skipped with a
-    warning; a malformed entry raises ``ValueError``."""
+    warning; a malformed entry raises ``ValueError``. ``callbacks``: the
+    hooks a client registered (only ``callback`` ones)."""
     out: dict[str, list[Matcher]] = {}
     for event, groups in config.items():
         if event not in EVENTS:
@@ -231,7 +247,7 @@ def parse_hooks(config: Mapping[str, Any]) -> dict[str, list[Matcher]]:
             for h in group.get("hooks") or []:
                 if not isinstance(h, dict):
                     raise ValueError(f"hooks.{event}: each hook is an object")
-                hook = _hook(event, h)
+                hook = _hook(event, h, callbacks=callbacks)
                 if hook is not None:
                     hooks.append(hook)
             if hooks:

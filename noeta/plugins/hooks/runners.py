@@ -393,12 +393,57 @@ async def run_mcp_tool(hook: HookCommand, payload: dict[str, Any], tool: Tool | 
     if tool is None:
         return HookResult(exit_code=FAILED, stderr=f"MCP server {hook.server!r} offers no tool "
                                                    f"{hook.tool!r} to this task")
+    arguments = mcp_input(hook.arguments, payload) if not hook.permission_prompt else {
+        "tool_name": payload.get("tool_name"), "input": payload.get("tool_input"),
+        "tool_use_id": payload.get("tool_use_id")}
     try:
-        out = await asyncio.wait_for(run_tool(tool, mcp_input(hook.arguments, payload), 0),
-                                     hook.timeout)
+        out = await asyncio.wait_for(run_tool(tool, arguments, 0), hook.timeout)
     except TimeoutError:
         return HookResult(exit_code=FAILED, stderr=f"timed out after {hook.timeout:g}s")
     text = "".join(b.text for b in out.content if isinstance(b, Text))
     if out.is_error:
         return HookResult(exit_code=FAILED, stderr=f"the MCP tool returned an error: {text}")
+    if hook.permission_prompt:
+        return permission_verdict(hook, text)
     return HookResult(exit_code=0, stdout=text[:OUTPUT_CAP])
+
+
+def permission_verdict(hook: HookCommand, text: str) -> HookResult:
+    """A permission prompt tool's answer (``{"behavior": "allow",
+    "updatedInput"?}`` or ``{"behavior": "deny", "message", "interrupt"?}``
+    as JSON text) as a PermissionRequest hook's output; anything else is a
+    failure."""
+    try:
+        verdict = json.loads(text)
+    except ValueError:
+        verdict = None
+    behavior = verdict.get("behavior") if isinstance(verdict, dict) else None
+    if not isinstance(verdict, dict) or behavior not in ("allow", "deny") or (
+            behavior == "deny" and not isinstance(verdict.get("message"), str)) or (
+            verdict.get("updatedInput") is not None
+            and not isinstance(verdict.get("updatedInput"), dict)):
+        return HookResult(exit_code=FAILED, stderr=(
+            f"the permission prompt tool {hook.label} answered {text[:200]!r}, not "
+            '{"behavior": "allow", "updatedInput"?: {...}} or '
+            '{"behavior": "deny", "message": "..."}'))
+    return HookResult(exit_code=0, stdout=json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PermissionRequest", "decision": verdict}}))
+
+
+async def run_callback(hook: HookCommand, payload: dict[str, Any],
+                       call: Callable[[str, dict[str, Any], str | None],
+                                      Awaitable[dict[str, Any]]] | None) -> HookResult:
+    """A ``callback`` hook: the connected client answers (``call``); its
+    reply is read like a command's JSON output."""
+    if call is None:
+        return HookResult(exit_code=FAILED, stderr="no client answers hook callbacks here")
+    tool_use_id = payload.get("tool_use_id")
+    try:
+        reply = await asyncio.wait_for(
+            call(hook.callback_id, payload,
+                 tool_use_id if isinstance(tool_use_id, str) else None), hook.timeout)
+    except TimeoutError:
+        return HookResult(exit_code=FAILED, stderr=f"timed out after {hook.timeout:g}s")
+    except Exception as exc:  # noqa: BLE001 — the client's failure is the hook's
+        return HookResult(exit_code=FAILED, stderr=f"the client's hook callback failed: {exc}")
+    return HookResult(exit_code=0, stdout=json.dumps(reply if isinstance(reply, dict) else {}))

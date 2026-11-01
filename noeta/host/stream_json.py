@@ -61,6 +61,7 @@ from noeta.host.pending import Pending, pending_tree
 from noeta.host.pending import follow_tree as _follow_tree
 from noeta.host.pending import tree_busy as _tree_busy
 from noeta.host.usage import TreeUsage, add_events, tree_usage
+from noeta.toolkit.hook_callbacks import HookCallbacks
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
@@ -107,6 +108,9 @@ class HeadlessOptions:
     task_id: str | None = None
     #: More task config (``prompts`` for ``--system-prompt``).
     config: dict[str, Any] = field(default_factory=dict)
+    #: Where the client's ``initialize`` hooks go: the hooks plugin of the
+    #: process that runs the task (none: they are ignored with a warning).
+    hook_callbacks: HookCallbacks | None = None
 
 
 @dataclass
@@ -177,6 +181,8 @@ class StreamJson(ControlRequests):
         self._requests = 0
         #: Our ``can_use_tool`` requests waiting for the client: id -> pending.
         self._asked: dict[str, Pending] = {}
+        #: Our ``hook_callback`` requests waiting for the client's reply.
+        self._hook_replies: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._shown: set[tuple[str, str]] = set()
         #: Prompt uuid -> inbox seq of its message (0: the first prompt).
         self._uuids: dict[str, int] = {}

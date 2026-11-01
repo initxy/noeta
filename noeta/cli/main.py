@@ -376,6 +376,7 @@ def _front(argv: list[str]) -> None:
                 "sources": headless.setting_sources(args),
                 "flag": headless.settings_layer(args, home_dir.HOME / "flag-settings")}
             mcp = headless.mcp_arguments(args)
+            hooks = headless.hooks_arguments(args)
             agent_files = headless.agent_files(args)
         except headless.FlagError as exc:
             sys.exit(f"noeta: {exc}")
@@ -387,10 +388,11 @@ def _front(argv: list[str]) -> None:
                 args.append_system_prompt_file).read_text("utf-8")
         app = _app(s, cwd=cwd, own_tasks_only=True,
                    permissions=headless.permission_arguments(args),
-                   plugins={"mcp": mcp} if mcp is not None else None,
+                   plugins={"hooks": hooks, **({"mcp": mcp} if mcp is not None else {})},
                    setting_sources=layers["sources"], flag_settings=layers["flag"],
                    agent_files=agent_files, plugin_dirs=args.plugin_dirs)
-        sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd)))
+        sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd,
+                                          hook_callbacks=hooks["callbacks"])))
     from noeta.cli.tui import run_tui
 
     if args.server:

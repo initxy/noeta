@@ -30,7 +30,7 @@ from noeta.core.extension import Ask, Deny, Extension, Gate, Reminder, TaskView
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
-from noeta.plugins.hooks.config import Matcher, parse_hooks, read_settings
+from noeta.plugins.hooks.config import HookCommand, Matcher, parse_hooks, read_settings
 from noeta.plugins.hooks.dispatch import (
     CONTEXT_LABEL,
     NAME,
@@ -43,6 +43,7 @@ from noeta.plugins.hooks.dispatch import (
 )
 from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
 from noeta.plugins.hooks.runners import Runner, run_command
+from noeta.toolkit.hook_callbacks import HookCallbacks
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
 __all__ = ["HANDBACK_TOOL", "MAX_STOP_CONTINUATIONS", "RETRY_NOTE", "Hooks"]
@@ -108,6 +109,17 @@ def _answered(messages: Sequence[Message]) -> list[Message]:
     return out
 
 
+def _prompt_tool_matcher(name: str) -> Matcher:
+    """The PermissionRequest hook ``--permission-prompt-tool`` stands for:
+    the MCP tool ``name`` answers, and a failure denies."""
+    server, sep, tool = name.removeprefix("mcp__").partition("__")
+    if not name.startswith("mcp__") or not sep or not server or not tool:
+        raise ValueError(f"permission_prompt_tool {name!r} is not an MCP tool name "
+                         "(mcp__<server>__<tool>)")
+    return Matcher("", (HookCommand(type="mcp_tool", server=server, tool=tool,
+                                    permission_prompt=True, block_on_failure=True),))
+
+
 class Hooks(Extension):
     """Constructor arguments:
 
@@ -117,6 +129,14 @@ class Hooks(Extension):
     * ``runner`` — runs one command hook (tests swap it).
     * ``http_transport`` — the transport HTTP hooks are sent through
       (tests swap it).
+    * ``callbacks`` — the hooks a connected client registers and answers
+      (``noeta.toolkit.hook_callbacks``; Claude Code's SDK hook callbacks).
+    * ``permission_prompt_tool`` — an MCP tool (``mcp__<server>__<tool>``)
+      that answers every permission request in the person's place, as
+      Claude Code's ``--permission-prompt-tool``: it is called with
+      ``tool_name``, ``input`` and ``tool_use_id`` and answers
+      ``{"behavior": "allow", "updatedInput"?}`` or ``{"behavior": "deny",
+      "message"}`` as JSON text; any other answer denies the call.
     """
 
     name = NAME
@@ -124,13 +144,36 @@ class Hooks(Extension):
     def __init__(self, *, hooks: Mapping[str, Any] | None = None,
                  settings_files: Sequence[str | Path] = (),
                  runner: Runner = run_command,
-                 http_transport: httpx.AsyncBaseTransport | None = None) -> None:
+                 http_transport: httpx.AsyncBaseTransport | None = None,
+                 callbacks: HookCallbacks | None = None,
+                 permission_prompt_tool: str | None = None) -> None:
         self.matchers: dict[str, list[Matcher]] = {}
         for config in [*(read_settings(f) for f in settings_files), hooks or {}]:
             for event, ms in parse_hooks(config).items():
                 self.matchers.setdefault(event, []).extend(ms)
+        if permission_prompt_tool:
+            self.matchers.setdefault("PermissionRequest", []).append(
+                _prompt_tool_matcher(permission_prompt_tool))
         self._d = Dispatcher(self.matchers, runner, http_transport)
         self._gates = ToolGates(self._d, self._stop)
+        self._client_matchers: list[tuple[str, Matcher]] = []
+        if callbacks is not None:
+            self._d.callbacks = callbacks
+            callbacks.listen(self._client_hooks)
+
+    def _client_hooks(self, hooks: dict[str, Any]) -> None:
+        """The connected client's hooks replace the ones it registered
+        before (the shared ``matchers`` are changed in place)."""
+        for event, old in self._client_matchers:
+            group = self.matchers.get(event, [])
+            if old in group:
+                group.remove(old)
+            if not group:
+                self.matchers.pop(event, None)
+        self._client_matchers = []
+        for event, ms in parse_hooks(hooks, callbacks=True).items():
+            self.matchers.setdefault(event, []).extend(ms)
+            self._client_matchers += [(event, m) for m in ms]
 
     @property
     def runner(self) -> Runner:
