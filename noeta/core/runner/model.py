@@ -35,7 +35,6 @@ def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     agent = run.agent
     assert agent is not None
     view = run.view()
-    config = run.state.config
     offer = run.tool_offer(view)
     request = build_request(
         run.state,
