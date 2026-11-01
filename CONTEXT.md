@@ -47,11 +47,11 @@ config) > `noeta/agents` (agent files, the built-in agents) > `noeta/plugins/<na
 `noeta/backends` (providers, exec envs, stores) | `noeta/host` (`LocalApp`, and the ways in: HTTP
 with `RemoteClient`, ACP) > `noeta/toolkit` (code plugins share) > `noeta/core`. `|` siblings never
 import each other, nor do two plugins or two backends (`lint-imports`). One plugin reaches another
-only through the kernel: a tool by name (`TaskView.find_tool`), inherited config
-(`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
-others (memory's `dir` for instructions, permissions and fs, shell's `cwd` and permissions'
-`mode` for permissions and hooks, instructions' files for hooks). Front ends import no plugin; they read permissions' `mode` /
-`modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
+only through the kernel: a tool by name (`TaskView.find_tool`), inherited config (`Extension.inherit`),
+runnable agents (`TaskView.agents`), or a record documented as read by others (memory's `dir` for
+instructions, permissions and fs, shell's `cwd` and permissions' `mode` for permissions and hooks,
+instructions' files for hooks and its `start` for the classifier). Front ends import no plugin; they
+read permissions' `mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
 
 ## Ways in
 
