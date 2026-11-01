@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-01
 branch: empty-turn
 ---
@@ -207,3 +207,7 @@ timeouts).
 per-trial `empty_nudges` (`evals/engine.py`, `trial_usage`; `tests/test_eval_usage.py`); the
 one-byte `"\n"` gap when Claude Code joins user text blocks went to the open-source follow-ups
 spec. `make check` green (2620 passed), `make parity` 0 mismatches.
+
+2026-11-01: `concise_direct_answer` (0.78 in the 9-trial run) A/B against main at 460ae7c7, two
+rounds of 18 and 27 trials: branch 0.83 then 0.94, main 0.94 then 0.76; no empty-reply nudge
+in any branch trial. Noise in the 40-word line, not this change. Merged and archived.
