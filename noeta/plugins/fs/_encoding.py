@@ -1,9 +1,11 @@
 """Which files the file tools treat as text, and in what encoding (Claude
 Code's rules).
 
-A file that starts with the UTF-16LE byte-order mark (``FF FE``) is
-UTF-16LE text: ``Read`` shows it decoded and ``Edit`` / ``Write`` write it
-back as UTF-16LE behind its mark. Anything else is read as UTF-8, and a
+A file that starts with the UTF-16LE byte-order mark (``FF FE``) and
+decodes cleanly as UTF-16LE is UTF-16LE text: ``Read`` shows it decoded and
+``Edit`` / ``Write`` write it back as UTF-16LE behind its mark; one that
+does not decode cleanly (binary data that happens to start with those two
+bytes) is not text, so an edit never writes replacement characters back. Anything else is read as UTF-8, and a
 UTF-8 byte-order mark is kept on a write. A file is *not text* when it
 starts with the UTF-16BE mark (``FE FF``), has a NUL byte in its first
 :data:`NUL_PROBE_BYTES` bytes, or is not valid UTF-8: ``Read`` still shows
@@ -34,7 +36,7 @@ __all__ = [
 ]
 
 Encoding = Literal["utf-8", "utf-16-le"]
-NotText = Literal["utf16be", "nul", "not_utf8"]
+NotText = Literal["utf16be", "nul", "not_utf8", "not_utf16"]
 
 UTF8_BOM = b"\xef\xbb\xbf"
 UTF16LE_BOM = b"\xff\xfe"
@@ -47,6 +49,8 @@ _WHAT: dict[NotText, str] = {
                  "(Windows-1252, Latin-1, GBK, Shift-JIS and the like) or it is binary"),
     "nul": (f"has a zero byte in its first {NUL_PROBE_BYTES:,} bytes: it is binary, UTF-16 or "
             "UTF-32 text without a byte-order mark, or text with NUL characters in it"),
+    "not_utf16": ("starts with the UTF-16LE byte-order mark (FF FE) but does not decode as "
+                  "UTF-16LE: it is binary or damaged"),
     "utf16be": ("is big-endian UTF-16 (its first two bytes are FE FF), an encoding the file "
                 "tools cannot write"),
 }
@@ -60,6 +64,10 @@ def encoding_of(head: bytes) -> Encoding:
 def not_text(raw: bytes) -> NotText | None:
     """Why the file holding ``raw`` is not text, or ``None`` when it is."""
     if encoding_of(raw) != "utf-8":
+        try:
+            codecs.decode(raw, "utf-16-le")
+        except UnicodeDecodeError:
+            return "not_utf16"
         return None
     if raw.startswith(UTF16BE_BOM):
         return "utf16be"
@@ -91,7 +99,7 @@ def encode(text: str, like: bytes) -> bytes:
 def read_note(reason: NotText) -> str:
     """``Read``'s note after a file that is not text."""
     shown = " Bytes that could not be decoded are shown as U+FFFD." \
-        if reason == "not_utf8" else ""
+        if reason in ("not_utf8", "not_utf16") else ""
     return (f"[Not text to the file tools: this file {_WHAT[reason]}.{shown} Edit and Write "
             "will not change it. Change it with a shell command that keeps its encoding, or "
             "ask the user whether it should become UTF-8.]")

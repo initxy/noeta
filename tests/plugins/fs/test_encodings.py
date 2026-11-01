@@ -67,6 +67,10 @@ async def test_a_utf8_byte_order_mark_is_kept_by_edit(h: Harness, ws: Path) -> N
     (b"\xfe\xff\x00a\x00\n", "utf16be"),
     (b"text\x00more\n", "nul"),
     (b"caf\xe9\n", "not_utf8"),
+    # Binary data that happens to start with the UTF-16LE mark: an odd
+    # length, and a lone surrogate.
+    (b"\xff\xfea\x00\n\x00\x07", "not_utf16"),
+    (b"\xff\xfea\x00\x00\xd8b\x00", "not_utf16"),
 ])
 async def test_a_file_that_is_not_text_is_shown_and_refused(
         h: Harness, ws: Path, raw: bytes, reason: NotText) -> None:
@@ -101,7 +105,8 @@ async def test_a_nul_past_the_probe_leaves_the_file_text(h: Harness, ws: Path) -
 
 
 def test_the_rules_on_whole_byte_strings() -> None:
-    assert not_text(b"") is None and not_text(b"\xff\xfe\x00\xd8") is None
+    assert not_text(b"") is None and not_text(b"\xff\xfe\x00\xd8") == "not_utf16"
+    assert not_text(b"\xff\xfea\x00") is None
     assert not_text(b"\xef\xbb\xbfok") is None
     assert not_text(b"a" * NUL_PROBE_BYTES + b"\x00") is None
     assert decode(UTF16) == "﻿first line\r\nzweite Zeile ü\r\n"
