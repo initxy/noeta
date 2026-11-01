@@ -19,6 +19,7 @@ from noeta.core.errors import (
     ModelError,
     RateLimited,
     StreamBroken,
+    TimedOut,
     Transient,
 )
 from noeta.core.provider import OnDelta
@@ -352,6 +353,29 @@ async def test_a_dropped_connection_streams_again_then_gets_one_more_call() -> N
         await complete_with_retries(failing, REQUEST, max_attempts=3,
                                     sleep=SleepRecorder(), rng=lambda: 0.0)
     assert failing.whole_calls == 1
+
+
+async def test_a_timed_out_call_in_one_piece_goes_back_to_streaming_for_good() -> None:
+    """A one-piece call that outlasted its time limit is not sent in one
+    piece again: the call streams, and a second broken stream is streamed
+    again instead of switching a second time."""
+    provider = WholeProvider([StreamBroken("server error"), StreamBroken("server error"),
+                              _ok("streamed")],
+                             [TimedOut("no answer in 300 s"), _ok("never")])
+    response = await complete_with_retries(provider, REQUEST, sleep=SleepRecorder(),
+                                           rng=lambda: 0.0)
+    assert response.message.content == [Text(text="streamed")]
+    assert (provider.calls, provider.whole_calls) == (3, 1)
+
+
+async def test_a_timed_out_call_in_one_piece_spends_the_budget_once() -> None:
+    provider = WholeProvider([StreamBroken("server error")] * 9,
+                             [TimedOut("no answer in 300 s")] * 9)
+    with pytest.raises(StreamBroken):
+        await complete_with_retries(provider, REQUEST, sleep=SleepRecorder(),
+                                    rng=lambda: 0.0)
+    assert provider.whole_calls == 1
+    assert provider.calls + provider.whole_calls == DEFAULT_MAX_ATTEMPTS
 
 
 async def test_a_provider_without_a_whole_call_streams_again() -> None:

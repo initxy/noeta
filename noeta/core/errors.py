@@ -77,6 +77,12 @@ class StreamBroken(Transient):
         self.stream_retries = stream_retries
 
 
+class TimedOut(Transient):
+    """No answer within the client's time limit. Retried like any transient
+    failure, except that a call answered in one piece that timed out is not
+    sent in one piece again (:func:`noeta.core.retry.complete_with_retries`)."""
+
+
 class RateLimited(Transient):
     def __init__(self, message: str, *, retry_after: float | None = None, **kw: object) -> None:
         super().__init__(message, **kw)  # type: ignore[arg-type]

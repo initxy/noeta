@@ -30,6 +30,7 @@ Code's fallback: the same body sent without streaming, its output capped at
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Sequence
 from contextlib import aclosing
@@ -60,7 +61,7 @@ from noeta.backends.providers._common import (
 )
 from noeta.backends.providers._sse import iter_sse_events
 from noeta.core import models
-from noeta.core.errors import Fatal, StreamBroken, Transient
+from noeta.core.errors import Fatal, StreamBroken, TimedOut
 from noeta.core.provider import OnDelta
 from noeta.core.types import ModelRequest, ModelResponse
 
@@ -107,6 +108,8 @@ _DEFAULT_EFFORT = "medium"
 #: stream: its output and its client timeout (seconds).
 WHOLE_MAX_TOKENS = 64_000
 WHOLE_TIMEOUT_SECONDS = 300.0
+#: Client timeout of a token count: an estimate stands in when it passes.
+COUNT_TOKENS_TIMEOUT_SECONDS = 10.0
 
 
 class AnthropicProvider:
@@ -159,6 +162,8 @@ class AnthropicProvider:
         self._device_id = device_id
         self._system_turns = system_turns
         self._whole_timeout = whole_timeout_seconds
+        #: Models whose token count the endpoint refused (:meth:`count_tokens`).
+        self._count_unavailable: set[str] = set()
         headers: dict[str, str] = {
             "x-api-key": resolved_key,
             "anthropic-version": anthropic_version,
@@ -236,16 +241,21 @@ class AnthropicProvider:
     async def complete_whole(self, request: ModelRequest) -> ModelResponse:
         """``request`` answered in one piece (no streaming), as Claude Code
         sends a call whose stream failed: output at most
-        :data:`WHOLE_MAX_TOKENS`, the client timeout the constructor's
-        ``whole_timeout_seconds``."""
+        :data:`WHOLE_MAX_TOKENS`, the whole call (not each read) bounded by
+        the constructor's ``whole_timeout_seconds`` (:class:`TimedOut` past
+        it). A body that is not a JSON message (a proxy's HTML error page)
+        is :class:`Fatal`, as Claude Code does not retry it."""
         guard_vision(request)
         body = self.build_body(request)
         body["max_tokens"] = min(int(body["max_tokens"]), WHOLE_MAX_TOKENS)
         body["stream"] = False
         try:
-            response = await self._client.post(
+            response = await asyncio.wait_for(self._client.post(
                 _MESSAGES_ENDPOINT, json=body, headers=self.request_headers(request) or None,
-                timeout=self._whole_timeout)
+                timeout=self._whole_timeout), self._whole_timeout)
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise TimedOut(f"Anthropic call in one piece got no answer within "
+                           f"{self._whole_timeout:g} s") from exc
         except httpx.RequestError as exc:
             raise transport_error(exc) from exc
         if response.is_error:
@@ -253,32 +263,46 @@ class AnthropicProvider:
         try:
             payload = response.json()
         except ValueError as exc:
-            raise Transient(f"Anthropic response was not JSON: {exc}") from exc
+            raise Fatal(_not_a_message(response), status=response.status_code,
+                        body=response.text[:2000]) from exc
         if not isinstance(payload, dict):
-            raise Transient("Anthropic response was not a JSON object")
+            raise Fatal(_not_a_message(response), status=response.status_code,
+                        body=response.text[:2000])
         return parse_message(payload, request.model)
 
     async def count_tokens(self, model: str, text: str) -> int | None:
         """The exact input-token count of one user message holding ``text``
         (``/v1/messages/count_tokens``, as Claude Code measures a large tool
-        result); ``None`` when the endpoint gives no count."""
+        result); ``None`` when the endpoint gives no count. The request is
+        bounded by :data:`COUNT_TOKENS_TIMEOUT_SECONDS`, and a model the
+        endpoint refused (a gateway without it: a 4xx other than 429, or a
+        body with no count) is not asked again by this provider."""
         if not text:
             return 0
+        if model in self._count_unavailable:
+            return None
         body = {"model": model, "messages": [{"role": "user", "content": text}], "tools": []}
         betas = [b for b in self._client.headers.get("anthropic-beta", "").split(",") if b]
         try:
             response = await self._client.post(
                 _COUNT_TOKENS_ENDPOINT, json=body,
-                headers={"anthropic-beta": ",".join([*betas, _COUNT_TOKENS_BETA])})
+                headers={"anthropic-beta": ",".join([*betas, _COUNT_TOKENS_BETA])},
+                timeout=COUNT_TOKENS_TIMEOUT_SECONDS)
         except httpx.RequestError:
             return None
         if response.is_error:
+            if 400 <= response.status_code < 500 and response.status_code != 429:
+                self._count_unavailable.add(model)
             return None
         try:
-            count = response.json().get("input_tokens")
+            payload = response.json()
         except ValueError:
+            payload = None
+        count = payload.get("input_tokens") if isinstance(payload, dict) else None
+        if not isinstance(count, int):
+            self._count_unavailable.add(model)
             return None
-        return count if isinstance(count, int) else None
+        return count
 
     # ------------------------------------------------------------------
     # Outbound translation
@@ -358,3 +382,10 @@ class AnthropicProvider:
             "AnthropicProvider(default_max_tokens=...), or register the model "
             "in noeta.core.models"
         )
+
+
+def _not_a_message(response: httpx.Response) -> str:
+    """The error for a one-piece answer whose body is not a JSON message."""
+    kind = response.headers.get("content-type", "").split(";")[0].strip() or "no content type"
+    return (f"Anthropic answered HTTP {response.status_code} with a body that is not a "
+            f"JSON message ({kind}): a proxy or gateway may have intercepted the request")

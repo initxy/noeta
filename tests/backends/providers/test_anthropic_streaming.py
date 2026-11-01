@@ -26,6 +26,7 @@ from noeta.core.errors import (
     MalformedToolArguments,
     RateLimited,
     StreamBroken,
+    TimedOut,
     Transient,
 )
 from noeta.core.provider import Provider
@@ -549,6 +550,48 @@ async def test_a_call_answered_in_one_piece_as_claude_code_falls_back() -> None:
     small = await _provider().complete_whole(_req(max_tokens=2_000))
     assert small.message.content == [Text(text="whole")]
     assert json.loads(route.calls.last.request.content)["max_tokens"] == 2_000
+
+
+@respx.mock
+async def test_a_call_in_one_piece_that_outlasts_its_limit_times_out() -> None:
+    """The limit bounds the whole call, not each read: a server that holds
+    the answer back past it is :class:`TimedOut`."""
+    async def slow(_: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(5)
+        return httpx.Response(200, json={})
+
+    respx.post(MESSAGES_ENDPOINT).mock(side_effect=slow)
+    with pytest.raises(TimedOut, match=r"0\.05 s"):
+        await _provider(whole_timeout_seconds=0.05).complete_whole(_req())
+    respx.post(MESSAGES_ENDPOINT).mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(TimedOut):
+        await _provider().complete_whole(_req())
+
+
+@respx.mock
+async def test_a_call_in_one_piece_answered_by_a_proxy_page_fails_at_once() -> None:
+    """A body that is not a JSON message (a gateway's HTML page) is not
+    retried, as on the streaming path."""
+    from noeta.core.retry import complete_with_retries
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=httpx.Response(
+        200, text="<html>login</html>", headers={"content-type": "text/html"}))
+    with pytest.raises(Fatal, match="text/html"):
+        await _provider().complete_whole(_req())
+    route.mock(return_value=httpx.Response(200, json=["not", "a", "message"]))
+    with pytest.raises(Fatal, match="not a JSON message"):
+        await _provider().complete_whole(_req())
+
+    class Broken(AnthropicProvider):
+        async def complete(self, request: Any, on_delta: Any = None) -> Any:
+            raise StreamBroken("cut")
+
+    route.mock(return_value=httpx.Response(200, text="<html/>"))
+    before = route.call_count
+    with pytest.raises(Fatal, match="not a JSON message"):
+        await complete_with_retries(
+            Broken(api_key="k", base_url=BASE_URL, default_max_tokens=4096), _req())
+    assert route.call_count == before + 1
 
 
 @respx.mock

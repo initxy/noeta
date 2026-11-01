@@ -743,3 +743,27 @@ async def test_count_tokens_posts_one_user_message_with_the_counting_beta() -> N
     assert await _provider().count_tokens("claude-opus-5-5", "x") is None
 
 
+
+
+@respx.mock
+async def test_a_refused_count_is_not_asked_again_and_a_count_is_bounded_in_time() -> None:
+    """A gateway without ``/count_tokens``: the first refusal is remembered
+    per model, so later borderline results use the estimate without a
+    request; a 429, a 5xx or a timeout is not remembered."""
+    route = respx.post(f"{BASE_URL}/v1/messages/count_tokens").mock(
+        return_value=httpx.Response(404, json={}))
+    provider = _provider()
+    assert await provider.count_tokens("m1", "x") is None
+    assert await provider.count_tokens("m1", "y") is None
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == 10.0
+    route.mock(return_value=httpx.Response(200, text="<html/>"))
+    assert await provider.count_tokens("m2", "x") is None
+    assert await provider.count_tokens("m2", "x") is None
+    assert route.call_count == 2
+    for passing in (httpx.Response(429, json={}), httpx.Response(503, json={}),
+                    httpx.ReadTimeout("slow")):
+        route.mock(side_effect=[passing])
+        assert await provider.count_tokens("m3", "x") is None
+    route.mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+    assert await provider.count_tokens("m3", "x") == 7
