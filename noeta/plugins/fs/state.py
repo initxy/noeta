@@ -18,7 +18,9 @@ Kinds:
   takes the file-state note off ``Edit``'s result; ``window: true`` marks a
   view of some lines without a ``range`` to answer from (a command's output
   cut to fit). A ``Bash`` command that showed a file records one too,
-  with ``"by": "Bash"`` (:mod:`noeta.plugins.fs.shell_reads`). ``Edit`` and ``Write``
+  with ``"by": "Bash"``, the command's ``call_id`` and, for a file a deny
+  rule keeps from ``Read``, ``"read_denied": true``
+  (:mod:`noeta.plugins.fs.shell_reads`). ``Edit`` and ``Write``
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
@@ -104,6 +106,8 @@ class FileRead(Struct):
     #: lines: no changed-file note follows it, as Claude Code sends none for
     #: such a read. Kept when a compaction drops ``range``.
     window: bool = False
+    #: The ``Bash`` call whose output showed the file, for a command's read.
+    call_id: str | None = None
 
 
 class FsState(Struct):
@@ -147,17 +151,25 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         if not (isinstance(lines, list) and len(lines) == 2
                 and all(isinstance(n, int) and not isinstance(n, bool) for n in lines)):
             lines = None
+        call_id = data.get("call_id")
+        # A copy of the map (the fold stays pure: a simulated fold shares
+        # this state) but no walk over it or ``checked`` in Python.
         reads = dict(base.reads)
         reads.pop(path, None)
+        dropped = []
         while len(reads) >= MAX_FILES:
-            del reads[next(iter(reads))]
+            oldest = next(iter(reads))
+            del reads[oldest]
+            dropped.append(oldest)
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
                                partial=data.get("partial") is True,
                                whole=data.get("whole") is not False,
                                window=data.get("window") is True or (
-                                   lines is not None and (lines[0] > 1 or lines[1] > 0)))
-        checked = {p: t for p, t in base.checked.items() if p != path and p in reads}
-        return msgspec.structs.replace(base, reads=reads, checked=checked)
+                                   lines is not None and (lines[0] > 1 or lines[1] > 0)),
+                               call_id=call_id if isinstance(call_id, str) else None)
+        return msgspec.structs.replace(base, reads=reads,
+                                       checked=_without(base.checked, [path, *dropped]),
+                                       noticed=_without(base.noticed, dropped))
     if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
         text = data.get("text")
         if not isinstance(text, str):
@@ -195,7 +207,8 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         path, digest = data.get("path"), data.get("digest")
         if not isinstance(path, str) or not isinstance(digest, str):
             return base
-        noticed = {p: d for p, d in base.noticed.items() if p != path and p in base.reads}
+        noticed = dict(base.noticed)
+        noticed.pop(path, None)
         noticed[path] = digest
         return _checked(msgspec.structs.replace(base, noticed=noticed), path, data.get("mtime"))
     if kind == KIND_CHECKED:
@@ -210,9 +223,21 @@ def _checked(state: FsState, path: str, mtime: Any) -> FsState:
     """``state`` with ``path`` found at ``mtime`` with nothing new to tell."""
     if isinstance(mtime, bool) or not isinstance(mtime, (int, float)):
         return state
-    checked = {p: t for p, t in state.checked.items() if p != path and p in state.reads}
+    checked = dict(state.checked)
+    checked.pop(path, None)
     checked[path] = float(mtime)
     return msgspec.structs.replace(state, checked=checked)
+
+
+def _without(entries: dict[str, Any], paths: list[str]) -> dict[str, Any]:
+    """``entries`` without ``paths`` (``entries`` itself when it holds none
+    of them, so nothing is copied)."""
+    if not any(p in entries for p in paths):
+        return entries
+    out = dict(entries)
+    for p in paths:
+        out.pop(p, None)
+    return out
 
 
 def current_fs_state(state: Mapping[str, Any]) -> FsState:

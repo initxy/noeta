@@ -18,10 +18,15 @@ lines (``head``, ``tail``, ``sed -n``) keeps its line range, so a ``Read``
 of the same range is answered as unchanged, and is not watched. Every one
 of them lets ``Edit`` and ``Write`` through the read-first check.
 
-The record names the command's tool (``"by": "Bash"``), so a plugin that
-acts on files the model looked at (the instructions plugin: the nested
-instruction files and ``paths:`` rules of the file's directories) can take
-it as a ``Read`` of that file, as Claude Code does.
+The record names the command's tool (``"by": "Bash"``) and the call
+(``"call_id"``), so a plugin that acts on files the model looked at (the
+instructions plugin: the nested instruction files and ``paths:`` rules of
+the file's directories) can take it as a ``Read`` of that file, as Claude
+Code does, and one that reads the files again later (the compaction's
+restore) knows where each command's relative path led. A file a deny rule
+keeps from ``Read`` is still recorded, as in Claude Code, but marked
+``"read_denied": true``: it brings no instructions (the task's checks are
+asked as for an ``@`` mention, :func:`noeta.plugins.fs.mentions.read_verdict`).
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from noeta.core.large_output import output_cut
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Text, ToolUse
 from noeta.plugins.fs._encoding import decode
+from noeta.plugins.fs.mentions import read_verdict
 from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
 from noeta.toolkit.shell import ShellRead, shell_reads
 
@@ -67,7 +73,7 @@ async def record_shell_reads(view: TaskView, call: ToolUse, output: ToolOutput) 
     cut = output_cut(printed)
     known = set(current_fs_state(view.state.ext).reads)
     cwd = shell_cwd(view)
-    for read in reads:
+    for i, read in enumerate(reads):
         if read.grep and output.meta.get("exit_code") != 0:
             continue
         try:
@@ -77,9 +83,14 @@ async def record_shell_reads(view: TaskView, call: ToolUse, output: ToolOutput) 
         if path in known:
             continue
         data = await _entry(view, path, read, printed, in_context=not cut and not read.grep)
-        if data is not None:
-            known.add(path)
-            view.record(FS, KIND_READ, data)
+        if data is None:
+            continue
+        data["call_id"] = call.id
+        probe = ToolUse(id=f"shell-read.{call.id}.{i}", name="Read", input={"file_path": path})
+        if await read_verdict(view, probe) == "deny":
+            data["read_denied"] = True
+        known.add(path)
+        view.record(FS, KIND_READ, data)
 
 
 async def _entry(view: TaskView, path: str, read: ShellRead, printed: str, *,

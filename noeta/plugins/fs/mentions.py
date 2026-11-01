@@ -47,7 +47,7 @@ from noeta.plugins.fs.state import FS, KIND_MENTIONS, KIND_NOTICE, current_fs_st
 from noeta.toolkit.tools import format_size, output_text
 
 __all__ = ["FIRST_LINES", "MENTION", "attach_mentions", "attachment_digest",
-           "hoist_attachments", "mentioned", "new_prompts"]
+           "hoist_attachments", "mentioned", "new_prompts", "read_verdict"]
 
 #: ``@path`` or ``@"path with spaces"``, not inside a word or an e-mail address.
 MENTION = re.compile(r'(?<![\w@])@("([^"]+)"|[^\s"]+)')
@@ -145,7 +145,7 @@ async def attach_mentions(view: TaskView, home: str | None = None) -> None:
             continue
         if await env.stat(path) is None:
             continue
-        verdict = await _verdict(view, ToolUse(id=f"mention.{through}.{i}", name="Read",
+        verdict = await read_verdict(view, ToolUse(id=f"mention.{through}.{i}", name="Read",
                                                input={"file_path": path}))
         if verdict == "deny":
             continue
@@ -214,7 +214,7 @@ def _absolute(view: TaskView, raw: str, home: str | None) -> str | None:
     return posixpath.normpath(posixpath.join(base, raw))
 
 
-async def _verdict(view: TaskView, call: ToolUse) -> Literal["allow", "ask", "deny"]:
+async def read_verdict(view: TaskView, call: ToolUse) -> Literal["allow", "ask", "deny"]:
     """What the task's checks say about ``Read`` of the path, as if the
     model asked: ``allow`` only when no check would ask (or rewrite the
     call). Whatever a check records while it is asked does not stand."""

@@ -57,6 +57,8 @@ def test_only_the_most_recent_files_are_remembered() -> None:
     assert "/f0" not in state.reads and "/f5" not in state.reads
     assert "/f6" in state.reads and "/new" in state.reads
     assert f"/f{MAX_FILES + 4}" in state.reads
+    # What the check knew of a forgotten file goes with it.
+    assert set(state.noticed) <= set(state.reads) and "/f0" not in state.noticed
 
 
 def test_unknown_kind_leaves_the_state_unchanged() -> None:
