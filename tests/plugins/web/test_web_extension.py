@@ -27,6 +27,7 @@ from noeta.plugins.web.fetch import (
     HttpFetchTransport,
     PageCache,
     WebFetchTool,
+    preapproved,
     upgrade_to_https,
 )
 from noeta.plugins.web.render import FetchedPage, html_to_markdown
@@ -157,7 +158,7 @@ def test_page_cache_expires_and_evicts() -> None:
     cache.put("a", "t", "m")
     cache.put("b", "t", "m")
     cache.put("c", "t", "m")
-    assert cache.entry("a") is None and cache.entry("c") == ("t", "m", False)
+    assert cache.entry("a") is None and cache.entry("c") == ("t", "m", False, "")
     now[0] = 901
     assert cache.entry("c") is None
 
@@ -185,6 +186,60 @@ async def test_http_transport_redirects_and_media() -> None:
         await transport.fetch("https://site.com/login")
     image = await transport.fetch("https://site.com/img")
     assert image.raw == b"x" and image.content_type == "image/png"
+    await client.aclose()
+
+
+def test_preapproved_sites_follow_claude_codes_rule() -> None:
+    for url in ("https://docs.python.org/3/library/os.html", "https://go.dev/doc",
+                "https://go.dev/doc/effective_go", "https://github.com/anthropics/x/issues/1",
+                "https://github.com/anthropic-experimental/x/blob/main/a.md",
+                "https://raw.githubusercontent.com/anthropics/x/refs/heads/main/a.md"):
+        assert preapproved(url), url
+    for url in ("https://go.dev/blog", "https://go.dev/docs", "https://go.dev/doc/../blog",
+                "https://go.dev/doc%2F..%2Fblog", "https://github.com/anthropic-experimental/x/pulls",
+                "https://raw.githubusercontent.com/anthropics/x/dev/a.md",
+                "https://docs.python.org.example.com/", "https://example.com/docs.python.org"):
+        assert not preapproved(url), url
+
+
+async def test_a_documentation_sites_markdown_is_the_result(tmp_path: Path) -> None:
+    digested: list[str] = []
+
+    async def digest(url: str, title: str, page: str, prompt: str) -> str:
+        digested.append(url)
+        return "summary"
+
+    def tool(page: str, ctype: str) -> tuple[WebFetchTool, FakeFetch]:
+        fetch = FakeFetch(page, ctype)
+        return WebFetchTool(fetch, digest_for=lambda _c: digest), fetch
+
+    md, fetch = tool("# Title\n\nBody.", "text/markdown; charset=utf-8")
+    out = await md.run({"url": "https://docs.python.org/3/x.md", "prompt": "p"}, _ctx(tmp_path))
+    assert text(out) == "# Title\n\nBody." and out.meta["markdown"] is True and not digested
+    # From the cache too, and from an offset.
+    out = await md.run({"url": "https://docs.python.org/3/x.md", "prompt": "q", "offset": 9},
+                       _ctx(tmp_path))
+    assert text(out) == "Body." and len(fetch.urls) == 1 and not digested
+    # Another site, HTML, or a page the window cannot hold go to the digest.
+    other, _ = tool("# Title", "text/markdown")
+    out = await other.run({"url": "https://example.com/x.md", "prompt": "p"}, _ctx(tmp_path))
+    html, _ = tool(PAGE, "text/html")
+    await html.run({"url": "https://docs.python.org/3/", "prompt": "p"}, _ctx(tmp_path))
+    long, _ = tool("x" * 100_000, "text/markdown")
+    await long.run({"url": "https://docs.python.org/3/", "prompt": "p"}, _ctx(tmp_path))
+    assert text(out) == "summary" and len(digested) == 3
+
+
+async def test_the_http_transport_asks_for_markdown_first() -> None:
+    accepts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        accepts.append(request.headers["accept"])
+        return httpx.Response(200, headers={"content-type": "text/markdown"}, content=b"# a")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    page = await HttpFetchTransport(client=client).fetch("https://docs.python.org/3/")
+    assert accepts == ["text/markdown, text/html, */*"] and page.content_type == "text/markdown"
     await client.aclose()
 
 
