@@ -1,10 +1,11 @@
 """The date note: told once when the day moves past the one the environment
-block gave, at the start of a turn; overridable text."""
+block gave, before any model call (mid-turn too); overridable text."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -54,6 +55,39 @@ async def test_told_once_when_the_day_changes(tmp_path: Path) -> None:
     await client.send(tid, "still the next day")
     await rt.run_until_idle()
     assert len(notes(3)) == 1
+    await store.close()
+
+
+async def test_told_mid_turn_when_the_day_changes_between_model_calls(
+        tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", ("Probe", {})), reply("done")])
+    # The day turns while the tool runs: the second call of the turn is told.
+    env = Environment(today=lambda: "2026-10-27" if len(provider.requests) < 1
+                      else "2026-10-28")
+
+    class Probe:
+        name = "Probe"
+        description = "probe"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = True
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            from noeta.core.tool import text_output
+            return text_output("ok")
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", tools=[Probe()],
+                                                 extensions=[env])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: LocalExecEnv(str(tmp_path)),
+                 sleep=_no_sleep)
+    await Client(store).create("a", "hi")
+    await rt.run_until_idle()
+    assert len(provider.requests) == 2
+    first, second = ([m.text for m in r.messages if m.role == "system"
+                      and m.text.startswith("The date moved on")] for r in provider.requests)
+    assert first == []
+    assert len(second) == 1 and "today is 2026-10-28" in second[0]
     await store.close()
 
 
