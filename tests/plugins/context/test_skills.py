@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import Waiting
@@ -19,13 +20,19 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills, UsageRank
+from noeta.plugins.skills.extension import _typed_command
 from noeta.plugins.skills.listing import (
     ROSTER_HEADER,
     fit_menu_to_budget,
     listing_lines,
     short_summary,
 )
-from noeta.plugins.skills.registry import SkillDescription, SkillRegistry, path_patterns
+from noeta.plugins.skills.registry import (
+    SkillDescription,
+    SkillRegistry,
+    load_registry,
+    path_patterns,
+)
 from noeta.plugins.subtasks import SubagentSpec, Subtasks
 from noeta.testing import reply
 from noeta.toolkit.allowed_tools import allow_rule_texts, granted_tools
@@ -577,31 +584,21 @@ async def test_a_command_that_would_ask_stops_the_skill(h: Harness) -> None:
     assert await h.records(tid, "skills", "activated") == []
 
 
-async def test_in_auto_mode_a_command_that_would_ask_is_left_to_the_model(
+async def test_in_auto_mode_a_command_that_would_ask_still_stops_the_skill(
         h: Harness) -> None:
+    # Not handed to the model to run later: the skill is refused and nothing runs.
     write_skill(skills_dir(h), "mk", "Make.",
                 body="Made: !`touch made.txt`\nBranch: !`echo main-line`\n")
-    write_skill(skills_dir(h), "two", "Two.", body="A: !`touch a.txt`\nB: !`touch b.txt`\n")
     a = Agent(name="a", model="m", extensions=[
         FileTools(), Shell(), Permissions(mode="auto", plans_dir=str(h.work.parent / "p")),
         Skills()])
-    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("", ("Skill", {"skill": "two"})),
-                   reply("done"))
+    h.provider.add(reply("", ("Skill", {"skill": "mk"})), reply("done"))
     tid = await h.start(a)
-    first, second = await h.results(tid)
-    assert not first.result.is_error and not second.result.is_error
+    [result] = await h.results(tid)
+    assert result.result.is_error and "touch made.txt" in result.result.text
     assert not (h.work / "made.txt").exists()
-    body = h.provider.requests[1].messages[-1].text
-    assert body.endswith(
-        "Made: [Before going on, run this command yourself, as written, and use what it "
-        "prints: `touch made.txt`]\nBranch: main-line\n")
-    two = h.provider.requests[2].messages[-1].text
-    assert two.startswith(
-        "[Before going on, run these 2 commands yourself, as written, and use what each prints "
-        "where it is named below: one Bash call each, or one call joining them with &&.]\n"
-        "1. `touch a.txt`\n2. `touch b.txt`\nBase directory for this skill: ")
-    assert two.endswith("A: [what command 1 prints, `touch a.txt`]\n"
-                        "B: [what command 2 prints, `touch b.txt`]\n")
+    assert await h.records(tid, "skills", "activated") == []
+    assert "yourself" not in h.provider.requests[1].messages[-1].text
 
 
 async def test_in_auto_mode_a_denied_command_still_stops_the_skill(h: Harness) -> None:
@@ -986,6 +983,68 @@ async def test_only_scoped_skills_of_a_name_are_named_when_the_bare_name_is_call
         "There is no skill named deploy. Skills of that name scoped to directories exist: "
         "apps/api:deploy, apps/web:deploy. Call the one whose directory holds the files you "
         "are working on.")
+
+
+async def test_a_skill_file_cannot_name_itself_like_a_plugin_or_scoped_skill(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Only the name a plugin's directory gives may hold a ':'; a SKILL.md
+    that calls itself ``superpowers:brainstorm`` is skipped, so it neither
+    replaces the plugin's skill nor takes on ``Skill(superpowers:*)``."""
+    plugin = tmp_path / "plug" / "skills"
+    write_skill(plugin, "brainstorm", "The plugin's.")
+    ws = tmp_path / "w" / ".noeta" / "skills"
+    for name in ("superpowers:brainstorm", "apps/web:deploy"):
+        d = ws / name.replace("/", "-").replace(":", "-")
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: Mine.\n---\nx\n")
+    env = LocalExecEnv(str(tmp_path / "w"))
+    registry = await load_registry(env, [(str(plugin), 0), (str(ws), 4)],
+                                   plugins={str(plugin): "superpowers"})
+    assert registry.names() == ("superpowers:brainstorm",)
+    assert registry.get("superpowers:brainstorm").description == "The plugin's."  # type: ignore[union-attr]
+    assert "invalid 'name' value 'superpowers:brainstorm'" in caplog.text
+
+
+async def test_a_nested_skill_scoped_like_a_plugin_never_replaces_its_skill(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """``superpowers/.noeta/skills/brainstorm`` would be scoped to
+    ``superpowers:brainstorm``, the plugin's skill's name: nested skills rank
+    last, so it is skipped (and said so)."""
+    plugin = tmp_path / "plug" / "skills"
+    write_skill(plugin, "brainstorm", "The plugin's.")
+    ws = tmp_path / "w" / ".noeta" / "skills"
+    write_skill(ws, "brainstorm", "The workspace's.")
+    nested = tmp_path / "w" / "superpowers" / ".noeta" / "skills"
+    write_skill(nested, "brainstorm", "The nested one.")
+    env = LocalExecEnv(str(tmp_path / "w"))
+    registry = await load_registry(
+        env, [(str(nested), 5), (str(plugin), 0), (str(ws), 4)],
+        plugins={str(plugin): "superpowers"}, scopes={str(nested): "superpowers"})
+    assert sorted(registry.names()) == ["brainstorm", "superpowers:brainstorm"]
+    assert registry.get("superpowers:brainstorm").description == "The plugin's."  # type: ignore[union-attr]
+    assert registry.tier_of("superpowers:brainstorm") == 0
+    assert f"{nested}/brainstorm/SKILL.md: its name 'superpowers:brainstorm' is taken" \
+        in caplog.text
+
+
+def test_a_skill_named_in_an_old_log_is_found_under_its_plugins_name() -> None:
+    def desc(name: str, unqualified: str | None = None) -> SkillDescription:
+        return SkillDescription(name=name, description="d", body="b", unqualified=unqualified)
+
+    registry = SkillRegistry({n: desc(n) for n in ("tools:ship", "a:dup", "b:dup", "own")}
+                             | {"apps:web": desc("apps:web", "web")})
+    assert registry.recorded("ship") is registry.get("tools:ship")
+    assert registry.recorded("own") is registry.get("own")
+    # Two plugins have it, or only a directory-scoped skill does: none.
+    assert registry.recorded("dup") is None and registry.recorded("web") is None
+    # The model's own calls are never resolved this way.
+    assert registry.get("ship") is None
+
+
+def test_a_typed_scoped_name_may_hold_a_slash() -> None:
+    assert _typed_command("/apps/web:deploy now") == ("apps/web:deploy", "now")
+    assert _typed_command("/tools:ship") == ("tools:ship", "")
+    assert _typed_command("/deploy x") == ("deploy", "x")
 
 
 def test_a_skill_given_again_after_a_compaction_says_where_it_comes_from() -> None:

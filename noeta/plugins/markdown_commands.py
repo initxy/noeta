@@ -105,7 +105,7 @@ class MarkdownCommands(Extension):
             try:
                 text = await run_inline_commands(
                     view, self.render(name, args), skill=name, what="command",
-                    call_id=f"command-{recorded.seq}", approve_rules=rules, hand_off=True)
+                    call_id=f"command-{recorded.seq}", approve_rules=rules)
             except InlineCommandError as exc:
                 view.notify(str(exc))
                 view.record(self.name, "load_failed", {"name": name}, message=user(

@@ -118,3 +118,22 @@ def test_noeta_plugins_lists_them(home: Path, tmp_path: Path,
     root = make_plugin(home / "plugins" / "deploy").resolve()
     main.main(["--cwd", str(tmp_path), "plugins"])
     assert f"deploy-tools\t{root}\t(Claude Code plugin 1.2.0)" in capsys.readouterr().out
+
+
+async def test_skills_dirs_in_config_toml_still_add_their_skills_beside_a_plugins(
+        home: Path, tmp_path: Path) -> None:
+    """``[plugins.skills] dirs`` (as written for 0.x) keeps working and no
+    longer replaces a Claude Code plugin's skill directories."""
+    root = make_plugin(home / "plugins" / "deploy").resolve()
+    mine = tmp_path / "mine"
+    (mine / "tidy").mkdir(parents=True)
+    (mine / "tidy" / "SKILL.md").write_text("---\nname: tidy\ndescription: Tidy.\n---\nx\n")
+    with (home / "config.toml").open("a") as f:
+        f.write(f'\n[plugins.skills]\ndirs = ["{mine}"]\n')
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    skills = ext(app, "main", "skills")
+    assert skills.dirs == [str(mine)]
+    assert skills.plugin_dirs == {str(root / "skills"): "deploy-tools"}
+    assert sorted(c.name for c in skills._commands(str(tmp_path))) == [
+        "deploy-tools:deploy", "tidy"]
+    await app.store.close()

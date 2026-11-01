@@ -482,9 +482,11 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         """The agent front ends start with: the settings' ``agent``, else
         the one a Claude Code plugin's settings name, else ``main``."""
         wanted = found.agent or plugin_agent.get("agent")
-        known = app.runtime.agents
-        app.main_agent = wanted if wanted and wanted in known else "main"
-        if wanted and wanted not in known:
+        # A plugin's agent by its bare name, as settings written before
+        # plugin agents were named <plugin>:<agent> give it.
+        named = app.runtime.agent(wanted) if wanted else None
+        app.main_agent = named.name if named is not None else "main"
+        if wanted and named is None:
             notice = (f"agent {wanted!r} (from the settings of "
                       f"{plugin_agent.get('source') if not found.agent else 'noeta'}) "
                       "is not an agent here; main is used")

@@ -117,6 +117,18 @@ class SkillRegistry:
     def get(self, name: str) -> SkillDescription | None:
         return self._skills.get(name)
 
+    def recorded(self, name: str) -> SkillDescription | None:
+        """The skill a task's log names ``name``: that skill, else the one
+        plugin skill ``<plugin>:<name>`` (logs written before a plugin's
+        skills were named so hold the bare name). Never for a model's call:
+        the ``Skill`` tool answers a bare name with the full one."""
+        found = self._skills.get(name)
+        if found is not None or ":" in name:
+            return found
+        former = [d for n, d in self._skills.items()
+                  if d.unqualified is None and n.endswith(f":{name}")]
+        return former[0] if len(former) == 1 else None
+
     def names(self) -> tuple[str, ...]:
         return tuple(self._skills)
 
@@ -182,16 +194,19 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = (), *,
     for warning in warnings:
         _log.warning("skill: %s: %s", path, warning)
     if name is None:
+        # Only a name the caller gives (a plugin's) may carry a ':'; one a
+        # SKILL.md gives itself may not, so no file can pass for a plugin's
+        # skill or a directory-scoped one and take on its allow rules.
         name = fields.get("name")
         if name is None:
             _log.warning("skill: %s: missing required key 'name'; skipped", path)
             return None
+        if not _NAME_PATTERN.match(name):
+            _log.warning("skill: %s: invalid 'name' value %r "
+                         "(must match ^[a-z0-9][a-z0-9-]*$); skipped", path, name)
+            return None
     elif not name.split(":", 1)[0]:
         _log.warning("skill: %s: no plugin name; skipped", path)
-        return None
-    if ":" not in name and not _NAME_PATTERN.match(name):
-        _log.warning("skill: %s: invalid 'name' value %r "
-                     "(must match ^[a-z0-9][a-z0-9-]*$); skipped", path, name)
         return None
     description = fields.get("description")
     if description is None:
@@ -312,6 +327,13 @@ async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
                     root, posixpath.dirname(posixpath.dirname(root))))
                 desc = replace(desc, description=desc.description
                                + FOUND_BELOW_NOTE.format(dir=where, scope=scope))
+            if desc.name in merged:
+                # Nested skills rank last: a scoped name never replaces a
+                # skill already known by it (a plugin's ``<plugin>:<name>``,
+                # or the same directory's other skill folder).
+                _log.warning("skill: %s: its name %r is taken by %s; skipped",
+                             desc.source_path, desc.name, merged[desc.name].source_path)
+                continue
             merged[desc.name] = desc
             tier_of[desc.name] = tier
     return SkillRegistry(merged, tier_of)

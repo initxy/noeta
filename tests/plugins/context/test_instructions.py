@@ -353,6 +353,27 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     assert len(texts) == 4
 
 
+async def test_a_plugin_skill_invoked_under_its_former_bare_name_is_given_again(
+        h: Harness) -> None:
+    """A log written when a plugin's skills had their own names (``ship``)
+    re-attaches the skill now named ``<plugin>:ship``."""
+    plugin = h.work.parent / "tools-plugin" / "skills"
+    (plugin / "ship").mkdir(parents=True)
+    (plugin / "ship" / "SKILL.md").write_text("---\nname: ship\ndescription: Ship.\n---\nGo.\n")
+    before = Agent(name="a", model="m", extensions=[
+        Skills(dirs=[str(plugin)]), FileTools(), MakeRoom()])
+    h.provider.add(reply("", ("Skill", {"skill": "ship"})), reply("done"))
+    tid = await h.start(before)
+    [act] = await h.records(tid, "skills", "activated")
+    assert act.data["name"] == "ship"
+    now = Agent(name="a", model="m", extensions=[
+        Skills(plugin_dirs={str(plugin): "tools"}), FileTools(), MakeRoom()])
+    h.provider.add(ContextOverflow("too long"), reply("fits"))
+    await h.say(now, tid, "next")
+    [again] = [m.text for m in h.last_messages() if m.text.startswith("These skills were")]
+    assert "### Skill: tools:ship\nPath: plugin:tools:ship\n\n" in again
+
+
 async def test_skills_given_again_are_capped_newest_first(h: Harness) -> None:
     """Claude Code's caps: each skill body cut to 5,000 tokens, newest
     invoked first, 25,000 in all; the oldest that does not fit is left out."""
