@@ -15,7 +15,10 @@ Kinds:
   the token ceiling, which counts as not read for ``Edit`` / ``Write`` and is
   never answered as unchanged; ``whole: false`` marks a view that was not
   the whole file (a window, or an edit made without the file in view), which
-  takes the file-state note off ``Edit``'s result. ``Edit`` and ``Write``
+  takes the file-state note off ``Edit``'s result; ``window: true`` marks a
+  view of some lines without a ``range`` to answer from (a command's output
+  cut to fit). A ``Bash`` command that showed a file records one too
+  (:mod:`noeta.plugins.fs.shell_reads`). ``Edit`` and ``Write``
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
@@ -97,9 +100,9 @@ class FileRead(Struct):
     #: or what it wrote itself over such a view).
     whole: bool = True
     #: Recorded by a ``Read`` given an offset past the first line or a limit
-    #: (or cut to fit the token ceiling): no changed-file note follows it, as
-    #: Claude Code sends none for such a read. Kept when a compaction drops
-    #: ``range``.
+    #: (or cut to fit the token ceiling), or by a command that showed some
+    #: lines: no changed-file note follows it, as Claude Code sends none for
+    #: such a read. Kept when a compaction drops ``range``.
     window: bool = False
 
 
@@ -151,7 +154,8 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
                                partial=data.get("partial") is True,
                                whole=data.get("whole") is not False,
-                               window=lines is not None and (lines[0] > 1 or lines[1] > 0))
+                               window=data.get("window") is True or (
+                                   lines is not None and (lines[0] > 1 or lines[1] > 0)))
         checked = {p: t for p, t in base.checked.items() if p != path and p in reads}
         return msgspec.structs.replace(base, reads=reads, checked=checked)
     if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
