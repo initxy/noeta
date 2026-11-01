@@ -16,12 +16,16 @@ and three ephemeral cache breakpoints (the two system blocks and the last
 message). Host context in the user's turn is framed as
 ``<system-reminder>``.
 
-**Every request is transported over SSE.** The non-streaming POST holds one
-socket idle for the whole generation and dies on the client timeout: a long
-answer on a 128K cap reliably outran 60 s and then burned the retry budget
-re-running the same doomed call. A streamed connection keeps producing bytes
-(Anthropic also sends ``ping`` events), so the timeout measures silence rather
-than total generation time.
+**Every request is transported over SSE first.** The non-streaming POST
+holds one socket idle for the whole generation and dies on the client
+timeout: a long answer on a 128K cap reliably outran 60 s and then burned the
+retry budget re-running the same doomed call. A streamed connection keeps
+producing bytes (Anthropic also sends ``ping`` events), so the timeout
+measures silence rather than total generation time. A stream that breaks
+after it began raises :class:`~noeta.core.errors.StreamBroken`, and the
+retry helper goes on with :meth:`AnthropicProvider.complete_whole`, Claude
+Code's fallback: the same body sent without streaming, its output capped at
+64,000 tokens, with a 300 s client timeout.
 """
 
 from __future__ import annotations
@@ -56,7 +60,7 @@ from noeta.backends.providers._common import (
 )
 from noeta.backends.providers._sse import iter_sse_events
 from noeta.core import models
-from noeta.core.errors import Fatal
+from noeta.core.errors import Fatal, StreamBroken, Transient
 from noeta.core.provider import OnDelta
 from noeta.core.types import ModelRequest, ModelResponse
 
@@ -99,6 +103,10 @@ def per_turn_model(model: str) -> bool:
 
 #: Effort sent with adaptive thinking when the request names none.
 _DEFAULT_EFFORT = "medium"
+#: Claude Code's ceilings for a call answered in one piece after a failed
+#: stream: its output and its client timeout (seconds).
+WHOLE_MAX_TOKENS = 64_000
+WHOLE_TIMEOUT_SECONDS = 300.0
 
 
 class AnthropicProvider:
@@ -128,6 +136,7 @@ class AnthropicProvider:
         betas: Sequence[str] = DEFAULT_BETAS,
         device_id: str | None = None,
         system_turns: bool = True,
+        whole_timeout_seconds: float = WHOLE_TIMEOUT_SECONDS,
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment
         variable; an explicit argument still wins. Missing credentials raise
@@ -137,7 +146,9 @@ class AnthropicProvider:
         ``extra_headers`` entry wins); ``device_id`` the stable id in
         ``metadata.user_id`` (default: one per process). ``system_turns=False``
         is for an endpoint without mid-conversation ``system`` turns: they go
-        as ``<system-reminder>`` text in the user's turn instead."""
+        as ``<system-reminder>`` text in the user's turn instead.
+        ``whole_timeout_seconds`` bounds a call answered in one piece
+        (:meth:`complete_whole`) from start to end."""
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:
             raise ValueError(
@@ -147,6 +158,7 @@ class AnthropicProvider:
         self._default_max_tokens = default_max_tokens
         self._device_id = device_id
         self._system_turns = system_turns
+        self._whole_timeout = whole_timeout_seconds
         headers: dict[str, str] = {
             "x-api-key": resolved_key,
             "anthropic-version": anthropic_version,
@@ -192,6 +204,7 @@ class AnthropicProvider:
         body = self.build_body(request)
         body["stream"] = True
         accumulator = StreamAccumulator(on_delta)
+        began = False
         try:
             async with self._client.stream(
                 "POST",
@@ -204,14 +217,46 @@ class AnthropicProvider:
                     # overflow markers, so the (small) error body is read first.
                     await response.aread()
                     raise translate_http_error(response)
+                began = True
                 async with aclosing(iter_sse_events(response.aiter_lines())) as events:
                     async for event_name, data in events:
                         accumulator.feed(event_name, data)
         except httpx.RequestError as exc:
-            # Timeouts and transport failures, including a disconnect
-            # mid-iteration, stay transient so the retry helper applies.
-            raise transport_error(exc) from exc
+            # Timeouts and transport failures stay transient so the retry
+            # helper applies. Once the stream began, a dropped connection is
+            # streamed again within the budget and silence once (Claude
+            # Code's counts) before the call goes on in one piece.
+            if not began:
+                raise transport_error(exc) from exc
+            silent = isinstance(exc, httpx.TimeoutException)
+            raise StreamBroken(f"Anthropic stream broke: {type(exc).__name__}: {exc}",
+                               stream_retries=1 if silent else None) from exc
         return parse_message(accumulator.message_payload(), request.model)
+
+    async def complete_whole(self, request: ModelRequest) -> ModelResponse:
+        """``request`` answered in one piece (no streaming), as Claude Code
+        sends a call whose stream failed: output at most
+        :data:`WHOLE_MAX_TOKENS`, the client timeout the constructor's
+        ``whole_timeout_seconds``."""
+        guard_vision(request)
+        body = self.build_body(request)
+        body["max_tokens"] = min(int(body["max_tokens"]), WHOLE_MAX_TOKENS)
+        body["stream"] = False
+        try:
+            response = await self._client.post(
+                _MESSAGES_ENDPOINT, json=body, headers=self.request_headers(request) or None,
+                timeout=self._whole_timeout)
+        except httpx.RequestError as exc:
+            raise transport_error(exc) from exc
+        if response.is_error:
+            raise translate_http_error(response)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise Transient(f"Anthropic response was not JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise Transient("Anthropic response was not a JSON object")
+        return parse_message(payload, request.model)
 
     async def count_tokens(self, model: str, text: str) -> int | None:
         """The exact input-token count of one user message holding ``text``

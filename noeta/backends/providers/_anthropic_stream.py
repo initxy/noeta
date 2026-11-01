@@ -19,7 +19,7 @@ from noeta.core.errors import (
     MalformedToolArguments,
     ModelError,
     RateLimited,
-    Transient,
+    StreamBroken,
 )
 from noeta.core.provider import OnDelta
 from noeta.core.types import (
@@ -209,7 +209,10 @@ def _translate_stream_error_event(payload: dict[str, Any]) -> ModelError:
     if error_type == "rate_limit_error":
         return RateLimited(described)
     if error_type in _TRANSIENT_STREAM_ERROR_TYPES:
-        return Transient(described)
+        # Claude Code streams again after an overload (twice) before it
+        # falls back; a server error falls back at once.
+        return StreamBroken(described, stream_retries=2 if error_type == "overloaded_error"
+                            else 0)
     if error_type in (
         "invalid_request_error",
         "request_too_large",
@@ -249,9 +252,9 @@ class StreamAccumulator:
         try:
             payload = json.loads(data)
         except json.JSONDecodeError as exc:
-            raise Fatal(f"Anthropic stream event was not valid JSON: {exc}") from exc
+            raise StreamBroken(f"Anthropic stream event was not valid JSON: {exc}") from exc
         if not isinstance(payload, dict):
-            raise Fatal(
+            raise StreamBroken(
                 "Anthropic stream event root was not a JSON object: "
                 f"type={type(payload).__name__}"
             )
@@ -366,12 +369,13 @@ class StreamAccumulator:
     def message_payload(self) -> dict[str, Any]:
         """The reconstructed vendor-shaped ``message`` dict."""
         if self._message is None:
-            raise Fatal("Anthropic stream ended without a message_start event")
+            raise StreamBroken("Anthropic stream ended without a message_start event")
         # ``message_delta`` carries the stop reason; a stream that closed
-        # cleanly without one was cut mid-generation. That is the same failure
-        # as a dropped connection — retryable — not a finished turn.
+        # cleanly without one was cut mid-generation: retryable, not a
+        # finished turn (streamed once more, then in one piece).
         if self._message.get("stop_reason") is None:
-            raise Transient("Anthropic stream ended before message_delta (no stop_reason)")
+            raise StreamBroken("Anthropic stream ended before message_delta (no stop_reason)",
+                               stream_retries=1)
         # Decode any tool_use block whose content_block_stop never arrived.
         for index in list(self._json_fragments):
             self._finalize_block(index)

@@ -13,6 +13,7 @@ import shlex
 
 __all__ = [
     "LONG_SLEEP_S",
+    "NO_OUTPUT",
     "SHELL_EXPANSION_CHARS",
     "SHELL_META_CHARS",
     "WRAPPER_PROGRAMS",
@@ -21,11 +22,15 @@ __all__ = [
     "has_unquoted_expansion",
     "long_leading_sleep",
     "parse_argv",
+    "read_files",
     "subcommands",
 ]
 
 
 SHELL_META_CHARS = frozenset(";&|<>`$()\n\r")
+
+#: The ``Bash`` result of a command that printed nothing.
+NO_OUTPUT = "(Bash completed with no output)"
 
 #: Characters bash expands in an UNQUOTED word — brace expansion, globbing,
 #: tilde expansion — that ``shlex`` leaves literal. A command carrying one
@@ -162,6 +167,155 @@ def long_leading_sleep(command: str) -> str | None:
     rest = " ".join(parts[1:]).strip()
     shown = _js_number(seconds)
     return f"sleep {shown} followed by: {rest}" if rest else f"standalone sleep {shown}"
+
+
+# ---------------------------------------------------------------------------
+# Files a command reads
+# ---------------------------------------------------------------------------
+
+
+#: Subcommands that may sit between reads without spoiling them.
+_READ_FILLER = re.compile(r"^\s*(echo|printf|true|:)\b")
+#: ``cat``-like programs and the flags each may carry.
+_CAT_FLAGS: dict[str, frozenset[str]] = {
+    "cat": frozenset({"-n", "--number"}),
+    "nl": frozenset(),
+    "bat": frozenset({"-n", "--number", "-p", "--plain"}),
+    "batcat": frozenset({"-n", "--number", "-p", "--plain"}),
+}
+_SED_RANGE = re.compile(r"^(\d+)(,(\d+))?p$")
+_GREP_CONTEXT = re.compile(r"^(-[ABC]\d+|--(after-context|before-context|context)=\d+)$")
+_GREP_SHORT = re.compile(r"^-[niwxEFGPHh]+$")
+_RG_SHORT = re.compile(r"^-[iSswxFnNHUP]+$")
+_GREP_LONG = frozenset({
+    "--line-number", "--ignore-case", "--word-regexp", "--line-regexp", "--extended-regexp",
+    "--fixed-strings", "--basic-regexp", "--perl-regexp", "--with-filename", "--no-filename",
+    "--color=never", "--color=auto"})
+_RG_LONG = frozenset({
+    "--ignore-case", "--smart-case", "--case-sensitive", "--word-regexp", "--line-regexp",
+    "--fixed-strings", "--line-number", "--no-line-number", "--with-filename",
+    "--no-filename", "--multiline", "--pcre2"})
+
+
+def _sed_read(argv: list[str]) -> str | None:
+    quiet, words = False, []
+    for word in argv[1:]:
+        if word.startswith("--"):
+            if word.startswith("--in-place") or word == "--expression":
+                return None
+            quiet = quiet or word in ("--quiet", "--silent")
+        elif word.startswith("-"):
+            if "i" in word or word == "-e":
+                return None
+            quiet = quiet or "n" in word
+        else:
+            words.append(word)
+    if not quiet or len(words) != 2 or not _SED_RANGE.match(words[0]):
+        return None
+    return words[1]
+
+
+def _cat_read(argv: list[str]) -> str | None:
+    flags = _CAT_FLAGS[argv[0]]
+    path = None
+    for word in argv[1:]:
+        if word.startswith("-") and word != "-":
+            if word not in flags:
+                return None
+        elif path is not None:
+            return None
+        else:
+            path = word
+    return None if path in (None, "-") else path
+
+
+def _head_tail_read(argv: list[str]) -> str | None:
+    path, count = None, None
+    words = iter(argv[1:])
+    for word in words:
+        if word in ("-n", "--lines"):
+            count = next(words, None)
+            if count is None or not count.isdigit():
+                return None
+        elif word.startswith("--lines="):
+            count = word.removeprefix("--lines=")
+            if not count.isdigit():
+                return None
+        elif re.fullmatch(r"-n?\d+", word):
+            count = word.lstrip("-n")
+        elif word.startswith("-"):
+            return None
+        elif path is not None:
+            return None
+        else:
+            path = word
+    if path in (None, "-") or (count is not None and int(count) == 0):
+        return None
+    return path
+
+
+def _grep_read(argv: list[str]) -> str | None:
+    rg = argv[0] == "rg"
+    short, long = (_RG_SHORT, _RG_LONG) if rg else (_GREP_SHORT, _GREP_LONG)
+    words: list[str] = []
+    rest = iter(argv[1:])
+    for word in rest:
+        if word.startswith("-") and word != "-":
+            if word in ("-A", "-B", "-C") or (rg and word in (
+                    "--after-context", "--before-context", "--context")):
+                value = next(rest, None)
+                if value is None or not value.isdigit():
+                    return None
+            elif not (_GREP_CONTEXT.match(word) or short.match(word) or word in long):
+                return None
+        elif len(words) == 2:
+            return None
+        else:
+            words.append(word)
+    if len(words) != 2 or words[1] == "-" or any(c in words[1] for c in "*?[{"):
+        return None
+    return words[1]
+
+
+def _one_read(part: str, alone: bool) -> tuple[str, bool] | None:
+    argv = parse_argv(part)
+    if not argv:
+        return None
+    name = argv[0]
+    if name == "sed":
+        path = _sed_read(argv)
+    elif name in _CAT_FLAGS:
+        path = _cat_read(argv)
+    elif name in ("head", "tail"):
+        path = _head_tail_read(argv)
+    elif alone and name in ("grep", "egrep", "fgrep", "rg"):
+        path = _grep_read(argv)
+        return None if path is None else (path, True)
+    else:
+        return None
+    return None if path is None else (path, False)
+
+
+def read_files(command: str) -> list[tuple[str, bool]]:
+    """The files ``command`` shows the model, as Claude Code counts a
+    ``Bash`` call among the files read: ``cat`` / ``nl`` / ``bat`` of one
+    file, ``head`` / ``tail`` of one file, ``sed -n 'N[,M]p' file``, and,
+    as the whole command, ``grep`` / ``rg`` of a pattern in one file; joined
+    by ``&&`` / ``;`` with nothing but ``echo`` / ``printf`` / ``true`` /
+    ``:`` between them. A pipe or a redirection counts nothing. Each path
+    is given as written, with whether it counts only when the command found
+    a match (``grep`` exits 0 only then)."""
+    if any(c in command for c in "|<>"):
+        return []
+    parts = subcommands(command)
+    out: list[tuple[str, bool]] = []
+    for part in parts:
+        read = _one_read(part, alone=len(parts) == 1)
+        if read is not None:
+            out.append(read)
+        elif len(parts) > 1 and not _READ_FILLER.match(part):
+            return []
+    return out
 
 
 # ---------------------------------------------------------------------------

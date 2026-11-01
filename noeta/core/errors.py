@@ -62,6 +62,21 @@ class Transient(ModelError):
     """Worth retrying as is: network failures, 5xx, overloaded."""
 
 
+class StreamBroken(Transient):
+    """A streamed reply that began (the response was accepted) and then
+    broke: the connection dropped, the stream went silent or carried a
+    server error, or it ended before its last event. When the provider can
+    send the same request in one piece (``Provider.complete_whole``), the
+    retry helper goes on that way, as Claude Code falls back from a stream
+    that failed. ``stream_retries`` is how many times the stream is tried
+    again first (``None``: as many as the retry budget allows)."""
+
+    def __init__(self, message: str, *, stream_retries: int | None = 0,
+                 **kw: object) -> None:
+        super().__init__(message, **kw)  # type: ignore[arg-type]
+        self.stream_retries = stream_retries
+
+
 class RateLimited(Transient):
     def __init__(self, message: str, *, retry_after: float | None = None, **kw: object) -> None:
         super().__init__(message, **kw)  # type: ignore[arg-type]

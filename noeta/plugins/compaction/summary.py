@@ -75,8 +75,6 @@ SUMMARY_FAILED_REASON = "compaction_summary_failed"
 
 #: Retries of a summarize call that is itself too long (Claude Code's).
 MAX_SUMMARY_OVERFLOW_RETRIES = 3
-#: The output ceiling of the second attempt after a failed first one.
-RETRY_MAX_TOKENS = 64_000
 
 _ANALYSIS = re.compile(r"<analysis>[\s\S]*?</analysis>")
 _SUMMARY = re.compile(r"<summary>([\s\S]*?)</summary>")

@@ -16,7 +16,7 @@ from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.events import Compacted
-from noeta.core.types import Message
+from noeta.core.types import Message, ModelRequest, ModelResponse
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.environment import Environment, date_line
 
@@ -83,6 +83,37 @@ async def test_what_follows_a_summary(store: SqliteStore, tmp_path: Path) -> Non
 
     # The summarize call adds Claude Code's summarize beta.
     assert all("fallback-credit-2026-06-01" in s.betas for s in model.summarize_requests)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_the_git_snapshot_ahead_of_a_summary_is_taken_then(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Claude Code computes the git status again after a compaction: the
+    snapshot ahead of the summary shows what the conversation changed."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    a = Agent(name="a", model="claude-opus-5-5", tools=[Probe()],
+              extensions=(Environment(today=lambda: TODAY),
+                          Compaction(auto_compact_window=SMALL)))
+    step = big_call()
+
+    def writes_then_calls(request: ModelRequest) -> ModelResponse:
+        (repo / "made.txt").write_text("x\n")
+        return step(request)
+
+    model = Model([call(), writes_then_calls, big_call(), answer("done")])
+    client, tid = await run(store, a, model, env_for=lambda _s: LocalExecEnv(str(repo)))
+    compactions = [r.event for r in await client.events(tid) if isinstance(r.event, Compacted)]
+    start = next(m.text for m in model.requests[0].messages if m.text.startswith(GIT_HEAD))
+    assert "Status:\n(clean)" in start and "made.txt" not in start
+    for c in compactions:
+        [snapshot] = [m.text for m in c.lead if m.text.startswith(GIT_HEAD)]
+        assert "?? made.txt" in snapshot
+    # Not again at the next turn: HEAD did not move.
+    await client.send(tid, "more")
+    model.main.append(answer("ok"))
+    await runtime(store, a, model, env_for=lambda _s: LocalExecEnv(str(repo))).run_until_idle()
+    assert not any(m.text.startswith(GIT_HEAD) for m in model.requests[-1].messages[-2:])
 
 
 class _Safe(Probe):

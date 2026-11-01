@@ -18,6 +18,7 @@ from noeta.core.errors import (
     MalformedToolArguments,
     ModelError,
     RateLimited,
+    StreamBroken,
     Transient,
 )
 from noeta.core.provider import OnDelta
@@ -290,3 +291,70 @@ async def test_a_malformed_tool_call_is_asked_for_again_once() -> None:
     with pytest.raises(MalformedToolArguments, match="bad again"):
         await complete_with_retries(twice, REQUEST, sleep=SleepRecorder())
     assert twice.calls == 3
+
+
+# ---------------------------------------------------------------------------
+# A broken stream goes on in one piece (Claude Code's non-streaming fallback)
+# ---------------------------------------------------------------------------
+
+
+class WholeProvider(ScriptedProvider):
+    """Streams from ``script``; answers in one piece from ``whole``."""
+
+    def __init__(self, script: list[ModelResponse | Exception],
+                 whole: list[ModelResponse | Exception]) -> None:
+        super().__init__(script)
+        self._whole = list(whole)
+        self.whole_calls = 0
+
+    async def complete_whole(self, request: ModelRequest) -> ModelResponse:
+        self.whole_calls += 1
+        item = self._whole.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+async def test_a_broken_stream_goes_on_in_one_piece_at_once() -> None:
+    sleep = SleepRecorder()
+    seen: list[tuple[int, float]] = []
+    provider = WholeProvider([StreamBroken("server error")],
+                             [Transient("504"), _ok("whole")])
+    response = await complete_with_retries(
+        provider, REQUEST, sleep=sleep, rng=lambda: 0.0,
+        on_retry=lambda attempt, delay, _e: seen.append((attempt, delay)))
+    assert response.message.content == [Text(text="whole")]
+    # No wait before the switch; the later retry stays in one piece.
+    assert (provider.calls, provider.whole_calls) == (1, 2)
+    assert seen[0] == (1, 0.0) and sleep.slept == [1.0]
+
+
+async def test_a_stream_is_tried_again_as_often_as_the_error_allows() -> None:
+    sleep = SleepRecorder()
+    provider = WholeProvider([StreamBroken("silent", stream_retries=1),
+                              StreamBroken("silent", stream_retries=1)], [_ok("whole")])
+    await complete_with_retries(provider, REQUEST, sleep=sleep, rng=lambda: 0.0)
+    assert (provider.calls, provider.whole_calls) == (2, 1)
+
+
+async def test_a_dropped_connection_streams_again_then_gets_one_more_call() -> None:
+    """A dropped connection is streamed again for the whole budget; the
+    call in one piece is made even then (Claude Code's)."""
+    provider = WholeProvider([StreamBroken("dropped", stream_retries=None)] * 3,
+                             [_ok("whole")])
+    response = await complete_with_retries(provider, REQUEST, max_attempts=3,
+                                           sleep=SleepRecorder(), rng=lambda: 0.0)
+    assert response.message.content == [Text(text="whole")]
+    assert (provider.calls, provider.whole_calls) == (3, 1)
+    failing = WholeProvider([StreamBroken("dropped", stream_retries=None)] * 3,
+                            [Transient("still down")])
+    with pytest.raises(Transient, match="still down"):
+        await complete_with_retries(failing, REQUEST, max_attempts=3,
+                                    sleep=SleepRecorder(), rng=lambda: 0.0)
+    assert failing.whole_calls == 1
+
+
+async def test_a_provider_without_a_whole_call_streams_again() -> None:
+    provider = ScriptedProvider([StreamBroken("cut"), _ok()])
+    await complete_with_retries(provider, REQUEST, sleep=SleepRecorder(), rng=lambda: 0.0)
+    assert provider.calls == 2

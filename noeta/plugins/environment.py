@@ -16,7 +16,9 @@ core.fsmonitor=``, no hooks), no signature program and no look inside
 submodules. A ``filter.<driver>.clean`` program has no off
 switch, so when the repository's own config (local or worktree scope)
 defines any filter driver the status is skipped. The capture is recorded
-when the task first starts and never changes under the prompt cache. noeta's
+when the task first starts, and taken again for a compaction (which starts
+the conversation over from its summary, as Claude Code does); in between it
+never changes under the prompt cache. noeta's
 own trigger for taking it again: Claude Code re-announces a changed session
 context when a session resumes (a new process); a durable task has no resume
 moment, so at the start of each later turn the branch and HEAD commit are
@@ -658,8 +660,10 @@ class Environment(Extension):
                          role="system", order=ORDER_DEFERRED)]
 
     async def lead_resident(self, view: TaskView) -> Sequence[Message]:
-        """Ahead of a compaction's summary, as Claude Code rebuilds it: the
-        git snapshot taken at the start, then the attribution note, or, when
+        """Ahead of a compaction's summary, as Claude Code rebuilds it: a
+        git snapshot taken now (the summary has replaced the earlier one, so
+        it shows what the conversation changed; none once the directory is
+        no longer a repository), then the attribution note, or, when
         messages stay after the summary, the date (a system turn, which
         follows the summary) and the note after those messages
         (``resident``). The environment and the deferred tools go out again
@@ -667,7 +671,15 @@ class Environment(Extension):
         st = view.ext_state(self.name)
         if view.keeps_tail is None or not isinstance(st, dict):
             return ()
-        out = [user(st["git"], origin="system")] if isinstance(st.get("git"), str) else []
+        out: list[Message] = []
+        if isinstance(st.get("git"), str):
+            env = task_env(view.env, view.state.config)
+            cwd = view.cwd or env.cwd
+            snapshot = await capture_git(env, cwd)
+            if snapshot:
+                view.record(self.name, "git", {"text": snapshot,
+                                               "head": await git_head(env, cwd)})
+                out.append(user(snapshot, origin="system"))
         if not view.keeps_tail and isinstance(st.get("attribution"), str):
             out.append(user(st["attribution"], origin="system"))
         date = view.keeps_tail and bool(st.get("date"))
