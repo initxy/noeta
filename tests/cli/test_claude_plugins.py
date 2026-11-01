@@ -38,6 +38,10 @@ def make_plugin(root: Path, *, manifest: bool = True) -> Path:
     (root / "agents" / "reviewer.md").write_text(
         "---\nname: reviewer\ndescription: Reviews deploys\n---\nScripts: ${CLAUDE_PLUGIN_ROOT}\n")
     (root / "agents" / "Explore.md").write_text("---\nname: Explore\n---\nmine\n")
+    (root / "agents" / "ops").mkdir()
+    (root / "agents" / "ops" / "pager.md").write_text("---\ndescription: Pages\n---\nPage.\n")
+    (root / "commands" / "ops").mkdir()
+    (root / "commands" / "ops" / "rollback.md").write_text("Roll back $ARGUMENTS.\n")
     (root / "hooks").mkdir()
     (root / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": [
         {"matcher": "Bash", "hooks": [
@@ -66,16 +70,21 @@ async def test_a_claude_code_plugin_loads_through_noetas_plugins(home: Path,
                                                                  tmp_path: Path) -> None:
     root = make_plugin(home / "plugins" / "deploy").resolve()
     app = from_settings(load_settings(), cwd=str(tmp_path))
-    assert str(root / "skills") in ext(app, "main", "skills").dirs
+    skills = ext(app, "main", "skills")
+    assert skills.plugin_dirs == {str(root / "skills"): "deploy-tools"}
+    assert [c.name for c in skills._commands(str(tmp_path))] == ["deploy-tools:deploy"]
     [matcher] = ext(app, "main", "hooks").matchers["PreToolUse"]
     assert matcher.hooks[0].command == f'"{root}"/check.sh'
     assert ext(app, "main", "mcp")._servers == {"deploy-api": {
         "command": "node", "args": [f"{root}/server.js"],
         "env": {"CACHE": str(home / "plugin-data" / "deploy-tools")}}}
-    reviewer = app.runtime.agents["reviewer"]
+    # Claude Code's names: <plugin>:<agent>, a subdirectory before the name.
+    reviewer = app.runtime.agents["deploy-tools:reviewer"]
     assert reviewer.system_prompt == f"Scripts: {root}\n"
+    assert "reviewer" not in app.runtime.agents
     assert app.runtime.agents["Explore"].system_prompt != "mine\n"
-    assert any("'Explore' is a built-in agent's name" in n for n in app.notices)
+    assert app.runtime.agents["deploy-tools:Explore"].system_prompt == "mine\n"
+    assert "deploy-tools:ops:pager" in app.runtime.agents
     ctx = CommandContext(cwd=str(tmp_path))
     main_agent = app.runtime.agents["main"]
     assert await expand_command(main_agent, ctx, "/deploy-tools:status prod") == \
@@ -85,6 +94,7 @@ async def test_a_claude_code_plugin_loads_through_noetas_plugins(home: Path,
         f"Show the deploy status of prod using {root}/bin/status."
     assert commands._allow["deploy-tools:status"] == ("Read", f"Bash({root}/bin/status:*)")
     assert commands.render("deploy-tools:about", "") == "Explain this plugin."
+    assert commands.render("deploy-tools:ops:rollback", "v2") == "Roll back v2."
     await app.store.close()
 
 
@@ -93,11 +103,11 @@ async def test_a_project_plugin_loads_once_trusted_without_its_mcp_servers(
     project = tmp_path / "repo"
     make_plugin(project / ".noeta" / "plugins" / "deploy", manifest=False)
     app = from_settings(load_settings(), cwd=str(project))
-    assert "reviewer" not in app.runtime.agents
+    assert "deploy:reviewer" not in app.runtime.agents
     await app.store.close()
     trust_project(str(project))
     app = from_settings(load_settings(), cwd=str(project))
-    assert "reviewer" in app.runtime.agents
+    assert "deploy:reviewer" in app.runtime.agents
     assert ext(app, "main", "mcp")._servers == ()
     assert any("do not start from a project" in n for n in app.notices)
     await app.store.close()

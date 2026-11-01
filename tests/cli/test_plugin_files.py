@@ -347,14 +347,15 @@ async def test_a_python_plugin_directory_ships_skills_commands_and_agents(
     app = from_settings(load_settings(), cwd=str(tmp_path))
     main_agent = app.runtime.agents["main"]
     names = [e.name for e in main_agent.extensions]
-    assert "kit" in names and "helper" in app.runtime.agents
+    # Named as a Claude Code plugin's parts are: <plugin directory>:<name>.
+    assert "kit" in names and "kit:helper" in app.runtime.agents
     found = {e.name: vars(e) for e in main_agent.extensions}
     assert "kit:hello" in str(found["markdown_commands"])
-    assert str(kit / "skills") in str(found["skills"])
+    assert found["skills"]["plugin_dirs"] == {str(kit / "skills"): "kit"}
     assert "Stop" not in str(found.get("hooks", {}))  # only skills, commands and agents
     await app.store.close()
     plain = from_settings(load_settings(), cwd=str(tmp_path), plugin_dirs=[str(kit)])
-    assert "helper" in plain.runtime.agents
+    assert "kit:helper" in plain.runtime.agents
     await plain.store.close()
 
 

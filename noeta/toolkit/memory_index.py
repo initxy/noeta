@@ -12,6 +12,10 @@ from noeta.toolkit.context import read_task_text
 #: directory; the instructions plugin shows the index with the other
 #: instruction files.
 MEMORY_INDEX_FILE = "MEMORY.md"
+#: Child task config: the auto memory directory of the task that started
+#: it, whose index a sub-agent is shown with its instruction files (Claude
+#: Code's sub-agents get the session's ``MEMORY.md``, but no memory section).
+MEMORY_DIR_KEY = "auto_memory_dir"
 MEMORY_INDEX_MAX_LINES = 200
 MEMORY_INDEX_MAX_BYTES = 25_000
 _INDEX_CUT = ("> Note: {name} is {size}; only part of it was loaded ({what}). Keep each index "

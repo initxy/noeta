@@ -16,7 +16,9 @@ its text):
    ``NOETA.local.md``;
 4. the auto memory index (``MEMORY.md``) when the agent runs the memory
    plugin before this one: that plugin records the directory, this one
-   reads the index from it.
+   reads the index from it; a sub-agent without the memory plugin is shown
+   its caller's index (Claude Code's sub-agents get it, but no memory
+   section).
 
 A rule whose frontmatter has ``paths:`` is left out there. When a ``Read``,
 ``Edit``, ``Write`` or ``NotebookEdit`` touches a file inside the working
@@ -35,12 +37,13 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from noeta.core.events import Recorded, ToolFinished
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Extension, TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.instructions.files import (
@@ -58,7 +61,7 @@ from noeta.plugins.instructions.files import (
     clean,
 )
 from noeta.toolkit.context import new_user_messages, read_text, task_env
-from noeta.toolkit.memory_index import read_memory_index
+from noeta.toolkit.memory_index import MEMORY_DIR_KEY, read_memory_index
 from noeta.toolkit.tokens import chars_per_token
 from noeta.toolkit.tools import path_within
 
@@ -255,11 +258,20 @@ class Instructions(Extension):
         return out
 
     def _memory_dir(self, view: TaskView, *, pending: bool) -> str | None:
+        """The memory plugin's directory; for a sub-agent without that
+        plugin, the one its caller passed on (``MEMORY_DIR_KEY``)."""
         state = view.folded({e.name: e.reduce for e in view.extensions}) \
             if pending else view.state
         memory = state.ext.get(MEMORY_PLUGIN)
         directory = memory.get("dir") if isinstance(memory, dict) else None
+        if directory is None and not any(e.name == MEMORY_PLUGIN for e in view.extensions):
+            directory = state.config.get(MEMORY_DIR_KEY)
         return directory if isinstance(directory, str) else None
+
+    def inherit(self, state: TaskState) -> Mapping[str, Any]:
+        """The memory directory this task was given, for its own sub-agents."""
+        directory = state.config.get(MEMORY_DIR_KEY)
+        return {MEMORY_DIR_KEY: directory} if isinstance(directory, str) else {}
 
     async def _memory_index(self, view: TaskView, *,
                             pending: bool) -> tuple[str, str, str] | None:

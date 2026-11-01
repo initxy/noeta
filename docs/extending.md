@@ -89,7 +89,8 @@ dependency never changes your agents by being installed.
 
 A Claude Code plugin directory (`.claude-plugin/plugin.json`, `skills/`, `agents/`,
 `commands/`, `hooks/hooks.json`, `.mcp.json`) put in `~/.noeta/plugins/` loads through the
-plugins that read those formats; commands are `/<plugin>:<command>` and, as skills do, run
+plugins that read those formats; its skills, agents and commands are named `<plugin>:<name>`
+(Claude Code's names), and commands, as skills do, run
 their `!` lines through the permission checks and pre-approve their `allowed-tools`.
 `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` (`~/.noeta/plugin-data/<name>`) are
 substituted. Its manifest's `userConfig` is asked for on `noeta plugin add` (or

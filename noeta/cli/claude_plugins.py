@@ -4,9 +4,10 @@ A directory under ``~/.noeta/plugins`` (or a trusted project's
 ``.noeta/plugins``) without an ``__init__.py`` that has
 ``.claude-plugin/plugin.json`` or Claude Code's standard layout is a Claude
 Code plugin. Its parts load through the plugins that already read those
-formats: ``skills/`` (the skills plugin), ``agents/*.md`` (agent files),
-``commands/*.md`` (the ``markdown_commands`` plugin, named
-``<plugin>:<command>`` as Claude Code does), ``hooks/hooks.json`` (the hooks
+formats: ``skills/`` (the skills plugin), ``agents/**/*.md`` (agent files),
+``commands/**/*.md`` (the ``markdown_commands`` plugin); its skills, agents
+and commands are named ``<plugin>:<name>`` (a subdirectory adds
+``<directory>:`` before the name) as Claude Code names them; ``hooks/hooks.json`` (the hooks
 plugin) and ``.mcp.json`` (the MCP plugin; never from a project's plugin,
 whose servers the person is told to copy into ``.noeta/mcp.json``, so a
 cloned repository never starts a server by itself).
@@ -88,6 +89,7 @@ class ClaudePlugin:
     version: str = ""
     #: From a project's ``.noeta/plugins`` (its MCP servers never start).
     project: bool = False
+    #: Its skill directories (their skills are named ``<plugin>:<directory>``).
     skill_dirs: list[str] = field(default_factory=list)
     agents: list[AgentFile] = field(default_factory=list)
     #: ``markdown_commands`` entries.
@@ -156,14 +158,21 @@ def _allowed(value: Any, names: Mapping[str, str]) -> str:
     return str(_substitute(text, names))
 
 
-def _command_files(paths: Iterable[Path]) -> list[Path]:
-    out: list[Path] = []
+def _md_files(paths: Iterable[Path]) -> list[tuple[Path, tuple[str, ...]]]:
+    """The ``.md`` files of ``paths`` (a directory's, at any depth), each with
+    the subdirectories it lies in: Claude Code puts them in the name."""
+    out: list[tuple[Path, tuple[str, ...]]] = []
     for path in paths:
         if path.is_dir():
-            out += sorted(path.glob("*.md"))
+            out += [(f, f.relative_to(path).parent.parts) for f in sorted(path.rglob("*.md"))]
         elif path.suffix == ".md" and path.is_file():
-            out.append(path)
+            out.append((path, ()))
     return out
+
+
+def _qualified(plugin: str, within: tuple[str, ...], name: str) -> str:
+    """Claude Code's name for a plugin's agent or command."""
+    return ":".join((plugin, *within, name))
 
 
 def _manifest(root: Path) -> dict[str, Any]:
@@ -307,22 +316,26 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
         return plugin_options.content(_substitute(body, names), values, fields)
     skills = [root / "skills", *_paths(root, manifest.get("skills", []), "skills")]
     plugin.skill_dirs = [str(p) for p in skills if p.is_dir()]
-    agents = _paths(root, manifest["agents"], "agents") if "agents" in manifest \
-        else sorted((root / "agents").glob("*.md"))
-    for file in agents:
+    agents = _md_files(_paths(root, manifest["agents"], "agents") if "agents" in manifest
+                       else [root / "agents"])
+    for file, within in agents:
         try:
             agent = parse_agent_file(file.read_text("utf-8"), source=str(file),
                                      default_name=file.stem)
         except (OSError, AgentFileError) as exc:
             log.warning("skipping agent file %s: %s", file, exc)
             continue
-        plugin.agents.append(dataclasses.replace(agent, prompt=text(agent.prompt)))
+        plugin.agents.append(dataclasses.replace(
+            agent, name=_qualified(name, within, agent.name), prompt=text(agent.prompt)))
     commands = manifest.get("commands")
     sources = [] if isinstance(commands, dict) else \
         _paths(root, commands, "commands") if commands is not None else [root / "commands"]
-    for file in _command_files(sources):
+    for file, within in _md_files(sources):
         front, body = _frontmatter(file.read_text("utf-8"))
-        plugin.commands.append({"name": f"{name}:{file.stem}",
+        # A ``SKILL.md`` among the commands is named by its directory.
+        own = _qualified(name, within[:-1], within[-1]) \
+            if file.name.lower() == "skill.md" and within else _qualified(name, within, file.stem)
+        plugin.commands.append({"name": own,
                                 "body": text(body),
                                 "description": str(front.get("description") or ""),
                                 "argument_hint": str(front.get("argument-hint") or ""),
@@ -395,13 +408,13 @@ def find_claude_plugins(directories: Iterable[tuple[Path, bool]],
 def plugin_settings(plugins: Iterable[ClaudePlugin]) -> tuple[dict[str, Any], list[str]]:
     """What ``plugins`` add to the plugin-setting table (skills, hooks, MCP
     servers, ``markdown_commands``), and notices for the person."""
-    skills: list[str] = []
+    skills: dict[str, str] = {}
     hooks: dict[str, list[Any]] = {}
     servers: dict[str, Any] = {}
     commands: list[dict[str, Any]] = []
     notices: list[str] = []
     for p in plugins:
-        skills += p.skill_dirs
+        skills.update(dict.fromkeys(p.skill_dirs, p.name))
         for event, groups in p.hooks.items():
             hooks.setdefault(event, []).extend(groups)
         if p.mcp_servers and p.project:
@@ -412,7 +425,7 @@ def plugin_settings(plugins: Iterable[ClaudePlugin]) -> tuple[dict[str, Any], li
         commands += p.commands
     table: dict[str, Any] = {}
     if skills:
-        table["skills"] = {"dirs": skills}
+        table["skills"] = {"plugin_dirs": skills}
     if hooks:
         table["hooks"] = {"hooks": hooks}
     if servers:
