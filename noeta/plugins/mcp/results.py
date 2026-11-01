@@ -36,7 +36,10 @@ from noeta.core.types import Image, Text
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
 from noeta.toolkit.tools import save_spilled, spill_path
 
-__all__ = ["DEFAULT_MAX_OUTPUT_TOKENS", "IMAGE_TOKENS", "max_output_tokens", "render_result"]
+__all__ = [
+    "DEFAULT_MAX_OUTPUT_TOKENS", "IMAGE_TOKENS", "describe_block", "max_output_tokens",
+    "render_result",
+]
 
 #: Claude Code's budget for one MCP result, in tokens.
 DEFAULT_MAX_OUTPUT_TOKENS = 25_000
@@ -69,7 +72,7 @@ def _decode_b64(data: object) -> bytes | None:
         return None
 
 
-def _describe_block(block: object) -> tuple[str, Image | None]:
+def describe_block(block: object) -> tuple[str, Image | None]:
     if not isinstance(block, dict):
         return "[unrecognised content block]", None
     kind = block.get("type")
@@ -156,7 +159,7 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
                 continue
             non_text += 1
             # Decoding a server's image is CPU work: off the event loop.
-            line, image = await asyncio.to_thread(_describe_block, block)
+            line, image = await asyncio.to_thread(describe_block, block)
             if image is not None:
                 blocks.append(image)
             elif line:

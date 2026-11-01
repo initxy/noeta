@@ -16,7 +16,8 @@ prompt or a resource itself.
   :func:`read_resource` returns the text snapshot to send the same way.
 
 The text goes in whole, as Claude Code sends a prompt's or a mentioned
-resource's text uncut. A server without prompts or resources lists none; a
+resource's text uncut; a prompt's other blocks become text as a tool
+result's do (:func:`flatten_prompt`). A server without prompts or resources lists none; a
 connection fault raises ``McpError``.
 """
 
@@ -29,6 +30,7 @@ from typing import Any
 from noeta.core.extension import Command
 from noeta.plugins.mcp.config import McpError, McpServer, make_tool_name
 from noeta.plugins.mcp.pool import McpPool, default_pool
+from noeta.plugins.mcp.results import describe_block
 
 __all__ = [
     "McpPrompt",
@@ -112,18 +114,39 @@ def _blocks(content: object) -> list[Any]:
     return []
 
 
-def flatten_prompt(result: dict[str, Any]) -> str:
-    """The text blocks of a ``prompts/get`` result, in order, joined by blank
-    lines (other blocks skipped)."""
+def _prompt_block(block: object, alias: str) -> str:
+    """One block of a prompt's message as text, as Claude Code converts it
+    (with a tool result's rules): an embedded text resource is its text
+    under a line naming it; a link, an image, audio or a binary resource is
+    a line saying what it is (a command's message carries text only)."""
+    if not isinstance(block, dict):
+        return ""
+    kind = block.get("type")
+    if kind == "text":
+        text = block.get("text")
+        return text if isinstance(text, str) else ""
+    res = block.get("resource")
+    if kind == "resource" and isinstance(res, dict) and isinstance(res.get("text"), str):
+        where = f" from {alias}" if alias else ""
+        return f"[resource {res.get('uri')}{where}]\n{res['text']}"
+    if kind == "image":
+        mime = block.get("mimeType")
+        mime_s = mime if isinstance(mime, str) and mime else "unknown type"
+        return f"[image ({mime_s}) in the prompt: not shown, a command's message is text]"
+    if kind not in ("audio", "resource", "resource_link"):
+        return ""
+    return describe_block(block)[0]
+
+
+def flatten_prompt(result: dict[str, Any], alias: str = "") -> str:
+    """A ``prompts/get`` result's messages as one text: each block in order
+    (:func:`_prompt_block`), joined by blank lines."""
     parts: list[str] = []
     messages = result.get("messages")
     for msg in messages if isinstance(messages, list) else []:
         if not isinstance(msg, dict):
             continue
-        for block in _blocks(msg.get("content")):
-            if isinstance(block, dict) and block.get("type") == "text" \
-                    and isinstance(block.get("text"), str):
-                parts.append(block["text"])
+        parts += [_prompt_block(block, alias) for block in _blocks(msg.get("content"))]
     return "\n\n".join(p for p in parts if p)
 
 
@@ -132,7 +155,7 @@ async def expand_prompt(server: McpServer, name: str, arguments: dict[str, Any],
     pool = pool if pool is not None else default_pool()
     result = await pool.use(server, scope, lambda c: c.get_prompt(name, dict(arguments)),
                             retry=True)
-    return flatten_prompt(result)
+    return flatten_prompt(result, server.alias)
 
 
 async def list_resources(servers: Sequence[McpServer], *, scope: str | None = None,
