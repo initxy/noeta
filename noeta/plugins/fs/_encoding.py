@@ -5,8 +5,9 @@ A file that starts with the UTF-16LE byte-order mark (``FF FE``) and
 decodes cleanly as UTF-16LE is UTF-16LE text: ``Read`` shows it decoded and
 ``Edit`` / ``Write`` write it back as UTF-16LE behind its mark; one that
 does not decode cleanly (binary data that happens to start with those two
-bytes) is not text, so an edit never writes replacement characters back. Anything else is read as UTF-8, and a
-UTF-8 byte-order mark is kept on a write. A file is *not text* when it
+bytes) is not text, so an edit never writes replacement characters back.
+Anything else is read as UTF-8, and a UTF-8 byte-order mark is kept on a
+write. A file is *not text* when it
 starts with the UTF-16BE mark (``FE FF``), has a NUL byte in its first
 :data:`NUL_PROBE_BYTES` bytes, or is not valid UTF-8: ``Read`` still shows
 it (undecodable bytes as U+FFFD) with :func:`read_note` after it, and
