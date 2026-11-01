@@ -172,6 +172,33 @@ async def test_the_memory_index_ends_the_instructions_message(h: Harness, tmp_pa
         "conversations):\n\n- [Note](note.md) — a note")
 
 
+async def test_a_sub_agent_without_the_memory_plugin_is_shown_its_callers_index(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.plugins.subtasks import SubagentSpec, Subtasks
+
+    home = tmp_path / "home"
+    mem = Path(memory_dir_for(str(h.work), home))
+    mem.mkdir(parents=True)
+    (mem / "MEMORY.md").write_text("- [Note](note.md) — a note\n")
+    roster = Subtasks([SubagentSpec(name="helper", description="Helps.", agent="w")])
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Memory(home=str(home)), Instructions(walk=False), roster])
+    # As Claude Code's general-purpose agent (Explore and Plan, without
+    # instruction files, are shown none).
+    helper = Agent(name="w", model="m", extensions=[FileTools(), Instructions(walk=False)])
+    h.provider.add(reply("", ("Agent", {"description": "d", "prompt": "help",
+                                        "subagent_type": "helper"})),
+                   reply("started"), reply("helped"), reply("thanks"))
+    await h.client.create("a", "go")
+    await h.runtime(main, helper).run_until_idle()
+    child = next(r for r in h.provider.requests if r.messages[-1].text == "help")
+    index = f"{mem / 'MEMORY.md'} (your auto memory index for this project, kept across " \
+        "conversations):\n\n- [Note](note.md) — a note"
+    assert child.messages[0].text.endswith(index)
+    # No memory section: the sub-agent's prompt does not name the directory.
+    assert str(mem) not in "".join(p.text for p in child.system)
+
+
 async def test_a_touched_file_brings_what_applies_to_it(h: Harness) -> None:
     pkg = h.work / "src" / "pkg"
     pkg.mkdir(parents=True)
