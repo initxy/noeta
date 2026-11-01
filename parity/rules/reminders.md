@@ -86,7 +86,7 @@ Hashes per `README.md` (normalized text, `source_hash.py`).
 | rem.git-status.2 | Opens by offering the following as context, then a `# gitStatus` heading and a note that it is a snapshot from the start of the conversation that will not update. | covered — `render_git`, our words |
 | rem.git-status.3 | Fields in order, each separated by a blank line: current branch; main branch (labelled as the usual PR target); git user name; `Status:` with the short status or `(clean)`; `Recent commits:` as one-line `hash subject` entries. With no user name set the user line is left out; a repository without commits gets an empty list (2.1.312 bundle). | covered — `render_git` (no user line without one; status cut at 2,048 bytes) |
 | rem.git-status.4 | Closes by saying the harness attached it automatically, the user did not write it, it is about the user's own account and checkout, and the model need not repeat it to them. | covered — `render_git` closing line |
-| rem.git-status.5 | Re-sent before the summary after compaction (see `compaction.md`). | covered — `Environment.lead_resident` re-sends the snapshot it holds (not a fresh one: see `compact.after.8`) |
+| rem.git-status.5 | Re-sent before the summary after compaction (see `compaction.md`). | covered — `Environment.lead_resident` takes the snapshot again at the compaction |
 
 ## attribution
 
