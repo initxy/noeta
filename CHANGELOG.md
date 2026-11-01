@@ -22,7 +22,9 @@ All notable changes to Noeta are documented here. The format is based on
     UTF-16LE files are read and written in their encoding and a UTF-8 byte-order mark is kept;
     not-text files (UTF-16BE, early NUL bytes, invalid UTF-8) are shown by `Read` with a note and
     refused by `Edit` / `Write` / `NotebookEdit`; a file a read-only `Bash` command showed (`cat`,
-    `head`, `tail`, `sed -n`, a matching `grep`) counts as read and is restored after a compaction.
+    `head`, `tail`, `sed -n`, a matching `grep`) counts as read, brings the nested instruction files
+    that apply to it, and is restored after a compaction; a command that rewrites files in place (a
+    formatter, `sed -i`) ends its result with the read files it changed.
   - MCP: tool descriptions are cut at 4,096 characters plus `… [truncated]` (16,384 once loaded
     through `ToolSearch`; `NOETA_MAX_MCP_DESCRIPTION_LENGTH`); prompts, resources and the resource
     tools are no longer cut at 64 KB; a result between half and four times its budget is counted by

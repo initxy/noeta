@@ -157,6 +157,9 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
   prompt tool refuses each call instead of exiting. Why: only that process can reach the client.
 - **StructuredOutput validation** by noeta's own checker (no `format`, no strict form); cap via
   `max_retries`. Why: no new dependency; noeta reads no CC environment variables.
+- **Note after a command rewrote read files** compares with the last time the task knew for
+  the file, not the command's start on CC's clock. Why: an exec env's clock may differ from the
+  worker's.
 - **C1 transcript line only with a local exec env**: CC's own rule when diskless.
 - **A1 / S1** no `claude`, `claude-code-guide`, `statusline-setup` agents, no bundled skills: CC
   product features (agent view, its docs, its status line, its settings files). Owner question 2.
@@ -180,6 +183,8 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
    `StructuredOutput` fails; exempt the tool in the kernel's agent filter?
 9. Plan naming: CC names only when the session has no name yet; follow (first approved plan only)?
 10. A missing `--permission-prompt-tool` MCP tool: exit at start as CC does?
+11. A shell read of a file a `Read` deny rule covers still brings its nested instruction files (CC
+    skips it); the instructions plugin would have to read the permissions plugin's rules. Match?
 
 ## Plan
 
@@ -189,8 +194,7 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
 - [x] Tools: T1-T9
 - [x] Compaction: C1-C2
 - [x] Rule catalogue: K1; pi/dsh notes: K2
-- [x] Found while closing: N1-N8, P1-P4, Q1
-- [ ] Found while closing: Q2, Q3
+- [x] Found while closing: N1-N8, P1-P4, Q1-Q3
 - [ ] Gates: `make check`, `make parity`, `make cluster`, `make e2e`; eval
 
 ## Acceptance criteria
