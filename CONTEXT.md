@@ -184,7 +184,7 @@ joined into the person's turn as plain text (a typed command's skill body, the i
 marker). Providers render `system` / `memory` as
 `<system-reminder>` blocks (Anthropic) or with a preamble saying it is not the user (OpenAI
 shapes); user text cannot forge the tag. `system` text taken into a running turn (a job's end
-notice) folds as a system turn.
+notice) folds as a system turn, unless it would directly follow the model's reply.
 
 ## Naming: Session is a scope, never an identity
 

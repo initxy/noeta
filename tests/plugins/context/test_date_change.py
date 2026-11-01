@@ -132,3 +132,30 @@ async def test_without_the_users_zone_the_date_is_utc_and_says_so(
     texts = await _first_request(tmp_path, {}, monkeypatch, EVENING_UTC)
     [line] = [t for t in texts if t.startswith("The date today is")]
     assert line.startswith("The date today is 2026-10-28 in UTC; the user's own date may differ.")
+
+
+async def test_a_worker_whose_clock_lags_never_takes_the_date_back(tmp_path: Path) -> None:
+    # Near midnight the calls of one task can run on workers whose clocks
+    # differ by seconds: the date told only ever moves forward.
+    day = {"today": "2026-10-27"}
+    env = Environment(today=lambda: day["today"])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("a"), reply("b"), reply("c"), reply("d")])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[env])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: LocalExecEnv(str(tmp_path)),
+                 sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "hi")
+    await rt.run_until_idle()
+
+    def notes(i: int) -> list[str]:
+        return [m.text for m in provider.requests[i].messages
+                if m.role == "system" and "date moved on" in m.text]
+
+    for i, today in enumerate(("2026-10-28", "2026-10-27", "2026-10-28"), 1):
+        day["today"] = today
+        await client.send(tid, f"msg {i}")
+        await rt.run_until_idle()
+    assert [len(notes(i)) for i in (1, 2, 3)] == [1, 1, 1]
+    assert all("2026-10-28" in n for n in notes(3))
+    await store.close()

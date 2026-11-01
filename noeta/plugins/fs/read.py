@@ -179,8 +179,11 @@ class _Scan:
     early_nul: bool = False
     #: Every byte so far decodes as UTF-8.
     valid_utf8: bool = True
+    #: Every byte so far decodes as UTF-16LE (a file behind its mark).
+    valid_utf16: bool = True
     _seen: int = 0
     _utf16: Any = None
+    _utf16_strict: Any = None
     _utf8: Any = None
     #: The file's last byte is a newline (Read then shows a final empty line).
     ends_with_newline: bool = False
@@ -191,6 +194,7 @@ class _Scan:
     def __post_init__(self) -> None:
         if encoding_of(self.head) == "utf-16-le":
             self._utf16 = codecs.getincrementaldecoder("utf-16-le")("replace")
+            self._utf16_strict = codecs.getincrementaldecoder("utf-16-le")("strict")
         else:
             self._utf8 = codecs.getincrementaldecoder("utf-8")("strict")
 
@@ -202,12 +206,20 @@ class _Scan:
         """Why the file is not text (after ``finish``), as
         :func:`noeta.plugins.fs._encoding.not_text` would say."""
         if self._utf16 is not None:
-            return None
+            return None if self.valid_utf16 else "not_utf16"
         if self.head.startswith(UTF16BE_BOM):
             return "utf16be"
         if self.early_nul:
             return "nul"
         return None if self.valid_utf8 else "not_utf8"
+
+    def _check_utf16(self, chunk: bytes, final: bool = False) -> None:
+        if self._utf16_strict is None or not self.valid_utf16:
+            return
+        try:
+            self._utf16_strict.decode(chunk, final)
+        except UnicodeDecodeError:
+            self.valid_utf16 = False
 
     def _check_utf8(self, chunk: bytes, final: bool = False) -> None:
         if self._utf8 is None or not self.valid_utf8:
@@ -245,6 +257,7 @@ class _Scan:
             self.early_nul = True
         self._seen += len(chunk)
         if self._utf16 is not None:
+            self._check_utf16(chunk)
             chunk = self._utf16.decode(chunk).encode("utf-8")
         self._check_utf8(chunk)
         self._split(chunk)
@@ -270,6 +283,7 @@ class _Scan:
 
     def finish(self) -> None:
         if self._utf16 is not None:
+            self._check_utf16(b"", True)
             self._split(self._utf16.decode(b"", True).encode("utf-8"))
         self._check_utf8(b"", True)
         if self._cur_len:

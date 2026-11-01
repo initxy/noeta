@@ -339,3 +339,48 @@ async def test_a_utf16_file_s_changes_are_shown_decoded(tmp_path: Path) -> None:
     [note] = _notes(provider.requests[2])
     assert note.endswith("numbered as in the file now:\n1\tone\n2\tTWO\n3\t")
     await store.close()
+
+
+async def test_one_check_shows_at_most_16k_of_changed_lines_and_skips_large_files(
+        tmp_path: Path) -> None:
+    # As Claude Code: the changed lines of all notes of one check share
+    # 16,384 characters (later notes name the file only, and the file then
+    # needs a Read before an edit); a file over Read's whole-file limit is
+    # neither read back nor told about.
+    from noeta.plugins.fs import CHANGED_FILE_MAX_BYTES
+
+    work = tmp_path / "w"
+    work.mkdir()
+    files = [work / f"f{n}.txt" for n in range(4)]
+    for f in files:
+        f.write_text("".join(f"line {i:04d} old old old old old\n" for i in range(200)))
+    big = work / "big.txt"
+    big.write_text("x\n" * (CHANGED_FILE_MAX_BYTES // 2 + 10))
+    env = CountingEnv(str(work))
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([
+        reply("", *[("Read", {"file_path": str(f)}) for f in files],
+              ("Read", {"file_path": str(big), "allow_large": True})),
+        reply("read"),
+        reply("ok"),
+    ])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[FileTools()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: env, sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "read them")
+    await rt.run_until_idle()
+
+    for f in files:
+        _touch(f, "".join(f"line {i:04d} new new new new new\n" for i in range(200)))
+    _touch(big, "y\n" * (CHANGED_FILE_MAX_BYTES // 2 + 10))
+    env.reads.clear()
+    await client.send(tid, "go on")
+    await rt.run_until_idle()
+    notes = ["Note: " + n for m in _notes(provider.requests[2]) for n in m.split("Note: ")
+             if n.strip()]
+    assert sorted(n.split(" changed on disk")[0] for n in notes) == [
+        f"Note: {f}" for f in files]
+    shown = ["numbered as in the file now:" in n for n in notes]
+    assert shown.count(True) == 3 and not shown[-1]
+    assert str(big) not in env.reads
+    await store.close()

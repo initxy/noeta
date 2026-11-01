@@ -644,6 +644,36 @@ def test_host_text_taken_mid_turn_is_a_system_turn_after_the_results() -> None:
     assert (idle.messages[-1].role, idle.messages[-1].origin) == ("user", "system")
 
 
+def test_host_text_right_after_a_reply_stays_in_the_user_turn() -> None:
+    # A turn that goes on from a reply cut at its output limit, or reopens
+    # for a message held behind calls whose results never came: host text
+    # taken there would be a system turn right after the reply, so it rides
+    # in a user turn instead, and the Anthropic wire alternates.
+    from noeta.backends.providers._anthropic_wire import messages_to_wire
+
+    notice = Say(message=user("job ended", origin="system"), when="now")
+    cut = fold([_rec(1, TaskCreated(agent="a")),
+                _rec(2, InputTaken(items=[InboxItem(seq=1, at=0, body=Say(
+                    message=user("hi")))], through=1)),
+                _rec(3, ModelReplied(response=ModelResponse(
+                    message=Message(role="assistant", content=[Text(text="part")]),
+                    stop_reason="max_tokens"))),
+                _rec(4, InputTaken(items=[InboxItem(seq=2, at=0, body=notice)], through=2))],
+               {})
+    assert cut.turn_open
+    assert (cut.messages[-1].role, cut.messages[-1].origin) == ("user", "system")
+    wire, _, _ = messages_to_wire(cut.messages, False, True)
+    assert [m["role"] for m in wire] == ["user", "assistant", "user"]
+    recs, _ = _running_call()
+    recs.append(_rec(5, InputTaken(items=[InboxItem(seq=2, at=0, body=notice)], through=2)))
+    st = fold(recs, {})
+    assert [m.role for m in st.held] == ["system"]
+    st = fold([_rec(6, ExtensionRecorded(extension=CORE, kind="turn_failed",
+                                         data={"reason": "x"}))], {}, state=st)
+    assert st.turn_open and st.messages[-2].role == "assistant"
+    assert (st.messages[-1].role, st.messages[-1].text) == ("user", "job ended")
+
+
 def test_an_answer_applies_only_to_its_own_batch() -> None:
     recs, _call = _running_call()
     recs.append(_rec(5, InputTaken(items=[

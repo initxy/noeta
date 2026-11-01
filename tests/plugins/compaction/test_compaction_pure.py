@@ -289,3 +289,33 @@ def test_files_a_shell_command_showed_are_restored_too() -> None:
                user("next")]
     assert recent_files(history, len(history), cwd="/w") == [
         "/abs/b.py", "/w/src/a.py", "/w/found.txt", "/w/skills/x/SKILL.md", "/w/read.txt"]
+
+
+def test_a_relative_path_a_command_showed_is_taken_from_where_it_ran() -> None:
+    """``cd frontend`` then ``cat package.json``: the restore reads
+    ``frontend/package.json`` (from the file tools' record of the call, else
+    the shell's directory), never the one in the task's directory."""
+    from noeta.plugins.compaction.restore import recent_files
+
+    history = [user("go"), *_shell("a", "cd frontend", ""),
+               *_shell("b", "cat package.json"), user("next")]
+    # The shell has moved on since; the record of call b says where it ran.
+    shown = {"b": ["/w/frontend/package.json"]}
+    assert recent_files(history, len(history), cwd="/w", shown=shown) == [
+        "/w/frontend/package.json"]
+    # Without a record of the call: the shell's directory now.
+    assert recent_files(history[:5], 5, cwd="/w/frontend") == ["/w/frontend/package.json"]
+
+
+def test_the_restore_finds_the_shell_directory_and_the_calls_by_name() -> None:
+    from noeta.plugins.compaction.extension import _shell_cwd, _shown_by_commands
+    from noeta.plugins.fs.state import FileRead, FsState
+    from noeta.plugins.shell.state import ShellState
+
+    ext = {"shell": ShellState(cwd="/w/frontend"),
+           "fs": FsState(reads={"/w/a": FileRead(digest="d"),
+                                "/w/frontend/package.json": FileRead(digest="d", call_id="b")})}
+    assert _shell_cwd(ext, "/w") == "/w/frontend"
+    assert _shell_cwd({}, "/w") == "/w"
+    assert _shown_by_commands(ext) == {"b": ["/w/frontend/package.json"]}
+    assert _shown_by_commands({}) == {}

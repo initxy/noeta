@@ -396,7 +396,8 @@ class Compaction(Extension):
                 since = sum(1 for s in state.history_seqs if s <= ext.seen_through)
             restored, records, full = await restore_files(
                 recent_files(state.history, raw_cut, since=since, carried=carried,
-                             cwd=view.cwd),
+                             cwd=_shell_cwd(state.ext, view.cwd),
+                             shown=_shown_by_commands(state.ext)),
                 read_tool, self._restore_context(view, state))
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
@@ -500,3 +501,22 @@ class Compaction(Extension):
 
 
 __all__ = ["COMMAND", "Compaction", "CompactionState", "command_text"]
+
+
+def _shell_cwd(ext: Mapping[str, Any], task_cwd: str) -> str:
+    """Where the shell is now: the shell plugin's ``cwd`` record (read by
+    name, as its state is not this plugin's), else the task's directory."""
+    cwd = getattr(ext.get("shell"), "cwd", None)
+    return cwd if isinstance(cwd, str) and cwd else task_cwd
+
+
+def _shown_by_commands(ext: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Call id -> the resolved paths of the files that ``Bash`` call showed,
+    from the file tools' ``read`` records (read by name)."""
+    out: dict[str, list[str]] = {}
+    reads = getattr(ext.get("fs"), "reads", None)
+    for path, read in (reads.items() if isinstance(reads, dict) else ()):
+        call_id = getattr(read, "call_id", None)
+        if isinstance(call_id, str) and isinstance(path, str):
+            out.setdefault(call_id, []).append(path)
+    return out

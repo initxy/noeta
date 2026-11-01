@@ -460,11 +460,12 @@ async def _reread(env: ExecEnv, path: str) -> str | None:
 def _touched(view: TaskView, event: Any) -> str | None:
     """The file ``event`` shows the model touched: the path a successful
     file tool's call names, or one a ``Bash`` command showed (the file
-    tools' ``read`` record of it, :data:`SHELL_READ`)."""
+    tools' ``read`` record of it, :data:`SHELL_READ`), unless a deny rule
+    keeps that file from ``Read`` (Claude Code skips those too)."""
     if isinstance(event, ExtensionRecorded):
         data = event.data
         if (event.extension, event.kind) != SHELL_READ[:2] or not isinstance(data, dict) \
-                or data.get("by") != SHELL_READ[2]:
+                or data.get("by") != SHELL_READ[2] or data.get("read_denied"):
             return None
         path = data.get("path")
         return path if isinstance(path, str) and path else None

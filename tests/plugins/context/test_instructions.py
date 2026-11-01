@@ -14,6 +14,7 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
 from noeta.plugins.instructions.files import matches
 from noeta.plugins.memory import Memory, memory_dir_for
+from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills
 from noeta.testing import reply
@@ -275,6 +276,35 @@ async def test_a_file_a_shell_command_showed_brings_what_applies_to_it(h: Harnes
     msgs = h.provider.requests[1].messages
     assert isinstance(msgs[2].content[0], ToolResult)
     assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
+
+
+async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
+        h: Harness) -> None:
+    # As Claude Code: the file still counts as read, but its directory's
+    # instruction files and ``paths:`` rules are not brought in.
+    secrets = h.work / "secrets"
+    secrets.mkdir()
+    (secrets / "NOETA.md").write_text("secret rules\n")
+    (secrets / "x.txt").write_text("token\n")
+    open_dir = h.work / "open"
+    open_dir.mkdir()
+    (open_dir / "NOETA.md").write_text("open rules\n")
+    (open_dir / "y.txt").write_text("fine\n")
+    h.provider.add(
+        reply("", ("Bash", {"command": "cat secrets/x.txt"})),
+        reply("", ("Bash", {"command": "cat open/y.txt"})),
+        reply("done"),
+    )
+    guarded = Agent(name="a", model="m", extensions=[
+        Permissions(mode="default", trusted_workspace=True, deny=["Read(./secrets/**)"]),
+        FileTools(), Shell(), Instructions(walk=False)])
+    tid = await h.start(guarded)
+    reads = [r.data for r in await h.records(tid, "fs", "read")]
+    assert [(Path(d["path"]).relative_to(h.work).as_posix(), d.get("read_denied")) for d in reads
+            ] == [("secrets/x.txt", True), ("open/y.txt", None)]
+    recs = await h.records(tid, "instructions", "nested")
+    assert [Path(r.data["files"][0]["path"]).relative_to(h.work).as_posix() for r in recs] == [
+        "open/NOETA.md"]
 
 
 async def test_reads_outside_the_workspace_or_failing_discover_nothing(h: Harness) -> None:

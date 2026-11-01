@@ -105,7 +105,11 @@ async def test_a_file_shown_by_cat_can_be_edited_without_a_read(tmp_path: Path) 
     assert "no need to Read it back" in results[1].text
     [shown, _written] = _reads(events)
     assert shown["path"] == str(src.resolve()) and "range" not in shown
-    assert "whole" not in shown
+    assert "whole" not in shown and "read_denied" not in shown
+    # The call that showed it, for whoever reads the file again later.
+    assert shown["call_id"] == next(e.call.id for e in events
+                                    if getattr(e, "call", None) is not None
+                                    and e.call.name == "Bash")
 
 
 async def test_a_piped_command_records_nothing(tmp_path: Path) -> None:
