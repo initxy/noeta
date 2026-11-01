@@ -9,7 +9,7 @@ from typing import Any
 
 from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
 from noeta.core.types import ToolUse
-from noeta.plugins.hooks.dispatch import CONTEXT_LABEL, KEEP, NAME, Dispatcher
+from noeta.plugins.hooks.dispatch import CONTEXT_LABEL, KEEP, NAME, UNREACHED, Dispatcher
 
 #: The tool a sub-agent ends its run with (a model-visible name).
 HANDBACK_TOOL = "SubagentHandback"
@@ -35,6 +35,8 @@ class ToolGates:
         rewrite = self._rewrites.get((view.task_id, call.id))
         if rewrite is not None and rewrite[0] == call.input:
             return rewrite[1]
+        if self._d.unreached("PreToolUse", view, call.name):
+            return Deny(reason=UNREACHED.format(event="PreToolUse"))
         if call.name == HANDBACK_TOOL and view.state.parent_id is not None:
             message = call.input.get("message")
             reason = await self._stop("SubagentStop", view,
@@ -82,6 +84,8 @@ class ToolGates:
             self._rewrites.popitem(last=False)
 
     async def resolve_ask(self, view: TaskView, call: ToolUse) -> Gate | None:
+        if self._d.unreached("PermissionRequest", view, call.name):
+            return Deny(reason=UNREACHED.format(event="PermissionRequest"))
         if "PermissionRequest" not in self._d.matchers:
             return None
         decided = self._d.state(view).permission.get(call.id)

@@ -112,3 +112,54 @@ async def test_an_unusable_prompt_tool_answer_denies(tmp_path: Path) -> None:
         assert is_error and "permission prompt tool chk/verify answered" in text
     with pytest.raises(ValueError, match="not an MCP tool name"):
         Hooks(permission_prompt_tool="Read")
+
+
+async def test_a_worker_that_cannot_ask_the_client_refuses_what_its_hooks_would_judge(
+        tmp_path: Path) -> None:
+    """Two workers on one store: the one holding the client asks it; the
+    other refuses a call a recorded PreToolUse callback would judge, and an
+    ask a recorded PermissionRequest callback would answer, instead of
+    running them unjudged. Other calls run."""
+    asked: list[str] = []
+
+    async def send(callback_id: str, payload: dict[str, Any],
+                   tool_use_id: str | None) -> dict[str, Any]:
+        asked.append(payload["tool_input"]["file_path"])
+        return {}
+
+    holder = HookCallbacks()
+    holder.register(parse_callbacks({
+        "PreToolUse": [{"matcher": "Read", "hookCallbackIds": ["h1"]}],
+        "PermissionRequest": [{"matcher": "Glob", "hookCallbackIds": ["h2"]}]}), send)
+    record = holder.summary()
+    assert record == {"client": holder.client_id,
+                      "events": {"PreToolUse": ["Read"], "PermissionRequest": ["Glob"]}}
+    s = Setup(tmp_path, {}, [reply("", READ_A), reply("refused"),
+                             reply("", ("Read", {"file_path": "b.txt"})), reply("read it")])
+    other = s.agent  # the worker without the client: no callbacks
+    with_hooks(s, Hooks(callbacks=holder))
+    holding = s.agent
+    s.agent = other
+    await s.start(client_hooks=record)
+    [(refused, is_error)] = await s.results()
+    assert is_error and "PreToolUse hook of the client" in refused and asked == []
+    s.agent = holding
+    await s.send("try again")
+    assert asked == ["b.txt"] and not (await s.results())[1][1]
+    # A recorded PermissionRequest callback: the other worker denies the ask.
+    s2 = Setup(tmp_path / "2", {}, [reply("", ("Glob", {"pattern": "*.txt"})),
+                                    reply("", READ_A), reply("done")],
+               extensions=(AskAll(),))
+    await s2.start(client_hooks=record)
+    first, second = await s2.results()
+    assert first[1] and "PermissionRequest hook of the client" in first[0]
+    assert second[1] and "PreToolUse hook of the client" in second[0]
+
+
+async def test_a_child_task_carries_the_client_hooks_record() -> None:
+    from noeta.core.loop.state import TaskState
+
+    record = {"client": "c", "events": {"PreToolUse": [""]}}
+    state = TaskState(task_id="t", agent="a", config={"client_hooks": record})
+    assert Hooks().inherit(state) == {"client_hooks": record}
+    assert Hooks().inherit(TaskState(task_id="t", agent="a")) == {}

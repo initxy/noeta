@@ -190,6 +190,58 @@ async def test_a_schema_agent_that_never_calls_structured_output_fails(
     assert len(failed) == 1
 
 
+async def test_a_schema_agent_started_by_an_older_noeta_answers_in_json_text(
+        store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A child started before agents answered through ``StructuredOutput``
+    (its prompt asked for JSON text; its log holds no such call) and ending
+    after the upgrade: its text, valid for the schema, is its result."""
+    import noeta.plugins.workflow as workflow
+
+    monkeypatch.setattr(workflow, "SCHEMA_NOTE", "\n\nYou are a step of a workflow script: "
+                        "your final reply is parsed as JSON matching this schema and returned "
+                        "to the script:\n{}")
+    script = ("export const meta = {name: 'one', description: 'd'}\n"
+              "return await agent('count abc', {schema: {type: 'object', properties: "
+              "{n: {type: 'number'}}, required: ['n']}})\n")
+    model = Model(reply("", ("Workflow", {"script": script})),
+                  reply("started"), reply("done"), text_counts=True)
+    main = Agent(name="main", model="m", extensions=[Orchestration(engine=Engine())])
+    old = Agent(name="general-purpose", model="m", description="worker")
+    rt = Runtime(store=store, agents={"main": main, "general-purpose": old},
+                 provider_for=lambda _m: model, env_for=lambda _s: None, sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("main", "use a workflow")
+    await rt.run_until_idle()
+    events = [r.event for r in await client.events(tid)]
+    [result] = [e.data for e in events if isinstance(e, ExtensionRecorded)
+                and e.kind == "result"]
+    assert result["value"] == {"n": 3}
+    assert not [e for e in events if isinstance(e, ExtensionRecorded)
+                and e.kind == "agent_failed"]
+
+
+async def test_a_schema_agent_whose_tools_list_lacks_structured_output_still_answers(
+        store: SqliteStore) -> None:
+    """A custom agent with a ``tools:`` allow-list run with a schema: the
+    answer tool is offered anyway."""
+    script = ("export const meta = {name: 'one', description: 'd'}\n"
+              "return await agent('count abcd', {agentType: 'reader', schema: {type: 'object', "
+              "properties: {n: {type: 'number'}}, required: ['n']}})\n")
+    model = Model(reply("", ("Workflow", {"script": script})), reply("started"), reply("done"))
+    main = Agent(name="main", model="m", extensions=[Orchestration(engine=Engine())])
+    reader = Agent(name="reader", model="m", description="reads", allowed_tools=["Read"],
+                   extensions=[StructuredOutput()])
+    rt = Runtime(store=store, agents={"main": main, "reader": reader},
+                 provider_for=lambda _m: model, env_for=lambda _s: None, sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("main", "use a workflow")
+    await rt.run_until_idle()
+    assert [t.name for t in model.children[0].tools] == ["StructuredOutput"]
+    [result] = [e.data for e in (r.event for r in await client.events(tid))
+                if isinstance(e, ExtensionRecorded) and e.kind == "result"]
+    assert result["value"] == {"n": 4}
+
+
 class _RemoteEnv(LocalExecEnv):
     """An env whose files are not on this machine (a container's)."""
 

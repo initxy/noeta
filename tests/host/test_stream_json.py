@@ -148,6 +148,10 @@ def test_print_mode_text_and_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         cli.main(["-p", "--json-schema", "{not json", "x", "--model", MODEL])
     assert done.value.code == 1
     assert "--json-schema is not a valid JSON Schema" in capsys.readouterr().err
+    # A root that is no object would make every request fail: refused at start.
+    with pytest.raises(SystemExit) as done:
+        cli.main(["-p", "--json-schema", '{"type": "array"}', "x", "--model", MODEL])
+    assert done.value.code == 1 and '"type": "object"' in capsys.readouterr().err
     with pytest.raises(SystemExit) as done:
         cli.main(["-p", "--output-format", "stream-json", "x", "--model", MODEL])
     assert done.value.code == 1 and "requires --verbose" in capsys.readouterr().err
@@ -539,9 +543,14 @@ async def test_structured_output_over_the_protocol(tmp_path: Path) -> None:
         assert "structured_output" not in last
         c.control("bad", subtype="initialize", jsonSchema=[1])
         await c.until(lambda m: m.get("response", {}).get("request_id") == "bad")
+        c.control("array", subtype="initialize", jsonSchema={"type": "array"})
+        await c.until(lambda m: m.get("response", {}).get("request_id") == "array")
         await c.inbox.put(None)
         await asyncio.wait_for(running, 10)
     [refused] = [m["response"] for m in c.out if m["type"] == "control_response"
                  and m["response"]["request_id"] == "bad"]
     assert refused["subtype"] == "error" and "jsonSchema" in refused["error"]
+    [refused] = [m["response"] for m in c.out if m["type"] == "control_response"
+                 and m["response"]["request_id"] == "array"]
+    assert refused["subtype"] == "error" and '"type": "object"' in refused["error"]
     assert len(provider.requests) == 6

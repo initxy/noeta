@@ -60,6 +60,46 @@ async def test_client_hooks_are_asked_through_hook_callback(tmp_path: Path) -> N
     assert callbacks.hooks == {}
 
 
+async def _client_hooks_signals(app: Any, task_id: str) -> list[Any]:
+    from noeta.core.events import External, InputTaken
+
+    return [i.body.data["client_hooks"] for r in await app.client.events(task_id)
+            if isinstance(r.event, InputTaken) for i in r.event.items
+            if isinstance(i.body, External) and i.body.name == "config"
+            and "client_hooks" in (i.body.data or {})]
+
+
+async def test_the_clients_hooks_are_recorded_in_the_task_and_end_with_it(
+        tmp_path: Path) -> None:
+    """Registered hooks go into the task's config (other workers refuse what
+    they would judge); a later run of another client takes them away."""
+    callbacks = HookCallbacks()
+    provider = ScriptedProvider([reply("hi"), reply("again")])
+    app = local(tmp_path, provider, Agent(name="main", model=MODEL,
+                                          extensions=[Hooks(callbacks=callbacks)]))
+    c = Client()
+    async with app:
+        conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path),
+                                               hook_callbacks=callbacks), c.emit)
+        running = asyncio.create_task(drive(conv, lines=c.lines()))
+        c.control("init", subtype="initialize", hooks={
+            "PreToolUse": [{"matcher": "Echo", "hookCallbackIds": ["hook_0"]}]})
+        await c.until(lambda m: m.get("response", {}).get("request_id") == "init")
+        c.say("hello")
+        await c.until(lambda m: m["type"] == "result")
+        await c.inbox.put(None)
+        await asyncio.wait_for(running, 10)
+        tid = conv.task_id
+        options = HeadlessOptions(model=MODEL, cwd=str(tmp_path), resume=tid,
+                                  hook_callbacks=HookCallbacks())
+        from noeta.core.types import Message, Text
+
+        await asyncio.wait_for(drive(StreamJson(app, options, Client().emit), prompt=Message(
+            role="user", content=[Text(text="go on")], origin="human")), 10)
+        assert await _client_hooks_signals(app, tid) == [
+            {"client": callbacks.client_id, "events": {"PreToolUse": ["Echo"]}}, None]
+
+
 async def test_a_failed_callback_reply_is_a_failed_hook(tmp_path: Path) -> None:
     echo = Echo()
     callbacks = HookCallbacks()

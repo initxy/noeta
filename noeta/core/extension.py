@@ -183,10 +183,12 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
                 denied: Sequence[str]) -> ToolOffer:
     """A task's tools for one step: every extension's (the first of a name
     wins), then each extension's ``tool_changes`` to them, the agent's allow
-    and deny lists applied to both (deny wins). An extension whose added
-    tool the lists refuse has its whole change set dropped: its withholds
-    and entries were computed alongside that tool (a loader of deferred
-    tools), so the deferred tools it withheld are sent plain instead."""
+    and deny lists applied to both (deny wins; not to a ``past_agent_lists``
+    tool, which its extension offers only when the task needs it). An
+    extension whose added tool the lists refuse has its whole change set
+    dropped: its withholds and entries were computed alongside that tool (a
+    loader of deferred tools), so the deferred tools it withheld are sent
+    plain instead."""
     refused = set(denied)
 
     def offered_name(name: str) -> bool:
@@ -196,7 +198,8 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
     seen: set[str] = set()
     for ext in exts:
         for t in ext.tools(view):
-            if offered_name(t.name) and t.name not in seen:
+            if (offered_name(t.name) or tool_flag(t, "past_agent_lists")) \
+                    and t.name not in seen:
                 seen.add(t.name)
                 tools.append(t)
     offered = tuple(tools)

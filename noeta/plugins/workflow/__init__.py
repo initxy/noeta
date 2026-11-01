@@ -48,6 +48,9 @@ SCHEMA_NOTE = ("\n\nYou are a step of a workflow script: return your result by c
                "StructuredOutput tool once, in the shape its input schema gives. The script "
                "reads only that call, never your text; if the call is refused, correct the "
                "shape and call it again.")
+#: How the schema note began before agents answered through
+#: ``StructuredOutput``: a child it went to answers in JSON text.
+JSON_TEXT_NOTE = "You are a step of a workflow script: your final reply is parsed as JSON"
 
 
 def default_max_running() -> int:
@@ -69,6 +72,16 @@ class Sink(Protocol):
 
 def _st(state: Any) -> dict[str, Any]:
     return {"runs": {}, **(state or {})}
+
+
+def _asked_for_json_text(log: Sequence[Recorded]) -> bool:
+    """Whether a child's first message carries the old JSON-text note."""
+    for rec in log:
+        if isinstance(rec.event, InputTaken):
+            for item in rec.event.items:
+                if isinstance(item.body, Say):
+                    return JSON_TEXT_NOTE in item.body.message.text
+    return False
 
 
 class Orchestration(Extension):
@@ -234,8 +247,8 @@ class Orchestration(Extension):
                     ended: ChildEnded) -> None:
         """Record one agent's end in ``run`` (and in the log). A schema-typed
         agent's result is its accepted ``StructuredOutput`` call, read from
-        its log: one that ended without such a call (after the reminder to
-        make it) failed."""
+        its log (:meth:`_structured`): one that ended with no value matching
+        the schema failed."""
         rid = run["run_id"]
         tokens = ended.last_usage.output if ended.last_usage is not None else 0
         schema = (run["agents"].get(key) or {}).get("schema")
@@ -255,10 +268,15 @@ class Orchestration(Extension):
 
     @staticmethod
     async def _structured(view: TaskView, ended: ChildEnded) -> Any:
-        """A child's structured answer: from its log, or (no log reader)
-        its answer, the value's JSON."""
+        """A child's structured answer: its accepted ``StructuredOutput``
+        call, read from its log. Its final text as JSON when there is no
+        log reader, or when the child was started (by an older noeta) with
+        the note asking for JSON text."""
         if view.read_log is not None:
-            return structured_answer(await view.read_log(ended.child_id))
+            log = await view.read_log(ended.child_id)
+            value = structured_answer(log)
+            if value is not None or not _asked_for_json_text(log):
+                return value
         try:
             return json.loads(ended.answer)
         except ValueError:

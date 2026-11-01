@@ -29,10 +29,12 @@ from noeta.cli.tui.widgets import (
 from noeta.core.commands import list_commands, run_typed
 from noeta.core.events import Waiting
 from noeta.core.extension import CommandContext
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta, Image
 from noeta.host.local import LocalApp, UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
+from noeta.toolkit.interactive import FOLLOWED_CONFIG
 from noeta.toolkit.local_env import local_timezone
 from noeta.toolkit.permission_modes import (
     MODE_SIGNAL,
@@ -188,6 +190,8 @@ class NoetaApp(TranscriptView):
         except UnknownAgent as exc:
             refused = str(exc)
         if resumed and not refused:
+            # A person follows it now, whatever headless run had it before.
+            await self.local.client.signal(task_id, CONFIG_SIGNAL, dict(FOLLOWED_CONFIG))
             await self.local.client.signal(task_id, RESUMED_SIGNAL)
         self.read_only = bool(refused)
         self.task_id = task_id

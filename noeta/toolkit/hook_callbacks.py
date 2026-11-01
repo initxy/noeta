@@ -6,17 +6,26 @@ like a command hook's JSON output.
 
 One :class:`HookCallbacks` is shared by the front end holding the client
 (it calls :meth:`register`) and the hooks plugin of that process (it
-:meth:`listen` s). Only that process can reach the client: a step that
-another worker runs has no such hooks, as a Claude Code session's callbacks
-end with its client.
+:meth:`listen` s). Only that process can reach the client. So the front end
+also records in the task's config (:data:`CLIENT_HOOKS_KEY`, inherited by
+its child tasks) which events and matchers have callbacks and which client
+answers them (:meth:`HookCallbacks.summary`): a step another worker runs
+refuses a call such a PreToolUse or PermissionRequest callback would have
+judged, instead of running it unjudged. A front end a person follows takes
+the record away when it reopens the task (``noeta.toolkit.interactive``).
 """
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-__all__ = ["HookCallbacks", "Send", "parse_callbacks"]
+__all__ = ["CLIENT_HOOKS_KEY", "HookCallbacks", "Send", "parse_callbacks"]
+
+#: The task config key recording a client's hook callbacks:
+#: ``{"client": <id>, "events": {event: [matcher, ...]}}``.
+CLIENT_HOOKS_KEY = "client_hooks"
 
 #: Asks the client: ``(callback_id, event input, tool_use_id)`` -> its reply.
 Send = Callable[[str, dict[str, Any], "str | None"], Awaitable[dict[str, Any]]]
@@ -60,6 +69,8 @@ class HookCallbacks:
         self.hooks: dict[str, Any] = {}
         self._send: Send | None = None
         self._listeners: list[Listener] = []
+        #: Names this process's client in the tasks' records.
+        self.client_id = uuid.uuid4().hex
 
     def register(self, hooks: dict[str, Any], send: Send) -> None:
         """The client's hooks (:func:`parse_callbacks`), replacing any it
@@ -73,6 +84,18 @@ class HookCallbacks:
         change."""
         self._listeners.append(listener)
         listener(self.hooks)
+
+    def summary(self) -> dict[str, Any] | None:
+        """The registered hooks as a task records them
+        (:data:`CLIENT_HOOKS_KEY`); ``None`` when there are none."""
+        events = {event: [str(g.get("matcher") or "") for g in groups]
+                  for event, groups in self.hooks.items() if groups}
+        return {"client": self.client_id, "events": events} if events else None
+
+    def answers(self, record: Any) -> bool:
+        """Whether this process reaches the client a task's record names."""
+        return self._send is not None and isinstance(record, Mapping) \
+            and record.get("client") == self.client_id
 
     async def call(self, callback_id: str, payload: dict[str, Any],
                    tool_use_id: str | None) -> dict[str, Any]:
