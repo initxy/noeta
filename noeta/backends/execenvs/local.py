@@ -370,6 +370,11 @@ class LocalExecEnv:
         target = self._abs(path)
         return await asyncio.to_thread(_stat, target)
 
+    async def stat_many(self, paths: Sequence[str]) -> list[FileStat | None]:
+        """``noeta.core.execenv.stat_many``: every path in one worker thread."""
+        targets = [self._abs(p) for p in paths]
+        return await asyncio.to_thread(lambda: [_stat_target(t) for t in targets])
+
     async def realpath(self, path: str) -> str:
         return await asyncio.to_thread(os.path.realpath, self._abs(path))
 
@@ -408,6 +413,16 @@ def _stat(target: str) -> FileStat | None:
         is_dir=_st.S_ISDIR(st.st_mode),
         is_symlink=is_symlink,
     )
+
+
+def _stat_target(target: str) -> FileStat | None:
+    """What ``target`` names, symlinks followed; ``None`` when nothing is
+    there or it cannot be examined."""
+    try:
+        st = os.stat(target)
+    except (OSError, ValueError):
+        return None
+    return FileStat(size=st.st_size, mtime=st.st_mtime, is_dir=_st.S_ISDIR(st.st_mode))
 
 
 def _open_read(target: str) -> BinaryIO:

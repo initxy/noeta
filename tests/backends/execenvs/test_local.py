@@ -19,7 +19,7 @@ import pytest
 
 from noeta.backends.execenvs import local as local_mod
 from noeta.backends.execenvs.local import LocalExecEnv, send_group_signal
-from noeta.core.execenv import ExecEnv, FileStat, RunResult
+from noeta.core.execenv import ExecEnv, FileStat, RunResult, stat_many
 from noeta.toolkit.local_env import OWN_SECRETS, child_env
 
 
@@ -405,3 +405,28 @@ async def test_realpath(env: LocalExecEnv, tmp_path: Path) -> None:
     assert await env.realpath("l/x/../y") == os.path.join(real, "d", "y")
     assert await env.realpath(".") == real
     assert await env.realpath("/") == "/"
+
+
+async def test_stat_many_examines_every_path_at_once(tmp_path: Path) -> None:
+    (tmp_path / "f").write_text("hello")
+    (tmp_path / "d").mkdir()
+    (tmp_path / "dangling").symlink_to(tmp_path / "gone")
+    env = LocalExecEnv(str(tmp_path))
+    f, d, missing, dangling = await stat_many(env, ["f", str(tmp_path / "d"), "nope", "dangling"])
+    assert f is not None and f.size == 5 and not f.is_dir
+    assert f.mtime == (await env.stat("f") or FileStat(size=0, mtime=0)).mtime
+    assert d is not None and d.is_dir
+    assert missing is None and dangling is None
+
+
+async def test_stat_many_without_the_envs_own_asks_stat_per_path(tmp_path: Path) -> None:
+    class StatOnly:
+        cwd = str(tmp_path)
+
+        async def stat(self, path: str) -> FileStat | None:
+            if path == "broken":
+                raise PermissionError(path)
+            return None if path == "nope" else FileStat(size=len(path), mtime=1.0)
+
+    stats = await stat_many(StatOnly(), ["ab", "nope", "broken"])  # type: ignore[arg-type]
+    assert stats == [FileStat(size=2, mtime=1.0), None, None]
