@@ -386,9 +386,11 @@ async def test_edit_missing_file(h: Harness, ws: Path) -> None:
 
 async def test_edit_binary_rejected(h: Harness, ws: Path) -> None:
     (ws / "bin").write_bytes(b"\x00\xffbinary")
-    out = await h.call(EditTool(), file_path="bin", old_string="x", new_string="y")
+    assert not (await h.call(ReadTool(), file_path="bin")).is_error
+    out = await h.call(EditTool(), file_path="bin", old_string="binary", new_string="y")
     assert out.is_error
-    assert text_of(out) == "Edit: 'bin' is not utf-8 text"
+    assert text_of(out).startswith("Edit: Nothing was written: this file has a zero byte")
+    assert (ws / "bin").read_bytes() == b"\x00\xffbinary"
 
 
 @pytest.mark.parametrize(

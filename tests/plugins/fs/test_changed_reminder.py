@@ -310,3 +310,32 @@ async def test_every_remembered_file_is_watched_in_one_batch(tmp_path: Path) -> 
     assert env.reads == []  # neither is read again until its time moves
     assert len(_notes(provider.requests[3])) == 1  # the earlier note only
     await store.close()
+
+
+async def test_a_utf16_file_s_changes_are_shown_decoded(tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    src = work / "wide.txt"
+    src.write_bytes(b"\xff\xfe" + "one\ntwo\n".encode("utf-16-le"))
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(src)})),
+        reply("", ("Format", {})),
+        reply("done"),
+    ])
+
+    class Wide(Formatter):
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            src.write_bytes(b"\xff\xfe" + "one\nTWO\n".encode("utf-16-le"))
+            st = src.stat()
+            os.utime(src, (st.st_atime, st.st_mtime + 5))
+            return text_output("formatted")
+
+    agent = Agent(name="a", model="m", tools=[Wide(src, "")], extensions=[FileTools()])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+    await Client(store).create("a", "go")
+    await rt.run_until_idle()
+    [note] = _notes(provider.requests[2])
+    assert note.endswith("numbered as in the file now:\n1\tone\n2\tTWO\n3\t")
+    await store.close()

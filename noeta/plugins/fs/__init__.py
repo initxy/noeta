@@ -35,6 +35,7 @@ from noeta.core.execenv import stat_many
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
 from noeta.core.types import ModelRequest
+from noeta.plugins.fs._encoding import decode, not_text
 from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
 from noeta.plugins.fs.mentions import attach_mentions, hoist_attachments
@@ -159,8 +160,8 @@ class FileTools(Extension):
                 "{path}", path)
             before = seen_text(view.state.messages, path, view.cwd or view.env.cwd)
             snippet = None
-            if before is not None and b"\0" not in raw:
-                snippet = changed_lines(before, raw.decode("utf-8", errors="replace"))
+            if before is not None and not_text(raw) in (None, "not_utf8"):
+                snippet = changed_lines(before, decode(raw).removeprefix("\ufeff"))
             if snippet is not None:
                 text += CHANGES_SHOWN.format(snippet=snippet)
                 # The model now has the file as it is: an edit needs no re-read.
