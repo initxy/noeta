@@ -9,7 +9,12 @@ import json
 from typing import Any
 
 from noeta.core.client import ClientAPI
-from noeta.core.questions import AnswerValidationError, detail_questions, normalize_answer
+from noeta.core.questions import (
+    AnswerValidationError,
+    detail_partial,
+    detail_questions,
+    normalize_answer,
+)
 from noeta.host.pending import pending
 
 __all__ = ["answer_question", "next_question", "typed_answer"]
@@ -45,7 +50,9 @@ def typed_answer(detail: dict[str, Any], text: str,
     (case and surrounding space ignored) selects it, comma-separated labels
     select several where the question allows it, anything else is the
     ``other`` text. A JSON object answers several at once (the
-    ``{"answers": {...}}`` body or the bare map). Returns ``answers`` with
+    ``{"answers": {...}}`` body or the bare map); where the question may
+    be answered in part (``"partial"``), the object is the whole answer and
+    the questions it leaves out stay unanswered. Returns ``answers`` with
     the new ones added; post ``{"answers": ...}`` once :func:`next_question`
     is ``None``."""
     out = dict(answers or {})
@@ -57,7 +64,11 @@ def typed_answer(detail: dict[str, Any], text: str,
             parsed = None
         if isinstance(parsed, dict):
             body = parsed.get("answers")
-            return {**out, **(body if isinstance(body, dict) else parsed)}
+            out = {**out, **(body if isinstance(body, dict) else parsed)}
+            if detail_partial(detail):
+                out.update({q["id"]: {} for q in detail_questions(detail)
+                            if q["id"] not in out})
+            return out
     for question in detail_questions(detail):
         if question["id"] not in out:
             out[question["id"]] = _typed_one(question, text)
@@ -74,7 +85,7 @@ async def answer_question(client: ClientAPI, task_id: str, request_id: str, data
             questions = detail_questions(item.detail)
             if isinstance(data, str) and len(questions) == 1:
                 data = {questions[0]["id"]: {"other": data}}
-            normalize_answer(data, questions)
+            normalize_answer(data, questions, partial=detail_partial(item.detail))
             await client.answer(task_id, request_id, data=data)
             return
     raise AnswerValidationError(f"no pending user question for question_id {request_id!r}")

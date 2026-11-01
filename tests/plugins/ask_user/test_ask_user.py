@@ -190,3 +190,32 @@ async def test_stopping_withdraws_the_question(store: SqliteStore) -> None:
 def test_question_texts_must_differ() -> None:
     error = validate_questions({"questions": [q(), q(header="Again")]})
     assert isinstance(error, str) and "Which auth?" in error
+
+
+async def test_unanswered_questions_are_left_out(store: SqliteStore) -> None:
+    two = {"questions": [q(), q(question="Layout?", header="UI")]}
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", two)), reply("ok")])
+    client, tid, rt = await start(store, provider)
+    [item] = pending(await client.events(tid), tid)
+    assert item.detail["partial"] is True
+    # What is answered is still checked; what is not may be left out.
+    with pytest.raises(AnswerValidationError, match="not an option"):
+        await answer_question(client, tid, item.request_id, {"1": {"selected": ["Nope"]}})
+    await answer_question(client, tid, item.request_id, {"1": {"selected": ["API key"]}})
+    await rt.run_until_idle()
+    [result] = finished(await events(client, tid))
+    assert not result.is_error
+    assert result.text == ('The user answered your questions: "Layout?"="API key". '
+                           "Go on with these answers in mind.")
+
+
+async def test_an_answer_with_nothing_in_it_says_so(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", {"questions": [q()]})),
+                                 reply("ok")])
+    client, tid, rt = await start(store, provider)
+    [item] = pending(await client.events(tid), tid)
+    # Blank typed text (what a front end sends for a question skipped) is no answer.
+    await answer_question(client, tid, item.request_id, {"answers": {"0": {"other": " "}}})
+    await rt.run_until_idle()
+    [result] = finished(await events(client, tid))
+    assert (result.text, result.is_error) == ("The user answered none of the questions.", False)
