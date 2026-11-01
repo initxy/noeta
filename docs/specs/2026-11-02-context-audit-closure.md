@@ -153,13 +153,31 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
   durable task does not hold a tool call open across a sub-agent that may move worker.
 - **Interactivity is task config**, and an MCP permission-prompt tool does not enable
   `AskUserQuestion`. Why: tasks wake on any worker; the MCP tool answers permissions only.
-- **Stream-json hook callbacks** fire only in the process holding the client; a missing MCP
-  prompt tool refuses each call instead of exiting. Why: only that process can reach the client.
+- **Stream-json hook callbacks** run in the process holding the client; the task records which
+  events have callbacks (`client_hooks`) and a worker that cannot reach the client denies what a
+  recorded `PreToolUse` / `PermissionRequest` callback matches (review P2-4). Why: a step may run on
+  any worker; parking would hang once the client is gone, pinning would cut multi-machine, and a
+  denying callback is never bypassed. A missing MCP prompt tool refuses each call.
 - **StructuredOutput validation** by noeta's own checker (no `format`, no strict form); cap via
   `max_retries`. Why: no new dependency; noeta reads no CC environment variables.
 - **Note after a command rewrote read files** compares with the last time the task knew for
   the file, not the command's start on CC's clock. Why: an exec env's clock may differ from the
   worker's.
+- **S3 inline commands that would ask** refuse the skill in every mode (main's behaviour). CC
+  2.1.312: auto mode hands them to the model (`promptShellHandOff`). Why: noeta re-attaches the
+  rendered skill after a compaction, so a hand-off would ask the model to run a side-effecting
+  command again (review P2-8).
+- **E4 Shell line** names the `bash` commands run in plus the login shell; CC names the person's
+  shell, where its commands run. Why: noeta always runs bash (review P2-15).
+- **MCP prompt / @-resource text capped at 64 KiB** (main's cap); CC sends both uncut. Why: the
+  text is a user message in a durable task, outside result limits and compaction (review P2-12).
+- **One-piece fallback timeout** returns to streaming; CC retries it. Why: no retry loop for cost
+  on unattended servers (review P2-6). Token count requests: 10 s, refusals remembered.
+- **Schema root not an object refused at start**; CC accepts it. Why: Anthropic rejects such a
+  tool schema, so the task could never run.
+- **`FF FE` that is not UTF-16LE is not text** (CC decodes leniently and an edit corrupts it); the
+  **date-change note never goes back**; the **git snapshot at a compaction** is bounded to 10 s
+  with the stored one as fallback.
 - **C1 transcript line only with a local exec env**: CC's own rule when diskless.
 - **A1 / S1** no `claude`, `claude-code-guide`, `statusline-setup` agents, no bundled skills: CC
   product features (agent view, its docs, its status line, its settings files). Owner question 2.
@@ -179,12 +197,18 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
 6. CC lets `WebFetch` of its preapproved documentation hosts through without asking; noeta still
    asks per domain. Follow CC?
 7. ACP sessions: set `interactive: false` with a prompt tool as CC's SDK-based adapter is?
-8. A workflow `agent({schema})` with a custom agent whose `tools:` allowlist drops
-   `StructuredOutput` fails; exempt the tool in the kernel's agent filter?
-9. Plan naming: CC names only when the session has no name yet; follow (first approved plan only)?
-10. A missing `--permission-prompt-tool` MCP tool: exit at start as CC does?
-11. A shell read of a file a `Read` deny rule covers still brings its nested instruction files (CC
-    skips it); the instructions plugin would have to read the permissions plugin's rules. Match?
+8. A missing `--permission-prompt-tool` MCP tool: exit at start as CC does?
+9. S3: keep refusing inline commands that would ask in auto mode (a written deviation), or port
+   CC's hand-off with its metadata so a compaction never asks for a second run?
+10. A bare plugin agent name in the settings `agent` key still resolves (old configs); require the
+    full `<plugin>:<agent>`?
+11. The 64 KiB MCP prompt/resource cap: keep, or a share of the context window?
+12. A non-timeout failure of the one-piece fallback still retries in one piece (CC's way); fall
+    back to streaming after any one-piece failure instead?
+13. HTTP: should a plain message also clear the headless keys, and should a `-p` process clear its
+    `client_hooks` record on a clean exit (now: other workers deny until the next takeover)?
+14. The fs state replay is still super-linear in the number of tracked files (about 2x faster
+    now); move `reads` to a persistent structure or evict in batches?
 
 ## Plan
 
@@ -228,4 +252,9 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
   only in the known-noisy concise_direct_answer (0.89) and compaction_resume_edits (0.66), plus
   plan_mode_multi_file 0.89 (one trial hit the 420 s trial timeout; another passed at 412 s).
   Awaiting the owner's answers to the open questions before review and merge.
+- 2026-11-02 Independent review of b48100ff (P0 0, P1 2, P2 14, P3 15) fixed on `ctxc-fixa`
+  (skills), `ctxc-fixb` (headless, hooks, structured output), `ctxc-fixc1` (fs, environment,
+  compaction, instructions), `ctxc-fixc2` (providers, MCP, web, plan); merged; open questions 8,
+  9 and 11 of the first list are settled (StructuredOutput past `tools:` lists, first plan only,
+  deny-covered shell reads bring nothing).
 
