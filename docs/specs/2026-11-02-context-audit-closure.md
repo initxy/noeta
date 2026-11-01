@@ -195,7 +195,7 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
 - [x] Compaction: C1-C2
 - [x] Rule catalogue: K1; pi/dsh notes: K2
 - [x] Found while closing: N1-N8, P1-P4, Q1-Q3
-- [ ] Gates: `make check`, `make parity`, `make cluster`, `make e2e`; eval
+- [x] Gates: `make check`, `make parity`, `make cluster`, `make e2e`; eval
 
 ## Acceptance criteria
 
@@ -222,4 +222,10 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
   `ctxc-round2`, `ctxc-compact` matched them; `ctxc-shellreads` matched Q1 found by P3.
 - 2026-11-02 Friction: merges conflicted on the request golden (re-recorded, hashes only),
   `stream_json` / `_stream_json_control` (both sides kept), `title.py`, CONTEXT Layers (budget).
+- 2026-11-02 Gates on the merged branch: `make check` 2788 passed (coverage 89.06%); `make parity`
+  0 mismatches (11 accepted deviations), own-words none; `make cluster` 14 passed; `make e2e` 7
+  passed; eval (DeepSeek V4.1, 9 trials) 0.955 against the 0.953 baseline, "no regression": drops
+  only in the known-noisy concise_direct_answer (0.89) and compaction_resume_edits (0.66), plus
+  plan_mode_multi_file 0.89 (one trial hit the 420 s trial timeout; another passed at 412 s).
+  Awaiting the owner's answers to the open questions before review and merge.
 
