@@ -414,7 +414,8 @@ One machine (16 cores, 62 GB, an NVIDIA T4 the GPU tasks could not use), harbor 
 Claude Code **2.1.312** (harbor's `claude-code` agent, telemetry off, process
 tree stopped at the cap), model `opensource/deepseek_v4_1_flash` through the
 gateway's Anthropic endpoint for both agents, effort `high`, 1M context window
-and 65,536 output tokens for both. Each run is one attempt per task (k=1);
+and 65,536 output tokens for both. Each run is one graded attempt per task
+(k=1; harbor may retry an attempt that ended without a grade, below);
 noeta and Claude Code trials of one job are interleaved, so they share the
 gateway's load over time. Two noeta commits:
 
@@ -440,12 +441,20 @@ retries inside its provider client without logging it, so its rate-limit
 count cannot be observed (it is not zero, it is unknown). No trial failed on a
 rate limit.
 
-Harbor retried a trial that failed before it was graded (up to 3 times,
-5 / 10 / 20 min apart; a timeout is graded and never retried). The causes were
-the environment, not the agents' work: Claude Code's install (`apt-get install
-nodejs` through the proxy failing, or the install timing out), noeta's process
-exiting non-zero at start, a container harbor could not resolve, and network
-errors. A retried trial starts over in a new container.
+Harbor retried a trial that ended without a grade (up to 3 times, 5 / 10 /
+20 min apart; a timeout is graded and never retried); a retried trial starts
+over in a new container, so a retry gives the agent a second attempt. Most
+causes were the environment: Claude Code's install (`apt-get install nodejs`
+through the proxy failing, or the install timing out), containers harbor could
+not resolve, and network errors. Not all: in TB4, 9 of noeta's 13 retries were
+the same failure mid-run — the model returned a turn with neither text nor a
+tool call and noeta ended the turn as an error (exit 1): `sglang-qwen-burst` in
+run 1 (after 6.8 min, 23 rounds) and in the rerun (43 min, 45 rounds), and
+`vllm-deepseek-streaming` in the rerun (25 min, 54 rounds), each retried 3
+times; a fix is open separately. Claude Code's `gotd__td-1759` in SWE-rebench
+run 1 exited non-zero after writing its trajectory and passed on the retry;
+noeta's `kestra-io__kestra-16119` and `intellectronica__ruler-556` (run 1)
+exited non-zero for a reason the logs do not show.
 
 | run | retries, noeta | retries, Claude Code | passed only after a retry |
 |---|---|---|---|
@@ -505,11 +514,13 @@ changing a file 17 → 7, timeouts 59 → 43. The original losses it explains:
 such variables in run 1.
 
 **Leaked answers.** Agents may reach the internet, and the upstream fix is
-public. A trial counts as leaked when a call that reached the task's own
-upstream repo returned lines of the reference fix: `WebFetch`, `WebSearch`
-(also a search naming the PR number and repo), or a shell `curl`, `wget`,
-`gh`, `git clone` / `fetch` / `pull` / `ls-remote` / `show` / `log` on it, or
-`git log -p` / `show` / `diff` inside such a clone. Lines counted are the fix's
+public. A trial counts as leaked when one of these calls returned lines of
+the reference fix: a `WebFetch` / `WebSearch` or a shell `curl`, `wget`, `gh`,
+`git ls-remote` / `show` / `log` on a pull-request, commit, compare, `.patch`
+or `.diff` URL of the task's own upstream repo; a web call naming the PR
+number and the repo; a `git clone` / `fetch` / `pull` of that repo; or any
+shell command that names the path of such a clone (`cat`, `grep`, `git log
+-p`, …). Lines counted are the fix's
 distinct added lines of at least 20 characters; the trial is leaked when at
 least min(3, max(1, a quarter of them)) came back. A task is left out when
 either agent leaked in any run. Both agents do it; across the three runs 20
@@ -531,7 +542,9 @@ tasks are affected:
 in a directory without one, `AGENTS.md`, never `CLAUDE.md`. In run 1 Claude
 Code loaded project instructions in 73 of 111 tasks: 56 had a `CLAUDE.md` (22
 of them also an `AGENTS.md`, which noeta reads too), 17 only an `AGENTS.md`.
-So in 34 tasks Claude Code had project instructions noeta did not see. It cuts both ways: on `Soju06__codex-lb-744` the repo's
+So in 34 tasks Claude Code read project instructions and noeta read none;
+in the 22 with both files Claude Code also read `CLAUDE.md` on top of the
+`AGENTS.md` noeta saw. It cuts both ways: on `Soju06__codex-lb-744` the repo's
 OpenSpec workflow was in `CLAUDE.md`, and on `kubernetes-sigs__kueue-11619`
 Claude Code followed the repo's instructions, stopped after 37 s to wait for
 an acknowledgement and scored 0. Not equalized in these runs.

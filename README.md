@@ -116,8 +116,9 @@ ship each kind, and how it compares with pi, DeepSeek Harness and Claude Code:
 
 noeta 1.0.0.dev0 at commit 34f8acee next to Claude Code 2.1.312 on the same model
 (`opensource/deepseek_v4_1_flash`, effort `high`), same tasks, caps and machine, run through
-harbor (2026-10-30 to 2026-11-01). Each run is one attempt per task; cost is DeepSeek's list
-price (read 2026-10-30) per run, off-peak throughout:
+harbor (2026-10-30 to 2026-11-01). Each run is one graded attempt per task (harbor retried an
+attempt that ended without a grade, and some tasks passed only on that retry; bench/README.md lists them); cost is
+DeepSeek's list price (read 2026-10-30) per run, off-peak throughout:
 
 | Benchmark | noeta | Claude Code | noeta − Claude Code (SE) |
 |---|---|---|---|

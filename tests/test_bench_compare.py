@@ -92,6 +92,7 @@ def test_an_error_result_counts_only_for_its_error_text_and_not_after_retries(tm
     turns = _agent_log(tmp_path / "a", [
         {"type": "result", "is_error": True, "num_turns": 429, "result": "tool failed"},
         {"type": "result", "is_error": True, "result": "configure the rate limiter in settings.py"},
+        {"type": "result", "is_error": True, "result": "both rate limiters reject it"},
     ])
     assert compare.api_errors(turns) == 0
     exhausted = _agent_log(tmp_path / "b", [
@@ -104,6 +105,10 @@ def test_an_error_result_counts_only_for_its_error_text_and_not_after_retries(tm
         {"type": "result", "is_error": True, "result": "API Error: 529 overloaded"},
     ])
     assert compare.api_errors(alone) == 1
+    named = _agent_log(tmp_path / "d", [
+        {"type": "result", "is_error": True, "result": "anthropic.RateLimitError: slow down"},
+    ])
+    assert compare.api_errors(named) == 1
 
 
 def test_cost_uses_the_list_price_and_peak_share() -> None:

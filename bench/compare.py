@@ -744,7 +744,7 @@ def cost(n_in: int, n_cache: int, n_out: int, model: str, peak_share: float) -> 
     return base * (1 + peak_share)
 
 
-_ERROR_LINE = re.compile(r"\b(429|529)\b|rate[ _-]?limit(?!er)|too many requests|overloaded", re.IGNORECASE)
+_ERROR_LINE = re.compile(r"\b(429|529)\b|rate[ _-]?limit(?!er\b|ers\b)|too many requests|overloaded", re.IGNORECASE)
 
 
 def api_errors(agent_dir: Path) -> int:
