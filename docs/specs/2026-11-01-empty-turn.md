@@ -195,3 +195,11 @@ opened by a notice (no nudge there); usage of dropped replies; wire placement; m
 `nLr`/`Me` notes. Rebased onto main cdc2cb2e. noeta `-p` vs the fake endpoint now: tool, empty,
 text → request 3 is `[assistant][user: tool_result | nudge][system: total_tokens]`, as Claude
 Code's Opus run; tool, empty, empty → `num_turns: 3`, `result: ""`, exit 0, as Claude Code.
+2026-11-01: gates after review fixes (on cdc2cb2e). `make check` green (2619 passed, 60
+skipped; coverage 89 %; it prints `gc due` for this spec being active with every task ticked,
+which merging resolves). `make parity` 0 mismatches (11 accepted deviations), own-words none.
+`make cluster` 14 passed. Eval (9 trials): overall 0.947 vs baseline 0.953, "no regression"; no
+`llm_empty_response`. Moves beyond 0.06, all known-noisy: `concise_direct_answer` 0.78 vs 1.00
+(four answers added a second sentence), `hook_block_adapts` 0.39 vs 0.52 (two 420 s timeouts),
+`compaction_resume_edits` 0.88 vs 0.78; `delegate_parallel_review` 0.33 as the baseline (6
+timeouts).
