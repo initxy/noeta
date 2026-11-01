@@ -33,14 +33,14 @@ from noeta.plugins.fs._encoding import decode
 from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
 from noeta.toolkit.shell import ShellRead, shell_reads
 
-__all__ = ["MAX_SHELL_READ_BYTES", "SHELL_TOOL", "record_shell_reads"]
+__all__ = ["MAX_SHELL_READ_BYTES", "SHELL_TOOL", "record_shell_reads", "shell_cwd"]
 
 SHELL_TOOL = "Bash"
 #: A larger file is not recorded (Claude Code's 10 MB).
 MAX_SHELL_READ_BYTES = 10 * 1024 * 1024
 
 
-def _shell_cwd(view: TaskView) -> str:
+def shell_cwd(view: TaskView) -> str:
     """Where the command ran: the directory the shell plugin's ``cwd``
     record left it in (read by name, as its state is not this plugin's),
     else the exec env's."""
@@ -61,7 +61,7 @@ async def record_shell_reads(view: TaskView, call: ToolUse, output: ToolOutput) 
     printed = "".join(b.text for b in output.content if isinstance(b, Text))
     cut = output_cut(printed)
     known = set(current_fs_state(view.state.ext).reads)
-    cwd = _shell_cwd(view)
+    cwd = shell_cwd(view)
     for read in reads:
         if read.grep and output.meta.get("exit_code") != 0:
             continue

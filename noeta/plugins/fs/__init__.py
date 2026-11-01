@@ -16,7 +16,10 @@ the file counts as read as it is now; otherwise ``Edit`` and ``Write`` refuse
 until the model reads it again.
 
 Files a ``Bash`` command showed (``cat``, ``head``, ``sed -n`` and the
-like) count as read too, as in Claude Code (:mod:`noeta.plugins.fs.shell_reads`).
+like) count as read too, as in Claude Code (:mod:`noeta.plugins.fs.shell_reads`);
+a command that rewrote files in place (a formatter, ``sed -i``) ends its
+result with a note naming the read files it changed
+(:mod:`noeta.plugins.fs.shell_writes`).
 
 A tool's own note for the model (``notice``: the paging hint of a read cut
 to fit the token ceiling) is sent as a reminder right after that call's
@@ -46,6 +49,7 @@ from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.pasted import remove_task_images, save_pasted_images
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.shell_reads import record_shell_reads
+from noeta.plugins.fs.shell_writes import note_modified_reads
 from noeta.plugins.fs.state import (
     FS,
     KIND_CHANGED,
@@ -119,6 +123,7 @@ class FileTools(Extension):
         return self._tools
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
+        output = await note_modified_reads(view, call, output)
         await record_shell_reads(view, call, output)
         return output
 
