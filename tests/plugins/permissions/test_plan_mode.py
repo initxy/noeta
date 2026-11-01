@@ -170,6 +170,51 @@ async def test_the_plan_is_named_once_approved_not_when_shown(store: SqliteStore
     assert names == ["add-logging"]
 
 
+
+async def test_only_the_first_approved_plan_of_a_task_is_named(store: SqliteStore,
+                                                               tmp_path: Path) -> None:
+    # Claude Code 2.1.312 names a plan only while the session has no name
+    # (``if(!D&&Bg(K()))return``, and again when the name arrives): a second
+    # approved plan in the same task asks for no name.
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    ag = agent([perms], [])
+    provider = Namer([reply("planning")])
+    rt = runtime(store, provider, ag)
+    client = Client(store)
+    message = await expand_command(ag, CommandContext(cwd=str(tmp_path)), "/plan logging")
+    assert message is not None
+    tid = await client.create("a", message, config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+
+    async def approve(note: str) -> None:
+        [path] = [e.data["plan"]["path"] for e in await events(client, tid)
+                  if isinstance(e, ExtensionRecorded) and e.kind == "mode"
+                  and e.data["mode"] == "plan"][-1:]
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(f"# Plan\n\n1. {note}\n")
+        provider.add(reply("", LOAD), reply("", ("ExitPlanMode", {})))
+        await client.send(tid, "ready")
+        await rt.run_until_idle()
+        question = next(p for p in pending(await client.events(tid), tid)
+                        if p.kind == "question")
+        provider.add(reply("coding now"))
+        await client.answer(tid, question.request_id,
+                            data={"answers": {"0": {"selected": [pl.CHOICE_DEFAULT]}}})
+        await rt.run_until_idle()
+
+    await approve("log")
+    assert len(provider.named) == 1
+    provider.add(reply("planning again"))
+    again = await expand_command(ag, CommandContext(cwd=str(tmp_path)), "/plan metrics")
+    assert again is not None
+    await client.send(tid, again)
+    await rt.run_until_idle()
+    await approve("metrics")
+    assert len(provider.named) == 1
+    names = [e.data["name"] for e in await events(client, tid)
+             if isinstance(e, ExtensionRecorded) and e.kind == "plan_name"]
+    assert names == ["add-logging"]
+
 ENTER = ("ToolSearch", {"query": "select:EnterPlanMode", "max_results": 1})
 
 
@@ -385,3 +430,14 @@ async def test_a_sub_agent_of_a_planning_task_plans_too(
     assert str(tmp_path / "plans" / f"{stem}-agent-{child_id}.md") in text
     assert not any(t.name in ("ExitPlanMode", "EnterPlanMode") for t in child.tools)
     assert write.runs == []
+
+
+def test_a_task_keeps_the_first_plan_name() -> None:
+    from noeta.plugins.permissions.state import PermState, fold
+
+    st = fold(PermState(), "plan_exit", {"mode": "default", "named": True})
+    assert st.plan_named and st.plan_name is None
+    st = fold(fold(st, "plan_name", {"name": "add-logging"}), "plan_name", {"name": "other"})
+    assert st.plan_name == "add-logging"
+    # A log written before ``named``: the recorded name still counts.
+    assert fold(PermState(), "plan_name", {"name": "x"}).plan_named

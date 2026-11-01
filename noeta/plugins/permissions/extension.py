@@ -450,7 +450,7 @@ class Permissions(Extension):
             view.record(NAME, "resumed")
         elif isinstance(body, External) and body.name == md.PLAN_NAME_SIGNAL:
             name = (body.data or {}).get("name") if isinstance(body.data, dict) else None
-            if isinstance(name, str) and name:
+            if isinstance(name, str) and name and state_of(view).plan_name is None:
                 view.record(NAME, "plan_name", {"name": name})
                 view.notify(f"plan: {name}")
         elif isinstance(body, Say) and body.message.role == "user" and \

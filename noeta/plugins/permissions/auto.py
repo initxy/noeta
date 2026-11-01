@@ -46,8 +46,9 @@ class Classifier:
         self.deny_rules = deny_rules
         self.trusted = trusted
         self._template: str | None = None
-        #: Root task id -> the instructions it was shown, for its sub-agents.
-        self._roots: OrderedDict[str, str] = OrderedDict()
+        #: Root task id -> the instruction texts it was shown, for its
+        #: sub-agents, and the last seq of its log read.
+        self._roots: OrderedDict[str, tuple[list[str], int]] = OrderedDict()
 
     async def answer(self, view: TaskView, call: ToolUse, ask: Ask) -> Gate | None:
         st = state_of(view)
@@ -150,23 +151,27 @@ class Classifier:
         return await self._root_instructions(view)
 
     async def _root_instructions(self, view: TaskView) -> str:
+        """The instructions the root task was shown: its ``start`` record,
+        then each re-read of a changed file. The root's log is read on from
+        the last record seen, so a ``NOETA.md`` changed mid-session reaches
+        the sub-agent's classifier as it reached the root."""
         root = view.state.root_id
         if not root or view.read_log is None:
             return ""
-        text = self._roots.get(root)
-        if text is None:
-            text = ""
-            for rec in await view.read_log(root):
-                ev = rec.event
-                if (isinstance(ev, ExtensionRecorded) and ev.extension == INSTRUCTIONS_PLUGIN
-                        and ev.kind == "start" and ev.message is not None):
-                    text = ev.message.text
-                    break
-            self._roots[root] = text
-            while len(self._roots) > ROOTS_KEPT:
-                self._roots.popitem(last=False)
+        texts, seen = self._roots.get(root, ([], 0))
+        records = await view.read_log(root, seen)
+        texts = list(texts)
+        for rec in records:
+            seen = max(seen, rec.seq)
+            ev = rec.event
+            if (isinstance(ev, ExtensionRecorded) and ev.extension == INSTRUCTIONS_PLUGIN
+                    and ev.kind in ("start", "reread") and ev.message is not None):
+                texts.append(ev.message.text)
+        self._roots[root] = (texts, seen)
         self._roots.move_to_end(root)
-        return text
+        while len(self._roots) > ROOTS_KEPT:
+            self._roots.popitem(last=False)
+        return "\n\n".join(texts)
 
     def _deny_texts(self, view: TaskView) -> list[str]:
         return [x.text for x in self.deny_rules] + list(view.denied_tools)
