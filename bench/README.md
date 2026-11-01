@@ -463,7 +463,8 @@ exited non-zero for a reason the logs do not show.
 | SWE-rebench r2 | 8 (container not resolved 7, non-zero exit 1) | 19 (install non-zero exit 10, install timeout 5, container not resolved 4) | noeta `oxc-project__oxc-22623`, `pydantic__pydantic-ai-5580`, `react-hook-form__react-hook-form-13464`, `vuejs__core-14877`; Claude Code `helidon-io__helidon-11979`, `pydantic__pydantic-ai-5580`, `react-hook-form__react-hook-form-13464`, `vuejs__core-14877` |
 | TB4 1 | 7 (non-zero exit 5, network 1, container 1) | 10 (network 5, non-zero exit 3, install timeout 2) | — |
 | TB4 fix | 7 (non-zero exit 6, container 1) | — | — |
-| larger model | 0 | 0 | — |
+| larger model 1 | 0 | 0 | — |
+| larger model fix | 4 (container not resolved) | — | noeta `kubernetes-sigs__kueue-11619`, `withcoral__coral-1143` |
 
 ### SWE-rebench 07-2026 (111 tasks, 50 min cap)
 
@@ -578,16 +579,29 @@ no grade; in the rerun noeta's `distributed-dedup`, `uefi-bootkit` and
 The failures that did not time out are graded fails (some tests pass, some do
 not); every scored task passes with its reference solution.
 
-### A larger private model (20 SWE-rebench tasks, pre-fix)
+### A larger private model (20 SWE-rebench tasks)
 
 A larger private gateway model (1M window, 128K output cap for both), 20 tasks
 drawn with seed 0 from the 104 SWE-rebench tasks whose image is not large,
-concurrency 1, noeta **54121930** (before the fix). Claude Code passed 10 of
-20, noeta 6: paired difference −20 points (SE 11.7, n=20). Claude Code hit 20
-rate-limit retries (HTTP 429, in 2 trials, both failed); noeta's retries are
-not logged, so its count is unknown. No trial failed on a rate limit. No leaked answers. 29.7 h wall; no list price for this model.
-A rerun of noeta 34f8acee on the same 20 tasks (paired against these Claude
-Code trials) is in progress.
+concurrency 1, 50-minute cap. No list price for this model; no leaked answers
+in either run.
+
+| run | agent (noeta commit) | started (UTC) | wall | passed | 50-min timeouts | tokens in / cached / out |
+|---|---|---|---|---|---|---|
+| 1 `rb-ad1max` | noeta 54121930 | 10-30 14:38 | 29.7 h | 6 (30 %) | 12 | 83M / 81M / 1.2M |
+| | Claude Code | | | 10 (50 %) | 8 | 107M / 103M / 0.8M |
+| fix `rb-ad1max-fix` | noeta 34f8acee | 11-01 09:11 | 11.1 h | 10 (50 %) | 5 | 114M / 110M / 0.8M |
+
+Paired difference against run 1's Claude Code: noeta 54121930 −20 points
+(SE 11.7), noeta 34f8acee 0 (SE 10.3; each passed 2 tasks the other did not);
+n=20, so neither is significant. Before the fix noeta wrote 810 output tokens
+per model call against Claude Code's 540; after it, 533. The rerun did not
+share the gateway with as much load as run 1 (beside the TB4 rerun for its
+first two hours, then alone; run 1 ran beside SWE-rebench run 1 and the TB4
+run), so part of its shorter time per round (23 s against Claude Code's 27 s
+in run 1) may be the gateway. Claude Code hit 20 rate-limit retries in run 1
+(HTTP 429, in 2 trials, both failed); noeta's retries are not logged, so its
+count is unknown. No trial failed on a rate limit.
 
 ## Publishing
 
