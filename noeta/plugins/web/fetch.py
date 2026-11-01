@@ -120,11 +120,17 @@ def preapproved(url: str) -> bool:
         parsed = httpx.URL(url)
     except Exception:  # noqa: BLE001 - a malformed URL is not preapproved
         return False
-    host = parsed.host.lower()
+    return _preapproved_at(parsed.host.lower(), _raw_path(parsed))
+
+
+def _raw_path(url: httpx.URL) -> str:
+    return url.raw_path.decode("ascii", "replace").split("?", 1)[0] or "/"
+
+
+def _preapproved_at(host: str, path: str) -> bool:
     if host in _PREAPPROVED_HOSTS:
         return True
     prefixes = _PREAPPROVED_PREFIXES.get(host)
-    path = parsed.raw_path.decode("ascii", "replace").split("?", 1)[0] or "/"
     if not prefixes or _ENCODED_SEPARATOR.search(path) or "\\" in path:
         return False
     for prefix in prefixes:
@@ -304,8 +310,10 @@ class FetchTransport(Protocol):
 
 def _same_origin(a: str, b: str) -> bool:
     """Whether a redirect from ``a`` to ``b`` stays on the site: the same
-    scheme and port, the same host up to a leading ``www.``, and no
-    credentials in the target."""
+    scheme and port, the same host up to a leading ``www.``, no credentials
+    in the target, and, from a preapproved path, a target still on one
+    (Claude Code's rule: leaving it counts as leaving the host, so a page
+    is treated as preapproved only where it was fetched from)."""
     ua, ub = httpx.URL(a), httpx.URL(b)
     defaults = {"http": 80, "https": 443}
 
@@ -316,6 +324,11 @@ def _same_origin(a: str, b: str) -> bool:
         return host.removeprefix("www.")
 
     if ub.userinfo:
+        return False
+    bare = _site(ua.host.lower())
+    hosts = (ua.host.lower(), bare, "www." + bare)
+    if any(_preapproved_at(h, _raw_path(ua)) for h in hosts) \
+            and not any(_preapproved_at(h, _raw_path(ub)) for h in hosts):
         return False
     return (ua.scheme, _site(ua.host), _port(ua)) == (ub.scheme, _site(ub.host), _port(ub))
 

@@ -11,7 +11,11 @@ This helper is the one place that decides whether to try again:
   ``complete_whole`` (Claude Code's fallback from a failed stream, for every
   call it makes): at once, or after the stream was tried again as often as
   the error allows; that call is made even when the budget is spent, and
-  every later retry of the call stays in one piece;
+  later retries of the call stay in one piece (Claude Code gives its
+  one-piece request the retries left), except after a
+  :class:`~noeta.core.errors.TimedOut` one-piece call: a long answer that
+  outlasted the time limit would only time out (and may be billed) again,
+  so the call goes back to streaming and never switches a second time;
 * :class:`~noeta.core.errors.MalformedToolArguments` — a tool call whose
   arguments did not parse — is asked for again once, as Claude Code falls
   back to one more request when a streamed reply cannot be read;
@@ -34,6 +38,7 @@ from noeta.core.errors import (
     ModelError,
     RateLimited,
     StreamBroken,
+    TimedOut,
     Transient,
 )
 from noeta.core.provider import OnDelta, Provider
@@ -109,6 +114,8 @@ async def complete_with_retries(
     malformed = 0
     whole = getattr(provider, "complete_whole", None)
     in_one_piece = False
+    #: The call went in one piece once and timed out: it streams from then on.
+    whole_timed_out = False
     streamed_again = 0
     while True:
         try:
@@ -117,7 +124,11 @@ async def complete_with_retries(
                 return response
             return await provider.complete(request, on_delta)
         except ModelError as exc:
-            if isinstance(exc, StreamBroken) and whole is not None and not in_one_piece:
+            if in_one_piece and isinstance(exc, TimedOut):
+                in_one_piece = False
+                whole_timed_out = True
+            if isinstance(exc, StreamBroken) and whole is not None and not in_one_piece \
+                    and not whole_timed_out:
                 spent = attempt + 1 >= max_attempts
                 if spent or (exc.stream_retries is not None
                              and streamed_again >= exc.stream_retries):

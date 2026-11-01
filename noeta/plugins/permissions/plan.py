@@ -155,8 +155,8 @@ def plan_name_request(model: str, plan: str, *, identity: str = "",
 
 def name_plan(ctx: ToolContext, plan: str) -> None:
     """Ask for the approved plan's name beside the task (Claude Code names
-    a plan once it is approved); the answer arrives as
-    :data:`PLAN_NAME_SIGNAL`."""
+    a plan once it is approved, and only the first: the caller asks once
+    per task); the answer arrives as :data:`PLAN_NAME_SIGNAL`."""
     complete, post = ctx.complete, ctx.post
     if complete is None or post is None or not ctx.model:
         return
@@ -301,7 +301,8 @@ class ExitPlanModeTool:
             return text_output(KEEP_PLANNING_FEEDBACK.format(feedback=feedback) if feedback
                                else KEEP_PLANNING, is_error=True)
         text = await read_plan(ctx, plan["path"]) or ""
-        ctx.record(NAME, "plan_exit", {"mode": mode})
-        if text.strip():
+        named = bool(text.strip()) and not getattr(ctx.state.get(NAME), "plan_named", False)
+        ctx.record(NAME, "plan_exit", {"mode": mode, **({"named": True} if named else {})})
+        if named:
             name_plan(ctx, text)
         return text_output(APPROVED.format(path=plan["path"], plan=text))

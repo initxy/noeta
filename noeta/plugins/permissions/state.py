@@ -34,6 +34,11 @@ class PermState:
     plan_reminders: int = 0
     #: Plan mode was left since the task began (a later entry is a re-entry).
     plan_left: bool = False
+    #: A plan's name was asked for: only the first approved plan of a task
+    #: is named (Claude Code names one only while the session has none).
+    plan_named: bool = False
+    #: The name the first approved plan was given.
+    plan_name: str | None = None
     steps: int = 0
     tool_calls: int = 0
     cost_usd: float = 0.0
@@ -104,7 +109,12 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
         # No auto-mode note again: Claude Code sends only the plan-exit
         # note (r2 m1).
         due = (*st.due, "plan_exited")
-        return replace(st, mode=mode, due=due, plan_left=True)
+        return replace(st, mode=mode, due=due, plan_left=True,
+                       plan_named=st.plan_named or bool(d.get("named")))
+    if kind == "plan_name":
+        name = d.get("name")
+        return replace(st, plan_named=True, plan_name=st.plan_name
+                       or (name if isinstance(name, str) else None))
     if kind == "noted":
         sent = set(d.get("kinds") or ())
         count = d.get("plan_reminders")

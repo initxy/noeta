@@ -299,6 +299,29 @@ async def test_redirects_are_followed_ten_times_on_one_site() -> None:
         await HttpFetchTransport(client=client).fetch("https://s.com/-1")
 
 
+async def test_a_redirect_off_a_preapproved_path_counts_as_leaving_the_host() -> None:
+    """Claude Code's rule: from a preapproved path, a same-host redirect to a
+    path that is not preapproved is reported, not followed, so a page is
+    preapproved only where it was fetched from."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/anthropics/x":
+            return httpx.Response(301, headers={"location": "/other/y"})
+        if request.url.path == "/anthropics/old":
+            return httpx.Response(301, headers={"location": "https://www.github.com/anthropics/new"})
+        if request.url.path == "/someone/a":
+            return httpx.Response(301, headers={"location": "/someone/b"})
+        return httpx.Response(200, headers={"content-type": "text/markdown"}, content=b"# doc")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    transport = HttpFetchTransport(client=client)
+    with pytest.raises(CrossHostRedirect) as left:
+        await transport.fetch("https://github.com/anthropics/x")
+    assert left.value.location == "https://github.com/other/y"
+    assert str(await transport.fetch("https://github.com/anthropics/old")) == "# doc"
+    assert str(await transport.fetch("https://github.com/someone/a")) == "# doc"
+    await client.aclose()
+
+
 async def test_long_or_credentialed_urls_are_invalid(tmp_path: Path) -> None:
     transport = HttpFetchTransport()
     assert transport.timeout == 60.0 and transport.max_bytes == 10 * 1024 * 1024
