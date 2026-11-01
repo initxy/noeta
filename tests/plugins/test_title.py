@@ -65,3 +65,15 @@ async def test_the_first_real_prompt_names_the_task_once(store: SqliteStore) -> 
               if isinstance(e, ExtensionRecorded) and e.extension == "title"
               and e.kind == "title"]
     assert titles == ["Parser crash in lexer.py"]
+
+
+async def test_a_task_nobody_follows_live_is_not_named(store: SqliteStore) -> None:
+    """Claude Code names no session in print mode."""
+    provider = Provider(reply("looking"))
+    agent = Agent(name="a", model="m", extensions=[Title()])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
+    await Client(store).create("a", "why does lexer.py crash on empty input?",
+                               config={"interactive": False})
+    await rt.run_until_idle()
+    assert provider.titles == []

@@ -28,7 +28,9 @@ from noeta.core.types import Message, user
 from noeta.plugins.workflow.engine import Engine, EngineMissing, Replay
 from noeta.plugins.workflow.tool import WorkflowTool, _ToolView
 from noeta.toolkit import notices
+from noeta.toolkit.json_schema import schema_errors
 from noeta.toolkit.notices import NOTICE_GUARD, escape
+from noeta.toolkit.structured_output import SCHEMA_KEY, structured_answer
 
 __all__ = ["Orchestration", "WorkflowTool", "_ToolView"]
 
@@ -42,8 +44,10 @@ INHERIT = ("cwd", "model", "effort", "permission_mode")
 
 RETURN_NOTE = ("\n\nYou are a step of a workflow script: your final reply is returned to the "
                "script as data, not shown to a person. End with exactly the result asked for.")
-SCHEMA_NOTE = ("\n\nYou are a step of a workflow script: your final reply is parsed as JSON "
-               "matching this schema and returned to the script:\n{schema}")
+SCHEMA_NOTE = ("\n\nYou are a step of a workflow script: return your result by calling the "
+               "StructuredOutput tool once, in the shape its input schema gives. The script "
+               "reads only that call, never your text; if the call is refused, correct the "
+               "shape and call it again.")
 
 
 def default_max_running() -> int:
@@ -65,14 +69,6 @@ class Sink(Protocol):
 
 def _st(state: Any) -> dict[str, Any]:
     return {"runs": {}, **(state or {})}
-
-
-def _validate(value: Any, schema: Mapping[str, Any]) -> bool:
-    """A light check of a parsed schema-typed answer: an object holding the
-    required properties."""
-    if not isinstance(value, dict):
-        return False
-    return all(k in value for k in schema.get("required") or [])
 
 
 class Orchestration(Extension):
@@ -152,8 +148,8 @@ class Orchestration(Extension):
         prompt = str(call["prompt"])
         schema = opts.get("schema")
         if isinstance(schema, dict):
-            config["output_schema"] = schema
-            prompt += SCHEMA_NOTE.format(schema=json.dumps(schema, sort_keys=True))
+            config[SCHEMA_KEY] = schema
+            prompt += SCHEMA_NOTE
         else:
             prompt += RETURN_NOTE
         return self._agent_type(view, opts.get("agentType")), prompt, config
@@ -234,20 +230,20 @@ class Orchestration(Extension):
                         message=user(text, origin="system"))
         return 0
 
-    def _take(self, view: TaskView, run: dict[str, Any], key: str, ended: ChildEnded) -> None:
-        """Record one agent's end in ``run`` (and in the log)."""
+    async def _take(self, view: TaskView, run: dict[str, Any], key: str,
+                    ended: ChildEnded) -> None:
+        """Record one agent's end in ``run`` (and in the log). A schema-typed
+        agent's result is its accepted ``StructuredOutput`` call, read from
+        its log: one that ended without such a call (after the reminder to
+        make it) failed."""
         rid = run["run_id"]
         tokens = ended.last_usage.output if ended.last_usage is not None else 0
         schema = (run["agents"].get(key) or {}).get("schema")
         value: Any = ended.answer
         ok = ended.status == "done"
         if ok and isinstance(schema, dict):
-            try:
-                value = json.loads(ended.answer)
-            except ValueError:
-                ok = False
-            else:
-                ok = _validate(value, schema)
+            value = await self._structured(view, ended)
+            ok = value is not None and not schema_errors(value, schema)
         if ok:
             view.record(self.name, "result", {"run_id": rid, "key": key, "value": value,
                                               "tokens": tokens})
@@ -256,6 +252,17 @@ class Orchestration(Extension):
         else:
             view.record(self.name, "agent_failed", {"run_id": rid, "key": key})
             run["failed"] = [*run["failed"], key]
+
+    @staticmethod
+    async def _structured(view: TaskView, ended: ChildEnded) -> Any:
+        """A child's structured answer: from its log, or (no log reader)
+        its answer, the value's JSON."""
+        if view.read_log is not None:
+            return structured_answer(await view.read_log(ended.child_id))
+        try:
+            return json.loads(ended.answer)
+        except ValueError:
+            return None
 
     def _spawner(self, view: TaskView) -> Any:
         def spawn(agent: str, prompt: str, config: dict[str, Any], key: str) -> str:
@@ -284,7 +291,7 @@ class Orchestration(Extension):
                 for key, a in run["agents"].items():
                     if a.get("child_id") == e.child_id and key not in run["results"] \
                             and key not in run["failed"]:
-                        self._take(view, run, key, e)
+                        await self._take(view, run, key, e)
                         touched.add(rid)
         if every_run:
             touched |= {rid for rid, run in runs.items()

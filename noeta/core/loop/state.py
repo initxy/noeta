@@ -51,7 +51,8 @@ Reducer = Callable[[Any, str, Any], Any]
 #: :data:`CHANGEABLE_CONFIG` keys, from the next model call on; a ``None``
 #: value removes the key.
 CONFIG_SIGNAL = "config"
-CHANGEABLE_CONFIG = ("model", "effort", "max_turns")
+CHANGEABLE_CONFIG = ("model", "effort", "max_turns", "output_schema", "interactive",
+                     "permission_prompt_tool")
 
 
 @dataclass

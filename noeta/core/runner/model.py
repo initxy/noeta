@@ -49,7 +49,6 @@ def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
         plain=offer.plain,
         effort=config.get("effort") or agent.effort,
         max_tokens=agent.max_tokens or run.rt.output_ceiling(run.model),
-        output_schema=config.get("output_schema") or agent.output_schema,
     )
     if final:
         # The step-limit round: tool schemas stay (the prefix stays cached),

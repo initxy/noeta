@@ -19,7 +19,9 @@ from noeta.host.pending import Pending, card_title
 from noeta.host.questions import typed_answer
 from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
 from noeta.host.usage import cost_text, tree_usage
+from noeta.toolkit.json_schema import schema_problem
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL, PERMISSION_MODES
+from noeta.toolkit.structured_output import SCHEMA_KEY
 
 if TYPE_CHECKING:
     from noeta.host.stream_json import HeadlessOptions, _Turn
@@ -78,6 +80,14 @@ class ControlRequests:
     async def _on_initialize(self, request: dict[str, Any]) -> dict[str, Any]:
         if request.get("hooks"):
             log.warning("hook callbacks from the client are not supported; ignored")
+        schema = request.get("jsonSchema")
+        if schema is not None:
+            # The SDK's ``outputFormat``: structured output from here on.
+            problem = schema_problem(schema)
+            if problem is not None:
+                raise ValueError(f"jsonSchema is not a valid JSON Schema: {problem}")
+            await self.client.signal(self.task_id, CONFIG_SIGNAL, {SCHEMA_KEY: schema})
+            self.options.output_schema = schema
         return {"commands": await self._commands(), "output_style": "default",
                 "available_output_styles": ["default"], "models": self._models(),
                 "account": {}, "pid": os.getpid()}

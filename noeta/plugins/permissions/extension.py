@@ -204,7 +204,8 @@ class Permissions(Extension):
             raise ValueError(f"max_risk must be one of {p.KNOWN_RISK_LEVELS}; got {max_risk!r}")
         self.default_risk = default_risk
         self.max_risk = max_risk
-        self.allowed = frozenset(allowed_tools) if allowed_tools is not None else None
+        self.allowed = frozenset(allowed_tools) | p.HARNESS_TOOLS \
+            if allowed_tools is not None else None
         self.disallowed = p.expand_disallowed(disallowed_tools)
         self.trusted = trusted_workspace
         self.remember_to_project = remember_to_project

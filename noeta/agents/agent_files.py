@@ -89,8 +89,9 @@ _WARNED: set[tuple[str, str]] = set()
 
 #: Plugins every agent runs with, whether its file names them or not (a host
 #: setting can still turn one off): any plugin's tool may be deferred, and
-#: only ``tool_search`` loads deferred tools.
-ALWAYS_PLUGINS: tuple[str, ...] = ("tool_search",)
+#: only ``tool_search`` loads deferred tools; any task may be given an answer
+#: schema (``output_schema``), and only ``structured_output`` takes the answer.
+ALWAYS_PLUGINS: tuple[str, ...] = ("tool_search", "structured_output")
 
 PluginEntry = tuple[str, Mapping[str, Any]]
 #: The host's setting of one plugin: its arguments, a ready instance, or on/off.

@@ -10,7 +10,9 @@ What goes out, one JSON object per line: ``system``/``init``; an
 ``task_notification``, ``status``, ``local_command_output``,
 ``informational``); a ``result`` when a prompt's work is done (usage, cost,
 duration, turns, permission denials, structured output). The root task's
-id is the protocol's ``session_id``.
+id is the protocol's ``session_id``. Its tasks are not interactive (no
+title; ``AskUserQuestion`` only when the client answers prompts), as
+Claude Code's print and SDK sessions are not (``noeta.toolkit.interactive``).
 
 What comes in: ``user`` messages (text or content blocks, a ``/command``
 runs as typed), and ``control_request`` s — ``initialize``, ``interrupt``,
@@ -61,8 +63,10 @@ from noeta.host.pending import Pending, pending_tree
 from noeta.host.pending import follow_tree as _follow_tree
 from noeta.host.pending import tree_busy as _tree_busy
 from noeta.host.usage import TreeUsage, add_events, tree_usage
+from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
+from noeta.toolkit.structured_output import ANSWER_KIND, PLUGIN, RETRIES_REASON, SCHEMA_KEY
 
 __all__ = ["HeadlessOptions", "StreamJson", "drive", "find_latest_task", "noeta_version"]
 
@@ -92,7 +96,9 @@ class HeadlessOptions:
     #: ``--max-turns``: model calls per prompt.
     max_turns: int | None = None
     max_budget_usd: float | None = None
-    #: ``--json-schema``: the answer is JSON matching it (``structured_output``).
+    #: ``--json-schema`` (or the client's ``initialize`` ``jsonSchema``): the
+    #: answer comes through the ``StructuredOutput`` tool, its input
+    #: (``structured_output``) matching this schema.
     output_schema: dict[str, Any] | None = None
     include_partial_messages: bool = False
     replay_user_messages: bool = False
@@ -122,6 +128,11 @@ class _Turn:
     stopped: bool = False
     over_budget: bool = False
     denials: list[dict[str, Any]] = field(default_factory=list)
+    #: The latest accepted ``StructuredOutput`` call's value (``answered``).
+    structured: Any = None
+    answered: bool = False
+    #: The text of the latest reply.
+    reply_text: str = ""
 
 
 async def find_latest_task(client: ClientAPI, cwd: str, agent: str = "main") -> str | None:
@@ -225,7 +236,10 @@ class StreamJson(ControlRequests):
         if o.max_turns:
             config["max_turns"] = o.max_turns
         if o.output_schema is not None:
-            config["output_schema"] = o.output_schema
+            config[SCHEMA_KEY] = o.output_schema
+        config[INTERACTIVE_KEY] = False
+        if o.ask_client:
+            config[PROMPT_TOOL_KEY] = "stdio"
         if o.resume:
             # Through the client first: an unknown task is refused before
             # the app serves or names anything of it.
@@ -234,9 +248,11 @@ class StreamJson(ControlRequests):
             await self.app.adopt(o.resume)
             self.task_id = o.resume
             await self.client.signal(self.task_id, RESUMED_SIGNAL)
-            changes = {k: config[k] for k in ("model", "max_turns") if k in config}
-            if changes:
-                await self.client.signal(self.task_id, CONFIG_SIGNAL, changes)
+            # This run's say on the schema and on who answers, whatever the
+            # task had before (``None`` takes a key away).
+            changes = {k: config.get(k) for k in (SCHEMA_KEY, INTERACTIVE_KEY, PROMPT_TOOL_KEY)}
+            changes.update({k: config[k] for k in ("model", "max_turns") if k in config})
+            await self.client.signal(self.task_id, CONFIG_SIGNAL, changes)
             if "permission_mode" in config:
                 await self.client.signal(self.task_id, MODE_SIGNAL,
                                          {"mode": config["permission_mode"]})
@@ -440,6 +456,7 @@ class StreamJson(ControlRequests):
         response = ev.response
         if self._turn is not None:
             self._turn.api_calls += 1
+            self._turn.reply_text = response.message.text
         self._partial.replied(self._called, response.stop_reason, response.usage.output)
         self._put(self._message(type="assistant", parent_tool_use_id=None, message={
             "id": f"msg_{self._called or rec.seq}", "type": "message", "role": "assistant",
@@ -456,6 +473,9 @@ class StreamJson(ControlRequests):
 
     def _recorded(self, ev: ExtensionRecorded) -> None:
         data = ev.data if isinstance(ev.data, dict) else {}
+        if ev.extension == PLUGIN and ev.kind == ANSWER_KIND and self._turn is not None:
+            self._turn.structured, self._turn.answered = data.get("value"), True
+            return
         core = records.decode(ev)
         if isinstance(core, records.Spawned):
             for child in core.children:
@@ -482,6 +502,9 @@ class StreamJson(ControlRequests):
         if failed and str(failed).startswith("max_turns"):
             await self._finish({"subtype": "error_max_turns", "is_error": True,
                           "errors": [str(failed).split(": ", 1)[-1]]})
+        elif failed and str(failed).startswith(RETRIES_REASON):
+            await self._finish({"subtype": "error_max_structured_output_retries",
+                                "is_error": True, "errors": [str(failed).split(": ", 1)[-1]]})
         elif turn.over_budget:
             await self._finish({"subtype": "error_max_budget_usd", "is_error": True,
                           "errors": [f"Reached maximum budget (${self.options.max_budget_usd})"]})
@@ -503,9 +526,12 @@ class StreamJson(ControlRequests):
         result["duration_ms"] = int((time.time() - turn.started) * 1000) if turn else 0
         result["stop_reason"] = "end_turn" if outcome.get("subtype") == "success" else None
         result["permission_denials"] = list(turn.denials) if turn else []
-        if outcome.get("subtype") == "success" and self.options.output_schema is not None:
-            with contextlib.suppress(ValueError):
-                result["structured_output"] = json.loads(str(result["result"]))
+        if outcome.get("subtype") == "success" and turn is not None and turn.answered:
+            # Claude Code's: the value, and as the text the reply's own
+            # (its compact JSON when the reply said nothing).
+            result["structured_output"] = turn.structured
+            result["result"] = turn.reply_text or json.dumps(
+                turn.structured, ensure_ascii=False, separators=(",", ":"))
         # Gathering the usage awaits the store: until the result is out, the
         # work stays open, or ``settled`` would return without it.
         self._finishing += 1

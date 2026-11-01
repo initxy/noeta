@@ -190,3 +190,26 @@ async def test_stopping_withdraws_the_question(store: SqliteStore) -> None:
 def test_question_texts_must_differ() -> None:
     error = validate_questions({"questions": [q(), q(header="Again")]})
     assert isinstance(error, str) and "Which auth?" in error
+
+
+def test_offered_only_where_a_question_can_be_answered() -> None:
+    """Claude Code's ``isEnabled``: off in a non-interactive session unless a
+    permission prompt tool answers; children inherit the say."""
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.ask_user import AskUser
+
+    plugin = AskUser()
+
+    def offered(config: dict[str, Any]) -> bool:
+        view = TaskView(state=TaskState(task_id="t", agent="main", config=config))
+        return [t.name for t in plugin.tools(view)] == ["AskUserQuestion"]
+
+    assert offered({}) and offered({"interactive": True})
+    assert not offered({"interactive": False})
+    assert not offered({"interactive": False, "permission_prompt_tool": "none"})
+    assert offered({"interactive": False, "permission_prompt_tool": "stdio"})
+    state = TaskState(task_id="t", agent="main",
+                      config={"interactive": False, "cwd": "/w"})
+    assert plugin.inherit(state) == {"interactive": False}
+    assert plugin.inherit(TaskState(task_id="t", agent="main")) == {}

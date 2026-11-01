@@ -47,7 +47,7 @@ async def store(tmp_path: Path) -> Any:
 async def test_a_task_records_its_plugins_when_it_starts(store: SqliteStore) -> None:
     [agent] = build_agents([parse_agent_file(
         "---\nname: a\nplugins:\n  - title: {model: small}\n---\nhi\n")], model="m",
-        plugins={"tool_search": False})
+        plugins={"tool_search": False, "structured_output": False})
     agent = Agent(name="a", model="m", extensions=(*agent.extensions, Marker()))
     provider = ScriptedProvider([reply("one"), reply("two")])
     client = Client(store)
