@@ -20,6 +20,7 @@ from noeta.core.errors import (
     Fatal,
     MalformedToolArguments,
     RateLimited,
+    StreamBroken,
     Transient,
 )
 from noeta.core.types import (
@@ -554,10 +555,12 @@ async def test_response_tool_use_input_not_dict_raises() -> None:
 
 @respx.mock
 async def test_unparseable_success_body_raises_loudly() -> None:
-    """A non-SSE 200 yields no events: a loud failure, never a hollow reply."""
+    """A non-SSE 200 yields no events: a failure, never a hollow reply; one
+    the retry helper answers in one piece (Claude Code's fallback)."""
     respx.post(MESSAGES_ENDPOINT).mock(return_value=httpx.Response(200, content=b"not-json"))
-    with pytest.raises(Fatal, match="without a message_start"):
+    with pytest.raises(StreamBroken, match="without a message_start") as raised:
         await _provider().complete(_req())
+    assert raised.value.stream_retries == 0
 
 
 @respx.mock
@@ -565,8 +568,9 @@ async def test_malformed_sse_frame_raises_loudly() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=sse_response(b"event: message_start\ndata: {not json}\n\n")
     )
-    with pytest.raises(Fatal, match="not valid JSON"):
+    with pytest.raises(StreamBroken, match="not valid JSON") as raised:
         await _provider().complete(_req())
+    assert raised.value.stream_retries == 0
 
 
 # ---------------------------------------------------------------------------

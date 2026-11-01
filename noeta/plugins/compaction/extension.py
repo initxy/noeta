@@ -469,12 +469,11 @@ class Compaction(Extension):
                                    extra)
         usage = Usage()
 
-        async def once(history: list[Message], ceiling: int | None
-                       ) -> ModelResponse | ModelError:
+        async def once(history: list[Message]) -> ModelResponse | ModelError:
             nonlocal usage
             assert view.complete is not None
             req = summary.summary_request(request, history, text, model=model,
-                                          max_tokens=ceiling or max_tokens)
+                                          max_tokens=max_tokens)
             try:
                 outcome = await view.complete(req)
             except ModelError as exc:
@@ -484,7 +483,7 @@ class Compaction(Extension):
 
         attempt = to_summarize
         dropped = False
-        outcome = await once(attempt, None)
+        outcome = await once(attempt)
         for _ in range(summary.MAX_SUMMARY_OVERFLOW_RETRIES):
             if not isinstance(outcome, ContextOverflow):
                 break
@@ -492,11 +491,7 @@ class Compaction(Extension):
             if shorter is None:
                 break
             attempt, dropped = shorter, True
-            outcome = await once(attempt, None)
-        if isinstance(outcome, ModelError) and not isinstance(outcome, ContextOverflow):
-            ceiling = min(summary.RETRY_MAX_TOKENS,
-                          max_tokens or request.max_tokens or summary.RETRY_MAX_TOKENS)
-            outcome = await once(attempt, ceiling)
+            outcome = await once(attempt)
         note = summary.joined_text(outcome) if isinstance(outcome, ModelResponse) else ""
         failure = summary.summary_failure(outcome, note)
         if failure is not None:

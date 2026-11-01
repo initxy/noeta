@@ -209,15 +209,16 @@ async def test_an_empty_reply_fails_the_turn(store: SqliteStore) -> None:
     assert len(model.summarize_requests) == 1  # no tool-free retry
 
 
-async def test_a_failed_summarize_call_is_retried_with_a_smaller_ceiling(
-        store: SqliteStore) -> None:
+async def test_a_failed_summarize_call_is_retried_as_it_was(store: SqliteStore) -> None:
+    """Like any call, through the retry helper (whose fallback from a broken
+    stream is the provider's): no second summarize call of its own."""
     a = agent()
     model = Model([*(call() for _ in range(12)), answer("done")],
                   summaries=[Transient("stream cut"), note_reply()])
     client, tid = await run(store, a, model)
     first, second = model.summarize_requests[:2]
     assert first.max_tokens == model.requests[0].max_tokens
-    assert second.max_tokens == min(64_000, first.max_tokens or 64_000)
+    assert second == first
     assert await compactions(client, tid)
 
 

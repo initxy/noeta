@@ -15,7 +15,10 @@ class Provider(Protocol):
 
     Optional members: ``async count_tokens(model, text) -> int | None`` (the
     exact token count of one user message holding ``text``; without it
-    callers estimate) and ``async aclose()`` (release connections).
+    callers estimate), ``async complete_whole(request) -> ModelResponse``
+    (the same call answered in one piece, without streaming: what the retry
+    helper sends after a :class:`~noeta.core.errors.StreamBroken`) and
+    ``async aclose()`` (release connections).
     """
 
     #: Which vendor wire the adapter speaks (``anthropic``, ``openai_compat``,

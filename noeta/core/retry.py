@@ -6,6 +6,12 @@ This helper is the one place that decides whether to try again:
 * :class:`~noeta.core.errors.Transient` (network failures, 5xx, overloaded, a
   stream cut before its terminal event) and
   :class:`~noeta.core.errors.RateLimited` are retried;
+* :class:`~noeta.core.errors.StreamBroken` — a stream that broke after it
+  began — goes on as a call answered in one piece when the provider offers
+  ``complete_whole`` (Claude Code's fallback from a failed stream, for every
+  call it makes): at once, or after the stream was tried again as often as
+  the error allows; that call is made even when the budget is spent, and
+  every later retry of the call stays in one piece;
 * :class:`~noeta.core.errors.MalformedToolArguments` — a tool call whose
   arguments did not parse — is asked for again once, as Claude Code falls
   back to one more request when a streamed reply cannot be read;
@@ -23,7 +29,13 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 
-from noeta.core.errors import MalformedToolArguments, ModelError, RateLimited, Transient
+from noeta.core.errors import (
+    MalformedToolArguments,
+    ModelError,
+    RateLimited,
+    StreamBroken,
+    Transient,
+)
 from noeta.core.provider import OnDelta, Provider
 from noeta.core.types import ModelRequest, ModelResponse
 
@@ -95,10 +107,29 @@ async def complete_with_retries(
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     attempt = 0
     malformed = 0
+    whole = getattr(provider, "complete_whole", None)
+    in_one_piece = False
+    streamed_again = 0
     while True:
         try:
+            if in_one_piece and whole is not None:
+                response: ModelResponse = await whole(request)
+                return response
             return await provider.complete(request, on_delta)
         except ModelError as exc:
+            if isinstance(exc, StreamBroken) and whole is not None and not in_one_piece:
+                spent = attempt + 1 >= max_attempts
+                if spent or (exc.stream_retries is not None
+                             and streamed_again >= exc.stream_retries):
+                    # No wait: the stream's failure says nothing about the
+                    # one-piece call.
+                    in_one_piece = True
+                    attempt += 1
+                    if on_retry is not None:
+                        on_retry(attempt, 0.0, exc)
+                    attempt = min(attempt, max_attempts - 1)
+                    continue
+                streamed_again += 1
             delay = backoff_delay(exc, attempt=attempt, rng=rng)
             if isinstance(exc, MalformedToolArguments):
                 malformed += 1

@@ -25,6 +25,7 @@ from noeta.core.errors import (
     Fatal,
     MalformedToolArguments,
     RateLimited,
+    StreamBroken,
     Transient,
 )
 from noeta.core.provider import Provider
@@ -501,6 +502,77 @@ async def test_vendor_error_event_retryable_types_map_to_transient(err_type: str
     with pytest.raises(Transient) as ex:
         await _run([_message_start(), _error_event(err_type)])
     assert not isinstance(ex.value, RateLimited)
+
+
+@respx.mock
+@pytest.mark.parametrize(("err_type", "again"), [("overloaded_error", 2), ("api_error", 0)])
+async def test_a_server_error_mid_stream_breaks_the_stream(err_type: str, again: int) -> None:
+    """Claude Code streams again twice after an overload, and goes on in one
+    piece at once after any other server error."""
+    with pytest.raises(StreamBroken) as ex:
+        await _run([_message_start(), _error_event(err_type)])
+    assert ex.value.stream_retries == again
+
+
+@respx.mock
+async def test_a_dropped_connection_or_silence_mid_stream_breaks_the_stream() -> None:
+    head = sse_bytes([_message_start(), _block_start(0, {"type": "text", "text": ""})])
+    for error, again in ((httpx.RemoteProtocolError("peer closed"), None),
+                         (httpx.ReadTimeout("silent"), 1)):
+        respx.post(MESSAGES_ENDPOINT).mock(return_value=httpx.Response(
+            200, stream=RaisingStream([head], error),
+            headers={"content-type": "text/event-stream"}))
+        with pytest.raises(StreamBroken) as ex:
+            await _provider().complete(_req())
+        assert ex.value.stream_retries == again
+    # Before the response began it is an ordinary transient failure.
+    respx.post(MESSAGES_ENDPOINT).mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(Transient) as plain:
+        await _provider().complete(_req())
+    assert not isinstance(plain.value, StreamBroken)
+
+
+@respx.mock
+async def test_a_call_answered_in_one_piece_as_claude_code_falls_back() -> None:
+    """``complete_whole``: the same body without streaming, the output
+    capped at 64,000 tokens, a 300 s client timeout."""
+    whole = {"id": "m", "type": "message", "role": "assistant", "model": "claude-opus-4-7",
+             "content": [{"type": "text", "text": "whole"}], "stop_reason": "end_turn",
+             "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 3}}
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=httpx.Response(200, json=whole))
+    response = await _provider().complete_whole(_req(max_tokens=128_000))
+    assert response.message.content == [Text(text="whole")]
+    sent = route.calls.last.request
+    body = json.loads(sent.content)
+    assert body["stream"] is False and body["max_tokens"] == 64_000
+    assert sent.extensions["timeout"]["read"] == 300.0
+    small = await _provider().complete_whole(_req(max_tokens=2_000))
+    assert small.message.content == [Text(text="whole")]
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == 2_000
+
+
+@respx.mock
+async def test_a_broken_stream_goes_on_in_one_piece_through_the_retry_helper() -> None:
+    """The recorded Claude Code sequence: a stream cut by a server error,
+    then non-streaming calls (a 504 retried) until one answers."""
+    from noeta.core.retry import complete_with_retries
+
+    whole = {"id": "m", "type": "message", "role": "assistant", "model": "claude-opus-4-7",
+             "content": [{"type": "text", "text": "summary"}], "stop_reason": "end_turn",
+             "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 3}}
+    broken = sse_response(sse_bytes([_message_start(), _error_event("api_error")]))
+    route = respx.post(MESSAGES_ENDPOINT).mock(side_effect=[
+        broken, httpx.Response(504, json={"type": "error", "error": {
+            "type": "api_error", "message": "upstream timeout"}}),
+        httpx.Response(200, json=whole)])
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    response = await complete_with_retries(_provider(), _req(), sleep=no_sleep)
+    assert response.message.content == [Text(text="summary")]
+    sent = [json.loads(c.request.content) for c in route.calls]
+    assert [b["stream"] for b in sent] == [True, False, False]
 
 
 @respx.mock
