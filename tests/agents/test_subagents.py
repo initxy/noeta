@@ -119,3 +119,16 @@ def test_explore_runs_on_opus_under_a_fable_caller() -> None:
     assert explores and all(a.description != "mine" or "inheritCap" not in a.extra
                             for a in explores)
     assert any(a.description == "mine" for a in explores)
+
+
+def test_the_plan_agents_prompt_looks_for_similar_features_and_ends_read_only() -> None:
+    """Claude Code's Plan prompt: the exploring step looks for similar
+    features to use as a reference, and a closing reminder after the report
+    format repeats that it only explores and plans."""
+    prompt = str(_agents()["Plan"].system_prompt)
+    explore = next(line for line in prompt.splitlines() if line.startswith("2. Explore"))
+    assert "similar features" in explore
+    critical = prompt.index("3-5 files most critical")
+    closing = prompt.index("Remember: you only explore and plan.")
+    assert critical < closing
+    assert "must not write, edit or change any file" in prompt[closing:]
