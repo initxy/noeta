@@ -26,7 +26,7 @@ Writing the script:
 - In a polling loop, let one failed request pass (`curl ... || true`) instead of ending the monitor.
 - Poll remote APIs every 30 seconds or slower, local state every 0.5 to 1 second.
 - Make `description` specific ("failures in deploy.log", not "logs"): it is shown with every event.
-- Only stdout produces events. stderr does not; you see its last lines in the notice sent when the script ends. For a command you run yourself, add `2>&1` so its errors reach your filter.
+- Only stdout produces events. stderr produces none: it goes to the output file named in the notice sent when the script ends, which you can Read. For a command you run yourself, add `2>&1` so its errors reach your filter (it changes nothing for `tail -f` of an existing log, which holds only what its writer put there).
 
 Silence is not success: a filter that only matches the good outcome says nothing when the process crashes, hangs or exits early, which looks the same as "still running". Make the filter match every final state you would act on (for example `grep -E --line-buffered "passed|failed|Traceback|Killed|OOM"`), and in polling loops emit every terminal status, not only success. When unsure, match more rather than less.
 

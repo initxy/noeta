@@ -7,11 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-__all__ = ["SHELL", "ShellState", "reduce_shell", "shell_state"]
+__all__ = ["SANDBOX_KIND", "SHELL", "ShellState", "reduce_shell", "shell_state"]
 
 #: The extension name the shell records under (``cwd``, and the background
 #: job kinds).
 SHELL = "shell"
+#: The record (and reminder) of the sandbox instructions the model was told.
+SANDBOX_KIND = "sandbox_instructions"
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,12 @@ class ShellState:
     #: Status lines of the jobs running at a compaction, owed to the next
     #: request.
     held_status: tuple[str, ...] = ()
+    #: ``Bash``'s description steers file reading and editing to the
+    #: dedicated tools; decided once, at the task's first request (``None``:
+    #: not yet).
+    steer: bool | None = None
+    #: The sandbox instructions the model was last told (``""``: none).
+    sandbox_told: str = ""
 
 
 def reduce_shell(state: ShellState | None, kind: str, data: Any) -> ShellState:
@@ -40,6 +48,10 @@ def reduce_shell(state: ShellState | None, kind: str, data: Any) -> ShellState:
         return replace(base, held_status=tuple(str(t) for t in data.get("texts") or ()))
     if kind == "task_status_sent":
         return replace(base, held_status=())
+    if kind == "steer":
+        return replace(base, steer=bool(data.get("steer")))
+    if kind == SANDBOX_KIND:
+        return replace(base, sandbox_told=str(data.get("text") or ""))
     if kind == "worktree":
         tree = data.get("worktree")
         return replace(base, worktree=dict(tree) if isinstance(tree, Mapping) else None)

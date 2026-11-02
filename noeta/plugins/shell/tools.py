@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from noeta.core.errors import HeldElsewhere
+from noeta.core.events import Cancel, External
 from noeta.core.execenv import RunResult
 from noeta.core.holds import Release
 from noeta.core.tool import ToolContext, ToolOutput, text_output
@@ -24,6 +25,7 @@ from noeta.plugins.shell.notices import format_duration
 from noeta.plugins.shell.sandbox import confine, sandbox_required
 from noeta.plugins.shell.state import SHELL, shell_state
 from noeta.plugins.shell.websocket import parse_ws
+from noeta.toolkit.background_tasks import STOP_RUN, background_agents, workflow_run
 from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
 from noeta.toolkit.shell_syntax import parse
 from noeta.toolkit.tools import Workspace, load_description, require_str, tool_error
@@ -204,7 +206,7 @@ class BackgroundBash(BashTool):
             cwd=cwd, env_vars={**self._command_env(ctx), **(confined.env if confined else {})},
             root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
             description=description or command, post=ctx.post,
-            argv=confined.argv if confined else argv, foreground=True)
+            argv=confined.argv if confined else argv, foreground=True, shell_command=command)
         if isinstance(job, str):  # no job slot: run it the plain way
             if confined is not None:
                 await confined.close()
@@ -416,7 +418,8 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         description=description or command, post=ctx.post,
         monitor_timeout_ms=monitor_timeout_ms, release=release_job,
         tree=held.tree if held is not None else None,
-        argv=confined.argv if confined else None)
+        argv=confined.argv if confined else None,
+        shell_command=command if monitor_timeout_ms is None else "")
     if isinstance(job, str):
         return tool_error(tool, job)
     ctx.record(SHELL, "started", {
@@ -436,17 +439,19 @@ def _holder(job: Job) -> dict[str, Any]:
 
 
 class TaskStopTool:
-    """``TaskStop``: stop a background job; its end comes as the usual
-    notice. Deferred."""
+    """``TaskStop``: stop a background job (its end comes as the usual
+    notice, unless stopped here: then none), a background agent this task
+    started (its task is cancelled) or one of its Workflow runs (the
+    workflow plugin ends it). Deferred."""
 
     name = "TaskStop"
     read_only = False
     clearable = False
     deferred = True
     description = (
-        "Stops a background task (a Bash command started with `run_in_background`, or a "
-        "Monitor) by its ID.\n\n"
-        "- `task_id` is the ID the launch result gave\n"
+        "Stops a background task by its ID: a Bash command started with "
+        "`run_in_background`, a Monitor, an agent you started, or a Workflow run.\n\n"
+        "- `task_id` is the ID its launch result gave (an agent's agent ID)\n"
         "- The result says whether the task was stopped\n"
         "- Use it to end a long-running task you no longer need")
     input_schema: dict[str, Any] = {
@@ -454,7 +459,8 @@ class TaskStopTool:
         "type": "object",
         "properties": {
             "task_id": {"type": "string",
-                        "description": "ID of the background task to stop."},
+                        "description": ("ID of the background task to stop; for an agent, "
+                                        "its agent ID.")},
             "shell_id": {"type": "string",
                          "description": "Older name for task_id; use task_id."},
         },
@@ -470,16 +476,72 @@ class TaskStopTool:
             return tool_error(self.name, "requires a non-empty 'task_id'")
         job = self.registry.find(_root(ctx), job_id)
         if job is None or job.foreground:
-            return tool_error(self.name, _unknown(self.registry, ctx, job_id))
+            other = await self._stop_other(ctx, job_id)
+            if other is not None:
+                return other
+            why = _unknown(self.registry, ctx, job_id)
+            if why.startswith("No task found"):
+                why += await _running_agents(ctx)
+            return tool_error(self.name, why)
         if job.status != "running":
             return tool_error(self.name, f"Task {job_id} is not running (status: "
                                          f"{Registry.status_of(job)})")
         self.registry.kill(job, quiet=True)  # Claude Code tells no end after a stop
-        # Claude Code's result: the stop as a JSON object.
-        return text_output(json.dumps({
-            "message": f"Successfully stopped task: {job_id} ({job.description})",
-            "task_id": job_id, "task_type": "monitor_ws" if job.ws else "local_bash",
-            "command": job.description}, ensure_ascii=False), job_id=job_id)
+        return _stopped(job_id, "monitor_ws" if job.ws else "local_bash", job.description)
+
+    async def _stop_other(self, ctx: ToolContext, task_id: str) -> ToolOutput | None:
+        """Stop the Workflow run or background agent ``task_id`` names, if
+        this task started one; ``None`` when it names neither."""
+        run = workflow_run(ctx.state, task_id)
+        if run is not None:
+            status = str(run.get("status") or "")
+            if status != "running":
+                return tool_error(self.name, f"Task {task_id} is not running (status: "
+                                             f"{status})")
+            if ctx.post is None:
+                return tool_error(self.name, NOT_AVAILABLE)
+            await ctx.post(External(name=STOP_RUN, data={"run_id": task_id}),
+                           dedupe_key=f"{STOP_RUN}:{task_id}")
+            return _stopped(task_id, "local_workflow",
+                            str(run.get("description") or run.get("name") or ""))
+        agent = background_agents(ctx.state).get(task_id)
+        if agent is None:
+            return None
+        if not await _task_running(ctx, agent.task_id):
+            return tool_error(self.name, f"Task {task_id} is not running (status: ended)")
+        if ctx.post is None:
+            return tool_error(self.name, NOT_AVAILABLE)
+        await ctx.post(Cancel(reason="stopped with TaskStop"), task_id=agent.task_id)
+        return _stopped(task_id, "local_agent", agent.description)
+
+
+def _stopped(task_id: str, task_type: str, command: str) -> ToolOutput:
+    """Claude Code's result: the stop as a JSON object."""
+    return text_output(json.dumps({
+        "message": f"Successfully stopped task: {task_id} ({command})",
+        "task_id": task_id, "task_type": task_type, "command": command},
+        ensure_ascii=False), job_id=task_id)
+
+
+async def _task_running(ctx: ToolContext, task_id: str) -> bool:
+    """Whether the store has ``task_id`` not yet ended (assumed so where the
+    tool cannot read the store)."""
+    if ctx.task is None:
+        return True
+    row = await ctx.task(task_id)
+    return row is not None and getattr(row, "status", None) != "ended"
+
+
+async def _running_agents(ctx: ToolContext) -> str:
+    """The background agents this task started that still run, for a stop
+    that named none (as Claude Code lists them)."""
+    agents = {a.agent_id: a for a in background_agents(ctx.state).values()}
+    live = [a for a in agents.values() if await _task_running(ctx, a.task_id)] \
+        if ctx.task is not None else []
+    if not live:
+        return ""
+    return ". Running background agents: " + ", ".join(
+        f"{a.agent_id} ({a.description})" if a.description else a.agent_id for a in live)
 
 
 class MonitorTool:

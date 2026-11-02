@@ -16,7 +16,10 @@ import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
+from noeta.core.extension import TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.tool import ToolContext
+from noeta.plugins.shell import Shell
 from noeta.plugins.shell.bash import BashTool, resolve_timeout
 from noeta.plugins.shell.git_prelude import git_prelude
 from noeta.plugins.shell.jobs import Registry
@@ -745,3 +748,36 @@ def test_shell_state_fold() -> None:
     assert reduce_shell(state, "cwd", {"cwd": 3}) is state
     assert reduce_shell(state, "cwd", ["/x"]) is state
     assert reduce_shell(state, "unknown", {}) is state
+
+
+@pytest.mark.parametrize(("mode", "steered"), [
+    (None, True), ("default", True), ("acceptEdits", True), ("plan", True),
+    ("auto", False), ("bypassPermissions", False)])
+async def test_bash_steers_file_work_to_the_dedicated_tools_outside_auto_mode(
+        mode: str | None, steered: bool) -> None:
+    # Claude Code's default-mode Bash description adds the "avoid cat, head,
+    # tail, sed, awk, echo" line; a session that starts in auto or bypass
+    # mode does without it. Decided once, so a mode switch leaves it.
+    shell = Shell()
+    config = {"permission_mode": mode} if mode else {}
+
+    def view(state: ShellState | None = None, switched: str | None = None) -> TaskView:
+        cfg = {"permission_mode": switched} if switched else config
+        return TaskView(state=TaskState(task_id="t", config=cfg,
+                                        ext={"shell": state} if state else {}),
+                        extensions=[shell])
+
+    line = "Do not run `cat`, `head`, `tail`, `sed`, `awk` or `echo` with this tool"
+    first = view()
+    bash = shell.tools(first)[0]
+    assert (line in bash.description) is steered
+    assert bash.description.index("Variables and functions") < (
+        bash.description.find(line) if steered else len(bash.description))
+    await shell.reminders(first)
+    [rec] = [r for r in first.pending if getattr(r, "kind", "") == "steer"]
+    st = reduce_shell(None, "steer", rec.data)  # type: ignore[attr-defined]
+    other = "auto" if steered else "default"
+    assert (line in shell.tools(view(st, switched=other))[0].description) is steered
+    later = view(st, switched=other)
+    await shell.reminders(later)
+    assert not [r for r in later.pending if getattr(r, "kind", "") == "steer"]

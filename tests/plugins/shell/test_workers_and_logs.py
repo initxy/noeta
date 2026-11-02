@@ -262,11 +262,15 @@ async def test_a_log_stops_growing_at_its_cap_and_says_so(tmp_path: Path, monito
     await asyncio.wait_for(job.done.wait(), 10)
     # The command ran to its end (nothing killed it for writing on).
     assert job.exit_code == 0
-    text = Path(job.out_path).read_text()
+    # A monitor's events come from its stdout alone, capped the same way.
+    text = Path(job.events_path or job.out_path).read_text()
     # The cap, past it one read at most (64 KB), then the note.
     kept, note = text.split("\n[output past 1000 bytes was not kept]\n")
     assert 1000 <= len(kept) <= 1000 + 65536 and set(kept) == {"x"}
     assert note == "\n[exited with code 0]\n" or (monitor and note == "")
+    if monitor:  # its output file has what it kept of stdout, the note and stderr
+        out = Path(job.out_path).read_text()
+        assert "\n[output past 1000 bytes was not kept]\n" in out and "late\n" in out
 
 
 async def test_a_foreground_log_keeps_its_start_and_its_true_end(tmp_path: Path) -> None:

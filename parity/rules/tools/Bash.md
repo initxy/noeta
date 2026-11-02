@@ -56,7 +56,7 @@ property carries its own `description`.
 | `tool.Bash.18` | Git: an `@name` in a PR, issue or comment notifies that GitHub user; a bare `@name` is used only when that real account should be pinged; anything else (roles, placeholders, code, text taken from project files) is backticked or loses the `@`. | covered |
 | `tool.Bash.19` | Git: commit or push only when the user asks; on the default branch, create a branch first. | covered |
 | `tool.Bash.20` | Git: when the attribution `<system-reminder>` is present, its lines close every commit message and PR description. | covered in the description (the attribution reminder itself: see `reminders.md`) |
-| `tool.Bash.21` | Default-mode variant only (`m2`): avoid `cat`, `head`, `tail`, `sed`, `awk`, `echo` unless told to or after confirming no dedicated tool fits; use the dedicated tool instead. In `auto` mode (baseline) this line is absent and the environment message instead says Bash is fine for reading, searching and small mechanical edits. | covered (no dedicated-tool steering; the default-mode variant is not built) |
+| `tool.Bash.21` | Default-mode variant only (`m2`): avoid `cat`, `head`, `tail`, `sed`, `awk`, `echo` unless told to or after confirming no dedicated tool fits; use the dedicated tool instead. In `auto` mode (baseline) this line is absent and the environment message instead says Bash is fine for reading, searching and small mechanical edits. | covered — the line is in the description unless the task starts in `auto` or `bypassPermissions` mode (Claude Code decides it once per session: auto active or bypass at launch); noeta decides it at the task's first request and records it (`shell` / `steer`), so a later mode switch leaves the description alone |
 | `tool.Bash.22` | The description states no output-size cap. (Observed: a 12005-character output came back whole.) | covered (no cap stated; output past 30000 characters is still spilled to a file) |
 | `tool.Bash.23` | (bundle) A command matching the in-place write markers (`--write`, `--fix`, `sed -i`, formatters such as `black`, `ruff format`, `cargo fmt`) ends its result with the files the model had read that it changed (five, then a count) and a request to `Read` them before editing; the changed-file note still follows. | covered (`fs/shell_writes.py`; the timing differs: `deviations.md`) |
 
@@ -76,6 +76,8 @@ Observed in `m1`, `m2`, `m3`, `s1`.
 | `tool.Bash.r.9` | exit 1 of a search or comparison | when the last command of the line is `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`, `[` or `git diff` / `git grep`, exit status 1 (no match, a difference, a false condition) is not a failure: no `Exit code` line, `is_error` false, `(Bash completed with no output)` when it printed nothing; status 2 and up still fails (2.1.312 bundle) | covered |
 | `tool.Bash.r.10` | foreground timeout | a command still running at its timeout is not killed but moved to the background (unless its first command is `sleep`, or background tasks are off): the result is not an error; it carries the last 2,000 bytes printed so far, then the job ID, the output file, that the model is notified at the end, not to start it again, `TaskStop` to stop it, reading the file for interim output, and a note when nothing was printed yet; the end comes as the usual notification. A command that cannot be moved is killed with a timed-out error (2.1.312 bundle) | covered (a host without background jobs kills it) |
 | `tool.Bash.r.11` | image output | a successful command whose whole output is one `data:image/<type>;base64,...` URI comes back as an image block (typed by its bytes, resized to the image limits); an undecodable one stays text (2.1.312 bundle) | covered |
+| `tool.Bash.r.12` | background exit 1 of a search or comparison | a background command whose last command is one of `tool.Bash.r.9`'s and exits 1 ends `completed`, its summary giving the code and what it means there (no matches, files differ, a false condition, directories that could not be read); not when that last command follows `&&` or the line cannot be parsed (status 1 may then be an earlier command's), and never for a monitor (2.1.312 bundle) | covered — `background_exit_note` (`shell/output.py`) |
+| `tool.Bash.r.13` | background command stuck at a prompt | a background command (not a monitor) whose output has not grown for 45 s (checked every 5 s) and whose last line looks like a question (`(y/n)`, `[y/n]`, `(yes/no)`, `Press Enter` / any key, `Continue?`, `Overwrite?`, a sentence opening "Do you" / "Would you" / "Shall I" / "Are you sure" / "Ready to" and ending in `?`) brings one notification without a status: the command appears to wait for interactive input, then, after the element, its last output and advice to stop it and re-run it with the answer piped in or a non-interactive flag (2.1.312 bundle) | covered — `Registry._stall`, read through the job's exec env |
 | `tool.Bash.r.8` | attached context | a result may carry `<system-reminder>` blocks appended after the output (after compaction, the `CLAUDE.md` and git-status reminders rode on the first tool result, `m1/0059`) | see `compaction.md` |
 
 ## Variants
@@ -86,12 +88,17 @@ Observed in `m1`, `m2`, `m3`, `s1`.
 ## Sandbox variant
 
 Not recorded (the baseline runs with `sandbox.enabled` unset); taken from the 2.1.312 bundle.
-With `sandbox.enabled` and a sandbox that can start, the description gains a sandbox section
-(noeta: `noeta/plugins/shell/descriptions/shell_sandbox*.md`).
+The sandbox is not described in `Bash`'s description: with `sandbox.enabled` and a sandbox that
+can start, a `sandbox_instructions` harness note (a meta message, ahead of the other
+announcements) carries the rules below. It is sent again whenever its text differs from the
+last one in the conversation (so again after a compaction drops it), and once the sandbox is
+off after one was sent, a note says commands now run unconfined and the earlier instructions
+no longer apply (noeta: `Shell.reminders`, text `noeta/plugins/shell/descriptions/shell_sandbox*.md`,
+`SANDBOX_OFF`).
 
 | id | rule | noeta today |
 |---|---|---|
-| `tool.Bash.s.1` | The section states what the sandbox allows: where commands may write, which hosts they may reach, and that denied connections are reported in a `<sandbox_violations>` block. | covered |
+| `tool.Bash.s.1` | The instructions state what the sandbox allows: where commands may write, which hosts they may reach, and that denied connections are reported in a `<sandbox_violations>` block. | covered |
 | `tool.Bash.s.2` | Default to running inside the sandbox; set `dangerouslyDisableSandbox: true` only when the user explicitly asks, or a command just failed with evidence the sandbox caused it (commands fail for many other reasons). | covered |
 | `tool.Bash.s.3` | Evidence: "Operation not permitted" on file or network operations, access denied outside allowed directories, connection failures to hosts not allowed, Unix socket errors. | covered |
 | `tool.Bash.s.4` | On that evidence, retry at once with `dangerouslyDisableSandbox: true` without asking (it goes through the permission gate), and briefly explain the likely restriction and how the user can change the sandbox settings. | covered (points at the settings' `sandbox` section, see `parity/deviations.md`) |
