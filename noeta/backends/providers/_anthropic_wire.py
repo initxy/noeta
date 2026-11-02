@@ -15,7 +15,7 @@ from noeta.backends.providers._common import (
     tool_result_text,
 )
 from noeta.core import models
-from noeta.core.mcp_names import legacy_names
+from noeta.core.mcp_names import legacy_index
 from noeta.core.runner.texts import EMPTY_REPLY_NUDGE, INTERRUPTED_MARKER, REJECTED_MARKER
 from noeta.core.types import (
     Image,
@@ -55,7 +55,8 @@ _CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
 class _References:
     """Names a ``tool_reference`` may carry in one request: a tool the
     request offers, or an MCP tool's old name (``noeta.core.mcp_names``)
-    sent as the tool's current one. A reference to anything else is left
+    sent as the tool's current one (one two offered tools share is left
+    out). A reference to anything else is left
     out, as Claude Code leaves it out: the API refuses a reference to a tool
     the request does not define."""
 
@@ -67,7 +68,7 @@ class _References:
         if name in self.tools:
             return name
         if self._old is None:
-            self._old = {o: n for n in sorted(self.tools) for o in legacy_names(n)}
+            self._old = legacy_index(self.tools)
         found = self._old.get(name)
         if found is None:
             log.info("tool_reference to %r left out: the request does not offer it", name)

@@ -9,9 +9,18 @@ from typing import Any
 
 import pytest
 
+from noeta.core import mcp_names
 from noeta.core.extension import Extension, TaskView, offer_tools
 from noeta.core.loop.state import TaskState
-from noeta.core.mcp_names import legacy_names, named_in, old_name, remember, short_name
+from noeta.core.mcp_names import (
+    allowed_in,
+    legacy_index,
+    legacy_names,
+    named_in,
+    old_name,
+    remember,
+    short_name,
+)
 from noeta.plugins.mcp.config import McpServer
 from noeta.plugins.mcp.extension import _server_entry
 
@@ -52,13 +61,45 @@ def test_named_in_warns_once(caplog: pytest.LogCaptureFixture) -> None:
     assert caplog.text.count("only by its old name") == 1
 
 
+def test_allowed_in_takes_the_current_name_only(caplog: pytest.LogCaptureFixture) -> None:
+    assert allowed_in({"mcp__srv__a"}, "mcp__srv__a", "test list")
+    assert not allowed_in({"mcp__srv__a"}, "mcp__Srv__a", "test list")
+    assert "never lets a tool through" in caplog.text
+
+
+def test_an_old_name_two_tools_share_picks_neither() -> None:
+    """``mcp__GitHub__x`` and ``mcp__GITHUB__x`` both were ``mcp__github__x``:
+    whatever their order, that old name resolves to no tool; an old name
+    that is another tool's current name resolves to none either."""
+    for names in (["mcp__GitHub__x", "mcp__GITHUB__x"], ["mcp__GITHUB__x", "mcp__GitHub__x"]):
+        assert "mcp__github__x" not in legacy_index(names)
+    assert legacy_index(["mcp__GitHub__x"]) == {"mcp__github__x": "mcp__GitHub__x"}
+    assert legacy_index(["mcp__GitHub__x", "mcp__github__x"]) == {}
+
+
+def test_remembered_old_names_accumulate_and_age_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two servers giving one current name to tools of different raw names
+    keep both old forms (each only narrows); past the cap the least
+    recently offered goes first."""
+    monkeypatch.setattr(mcp_names, "_remembered", type(mcp_names._remembered)())
+    monkeypatch.setattr(mcp_names, "_REMEMBER_MAX", 2)
+    remember("mcp__a__t", "old1")
+    remember("mcp__a__t", "old2")
+    assert {"old1", "old2"} <= set(legacy_names("mcp__a__t"))
+    remember("mcp__b__t", "oldb")
+    remember("mcp__a__t", "old1")  # offered again: kept
+    remember("mcp__c__t", "oldc")
+    assert "oldb" not in legacy_names("mcp__b__t")
+    assert "old1" in legacy_names("mcp__a__t")
+
+
 def test_the_short_name_on_a_64_character_wire() -> None:
     long = "mcp__s__" + "x" * 80
     assert short_name("Bash") == "Bash"
     assert len(short_name(long)) == 64 and short_name(long).endswith(_sha(long))
 
 
-def test_an_agents_tool_lists_by_an_old_name_still_apply() -> None:
+def test_an_agents_tool_lists_by_an_old_name_refuse_never_offer() -> None:
     class Fake:
         description = "d"
         input_schema: dict[str, Any] = {"type": "object"}
@@ -78,8 +119,13 @@ def test_an_agents_tool_lists_by_an_old_name_still_apply() -> None:
     view = TaskView(state=TaskState(), extensions=[Tools()])
     denied = offer_tools([Tools()], view, None, ["mcp__github__delete_repo"])
     assert [t.name for t in denied.tools] == ["Read", "mcp__GitHub__list"]
+    # An agent's tools: list by an old name offers nothing: it may name a
+    # second server's tool.
     allowed = offer_tools([Tools()], view, ["Read", "mcp__github__list"], [])
-    assert [t.name for t in allowed.tools] == ["Read", "mcp__GitHub__list"]
+    assert [t.name for t in allowed.tools] == ["Read"]
+    listed = TaskView(state=TaskState(), extensions=[Tools()],
+                      allowed_tools=["mcp__github__list"])
+    assert listed.find_tool("mcp__GitHub__list") is None
 
 
 def test_a_terminal_mcp_tool_named_the_old_way(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,3 +138,12 @@ def test_a_terminal_mcp_tool_named_the_old_way(monkeypatch: pytest.MonkeyPatch) 
     tool = McpTool(name="mcp__GitHub__done", alias="GitHub", remote="done", description="d",
                    input_schema={}, invoke=invoke)
     assert tool.silent_reply_after == "success"
+
+
+def test_a_skills_allowed_tools_grant_takes_the_current_name_only() -> None:
+    from noeta.core.extension import Deny
+    from noeta.plugins.skills.gates import allowed_tools_gate
+
+    active = {"s": {"allowed_tools": ["mcp__github"]}}
+    assert allowed_tools_gate("mcp__github__x", active, "deny") is None
+    assert isinstance(allowed_tools_gate("mcp__GitHub__x", active, "deny"), Deny)

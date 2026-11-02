@@ -236,7 +236,7 @@ class OpenAICompatProvider:
             body["reasoning_effort"] = _EFFORT_MAP.get(request.effort, request.effort)
         # ``thinking`` has no Chat Completions equivalent; it is ignored.
         # One name per tool: the function list's, in the text as well.
-        return shorten_names_in_text(body)
+        return shorten_names_in_text(body, (t.name for t in request.tools))
 
 
 # ---------------------------------------------------------------------------

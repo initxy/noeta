@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from noeta.core.mcp_names import legacy_names, short_name
+from noeta.core.mcp_names import legacy_index, short_name
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolReference
 from noeta.toolkit.tools import SCHEMA_DIALECT
@@ -111,9 +111,11 @@ class ToolSearchTool:
             by_lower = {n.lower(): n for n in self._tools}
             # An MCP tool's old name (``noeta.core.mcp_names``) selects it.
             # So does the short form an OpenAI-family wire writes for a long one.
-            by_lower.update({o.lower(): n for n in self._tools
-                             for o in (*legacy_names(n), short_name(n))
+            # An old name two tools share selects neither.
+            by_lower.update({o.lower(): n for o, n in sorted(legacy_index(self._tools).items())
                              if o.lower() not in by_lower})
+            by_lower.update({short_name(n).lower(): n for n in self._tools
+                             if short_name(n).lower() not in by_lower})
             out: list[str] = []
             for n in wanted:
                 hit = n if n in self._tools else by_lower.get(n.lower())

@@ -222,3 +222,26 @@ def test_openai_wires_write_a_long_tool_name_one_way_in_text_too() -> None:
     tool = ToolSearchTool({long: ToolSpec(name=long, description="d", input_schema={})})
     assert tool.search(f"select:{short}") == [long]
     assert tool.search(short) == [long]
+
+
+def test_openai_wires_leave_long_mcp_text_that_is_no_offered_tool() -> None:
+    """Only the request's own long tool names are rewritten: an ``mcp__``
+    string in a file the model read, or in an edit's old string, reaches
+    the model as written (a rewrite would make the edit miss)."""
+    from noeta.backends.providers._common import wire_tool_name
+    from noeta.core.types import ToolSpec
+
+    offered = "mcp__server__" + "x" * 100
+    other = "mcp__server__" + "y" * 100
+    edit = {"file_path": "a.py", "old_string": f"NAME = '{other}'", "new_string": "NAME = 1"}
+    call = Message(role="assistant", content=[ToolUse(id="c1", name="Edit", input=edit)])
+    read = Message(role="user", content=[ToolResult(call_id="c1", content=[
+        Text(text=f"NAME = '{other}'  # calls {offered}")])])
+    request = ModelRequest(model="m", messages=[user("q"), call, read], max_tokens=64,
+                           tools=[ToolSpec(name=offered, description="d", input_schema={}),
+                                  ToolSpec(name="Edit", description="d", input_schema={})])
+    for body in (OpenAICompatProvider("https://x.test/v1", "k").build_body(request),
+                 OpenAIResponsesProvider("https://x.test/v1/responses", "k").build_body(
+                     request)):
+        text = str(body)
+        assert other in text and offered not in text and wire_tool_name(offered) in text

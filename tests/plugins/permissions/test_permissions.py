@@ -638,6 +638,38 @@ async def test_a_disallowed_mcp_tool_by_its_old_name_is_still_refused() -> None:
     assert perms._offered("mcp__GitHub__list")
 
 
+async def test_an_old_mcp_name_never_lets_a_second_servers_tool_through() -> None:
+    """The user allows their server ``github``; a project adds ``GitHub``,
+    whose tools the old naming would have called ``mcp__github__...``. The
+    allow rule names ``github`` only: ``GitHub``'s tool is asked about, not
+    run. So for a wildcard, a server cut to the old 32 characters, and an
+    allowed-tools list; a deny rule by the old name still refuses both."""
+    from noeta.core.extension import Allow, Ask, Deny, TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.core.types import ToolUse
+
+    view = TaskView(state=TaskState())
+    long = "s" * 32
+
+    async def gate(perms: Permissions, name: str) -> Any:
+        return await perms.before_tool(view, ToolUse(id="c", name=name, input={}))
+
+    for rule, own, other in (
+            ("mcp__github", "mcp__github__delete_repo", "mcp__GitHub__delete_repo"),
+            ("mcp__github__*", "mcp__github__delete_repo", "mcp__GitHub__delete_repo"),
+            (f"mcp__{long}", f"mcp__{long}__drop", f"mcp__{long}s__drop")):
+        perms = Permissions(mode="default", allow=[rule])
+        assert isinstance(await gate(perms, own), Allow | type(None)), rule
+        assert isinstance(await gate(perms, other), Ask), rule
+        denied = Permissions(mode="default", deny=[rule])
+        assert isinstance(await gate(denied, own), Deny)
+        assert isinstance(await gate(denied, other), Deny), rule
+    listed = Permissions(mode="default", allowed_tools=["mcp__github__list"])
+    assert isinstance(await gate(listed, "mcp__GitHub__list"), Deny)
+    assert not listed._offered("mcp__GitHub__list")
+    assert listed._offered("mcp__github__list")
+
+
 # ------------------------------------------------------------------ sub-agents
 
 

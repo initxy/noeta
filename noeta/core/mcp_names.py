@@ -10,6 +10,15 @@ and the ``ToolReference`` blocks of a task begun under them still name the
 old form; :func:`legacy_names` gives it, so each of those places can accept
 it as another name of the same tool instead of silently matching nothing.
 
+An old name only ever narrows. A deny or ask rule, a disallowed list and a
+hook's block match by it; an allow rule, an allowed list (``allowed_tools``,
+an agent's ``tools:``) and a hook's allow do not (:func:`allowed_in`): the
+old naming folded case and cut aliases, so ``mcp__github`` read as an old
+name also covers a server ``GitHub`` some project adds next to the user's
+``github``, and which servers are connected at a call (one may be down or
+not yet started) cannot tell that apart. Where an old name picks one tool
+(:func:`legacy_index`), one that two tools share picks neither.
+
 The old form is derived from the current name: where the old name was cut
 and hashed, the hash is taken of the tool part as it reads today, and of the
 part before a trailing disambiguation hash when it has one. That misses only
@@ -24,9 +33,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from collections import OrderedDict
+from collections.abc import Collection, Iterable
 
-__all__ = ["SHORT_NAME_MAX", "legacy_names", "named_in", "old_name", "remember", "short_name",
-           "warn_legacy"]
+__all__ = ["SHORT_NAME_MAX", "allowed_in", "legacy_index", "legacy_names", "named_in",
+           "old_name", "remember", "short_name", "warn_legacy", "warn_not_allowed"]
 
 log = logging.getLogger("noeta.mcp")
 
@@ -60,16 +71,23 @@ def old_name(alias: str, safe: str, raw: str) -> str:
 
 
 #: Old names only the MCP plugin could compute (:func:`old_name`): current
-#: name -> old name, for the tools this process has offered.
-_remembered: dict[str, str] = {}
+#: name -> its old names, for the tools this process has offered. One table
+#: for the process: an entry is a function of the server's alias and the
+#: tool's raw name alone, so tasks never disagree on it; two servers of two
+#: tasks giving one current name to tools whose raw names differ add both
+#: old forms (each only narrows, see the module's note). The least recently
+#: offered entries go first past :data:`_REMEMBER_MAX`; the MCP plugin
+#: remembers its tools' each time it offers them.
+_remembered: OrderedDict[str, frozenset[str]] = OrderedDict()
 _REMEMBER_MAX = 10_000
 
 
 def remember(name: str, old: str) -> None:
     """Makes ``old`` one of :func:`legacy_names` for ``name``."""
-    if len(_remembered) >= _REMEMBER_MAX and name not in _remembered:
-        _remembered.clear()
-    _remembered[name] = old
+    _remembered[name] = _remembered.get(name, frozenset()) | {old}
+    _remembered.move_to_end(name)
+    while len(_remembered) > _REMEMBER_MAX:
+        _remembered.popitem(last=False)
 
 
 def legacy_names(name: str) -> tuple[str, ...]:
@@ -87,9 +105,21 @@ def legacy_names(name: str) -> tuple[str, ...]:
         if rest:
             out += _old_forms(body[:at], rest)
         at = body.find("__", at + 1)
-    if name in _remembered:
-        out.append(_remembered[name])
+    out += sorted(_remembered.get(name, ()))
     return tuple(n for n in dict.fromkeys(out) if n != name)
+
+
+def legacy_index(names: Iterable[str]) -> dict[str, str]:
+    """Old name -> current name, for the old names of ``names`` that name
+    exactly one of them and are not the current name of another: an old
+    name two tools share picks neither, whatever their order."""
+    current = set(names)
+    seen: dict[str, set[str]] = {}
+    for name in current:
+        for old in legacy_names(name):
+            seen.setdefault(old, set()).add(name)
+    return {old: next(iter(owners)) for old, owners in seen.items()
+            if len(owners) == 1 and old not in current}
 
 
 #: OpenAI's function-name limit (``^[a-zA-Z0-9_-]{1,64}$``); noeta's tool
@@ -122,9 +152,24 @@ def warn_legacy(where: str, written: str, name: str) -> None:
                 "current name", where, written, name)
 
 
-def named_in(names: frozenset[str] | set[str], name: str, where: str) -> bool:
-    """Whether the set ``names`` (a setting listing tools) holds the tool
-    ``name``, by its current name or, with a warning, by its old one."""
+def warn_not_allowed(where: str, written: str, name: str) -> None:
+    """Logs, once per process for each ``(where, written, name)``, that
+    ``written`` names the tool ``name`` only by its old name, which lets
+    nothing through."""
+    key = (f"allow:{where}", written, name)
+    if key in _warned:
+        return
+    _warned.add(key)
+    log.warning("%s %r names the MCP tool %r only by its old name (before MCP tool names "
+                "kept their case and length); an old name never lets a tool through, so it "
+                "is asked about or left out: write it with the current name", where, written,
+                name)
+
+
+def named_in(names: Collection[str], name: str, where: str) -> bool:
+    """Whether ``names`` (a setting that refuses the tools it lists) holds
+    the tool ``name``, by its current name or, with a warning, by its old
+    one."""
     if name in names:
         return True
     old = next((n for n in legacy_names(name) if n in names), None)
@@ -132,3 +177,15 @@ def named_in(names: frozenset[str] | set[str], name: str, where: str) -> bool:
         return False
     warn_legacy(where, old, name)
     return True
+
+
+def allowed_in(names: Collection[str], name: str, where: str) -> bool:
+    """Whether ``names`` (a setting that lets through, or offers, the tools
+    it lists) holds the tool ``name``: by its current name only. A listed
+    old name is logged and counts for nothing (see the module's note)."""
+    if name in names:
+        return True
+    old = next((n for n in legacy_names(name) if n in names), None)
+    if old is not None:
+        warn_not_allowed(where, old, name)
+    return False

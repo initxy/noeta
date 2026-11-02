@@ -25,7 +25,7 @@ from collections.abc import Sequence
 
 from noeta.core.extension import Extension, TaskView, ToolChanges, ToolEntry
 from noeta.core.loop.state import TaskState
-from noeta.core.mcp_names import legacy_names
+from noeta.core.mcp_names import legacy_index
 from noeta.core.tool import Tool, tool_flag
 from noeta.core.types import ToolReference, ToolResult, ToolSpec
 from noeta.plugins.tool_search.search import TOOL_SEARCH, ToolSearchTool
@@ -70,8 +70,10 @@ class ToolSearch(Extension):
         add: list[Tool] = [] if any(t.name == TOOL_SEARCH for t in offered) \
             else [ToolSearchTool(deferred)]
         loaded = loaded_tools(view.state)
-        # A reference written under an MCP tool's old name loads it too.
-        loaded |= {n for n in deferred if any(o in loaded for o in legacy_names(n))}
+        # A reference written under an MCP tool's old name loads it too (one
+        # that two offered tools share loads neither).
+        index = legacy_index(t.name for t in offered)
+        loaded |= {index[o] for o in loaded if index.get(o) in deferred}
         withhold = {n: NOT_LOADED.format(name=n) for n in deferred if n not in loaded}
         sent = [t for t in [*offered, *add] if t.name not in withhold]
         order = [*sorted(t.name for t in sent if not tool_flag(t, "listed_last")),

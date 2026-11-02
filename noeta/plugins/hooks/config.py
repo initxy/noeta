@@ -134,15 +134,21 @@ class Matcher:
     lenient: bool = field(default=True, compare=False)
 
     def matches(self, subject: str | None) -> bool:
+        return self.matched_by(subject) is not None
+
+    def matched_by(self, subject: str | None) -> str | None:
+        """``"name"`` when the matcher matches ``subject`` itself,
+        ``"former"`` when only by an MCP tool's old name
+        (``noeta.core.mcp_names``: its hooks may then block, not allow),
+        ``None`` when not at all."""
         if subject is None or self.pattern in ("", "*"):
-            return True
+            return "name"
         if self._matches(subject):
-            return True
-        # An MCP tool's old name (noeta.core.mcp_names) still matches.
+            return "name"
         if any(self._matches(old) for old in legacy_names(subject)):
             warn_legacy("hook matcher", self.pattern, subject)
-            return True
-        return False
+            return "former"
+        return None
 
     def _matches(self, subject: str) -> bool:
         plain = r"[A-Za-z0-9_|, -]+" if self.lenient else r"[A-Za-z0-9_|]+"

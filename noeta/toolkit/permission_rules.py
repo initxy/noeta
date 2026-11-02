@@ -16,9 +16,9 @@
 * ``WebFetch(domain:example.com)`` (or ``*.example.com``) names a host.
 * ``mcp__server`` / ``mcp__server__*`` cover a server's tools,
   ``mcp__server__tool`` one tool; ``Agent(Explore)`` a sub-agent type;
-  ``Skill(name)`` a skill. A rule written with an MCP tool's old name
-  (``noeta.core.mcp_names``: alias lower-cased and cut) still covers it,
-  with a warning in the log.
+  ``Skill(name)`` a skill. A deny or ask rule written with an MCP tool's
+  old name (``noeta.core.mcp_names``: alias lower-cased and cut) still
+  covers it, with a warning in the log; an allow rule does not.
 
 A rule string that names a tool with no content covers every call of it.
 The permissions plugin and hook ``if`` conditions share this module;
@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlsplit
 
-from noeta.core.mcp_names import legacy_names, warn_legacy
+from noeta.core.mcp_names import legacy_names, warn_legacy, warn_not_allowed
 from noeta.toolkit.shell import parse_argv, subcommands
 from noeta.toolkit.shell_syntax import hides_effects, parse
 
@@ -165,13 +165,20 @@ def _tool_matches(rule_tool: str, name: str) -> bool:
 
 
 def match(rule: Rule, name: str, input: Mapping[str, Any], ctx: RuleContext, *,
-          for_allow: bool = False) -> bool:
+          for_allow: bool = False, former: bool | None = None) -> bool:
     """Whether ``rule`` covers the call ``name(input)``. ``for_allow``: a
-    shell rule must cover every subcommand (deny and ask rules match any)."""
+    shell rule must cover every subcommand (deny and ask rules match any).
+    ``former``: whether the rule may name an MCP tool by its old name
+    (``noeta.core.mcp_names``), by default only where it cannot widen what
+    runs: not for an allow rule."""
     name = ALIASES.get(name, name)
     if not _tool_matches(rule.tool, name):
         if not rule.tool.startswith("mcp__") or not any(
                 _tool_matches(rule.tool, old) for old in legacy_names(name)):
+            return False
+        if not (not for_allow if former is None else former):
+            if for_allow:
+                warn_not_allowed("allow rule", rule.text, name)
             return False
         warn_legacy("permission rule", rule.text, name)
     if rule.content is None:
