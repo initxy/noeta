@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -129,11 +130,17 @@ _FINGERPRINT = ('for d in "$@"; do case "$d" in */commands) n="*.md" ;; *) n=SKI
 #: ``Bash`` command showed, which counts only for instruction files).
 FILE_TOOLS = frozenset({"Read", "Write", "Edit"})
 #: What ``${CLAUDE_EFFORT}`` says when neither the skill nor the task sets
-#: an effort: the provider's default.
+#: an effort (the request then carries none): the provider's default. The
+#: one place to point at a model's own default effort.
 DEFAULT_EFFORT = "medium"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 #: Ancestor walks remembered, by working directory.
 ANCESTORS_KEEP = 256
+#: Loading one of these unscoped skills first looks for skill folders on
+#: the way to the repository's changed files (Claude Code's, for its
+#: review skills), at most this many directories.
+CHANGED_FILES_SKILLS = frozenset({"verify", "code-review"})
+CHANGED_DIRS_MAX = 100
 
 #: Heads the skills re-attached after a compaction.
 INVOKED_SKILLS_HEADER = (
@@ -290,6 +297,10 @@ class Skills(Extension):
       and ``.noeta/commands`` come after the workspace's (trust-gated too).
     * ``plugin_vars`` — plugin skill directory -> ``{variable: value}`` filled
       into its skills' bodies (``${CLAUDE_PLUGIN_ROOT}``, its options).
+    * ``plugin_commands`` — a Claude Code plugin's commands (``name``,
+      ``path``, ``text``: the file with its variables filled in): skills the
+      model can call, as in Claude Code; typing them stays the
+      ``markdown_commands`` plugin's.
     * ``skills_dir`` — replaces the workspace tiers with this one directory
       (relative to the workspace), not trust-gated (0.6 ``skills_dir``).
     * ``trusted`` — ``trusted(workspace_path) -> bool`` gate for the
@@ -333,6 +344,7 @@ class Skills(Extension):
         workspace: bool = True,
         additional_dirs: Sequence[str | Path] = (),
         plugin_vars: Mapping[str, Mapping[str, str]] | None = None,
+        plugin_commands: Sequence[Mapping[str, str]] = (),
         skills_dir: str | Path | None = None,
         trusted: Callable[[str], bool] | None = None,
         budget_chars: int | None = None,
@@ -369,6 +381,7 @@ class Skills(Extension):
         self.additional_dirs = [os.path.expanduser(str(d)) for d in additional_dirs]
         self.plugin_vars = {os.path.expanduser(str(d)): tuple(sorted(v.items()))
                             for d, v in (plugin_vars or {}).items()}
+        self.plugin_commands = tuple(_plugin_command(c) for c in plugin_commands)
         self.skills_dir = str(skills_dir) if skills_dir is not None else None
         self.trusted = trusted
         self.budget_chars = budget_chars
@@ -490,7 +503,8 @@ class Skills(Extension):
         return await load_registry(env, tiers, plugins=self.plugin_dirs,
                                    scopes=_scopes(env.cwd, nested),
                                    commands=self.commands_dirs(tiers),
-                                   variables=self.plugin_vars)
+                                   variables=self.plugin_vars,
+                                   extra=[d for d in self.plugin_commands if d is not None])
 
     async def turn_registry(self, view: TaskView) -> SkillRegistry:
         """The skills as found for the task: loaded again when new input was
@@ -547,7 +561,12 @@ class Skills(Extension):
         if kind == "invoked_sent":
             return {**state, "invoked": None}
         if kind == "listing_rebuilt":
-            return {**state, "listings": [{**data, "held": True}] if data.get("names") else []}
+            kept = data.get("kept") or {}
+            out = [{"names": kept["names"], "lines": [], "digests": kept.get("digests") or {}}] \
+                if kept.get("names") else []
+            if data.get("names"):
+                out.append({k: v for k, v in data.items() if k != "kept"} | {"held": True})
+            return {**state, "listings": out}
         if kind == "turn":
             return {**state, "turn": data}
         if kind == "turn_done":
@@ -759,6 +778,7 @@ class Skills(Extension):
                 self._record_invocation(view, {**data, "input": recorded.seq}, prior,
                                         "inline")
                 self._note_turn(view, desc)
+                registry = await self._changed_files_skills(view, desc, registry)
                 self._note_variants(view, registry, desc, "inline")
 
     async def _fork_typed(self, view: TaskView, desc: SkillDescription, args: str,
@@ -837,6 +857,53 @@ class Skills(Extension):
             view.record(self.name, "turn", {"name": desc.name, "model": model,
                                             "effort": effort})
 
+    async def _changed_files_skills(self, view: TaskView, desc: SkillDescription,
+                                    registry: SkillRegistry) -> SkillRegistry:
+        """Before naming a review skill's scoped variants: the skill folders
+        on the way to each file git reports changed (Claude Code's), so a
+        variant there is known; the registry as it is then."""
+        if desc.unqualified is not None or desc.name not in CHANGED_FILES_SKILLS \
+                or view.env is None:
+            return registry
+        env = task_env(view.env, view.state.config)
+        try:
+            top = await env.run(["git", "rev-parse", "--show-toplevel"], cwd=env.cwd,
+                                timeout=5, output_cap=4096)
+            root = top.stdout.decode("utf-8", errors="replace").strip()
+            if top.exit_code != 0 or not root:
+                return registry
+            done = await env.run(["git", "status", "--porcelain", "-z",
+                                  "--untracked-files=normal"], cwd=root, timeout=10,
+                                 output_cap=1024 * 1024)
+        except Exception:  # noqa: BLE001 — no git: nothing to look at
+            return registry
+        if done.exit_code != 0:
+            return registry
+        entries = done.stdout.decode("utf-8", errors="replace").split("\0")
+        files: dict[str, str] = {}
+        i = 0
+        while i < len(entries):
+            entry = entries[i]
+            i += 1
+            if len(entry) < 4:
+                continue
+            paths = [entry[3:]]
+            if "R" in entry[:2] or "C" in entry[:2]:
+                paths.append(entries[i] if i < len(entries) else "")
+                i += 1
+            for rel in paths:
+                path = os.path.normpath(os.path.join(root, rel))
+                if rel and path != root and len(files) < CHANGED_DIRS_MAX \
+                        and path.startswith(root.rstrip("/") + "/"):
+                    files.setdefault(os.path.dirname(path), path)
+        found: list[str] = []
+        for path in files.values():
+            await self._discover(view, path, found)
+        if not found:
+            return registry
+        state = view.ext_state(self.name) or {}
+        return await self.registry(env, {**state, "nested": [*nested_dirs(state), *found]})
+
     def _note_variants(self, view: TaskView, registry: SkillRegistry, desc: SkillDescription,
                        origin: Origin | None) -> None:
         """After an unscoped skill loaded: the skills of its name scoped to
@@ -913,6 +980,7 @@ class Skills(Extension):
         self._record_invocation(view, data, prior, self.origin)
         if desc is not None:
             self._note_turn(view, desc)
+            registry = await self._changed_files_skills(view, desc, registry)
             self._note_variants(view, registry, desc, self.origin)
         meta = {k: v for k, v in output.meta.items() if k != "skill_activation"}
         meta["skill"] = data["name"]
@@ -1004,12 +1072,16 @@ class Skills(Extension):
                                           "prompt": prompt})
         return Rewrite(name=AGENT_TOOL, input={**call.input, "prompt": prompt})
 
-    async def _discover(self, view: TaskView, path: str) -> None:
+    async def _discover(self, view: TaskView, path: str,
+                        recorded: list[str] | None = None) -> None:
         """Skill directories (``.noeta/skills``, ``.agents/skills``) of the
         directories between the working directory and the file this call
         touched join the task, announced with their skills' names (Claude
         Code's nested skill discovery). A directory git ignores (a
-        dependency's, a build's) is skipped, as Claude Code skips it."""
+        dependency's, a build's) is skipped, as Claude Code skips it.
+        ``recorded``: directories this hook found already (its records are
+        not folded yet); the ones found here are added."""
+        recorded = recorded if recorded is not None else []
         if self.skills_dir is not None or not self.workspace:
             return
         env = task_env(view.env, view.state.config)
@@ -1021,6 +1093,7 @@ class Skills(Extension):
         if rel == "." or rel.startswith(".."):
             return
         state = view.ext_state(self.name) or {}
+        state = {**state, "nested": [*nested_dirs(state), *recorded]}
         known = set(nested_dirs(state))
         d = cwd
         for part in rel.split(os.sep):
@@ -1034,6 +1107,7 @@ class Skills(Extension):
                 if not found or await _git_ignored(env, root, cwd):
                     continue
                 known.add(root)
+                recorded.append(root)
                 view.record(self.name, "nested", {"dir": root})
                 state = {**state, "nested": [*nested_dirs(state), root]}
                 registry = await self.registry(env, state)
@@ -1152,14 +1226,29 @@ class Skills(Extension):
                 view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
         if view.keeps_tail is not None:
             # The listing again, built from the skills there are now (Claude
-            # Code's): an edited skill once, a removed one gone.
+            # Code's): an edited skill once, a removed one gone. A listing
+            # the kept messages still hold counts as sent: only the skills
+            # it lacks, or whose text changed since, are listed.
+            kept_texts = {m.text for m in view.kept}
+            sent: dict[str, str] = {}
+            for listing in state.get("listings") or []:
+                if listing.get("lines") and render_listing(listing["lines"]) in kept_texts:
+                    sent.update(dict.fromkeys(listing["names"], ""))
+                    sent.update(listing.get("digests") or {})
+            only = []
+            for name in registry.model_invocable(unlocked_skills(state)):
+                desc = registry.get(name)
+                if desc is not None and sent.get(name, None) not in ("", skill_digest(desc)):
+                    only.append(name)
             lines = listing_lines(registry, budget_chars=self._budget(view),
                                   rank=await self._rank(view), unlocked=unlocked_skills(state),
-                                  max_desc_chars=self.max_desc_chars)
+                                  only=only, max_desc_chars=self.max_desc_chars) if only else ()
             if lines or state.get("listings"):
                 view.record(self.name, "listing_rebuilt", {
                     "names": [n for n, _ in lines], "lines": [t for _, t in lines],
-                    "digests": _digests(registry, lines)})
+                    "digests": _digests(registry, lines),
+                    "kept": {"names": sorted(sent), "digests": {
+                        n: d for n, d in sent.items() if d}}})
         return out
 
     def _source(self, desc: SkillDescription, registry: SkillRegistry) -> str:
@@ -1174,7 +1263,8 @@ class Skills(Extension):
         if tier >= 1:
             return "user"
         source = desc.source_path or ""
-        if any(source.startswith(d.rstrip("/") + "/") for d in self.plugin_dirs):
+        if any(source.startswith(d.rstrip("/") + "/") for d in self.plugin_dirs) \
+                or any(d is not None and d.name == desc.name for d in self.plugin_commands):
             return "plugin"
         return "host"
 
@@ -1241,3 +1331,12 @@ def _fork_options(agent_tool: Any, desc: SkillDescription) -> dict[str, str]:
         if value and allowed and value in allowed:
             out[key] = value
     return out
+
+
+def _plugin_command(entry: Mapping[str, str]) -> SkillDescription | None:
+    """A plugin's command as a skill: the model's to call; the person types
+    it through the ``markdown_commands`` plugin."""
+    path = str(entry.get("path") or "")
+    desc = parse_skill(path or str(entry["name"]), str(entry.get("text") or ""),
+                       name=str(entry["name"]), own_dir=path.endswith("/SKILL.md"))
+    return replace(desc, user_invocable=False) if desc is not None else None

@@ -427,6 +427,7 @@ async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
                         scopes: Mapping[str, str] | None = None,
                         commands: Collection[str] = (),
                         variables: Mapping[str, tuple[tuple[str, str], ...]] | None = None,
+                        extra: Sequence[SkillDescription] = (),
                         ) -> SkillRegistry:
     """Merge ``(directory, tier)`` pairs, highest precedence first: the
     first skill of a name wins (Claude Code keeps the first it loaded). ``plugins``:
@@ -438,7 +439,8 @@ async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
     one whose name another skill has too is named ``<scope>:<name>``, as
     Claude Code names directory-scoped skills, and each one's description
     says which files it is for. Of one directory's two skill folders, the
-    first given wins a name they share."""
+    first given wins a name they share. ``extra``: skills that come from no
+    directory (a plugin's commands), after the directories' (tier 0)."""
     plugins, scopes, variables = plugins or {}, scopes or {}, variables or {}
     merged: dict[str, SkillDescription] = {}
     tier_of: dict[str, int] = {}
@@ -462,6 +464,10 @@ async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
                 continue
             merged[name] = desc
             tier_of[name] = tier
+    for desc in extra:
+        if desc.name not in merged:
+            merged[desc.name] = desc
+            tier_of[desc.name] = 0
     named = Counter(name for _root, _tier, found in below.values() for name in found)
     plain = set(merged)
     for scope, (root, tier, found) in below.items():

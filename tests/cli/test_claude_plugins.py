@@ -95,6 +95,14 @@ async def test_a_claude_code_plugin_loads_through_noetas_plugins(home: Path,
     assert commands._allow["deploy-tools:status"] == ("Read", f"Bash({root}/bin/status:*)")
     assert commands.render("deploy-tools:about", "") == "Explain this plugin."
     assert commands.render("deploy-tools:ops:rollback", "v2") == "Roll back v2."
+    # The commands are skills the model can call too (Claude Code's).
+    called = {d.name: d for d in skills.plugin_commands}
+    assert set(called) == {"deploy-tools:status", "deploy-tools:about",
+                           "deploy-tools:ops:rollback"}
+    status = called["deploy-tools:status"]
+    assert status.description == "Show the status" and not status.user_invocable
+    assert f"{root}/bin/status" in status.body and f"{root}/bin/status" in (
+        status.meta("allowed-tools") or "")
     await app.store.close()
 
 

@@ -403,7 +403,7 @@ class Compaction(Extension):
                 view.record(ext_name, kind, data)
             if restored:
                 view.record(self.name, "restored", {"texts": [m.text for m in restored]})
-        after.extend(await view.residents(keeps_tail=tail))
+        after.extend(await view.residents(keeps_tail=tail, kept=state.messages[cut:]))
         if manual and command_at is not None and state.message_seqs[command_at]:
             # Claude Code's order: nothing ahead of the summary; the kept
             # reply, then what is given again in the person's turn ahead of

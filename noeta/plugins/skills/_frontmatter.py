@@ -14,9 +14,9 @@ ignored. A quoted value that is not one well-formed scalar (unterminated, or
 followed by more text) stays verbatim with a warning.
 
 Any key parses, not just the semantic ones, so a typo of a known key
-(``descrption:``) degrades to metadata instead of failing the file. Only a
-structural violation raises :class:`FrontmatterError`, and callers log and skip
-it so one bad SKILL.md cannot take down the registry build.
+(``descrption:``) degrades to metadata instead of failing the file. A
+structural violation drops the whole frontmatter with a warning and the file
+loads from its body, as Claude Code loads it.
 """
 
 from __future__ import annotations
@@ -93,9 +93,9 @@ def parse(text: str) -> tuple[dict[str, str], str, list[str]]:
 
     ``fields`` carries **every** parsed key, semantic and non-semantic alike;
     splitting the semantic keys from the opaque metadata is the registry's
-    job. ``body`` has its line endings normalised to LF. A structural violation
-    raises :class:`FrontmatterError` naming the rule it broke, so the caller
-    can log something useful; warnings are non-fatal.
+    job. ``body`` has its line endings normalised to LF. Frontmatter that
+    breaks a structural rule is ignored with a warning naming the rule (the
+    file loads, as in Claude Code); warnings are non-fatal.
     """
     if text.startswith("\ufeff"):
         text = text[1:]
@@ -107,11 +107,15 @@ def parse(text: str) -> tuple[dict[str, str], str, list[str]]:
 
     end_idx = _find_terminator(lines)
     if end_idx is None:
-        raise FrontmatterError("missing terminating '---' delimiter")
-
-    fields, warnings = _parse_lines(lines[1:end_idx])
+        # No closing delimiter: no frontmatter, all of it is the body.
+        return {}, "\n".join(lines), ["no closing '---': read as having no frontmatter"]
 
     body = "\n".join(lines[end_idx + 1:])
+    try:
+        fields, warnings = _parse_lines(lines[1:end_idx])
+    except FrontmatterError as exc:
+        # Claude Code loads the skill with its frontmatter ignored.
+        return {}, body, [f"invalid frontmatter ({exc}); ignored"]
     return fields, body, warnings
 
 

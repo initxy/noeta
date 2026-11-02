@@ -268,19 +268,37 @@ async def test_after_a_compaction_the_listing_is_rebuilt_and_skills_keep_their_t
     (keep / "SKILL.md").write_text("---\ndescription: Kept, edited.\n---\nNew steps.\n")
     (gone / "SKILL.md").unlink()
     gone.rmdir()
-    await h.say(a, tid, "more")  # the edited skill is listed again
     h.provider.add(reply("summary"))
     await h.say(a, tid, command_text(""))
     h.provider.add(reply("after"))
     await h.say(a, tid, "next")
     texts = [m.text for m in h.provider.requests[-1].messages]
     listings = [t for t in texts if t.startswith(ROSTER_HEADER)]
-    # The whole listing again, from the skills there are now: the removed
-    # one is gone (a listing the kept tail holds stays as it was).
-    assert listings[-1] == f"{ROSTER_HEADER}\n\n- keep: Kept, edited."
-    assert not any("gone" in t for t in listings)
+    # The whole listing again, from the skills there are now.
+    assert listings == [f"{ROSTER_HEADER}\n\n- keep: Kept, edited."]
     [invoked] = [t for t in texts if t.startswith("These skills were invoked")]
     assert "Original steps." in invoked and "New steps." not in invoked
+
+
+async def test_a_listing_the_compaction_keeps_is_not_sent_again(h: Harness) -> None:
+    """Claude Code lists after a compaction only what the kept messages'
+    listings lack (by name and digest)."""
+    skill(ws(h), "first", "description: First.\n")
+    a = agent(Compaction())
+    h.provider.add(reply("ok"))
+    tid = await h.start(a)
+    skill(ws(h), "second", "description: Second.\n")
+    # Listed with the command, so after the kept reply.
+    h.provider.add(reply("summary"))
+    await h.say(a, tid, command_text(""))
+    h.provider.add(reply("after"), reply("later"))
+    await h.say(a, tid, "next")
+    texts = [m.text for m in h.provider.requests[-1].messages]
+    listings = [t for t in texts if t.startswith(ROSTER_HEADER)]
+    assert listings == [f"{ROSTER_HEADER}\n\n- second: Second.",
+                        f"{ROSTER_HEADER}\n\n- first: First."]
+    await h.say(a, tid, "again")  # nothing is listed twice later
+    assert len(await h.records(tid, "skills", "listing")) == 2
 
 
 def _activation(at: float, name: str, task: str = "t") -> Recorded:
@@ -310,3 +328,54 @@ def test_the_listing_settings_reach_the_plugin(tmp_path: Path,
     assert args["budget_chars"] == 5000 and args["additional_dirs"] == ["/extra"]
     ext = Skills(**{k: v for k, v in args.items() if k != "trusted"})
     assert ext.max_desc_chars == 99 and ext.budget_fraction == 0.02
+
+
+async def test_a_skill_whose_frontmatter_breaks_loads_without_it(h: Harness) -> None:
+    (ws(h) / "broken").mkdir(parents=True)
+    (ws(h) / "broken" / "SKILL.md").write_text(
+        "---\ndescription: Lost.\nthis line is no key\n---\nUse the body.\n")
+    (ws(h) / "open").mkdir()
+    (ws(h) / "open" / "SKILL.md").write_text("---\nNo closing line.\n")
+    h.provider.add(reply("ok"))
+    await h.start(agent())
+    assert listing(h) == f"{ROSTER_HEADER}\n\n- broken: Use the body.\n- open: ---"
+
+
+async def test_a_plugins_commands_are_skills_the_model_can_call(h: Harness) -> None:
+    from noeta.plugins.markdown_commands import MarkdownCommands
+
+    commands = [{"name": "tools:review", "path": "/plug/commands/review.md",
+                 "text": "---\ndescription: Review it.\n---\nReview $ARGUMENTS.\n"},
+                {"name": "tools:quiet", "path": "/plug/commands/quiet.md",
+                 "text": "---\ndescription: Quiet.\ndisable-model-invocation: true\n---\nx\n"}]
+    typed = [{"name": "tools:review", "body": "Review $ARGUMENTS.\n"}]
+    a = agent(MarkdownCommands(typed), plugin_commands=commands)
+    h.provider.add(reply("", ("Skill", {"skill": "tools:review", "args": "a.py"})),
+                   reply("ok"), reply("typed"))
+    tid = await h.start(a)
+    assert listing(h) == f"{ROSTER_HEADER}\n\n- tools:review: Review it."
+    assert h.provider.requests[1].messages[-1].text == "Review a.py.\n"
+    # Typing it stays the markdown_commands plugin's: it is added once.
+    await h.say(a, tid, "/tools:review b.py")
+    assert sum(m.text == "Review b.py." for m in h.provider.requests[-1].messages) == 1
+    assert len(await h.records(tid, "skills", "activated")) == 1
+
+
+async def test_a_review_skill_finds_scoped_variants_by_the_changed_files(h: Harness) -> None:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(h.work)], check=True)
+    skill(ws(h), "verify", "description: Verify.\n")
+    pkg = h.work / "apps" / "web"
+    skill(pkg / ".noeta" / "skills", "verify", "description: Verify the web app.\n")
+    (pkg / "main.ts").write_text("export {}\n")
+    git = ["git", "-C", str(h.work), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], check=True)
+    (pkg / "main.ts").write_text("export const changed = 1\n")
+    h.provider.add(reply("", ("Skill", {"skill": "verify"})), reply("ok"))
+    tid = await h.start(agent())
+    [nested] = await h.records(tid, "skills", "nested")
+    assert nested.data == {"dir": str(pkg / ".noeta" / "skills")}
+    [note] = await h.records(tid, "skills", "variants")
+    assert note.message is not None and "`apps/web:verify`" in note.message.text

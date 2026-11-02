@@ -98,6 +98,10 @@ class ClaudePlugin:
     agents: list[AgentFile] = field(default_factory=list)
     #: ``markdown_commands`` entries.
     commands: list[dict[str, Any]] = field(default_factory=list)
+    #: The same commands as skills the model can call (Claude Code's): the
+    #: skills plugin's ``plugin_commands`` entries (``name``, ``path``, the
+    #: file's ``text`` with the plugin's variables filled in).
+    skill_commands: list[dict[str, str]] = field(default_factory=list)
     #: Claude Code's hooks event map.
     hooks: dict[str, list[Any]] = field(default_factory=dict)
     #: Claude Code's ``mcpServers`` map.
@@ -338,7 +342,8 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
     sources = [] if isinstance(commands, dict) else \
         _paths(root, commands, "commands") if commands is not None else [root / "commands"]
     for file, within in _md_files(sources):
-        front, body = _frontmatter(file.read_text("utf-8"))
+        raw = file.read_text("utf-8")
+        front, body = _frontmatter(raw)
         # A ``SKILL.md`` among the commands is named by its directory.
         own = _qualified(name, within[:-1], within[-1]) \
             if file.name.lower() == "skill.md" and within else _qualified(name, within, file.stem)
@@ -347,6 +352,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
                                 "description": str(front.get("description") or ""),
                                 "argument_hint": str(front.get("argument-hint") or ""),
                                 "allowed_tools": _allowed(front.get("allowed-tools"), names)})
+        plugin.skill_commands.append({"name": own, "path": str(file), "text": text(raw)})
     for key, entry in (commands or {}).items() if isinstance(commands, dict) else ():
         if not isinstance(entry, dict):
             continue
@@ -362,6 +368,13 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
                                     "description": str(entry.get("description") or ""),
                                     "argument_hint": str(entry.get("argumentHint") or ""),
                                     "allowed_tools": _allowed(allowed, names)})
+            head = {"description": entry.get("description") or front.get("description"),
+                    "allowed-tools": allowed}
+            fm = "".join(f"{k}: {json.dumps(', '.join(v) if isinstance(v, list) else str(v))}\n"
+                         for k, v in head.items() if v)
+            plugin.skill_commands.append({
+                "name": f"{name}:{key}", "path": str(files[0]) if files else "",
+                "text": (f"---\n{fm}---\n" if fm else "") + text(content)})
     hook_sources: list[Any] = [root / "hooks" / "hooks.json"]
     declared = manifest.get("hooks")
     for item in declared if isinstance(declared, list) else [declared] if declared else []:
@@ -420,6 +433,7 @@ def plugin_settings(plugins: Iterable[ClaudePlugin]) -> tuple[dict[str, Any], li
     hooks: dict[str, list[Any]] = {}
     servers: dict[str, Any] = {}
     commands: list[dict[str, Any]] = []
+    skill_commands: list[dict[str, str]] = []
     notices: list[str] = []
     for p in plugins:
         skills.update(dict.fromkeys(p.skill_dirs, p.name))
@@ -432,9 +446,11 @@ def plugin_settings(plugins: Iterable[ClaudePlugin]) -> tuple[dict[str, Any], li
         elif p.mcp_servers:
             servers.update(p.mcp_servers)
         commands += p.commands
+        skill_commands += p.skill_commands
     table: dict[str, Any] = {}
-    if skills:
-        table["skills"] = {"plugin_dirs": skills, "plugin_vars": skill_vars}
+    if skills or skill_commands:
+        table["skills"] = {"plugin_dirs": skills, "plugin_vars": skill_vars,
+                           "plugin_commands": skill_commands}
     if hooks:
         table["hooks"] = {"hooks": hooks}
     if servers:
