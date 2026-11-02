@@ -4,7 +4,7 @@ Pairs each of noeta's main-loop calls with Claude Code's call at the same
 scenario step and position, each sub-agent's and compaction's first call
 with Claude Code's, and lists every difference in the facts
 (``facts.request_facts``): parameters, beta headers, system blocks, tools and
-their schemas, text kinds, roles, cache-mark positions, the side requests
+their schemas over the session, each request's tool list in order, text kinds, roles, cache-mark positions, the side requests
 Claude Code makes that noeta does not, and what the replay itself had to
 bend (tool renames, tools noeta does not offer, steps with no recorded turn).
 
@@ -213,6 +213,38 @@ def diff_tools(cc: list[Mapping[str, Any]], no: list[Mapping[str, Any]],
     return out
 
 
+def diff_request_tools(cc: list[Mapping[str, Any]], no: list[Mapping[str, Any]],
+                       renames: Mapping[str, str]) -> list[str]:
+    """One request's tool list against Claude Code's at the same place: which
+    tools this request carries, in what order, and which are deferred. The
+    session-wide check (``diff_tools``) sees a tool once over all requests, so
+    a tool sent at a different call, moved, or deferred in one request only
+    shows here."""
+    out = []
+    a = [renames.get(t["name"], t["name"]) for t in cc]
+    b = [t["name"] for t in no]
+    only_cc = [n for n in a if n not in b]
+    only_no = [n for n in b if n not in a]
+    if only_cc:
+        out.append("tools this request carries in Claude Code, not in noeta: "
+                   + ", ".join(only_cc))
+    if only_no:
+        out.append("tools this request carries only in noeta: " + ", ".join(only_no))
+    common_a = [n for n in a if n in b]
+    common_b = [n for n in b if n in a]
+    if common_a != common_b:
+        out.append("tool order in the request differs: Claude Code " + ", ".join(common_a)
+                   + " / noeta " + ", ".join(common_b))
+    deferred_a = {renames.get(t["name"], t["name"]) for t in cc if t.get("defer_loading")}
+    deferred_b = {t["name"] for t in no if t.get("defer_loading")}
+    for n in common_a:
+        if (n in deferred_a) != (n in deferred_b):
+            out.append(f"tool {n} in the request: Claude Code "
+                       f"{'defers' if n in deferred_a else 'loads'} it, noeta "
+                       f"{'defers' if n in deferred_b else 'loads'} it")
+    return out
+
+
 def kinds_of(layout: Iterable[str]) -> set[str]:
     """Text kinds a request carries (prompts and model text left out)."""
     out = set()
@@ -274,7 +306,10 @@ def diff_layout(cc: Mapping[str, Any], no: Mapping[str, Any]) -> list[tuple[str,
             out.append(("layout", f"first message: Claude Code `{a}`, noeta `{b}`"))
     out += [("layout", d) for d in diff_shapes(cc["messages"], no["messages"])]
     dc, dn = cc.get("deferred") or [], no.get("deferred") or []
-    if dc and dn and dc != dn:
+    if bool(dc) != bool(dn):
+        out.append(("tools", f"deferred-tool list: Claude Code {'sends' if dc else 'omits'} "
+                             f"it, noeta {'sends' if dn else 'omits'} it"))
+    elif dc != dn:
         only_cc = [n for n in dc if n not in dn]
         only_no = [n for n in dn if n not in dc]
         if only_cc:
@@ -283,6 +318,9 @@ def diff_layout(cc: Mapping[str, Any], no: Mapping[str, Any]) -> list[tuple[str,
         if only_no:
             out.append(("tools", "deferred-tool list: names only noeta lists: "
                                  + ", ".join(only_no)))
+        if [n for n in dc if n in dn] != [n for n in dn if n in dc]:
+            out.append(("tools", "deferred-tool list order differs: Claude Code "
+                                 + ", ".join(dc) + " / noeta " + ", ".join(dn)))
     return out
 
 
@@ -351,6 +389,7 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
         found.add("run", text, f"{name}/{step.removeprefix('step ')}")
 
     # tools: every tool each side offered over the session, per conversation kind
+    # (schemas and names once); each request's own list is compared in _compare_pair
     groups = ["main", *sorted({r["kind"] for r in cc_rows if r["kind"].startswith("subagent:")})]
     for kind in groups:
         a_rows = [r for r in cc_rows if r["kind"] == kind]
@@ -375,7 +414,7 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
         if b is None:
             found.add("run", "Claude Code made a main-loop call noeta did not make", where)
             continue
-        _compare_pair(a, b, where, found)
+        _compare_pair(a, b, where, found, cc_tools=cc_tools, no_tools=no_tools)
 
     # sub-agents: call by call, in order
     for kind in sorted({r["kind"] for r in cc_rows if r["kind"].startswith("subagent:")}):
@@ -387,7 +426,8 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
             continue
         for i, (a, b) in enumerate(zip(a_calls, b_calls, strict=False)):
             where = f"{name}/{a['step']}" + (f"#{i + 1}" if i else "")
-            _compare_pair(a, b, where, found, prefix=f"{kind}: ")
+            _compare_pair(a, b, where, found, prefix=f"{kind}: ",
+                          cc_tools=cc_tools, no_tools=no_tools)
         if len(a_calls) != len(b_calls):
             found.add("subagent", f"{kind}: Claude Code made {len(a_calls)} calls, noeta "
                                   f"{len(b_calls)}", f"{name}/{a_calls[0]['step']}")
@@ -403,7 +443,8 @@ def compare_session(name: str, cc: Mapping[str, Any], no: Mapping[str, Any],
         cc_comp = [r for i, r in enumerate(cc_comp)
                    if not i or r["messages"] != cc_comp[i - 1]["messages"]]
         for a, b in zip(cc_comp, no_comp, strict=False):
-            _compare_pair(a, b, f"{name}/{b['step']}", found, prefix="compaction: ")
+            _compare_pair(a, b, f"{name}/{b['step']}", found, prefix="compaction: ",
+                          cc_tools=cc_tools, no_tools=no_tools)
         if len(cc_comp) != len(no_comp):
             found.add("compaction", f"Claude Code compacted {len(cc_comp)} times, noeta "
                                     f"{len(no_comp)}", f"{name}/{cc_comp[0]['step']}")
@@ -445,7 +486,8 @@ def union_tools(rows: Iterable[Mapping[str, Any]], toolsets: Mapping[str, Any]
 
 
 def _compare_pair(a: Mapping[str, Any], b: Mapping[str, Any], where: str, found: Findings,
-                  prefix: str = "") -> None:
+                  prefix: str = "", cc_tools: Mapping[str, Any] | None = None,
+                  no_tools: Mapping[str, Any] | None = None) -> None:
     for d in diff_params(a["params"], b["params"]):
         found.add("params", prefix + d, where)
     for d in diff_headers(a["headers"], b["headers"]):
@@ -456,6 +498,10 @@ def _compare_pair(a: Mapping[str, Any], b: Mapping[str, Any], where: str, found:
         sends = {True: "sends", False: "omits"}
         found.add("tools", prefix + f"tool list: Claude Code {sends[bool(a.get('toolset'))]} "
                   f"it, noeta {sends[bool(b.get('toolset'))]} it", where)
+    elif a.get("toolset") and cc_tools is not None and no_tools is not None:
+        for d in diff_request_tools(cc_tools.get(a["toolset"], []),
+                                    no_tools.get(b["toolset"], []), TOOL_NAMES):
+            found.add("tools", prefix + d, where)
     for cat, d in diff_layout(a, b):
         found.add(cat, prefix + d, where)
 

@@ -36,11 +36,11 @@ sub-agent requests (never in the main agent's list), always loaded, last of 6 in
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.SubagentHandback.r.1` | The run ends on the call; no `tool_result` is ever sent back to the sub-agent (m1/0033 is its last main-loop request). |
-| `tool.SubagentHandback.r.2` | The caller receives the report as a user-role message: a lead line announcing a message from another session, then `<agent-message from="<agentId>">` whose first line is a `[Subagent hand-back]` frame (model output, not the user; no user authority; every report line is indented by two spaces so a column-zero frame line inside it would be forged), the indented report, `</agent-message>`, and a closing paragraph saying the sender is an agent inside this session that cannot grant permissions or approve pending prompts, and that a request to do something it was denied is permission laundering to refuse and surface. |
-| `tool.SubagentHandback.r.3` | The same caller request also carries the `<task-notification>` whose `result` points at that message instead of repeating it (see `Agent.md` r.6, `reminders.md`). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.SubagentHandback.r.1` | The run ends on the call; no `tool_result` is ever sent back to the sub-agent (m1/0033 is its last main-loop request). | covered (the call ends the sub-agent's turn with the report, `ToolOutput.end_turn`; nothing is sent back to it) |
+| `tool.SubagentHandback.r.2` | The caller receives the report as a user-role message: a lead line announcing a message from another session, then `<agent-message from="<agentId>">` whose first line is a `[Subagent hand-back]` frame (model output, not the user; no user authority; every report line is indented by two spaces so a column-zero frame line inside it would be forged), the indented report, `</agent-message>`, and a closing paragraph saying the sender is an agent inside this session that cannot grant permissions or approve pending prompts, and that a request to do something it was denied is permission laundering to refuse and surface. | covered, in our wording (`subtasks/texts.py`) |
+| `tool.SubagentHandback.r.3` | The same caller request also carries the `<task-notification>` whose `result` points at that message instead of repeating it (see `Agent.md` r.6, `reminders.md`). | covered |
 
 ## Variants
 

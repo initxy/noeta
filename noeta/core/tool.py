@@ -154,6 +154,8 @@ class Tool(Protocol):
     * ``deferred: bool = False`` — named to the model by name only
       (``TaskView.deferred_tool_names``) and sent with ``defer_loading``; the
       ``tool_search`` plugin withholds it until the model loads it.
+    * ``search_hint: str = ""`` — a few words a ``ToolSearch`` keyword query
+      also matches (Claude Code's ``searchHint``); never sent to the model.
     * ``loaded_description: str`` — the description sent instead of
       ``description`` while the tool goes with ``defer_loading`` (the model
       loaded it through ``ToolSearch``), as Claude Code gives such a tool a

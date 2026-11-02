@@ -1,6 +1,7 @@
 """Pieces the three adapters share: tool-argument JSON codec, ``Retry-After``
 parsing, HTTP error translation (including context-overflow detection), the
-host-injected preamble, reserved-tag neutralization and the vision guard.
+host-injected preamble, reserved-tag neutralization, the vision guard and the
+tool-name mapping for wires with a shorter name limit.
 
 Only pieces that are genuinely independent of any wire shape belong here; each
 adapter's real differences stay in that adapter — how it extracts the raw
@@ -12,12 +13,14 @@ from __future__ import annotations
 
 import base64
 import email.utils
+import hashlib
 import json
 import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
+import msgspec
 
 from noeta.core import models
 from noeta.core.errors import (
@@ -28,7 +31,16 @@ from noeta.core.errors import (
     RateLimited,
     Transient,
 )
-from noeta.core.types import Image, Message, ModelRequest, Text, ToolReference, ToolResult
+from noeta.core.types import (
+    Image,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    Text,
+    ToolReference,
+    ToolResult,
+    ToolUse,
+)
 
 __all__ = [
     "HOST_INJECTED_PREAMBLE",
@@ -44,10 +56,48 @@ __all__ = [
     "model_admits_images",
     "neutralize_reserved_tags",
     "parse_retry_after",
+    "restore_tool_names",
     "tool_result_text",
     "translate_http_error",
     "transport_error",
+    "wire_tool_name",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Tool names on a wire with a shorter limit
+# ---------------------------------------------------------------------------
+
+#: OpenAI's function-name limit (``^[a-zA-Z0-9_-]{1,64}$``); noeta's tool
+#: names follow the Messages API's 128 (an MCP tool's can pass 64).
+OPENAI_NAME_MAX = 64
+_NAME_HASH_LEN = 8
+
+
+def wire_tool_name(name: str, limit: int = OPENAI_NAME_MAX) -> str:
+    """``name`` as sent on a wire that takes at most ``limit`` characters: a
+    longer one is cut and ends in ``_`` plus 8 hex digits of its sha256, the
+    same every request, so the history's calls keep their names."""
+    if len(name) <= limit:
+        return name
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:_NAME_HASH_LEN]
+    return f"{name[: limit - _NAME_HASH_LEN - 1]}_{digest}"
+
+
+def restore_tool_names(response: ModelResponse, request: ModelRequest,
+                       limit: int = OPENAI_NAME_MAX) -> ModelResponse:
+    """``response`` with each tool call named as noeta named the tool
+    (:func:`wire_tool_name` undone for the request's tools)."""
+    back = {wire_tool_name(t.name, limit): t.name for t in request.tools
+            if len(t.name) > limit}
+    if not back or not any(isinstance(b, ToolUse) and b.name in back
+                           for b in response.message.content):
+        return response
+    content = [msgspec.structs.replace(b, name=back[b.name])
+               if isinstance(b, ToolUse) and b.name in back else b
+               for b in response.message.content]
+    message = msgspec.structs.replace(response.message, content=content)
+    return msgspec.structs.replace(response, message=message)
 
 
 # ---------------------------------------------------------------------------

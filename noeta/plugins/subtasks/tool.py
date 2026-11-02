@@ -355,9 +355,13 @@ class SendMessageTool:
     clearable = False
     #: Claude Code lists it among the tools loaded on demand.
     deferred = True
+    search_hint = "send a message to a running agent or another session"
     input_schema = _schema({
-        "to": {"description": texts.SEND_TO_PROP, "type": "string", "maxLength": 300},
-        "message": {"description": texts.SEND_MESSAGE_PROP, "type": "string"},
+        # Claude Code's: one line of at most 300 characters; the message may
+        # be left out (a notify_when_idle subscription alone).
+        "to": {"description": texts.SEND_TO_PROP, "type": "string", "maxLength": 300,
+               "pattern": "^[^\n\r]*$"},
+        "message": {"description": texts.SEND_MESSAGE_PROP, "type": "string", "default": ""},
         "summary": {"description": texts.SEND_SUMMARY_PROP, "type": "string",
                     "maxLength": 200},
         "notify_when_idle": {"description": texts.SEND_NOTIFY_PROP, "type": "boolean"},

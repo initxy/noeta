@@ -431,6 +431,7 @@ class WebFetchTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "fetch a URL and pull out its content"
 
     def __init__(self, transport: FetchTransport, *,
                  digest_for: Callable[[ToolContext], Digest | None] = lambda _c: None,

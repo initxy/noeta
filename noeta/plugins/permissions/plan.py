@@ -231,6 +231,7 @@ class EnterPlanModeTool:
     read_only = True
     clearable = False
     deferred = True
+    search_hint = "switch to plan mode to design an approach before writing code"
 
     def __init__(self, enter: Callable[[ToolContext], bool]) -> None:
         self._enter = enter
@@ -271,6 +272,7 @@ class ExitPlanModeTool:
     read_only = False
     clearable = False
     deferred = True
+    search_hint = "present the plan for approval and start coding (plan mode only)"
 
     def _plan(self, ctx: ToolContext) -> dict[str, Any] | None:
         st = ctx.state.get(NAME)

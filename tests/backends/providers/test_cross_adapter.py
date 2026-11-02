@@ -160,3 +160,33 @@ def test_anthropic_key_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> Non
         provider_for("anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
     assert isinstance(provider_for("anthropic"), AnthropicProvider)
+
+
+# ---------------------------------------------------------------------------
+# Tool names longer than OpenAI's 64 characters
+# ---------------------------------------------------------------------------
+
+
+def test_openai_wires_shorten_a_long_tool_name_and_map_it_back() -> None:
+    from noeta.backends.providers._common import restore_tool_names, wire_tool_name
+    from noeta.core.types import ModelResponse, ToolSpec
+
+    long = "mcp__server__" + "x" * 100
+    short = wire_tool_name(long)
+    assert len(short) == 64 and short == wire_tool_name(long) and short != long
+    assert wire_tool_name("Bash") == "Bash"
+    call = Message(role="assistant", content=[ToolUse(id="c1", name=long, input={})])
+    request = ModelRequest(model="m", messages=[user("q"), call], max_tokens=64,
+                           tools=[ToolSpec(name=long, description="d", input_schema={}),
+                                  ToolSpec(name="Bash", description="d", input_schema={})])
+    chat = OpenAICompatProvider("https://x.test/v1", "k").build_body(request)
+    assert [t["function"]["name"] for t in chat["tools"]] == [short, "Bash"]
+    assert chat["messages"][1]["tool_calls"][0]["function"]["name"] == short
+    responses = OpenAIResponsesProvider("https://x.test/v1/responses", "k").build_body(request)
+    assert [t["name"] for t in responses["tools"]] == [short, "Bash"]
+    assert [i["name"] for i in responses["input"] if i["type"] == "function_call"] == [short]
+    reply = ModelResponse(message=Message(role="assistant", content=[
+        Text(text="t"), ToolUse(id="c2", name=short, input={}),
+        ToolUse(id="c3", name="Bash", input={})]), stop_reason="tool_use")
+    restored = restore_tool_names(reply, request)
+    assert [b.name for b in restored.message.content if isinstance(b, ToolUse)] == [long, "Bash"]

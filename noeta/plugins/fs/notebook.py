@@ -148,6 +148,7 @@ class NotebookEditTool:
     read_only = False
     clearable = False
     deferred = True
+    search_hint = "edit the cells of a Jupyter notebook (.ipynb)"
     input_schema: dict[str, Any]
 
     def __init__(self, *, write_roots: WriteRoots | None = None) -> None:

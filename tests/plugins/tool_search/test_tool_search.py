@@ -23,6 +23,7 @@ from noeta.core.runner import Runtime
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, Text, ToolReference, ToolResult, ToolSpec
 from noeta.plugins.tool_search import PLACEHOLDER, ToolSearch, ToolSearchTool, loaded_tools
+from noeta.plugins.tool_search.search import search_hint
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -65,12 +66,18 @@ def test_no_deferred_tool_means_a_sorted_list_and_no_placeholder() -> None:
         "Agent", "Bash", "Write"]
 
 
-def test_the_placeholder_sits_before_the_last_tool_until_something_is_loaded() -> None:
+def test_the_placeholder_is_always_second_to_last() -> None:
+    # Claude Code splices it in at length - 1 (recorded m5: `Workflow,
+    # DeferredToolPlaceholder, Write` with Monitor loaded and no MCP tool).
     tools = [Fake("Write"), Fake("Read"), Fake("WebFetch", deferred=True),
-             Fake("mcp__s__t", deferred=True, last=True), Fake("ToolSearch")]
+             Fake("mcp__s__t", deferred=True, last=True), Fake("mcp__s__u", deferred=True,
+                                                               last=True), Fake("ToolSearch")]
     assert names(specs(tools)) == ["Read", "ToolSearch", PLACEHOLDER + "*", "Write"]
-    assert names(specs(tools, ["WebFetch", "mcp__s__t"])) == [
-        "Read", "ToolSearch", "WebFetch*", "Write", PLACEHOLDER + "*", "mcp__s__t*"]
+    assert names(specs(tools, ["WebFetch"])) == [
+        "Read", "ToolSearch", "WebFetch*", PLACEHOLDER + "*", "Write"]
+    assert names(specs(tools, ["WebFetch", "mcp__s__t", "mcp__s__u"])) == [
+        "Read", "ToolSearch", "WebFetch*", "Write", "mcp__s__t*", PLACEHOLDER + "*",
+        "mcp__s__u*"]
 
 
 def test_a_listed_last_tool_keeps_the_placeholder_before_it() -> None:
@@ -135,15 +142,41 @@ def test_keyword_ranking() -> None:
     assert schema["properties"]["max_results"]["default"] == 5
 
 
-def test_the_whole_name_counts_for_each_term_on_its_own() -> None:
+def test_the_raw_name_does_not_score() -> None:
+    # Claude Code's whole-name +3 reads the name's words joined (no
+    # ``mcp__``, no ``__``) and only while nothing scored: "mcp" boosts no MCP
+    # tool, and a term across the ``__`` boundary finds nothing.
     search = ToolSearchTool({t.name: t for t in [
         Fake("mcp__slack__list", description="List channels."),
         Fake("mcp__slack__send_message", description="Post to a channel."),
     ]})
-    # "slack" scores both alike; "ack__send" is only in one tool's whole
-    # name, which counts though "slack" already scored.
-    assert search.search("slack ack__send") == ["mcp__slack__send_message",
-                                                "mcp__slack__list"]
+    assert search.search("mcp") == []
+    assert search.search("ack__send") == []
+    assert search.search("send_mes") == ["mcp__slack__send_message"]
+
+
+def test_a_search_hint_scores_and_filters() -> None:
+    hinted = Fake("NotebookEdit", description="Edit a cell.")
+    hinted.search_hint = "Change Jupyter notebook cells"  # type: ignore[attr-defined]
+    search = ToolSearchTool({t.name: t for t in [
+        Fake("WebFetch", description="Fetch a page about jupyter."), hinted]})
+    assert search.search("jupyter") == ["NotebookEdit", "WebFetch"]  # +4 over +2
+    assert search.search("+cells edit") == ["NotebookEdit"]
+    assert search_hint(hinted) == "change jupyter notebook cells"
+
+
+async def test_no_match_names_the_mcp_servers_that_are_down() -> None:
+    search = ToolSearchTool({"Tool": Fake("Tool")})
+    ctx = ToolContext(task_id="t", call_id="c", env=None, record=lambda *_: None,
+                      state={"mcp": {"down": {"slack": "connection refused", "mail": ""}}})
+    out = await search.run({"query": "calendar", "max_results": 5}, ctx)
+    text = out.content[0].text  # type: ignore[union-attr]
+    assert text.startswith("No deferred tool matches 'calendar'.")
+    assert 'mail; slack: "connection refused"' in text and "connection failure" in text
+    plain = await search.run({"query": "calendar", "max_results": 5},
+                             ToolContext(task_id="t", call_id="c", env=None, state={},
+                                         record=lambda *_: None))
+    assert plain.content[0].text == "No deferred tool matches 'calendar'."  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize("limit", [float("inf"), float("-inf"), float("nan"), "5", None])
@@ -216,7 +249,7 @@ async def test_a_loaded_tool_is_sent_and_callable_and_survives_compaction(
     await rt.run_until_idle()
     first, _, after_load, after_compact = provider.requests
     assert names(first.tools) == ["Read", PLACEHOLDER + "*", "ToolSearch"]
-    assert names(after_load.tools) == ["Read", "ToolSearch", "WebFetch*", PLACEHOLDER + "*"]
+    assert names(after_load.tools) == ["Read", "ToolSearch", PLACEHOLDER + "*", "WebFetch*"]
     assert names(after_compact.tools) == names(after_load.tools)
     results = [r.event.result for r in await client.events(tid)
                if isinstance(r.event, ToolFinished)]

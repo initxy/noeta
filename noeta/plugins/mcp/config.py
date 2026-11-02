@@ -1,14 +1,16 @@
 """MCP vocabulary: server specs, errors, tool naming and the text caps.
 
-Naming: a server tool is offered to the model as ``mcp__{alias}__{safe}``,
-where ``safe`` is the server's raw tool name with every character outside
-``[A-Za-z0-9_-]`` replaced by ``_``. The full name must match
-``^[A-Za-z0-9_-]{1,64}$`` (provider-safe). A name that would pass 64
-characters keeps the ``mcp__{alias}__`` prefix, is cut, and ends in ``_`` plus
-8 hex digits of the raw name's sha256; two raw names of one server that
-sanitize alike are told apart the same way (a raw name that is already
-provider-safe keeps its plain form), so one awkward name never costs the rest
-of the server's tools. ``mcp__`` is a reserved prefix.
+Naming (Claude Code's): a server tool is offered to the model as
+``mcp__{alias}__{safe}``, where ``safe`` is the server's raw tool name with
+every character outside ``[A-Za-z0-9_-]`` replaced by ``_``, case kept and
+nothing cut. Two raw names of one server that sanitize alike are told apart
+with ``_`` plus 8 hex digits of the raw name's sha256 (a raw name that is
+already safe keeps its plain form), so one awkward name never costs the rest
+of the server's tools. A full name over :data:`NAME_MAX` characters (the
+Messages API's limit) is not offered: the server's log says so and its other
+tools stay. A provider with a shorter limit maps names in its adapter
+(``noeta/backends/providers/_common.py`` ``wire_tool_name``). ``mcp__`` is a
+reserved prefix.
 """
 
 from __future__ import annotations
@@ -26,11 +28,13 @@ __all__ = [
     "LOADED_DESCRIPTION_MAX_CHARS",
     "MAX_TIMEOUT_S",
     "MCP_PREFIX",
+    "NAME_MAX",
     "TRANSPORTS",
     "McpAuthRequired",
     "McpConfigError",
     "McpError",
     "McpServer",
+    "McpServerError",
     "OAuthSettings",
     "cap_text",
     "describe_tool",
@@ -97,20 +101,30 @@ DESCRIPTION_MAX_CHARS = 4096
 LOADED_DESCRIPTION_MAX_CHARS = 16_384
 _TRUNCATED = "… [truncated]"
 
-_ALIAS_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
-_NAME_MAX = 64
-_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_ALIAS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+#: The longest tool name sent (the Messages API's limit, Claude Code's cut-off).
+NAME_MAX = 128
 _UNSAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
 _NAME_HASH_LEN = 8
 
 
 class McpConfigError(ValueError):
     """The operator's wiring is wrong (a bad alias, an empty command, a tool
-    name that cannot be made provider-safe, two servers producing one name)."""
+    name that is empty, two servers producing one name)."""
 
 
 class McpError(Exception):
     """A transport, protocol or timeout fault talking to a server."""
+
+
+class McpServerError(McpError):
+    """The server answered a request with a JSON-RPC ``error``: it is up,
+    and refused or could not do what was asked."""
+
+    def __init__(self, message: str, code: object = None, detail: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
 
 
 class McpAuthRequired(McpError):
@@ -153,8 +167,10 @@ class McpServer:
     ``tools`` keeps only the named raw tools (``None`` = all advertised).
     ``call_timeout`` bounds one ``tools/call`` (``None``: :func:`tool_timeout_s`).
     ``deferred`` (the default) announces the server's tools by name only:
-    the model loads them with ``ToolSearch`` (the ``tool_search`` plugin);
-    ``False`` sends their schemas from the first request.
+    the model loads them with ``ToolSearch`` (the ``tool_search`` plugin),
+    except a tool whose ``_meta["anthropic/alwaysLoad"]`` is true; ``False``
+    sends their schemas from the first request. ``defer_all`` (the settings'
+    ``alwaysLoad: false``) defers every tool, whatever its ``_meta`` says.
     ``bare_elicitation`` declares the elicitation capability without its
     ``form`` / ``url`` modes, for servers that reject them.
     """
@@ -167,6 +183,7 @@ class McpServer:
     tools: Sequence[str] | None = None
     call_timeout: float | None = None
     deferred: bool = True
+    defer_all: bool = False
     type: str = ""
     headers_helper: str = ""
     oauth: OAuthSettings | None = None
@@ -175,7 +192,7 @@ class McpServer:
     def __post_init__(self) -> None:
         if not _ALIAS_RE.match(self.alias):
             raise McpConfigError(
-                f"invalid MCP server alias {self.alias!r} (must match ^[a-z0-9_-]{{1,32}}$)"
+                f"invalid MCP server alias {self.alias!r} (must match ^[A-Za-z0-9_-]+$)"
             )
         if bool(self.command) == bool(self.url):
             raise McpConfigError(
@@ -236,21 +253,14 @@ def describe_tool(description: object) -> tuple[str, str]:
 
 
 def make_tool_name(alias: str, raw: object, *, disambiguate: bool = False) -> str:
-    """``mcp__{alias}__{safe}``, shortened or disambiguated with a hash of
-    the raw name (see the module docstring)."""
+    """``mcp__{alias}__{safe}``, with a hash of the raw name when
+    ``disambiguate`` (see the module docstring)."""
     if not isinstance(raw, str) or raw == "":
         raise McpConfigError(f"MCP server {alias!r} advertised a tool with a missing/empty name")
-    safe = _UNSAFE_RE.sub("_", raw)
-    prefix = f"{MCP_PREFIX}{alias}__"
-    name = f"{prefix}{safe}"
-    if disambiguate or len(name) > _NAME_MAX:
+    name = f"{MCP_PREFIX}{alias}__{_UNSAFE_RE.sub('_', raw)}"
+    if disambiguate:
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-        tail = f"_{digest[:_NAME_HASH_LEN]}"
-        name = f"{prefix}{safe[: _NAME_MAX - len(prefix) - len(tail)]}{tail}"
-    if not _NAME_RE.match(name):
-        raise McpConfigError(
-            f"MCP tool name {name!r} is not provider-safe (must match ^[A-Za-z0-9_-]{{1,64}}$)"
-        )
+        name = f"{name}_{digest[:_NAME_HASH_LEN]}"
     return name
 
 
