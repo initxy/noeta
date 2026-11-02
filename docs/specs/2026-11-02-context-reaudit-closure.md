@@ -248,8 +248,9 @@ Resolved items, with the evidence that settled them:
 - **A1** CC reviews `SubagentHandback` as an ordinary transcript entry (m1/0035), as noeta did;
   `<subagent_hand_back>` with severity scoring is CC's end-of-run review of an agent that ended
   without handing back (owner). A flagged hand-back is now delivered under a warning (matched).
-- **A3** The bundle applies `useAutoModeDuringPlan` to plan mode entered from any mode except
-  `bypassPermissions` (`_LtL`, `y1n`, `_e()`). Matched.
+- **A3** The bundle applies `useAutoModeDuringPlan` to any plan while its account-level auto-mode
+  gate is open, bypass not available (`nvo`, `y1n`, `_Lt`, `gPe`); review P1-1 narrowed noeta's
+  to plans begun in auto mode (row below). CC does not tell the classifier it is in plan mode.
 - **A5** CC builds a "Previous: …" line but never sends it (dead code in `Li()`); noeta sends none.
 - **A14** CC's `EnterPlanMode` asks only in diskless (remote) sessions; row below.
 - **cls.input.12 / .13** CC's meta and outcome lines sit behind switches that are off by default
@@ -259,6 +260,16 @@ Resolved items, with the evidence that settled them:
   "Operation stopped by hook" and makes no model call: matched.
 - **Compaction fallback tools** the call site's `_a` is lodash `uniqBy` (names once, order kept,
   no sort): matched.
+- Review round (bundle): hook output is capped only on CC's main hook path (`D_e`); `PreCompact`
+  and the other `f0` events are never capped (`UHe` joins them whole). After an overflow CC still
+  makes the fallback summarize call and reads the gap from it (`Lrn`). A run stopped with
+  `TaskStop` is marked notified, so the model gets no notice (`Lge`). `critical_system_reminder`
+  goes with every loop iteration; the ultrathink note reads only the submitted prompt (`yvr`).
+  `autoMode` entries go in raw (`iAn` / `Mg`). The skill-folder walk stops below home and at the
+  git root, including it (`getProjectDirsUpToHome`); `verify` / `code-review` scan git's changed
+  files (a set of those two names, logged "Changed files not searched for nested skills").
+  `tool_reference`s to tools a request does not offer are filtered out, with a note when none is
+  left; noeta's note is in its own words.
 
 Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`, dsh
 `deepseek-ai/DeepSeek-Harness`):
@@ -354,6 +365,28 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   `{rule, source, …}`; pi, dsh: no classifier). Why: the host passes noeta merged rule lists with no
   settings source, so a source would be invented; with an API key the server does not run the
   check, so the field is unread.
+- **A3 plan mode with the classifier only when begun in auto mode.** CC: any plan while its
+  account-level auto-mode gate is open (server switch, supported model, no `disableAutoMode`).
+  pi: no plan mode. dsh: no classifier. Why: noeta has no account gate to stand for "auto mode
+  available", and a person who switched to default chose to be asked: safer on unattended
+  servers, and no classifier calls (falling back to the main model) on non-Anthropic hosts.
+- **Former names answer settings** (review P1-2). CC never renamed MCP tools or skills, so it has
+  no old names. noeta: an MCP tool's former name (server lower-cased and cut to 32, names over 64
+  cut with a hash) and a skill's frontmatter `name` keep answering permission rules (deny and ask
+  always; allow only while unambiguous), hook matchers and `if` conditions, tool lists, preloads,
+  the prompt tool and `NOETA_TERMINAL_MCP_TOOLS`, each match logged once; the model sees only
+  CC's names. Why: a deny rule that silently stops matching lets the tool run in bypass or auto
+  mode. pi, dsh: no rename to carry.
+- **A skill's `model` of another provider family is ignored** with a warning. CC switches always
+  (it speaks to one provider). pi, dsh: no per-skill model. Why: noeta's aliases are Claude ids; on
+  an OpenAI-compatible or DeepSeek deployment the switch would fail every request of the turn.
+- **A command file never takes a plugin skill's or scoped skill's name.** CC lists skill-directory
+  commands first, so `.claude/commands/sp/brain.md` would shadow plugin `sp:brain`. pi, dsh: no
+  plugin names. Why: rules and hooks written for the plugin's skill must not reach a repository
+  file (main's rule).
+- **OpenAI short names in text too**, and **over-128 names named by a fruitless `ToolSearch`**
+  (CC has no such note; its unavailable-tools note covers rejected schemas only): the model reads
+  one name per tool, and a server lost to a long name is not read as a missing capability.
 - **A14 `EnterPlanMode` asks** in `default` / `acceptEdits` (CC asks only in remote sessions; pi:
   no plan mode; dsh: only the person's `/plan`). Why: noeta runs server-side like CC's remote
   sessions. Owner question 8.
@@ -374,6 +407,10 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
 9. `--effort ultracode` and `--settings` in the CLI? Recommended: not until asked (task config
    covers HTTP and SDK hosts).
 10. R5: send CC's shell-first note in `bypassPermissions` too? Recommended: no (eval above).
+11. Sonnet 4.6 now has CC's 200K window and noeta no 1M option for it; add CC's 1M selector?
+    Recommended: only when a host asks.
+12. A model calling a not-yet-loaded MCP tool by its OpenAI short name gets "unknown tool", not
+    the not-loaded hint. Recommended: leave.
 
 ## Plan
 
@@ -428,3 +465,20 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   (DeepSeek V4.1, 9 trials) 0.957 against 0.953, "no regression": drops only in the known-noisy
   `delegate_parallel_review` (0.22) and `hook_block_adapts` (0.48). Awaiting the owner's answers
   before review and merge.
+- 2026-11-02 Independent review of c686df54 (P0 0, P1 3, P2 14, P3 ~15) fixed on `rf-perms`,
+  `rf-mcp`, `rf-skills`, `rf-misc` (each `make check` green, `make parity` 0), merged; the
+  coordinator wrote the five missing deviation rows (R2/R3, R18, MCP instruction re-announce, T11,
+  A5), the R5 numbers in one form, CHANGELOG Breaking entries (models, hooks, task config, public
+  names, MCP and skill names, plan mode, `auto_mode` lists, the `spent` record) and the follow-ups
+  ledger (S13 done). Map: P1-1 → plan classifier only for plans begun in auto (row); P1-2 →
+  former MCP and skill names answer settings, Breaking with migration; P1-3 → skill model/effort
+  cleared at a turn's first call; P2-1 → Breaking text and a load warning; P2-2 → five rows;
+  P2-3/P2-4 → Breaking list; P2-5 → cap only model-bound events, broad save fallback, logged
+  background hooks; P2-6 → `spent` record in usage and the USD note; P2-7 → missing tool list is a
+  mismatch, cache marks and description changes compared; P2-8 → `tool_reference` filtered to the
+  request's tools; P2-9 → short names in text; P2-10 → other-family skill model ignored (row);
+  P2-11 → guard restored (row); P2-12 → absence checked with `stat`; P2-13 → exec env's home,
+  per-env cache; P2-14 → mentions seen-through. P3s: hand-back key, `_region` (CC raw), stalled
+  watch, Monitor cap, keeper loop, USD reads, dead branch, `TaskStop` without background jobs,
+  stopped Workflow notice, ultrathink once, fence close, settings int, fingerprint, recall key
+  `chars`, CHANGED_FILES evidence, A14 reason, R5 numbers, A11 test, `tool_choice` docstring.
