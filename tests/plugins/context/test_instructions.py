@@ -12,7 +12,7 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ModelRequest, ToolResult
 from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
-from noeta.plugins.instructions.files import matches
+from noeta.plugins.instructions.files import clean, matches
 from noeta.plugins.memory import Memory, memory_dir_for
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
@@ -157,6 +157,19 @@ async def test_imports_follow_the_file_naming_them(h: Harness, tmp_path: Path) -
     assert names == ["NOETA.md", "AGENTS.md", "style.md", "deep1.md", "deep2.md"]
     text = h.provider.requests[0].messages[0].text
     assert "<!--" not in text and "never" not in text and "outside\n" not in text
+
+
+def test_only_comment_blocks_are_dropped() -> None:
+    """Claude Code's markdown lexer drops a comment that stands as a block;
+    one inside a paragraph, inline code, a code block or a list item stays."""
+    text = ("<!-- maintainers only -->\nUse tabs.\n<!-- a\nlong one -->\n\n"
+            "Keep <!-- inline --> this and `<!-- code -->`.\n"
+            "```\n<!-- fenced -->\n```\n- item\n  <!-- in the item -->\n"
+            "<!-- note --> after it\n<!-- never closed")
+    assert clean(text)[0] == (
+        "Use tabs.\nKeep <!-- inline --> this and `<!-- code -->`.\n"
+        "```\n<!-- fenced -->\n```\n- item\n  <!-- in the item -->\n"
+        " after it\n<!-- never closed")
 
 
 async def test_an_import_through_a_link_out_of_the_repository_is_not_read(
