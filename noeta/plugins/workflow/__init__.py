@@ -56,6 +56,23 @@ SCHEMA_NOTE = ("\n\nYou are a step of a workflow script: return your result by c
 JSON_TEXT_NOTE = "You are a step of a workflow script: your final reply is parsed as JSON"
 
 
+def _resume_call(run: Mapping[str, Any]) -> str:
+    """The ``Workflow`` call that resumes ``run`` from its saved script
+    (``""`` when the script was not saved)."""
+    path = run.get("script_path")
+    if not path:
+        return ""
+    args = run.get("args")
+    extra = "" if args is None else f", args: {json.dumps(args, ensure_ascii=False)}"
+    return f"Workflow({{scriptPath: '{path}', resumeFromRunId: '{run['run_id']}'{extra}}})"
+
+
+def _failure(run: Mapping[str, Any], data: Mapping[str, Any]) -> str:
+    """One failed agent of ``run``: its label (or key) and why."""
+    agent = (run.get("agents") or {}).get(data.get("key")) or {}
+    return f"{agent.get('label') or data.get('key')}: {data.get('error') or 'failed'}"
+
+
 def default_max_running() -> int:
     """Agents one run keeps running at once: CPUs - 2, between 2 and 16."""
     return min(16, max(2, (os.cpu_count() or 4) - 2))
@@ -112,15 +129,18 @@ class Orchestration(Extension):
         if kind == "run":
             run = {**data, "status": "running", "agents": {}, "results": dict(data.get("results")
                                                                                or {}),
-                   "failed": [], "logs": 0, "spent": 0}
+                   "failed": [], "logs": 0, "spent": 0, "calls": 0, "failures": []}
         elif kind == "agent" and run:
             run["agents"] = {**run["agents"], data["key"]: {
                 k: data.get(k) for k in ("child_id", "label", "phase", "schema")}}
         elif kind == "result" and run:
             run["results"] = {**run["results"], data["key"]: data.get("value")}
             run["spent"] = int(run.get("spent") or 0) + int(data.get("tokens") or 0)
+            run["calls"] = int(run.get("calls") or 0) + int(data.get("tool_calls") or 0)
         elif kind == "agent_failed" and run:
             run["failed"] = [*run["failed"], data["key"]]
+            run["calls"] = int(run.get("calls") or 0) + int(data.get("tool_calls") or 0)
+            run["failures"] = [*(run.get("failures") or []), _failure(run, data)]
         elif kind == "logged" and run:
             run["logs"] = int(data["n"])
         elif kind == "ended" and run:
@@ -220,25 +240,40 @@ class Orchestration(Extension):
 
     async def _end(self, sink: Sink, run: dict[str, Any], status: str, *,
                    value: Any = None, error: str = "") -> int:
+        """Record the run's end and send its notice (Claude Code's meaning):
+        the summary; for a failed or stopped run how to resume it, for a
+        completed one its result and how to re-run only what changed; the
+        agents that failed; the usage."""
         rid = run["run_id"]
         sink.record(self.name, "ended", {"run_id": rid, "status": status, "error": error})
-        agents = len(run["agents"])
+        name = run["name"] or "Dynamic workflow"
+        resume = _resume_call(run)
+        body = ""
         if status == "completed":
-            summary = f'Workflow "{run["name"]}" completed'
-            result = json.dumps(value, ensure_ascii=False, indent=2)
-        elif status == "killed":
-            summary = f'Workflow "{run["name"]}" was stopped'
-            result = ""
+            summary = f'Dynamic workflow "{name}" completed'
+            body += f"\n<result>{escape(json.dumps(value, ensure_ascii=False, indent=2))}" \
+                    "\n</result>"
+            if resume:
+                body += ("\n<diagnostics>To change what the script does with the agents' "
+                         f"results and run it again: {escape(resume)}; agents whose prompt "
+                         "and options are unchanged answer from this run.</diagnostics>")
         else:
-            summary = f'Workflow "{run["name"]}" failed: {error}'
-            result = error
+            summary = f'Dynamic workflow "{name}" was stopped' if status == "killed" \
+                else f'Dynamic workflow "{name}" failed: {error or "unknown error"}'
+            if resume:
+                body = (f"\n<recovery>To resume (after editing the script if needed): "
+                        f"{escape(resume)}</recovery>")
+        failures = [str(f) for f in run.get("failures") or []]
+        if failures:
+            body += f"\n<failures>{escape(chr(10).join(failures))}</failures>"
         duration = int(max(0.0, time.time() - float(run.get("started_at") or time.time())) * 1000)
+        body += (f"\n<usage><agent_count>{len(run['agents'])}</agent_count>"
+                 f"<subagent_tokens>{int(run.get('spent') or 0)}</subagent_tokens>"
+                 f"<tool_uses>{int(run.get('calls') or 0)}</tool_uses>"
+                 f"<duration_ms>{duration}</duration_ms></usage>")
         element = notices.task_notification(
             (("task-id", rid), ("tool-use-id", f"{run.get('call_id', '')}"), ("status", status),
-             ("summary", escape(summary))),
-            body=(f"\n<result>{escape(result)}\n</result>\n<usage><subagent_tokens>"
-                  f"{int(run.get('spent') or 0)}</subagent_tokens><agents>{agents}</agents>"
-                  f"<duration_ms>{duration}</duration_ms></usage>"))
+             ("summary", escape(summary))), body=body)
         text = f"{NOTICE_GUARD}\n\n{element}"
         sink.notify(summary, kind="workflow", data={"run_id": rid, "status": status})
         if sink.post is not None:
@@ -265,12 +300,17 @@ class Orchestration(Extension):
             ok = value is not None and not schema_errors(value, schema)
         if ok:
             view.record(self.name, "result", {"run_id": rid, "key": key, "value": value,
-                                              "tokens": tokens})
+                                              "tokens": tokens, "tool_calls": ended.tool_calls})
             run["results"] = {**run["results"], key: value}
             run["spent"] = int(run.get("spent") or 0) + tokens
         else:
-            view.record(self.name, "agent_failed", {"run_id": rid, "key": key})
+            error = ended.error or ("it gave no result matching its schema"
+                                    if ended.status == "done" else ended.status)
+            data = {"run_id": rid, "key": key, "error": error, "tool_calls": ended.tool_calls}
+            view.record(self.name, "agent_failed", data)
             run["failed"] = [*run["failed"], key]
+            run["failures"] = [*(run.get("failures") or []), _failure(run, data)]
+        run["calls"] = int(run.get("calls") or 0) + ended.tool_calls
 
     @staticmethod
     async def _structured(view: TaskView, ended: ChildEnded) -> Any:

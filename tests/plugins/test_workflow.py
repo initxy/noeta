@@ -142,6 +142,9 @@ async def test_a_workflow_runs_its_agents_and_notifies_its_end(store: SqliteStor
     assert model.children[2].messages[0].text.startswith("sum 2,4")
     notice = model.parent[-1].messages[-1].text
     assert "<task-notification>" in notice and "<status>completed</status>" in notice
+    assert '<summary>Dynamic workflow "count-words" completed</summary>' in notice
+    assert "<usage><agent_count>3</agent_count><subagent_tokens>15</subagent_tokens>" \
+           "<tool_uses>2</tool_uses><duration_ms>" in notice
     assert '"counts": [\n    2,\n    4\n  ]' in notice and '"total": "6"' in notice
     logs = [e.data["data"]["log"] for e in events if isinstance(e, ExtensionRecorded)
             and e.kind == "notice" and (e.data.get("data") or {}).get("log")]
@@ -215,7 +218,7 @@ async def test_task_stop_ends_a_run_and_cancels_its_agents(store: SqliteStore) -
     assert model.children == []  # no agent answered, and the sum never started
     notice = model.parent[-1].messages[-1].text
     assert "<status>killed</status>" in notice
-    assert '<summary>Workflow "count-words" was stopped</summary>' in notice
+    assert '<summary>Dynamic workflow "count-words" was stopped</summary>' in notice
 
 
 async def test_resume_reuses_finished_agents(store: SqliteStore) -> None:
@@ -516,3 +519,48 @@ def test_a_run_keeps_two_to_sixteen_agents_running(monkeypatch: pytest.MonkeyPat
         monkeypatch.setattr(workflow.os, "cpu_count", lambda c=cpus: c)
         assert workflow.default_max_running() == want
 
+
+
+class _Sink:
+    post = None
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, str, Any, Any]] = []
+
+    def notify(self, text: str, *, kind: str | None = None, data: Any = None) -> None:
+        pass
+
+    def record(self, extension: str, kind: str, data: Any = None, *,
+               message: Any = None) -> None:
+        self.records.append((extension, kind, data, message))
+
+
+@pytest.mark.parametrize("status", ["failed", "killed", "completed"])
+async def test_the_end_notice_says_how_to_resume_or_rerun(status: str) -> None:
+    # Claude Code's: a failed or stopped run's notice says how to resume it
+    # from its saved script, a completed one's how to re-run what changed;
+    # failed agents are listed.
+    ext = Orchestration(engine=Engine())
+    run = {"run_id": "wf_abc123", "name": "audit", "call_id": "c1", "started_at": 0,
+           "script_path": "/spill/t/workflows/wf_abc123.js", "args": ["a"],
+           "agents": {"k1": {"label": "scan a"}}, "spent": 7, "calls": 4,
+           "failures": ["scan a: cancelled"]}
+    sink = _Sink()
+    await ext._end(sink, run, status, value={"ok": 1}, error="the script failed")
+    notice = sink.records[-1][3].text
+    call = "Workflow({scriptPath: '/spill/t/workflows/wf_abc123.js', " \
+           "resumeFromRunId: 'wf_abc123', args: [\"a\"]})"
+    summary = {"failed": 'Dynamic workflow "audit" failed: the script failed',
+               "killed": 'Dynamic workflow "audit" was stopped',
+               "completed": 'Dynamic workflow "audit" completed'}[status]
+    assert f"<summary>{summary}</summary>" in notice
+    assert ("<recovery>" in notice) is (status != "completed")
+    assert ("<diagnostics>" in notice) is (status == "completed")
+    assert ("<result>" in notice) is (status == "completed")
+    assert call in notice
+    assert "<failures>scan a: cancelled</failures>" in notice
+    assert "<usage><agent_count>1</agent_count><subagent_tokens>7</subagent_tokens>" \
+           "<tool_uses>4</tool_uses>" in notice
+    del run["script_path"]
+    await ext._end(sink, run, status, value=None, error="x")
+    assert "resumeFromRunId" not in sink.records[-1][3].text
