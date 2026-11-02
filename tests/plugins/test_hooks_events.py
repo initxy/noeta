@@ -1111,3 +1111,42 @@ async def test_a_stop_guard_by_a_shared_old_name_fails_rather_than_blocks(
                     extensions=(TwoServers(),)).start()
     assert len(s.provider.requests) == 1
     assert any("old name" in n for n in await s.notices())
+
+
+async def test_a_continuation_that_already_replied_fires_no_session_start(
+        tmp_path: Path) -> None:
+    """A continuation that ran before continued conversations fired
+    SessionStart (its log has no record of it) folds as continued; after
+    the upgrade it must not fire one mid-conversation."""
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply(f"r{i}") for i in range(6)],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+
+    class Before(Hooks):  # the plugin as it was: no start for a continuation
+        async def on_start(self, view: TaskView) -> None:
+            return None
+
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Before(hooks=config, runner=s.runner), FileTools()])
+    s.tid = await s.client.create("a", "go on", config={"cwd": str(s.work)},
+                                  history_from=s.tid)
+    await s.runtime().run_until_idle()
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.send("after the upgrade")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
+
+
+async def test_an_unknown_continued_as_is_taken_as_fork(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.core.client import CONTINUED_AS_KEY
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply("a"), reply("b")],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+    with caplog.at_level(logging.WARNING, logger="noeta.hooks"):
+        await s.client.create("a", "go on", config={"cwd": str(s.work),
+                                                     CONTINUED_AS_KEY: "sideways"},
+                              history_from=s.tid)
+        await s.runtime().run_until_idle()
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "fork"]
+    assert "sideways" in caplog.text

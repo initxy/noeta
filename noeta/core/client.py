@@ -31,6 +31,8 @@ Input = Union[str, Message]
 #: carried on), ``"fork"`` (the default: a new branch of the conversation),
 #: or ``"rewind"`` (no start told, as Claude Code's rewind tells none).
 CONTINUED_AS_KEY = "continued_as"
+#: The values :data:`CONTINUED_AS_KEY` takes.
+CONTINUED_AS = ("resume", "fork", "rewind")
 
 
 async def _message(value: Input) -> Message:

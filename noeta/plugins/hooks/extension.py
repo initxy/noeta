@@ -15,7 +15,7 @@ import httpx
 import msgspec
 
 from noeta.core import records
-from noeta.core.client import CONTINUED_AS_KEY
+from noeta.core.client import CONTINUED_AS, CONTINUED_AS_KEY
 from noeta.core.errors import TurnDone, TurnFailed
 from noeta.core.events import (
     Compacted,
@@ -291,10 +291,19 @@ class Hooks(Extension):
             return
         if st.continued:
             # A continued conversation (``history_from``): Claude Code's
-            # resume / fork sources; a rewind fires none.
-            source = str(view.state.config.get(CONTINUED_AS_KEY) or "fork")
+            # resume / fork sources; a rewind fires none. Only before the
+            # task's own first reply: a continuation that ran before this
+            # rule existed folds to ``continued`` too, mid-conversation.
+            source = view.state.config.get(CONTINUED_AS_KEY) or "fork"
+            if source not in CONTINUED_AS:
+                log.warning("hooks: %s %r is none of %s; taken as fork", CONTINUED_AS_KEY,
+                            source, ", ".join(CONTINUED_AS))
+                source = "fork"
             view.record(self.name, "started", {"event": "SessionStart"})
-            if source in ("resume", "fork") and "SessionStart" in self.matchers:
+            replied = any(m.role == "assistant" and seq > 0 for seq, m in
+                          zip(view.state.message_seqs, view.state.messages, strict=False))
+            if source in ("resume", "fork") and not replied \
+                    and "SessionStart" in self.matchers:
                 reads = await self._d.run("SessionStart", view,
                                           {"source": source, "model": view.model})
                 self._start_context(view, source, reads)

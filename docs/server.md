@@ -105,7 +105,7 @@ set, `client_hooks`: the record of a headless client's hook callbacks
 is told to orchestrate with `Workflow` on every substantial task, and told again when it is
 taken away (`noeta.plugins.workflow.opt_in`). `continued_as` says how a task created with
 `history_from` continues its source, for SessionStart hooks: `fork` (the default), `resume`, or
-`rewind` (none fires).
+`rewind` (none fires); another value is refused.
 
 ## Several parties
 

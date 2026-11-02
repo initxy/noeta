@@ -542,3 +542,8 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   hooks and fs `continue_state` docstrings say what is not carried; a follow-ups line for pasted
   images across a continuation. T-P3-4 → an `mcp_tool` hook by a shared old name fails rather
   than blocks on `Stop` / `SubagentStop` (test; deviations row, CHANGELOG).
+- 2026-11-02 Fourth confirm review: two P3s closed on `rr-cont`. A continuation's SessionStart
+  fires only before the task's own first reply, so a continuation that ran before the rule (it
+  folds as continued again) fires none mid-conversation (test: an old-plugin run, then the new
+  one). `continued_as` takes `resume` / `fork` / `rewind`: the HTTP guard refuses another value
+  (400), and the hooks plugin logs one from elsewhere and takes it as `fork` (tests).

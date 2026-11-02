@@ -15,7 +15,7 @@ import msgspec
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from noeta.core.client import CONTINUED_AS_KEY, ClientAPI, Input
+from noeta.core.client import CONTINUED_AS, CONTINUED_AS_KEY, ClientAPI, Input
 from noeta.core.errors import UnknownTask
 from noeta.core.events import Recorded
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
@@ -104,6 +104,8 @@ class GuardedClient:
                 raise Refused(f"a request may not set the task config key {key!r} "
                               f"(only {', '.join(allowed)})")
         self._mode(config.get("permission_mode"))
+        if config.get(CONTINUED_AS_KEY, "fork") not in CONTINUED_AS:
+            raise ValueError(f"{CONTINUED_AS_KEY} is one of {', '.join(CONTINUED_AS)}")
         if config.get(SCHEMA_KEY) is not None:
             problem = answer_schema_problem(config[SCHEMA_KEY])
             if problem is not None:

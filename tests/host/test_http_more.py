@@ -385,3 +385,15 @@ async def test_a_clients_message_is_the_persons_text_and_images_only(
             await asyncio.sleep(0.01)
         assert "from the person" in events
         assert '"origin":"agent"' not in events
+
+
+async def test_continued_as_takes_only_its_values(
+        served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        bad = await http.post("/tasks", json={"agent": "main", "config": {
+            "cwd": str(tmp_path / "sub"), "continued_as": "bogus"}})
+        assert bad.status_code == 400 and "continued_as" in bad.text
+        ok = await http.post("/tasks", json={"agent": "main", "config": {
+            "cwd": str(tmp_path / "sub"), "continued_as": "resume"}})
+        assert ok.status_code == 201
