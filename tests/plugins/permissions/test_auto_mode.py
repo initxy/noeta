@@ -513,3 +513,17 @@ async def test_plan_mode_asks_the_person_when_the_setting_is_off(store: SqliteSt
     assert "afk-mode-2026-01-31" not in provider.requests[0].betas
     last = (await events(client, tid))[-1]
     assert isinstance(last, Waiting) and last.on == "approval"
+
+
+async def test_plan_mode_never_lets_the_classifier_allow_a_file_write(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """A protected path is asked about before plan mode's refusal; in plan
+    mode the person still answers it, never the classifier."""
+    edit = Fake("Edit")
+    provider = ScriptedProvider([
+        reply("", ("Edit", {"file_path": str(tmp_path / ".git" / "config")}))])
+    perms = Permissions(mode="plan", plans_dir=str(tmp_path / "plans"))
+    client, tid = await start(store, provider, [edit], tmp_path, perms)
+    assert not classifier_calls(provider) and not edit.runs
+    last = (await events(client, tid))[-1]
+    assert isinstance(last, Waiting) and last.on == "approval"

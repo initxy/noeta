@@ -115,9 +115,9 @@ class Permissions(Extension):
       config (an agent file's ``permissionMode``) and as a switch.
     * ``auto_during_plan`` — plan mode runs with the auto-mode classifier
       (Claude Code's top-level ``useAutoModeDuringPlan``, default on): an ask
-      in plan mode goes to the classifier, except plan mode's own refusal of
-      a write, which the person answers. Not when planning started from
-      ``bypassPermissions``.
+      in plan mode goes to the classifier, except a file tool's write and
+      plan mode's refusal of a tool that is not read-only, which the person
+      answers. Not when planning started from ``bypassPermissions``.
 
     The rest are noeta's own:
 
