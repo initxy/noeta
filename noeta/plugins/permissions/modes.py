@@ -22,6 +22,7 @@ from noeta.plugins.permissions.state import (
     NAME,
     PermState,
     auto_active,
+    plan_classifier_on,
     state_of,
 )
 
@@ -47,9 +48,9 @@ PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
 def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass: bool,
            plans_dir: str, by_command: bool = False, auto_during_plan: bool = True) -> None:
     """Record a switch from ``current`` to ``mode`` (asked for at log seq
-    ``seq``; ``by_command``: by a typed ``/plan``), when it is one.
-    ``auto_during_plan``: plan mode keeps the auto-mode classifier (kept
-    with the plan: whether planning after auto mode leaves it)."""
+    ``seq``; ``by_command``: by a typed ``/plan``), when it is one. A plan
+    records whether it runs with the auto-mode classifier
+    (:func:`plan_classifier_on`)."""
     if not isinstance(mode, str) or mode not in p.PERMISSION_MODES:
         return
     if mode == "bypassPermissions" and disable_bypass:
@@ -63,7 +64,8 @@ def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass:
         path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
         data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq,
                         **({"by_command": True} if by_command else {}),
-                        **({} if auto_during_plan else {AUTO_DURING_PLAN: False})}
+                        AUTO_DURING_PLAN: plan_classifier_on(
+                            current, auto_during_plan=auto_during_plan)}
     view.record(NAME, "mode", data)
 
 
@@ -80,7 +82,7 @@ def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
             else pl.new_plan_path(plans_dir))
     view.record(NAME, "mode", {"mode": mode, "plan": {
         "path": path, "pre_mode": pre, "entered_seq": 0,
-        **({} if auto_during_plan else {AUTO_DURING_PLAN: False})}})
+        AUTO_DURING_PLAN: plan_classifier_on(pre, auto_during_plan=auto_during_plan)}})
 
 
 def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str,
@@ -95,7 +97,7 @@ def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str,
     path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
     ctx.record(NAME, "mode", {"mode": "plan", "plan": {
         "path": path, "pre_mode": current, "entered_seq": 0,
-        **({} if auto_during_plan else {AUTO_DURING_PLAN: False})}})
+        AUTO_DURING_PLAN: plan_classifier_on(current, auto_during_plan=auto_during_plan)}})
     return True
 
 

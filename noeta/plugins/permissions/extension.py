@@ -54,6 +54,7 @@ from noeta.plugins.permissions.state import (
     NAME,
     PLAN_NAME_KEY,
     PermState,
+    auto_active,
     fold,
     inherited_rules,
     state_of,
@@ -118,10 +119,13 @@ class Permissions(Extension):
       ``disableBypassPermissionsMode``): as the starting mode, from a task's
       config (an agent file's ``permissionMode``) and as a switch.
     * ``auto_during_plan`` — plan mode runs with the auto-mode classifier
-      (Claude Code's top-level ``useAutoModeDuringPlan``, default on): an ask
-      in plan mode goes to the classifier, except a file tool's write and
-      plan mode's refusal of a tool that is not read-only, which the person
-      answers. Not when planning started from ``bypassPermissions``.
+      when planning starts from auto mode (Claude Code's top-level
+      ``useAutoModeDuringPlan``, default on): an ask in plan mode goes to the
+      classifier, except a file tool's write and plan mode's refusal of a
+      tool that is neither read-only nor a shell tool, which the person
+      answers. A plan begun in any other mode leaves every ask to the
+      person, and its requests carry no auto-mode betas. Settled when plan
+      mode is entered.
 
     The rest are noeta's own:
 
@@ -202,6 +206,11 @@ class Permissions(Extension):
         self.ask_rules = r.parse_rules(ask, "ask")
         self.additional_directories = tuple(_directory(d) for d in additional_directories)
         self.auto_mode = p.check_auto_mode(auto_mode)
+        for key in ("hard_deny", "soft_deny"):
+            if self.auto_mode[key] and "$defaults" not in self.auto_mode[key]:
+                # Only a log line: the classifier's text is as Claude Code's.
+                log.warning('auto_mode.%s has no "$defaults": it replaces the classifier\'s '
+                            "built-in %s rules", key, key)
         self.auto_during_plan = bool(auto_during_plan)
         self.classifier_model = classifier_model
         self.plans_dir = plans_dir or str(default_plans_dir())
@@ -390,13 +399,9 @@ class Permissions(Extension):
                                         plan_classifier=self.plan_classifier(view, mode))
 
     def plan_classifier(self, view: TaskView, mode: str) -> bool:
-        """Whether this task plans with the auto-mode classifier (Claude
-        Code: when ``useAutoModeDuringPlan`` holds, unless planning started
-        from ``bypassPermissions``)."""
-        if mode != "plan" or not self.auto_during_plan:
-            return False
-        plan = state_of(view).plan or {}
-        return plan.get("pre_mode") != "bypassPermissions"
+        """Whether this task plans with the auto-mode classifier, as its
+        plan record says (settled on entry: :func:`state.plan_classifier_on`)."""
+        return mode == "plan" and auto_active(mode, state_of(view).plan)
 
     def _counters(self, view: TaskView, st: PermState, call: ToolUse) -> g.Counters:
         before = 0

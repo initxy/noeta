@@ -357,8 +357,13 @@ class HandbackTool:
                                is_error=True)
         parent = self._state.parent_id
         sender = str(self._state.config.get(AGENT_ID_KEY) or self._state.task_id)
-        # Set by the permission layer when auto mode flagged the report.
+        # Set by the permission layer when auto mode flagged the report;
+        # never the agent's own: a key the model wrote into its call is
+        # dropped unless a rewrite of the call put another value there.
         note = input.get(HANDBACK_REVIEW_KEY)
+        if note is not None and note == _model_input(self._state, ctx.call_id).get(
+                HANDBACK_REVIEW_KEY):
+            note = None
         if parent and ctx.post is not None:
             await ctx.post(Say(message=agent_message(
                 sender, report, note=note if isinstance(note, str) else ""), when="now"),
@@ -369,6 +374,14 @@ class HandbackTool:
         """A hand-back a crash cut short is made again: the caller drops the
         repeated report (its key), and the run ends as it would have."""
         return await self.run(input, ctx)
+
+
+def _model_input(state: TaskState, call_id: str) -> dict[str, Any]:
+    """The input the model wrote for call ``call_id`` (before any rewrite)."""
+    for c in state.calls:
+        if c.use.id == call_id:
+            return dict(c.use.input)
+    return {}
 
 
 class SendMessageTool:
