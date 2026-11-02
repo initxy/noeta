@@ -101,8 +101,8 @@ async def test_planning_without_the_classifier_leaves_auto_mode(
 
 async def test_planning_from_default_mode_owes_no_auto_mode_note(
         store: SqliteStore, tmp_path: Path) -> None:
-    # The classifier screens a plan begun in default mode, but no auto-mode
-    # note was ever sent: none comes in plan mode, nor an exit note after.
+    # A plan begun in default mode (on a host that does not start tasks in
+    # auto mode: no classifier) owes no auto-mode note, nor an exit note.
     client, tid, provider, rt = await _start(store, tmp_path, "default")
     await _prompt(client, tid, rt, "p2", "plan")
     assert GUIDANCE not in notes(provider.requests[1])

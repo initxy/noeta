@@ -10,8 +10,9 @@ from noeta.core.extension import TaskView
 from noeta.toolkit import permission_modes as pm
 
 NAME = "permissions"
-#: In a plan record: ``False`` when plan mode did not keep the auto-mode
-#: classifier (absent: it did).
+#: In a plan record: whether this plan runs with the auto-mode classifier,
+#: settled when plan mode is entered (absent, in a log written before
+#: noeta recorded it: when planning began in auto mode).
 AUTO_DURING_PLAN = "auto_during_plan"
 #: Decisions kept in the folded state (per call id).
 _KEEP = 256
@@ -32,7 +33,7 @@ class PermState:
     #: The mode switched to during the task (``None``: the starting one).
     mode: str | None = None
     #: Plan mode: ``{"path", "pre_mode", "entered_seq", "by_command",
-    #: "auto_during_plan"}`` (the last only when off), kept after it ends.
+    #: "auto_during_plan"}``, kept after it ends.
     plan: dict[str, Any] | None = None
     #: Plan-mode texts sent since planning began or the last compaction.
     plan_reminders: int = 0
@@ -77,6 +78,8 @@ class PermState:
     #: The plan file read at a compaction, owed to the next request
     #: (``{"path", "text"}``).
     plan_file: dict[str, Any] | None = None
+    #: The task has been in auto mode (auto mode is available to it).
+    auto_seen: bool = False
 
 
 def state_of(view: TaskView) -> PermState:
@@ -120,14 +123,16 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
             due = (*due, "plan_exited")
         due = _auto_exit(st, due, mode, plan)
         return replace(st, mode=mode, plan=plan, due=due, consecutive_denials=0,
-                       plan_reminders=reminders, plan_left=st.plan_left or left_plan)
+                       plan_reminders=reminders, plan_left=st.plan_left or left_plan,
+                       auto_seen=st.auto_seen or mode == "auto")
     if kind == "plan_exit":
         mode = str(d.get("mode") or "default")
         # Only the plan-exit note: the auto-mode note sent before planning
         # still stands (r2 m1).
         due = _auto_exit(st, (*st.due, "plan_exited"), mode, st.plan)
         return replace(st, mode=mode, due=due, plan_left=True,
-                       plan_named=st.plan_named or bool(d.get("named")))
+                       plan_named=st.plan_named or bool(d.get("named")),
+                       auto_seen=st.auto_seen or mode == "auto")
     if kind == "plan_name":
         name = d.get("name")
         return replace(st, plan_named=True, plan_name=st.plan_name
@@ -177,13 +182,28 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
     return st
 
 
+def plan_classifier_on(pre_mode: str, *, auto_during_plan: bool, auto_enabled: bool) -> bool:
+    """Whether plan mode entered from ``pre_mode`` runs with the auto-mode
+    classifier, as Claude Code settles it on entry: ``useAutoModeDuringPlan``
+    (``auto_during_plan``) holds, planning did not start from
+    ``bypassPermissions``, and auto mode is available: planning began in it,
+    or ``auto_enabled`` (the host starts tasks in auto mode, or this task
+    has been in it)."""
+    return auto_during_plan and pre_mode != "bypassPermissions" and (
+        pre_mode == "auto" or auto_enabled)
+
+
 def auto_active(mode: str | None, plan: dict[str, Any] | None) -> bool:
-    """Whether auto mode is in force: in it, or planning after it while
-    the classifier keeps screening (Claude Code's ``useAutoModeDuringPlan``,
-    on unless the plan record says it was off)."""
+    """Whether auto mode is in force: in it, or planning with its classifier
+    (the plan record's ``auto_during_plan``; Claude Code's auto mode stays
+    active through such a plan)."""
+    if mode == "auto":
+        return True
+    if mode != "plan":
+        return False
     plan = plan or {}
-    return mode == "auto" or (mode == "plan" and plan.get("pre_mode") == "auto"
-                              and plan.get(AUTO_DURING_PLAN, True) is not False)
+    on = plan.get(AUTO_DURING_PLAN)
+    return on if isinstance(on, bool) else plan.get("pre_mode") == "auto"
 
 
 def _auto_exit(st: PermState, due: tuple[str, ...], mode: str,
