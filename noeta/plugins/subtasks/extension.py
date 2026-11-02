@@ -50,7 +50,7 @@ from noeta.plugins.subtasks.tool import (
 )
 from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
-from noeta.toolkit.notices import NOTICE_GUARD, escape
+from noeta.toolkit.notices import NOTICE_GUARD, STATUS_ORDER, escape, one_line
 from noeta.toolkit.tools import mark_spill_dir
 
 __all__ = ["SubagentSpec", "Subtasks", "task_notification"]
@@ -145,7 +145,8 @@ class Subtasks(Extension):
 
     def initial_state(self) -> Any:
         return {"agents": {}, "tasks": {}, "handbacks": {}, "pending": {}, "noticed": [],
-                "reminded": False, "listed": False, "held_list": None, **idle.initial()}
+                "reminded": False, "listed": False, "held_list": None, "held_status": [],
+                **idle.initial()}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = {**self.initial_state(), **(state or {})}
@@ -175,6 +176,10 @@ class Subtasks(Extension):
             return {**st, "listed": True, "types": data["types"]}
         if kind == "agent_list_sent":
             return {**st, "held_list": None}
+        if kind == "task_status":
+            return {**st, "held_status": list(data.get("texts") or ())}
+        if kind == "task_status_sent":
+            return {**st, "held_status": []}
         return idle.reduce(st, kind, data) or st
 
     def _state(self, state: TaskState) -> dict[str, Any]:
@@ -277,7 +282,8 @@ class Subtasks(Extension):
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         st = self._state(view.state)
-        out: list[Reminder] = []
+        out: list[Reminder] = [Reminder(text=t, kind="task_status_sent", data={}, role="system",
+                                        order=STATUS_ORDER) for t in st["held_status"]]
         if _hands_back(view.state.config) and not st["reminded"]:
             out.append(Reminder(text=texts.HANDBACK_REMINDER, kind="handback_reminder"))
         if st["held_list"] and (not view.state.parent_id or _replied(view.state.messages)):
@@ -322,11 +328,32 @@ class Subtasks(Extension):
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction the agent list goes out again with the next
-        request, in the environment's system turn."""
+        request, in the environment's system turn, and a status line for
+        each agent still running (Claude Code's ``task_status``)."""
         text = None if view.state.parent_id else self.agent_list(view)
         if text and view.keeps_tail is not None:
             view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
+        texts = self.running_status(view) if view.keeps_tail is not None else []
+        if texts:
+            view.record(self.name, "task_status", {"texts": texts})
         return ()
+
+    def running_status(self, view: TaskView) -> list[str]:
+        """One status line per agent this task started that is still
+        running."""
+        agents = self._state(view.state)["agents"]
+        send = bool(self.roster_for(view)) or bool(view.state.parent_id)
+        out: list[str] = []
+        for agent_id in self.running(view.state):
+            data = agents[agent_id]
+            text = texts.STILL_RUNNING.format(
+                description=one_line(str(data.get("description") or "")), id=agent_id)
+            if data.get("output_file"):
+                text += texts.STILL_RUNNING_FILE.format(path=data["output_file"])
+            if send:
+                text += texts.STILL_RUNNING_SEND
+            out.append(text)
+        return out
 
     async def on_start(self, view: TaskView) -> None:
         st = self._state(view.state)

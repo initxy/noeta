@@ -43,19 +43,19 @@ from noeta.core.events import (
     TaskEnded,
     Waiting,
 )
-from noeta.core.extension import Extension, TaskView
+from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.store import HOLD_LOST
 from noeta.core.tool import Tool
-from noeta.core.types import user
+from noeta.core.types import Message, user
 from noeta.plugins.shell.bash import BashTool
 from noeta.plugins.shell.job_logs import DEFAULT_LOG_DIR
 from noeta.plugins.shell.jobs import JOB_ENDED, REGISTRY, Registry
-from noeta.plugins.shell.notices import lost_summary, task_notification
+from noeta.plugins.shell.notices import lost_summary, running_status, task_notification
 from noeta.plugins.shell.sandbox import sandbox_description
 from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell
 from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
-from noeta.toolkit.notices import NOTICE_GUARD
+from noeta.toolkit.notices import NOTICE_GUARD, STATUS_ORDER
 from noeta.toolkit.sandbox import sandbox_of
 
 __all__ = ["JOB_ENDED", "SHELL", "BashTool", "Registry", "Shell", "lost_notice"]
@@ -167,6 +167,25 @@ class Shell(Extension):
                 del self._sandboxed[next(iter(self._sandboxed))]
         self._sandboxed[key] = tools  # newest last
         return tools
+
+    # ------------------------------------------------------------ compaction
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """At a compaction: a status line for each background job still
+        running, given with the next request (Claude Code's ``task_status``)."""
+        state = view.ext_state(SHELL)
+        if view.keeps_tail is None or not isinstance(state, ShellState):
+            return ()
+        texts = running_status(state.jobs)
+        if texts:
+            view.record(SHELL, "task_status", {"texts": texts})
+        return ()
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        state = view.ext_state(SHELL)
+        held = state.held_status if isinstance(state, ShellState) else ()
+        return [Reminder(text=t, kind="task_status_sent", data={}, role="system",
+                         order=STATUS_ORDER) for t in held]
 
     # ------------------------------------------------------------ lifecycle
 

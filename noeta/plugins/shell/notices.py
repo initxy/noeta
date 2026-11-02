@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from noeta.toolkit import notices
-from noeta.toolkit.notices import escape
+from noeta.toolkit.notices import escape, one_line
 
 __all__ = [
     "MonitorStream",
@@ -295,3 +296,33 @@ class MonitorStream:
             )
             self._closed = True
             self._stop()
+
+
+#: After a compaction, one per background job still running (Claude Code's
+#: ``task_status``): what it is, its id and description, its command on one
+#: line, not to start it again, and where its output is.
+STILL_RUNNING = ('{what} {id} ("{description}") is still running (its command, on one line: '
+                 "`{command}`). Do not start it again; to restart it, stop it with TaskStop "
+                 "first.")
+STILL_RUNNING_OUTPUT = " Its output is in {path}."
+#: Claude Code's cuts of the description and the command in that line.
+STATUS_DESCRIPTION_CHARS = 200
+STATUS_COMMAND_CHARS = 500
+
+
+def running_status(jobs: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """One status line per job of ``jobs`` (the folded shell state's) still
+    running."""
+    out: list[str] = []
+    for job_id, job in jobs.items():
+        if job.get("status") != "running":
+            continue
+        text = STILL_RUNNING.format(
+            what="Background monitor" if job.get("monitor") else "Background shell",
+            id=job_id,
+            description=one_line(str(job.get("description") or ""), STATUS_DESCRIPTION_CHARS),
+            command=one_line(str(job.get("command") or ""), STATUS_COMMAND_CHARS))
+        if job.get("output_file"):
+            text += STILL_RUNNING_OUTPUT.format(path=job["output_file"])
+        out.append(text)
+    return out
