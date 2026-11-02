@@ -10,7 +10,8 @@ child's end replays again, until the script returns. Only the results live
 in the task's log, so a run survives restarts and moves between workers;
 its end arrives as a ``<task-notification>``. ``TaskStop`` stops a run
 (``noeta.toolkit.background_tasks.STOP_RUN``): it ends as ``killed``, its
-running agents are cancelled, and its notice says it was stopped.
+running agents are cancelled, and no notice wakes the model (the stop's
+result told it), as Claude Code's.
 """
 
 from __future__ import annotations
@@ -247,14 +248,20 @@ class Orchestration(Extension):
         return await self._end(sink, run, "failed", error=replay.error or "the script failed")
 
     async def _end(self, sink: Sink, run: dict[str, Any], status: str, *,
-                   value: Any = None, error: str = "") -> int:
+                   value: Any = None, error: str = "", tell_model: bool = True) -> int:
         """Record the run's end and send its notice (Claude Code's meaning):
         the summary; for a failed or stopped run how to resume it, for a
         completed one its result and how to re-run only what changed; the
-        agents that failed; the usage."""
+        agents that failed; the usage. ``tell_model`` off: the person is
+        told, the model is not (a run stopped with ``TaskStop``, whose result
+        said so: Claude Code marks it notified as it kills it)."""
         rid = run["run_id"]
         sink.record(self.name, "ended", {"run_id": rid, "status": status, "error": error})
         name = run["name"] or "Dynamic workflow"
+        if not tell_model:
+            sink.notify(f'Dynamic workflow "{name}" was stopped', kind="workflow",
+                        data={"run_id": rid, "status": status})
+            return 0
         resume = _resume_call(run)
         body = ""
         if status == "completed":
@@ -367,7 +374,7 @@ class Orchestration(Extension):
             if child and key not in run["results"] and key not in run["failed"] \
                     and view.state.children.get(child) is None:
                 view.enqueue(Cancel(reason="its workflow run was stopped"), task_id=child)
-        await self._end(view, run, "killed")
+        await self._end(view, run, "killed", tell_model=False)
         return {rid}
 
     async def on_start(self, view: TaskView) -> None:

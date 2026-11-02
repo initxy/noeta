@@ -181,8 +181,9 @@ async def _until(check: Any) -> None:
 
 async def test_task_stop_ends_a_run_and_cancels_its_agents(store: SqliteStore) -> None:
     # TaskStop posts the run's stop: the run ends killed, its running agents
-    # are cancelled, nothing more starts, and its notice says it was stopped
-    # (Claude Code's).
+    # are cancelled, nothing more starts, and no notice starts another turn
+    # (Claude Code marks the run notified as it kills it; TaskStop's result
+    # told the model).
     model = _HeldModel(reply("", ("Workflow", {"script": SCRIPT, "args": ["ab", "abcd"]})),
                        reply("started"), reply("stopping"), reply("stopped"))
     rt = runtime(store, model, Orchestration(engine=Engine()))
@@ -216,9 +217,12 @@ async def test_task_stop_ends_a_run_and_cancels_its_agents(store: SqliteStore) -
     assert ends == [{"run_id": rid, "status": "killed", "error": ""}]
     assert [r.end_status for r in await client.tasks(parent_id=tid)] == ["cancelled"] * 2
     assert model.children == []  # no agent answered, and the sum never started
-    notice = model.parent[-1].messages[-1].text
-    assert "<status>killed</status>" in notice
-    assert '<summary>Dynamic workflow "count-words" was stopped</summary>' in notice
+    assert not any("<task-notification>" in m.text for r in model.parent
+                   for m in r.messages)
+    assert len(model.parent) == 3  # the Workflow call, "started", the reply to "stop it"
+    notices = [e.data["text"] for e in events if isinstance(e, ExtensionRecorded)
+               and e.kind == "notice"]
+    assert 'Dynamic workflow "count-words" was stopped' in notices
 
 
 async def test_resume_reuses_finished_agents(store: SqliteStore) -> None:
