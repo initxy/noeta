@@ -402,17 +402,20 @@ async def test_search_results_and_counts(tmp_path: Path) -> None:
     tool = WebSearchTool(fake)
     out = await tool.run({"query": "q", "mode": "extended"}, _ctx(tmp_path))
     assert text(out) == (
-        'Web search results for query: "q"\n\n'
-        'Links: [{"title": "T", "url": "https://u"}, {"title": "https://v", "url": "https://v"}]'
-        "\n\n1. [T](https://u)\n   snip\n\n2. [https://v](https://v)\n\n"
+        'Web search results for query: "q"\n'
+        'Links: [{"title":"T","url":"https://u"},{"title":"https://v","url":"https://v"}]'
+        "\n1. [T](https://u)\n   snip\n\n2. [https://v](https://v)\n\n"
         "Reminder: cite the sources above in your reply, as Markdown links.")
     await tool.run({"query": "q", "mode": "standard"}, _ctx(tmp_path))
-    assert [c for _, c in fake.calls] == [10, 5]
-    assert tool.input_schema["required"] == ["query", "mode"]
+    await tool.run({"query": "q"}, _ctx(tmp_path))  # mode left out: extended
+    assert [c for _, c in fake.calls] == [10, 5, 10]
+    assert tool.input_schema["required"] == ["query"]
+    assert tool.input_schema["properties"]["mode"]["default"] == "extended"
     assert "count" not in tool.input_schema["properties"]
     none = await WebSearchTool(FakeSearch([])).run({"query": "zz"}, _ctx(tmp_path))
     assert not none.is_error
-    assert text(none) == 'Web search results for query: "zz"\n\nNo links found.'
+    assert text(none) == ('Web search results for query: "zz"\nNo links found.\n\n'
+                          "Reminder: cite the sources above in your reply, as Markdown links.")
     assert text(await tool.run({}, _ctx(tmp_path))) == "WebSearch requires a non-empty 'query'"
     both = await tool.run({"query": "q", "allowed_domains": ["a.com"],
                            "blocked_domains": ["b.com"]}, _ctx(tmp_path))

@@ -1,10 +1,12 @@
 """``WebSearch``: ranked hits through the Tavily Search API as in 0.6, in
 Claude Code's result shape: the query, the hits' titles and URLs as a JSON
-list, then each hit with its snippet, and a reminder to cite the sources.
+list, then (where Claude Code puts its search model's summary) each hit with
+its snippet, and a reminder to cite the sources, also when nothing was found.
 
 Claude Code's parameters: ``allowed_domains`` / ``blocked_domains`` filter
 the hits (passed to a transport that takes them, and applied to what comes
-back either way) and ``mode`` picks a quick search or a thorough one.
+back either way) and ``mode`` picks a quick search or a thorough one
+(``extended`` when left out, as Claude Code's).
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ DEFAULT_COUNT = 5
 #: Hits asked for in ``extended`` mode.
 EXTENDED_COUNT = 10
 MODES = ("standard", "extended")
+DEFAULT_MODE = "extended"
 #: Claude Code's ``maxResultSizeChars`` for WebSearch (1e5) under its 50,000 ceiling.
 WEBSEARCH_RESULT_LIMIT = 50_000
 #: The line closing every result that has hits.
@@ -159,9 +162,9 @@ class WebSearchTool:
                     "\"standard\": a quick, cheap search, right for plain lookups (facts, "
                     "official pages, documentation, well-known topics) and follow-ups. "
                     "\"extended\": a thorough, fresh search that costs several times more "
-                    "and takes longer.")},
+                    "and takes longer."), "default": DEFAULT_MODE},
             },
-            "required": ["query", "mode"],
+            "required": ["query"],
             "additionalProperties": False,
         }
 
@@ -174,7 +177,7 @@ class WebSearchTool:
         if allowed and blocked:
             return text_output("WebSearch takes allowed_domains or blocked_domains, not both "
                                "in one search", is_error=True)
-        extended = input.get("mode") == "extended"
+        extended = (input.get("mode") or DEFAULT_MODE) == "extended"
         count = EXTENDED_COUNT if extended else DEFAULT_COUNT
         try:
             if _takes_filters(self.transport):
@@ -187,12 +190,12 @@ class WebSearchTool:
             return text_output(f"WebSearch failed: {exc}", is_error=True)
         results = [r for r in results if (not allowed or _host_in(r.url, allowed))
                    and not _host_in(r.url, blocked)]
-        header = f'Web search results for query: "{query}"\n\n'
+        header = f'Web search results for query: "{query}"\n'
         if not results:
-            return text_output(header + "No links found.", hits=0)
+            return text_output(f"{header}No links found.\n\n{CITE_REMINDER}", hits=0)
         links = json.dumps([{"title": r.title.strip() or r.url.strip(), "url": r.url.strip()}
-                            for r in results], ensure_ascii=False)
-        body = f"{header}Links: {links}\n\n{results_to_markdown(results)}"
+                            for r in results], ensure_ascii=False, separators=(",", ":"))
+        body = f"{header}Links: {links}\n{results_to_markdown(results)}"
         if len(body) > _INLINE_RESULT_MAX_CHARS:
             total = len(body)
             body = body[:_INLINE_RESULT_MAX_CHARS] + (
