@@ -90,9 +90,13 @@ All notable changes to Noeta are documented here. The format is based on
     - Task config gains `interactive`, `permission_prompt_tool` and `client_hooks`
       (`CHANGEABLE_CONFIG`); the terminal UI and ACP remove them when they reopen a task; an HTTP
       config signal may remove `client_hooks` but not set it (403).
-    - For a task whose headless client registered hook callbacks, a worker that cannot reach that
-      client denies calls a recorded `PreToolUse` callback matches and asks a recorded
-      `PermissionRequest` callback matches (they used to run unjudged).
+    - For a task whose headless client registered hook callbacks, a process whose client has not
+      registered the same callbacks denies a call a recorded `PreToolUse` callback matches, and
+      denies (does not ask about) a call a recorded `PermissionRequest` callback matches; they used
+      to run unjudged. Child tasks carry the record; a reconnected client with the same callbacks
+      answers for them, and the terminal UI or ACP reopening the task clears the whole open tree.
+      A `-p` run that exits leaves the record, so those calls are denied until a front end reopens
+      the task.
     - `offer_tools` skips an agent's allow and deny lists for tools flagged `past_agent_lists`
       (`StructuredOutput`).
     - The summarize call's own 64,000-token second attempt and `compaction.summary.RETRY_MAX_TOKENS`

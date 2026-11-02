@@ -157,7 +157,12 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
   events have callbacks (`client_hooks`) and a worker that cannot reach the client denies what a
   recorded `PreToolUse` / `PermissionRequest` callback matches (review P2-4). Why: a step may run on
   any worker; parking would hang once the client is gone, pinning would cut multi-machine, and a
-  denying callback is never bypassed. A missing MCP prompt tool refuses each call.
+  denying callback is never bypassed. The record names events and matchers, not a client, so a
+  reconnected client with the same callbacks answers for the root and for background children
+  holding a copy (confirm review N1); the terminal UI and ACP reopening a task clear the whole
+  open tree. A `-p` run that exits leaves the record on purpose: until a front end reopens the
+  task, any worker (a timer, a background job's end, HTTP) denies the matched calls, stricter than
+  CC, whose session ends with its process. A missing MCP prompt tool refuses each call.
 - **StructuredOutput validation** by noeta's own checker (no `format`, no strict form); cap via
   `max_retries`. Why: no new dependency; noeta reads no CC environment variables.
 - **Note after a command rewrote read files** compares with the last time the task knew for
@@ -262,4 +267,7 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
   0.955 against 0.953, "no regression". plan_mode_multi_file 0.89 again from one trial at the
   420 s cap: its mean trial time (232 s) matches the earlier main-based run (245 s), so the cap,
   not a behaviour change; worth a longer cap for that scenario.
+- 2026-11-02 Confirm review N1: child tasks kept a copy of `client_hooks` naming the old client,
+  so a reconnect left background children denying hooked calls; `HookCallbacks.answers` now
+  checks the registered callbacks cover the record, and `interactive.follow` clears the open tree.
 

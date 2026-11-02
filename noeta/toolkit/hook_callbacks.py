@@ -8,11 +8,14 @@ One :class:`HookCallbacks` is shared by the front end holding the client
 (it calls :meth:`register`) and the hooks plugin of that process (it
 :meth:`listen` s). Only that process can reach the client. So the front end
 also records in the task's config (:data:`CLIENT_HOOKS_KEY`, inherited by
-its child tasks) which events and matchers have callbacks and which client
-answers them (:meth:`HookCallbacks.summary`): a step another worker runs
-refuses a call such a PreToolUse or PermissionRequest callback would have
-judged, instead of running it unjudged. A front end a person follows takes
-the record away when it reopens the task (``noeta.toolkit.interactive``).
+its child tasks) which events and matchers have callbacks
+(:meth:`HookCallbacks.summary`): a step run by a process whose client has
+not registered callbacks for all of them refuses a call such a PreToolUse or
+PermissionRequest callback would have judged, instead of running it
+unjudged. The record names no particular client, so a reconnected client
+with the same callbacks answers for the root and its children alike. A
+front end a person follows takes the record away from the whole open task
+tree when it reopens the task (``noeta.toolkit.interactive.follow``).
 """
 
 from __future__ import annotations
@@ -93,9 +96,19 @@ class HookCallbacks:
         return {"client": self.client_id, "events": events} if events else None
 
     def answers(self, record: Any) -> bool:
-        """Whether this process reaches the client a task's record names."""
-        return self._send is not None and isinstance(record, Mapping) \
-            and record.get("client") == self.client_id
+        """Whether this process's client registered a callback for every
+        event and matcher a task's record names (whichever client wrote
+        the record: a reconnect replaces the client, not the callbacks)."""
+        if self._send is None or not isinstance(record, Mapping):
+            return False
+        events = record.get("events")
+        if not isinstance(events, Mapping):
+            return False
+        have = {event: {str(g.get("matcher") or "") for g in groups}
+                for event, groups in self.hooks.items()}
+        return all(isinstance(matchers, list)
+                   and {str(m) for m in matchers} <= have.get(str(event), set())
+                   for event, matchers in events.items())
 
     async def call(self, callback_id: str, payload: dict[str, Any],
                    tool_use_id: str | None) -> dict[str, Any]:

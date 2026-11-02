@@ -12,18 +12,25 @@ client answers ``can_use_tool`` requests.
 The keys stay in the task's config, the only place every worker that runs
 one of its steps reads, so whoever takes the task over says again who
 follows it: a headless run sets its own values on ``--resume``, and the
-terminal UI and ACP send :data:`FOLLOWED_CONFIG` when they reopen a task
-(as a Claude Code session resumed in its terminal is interactive whatever
-ran it before). An HTTP client sets the keys itself (a config signal)."""
+terminal UI and ACP send :data:`FOLLOWED_CONFIG` to the task and every
+open task below it when they reopen it (:func:`follow`; child tasks carry
+copies), as a Claude Code session resumed in its terminal is interactive
+whatever ran it before. An HTTP client sets the keys itself (a config
+signal). A headless run that exits leaves its record: until a front end
+reopens the task, a worker without the client refuses what the client's
+callbacks would judge (``noeta.toolkit.hook_callbacks``)."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Protocol
 
+from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.store import TaskRow
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 
-__all__ = ["FOLLOWED_CONFIG", "INTERACTIVE_KEY", "PROMPT_TOOL_KEY", "can_ask", "interactive"]
+__all__ = ["FOLLOWED_CONFIG", "INTERACTIVE_KEY", "PROMPT_TOOL_KEY", "can_ask", "follow",
+           "interactive"]
 
 INTERACTIVE_KEY = "interactive"
 PROMPT_TOOL_KEY = "permission_prompt_tool"
@@ -43,3 +50,25 @@ def can_ask(config: Mapping[str, Any]) -> bool:
     """Whether a question the task asks can be answered: a person follows
     it, or its client answers prompts."""
     return interactive(config) or config.get(PROMPT_TOOL_KEY) not in (None, "", "none")
+
+
+class _Tree(Protocol):
+    async def tasks(self, *, parent_id: str | None = None, status: Any = None,
+                    limit: int = 100) -> list[TaskRow]: ...
+
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int: ...
+
+
+async def follow(client: _Tree, task_id: str) -> None:
+    """A person follows ``task_id`` now: :data:`FOLLOWED_CONFIG` to it and
+    to every task below it that has not ended (they carry copies of the
+    keys)."""
+    todo = [task_id]
+    while todo:
+        tid = todo.pop()
+        await client.signal(tid, CONFIG_SIGNAL, dict(FOLLOWED_CONFIG))
+        for status in ("ready", "running", "waiting"):
+            todo.extend(row.task_id for row in await client.tasks(parent_id=tid, status=status,
+                                                                  limit=1000))
+

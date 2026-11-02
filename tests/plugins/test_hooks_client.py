@@ -163,3 +163,76 @@ async def test_a_child_task_carries_the_client_hooks_record() -> None:
     state = TaskState(task_id="t", agent="a", config={"client_hooks": record})
     assert Hooks().inherit(state) == {"client_hooks": record}
     assert Hooks().inherit(TaskState(task_id="t", agent="a")) == {}
+
+
+def test_a_reconnected_client_with_the_same_callbacks_answers_an_older_record() -> None:
+    """The record names events and matchers, not one client: after a
+    reconnect (a new client id) the new client answers what the root and
+    its children recorded, and a client lacking one of them does not."""
+    async def send(callback_id: str, payload: dict[str, Any],
+                   tool_use_id: str | None) -> dict[str, Any]:
+        return {}
+
+    hooks = {"PreToolUse": [{"matcher": "Read", "hookCallbackIds": ["h1"]}],
+             "PermissionRequest": [{"matcher": "Glob", "hookCallbackIds": ["h2"]}]}
+    old = HookCallbacks()
+    old.register(parse_callbacks(hooks), send)
+    record = old.summary()
+    new = HookCallbacks()
+    assert not new.answers(record)  # no client registered here yet
+    new.register(parse_callbacks(hooks), send)
+    assert new.client_id != old.client_id and new.answers(record)
+    fewer = HookCallbacks()
+    fewer.register(parse_callbacks({"PreToolUse": hooks["PreToolUse"]}), send)
+    assert not fewer.answers(record)
+
+
+async def test_a_reconnect_while_a_background_child_runs_lets_the_child_ask_the_new_client(
+        tmp_path: Path) -> None:
+    """A child task carries the copy written for the first client; once a
+    new client with the same callbacks holds this process, the child's
+    hooked call is asked of it, not refused."""
+    asked: list[str] = []
+
+    async def send(callback_id: str, payload: dict[str, Any],
+                   tool_use_id: str | None) -> dict[str, Any]:
+        asked.append(payload["tool_input"]["file_path"])
+        return {}
+
+    hooks = {"PreToolUse": [{"matcher": "Read", "hookCallbackIds": ["h1"]}]}
+    first = HookCallbacks()
+    first.register(parse_callbacks(hooks), send)
+    copy = first.summary()  # what the child inherited
+    second = HookCallbacks()  # the reconnected client in this process
+    second.register(parse_callbacks(hooks), send)
+    s = Setup(tmp_path, {}, [reply("", ("Read", {"file_path": "b.txt"})), reply("read it")])
+    with_hooks(s, Hooks(callbacks=second))
+    await s.start(client_hooks=copy)
+    [(_text, is_error)] = await s.results()
+    assert not is_error and asked == ["b.txt"]
+
+
+async def test_following_a_task_clears_its_open_children_too() -> None:
+    from noeta.core.loop.state import CONFIG_SIGNAL
+    from noeta.toolkit.interactive import FOLLOWED_CONFIG, follow
+
+    class Row:
+        def __init__(self, task_id: str) -> None:
+            self.task_id = task_id
+
+    tree = {("root", "waiting"): ["child"], ("child", "running"): ["grandchild"]}
+    signalled: list[tuple[str, str, Any]] = []
+
+    class Fake:
+        async def tasks(self, *, parent_id: str | None = None, status: Any = None,
+                        limit: int = 100) -> list[Any]:
+            return [Row(t) for t in tree.get((parent_id or "", status), [])]
+
+        async def signal(self, task_id: str, name: str, data: Any = None, *,
+                         dedupe_key: str | None = None) -> int:
+            signalled.append((task_id, name, data))
+            return 0
+
+    await follow(Fake(), "root")  # type: ignore[arg-type]
+    assert sorted(t for t, _n, _d in signalled) == ["child", "grandchild", "root"]
+    assert all(n == CONFIG_SIGNAL and d == dict(FOLLOWED_CONFIG) for _t, n, d in signalled)
