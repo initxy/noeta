@@ -376,16 +376,18 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
 
 ## Plan
 
-- [ ] Spec (this file); baseline `make check`
-- [ ] `rr-parity-tools`: K0, T1, T3-T10, T14-T16, K-results
-- [ ] `rr-shell`: R11-R13, T2, T11-T13
-- [ ] `rr-prompt-env`: P1-P9, E1-E10, R9, R10, L2
-- [ ] `rr-reminders`: R1-R8, R14-R21
-- [ ] `rr-skills`: S1-S16, L1
-- [ ] `rr-memory-compaction`: M1-M7, C1-C6
-- [ ] `rr-agents`: A1-A14, K-cls
-- [ ] K1, K2 rows (per branch); L3
-- [ ] Merge; gates `make check`, `make parity`, `make cluster`, `make e2e`; eval
+- [x] Spec (this file); baseline `make check`
+- [x] `rr-parity-tools`: K0, T1, T3-T10, T14-T16, K-results
+- [x] `rr-shell`: R11-R13, T2, T11-T13 (and the Workflow end notice it found)
+- [x] `rr-prompt-env`: P1-P9, E1-E10, R9, R10, L2
+- [x] `rr-reminders`: R1-R8, R14-R21
+- [x] `rr-skills`: S1-S16, L1 (and the gaps it found)
+- [x] `rr-memory-compaction`: M1-M7, C1-C6
+- [x] `rr-agents`: A1-A14, K-cls
+- [x] `rr-final`: the classifier rows left partly, TaskStop's notice, prompt-hook stop, plan mode
+  with auto mode, the fallback call's tools
+- [x] K1, K2 rows (per branch); L3
+- [x] Merge; gates `make check`, `make parity`, `make cluster`, `make e2e`; eval
 
 ## Acceptance criteria
 
@@ -405,3 +407,23 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
 
 ## Progress log
 - 2026-11-02 Created from the re-audit of local main @c5d3647a.
+- 2026-11-02 Seven branches (`rr-parity-tools`, `rr-shell`, `rr-prompt-env`, `rr-reminders`,
+  `rr-skills`, `rr-memory-compaction`, `rr-agents`) each green on `make check` and `make parity`,
+  merged `--no-ff`; then `rr-final` for what they left. K0 found 2 hidden mismatches (13 requests),
+  both T1. Two agents' findings were the opposite of the plan: S12 (CC's shell reads unlock no
+  skills) and the `UserPromptSubmit` stop (CC keeps the prompt).
+- 2026-11-02 Friction: merge conflicts in `shell/__init__.py` (two `reminders` / `resident`
+  methods, combined), `skills/extension.py`, `environment.py`, settings, notices, deviation rows
+  and the request golden (re-recorded, hashes); the plan-file compaction test needed plan mode off
+  the classifier (its safeguards name the exec env's directory, absent in the rebuild check).
+  Merging also pointed side requests and `${CLAUDE_EFFORT}` at the model's default effort and
+  output (`models.default_effort`), as the main request now does. An `rr-skills` agent ran a grep
+  naming a path under `~/.claude` (no `-r`, a directory: nothing read); no other access.
+- 2026-11-02 First eval on the merged head: 0.932 against 0.953, "no regression" by tolerance but
+  `read_over_shell_cat` 0.61, `deny_rule_respected` 0.78, `parallel_independent_reads` 0.83. A/B
+  traced it to R5's bypass-mode note (Decisions); reverted as a deviation.
+- 2026-11-02 Gates on the final head: `make check` 2996 passed (coverage 90%); `make parity`
+  0 mismatches (11 accepted), own-words none; `make cluster` 14 passed; `make e2e` 7 passed; eval
+  (DeepSeek V4.1, 9 trials) 0.957 against 0.953, "no regression": drops only in the known-noisy
+  `delegate_parallel_review` (0.22) and `hook_block_adapts` (0.48). Awaiting the owner's answers
+  before review and merge.
