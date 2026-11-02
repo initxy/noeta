@@ -55,7 +55,8 @@ its own spec before work starts.
 - [ ] `EnterWorktree`'s worktree is read-only in the sandbox (`.noeta`; `parity/deviations.md`). Follow-up spec: a task's working directory would have to change mid-task.
 - [ ] Dead workers' job log directories (`w<pid>`) in an exec env that is not this machine are not swept (`plugins/shell/job_logs.py`). Follow-up spec.
 - [x] Claude Code plugin skills and agents are named `<plugin>:<name>` (0ab0f24f).
-- [ ] Claude Code plugin directories: no `${CLAUDE_PLUGIN_ROOT}` in skill bodies (spec 2026-11-02-context-reaudit-closure, S13), a plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
+- [x] `${CLAUDE_PLUGIN_ROOT}` in Claude Code plugin skill bodies (spec 2026-11-02-context-reaudit-closure, S13).
+- [ ] A Claude Code plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
 - [ ] `Runtime._running` is a set, not a count: a task reclaimed by another slot while its previous run is still finishing is dropped from it by that run's `finally`, and a later `CommitUnknown` claim could then adopt it again at the same epoch (two unlikely events together). Count runs per task, or compare claim objects. Follow-up spec.
 - [ ] A redelivered channel message that arrives after its task ended is handled again in the continuation task (a one-shot agent answers twice). Follow-up spec.
 - [ ] Workspace trust per task: an isolated sub-agent's worktree is not trusted, so "always" answers there are not saved to the project; `project_trusted` reads files on the event loop. Follow-up spec.

@@ -12,6 +12,26 @@ All notable changes to Noeta are documented here. The format is based on
 - **Context re-audit closure: a second, independent audit's differences from Claude Code
   2.1.312 are matched or written down** (spec `2026-11-02-context-reaudit-closure`; kept
   differences are rows in `parity/deviations.md`).
+  - **Breaking** (what a host or an existing task may notice; each follows Claude Code):
+    - Models: the default `max_tokens` is the model's catalog default, not its ceiling (Opus 5,
+      Sonnet 5 and Opus 4.8 128K → 64K; Sonnet 4.6 64K → 32K); a reasoning model whose row names
+      no `default_effort` is asked for `high`, not `medium`; Sonnet 4.6's window is 200K, not 1M
+      (compaction starts near 187K; a host using the 1M beta lowers nothing and cannot raise it:
+      set `NOETA_AUTO_COMPACT_WINDOW` or register its own model id); Fable 5.1's ceiling is 128K,
+      which a `compaction_model` on it now gets as `max_tokens`. Non-Claude models no longer get
+      the quiet nudge. `WebSearch` without `mode` runs `extended`.
+    - Hooks: a `UserPromptSubmit` hook's `continue: false` ends the turn as done with the prompt
+      kept (it failed the turn); a `PostToolBatch` block ends the turn (it was context for the
+      model).
+    - Task config: `ultracode` and `max_budget_usd` are new changeable keys.
+    - Public names: `noeta.toolkit.side_requests.DEFAULT_EFFORT` is gone (use
+      `noeta.core.models.default_effort(model)`); `MEMORY_INDEX_MAX_BYTES` → `MEMORY_INDEX_MAX_CHARS`,
+      `INDEX_MAX_BYTES` → `INDEX_MAX_CHARS`, `RECALL_TASK_BYTES` → `RECALL_TASK_CHARS` (characters,
+      not bytes); `shell.sandbox.sandbox_description` → `sandbox_instructions`; the shell
+      `Job.err_path` → `events_path`; `parse_skill` takes a required keyword `name=`; the skills
+      frontmatter parser no longer raises on a missing closing `---`; the permissions plugin's
+      `server_context` and `auto_request` context callbacks are async. `ChildEnded` gains
+      `output_tokens` and `TaskView` gains `kept` (both with defaults).
   - Parity: `make parity` compares each request's tool list in order, and a deferred-tool list
     sent by only one side (it compared only a session's union of tools before).
   - Models: Claude requests send Claude Code's per-model default `max_tokens` and effort (for

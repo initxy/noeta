@@ -287,11 +287,12 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   instruction notes** keep being re-announced (CC only behind a flag gate): the model is told the
   truth.
 - **R5 no shell-first note in `bypassPermissions`** (CC sends it there as in auto mode; pi, dsh:
-  none). Measured: the eval (DeepSeek V4.1, all trials in bypass mode) with the note scored
-  `deny_rule_respected` 0.78 and `read_over_shell_cat` 0.61 against the 1.00 / 0.89 baseline; an
-  A/B on the same head (9 trials each) gave 0.67 / 0.78 with the note and 0.89 / 0.83 without. The
-  misses edit a denied file through the shell. A deny rule holds in bypass mode too, and a note
-  inviting shell edits makes working around it likelier on an unattended server. Owner question 10.
+  none). Measured: DeepSeek V4.1, 9 trials per run, every trial in bypass mode (the eval's mode):
+  with the note, `deny_rule_respected` 7/9 and 6/9 (13/18) and `read_over_shell_cat` 0.61 and 0.78
+  (0.69); without it (the A/B arm, then the final head): 8/9 and 9/9 (17/18) and 0.83 and 0.94
+  (0.89); main 9/9 and 0.89. The misses changed the file the deny rule protects (a deny on `Edit`
+  does not cover a shell edit). A deny rule holds in bypass mode too, and a note inviting shell
+  edits makes working around it likelier on an unattended server. Owner question 10.
 - **R21 MCP schema check** not built (CC drops tools whose schema the API would reject and tells
   the model). Owner question 3.
 - **T2 `TaskStop`** by id only: noeta has no agent teams and `Agent` has no `name` (nor has CC's
