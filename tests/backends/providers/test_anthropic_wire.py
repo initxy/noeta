@@ -245,9 +245,27 @@ async def test_api_key_request_settings_follow_claude_code() -> None:
     assert sent["thinking"] == {"type": "adaptive", "display": "updates"}
     assert sent["context_management"] == {
         "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
-    assert sent["output_config"] == {"effort": "medium"}
+    # Claude Code's catalog: Opus 4.8's default effort is high.
+    assert sent["output_config"] == {"effort": "high"}
     assert json.loads(sent["metadata"]["user_id"]) == {
         "device_id": "d" * 64, "account_uuid": "", "session_id": str(uuid.UUID(root))}
+
+
+@respx.mock
+@pytest.mark.parametrize(("model", "max_tokens", "effort"), [
+    ("claude-opus-5-5", 128_000, "medium"), ("claude-sonnet-5-5", 128_000, "medium"),
+    ("claude-haiku-5-5", 128_000, "medium"), ("claude-fable-5-1", 64_000, "high"),
+    ("claude-opus-5", 64_000, "high"), ("claude-sonnet-5", 64_000, "high"),
+    ("claude-opus-4-8", 64_000, "high"), ("claude-sonnet-4-6", 32_000, "high"),
+    ("claude-haiku-4-5", 32_000, None)])
+async def test_output_cap_and_effort_default_to_claude_codes_catalog(
+        model: str, max_tokens: int, effort: str | None) -> None:
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    await _provider(default_max_tokens=None).complete(
+        _req(model=model, max_tokens=None, thinking=True))
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["max_tokens"] == max_tokens
+    assert sent.get("output_config", {}).get("effort") == effort
 
 
 @respx.mock
@@ -275,6 +293,20 @@ async def test_a_beta_set_the_host_chose_is_sent_as_given() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
     await _provider(betas=("one", PER_TURN_BETA)).complete(_req(model="gpt-5.4", max_tokens=9))
     assert route.calls.last.request.headers["anthropic-beta"] == f"one,{PER_TURN_BETA}"
+
+
+@respx.mock
+async def test_betas_a_request_adds_take_claude_codes_order() -> None:
+    from noeta.backends.providers.anthropic import DEFAULT_BETAS
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    request = _req(model="claude-opus-5-5", max_tokens=9,
+                   betas=["dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31", "zz-own"])
+    await _provider().complete(request)
+    # As recorded from Claude Code 2.1.312 in auto mode.
+    assert route.calls.last.request.headers["anthropic-beta"] == ",".join([
+        *DEFAULT_BETAS[:-1], "dangerous-tool-use-2026-09-03",
+        "thinking-display-updates-2026-08-18", "afk-mode-2026-01-31", "zz-own"])
 
 
 # ---------------------------------------------------------------------------

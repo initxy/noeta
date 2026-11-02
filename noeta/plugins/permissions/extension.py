@@ -231,6 +231,11 @@ class Permissions(Extension):
         self._exit_plan = pl.ExitPlanModeTool()
         self._enter_plan = pl.EnterPlanModeTool(self._enter_plan_mode)
 
+    def working_directories(self, view: TaskView) -> tuple[str, ...]:
+        """The task's working directory, then the additional ones (absolute):
+        what the environment message lists."""
+        return self._check.scope(view).dirs
+
     def trusts(self, view: TaskView) -> bool:
         """Whether this task's working directory is a trusted workspace."""
         trusted = self.trusted

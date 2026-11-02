@@ -299,3 +299,26 @@ def test_secrets_noetas_config_hands_its_plugins_stay_out_of_commands(
     env = local_env.child_env()
     assert not {"CHAT_HOOK_TOKEN", "SEARCH_KEY", "HOOK_SECRET", "AGENT_SECRET"} & set(env)
     assert env["GITHUB_TOKEN"] == "x"  # the person's own, as Claude Code passes it
+
+
+def test_language_and_attribution_settings_reach_the_environment(home: Path) -> None:
+    (home / "config.toml").write_text(
+        f'model = "m"\nprovider = "anthropic"\napi_key = "k"\nstore = "sqlite:///{home / "t.db"}"\n')
+    (home / "managed").mkdir()
+    (home / "settings.json").write_text(json.dumps({
+        "language": "Deutsch", "attribution": {"commit": "Assisted-by: AI", "pr": "x"}}))
+    (home / "managed" / "managed-settings.json").write_text(json.dumps({
+        "attribution": {"pr": ""}}))
+    found = config.file_settings(str(home))
+    assert found.language == "Deutsch"
+    assert found.attribution == {"commit": "Assisted-by: AI", "pr": ""}
+    assert config.environment_arguments(found) == {
+        "language": "Deutsch", "attribution_commit": "Assisted-by: AI", "attribution_pr": ""}
+    app = from_settings(load_settings(cwd=str(home)), cwd=str(home))
+    [env] = [e for e in app.runtime.agents["main"].extensions if e.name == "environment"]
+    assert env.language == "Deutsch"  # type: ignore[attr-defined]
+    assert (env.attribution_commit, env.attribution_pr) == ("Assisted-by: AI", "")  # type: ignore[attr-defined]
+    # includeCoAuthoredBy: false (the older setting) leaves both lines out.
+    (home / "settings.json").write_text(json.dumps({"includeCoAuthoredBy": False}))
+    (home / "managed" / "managed-settings.json").write_text("{}")
+    assert config.file_settings(str(home)).attribution == {"commit": "", "pr": ""}

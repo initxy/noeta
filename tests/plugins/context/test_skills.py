@@ -102,6 +102,30 @@ async def test_no_skills_means_no_listing_but_the_tool_stays(h: Harness) -> None
     assert await h.records(tid, "skills") == []
 
 
+_GUIDED = ("Intro.\n\n# Session-specific guidance\n - When the user types `/<skill-name>`, "
+           "run it.\n\n# Environment\n - Facts.\n")
+
+
+async def test_the_prompts_skill_line_goes_only_with_skills_and_the_tool(h: Harness) -> None:
+    # Claude Code gives the line only when there are skills and Skill is
+    # offered; the heading goes with its last line.
+    from noeta.plugins.skills.guidance import drop_skill_guidance
+
+    assert drop_skill_guidance(_GUIDED) == "Intro.\n\n# Environment\n - Facts.\n"
+    kept = _GUIDED.replace(" - When", " - Other.\n - When")
+    assert drop_skill_guidance(kept) == (
+        "Intro.\n\n# Session-specific guidance\n - Other.\n\n# Environment\n - Facts.\n")
+    a = Agent(name="a", model="m", system_prompt=_GUIDED,
+              extensions=[FileTools(), Skills()])
+    h.provider.add(reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    assert "Session-specific guidance" not in "".join(
+        p.text for p in h.provider.requests[0].system)
+    write_skill(skills_dir(h), "deploy", "Ship the app.")
+    await h.say(a, tid, "more")
+    assert "`/<skill-name>`" in "".join(p.text for p in h.provider.requests[1].system)
+
+
 async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     d = write_skill(skills_dir(h), "deploy", "Ship $ARGUMENTS now.",
                     body="Step one.\n\nScope: $ARGUMENTS\nStep two.\n")

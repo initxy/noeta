@@ -12,9 +12,9 @@ The files, lowest precedence first:
 A headless run's ``--settings`` adds a layer just below the managed one, and
 ``--setting-sources`` picks which of 1 to 3 are read (:func:`settings_layers`).
 
-A key a later file sets wins (``model``, ``agent``, ``outputStyle``, each ``env``
-variable, ``permissions.defaultMode``); permission rule lists and
-``additionalDirectories`` add up across files, without repeats; the
+A key a later file sets wins (``model``, ``agent``, ``outputStyle``, ``language``,
+each ``attribution`` line, each ``env`` variable, ``permissions.defaultMode``);
+permission rule lists and ``additionalDirectories`` add up across files, without repeats; the
 ``sandbox`` object merges as :func:`merge_sandbox` says. Hooks and
 MCP consent (``enabledMcpjsonServers``) are read from the same files by the
 hooks and MCP plugins, which take the file list.
@@ -59,6 +59,11 @@ class FileSettings:
     #: The agent front ends start with (Claude Code's ``agent``).
     agent: str | None = None
     output_style: str | None = None
+    #: ``language``: the language the model answers in.
+    language: str | None = None
+    #: ``attribution.commit`` / ``attribution.pr`` (an empty string: no
+    #: line); ``includeCoAuthoredBy: false`` without them sets both empty.
+    attribution: dict[str, str] = field(default_factory=dict)
     #: ``allow`` / ``deny`` / ``ask`` rule lists (Claude Code's
     #: ``Tool(spec)`` strings, unparsed), ``defaultMode`` and
     #: ``additionalDirectories``.
@@ -225,6 +230,14 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
             out.agent = data["agent"]
         if isinstance(data.get("outputStyle"), str) and data["outputStyle"]:
             out.output_style = data["outputStyle"]
+        if isinstance(data.get("language"), str):
+            out.language = data["language"].strip() or None
+        attribution = data.get("attribution")
+        if isinstance(attribution, dict):
+            out.attribution.update({k: v for k, v in attribution.items()
+                                    if k in ("commit", "pr") and isinstance(v, str)})
+        elif data.get("includeCoAuthoredBy") is False:
+            out.attribution.update({"commit": "", "pr": ""})
         perms = data.get("permissions")
         if not isinstance(perms, dict):
             continue

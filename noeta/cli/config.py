@@ -330,7 +330,20 @@ def _base_plugin_settings(found: FileSettings, cwd: str | None,
                  "project": project_trusted if project else False},
          "skills": {"trusted": project_trusted, "global_dir": str(home_dir.HOME / "skills")},
          "instructions": {"user_dir": str(home_dir.HOME), "managed_dir": str(managed_dir())},
-         "permissions": permission_args, "fs": {"write_roots": write_roots}})
+         "permissions": permission_args, "fs": {"write_roots": write_roots},
+         "environment": environment_arguments(found)})
+
+
+def environment_arguments(found: FileSettings) -> dict[str, Any]:
+    """The environment plugin's arguments the settings files give:
+    ``language`` and the ``attribution`` lines."""
+    out: dict[str, Any] = {}
+    if found.language:
+        out["language"] = found.language
+    for key in ("commit", "pr"):
+        if key in found.attribution:
+            out[f"attribution_{key}"] = found.attribution[key]
+    return out
 
 
 def _apply_sandbox(sandbox: SandboxSettings, cwd: str | None,

@@ -696,3 +696,13 @@ async def test_a_quoted_bracket_names_a_file_and_is_checked_as_one(
     assert len(asked(await events(client, tid))) == 3
     assert [r["command"] for r in bash.runs] == ["cat README"]
 
+
+
+def test_the_working_directories_are_the_cwd_then_the_additional_ones() -> None:
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.permissions import Permissions
+
+    ext = Permissions(additional_directories=["../shared", "/srv/docs", "/srv/docs"])
+    view = TaskView(state=TaskState(task_id="t", config={"cwd": "/w/proj"}))
+    assert ext.working_directories(view) == ("/w/proj", "/w/shared", "/srv/docs")

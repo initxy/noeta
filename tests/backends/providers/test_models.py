@@ -178,7 +178,7 @@ def test_aliases_point_at_the_current_generation() -> None:
     ("claude-opus-5-5", 128_000, (4.0, 20.0, 0.20, 5.0)),
     ("claude-sonnet-5-5", 128_000, (2.0, 10.0, 0.10, 2.5)),
     ("claude-haiku-5-5", 128_000, (0.10, 0.50, 0.01, 0.125)),
-    ("claude-fable-5-1", 64_000, (10.0, 50.0, 0.25, 12.5)),
+    ("claude-fable-5-1", 128_000, (10.0, 50.0, 0.25, 12.5)),
 ])
 def test_the_5_5_family_and_fable_as_claude_code_catalogs_them(
         model: str, output: int, prices: tuple[float, ...]) -> None:
@@ -188,6 +188,27 @@ def test_the_5_5_family_and_fable_as_claude_code_catalogs_them(
             spec.cache_read_price_per_mtok, spec.cache_write_price_per_mtok) == prices
     assert spec.is_reasoning and spec.supports_vision
     assert model_family(model) == "anthropic"
+
+
+@pytest.mark.parametrize(("model", "window", "default_output", "effort", "cutoff"), [
+    ("claude-opus-5-5", 1_000_000, 128_000, "medium", "June 2026"),
+    ("claude-sonnet-5-5", 1_000_000, 128_000, "medium", "June 2026"),
+    ("claude-haiku-5-5", 1_000_000, 128_000, "medium", "June 2026"),
+    ("claude-fable-5-1", 1_000_000, 64_000, "high", "June 2026"),
+    ("claude-opus-5", 1_000_000, 64_000, "high", "May 2026"),
+    ("claude-sonnet-5", 1_000_000, 64_000, "high", "January 2026"),
+    ("claude-opus-4-8", 1_000_000, 64_000, "high", "January 2026"),
+    ("claude-sonnet-4-6", 200_000, 32_000, None, "August 2025"),
+    ("claude-haiku-4-5", 200_000, 32_000, None, "February 2025"),
+])
+def test_every_claude_row_carries_claude_codes_defaults_and_cutoff(
+        model: str, window: int, default_output: int, effort: str | None,
+        cutoff: str) -> None:
+    spec = spec_for(model)
+    assert spec.context_window == window
+    assert spec.output_default == default_output <= spec.max_output_tokens
+    assert spec.default_effort == effort
+    assert spec.knowledge_cutoff == cutoff
 
 
 def test_an_unknown_model_is_announced() -> None:
