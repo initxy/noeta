@@ -12,7 +12,7 @@ plugin) and ``.mcp.json`` (the MCP plugin; never from a project's plugin,
 whose servers the person is told to copy into ``.noeta/mcp.json``, so a
 cloned repository never starts a server by itself).
 ``${CLAUDE_PLUGIN_ROOT}`` and ``${CLAUDE_PLUGIN_DATA}`` (``~/.noeta/plugin-data/<name>``)
-are substituted in hooks, MCP servers, commands and agent prompts, and the
+are substituted in hooks, MCP servers, skills, commands and agent prompts, and the
 manifest's ``userConfig`` values as Claude Code does (:mod:`noeta.cli.plugin_options`).
 The plugin's ``settings.json`` (else the manifest's ``settings``) may name
 the ``agent`` front ends start with, below the person's own settings.
@@ -91,6 +91,10 @@ class ClaudePlugin:
     project: bool = False
     #: Its skill directories (their skills are named ``<plugin>:<directory>``).
     skill_dirs: list[str] = field(default_factory=list)
+    #: What its skills' bodies fill in: ``${CLAUDE_PLUGIN_ROOT}``,
+    #: ``${CLAUDE_PLUGIN_DATA}`` and each ``${user_config.KEY}`` (a sensitive
+    #: one gets Claude Code's placeholder, an unset one stays as written).
+    skill_vars: dict[str, str] = field(default_factory=dict)
     agents: list[AgentFile] = field(default_factory=list)
     #: ``markdown_commands`` entries.
     commands: list[dict[str, Any]] = field(default_factory=list)
@@ -316,6 +320,9 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
         return plugin_options.content(_substitute(body, names), values, fields)
     skills = [root / "skills", *_paths(root, manifest.get("skills", []), "skills")]
     plugin.skill_dirs = [str(p) for p in skills if p.is_dir()]
+    plugin.skill_vars = {"${" + k + "}": v for k, v in names.items()}
+    plugin.skill_vars.update({ref: text(ref) for ref in
+                              ("${user_config." + key + "}" for key in fields)})
     agents = _md_files(_paths(root, manifest["agents"], "agents") if "agents" in manifest
                        else [root / "agents"])
     for file, within in agents:
@@ -409,12 +416,14 @@ def plugin_settings(plugins: Iterable[ClaudePlugin]) -> tuple[dict[str, Any], li
     """What ``plugins`` add to the plugin-setting table (skills, hooks, MCP
     servers, ``markdown_commands``), and notices for the person."""
     skills: dict[str, str] = {}
+    skill_vars: dict[str, dict[str, str]] = {}
     hooks: dict[str, list[Any]] = {}
     servers: dict[str, Any] = {}
     commands: list[dict[str, Any]] = []
     notices: list[str] = []
     for p in plugins:
         skills.update(dict.fromkeys(p.skill_dirs, p.name))
+        skill_vars.update(dict.fromkeys(p.skill_dirs, p.skill_vars))
         for event, groups in p.hooks.items():
             hooks.setdefault(event, []).extend(groups)
         if p.mcp_servers and p.project:
@@ -425,7 +434,7 @@ def plugin_settings(plugins: Iterable[ClaudePlugin]) -> tuple[dict[str, Any], li
         commands += p.commands
     table: dict[str, Any] = {}
     if skills:
-        table["skills"] = {"plugin_dirs": skills}
+        table["skills"] = {"plugin_dirs": skills, "plugin_vars": skill_vars}
     if hooks:
         table["hooks"] = {"hooks": hooks}
     if servers:

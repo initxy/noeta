@@ -328,9 +328,35 @@ def _base_plugin_settings(found: FileSettings, cwd: str | None,
          "hooks": {"settings_files": setting_files},
          "mcp": {"settings_files": setting_files,
                  "project": project_trusted if project else False},
-         "skills": {"trusted": project_trusted, "global_dir": str(home_dir.HOME / "skills")},
+         "skills": _skills_settings(found, write_roots),
          "instructions": {"user_dir": str(home_dir.HOME), "managed_dir": str(managed_dir())},
          "permissions": permission_args, "fs": {"write_roots": write_roots}})
+
+
+#: The skill listing's budget in characters for every task (Claude Code's
+#: ``SLASH_COMMAND_TOOL_CHAR_BUDGET``, under noeta's name).
+SKILL_BUDGET_ENV = "NOETA_SLASH_COMMAND_TOOL_CHAR_BUDGET"
+
+
+def _skills_settings(found: FileSettings, additional: Sequence[str]) -> dict[str, Any]:
+    """The skills plugin's arguments: noeta's places (``~/.noeta/skills``
+    and ``commands``, the managed directory's), the additional directories,
+    and the listing settings."""
+    out: dict[str, Any] = {"trusted": project_trusted,
+                           "global_dir": str(home_dir.HOME / "skills"),
+                           "global_commands_dir": str(home_dir.HOME / "commands"),
+                           "managed_dir": str(managed_dir()),
+                           "additional_dirs": list(additional)}
+    fraction = found.skill_listing.get("skillListingBudgetFraction")
+    if fraction is not None:
+        out["budget_fraction"] = float(fraction)
+    max_chars = found.skill_listing.get("skillListingMaxDescChars")
+    if max_chars is not None:
+        out["max_desc_chars"] = int(max_chars)
+    raw = os.environ.get(SKILL_BUDGET_ENV, "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        out["budget_chars"] = int(raw)
+    return out
 
 
 def _apply_sandbox(sandbox: SandboxSettings, cwd: str | None,

@@ -85,7 +85,8 @@ class SkillTool:
             return text_output("args must be a string", is_error=True)
         return text_output(
             f"Starting skill: {name}. Its instructions follow.",
-            skill_activation=activation_data(desc, "model", args, ctx.env.cwd),
+            skill_activation=activation_data(desc, "model", args, ctx.env.cwd,
+                                             ctx.root_id or ctx.task_id),
         )
 
 
@@ -132,9 +133,10 @@ def _edit_distance(a: str, b: str) -> int:
 
 
 def activation_data(desc: SkillDescription, source: str,
-                    args: str | None = None, cwd: str | None = None) -> dict[str, Any]:
+                    args: str | None = None, cwd: str | None = None,
+                    root_id: str | None = None, effort: str | None = None) -> dict[str, Any]:
     """What activating ``desc`` records (``source``: ``model`` / ``user`` /
-    ``preload``)."""
+    ``preload``); ``root_id`` and ``effort`` fill the skill's variables."""
     raw = desc.meta("allowed-tools")
     allowed: list[str] | None = None
     if raw is not None:
@@ -149,7 +151,7 @@ def activation_data(desc: SkillDescription, source: str,
         "allowed_tools": allowed,
         "allow_rules": rules,
         "args": args,
-        "text": render_command_body(desc, args, cwd),
+        "text": render_command_body(desc, args, cwd, root_id, effort),
     }
 
 

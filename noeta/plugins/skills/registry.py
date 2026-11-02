@@ -3,7 +3,10 @@ activation text.
 
 Discovery reads through the task's ExecEnv (one ``find`` per directory plus a
 read per SKILL.md), so in a container the skill directories and the rendered
-base-directory lines are container paths. It is deterministic: candidates are
+base-directory lines are container paths. As in Claude Code, a skill is a
+``<directory>/SKILL.md`` one level below a skills directory, named by that
+directory (its frontmatter ``name`` is a display name), and a commands
+directory's ``*.md`` files are skills too. It is deterministic: candidates are
 sorted by POSIX relative path before duplicate names resolve first-wins, so
 the same tree always yields the same registry and the same listing bytes.
 """
@@ -28,6 +31,9 @@ __all__ = [
     "SkillDescription",
     "SkillRegistry",
     "argument_names",
+    "body_description",
+    "display_label",
+    "index_commands_dir",
     "index_dir",
     "load_registry",
     "parse_list",
@@ -35,13 +41,24 @@ __all__ = [
     "plugin_skill_name",
     "render_body",
     "render_command_body",
+    "skill_dir_name",
     "strip_argument_placeholder",
     "substitute_variables",
 ]
 
 _log = logging.getLogger(__name__)
 
-_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+#: A skill's own name (its directory's, or a command file's path): letters,
+#: digits, marks, ``_``, ``.`` and ``-`` (Claude Code's name characters; a
+#: ``:`` only in names noeta gives: a plugin's, a scoped or nested command's).
+_NAME_PATTERN = re.compile(r"^[\w.\-\u0300-\u036f]+$")
+#: What a display name (a skill's frontmatter ``name``) may hold to be shown
+#: beside the skill's name in the listing (Claude Code's).
+_DISPLAY_PATTERN = re.compile(r"^[\w:.\-\u0300-\u036f]+$")
+#: Longest name or display name (Claude Code's).
+NAME_MAX_CHARS = 256
+#: A description taken from the body's first line is cut to this length.
+BODY_DESCRIPTION_MAX_CHARS = 100
 #: What a plugin skill's directory name keeps (Claude Code's).
 _PLUGIN_NAME_UNSAFE = re.compile(r"[^a-zA-Z0-9_-]")
 
@@ -92,10 +109,30 @@ class SkillDescription:
     agent: str | None = None
     #: A directory-scoped skill's own name (``deploy`` of ``apps/web:deploy``).
     unqualified: str | None = None
+    #: The frontmatter ``name`` when it differs from the skill's name (the
+    #: listing shows it after the name, as Claude Code does).
+    display_name: str | None = None
+    #: ``user-invocable: false``: not offered as ``/<name>``; the model may
+    #: still load it.
+    user_invocable: bool = True
+    #: ``model`` / ``effort``: what the rest of the turn that loads the skill
+    #: runs with (Claude Code's); ``None`` = the task's.
+    model: str | None = None
+    effort: str | None = None
+    #: ``disallowed-tools``: tools a ``context: fork`` skill's agent lacks.
+    disallowed_tools: tuple[str, ...] = ()
+    #: ``False`` for a plain command file (``commands/<name>.md``): it has no
+    #: directory of its own, so no "Base directory" line.
+    own_dir: bool = True
+    #: Literal ``(variable, value)`` pairs filled into the body first (a
+    #: Claude Code plugin's ``${CLAUDE_PLUGIN_ROOT}`` and the like).
+    variables: tuple[tuple[str, str], ...] = ()
 
     @property
     def base_dir(self) -> str | None:
-        return posixpath.dirname(self.source_path) if self.source_path else None
+        if not self.source_path or not self.own_dir:
+            return None
+        return posixpath.dirname(self.source_path)
 
     def meta(self, key: str) -> str | None:
         for k, v in self.metadata:
@@ -131,6 +168,9 @@ class SkillRegistry:
 
     def names(self) -> tuple[str, ...]:
         return tuple(self._skills)
+
+    def items(self) -> tuple[tuple[str, SkillDescription], ...]:
+        return tuple(self._skills.items())
 
     def tier_of(self, name: str) -> int:
         return self._tiers.get(name, 0)
@@ -180,12 +220,45 @@ def plugin_skill_name(plugin: str, rel: str, root: str, front_name: str | None) 
     return f"{plugin}:{_PLUGIN_NAME_UNSAFE.sub('-', base)}"
 
 
+def skill_dir_name(name: str) -> bool:
+    """Whether ``name`` (a directory's) may name a skill."""
+    return len(name) <= NAME_MAX_CHARS and _NAME_PATTERN.match(name) is not None
+
+
+def body_description(body: str) -> str | None:
+    """The first non-blank line of ``body`` (a heading without its ``#``),
+    cut to 100 characters: what a skill without a ``description`` is listed
+    with (Claude Code's)."""
+    for line in body.split("\n"):
+        text = line.strip()
+        if text:
+            heading = re.match(r"^#+\s+(\S.*)$", text)
+            text = heading.group(1) if heading else text
+            if len(text) > BODY_DESCRIPTION_MAX_CHARS:
+                return text[:BODY_DESCRIPTION_MAX_CHARS - 3] + "..."
+            return text
+    return None
+
+
+def _flag(raw: str | None, default: bool) -> bool:
+    if raw is None:
+        return default
+    token = raw.strip().lower()
+    if token in ("true", "yes", "on", "1"):
+        return True
+    if token in ("false", "no", "off", "0"):
+        return False
+    return default
+
+
 def parse_skill(path: str, raw: str, resources: tuple[str, ...] = (), *,
-                name: str | None = None) -> SkillDescription | None:
-    """One SKILL.md text into a description, or ``None`` (logged) when it is
-    unusable: bad frontmatter, a missing or invalid ``name``, no
-    ``description``. ``name`` is given for a plugin's skill (named by its
-    directory); its frontmatter ``name`` is then not needed."""
+                name: str, own_dir: bool = True,
+                variables: tuple[tuple[str, str], ...] = ()) -> SkillDescription | None:
+    """One SKILL.md (or command file) text into a description named
+    ``name`` (its directory's, or what its path gives), or ``None`` (logged)
+    when the frontmatter is unusable. The frontmatter ``name`` is a display
+    name; a skill without a ``description`` is described by its body's first
+    line."""
     try:
         fields, body, warnings = _frontmatter.parse(raw)
     except _frontmatter.FrontmatterError as exc:
@@ -193,25 +266,14 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = (), *,
         return None
     for warning in warnings:
         _log.warning("skill: %s: %s", path, warning)
-    if name is None:
-        # Only a name the caller gives (a plugin's) may carry a ':'; one a
-        # SKILL.md gives itself may not, so no file can pass for a plugin's
-        # skill or a directory-scoped one and take on its allow rules.
-        name = fields.get("name")
-        if name is None:
-            _log.warning("skill: %s: missing required key 'name'; skipped", path)
-            return None
-        if not _NAME_PATTERN.match(name):
-            _log.warning("skill: %s: invalid 'name' value %r "
-                         "(must match ^[a-z0-9][a-z0-9-]*$); skipped", path, name)
-            return None
-    elif not name.split(":", 1)[0]:
-        _log.warning("skill: %s: no plugin name; skipped", path)
+    if not name.split(":", 1)[0]:
+        _log.warning("skill: %s: no name; skipped", path)
         return None
-    description = fields.get("description")
-    if description is None:
-        _log.warning("skill: %s: missing required key 'description'; skipped", path)
-        return None
+    description = (fields.get("description") or "").strip() or body_description(body) or ""
+    shown = (fields.get("name") or "").strip()
+    display = shown if shown and shown != name and len(shown) <= NAME_MAX_CHARS else None
+    effort = (fields.get("effort") or "").strip() or None
+    model = (fields.get("model") or "").strip() or None
     return SkillDescription(
         name=name,
         description=description,
@@ -227,7 +289,28 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = (), *,
         paths=path_patterns(fields.get("paths")),
         fork=(fields.get("context") or "").strip() == "fork",
         agent=(fields.get("agent") or "").strip() or None,
+        display_name=display,
+        user_invocable=_flag(fields.get("user-invocable"), True),
+        model=None if model is not None and model.lower() == "inherit" else model,
+        effort=effort,
+        disallowed_tools=parse_list(fields.get("disallowed-tools")),
+        own_dir=own_dir,
+        variables=variables,
     )
+
+
+def display_label(desc: SkillDescription, registry: SkillRegistry) -> str:
+    """How the listing names a skill: ``name (Display name)`` when its
+    frontmatter gives another name that no other skill answers to, else its
+    name (Claude Code's)."""
+    shown = desc.display_name
+    if shown is None or desc.name.endswith(f":{shown}") \
+            or _DISPLAY_PATTERN.match(shown) is None:
+        return desc.name
+    if registry.get(shown) is not None:
+        return desc.name
+    first = next((d for _n, d in sorted(registry.items()) if d.display_name == shown), None)
+    return f"{desc.name} ({shown})" if first is desc else desc.name
 
 
 async def _list_files(env: ExecEnv, root: str) -> list[str]:
@@ -251,27 +334,33 @@ def _rel(path: str, root: str) -> str | None:
     return None if rel.startswith("..") else rel
 
 
-async def index_dir(env: ExecEnv, root: str,
-                    plugin: str | None = None) -> dict[str, SkillDescription]:
-    """Index ``<root>/**/SKILL.md``. Candidates are sorted by relative path
-    and a duplicate name keeps the first. ``plugin``: the plugin whose skill
-    directory ``root`` is (its skills are named ``<plugin>:<directory>``)."""
+async def index_dir(env: ExecEnv, root: str, plugin: str | None = None, *,
+                    variables: tuple[tuple[str, str], ...] = ()) -> dict[str, SkillDescription]:
+    """Index ``<root>/<directory>/SKILL.md`` (one level, as Claude Code
+    reads a skills directory), each named by its directory. ``plugin``: the
+    plugin whose skill directory ``root`` is (its skills are named
+    ``<plugin>:<directory>``, and a ``SKILL.md`` at ``root`` itself is one
+    too); ``variables``: filled into each body."""
     files = await _list_files(env, root)
     rels = sorted(r for r in (_rel(f, root) for f in files) if r is not None)
-    candidates = [r for r in rels if posixpath.basename(r) == "SKILL.md"]
+    candidates = [r for r in rels if posixpath.basename(r) == "SKILL.md"
+                  and (r.count("/") == 1 or (plugin is not None and r == "SKILL.md"))]
     skills: dict[str, SkillDescription] = {}
     for rel in candidates:
         path = posixpath.join(root, rel)
+        skill_dir = posixpath.dirname(rel)
+        if plugin is None and not skill_dir_name(skill_dir):
+            _log.warning("skill: %s: the directory name %r cannot name a skill; skipped",
+                         path, skill_dir)
+            continue
         raw = await read_text(env, path)
         if raw is None:
             _log.warning("skill: %s: failed to read; skipped", path)
             continue
-        skill_dir = posixpath.dirname(rel)
         resources = tuple(sorted(
             r2 for r2 in (_rel(r, skill_dir) if skill_dir else r for r in rels)
             if r2 is not None and posixpath.basename(r2) != "SKILL.md"
         ))
-        name = None
         if plugin is not None:
             front = None
             if not skill_dir:
@@ -280,7 +369,9 @@ async def index_dir(env: ExecEnv, root: str,
                 except _frontmatter.FrontmatterError:
                     front = None
             name = plugin_skill_name(plugin, rel, root, front)
-        desc = parse_skill(path, raw, resources, name=name)
+        else:
+            name = skill_dir
+        desc = parse_skill(path, raw, resources, name=name, variables=variables)
         if desc is None:
             continue
         if desc.name in skills:
@@ -291,46 +382,103 @@ async def index_dir(env: ExecEnv, root: str,
     return skills
 
 
+def command_name(rel: str) -> str | None:
+    """A commands directory's file's skill name (Claude Code's): its path
+    without ``.md``, directories joined by ``:``; a ``SKILL.md`` is named by
+    its directory. ``None`` when a part cannot name a skill."""
+    parts = rel.split("/")
+    if parts[-1] == "SKILL.md":
+        parts = parts[:-1]
+    else:
+        parts[-1] = parts[-1][:-3]
+    if not parts or not all(skill_dir_name(p) for p in parts):
+        return None
+    return ":".join(parts)
+
+
+async def index_commands_dir(env: ExecEnv, root: str) -> dict[str, SkillDescription]:
+    """Index a commands directory: every ``*.md`` below it is a skill (a
+    directory holding a ``SKILL.md`` gives only that one), named by its path
+    (:func:`command_name`)."""
+    files = await _list_files(env, root)
+    rels = sorted(r for r in (_rel(f, root) for f in files)
+                  if r is not None and r.endswith(".md"))
+    with_skill = {posixpath.dirname(r) for r in rels if posixpath.basename(r) == "SKILL.md"}
+    skills: dict[str, SkillDescription] = {}
+    for rel in rels:
+        own = posixpath.basename(rel) == "SKILL.md"
+        if not own and posixpath.dirname(rel) in with_skill:
+            continue
+        name = command_name(rel)
+        path = posixpath.join(root, rel)
+        if name is None or name in skills:
+            continue
+        raw = await read_text(env, path)
+        if raw is None:
+            continue
+        desc = parse_skill(path, raw, name=name, own_dir=own)
+        if desc is not None:
+            skills[name] = desc
+    return skills
+
+
 async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
                         plugins: Mapping[str, str] | None = None,
-                        scopes: Mapping[str, str] | None = None) -> SkillRegistry:
-    """Merge ``(directory, tier)`` pairs, low precedence first: a later
-    directory's skill shadows an earlier one of the same name. ``plugins``:
-    directory -> the plugin whose skills it holds. ``scopes``: a skill
+                        scopes: Mapping[str, str] | None = None,
+                        commands: Collection[str] = (),
+                        variables: Mapping[str, tuple[tuple[str, str], ...]] | None = None,
+                        ) -> SkillRegistry:
+    """Merge ``(directory, tier)`` pairs, highest precedence first: the
+    first skill of a name wins (Claude Code keeps the first it loaded). ``plugins``:
+    directory -> the plugin whose skills it holds. ``commands``: the
+    directories that are commands directories (:func:`index_commands_dir`).
+    ``variables``: directory -> what its skills' bodies fill in. ``scopes``: a skill
     directory found below the working directory -> the directory it serves
     (relative to the working directory); such a skill never shadows another:
     one whose name another skill has too is named ``<scope>:<name>``, as
     Claude Code names directory-scoped skills, and each one's description
-    says which files it is for."""
-    plugins, scopes = plugins or {}, scopes or {}
+    says which files it is for. Of one directory's two skill folders, the
+    first given wins a name they share."""
+    plugins, scopes, variables = plugins or {}, scopes or {}, variables or {}
     merged: dict[str, SkillDescription] = {}
     tier_of: dict[str, int] = {}
-    below: list[tuple[str, str, int, dict[str, SkillDescription]]] = []
+    below: dict[str, tuple[str, int, dict[str, SkillDescription]]] = {}
     for root, tier in tiers:
-        found = await index_dir(env, root, plugins.get(root))
+        if root in commands:
+            found = await index_commands_dir(env, root)
+        else:
+            found = await index_dir(env, root, plugins.get(root),
+                                    variables=variables.get(root, ()))
         if root in scopes:
-            below.append((root, scopes[root], tier, found))
+            scope = scopes[root]
+            first_root, first_tier, have = below.get(scope, (root, tier, {}))
+            below[scope] = (first_root, first_tier,
+                            {**found, **have})  # the first folder keeps a shared name
             continue
         for name, desc in found.items():
+            if name in merged:
+                _log.info("skill: %s: %r is already %s; skipped", desc.source_path, name,
+                          merged[name].source_path)
+                continue
             merged[name] = desc
             tier_of[name] = tier
-    named = Counter(name for _root, _scope, _tier, found in below for name in found)
+    named = Counter(name for _root, _tier, found in below.values() for name in found)
     plain = set(merged)
-    for root, scope, tier, found in below:
-        for name, desc in found.items():
+    for scope, (root, tier, found) in below.items():
+        for name, desc in sorted(found.items()):
             if name in plain or named[name] > 1:
                 desc = replace(desc, name=f"{scope}:{name}", unqualified=name,
                                description=desc.description
                                + SCOPED_NOTE.format(scope=scope, name=name))
             else:
+                skills_root = posixpath.dirname(posixpath.dirname(desc.source_path or root))
                 where = posixpath.join(scope, posixpath.relpath(
-                    root, posixpath.dirname(posixpath.dirname(root))))
+                    skills_root, posixpath.dirname(posixpath.dirname(skills_root))))
                 desc = replace(desc, description=desc.description
                                + FOUND_BELOW_NOTE.format(dir=where, scope=scope))
             if desc.name in merged:
                 # Nested skills rank last: a scoped name never replaces a
-                # skill already known by it (a plugin's ``<plugin>:<name>``,
-                # or the same directory's other skill folder).
+                # skill already known by it (a plugin's ``<plugin>:<name>``).
                 _log.warning("skill: %s: its name %r is taken by %s; skipped",
                              desc.source_path, desc.name, merged[desc.name].source_path)
                 continue
@@ -392,14 +540,21 @@ def argument_names(raw: str | None) -> tuple[str, ...]:
 #: Code's for skills written for it.
 SKILL_DIR_VARIABLES = ("${NOETA_SKILL_DIR}", "${CLAUDE_SKILL_DIR}")
 PROJECT_DIR_VARIABLES = ("${NOETA_PROJECT_DIR}", "${CLAUDE_PROJECT_DIR}")
+#: The conversation's id (noeta: the task tree's root task id) and the
+#: effort the skill runs at (Claude Code's).
+ROOT_ID_VARIABLES = ("${CLAUDE_SESSION_ID}",)
+EFFORT_VARIABLES = ("${NOETA_EFFORT}", "${CLAUDE_EFFORT}")
 
 
-def substitute_variables(text: str, skill_dir: str | None, project_dir: str | None) -> str:
-    """``text`` with the skill's directory and the project's (the task's
-    working directory) filled in; a variable with no value stays as
-    written."""
+def substitute_variables(text: str, skill_dir: str | None, project_dir: str | None,
+                         root_id: str | None = None, effort: str | None = None) -> str:
+    """``text`` with the skill's directory, the project's (the task's
+    working directory), the session id and the effort filled in; a variable
+    with no value stays as written."""
     for names, value in ((SKILL_DIR_VARIABLES, skill_dir),
-                         (PROJECT_DIR_VARIABLES, project_dir)):
+                         (PROJECT_DIR_VARIABLES, project_dir),
+                         (ROOT_ID_VARIABLES, root_id),
+                         (EFFORT_VARIABLES, effort)):
         if value:
             for name in names:
                 text = text.replace(name, value)
@@ -407,19 +562,26 @@ def substitute_variables(text: str, skill_dir: str | None, project_dir: str | No
 
 
 def render_body(desc: SkillDescription, args: str | None = None,
-                project_dir: str | None = None) -> str:
-    """The skill's body as the model gets it: the directory variables, then
-    the argument placeholders (an argument naming a variable stays as
-    typed)."""
-    body = substitute_variables(desc.body, desc.base_dir, project_dir)
+                project_dir: str | None = None, root_id: str | None = None,
+                effort: str | None = None) -> str:
+    """The skill's body as the model gets it: its own variables (a plugin's
+    root, data directory and options), the directory, session and effort
+    variables, then the argument placeholders (an argument naming a
+    variable stays as typed)."""
+    body = desc.body
+    for name, value in desc.variables:
+        body = body.replace(name, value)
+    body = substitute_variables(body, desc.base_dir, project_dir, root_id,
+                                desc.effort or effort)
     escape = neutralise if has_commands(body) else None
     return substitute_arguments(body, args, desc.arguments, escape)
 
 
 def render_command_body(desc: SkillDescription, args: str | None = None,
-                        project_dir: str | None = None) -> str:
+                        project_dir: str | None = None, root_id: str | None = None,
+                        effort: str | None = None) -> str:
     """What a skill puts in the conversation when it loads (after the
     command tags of a typed ``/<name> <args>``, or after a ``Skill`` call's
     result): the skill's directory and its rendered body."""
     base = f"Base directory for this skill: {desc.base_dir}\n\n" if desc.base_dir else ""
-    return base + render_body(desc, args, project_dir).lstrip("\n")
+    return base + render_body(desc, args, project_dir, root_id, effort).lstrip("\n")

@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 import msgspec
 
-from noeta.core import records
+from noeta.core import models, records
 from noeta.core.client import ClientAPI
 from noeta.core.errors import TurnDone
 from noeta.core.events import Recorded
@@ -39,15 +39,23 @@ from noeta.plugins.skills.gates import (
     pre_approved,
     script_gate,
 )
-from noeta.plugins.skills.listing import listing_lines, render_listing, skill_digest
+from noeta.plugins.skills.listing import (
+    MENU_DESCRIPTION_MAX_CHARS,
+    listing_lines,
+    render_listing,
+    skill_digest,
+)
 from noeta.plugins.skills.registry import (
     SkillDescription,
     SkillRegistry,
+    command_name,
     index_dir,
     load_registry,
+    parse_skill,
     plugin_skill_name,
     render_body,
     render_command_body,
+    skill_dir_name,
 )
 from noeta.plugins.skills.script import (
     SKILL_SCRIPT_TOOL_NAME,
@@ -70,7 +78,12 @@ from noeta.toolkit.inline_commands import (
     run_inline_commands,
     strip_commands,
 )
-from noeta.toolkit.tokens import estimate_tokens, listing_budget_chars, prefix_within
+from noeta.toolkit.tokens import (
+    LISTING_BUDGET_FRACTION,
+    estimate_tokens,
+    listing_budget_chars,
+    prefix_within,
+)
 
 __all__ = [
     "SKILL_TOOL",
@@ -105,12 +118,22 @@ TURN_REGISTRIES_KEEP = 256
 #: their calls, newest last.
 ERASABLE_KEEP = 32
 FORKS_KEEP = 32
-#: One checksum of every ``SKILL.md`` (paths and text) under the directories
-#: given as arguments: changes when a skill is added, removed or edited.
-_FINGERPRINT = ('for d in "$@"; do [ -d "$d" ] && find -L "$d" -type f -name SKILL.md '
-                '-print -exec cat {} + ; done 2>/dev/null | cksum')
-#: Calls whose file makes a skill with matching ``paths`` available.
-FILE_TOOLS = frozenset({"Read", "Write", "Edit", "NotebookEdit"})
+#: One checksum of every ``SKILL.md`` (and a commands directory's ``*.md``;
+#: paths and text) under the directories given as arguments: changes when a
+#: skill is added, removed or edited.
+_FINGERPRINT = ('for d in "$@"; do case "$d" in */commands) n="*.md" ;; *) n=SKILL.md ;; '
+                'esac; [ -d "$d" ] && find -L "$d" -type f -name "$n" -print -exec cat {} + ; '
+                'done 2>/dev/null | cksum')
+#: Calls whose file makes a skill with matching ``paths`` available and
+#: finds the skill directories on its way (Claude Code's: not a file a
+#: ``Bash`` command showed, which counts only for instruction files).
+FILE_TOOLS = frozenset({"Read", "Write", "Edit"})
+#: What ``${CLAUDE_EFFORT}`` says when neither the skill nor the task sets
+#: an effort: the provider's default.
+DEFAULT_EFFORT = "medium"
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+#: Ancestor walks remembered, by working directory.
+ANCESTORS_KEEP = 256
 
 #: Heads the skills re-attached after a compaction.
 INVOKED_SKILLS_HEADER = (
@@ -134,9 +157,11 @@ LISTING_ORDER = 50
 #: The skills invoked before a compaction, after it: ahead of the lists.
 INVOKED_ORDER = 20
 
-#: The directories a workspace contributes, relative to its root.
+#: The directories a workspace contributes, relative to its root (and to
+#: each directory above it up to the repository's root).
 WORKSPACE_SKILLS_DIR = ".noeta/skills"
 WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
+WORKSPACE_COMMANDS_DIR = ".noeta/commands"
 #: The keep-order tier of a skill directory found below the working
 #: directory. Such a skill never shadows another of the same name (Claude
 #: Code lists the others first and keeps the first of a name).
@@ -197,7 +222,7 @@ def _typed_command(text: str) -> tuple[str, str] | None:
     if tagged is not None:
         return tagged[0], tagged[1].strip()
     # A scoped name's directory may hold a "/" (``/apps/web:deploy``).
-    m = re.match(r"/([a-z0-9][a-z0-9-]*|[A-Za-z0-9][A-Za-z0-9_./-]*:[A-Za-z0-9_-]+)"
+    m = re.match(r"/([\w.-]+(?::[\w.-]+)*|[\w][\w./-]*:[\w.-]+)"
                  r"(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
     return (m.group(1), m.group(2).strip()) if m else None
 
@@ -208,6 +233,19 @@ def _scopes(cwd: str, nested: Sequence[str]) -> dict[str, str]:
     to ``cwd``."""
     return {root: os.path.relpath(os.path.dirname(os.path.dirname(root)), cwd)
             for root in nested}
+
+
+def _noeta_first(nested: Sequence[str]) -> list[str]:
+    """``nested`` with each directory's ``.noeta/skills`` ahead of its
+    ``.agents/skills``: the first wins a name the two share."""
+    out = list(nested)
+    for d in nested:
+        twin = os.path.join(os.path.dirname(os.path.dirname(d)), WORKSPACE_SKILLS_DIR)
+        if d.endswith(WORKSPACE_AGENTS_SKILLS_DIR) and twin in out \
+                and out.index(twin) > out.index(d):
+            out.remove(twin)
+            out.insert(out.index(d), twin)
+    return out
 
 
 def nested_dirs(state: Any) -> tuple[str, ...]:
@@ -236,15 +274,31 @@ class Skills(Extension):
       ``<plugin>:<skill directory>``, as Claude Code names them.
     * ``global_agents_dir`` / ``global_dir`` — the user's ``~/.agents/skills`` /
       ``~/.noeta/skills`` tiers (``None`` = none, the 0.6 default).
-    * ``workspace`` — mount the workspace tiers ``<cwd>/.agents/skills`` and
-      ``<cwd>/.noeta/skills`` (repo-derived, so they pass ``trusted``).
+    * ``global_commands_dir`` — the user's commands directory
+      (``~/.noeta/commands``): each ``*.md`` is a skill (Claude Code's
+      ``~/.claude/commands``).
+    * ``managed_dir`` — the machine's managed directory: its
+      ``.noeta/skills`` and ``.noeta/commands`` go first (Claude Code's
+      managed skills).
+    * ``workspace`` — mount the workspace tiers ``.noeta/skills``,
+      ``.agents/skills`` and ``.noeta/commands`` of the working directory and
+      of each directory above it up to the repository's root (not the home
+      directory), nearest first (repo-derived, so they pass ``trusted``).
       Claude Code's ``.claude/skills`` is never read.
+    * ``additional_dirs`` — the task's other directories (``--add-dir``,
+      ``additionalDirectories``): their ``.noeta/skills``, ``.agents/skills``
+      and ``.noeta/commands`` come after the workspace's (trust-gated too).
+    * ``plugin_vars`` — plugin skill directory -> ``{variable: value}`` filled
+      into its skills' bodies (``${CLAUDE_PLUGIN_ROOT}``, its options).
     * ``skills_dir`` — replaces the workspace tiers with this one directory
       (relative to the workspace), not trust-gated (0.6 ``skills_dir``).
     * ``trusted`` — ``trusted(workspace_path) -> bool`` gate for the
       repo-derived tiers; ``None`` = open (0.6 ``workspace_skills_trust``).
-    * ``budget_chars`` — listing budget in characters; ``None`` = 1 % of the
-      task model's window times its characters per token (Claude Code's).
+    * ``budget_chars`` — listing budget in characters; ``None`` =
+      ``budget_fraction`` (default 1 %) of the task model's window times its
+      characters per token (Claude Code's ``skillListingBudgetFraction``).
+    * ``max_desc_chars`` — each listed description's cap (Claude Code's
+      ``skillListingMaxDescChars``, default 1,536).
     * ``rank`` — ``rank(view) -> {skill: score}`` (sync or async), asked once
       when the listing is recorded; higher keeps more of its summary over
       budget (0.6 ``skill_menu_rank_resolver``). ``noeta.plugins.skills.usage``
@@ -274,10 +328,16 @@ class Skills(Extension):
         plugin_dirs: Mapping[str, str] | None = None,
         global_agents_dir: str | Path | None = None,
         global_dir: str | Path | None = None,
+        global_commands_dir: str | Path | None = None,
+        managed_dir: str | Path | None = None,
         workspace: bool = True,
+        additional_dirs: Sequence[str | Path] = (),
+        plugin_vars: Mapping[str, Mapping[str, str]] | None = None,
         skills_dir: str | Path | None = None,
         trusted: Callable[[str], bool] | None = None,
         budget_chars: int | None = None,
+        budget_fraction: float | None = None,
+        max_desc_chars: int | None = None,
         rank: Rank | None = None,
         usage_from: ClientAPI | None = None,
         preload: Sequence[str] = (),
@@ -289,6 +349,10 @@ class Skills(Extension):
     ) -> None:
         if budget_chars is not None and budget_chars <= 0:
             raise ValueError("Skills: budget_chars must be a positive int")
+        if budget_fraction is not None and not 0 < budget_fraction <= 1:
+            raise ValueError("Skills: budget_fraction must be in (0, 1]")
+        if max_desc_chars is not None and max_desc_chars <= 0:
+            raise ValueError("Skills: max_desc_chars must be a positive int")
         if tool_enforcement not in ("off", "approval", "deny"):
             raise ValueError(f"Skills: unknown tool_enforcement {tool_enforcement!r}")
         self.dirs = [os.path.expanduser(str(d)) for d in dirs]
@@ -297,10 +361,19 @@ class Skills(Extension):
         self.global_agents_dir = os.path.expanduser(str(global_agents_dir)) \
             if global_agents_dir is not None else None
         self.global_dir = os.path.expanduser(str(global_dir)) if global_dir is not None else None
+        self.global_commands_dir = os.path.expanduser(str(global_commands_dir)) \
+            if global_commands_dir is not None else None
+        self.managed_dir = os.path.expanduser(str(managed_dir)) \
+            if managed_dir is not None else None
         self.workspace = workspace
+        self.additional_dirs = [os.path.expanduser(str(d)) for d in additional_dirs]
+        self.plugin_vars = {os.path.expanduser(str(d)): tuple(sorted(v.items()))
+                            for d, v in (plugin_vars or {}).items()}
         self.skills_dir = str(skills_dir) if skills_dir is not None else None
         self.trusted = trusted
         self.budget_chars = budget_chars
+        self.budget_fraction = budget_fraction
+        self.max_desc_chars = max_desc_chars or MENU_DESCRIPTION_MAX_CHARS
         self.rank = rank if rank is not None or usage_from is None else UsageRank(usage_from)
         self.preload = list(preload)
         self.scripts = scripts
@@ -318,28 +391,48 @@ class Skills(Extension):
         #: Fork skills whose commands wait until every check passed the
         #: ``Skill`` call: ``(task, call id)`` -> ``(Agent input, activation)``.
         self._forks_due: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
+        #: The directories from a working directory up to its repository's
+        #: root, by working directory (each worker finds them for itself).
+        self._ancestors: dict[str, tuple[str, ...]] = {}
 
     # ------------------------------------------------------------ discovery
 
-    def tiers(self, cwd: str, nested: Sequence[str] = ()) -> list[tuple[str, int]]:
-        """``(directory, keep-order tier)``, low precedence first; ``nested``
-        are skill directories found below the working directory (deepest
-        last), below every other."""
-        out = [(d, 0) for d in [*self.dirs, *self.plugin_dirs]]
-        first: list[tuple[str, int]] = []
-        if self.global_agents_dir is not None:
-            out.append((self.global_agents_dir, 1))
+    def tiers(self, cwd: str, nested: Sequence[str] = (),
+              ancestors: Sequence[str] | None = None) -> list[tuple[str, int]]:
+        """``(directory, keep-order tier)``, highest precedence first (the
+        first skill of a name wins, as in Claude Code: the machine's, the
+        user's, the workspace's from the working directory up, the
+        additional directories', then commands directories, then the host's
+        and plugins'); ``ancestors``: the working directory and those above
+        it to scan (default: the working directory). ``nested`` are skill
+        directories found below the working directory (deepest last): they
+        never shadow, and come last."""
+        managed = [(os.path.join(self.managed_dir, WORKSPACE_SKILLS_DIR), 2)] \
+            if self.managed_dir is not None else []
+        user: list[tuple[str, int]] = []
         if self.global_dir is not None:
-            out.append((self.global_dir, 2))
+            user.append((self.global_dir, 2))
+        if self.global_agents_dir is not None:
+            user.append((self.global_agents_dir, 1))
+        workspace: list[tuple[str, int]] = []
+        commands: list[tuple[str, int]] = []
+        if self.managed_dir is not None:
+            commands.append((os.path.join(self.managed_dir, WORKSPACE_COMMANDS_DIR), 2))
+        if self.global_commands_dir is not None:
+            commands.append((self.global_commands_dir, 2))
+        below: list[tuple[str, int]] = []
         if self.skills_dir is not None:
-            out.append((os.path.join(cwd, self.skills_dir), 4))
+            workspace.append((os.path.join(cwd, self.skills_dir), 4))
         elif self.workspace:
-            gated = [os.path.join(cwd, WORKSPACE_AGENTS_SKILLS_DIR),
-                     os.path.join(cwd, WORKSPACE_SKILLS_DIR)]
             if self.trusted is None or self.trusted(cwd):
-                out += [(gated[0], 3), (gated[1], 4)]
-                first = [(d, NESTED_TIER) for d in nested]
+                for d in [*(ancestors or [cwd]), *self.additional_dirs]:
+                    workspace += [(os.path.join(d, WORKSPACE_SKILLS_DIR), 4),
+                                  (os.path.join(d, WORKSPACE_AGENTS_SKILLS_DIR), 3)]
+                    commands.append((os.path.join(d, WORKSPACE_COMMANDS_DIR), 4))
+                below = [(d, NESTED_TIER) for d in _noeta_first(nested)]
             elif cwd not in _warned_untrusted:
+                gated = [os.path.join(cwd, WORKSPACE_AGENTS_SKILLS_DIR),
+                         os.path.join(cwd, WORKSPACE_SKILLS_DIR)]
                 skipped = [d for d in gated if os.path.isdir(d)]
                 if skipped:  # nothing is skipped where the directories do not exist
                     if len(_warned_untrusted) >= WARNED_KEEP:
@@ -347,17 +440,57 @@ class Skills(Extension):
                     _warned_untrusted[cwd] = None
                     _log.warning("workspace %s is not trusted; skipping its skill "
                                  "directories: %s", cwd, ", ".join(skipped))
-        return first + out
+        host = [(d, 0) for d in [*self.dirs, *self.plugin_dirs]]
+        return managed + user + workspace + commands + host + below
+
+    def commands_dirs(self, tiers: Sequence[tuple[str, int]]) -> frozenset[str]:
+        """Which of ``tiers``' directories are commands directories."""
+        own = {self.global_commands_dir}
+        return frozenset(d for d, _ in tiers
+                         if d in own or d.endswith(os.sep + WORKSPACE_COMMANDS_DIR))
+
+    async def ancestors(self, env: ExecEnv) -> tuple[str, ...]:
+        """The working directory and each directory above it, up to the
+        repository's root (the first with a ``.git``) or the filesystem's,
+        never the home directory (Claude Code's project directories), as
+        ``env`` sees them."""
+        cwd = env.cwd
+        found = self._ancestors.get(cwd)
+        if found is not None:
+            return found
+        home = os.path.expanduser("~")
+        out: list[str] = []
+        d = cwd
+        while d != home:
+            out.append(d)
+            try:
+                if await env.stat(os.path.join(d, ".git")) is not None:
+                    break
+            except OSError:
+                break
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+        if len(self._ancestors) >= ANCESTORS_KEEP:
+            del self._ancestors[next(iter(self._ancestors))]
+        self._ancestors[cwd] = found = tuple(out) or (cwd,)
+        return found
+
+    async def _tiers(self, env: ExecEnv, state: Any) -> list[tuple[str, int]]:
+        return self.tiers(env.cwd, nested_dirs(state), await self.ancestors(env))
 
     async def registry(self, env: ExecEnv, state: Any = None) -> SkillRegistry:
         """The skills ``env`` sees, with the nested directories ``state``
         (this plugin's) recorded."""
-        return await self._load(env, self.tiers(env.cwd, nested_dirs(state)), nested_dirs(state))
+        return await self._load(env, await self._tiers(env, state), nested_dirs(state))
 
     async def _load(self, env: ExecEnv, tiers: Sequence[tuple[str, int]],
                     nested: Sequence[str]) -> SkillRegistry:
         return await load_registry(env, tiers, plugins=self.plugin_dirs,
-                                   scopes=_scopes(env.cwd, nested))
+                                   scopes=_scopes(env.cwd, nested),
+                                   commands=self.commands_dirs(tiers),
+                                   variables=self.plugin_vars)
 
     async def turn_registry(self, view: TaskView) -> SkillRegistry:
         """The skills as found for the task: loaded again when new input was
@@ -366,7 +499,7 @@ class Skills(Extension):
         model call, not after every file a call touched."""
         env = task_env(view.env, view.state.config)
         nested = nested_dirs(view.ext_state(self.name))
-        tiers = self.tiers(env.cwd, nested)
+        tiers = await self._tiers(env, view.ext_state(self.name))
         key = (view.state.inbox_read, env.cwd, tuple(tiers),
                self._fingerprints.get(view.task_id))
         cached = self._turn_registries.pop(view.task_id, None)
@@ -385,8 +518,7 @@ class Skills(Extension):
         found before the next model call (Claude Code watches the
         directories)."""
         env = task_env(view.env, view.state.config)
-        roots = [root for root, _tier in self.tiers(env.cwd, nested_dirs(
-            view.ext_state(self.name)))]
+        roots = [root for root, _tier in await self._tiers(env, view.ext_state(self.name))]
         try:
             out = await env.run(["sh", "-c", _FINGERPRINT, "sh", *roots], timeout=10,
                                 output_cap=256)
@@ -414,6 +546,12 @@ class Skills(Extension):
             return {**state, "invoked": data.get("text")}
         if kind == "invoked_sent":
             return {**state, "invoked": None}
+        if kind == "listing_rebuilt":
+            return {**state, "listings": [{**data, "held": True}] if data.get("names") else []}
+        if kind == "turn":
+            return {**state, "turn": data}
+        if kind == "turn_done":
+            return {**state, "turn": None}
         if kind == "listing_rehold":
             return {**state, "listings": [{**listing, "held": True}
                                           for listing in state["listings"]]}
@@ -488,20 +626,48 @@ class Skills(Extension):
         return await asyncio.to_thread(self._commands, ctx.cwd)
 
     def _commands(self, cwd: str) -> list[Command]:
+        tiers = self.tiers(cwd, (), _local_ancestors(cwd))
+        commands = self.commands_dirs(tiers)
         found: dict[str, str] = {}
-        for root, _tier in self.tiers(cwd):
+        taken: set[str] = set()
+        for root, _tier in tiers:
+            base = Path(root)
+            if not base.is_dir():
+                continue
             plugin = self.plugin_dirs.get(root)
-            for path in sorted(Path(root).rglob("SKILL.md")) if Path(root).is_dir() else []:
+            if root in commands:
+                paths = sorted(base.rglob("*.md"))
+            else:
+                paths = sorted(base.glob("*/SKILL.md"))
+                if plugin is not None and (base / "SKILL.md").is_file():
+                    paths.insert(0, base / "SKILL.md")
+            for path in paths:
+                rel = path.relative_to(base).as_posix()
                 try:
-                    fields, _body, _w = _frontmatter.parse(path.read_text(encoding="utf-8"))
-                except (OSError, UnicodeDecodeError, _frontmatter.FrontmatterError):
+                    raw = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
                     continue
-                name = fields.get("name")
-                if plugin is not None:
-                    name = plugin_skill_name(plugin, path.relative_to(root).as_posix(), root,
-                                             name)
-                if name and (plugin is not None or re.fullmatch(r"[a-z0-9][a-z0-9-]*", name)):
-                    found[name] = fields.get("description", "")
+                name: str | None
+                if root in commands:
+                    name = command_name(rel)
+                elif plugin is not None:
+                    try:
+                        front = _frontmatter.parse(raw)[0].get("name")
+                    except _frontmatter.FrontmatterError:
+                        front = None
+                    name = plugin_skill_name(plugin, rel, root, front)
+                else:
+                    name = rel.split("/")[0]
+                    name = name if skill_dir_name(name) else None
+                if name is None or name in taken:
+                    continue
+                desc = parse_skill(str(path), raw, name=name,
+                                   own_dir=root not in commands or rel.endswith("SKILL.md"))
+                if desc is None:
+                    continue
+                taken.add(name)
+                if desc.user_invocable:
+                    found[name] = desc.description
         return [Command(name=n, description=d, template=command_message(n, "{args}"))
                 for n, d in sorted(found.items())]
 
@@ -512,7 +678,8 @@ class Skills(Extension):
         if not state.get("listings"):
             registry = await self.registry(env)
             lines = listing_lines(registry, budget_chars=self._budget(view),
-                                  rank=await self._rank(view), unlocked=unlocked_skills(state))
+                                  rank=await self._rank(view), unlocked=unlocked_skills(state),
+                                  max_desc_chars=self.max_desc_chars)
             if lines:
                 # Held for the first request's system turn, after the prompt.
                 view.record(self.name, "listing", {"names": [n for n, _ in lines],
@@ -527,7 +694,8 @@ class Skills(Extension):
                 if desc is None:
                     _log.warning("skills: preload %r is not an indexed skill; skipped", name)
                     continue
-                data = activation_data(desc, "preload", cwd=view.cwd)
+                data = activation_data(desc, "preload", cwd=view.cwd,
+                                       root_id=_root(view), effort=_effort(view))
                 try:
                     data = await self._expand(view, data, f"skill-preload-{name}")
                 except InlineCommandError as exc:
@@ -561,12 +729,16 @@ class Skills(Extension):
         if not messages:
             return
         state = view.ext_state(self.name) or {}
+        if state.get("turn") and not view.state.steps_in_turn:
+            # A new turn: a skill's model and effort were for the last one.
+            view.record(self.name, "turn_done", {})
         registry = await self.turn_registry(view)
         for message in messages:
             self._note_mentions(view, registry, state, message.text)
             typed = _typed_command(message.text)
             desc = registry.get(typed[0]) if typed else None
-            if desc is not None and desc.paths and desc.name not in unlocked_skills(state):
+            if desc is not None and (not desc.user_invocable or (
+                    desc.paths and desc.name not in unlocked_skills(state))):
                 desc = None
             if typed and desc is not None and desc.fork \
                     and view.find_tool(AGENT_TOOL) is not None:
@@ -574,10 +746,8 @@ class Skills(Extension):
                 continue
             if typed and desc is not None:
                 prior = (state.get("active") or {}).get(desc.name)
-                data = activation_data(desc, "user", typed[1], view.cwd)
-                # The body rides in the person's turn as plain text, after
-                # the command's tags (Claude Code's slash-command shape).
-                data["text"] = render_command_body(desc, typed[1], view.cwd)
+                data = activation_data(desc, "user", typed[1], view.cwd, _root(view),
+                                       _effort(view))
                 try:
                     data = await self._expand(view, data, f"skill-{recorded.seq}")
                 except InlineCommandError as exc:
@@ -588,6 +758,7 @@ class Skills(Extension):
                     continue
                 self._record_invocation(view, {**data, "input": recorded.seq}, prior,
                                         "inline")
+                self._note_turn(view, desc)
                 self._note_variants(view, registry, desc, "inline")
 
     async def _fork_typed(self, view: TaskView, desc: SkillDescription, args: str,
@@ -598,7 +769,7 @@ class Skills(Extension):
         forks it; noeta's agents always run in the background)."""
         call_id = f"skill-{seq}"
         data = activation_data(desc, "user", args, view.cwd)
-        data["text"] = render_body(desc, args, view.cwd)
+        data["text"] = render_body(desc, args, view.cwd, _root(view), _effort(view))
         try:
             prompt = (await self._expand(view, data, call_id))["text"]
         except InlineCommandError as exc:
@@ -620,7 +791,8 @@ class Skills(Extension):
                           model=view.model, prompt=view.prompt)
         output = await tool.run({"description": FORK_DESCRIPTION.format(name=desc.name),
                                  "prompt": prompt,
-                                 "subagent_type": desc.agent or DEFAULT_FORK_AGENT}, ctx)
+                                 "subagent_type": desc.agent or DEFAULT_FORK_AGENT,
+                                 **_fork_options(tool, desc)}, ctx)
         text = "\n".join(getattr(c, "text", "") for c in output.content).strip()
         if output.is_error:
             view.notify(text)
@@ -633,8 +805,14 @@ class Skills(Extension):
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         """No model call answers a typed fork skill's message (its agent's
-        report opens a turn later)."""
-        at = (view.ext_state(self.name) or {}).get("typed_fork")
+        report opens a turn later). A skill loaded this turn with its own
+        ``model`` or ``effort`` sets the rest of the turn's (Claude Code's)."""
+        state = view.ext_state(self.name) or {}
+        turn = state.get("turn") or {}
+        changes = {k: turn[k] for k in ("model", "effort") if turn.get(k)}
+        if changes:
+            request = msgspec.structs.replace(request, **changes)
+        at = state.get("typed_fork")
         if at is None:
             return request
         view.record(self.name, "typed_fork_done", {})
@@ -646,6 +824,18 @@ class Skills(Extension):
         if newest == at:
             raise TurnDone()
         return request
+
+    def _note_turn(self, view: TaskView, desc: SkillDescription) -> None:
+        """Keep a loaded skill's ``model`` and ``effort`` for the rest of
+        the turn."""
+        effort = desc.effort if desc.effort in EFFORTS else None
+        if desc.effort and effort is None:
+            _log.warning("skills: %s: effort %r is not one of %s; ignored", desc.name,
+                         desc.effort, ", ".join(EFFORTS))
+        model = models.resolve_alias(desc.model) if desc.model else None
+        if model or effort:
+            view.record(self.name, "turn", {"name": desc.name, "model": model,
+                                            "effort": effort})
 
     def _note_variants(self, view: TaskView, registry: SkillRegistry, desc: SkillDescription,
                        origin: Origin | None) -> None:
@@ -669,20 +859,25 @@ class Skills(Extension):
         if any(listing.get("held") for listing in state.get("listings", [])):
             return  # the first request's listing is still to go out
         registry = await self.turn_registry(view)
+        unlocked = unlocked_skills(state)
+        only: list[str] | None = None
         if state.get("listings"):
             announced, digests = self.announced(state), self.digests(state)
-            lines = listing_lines(registry, budget_chars=self._budget(view),
-                                  unlocked=unlocked_skills(state))
-            current = _digests(registry, lines)
-            added = [(n, line) for n, line in lines if n not in announced
-                     or digests.get(n, current[n]) != current[n]]
-            if added:
-                self._record_listing(view, added, registry)
-        else:
-            lines = listing_lines(registry, budget_chars=self._budget(view),
-                                  rank=await self._rank(view), unlocked=unlocked_skills(state))
-            if lines:
-                self._record_listing(view, lines, registry)
+            only = []
+            for name in registry.model_invocable(unlocked):
+                desc = registry.get(name)
+                now = skill_digest(desc) if desc is not None else ""
+                if name not in announced or digests.get(name, now) != now:
+                    only.append(name)
+            if not only:
+                return
+        # The new ones fitted to the whole budget by themselves, ranked
+        # (Claude Code's).
+        lines = listing_lines(registry, budget_chars=self._budget(view),
+                              rank=await self._rank(view), unlocked=unlocked, only=only,
+                              max_desc_chars=self.max_desc_chars)
+        if lines:
+            self._record_listing(view, lines, registry)
 
     def _note_mentions(self, view: TaskView, registry: SkillRegistry, state: Any,
                        text: str) -> None:
@@ -698,21 +893,26 @@ class Skills(Extension):
                             message=user(note.replace("{name}", name), origin=self.origin))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
-        if call.name in FILE_TOOLS and not output.is_error:
-            await self._discover(view, call)
-            await self._unlock(view, call)
+        path = _file_of(call)
+        if call.name in FILE_TOOLS and not output.is_error and path is not None:
+            await self._discover(view, path)
+            await self._unlock(view, path)
         data = output.meta.get("skill_activation")
         if call.name != SKILL_TOOL or output.is_error or not isinstance(data, dict):
             return output
         prior = ((view.ext_state(self.name) or {}).get("active") or {}).get(data["name"])
+        registry = await self.turn_registry(view)
+        desc = registry.get(data["name"])
+        if desc is not None:
+            data = {**data, "text": render_command_body(desc, data.get("args"), view.cwd,
+                                                        _root(view), _effort(view))}
         try:
             data = await self._expand(view, data, call.id)
         except InlineCommandError as exc:
             return text_output(str(exc), is_error=True)
         self._record_invocation(view, data, prior, self.origin)
-        registry = await self.turn_registry(view)
-        desc = registry.get(data["name"])
         if desc is not None:
+            self._note_turn(view, desc)
             self._note_variants(view, registry, desc, self.origin)
         meta = {k: v for k, v in output.meta.items() if k != "skill_activation"}
         meta["skill"] = data["name"]
@@ -739,7 +939,10 @@ class Skills(Extension):
     def _budget(self, view: TaskView) -> int:
         if self.budget_chars is not None:
             return self.budget_chars
-        return listing_budget_chars(str(view.state.config.get("model") or ""))
+        budget = listing_budget_chars(str(view.state.config.get("model") or ""))
+        if self.budget_fraction is not None:
+            budget = max(1, int(budget * self.budget_fraction / LISTING_BUDGET_FRACTION))
+        return budget
 
     async def _rank(self, view: TaskView) -> Mapping[str, float] | None:
         if self.rank is None:
@@ -771,7 +974,8 @@ class Skills(Extension):
         due: dict[str, Any] | None = None
         if prompt is None:
             data = activation_data(desc, "model", args, view.cwd)
-            data["text"] = prompt = render_body(desc, args, view.cwd)
+            data["text"] = prompt = render_body(desc, args, view.cwd, _root(view),
+                                                _effort(view))
             if has_commands(prompt) and self.shell_commands:
                 # Run once the rewritten call is gated: a deny of this
                 # ``Skill`` call (any plugin's) has stopped it by then.
@@ -781,7 +985,8 @@ class Skills(Extension):
                 view.record(self.name, "forked", {"call_id": call.id, "name": name,
                                                   "prompt": prompt})
         agent_input = {"description": FORK_DESCRIPTION.format(name=name), "prompt": prompt,
-                       "subagent_type": desc.agent or DEFAULT_FORK_AGENT}
+                       "subagent_type": desc.agent or DEFAULT_FORK_AGENT,
+                       **_fork_options(view.find_tool(AGENT_TOOL), desc)}
         if due is not None:
             if len(self._forks_due) >= FORKS_DUE_KEEP:
                 self._forks_due.pop(next(iter(self._forks_due)))
@@ -799,15 +1004,13 @@ class Skills(Extension):
                                           "prompt": prompt})
         return Rewrite(name=AGENT_TOOL, input={**call.input, "prompt": prompt})
 
-    async def _discover(self, view: TaskView, call: ToolUse) -> None:
+    async def _discover(self, view: TaskView, path: str) -> None:
         """Skill directories (``.noeta/skills``, ``.agents/skills``) of the
         directories between the working directory and the file this call
         touched join the task, announced with their skills' names (Claude
         Code's nested skill discovery). A directory git ignores (a
         dependency's, a build's) is skipped, as Claude Code skips it."""
-        path = next((call.input[k] for k in ("file_path", "notebook_path")
-                     if isinstance(call.input.get(k), str) and call.input[k]), None)
-        if path is None or self.skills_dir is not None or not self.workspace:
+        if self.skills_dir is not None or not self.workspace:
             return
         env = task_env(view.env, view.state.config)
         cwd = env.cwd
@@ -822,7 +1025,8 @@ class Skills(Extension):
         d = cwd
         for part in rel.split(os.sep):
             d = os.path.join(d, part)
-            for sub in (WORKSPACE_AGENTS_SKILLS_DIR, WORKSPACE_SKILLS_DIR):
+            # ``.noeta/skills`` first: it wins a name the two share.
+            for sub in (WORKSPACE_SKILLS_DIR, WORKSPACE_AGENTS_SKILLS_DIR):
                 root = os.path.join(d, sub)
                 if root in known:
                     continue
@@ -849,13 +1053,9 @@ class Skills(Extension):
                 view.record(self.name, "nested_found", {"dir": root, "names": names},
                             message=user(text, origin=self.origin))
 
-    async def _unlock(self, view: TaskView, call: ToolUse) -> None:
-        """Offer the skills whose ``paths`` match the file this call touched,
+    async def _unlock(self, view: TaskView, path: str) -> None:
+        """Offer the skills whose ``paths`` match the file the model touched,
         announced like a newly installed skill."""
-        path = next((call.input[k] for k in ("file_path", "notebook_path")
-                     if isinstance(call.input.get(k), str) and call.input[k]), None)
-        if path is None:
-            return
         state = view.ext_state(self.name) or {}
         unlocked = unlocked_skills(state)
         registry = await self.turn_registry(view)
@@ -873,11 +1073,12 @@ class Skills(Extension):
         if not names:
             return
         view.record(self.name, "unlocked", {"names": names})
+        fresh = [n for n in names if n not in self.announced(state)]
         lines = listing_lines(registry, budget_chars=self._budget(view),
-                              unlocked={*unlocked, *names})
-        fresh = [(n, line) for n, line in lines if n in names and n not in self.announced(state)]
-        if fresh:
-            self._record_listing(view, fresh, registry)
+                              rank=await self._rank(view), unlocked={*unlocked, *names},
+                              only=fresh, max_desc_chars=self.max_desc_chars) if fresh else ()
+        if lines:
+            self._record_listing(view, lines, registry)
 
     async def _expand(self, view: TaskView, data: dict[str, Any],
                       call_id: str) -> dict[str, Any]:
@@ -908,7 +1109,9 @@ class Skills(Extension):
         """A skill invoked, by the model or a typed ``/name``: its text the
         first time; a short note when the same text is already in the
         conversation; a note and the whole text when its arguments or
-        command output changed (Claude Code's)."""
+        command output changed (Claude Code's). The text is kept as it was
+        rendered: a compaction gives that again, not the file as it is then."""
+        data = {**data, "rendered": data.get("rendered") or data["text"]}
         if prior is not None and (prior.get("args"), prior.get("rendered")) == (
                 data.get("args"), data.get("rendered")):
             args = f" Arguments: {data['args']}" if data.get("args") else ""
@@ -929,15 +1132,16 @@ class Skills(Extension):
         state = view.ext_state(self.name) or {}
         out: list[Message] = []
         active = state.get("active") or {}
+        registry = await self.registry(task_env(view.env, view.state.config), state)
         if active:
-            registry = await self.registry(task_env(view.env, view.state.config), state)
             parts = [INVOKED_SKILLS_HEADER]
             used = 0
             for name, entry in reversed(active.items()):
                 desc = registry.recorded(name)
                 if desc is not None:
                     text = _cut_skill(entry.get("rendered") or strip_commands(
-                        render_command_body(desc, entry.get("args"), view.cwd), ""))
+                        render_command_body(desc, entry.get("args"), view.cwd,
+                                            _root(view), _effort(view)), ""))
                     size = estimate_tokens(text)
                     if used + size > INVOKED_SKILLS_BUDGET_TOKENS:
                         continue
@@ -946,8 +1150,16 @@ class Skills(Extension):
                                  f"Path: {self._source(desc, registry)}:{desc.name}\n\n{text}")
             if len(parts) > 1 and view.keeps_tail is not None:
                 view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
-        if view.keeps_tail is not None and state.get("listings"):
-            view.record(self.name, "listing_rehold", {})
+        if view.keeps_tail is not None:
+            # The listing again, built from the skills there are now (Claude
+            # Code's): an edited skill once, a removed one gone.
+            lines = listing_lines(registry, budget_chars=self._budget(view),
+                                  rank=await self._rank(view), unlocked=unlocked_skills(state),
+                                  max_desc_chars=self.max_desc_chars)
+            if lines or state.get("listings"):
+                view.record(self.name, "listing_rebuilt", {
+                    "names": [n for n, _ in lines], "lines": [t for _, t in lines],
+                    "digests": _digests(registry, lines)})
         return out
 
     def _source(self, desc: SkillDescription, registry: SkillRegistry) -> str:
@@ -985,3 +1197,47 @@ async def _git_ignored(env: ExecEnv, path: str, cwd: str) -> bool:
     except Exception:  # noqa: BLE001 — no git: nothing is ignored
         return False
     return done.exit_code == 0 and not done.timed_out
+
+
+def _local_ancestors(cwd: str) -> tuple[str, ...]:
+    """:meth:`Skills.ancestors` on this machine (a front end's own
+    directory)."""
+    home = os.path.expanduser("~")
+    out: list[str] = []
+    d = cwd
+    while d != home:
+        out.append(d)
+        if os.path.exists(os.path.join(d, ".git")):
+            break
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return tuple(out) or (cwd,)
+
+
+def _root(view: TaskView) -> str:
+    """What a skill's conversation-id variable says: the root task's id."""
+    return view.state.root_id or view.task_id
+
+
+def _effort(view: TaskView) -> str:
+    """``${CLAUDE_EFFORT}`` when the skill sets none: the task's effort."""
+    return view.effort or DEFAULT_EFFORT
+
+
+def _file_of(call: ToolUse) -> str | None:
+    return next((call.input[k] for k in ("file_path", "notebook_path")
+                 if isinstance(call.input.get(k), str) and call.input[k]), None)
+
+
+def _fork_options(agent_tool: Any, desc: SkillDescription) -> dict[str, str]:
+    """A fork skill's ``model`` and ``effort`` as its agent's, where the
+    ``Agent`` tool takes that value."""
+    props = ((getattr(agent_tool, "input_schema", None) or {}).get("properties") or {})
+    out: dict[str, str] = {}
+    for key, value in (("model", desc.model), ("effort", desc.effort)):
+        allowed = (props.get(key) or {}).get("enum")
+        if value and allowed and value in allowed:
+            out[key] = value
+    return out

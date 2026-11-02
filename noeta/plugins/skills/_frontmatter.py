@@ -43,6 +43,10 @@ KNOWN_KEYS: frozenset[str] = frozenset(
         "paths",
         "context",
         "agent",
+        "model",
+        "effort",
+        "disallowed-tools",
+        "user-invocable",
     }
 )
 
@@ -96,9 +100,8 @@ def parse(text: str) -> tuple[dict[str, str], str, list[str]]:
     if text.startswith("\ufeff"):
         text = text[1:]
     if not (text.startswith("---\n") or text.startswith("---\r\n")):
-        raise FrontmatterError(
-            "missing leading '---' delimiter at byte 0"
-        )
+        # No frontmatter: all of it is the body (Claude Code's).
+        return {}, text.replace("\r\n", "\n"), []
 
     lines = [_strip_cr(line) for line in text.split("\n")]
 
