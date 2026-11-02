@@ -193,7 +193,7 @@ class Subtasks(Extension):
     def initial_state(self) -> Any:
         return {"agents": {}, "tasks": {}, "handbacks": {}, "flagged": [], "pending": {},
                 "noticed": [], "reminded": False, "listed": False, "held_list": None,
-                "held_status": [], "progress": None, **idle.initial()}
+                "held_status": [], "progress": None, "mentions_through": 0, **idle.initial()}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = {**self.initial_state(), **(state or {})}
@@ -234,6 +234,11 @@ class Subtasks(Extension):
             return {**st, "held_status": list(data.get("texts") or ())}
         if kind == "task_status_sent":
             return {**st, "held_status": []}
+        if kind == "agent_mention":
+            through = data.get("through") if isinstance(data, dict) else None
+            if isinstance(through, int):
+                return {**st, "mentions_through": max(st["mentions_through"], through)}
+            return st
         return idle.reduce(st, kind, data) or st
 
     def _state(self, state: TaskState) -> dict[str, Any]:
@@ -367,7 +372,7 @@ class Subtasks(Extension):
         elif not st["held_list"]:
             out += self._agent_delta(view, st)
         if not view.state.parent_id:
-            out += mention_reminders(view, self.roster_for(view))
+            out += mention_reminders(view, self.roster_for(view), st["mentions_through"])
         return out
 
     def _agent_delta(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
@@ -407,9 +412,9 @@ class Subtasks(Extension):
         text = None if view.state.parent_id else self.agent_list(view)
         if text and view.keeps_tail is not None:
             view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
-        texts = self.running_status(view) if view.keeps_tail is not None else []
-        if texts:
-            view.record(self.name, "task_status", {"texts": texts})
+        status = self.running_status(view) if view.keeps_tail is not None else []
+        if status:
+            view.record(self.name, "task_status", {"texts": status})
         return ()
 
     def running_status(self, view: TaskView) -> list[str]:
@@ -613,8 +618,7 @@ def _outcome(agent: Mapping[str, Any], agent_id: str, ended: ChildEnded,
         reason = ended.error
         summary = (texts.SUMMARY_STOPPED_BY_CALLER if reason == notices.STOPPED_BY_CALLER
                    else texts.SUMMARY_STOPPED_BY_USER if reason in ("", "cancelled")
-                   else texts.SUMMARY_STOPPED_WHY if reason
-                   else texts.SUMMARY_STOPPED)
+                   else texts.SUMMARY_STOPPED_WHY)
         return "killed", summary.format(description=description, reason=reason), ended.answer
     limit = step_limit(ended.answer)
     summary = (texts.SUMMARY_STEP_LIMIT.format(description=description, n=limit)

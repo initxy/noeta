@@ -17,7 +17,7 @@ from noeta.core.events import ChildEnded
 from noeta.core.extension import Extension, Gate, Rewrite, TaskView
 from noeta.core.runner.texts import STEP_LIMIT_HEAD
 from noeta.core.types import ToolUse, Usage
-from noeta.plugins.shell import Registry
+from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.tools import TaskStopTool
 from noeta.plugins.subtasks import texts
 from noeta.plugins.subtasks.extension import _outcome, subagent_tokens, task_notification
@@ -152,13 +152,17 @@ async def _until(check: Any) -> None:
     raise AssertionError("timed out")
 
 
+@pytest.mark.parametrize("offered_by", ["tool", "shell_without_background"])
 async def test_an_agent_stopped_with_task_stop_is_told_as_stopped_by_the_caller(
-        store: SqliteStore) -> None:
+        store: SqliteStore, offered_by: str) -> None:
     # TaskStop cancels a background agent as its caller's stop, so the end
-    # notice says the caller stopped it (Claude Code's "stopped by you").
+    # notice says the caller stopped it (Claude Code's "stopped by you"). A
+    # shell without background jobs offers it too.
     p = ScriptedProvider([reply("", agent("dig", run_in_background=True)), reply("launched")])
     c = _HeldChild()
-    rt = runtime(store, {"p": p, "c": c}, parent(tools=[TaskStopTool(Registry())]), worker())
+    main = parent(tools=[TaskStopTool(Registry())]) if offered_by == "tool" \
+        else parent(Shell(background=False))
+    rt = runtime(store, {"p": p, "c": c}, main, worker())
     client = Client(store)
     tid = await client.create("main", "go")
     stop = asyncio.Event()

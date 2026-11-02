@@ -12,7 +12,8 @@ Claude Code 2.1.312 · re-recording r2, session `m5` · rules in our words (see 
 Stops a running background task by its id. Deferred: named in the baseline's deferred list
 (`main.env.7`) and loaded through `ToolSearch` (`select:TaskStop` in r2 `m5`), after which it
 is sent with `defer_loading: true`. Called once in r2 `m5`, on a background `Bash` command.
-noeta's is `TaskStopTool` (`noeta/plugins/shell/tools.py`).
+noeta's is `TaskStopTool` (`noeta/plugins/shell/tools.py`), offered by the shell plugin also
+without background commands (`Shell(background=False)`), for background agents and Workflow runs.
 
 ## Parameters
 

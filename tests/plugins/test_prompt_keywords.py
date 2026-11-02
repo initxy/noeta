@@ -85,6 +85,19 @@ async def test_ultrathink_adds_a_note_and_raises_the_turns_effort(store: SqliteS
     assert _texts(provider.requests[2]).count(ULTRATHINK_NOTE) == 1
 
 
+async def test_the_ultrathink_note_is_made_once_per_prompt(store: SqliteStore) -> None:
+    """Not again when the call is made again (an empty reply asked to go
+    on), nor with the next prompt after a turn that ended without a reply."""
+    agent = Agent(name="a", model="m", extensions=[Environment(today=lambda: "2026-11-01")])
+    client, tid, provider, runtime = await _session(
+        store, agent, [reply(""), reply(""), reply("ok")])
+    await client.send(tid, "ultrathink: why?")
+    await runtime().run_until_idle()
+    await client.send(tid, "and now?")
+    await runtime().run_until_idle()
+    assert [_texts(r).count(ULTRATHINK_NOTE) for r in provider.requests] == [1, 1, 1]
+
+
 async def test_ultrathink_leaves_a_model_not_known_to_take_effort(store: SqliteStore) -> None:
     agent = Agent(name="a", model="m", extensions=[Environment(today=lambda: "2026-11-01")])
     client, tid, provider, runtime = await _session(store, agent, [reply("ok")])

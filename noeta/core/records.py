@@ -189,6 +189,27 @@ class TurnDone(Struct):
                    model=_str(d.get("model")), usage=_dropped_usage(d))
 
 
+class Spent(Struct):
+    """Model calls made outside the conversation (a plugin's side request,
+    such as a compaction's summarize calls, failed ones included): what they
+    cost counts in the task's usage like a reply's. ``purpose`` names them."""
+
+    kind: ClassVar[str] = "spent"
+    model: str = ""
+    usage: Usage = msgspec.field(default_factory=Usage)
+    purpose: str = ""
+
+    def data(self) -> dict[str, Any]:
+        return {"model": self.model, "usage": msgspec.to_builtins(self.usage),
+                "purpose": self.purpose}
+
+    @classmethod
+    def parse(cls, data: Any) -> Spent:
+        d = _fields(data)
+        return cls(model=_str(d.get("model")) or "", usage=_dropped_usage(d) or Usage(),
+                   purpose=_str(d.get("purpose")) or "")
+
+
 class Erased(Struct):
     """The person's messages taken at these log ``seqs``, and what a plugin
     expanded them into (``inline`` text) or recalled for them (``memory``),
@@ -302,12 +323,12 @@ class Plugins(Struct):
         return cls(pins=[p for p in _fields(data).get("pins") or [] if isinstance(p, dict)])
 
 
-CoreRecord = Union[Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Erased,
+CoreRecord = Union[Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Spent, Erased,
                    Parked, Spawned, Timer, TimerCleared, Prompts, Plugins]
 
 _KINDS: dict[str, Any] = {cls.kind: cls for cls in (
-    Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Erased, Parked, Spawned,
-    Timer, TimerCleared, Prompts, Plugins)}
+    Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Spent, Erased, Parked,
+    Spawned, Timer, TimerCleared, Prompts, Plugins)}
 
 
 def event(record: CoreRecord, *, message: Message | None = None) -> ExtensionRecorded:

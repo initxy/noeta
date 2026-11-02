@@ -31,16 +31,27 @@ def agent_mentions(text: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
-def mention_reminders(view: TaskView, types: Collection[str]) -> Sequence[Reminder]:
+def mention_reminders(view: TaskView, types: Collection[str], through: int = 0
+                      ) -> Sequence[Reminder]:
     """A note per agent type of ``types`` the prompts after the model's last
-    reply mention (with the first model call that sees them)."""
+    reply mention, newer than log seq ``through`` (the newest prompt a note
+    was made for: once per prompt, also when the call is retried or the
+    turn ended before a reply). Each note's data carries its ``through``."""
+    state = view.state
     prompts: list[str] = []
-    for m in reversed(view.state.messages):
+    newest = through
+    for i in range(len(state.messages) - 1, -1, -1):
+        m = state.messages[i]
         if m.role == "assistant":
+            break
+        seq = state.message_seqs[i] if i < len(state.message_seqs) else 0
+        if seq and seq <= through:
             break
         if m.from_person and m.origin == "human" \
                 and not any(isinstance(b, ToolResult) for b in m.content):
             prompts.insert(0, m.text)
+            newest = max(newest, seq)
     wanted = [t for text in prompts for t in agent_mentions(text) if t in types]
-    return [Reminder(text=AGENT_MENTION.format(type=t), kind="agent_mention", data={"type": t})
+    return [Reminder(text=AGENT_MENTION.format(type=t), kind="agent_mention",
+                     data={"type": t, "through": newest})
             for t in dict.fromkeys(wanted)]

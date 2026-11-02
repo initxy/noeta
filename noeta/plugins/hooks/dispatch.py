@@ -58,6 +58,12 @@ STOPPED_DEFAULT = "Execution stopped by {event} hook"
 #: Characters of a hook's output for the model kept inline; past it the
 #: whole is saved to a file and a preview sent (Claude Code's 10,000).
 OUTPUT_CAP = 10_000
+#: Events whose answers are not shown to the model, or (PreCompact) are
+#: joined whole into the summary instructions of a request that has no tools
+#: to read a saved file with: their output is never capped (Claude Code runs
+#: these outside the path that caps).
+UNCAPPED = frozenset({"PreCompact", "PostCompact", "CwdChanged", "InstructionsLoaded",
+                      "Notification", "SessionEnd", "StopFailure"})
 #: The inbox signal that carries a background hook's answer to its task.
 ASYNC_SIGNAL = "hooks.async_response"
 #: What the model is told when a UserPromptSubmit hook answers ``continue:
@@ -90,11 +96,11 @@ async def capped(view: TaskView, text: str, name: str) -> str:
         path = spill_path(view.spill_dir, view.task_id, name)
         try:
             await view.env.write_bytes(path, text.encode("utf-8"))
-        except OSError:
-            log.warning("hooks: output of %s could not be saved", name, exc_info=True)
-        else:
             await mark_spill_dir(view.env, task_spill_dir(view.spill_dir, view.task_id),
                                  view.task_id)
+        except Exception:  # any exec env's failure: cut inline instead
+            log.warning("hooks: output of %s could not be saved", name, exc_info=True)
+        else:
             saved = path
     return large_output_message(text, OUTPUT_CAP, saved_to=saved)
 
@@ -433,7 +439,17 @@ class Dispatcher:
     def spawn(self, coro: Any) -> None:
         task = asyncio.ensure_future(coro)
         self._background.add(task)
-        task.add_done_callback(self._background.discard)
+        task.add_done_callback(self._background_done)
+
+    def _background_done(self, task: asyncio.Future[Any]) -> None:
+        """A background hook's end: its failure is logged (never left as an
+        exception no one retrieves)."""
+        self._background.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("hooks: a background hook failed", exc_info=exc)
 
     async def _in_background(self, hook: HookCommand, payload: dict[str, Any], cwd: str | None,
                              view: TaskView, name: str, key: str) -> None:
@@ -511,7 +527,8 @@ class Dispatcher:
                 elif record:
                     view.notify(f"{event} hook failed: {result.stderr.strip()[:300]}")
             read = replace(_read(event, result), command=hook.label)
-            read = await self._capped(view, read, f"hook-{fired}-{len(out)}")
+            if event not in UNCAPPED:
+                read = await self._capped(view, read, f"hook-{fired}-{len(out)}")
             message = read.data.get("systemMessage")
             if record and isinstance(message, str) and message.strip():
                 view.notify(message.strip())

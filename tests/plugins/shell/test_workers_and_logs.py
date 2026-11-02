@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -32,7 +33,7 @@ from noeta.core.tool import ToolContext
 from noeta.core.types import Text, user
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.job_logs import DEAD_WORKER_LOGS_KEEP_S
-from noeta.plugins.shell.jobs import _KEEP_TAIL, JOB_ENDED, Job
+from noeta.plugins.shell.jobs import _KEEP_HEAD, _KEEP_TAIL, JOB_ENDED, Job
 from noeta.plugins.shell.state import ShellState
 from noeta.toolkit.notices import NOTICE_GUARD
 
@@ -271,6 +272,40 @@ async def test_a_log_stops_growing_at_its_cap_and_says_so(tmp_path: Path, monito
     if monitor:  # its output file has what it kept of stdout, the note and stderr
         out = Path(job.out_path).read_text()
         assert "\n[output past 1000 bytes was not kept]\n" in out and "late\n" in out
+
+
+async def test_a_monitors_output_file_stays_within_the_cap(tmp_path: Path) -> None:
+    # stderr fills the shared output file first; stdout then goes on to its
+    # events file only (the output file was written to twice the cap).
+    cap = 200_000
+    registry = Registry(log_dir=str(tmp_path / "logs"), log_max_bytes=cap)
+    command = ("head -c 300000 /dev/zero | tr '\\0' e >&2; "
+               "head -c 300000 /dev/zero | tr '\\0' o; echo end")
+    job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command=command,
+                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               tool_use_id="c", description="", post=_posted,
+                               monitor_timeout_ms=60_000)
+    assert isinstance(job, Job)
+    await asyncio.wait_for(job.done.wait(), 10)
+    out = Path(job.out_path).read_text()
+    assert len(out) <= cap + 2 * 65536 + 200
+    assert f"[output past {cap} bytes was not kept]" in out
+    events = Path(job.events_path or "").read_text()
+    assert events.startswith("o" * cap)
+
+
+def test_a_keeper_ends_with_its_input_while_its_file_still_grows(tmp_path: Path) -> None:
+    # A monitor's stderr keeper shares the output file with stdout's: once
+    # stderr closes it ends (it read on, spinning, while stdout wrote).
+    shared = tmp_path / "out"
+    shared.write_text("")
+    script = (_KEEP_HEAD
+              + f"(timeout 2 sh -c 'while :; do echo x; done' >> {shared}) >/dev/null 2>&1 &\n"
+              f"sleep 0.1\nkeep_head 1000000000 {shared} </dev/null\necho done\n")
+    started = time.monotonic()
+    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10)
+    assert done.stdout.strip() == "done"
+    assert time.monotonic() - started < 1.5
 
 
 async def test_a_foreground_log_keeps_its_start_and_its_true_end(tmp_path: Path) -> None:
@@ -579,3 +614,23 @@ async def test_a_tree_whose_hold_is_lost_leaves_with_its_logs(tmp_path: Path) ->
     await asyncio.gather(*reg._retiring)
     assert "r" not in reg.jobs
     assert not Path(job.out_path).exists() and not Path(ended.out_path).exists()
+
+
+async def test_the_stall_watch_survives_an_env_that_fails_to_read(
+        caplog: pytest.LogCaptureFixture) -> None:
+    class Broken:
+        calls = 0
+
+        async def stat(self, path: str) -> None:
+            Broken.calls += 1
+            if Broken.calls >= 3:
+                job.status = "done"
+            raise RuntimeError("the container went away")
+
+    job: Any = type("J", (), {"status": "running", "job_id": "j", "out_path": "/x",
+                              "env": Broken()})()
+    registry = Registry(stall_check_s=0.001)
+    with caplog.at_level("WARNING", logger="noeta.plugins.shell"):
+        await asyncio.wait_for(registry._stall(job), 5)
+    assert Broken.calls == 3
+    assert "cannot read the size of job j's output" in caplog.text

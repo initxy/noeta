@@ -354,6 +354,8 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
         if core.reason == records.EMPTY_REPLY:
             state.answer_parts = []  # the turn ended on nothing: it has no answer
         _end_turn(state, seq)
+    elif isinstance(core, records.Spent):
+        state.usage = state.usage + core.usage
     elif isinstance(core, records.Erased):
         _erase(state, set(core.seqs))
     elif isinstance(core, records.TurnFailed):
