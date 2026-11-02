@@ -362,3 +362,10 @@ def test_the_fallback_call_offers_tool_search_and_mcp_tools_when_searching() -> 
     plain = summary.fallback_request(ModelRequest(
         model="m", tools=[t for t in tools if t.name != "ToolSearch"]))
     assert [t.name for t in plain.tools] == ["Read"]
+    # Claude Code's list goes through a by-name de-duplication (lodash
+    # ``uniqBy``): a name offered twice is kept once, where it came first.
+    twice = summary.fallback_request(ModelRequest(model="m", tools=[
+        *tools, ToolSpec(name="mcp__db__query", description="again", input_schema={})]))
+    assert [t.name for t in twice.tools] == ["Read", "ToolSearch", "mcp__db__query",
+                                             "mcp__gh__issue"]
+    assert next(t for t in twice.tools if t.name == "mcp__db__query").description == ""

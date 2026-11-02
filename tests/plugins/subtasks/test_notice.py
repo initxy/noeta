@@ -4,6 +4,7 @@ token count, and a hand-back auto mode flagged."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from noeta.core.events import ChildEnded
 from noeta.core.extension import Extension, Gate, Rewrite, TaskView
 from noeta.core.runner.texts import STEP_LIMIT_HEAD
 from noeta.core.types import ToolUse, Usage
+from noeta.plugins.shell import Registry
+from noeta.plugins.shell.tools import TaskStopTool
 from noeta.plugins.subtasks import texts
 from noeta.plugins.subtasks.extension import _outcome, subagent_tokens, task_notification
 from noeta.plugins.subtasks.tool import agent_message, handback_flagged, handback_sender
@@ -125,3 +128,61 @@ async def test_a_flagged_report_reaches_the_caller_under_its_warning(
     [child] = await client.tasks(parent_id=tid)
     pointer = texts.RESULT_POINTER_FLAGGED.format(id=child.task_id)
     assert any(pointer in m.text for m in p.requests[3].messages)
+
+
+class _HeldChild(ScriptedProvider):
+    """A sub-agent's model that answers only once let go."""
+
+    def __init__(self) -> None:
+        super().__init__([reply("never seen")])
+        self.go = asyncio.Event()
+        self.waiting = False
+
+    async def complete(self, request: Any, on_delta: Any = None) -> Any:
+        self.waiting = True
+        await self.go.wait()
+        return await super().complete(request, on_delta)
+
+
+async def _until(check: Any) -> None:
+    for _ in range(500):
+        if await check():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out")
+
+
+async def test_an_agent_stopped_with_task_stop_is_told_as_stopped_by_the_caller(
+        store: SqliteStore) -> None:
+    # TaskStop cancels a background agent as its caller's stop, so the end
+    # notice says the caller stopped it (Claude Code's "stopped by you").
+    p = ScriptedProvider([reply("", agent("dig", run_in_background=True)), reply("launched")])
+    c = _HeldChild()
+    rt = runtime(store, {"p": p, "c": c}, parent(tools=[TaskStopTool(Registry())]), worker())
+    client = Client(store)
+    tid = await client.create("main", "go")
+    stop = asyncio.Event()
+    serving = asyncio.create_task(rt.serve(stop))
+
+    async def child_waiting() -> bool:
+        return c.waiting
+
+    await _until(child_waiting)
+    [child] = await client.tasks(parent_id=tid)
+    p.add(reply("", ("TaskStop", {"task_id": child.task_id})), reply("stopping"),
+          reply("noted"))
+    await client.send(tid, "stop it")
+
+    async def told() -> bool:
+        return any('was stopped by you' in m.text for r in p.requests for m in r.messages)
+
+    await _until(told)
+    stop.set()
+    c.go.set()
+    await serving
+    [row] = await client.tasks(parent_id=tid)
+    assert row.end_status == "cancelled"
+    notice = next(m.text for r in p.requests for m in r.messages
+                  if "<task-notification>" in m.text)
+    assert "<status>killed</status>" in notice
+    assert '<summary>Agent "do it" was stopped by you</summary>' in notice

@@ -38,6 +38,7 @@ import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import resources
+from typing import Any
 
 from noeta.core.types import Block, Message, ModelRequest, SystemPart, Text, ToolResult, ToolUse
 
@@ -106,25 +107,45 @@ def prompt_template() -> str:
             "auto_mode_classifier.md").read_text("utf-8").rstrip("\n")
 
 
-def _bullets(lines: Sequence[str]) -> str:
-    return "\n".join(f"- {' '.join(x.split())}" for x in lines)
+#: The ``autoMode`` keys, each the name of the template region
+#: (``<<key>>`` ... ``<</key>>``) its list replaces.
+REGIONS = ("hard_deny", "soft_deny", "allow", "environment")
+#: An ``autoMode`` entry that puts the built-in text at its place.
+DEFAULTS = "$defaults"
+
+
+def _region(defaults: str, lines: Sequence[str]) -> str:
+    """A region as Claude Code fills it: the built-in text when the person's
+    list is empty; else their lines as bullets, the built-in text where
+    the first ``$defaults`` stands (a later one is dropped)."""
+    if not lines:
+        return defaults
+    out: list[str] = []
+    placed = False
+    for line in lines:
+        if line == DEFAULTS:
+            if not placed:
+                out.append(defaults)
+                placed = True
+            continue
+        out.append(f"- {line}")
+    return "\n".join(out)
 
 
 def render_prompt(template: str, auto_mode: Mapping[str, Sequence[str]],
                   deny_rules: Sequence[str]) -> str:
-    """The classifier prompt with the person's ``autoMode`` lines and deny
-    rules in their slots."""
-    slots = {
-        "<<environment>>": _bullets(auto_mode.get("environment") or ()),
-        "<<hard_deny_extra>>": _bullets(auto_mode.get("hard_deny") or ()),
-        "<<soft_deny_extra>>": _bullets(auto_mode.get("soft_deny") or ()),
-        "<<allow_extra>>": _bullets(auto_mode.get("allow") or ()),
-        "<<deny_rules>>": DENY_RULES.format(rules=", ".join(f"`{r}`" for r in deny_rules))
-        if deny_rules else "",
-    }
+    """The classifier prompt with the person's ``autoMode`` lists in place
+    of the built-in rules, exceptions and environment readings they
+    replace, and their deny rules in their slot."""
     out = template
-    for slot, text in slots.items():
-        out = out.replace(slot, text)
+    for key in REGIONS:
+        found = re.search(rf"<<{key}>>\n(.*?)\n<</{key}>>", out, flags=re.DOTALL)
+        if found is None:
+            continue
+        text = _region(found.group(1), list(auto_mode.get(key) or ()))
+        out = out[:found.start()] + text + out[found.end():]
+    out = out.replace("<<deny_rules>>", DENY_RULES.format(
+        rules=", ".join(f"`{r}`" for r in deny_rules)) if deny_rules else "")
     return re.sub(r"\n{3,}", "\n\n", out)
 
 
@@ -168,20 +189,63 @@ def render_call(use: ToolUse) -> str:
     if name == "SubagentHandback":
         return f"{HANDBACK_LEAD}\n{i.get('message', '')}"
     if name == "AskUserQuestion":
-        parts = []
-        for q in i.get("questions") or []:
-            if not isinstance(q, dict):
-                continue
-            options = "; ".join(
-                f"{n}. {o.get('label', '')}" + (f" - {o['description']}" if o.get(
-                    "description") else "")
-                for n, o in enumerate(q.get("options") or [], 1) if isinstance(o, dict))
-            parts.append(f'"{q.get("question", "")}" ({q.get("header", "")}): {options}')
-        return " | ".join(parts)
+        return _questions(i)
     if name.startswith("mcp__"):
         return " ".join(f"{k}={v if isinstance(v, str) else json.dumps(v)}"
                         for k, v in i.items())
     return json.dumps(i, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+#: Entries of an ``AskUserQuestion`` call rendered, per list (Claude Code's).
+QUESTION_ENTRIES = 256
+MALFORMED_QUESTIONS = "[malformed AskUserQuestion input]"
+
+
+def _flat(value: Any) -> str:
+    """A question field on one line, its quotes escaped (Claude Code's)."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[\s\x85]+", " ", value).strip().replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _questions(i: Mapping[str, Any]) -> str:
+    """``AskUserQuestion`` as Claude Code shows it to the classifier: each
+    question quoted, its header and multi-select flag, then its numbered
+    options with description and preview; questions joined by ``|``."""
+    questions = i.get("questions")
+    if not isinstance(questions, list):
+        return MALFORMED_QUESTIONS
+    parts: list[str] = []
+    for q in questions:
+        if len(parts) >= QUESTION_ENTRIES:
+            parts.append(f"[\u2026 further question entries elided: reported length "
+                         f"{len(questions)}]")
+            break
+        if not isinstance(q, dict):
+            flat = _flat(q)
+            parts.append(f"[malformed question entry] {flat}" if flat
+                         else "[malformed question entry]")
+            continue
+        options: list[str] = []
+        listed = q.get("options")
+        for n, o in enumerate(listed if isinstance(listed, list) else [], 1):
+            if len(options) >= QUESTION_ENTRIES:
+                options.append("[\u2026 further option entries elided]")
+                break
+            if not isinstance(o, dict):
+                options.append(f'({n}) "{_flat(o)}"')
+                continue
+            bits = [f'({n}) "{_flat(o.get("label"))}"']
+            if _flat(o.get("description")):
+                bits.append(f"\u2014 {_flat(o.get('description'))}")
+            if _flat(o.get("preview")):
+                bits.append(f"[preview: {_flat(o.get('preview'))}]")
+            options.append(" ".join(bits))
+        header = _flat(q.get("header"))
+        parts.append(f'"{_flat(q.get("question"))}"' + (f" [header: {header}]" if header else "")
+                     + (" [multiSelect]" if q.get("multiSelect") is True else "")
+                     + f" options: {' '.join(options)}")
+    return " | ".join(parts) if parts else MALFORMED_QUESTIONS
 
 
 def _is_notice(message: Message) -> bool:

@@ -69,9 +69,9 @@ async def _remind(run: TaskRun, request: ModelRequest) -> ModelRequest:
     try:
         for ext in run.exts:
             due += [(ext.name, r) for r in await ext.reminders(view)]
-    except TurnFailed:
+    except (TurnFailed, TurnDone):
         _record_reminders(view, due)
-        await run.flush(view)  # what was recorded before the failure stands
+        await run.flush(view)  # what was recorded before the turn ended stands
         raise
     _record_reminders(view, due)
     if not view.pending:

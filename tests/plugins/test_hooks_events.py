@@ -903,3 +903,61 @@ async def test_an_async_rewake_hook_wakes_the_model_on_exit_2(tmp_path: Path) ->
     assert len(s.provider.requests) == 3
     assert s.provider.requests[2].messages[-1].text == \
         'Stop hook blocking error from command "PostToolUse:Read": 2 tests failed'
+
+
+async def test_a_background_session_start_answer_already_given_is_left_out(
+        tmp_path: Path) -> None:
+    # Claude Code leaves out a background SessionStart answer whose texts
+    # the newest earlier SessionStart output already holds; judged from the
+    # task's log, so a worker that did not run the first hook judges alike.
+    release = asyncio.Event()
+    notes = {"bg": "Read NOTES.md.", "bg2": "Tests are slow here."}
+
+    async def runner(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
+        if hook.command == "start":
+            return specific("SessionStart", additionalContext="Read NOTES.md.")
+        await release.wait()
+        return specific("SessionStart", additionalContext=notes[hook.command])
+
+    config = {"SessionStart": [{"hooks": [
+        {"type": "command", "command": "start"},
+        {"type": "command", "command": "bg", "async": True},
+        {"type": "command", "command": "bg2", "async": True}]}]}
+    s = Setup(tmp_path, config, [reply("a"), reply("b"), reply("c")])
+    s.hooks.runner = runner
+    await s.start()
+    assert s.system_texts(0) == ["SessionStart hook additional context: Read NOTES.md."]
+    release.set()
+    await asyncio.sleep(0.05)
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=runner), FileTools()])
+    await s.send("more")
+    told = s.system_texts(1)
+    assert told.count("Read NOTES.md.") == 0
+    assert "Tests are slow here." in told
+
+
+async def test_a_prompt_hooks_continue_false_keeps_the_prompt_and_tells_the_model(
+        tmp_path: Path) -> None:
+    # Claude Code: no model call, the prompt stays, and the model later reads
+    # that the hook stopped it.
+    stop = {"n": 0}
+
+    def answer(payload: dict[str, Any]) -> HookResult:
+        stop["n"] += 1
+        return ok({"continue": False, "stopReason": "Freeze is on."}) if stop["n"] == 1 \
+            else ok({"continue": False}) if stop["n"] == 2 else ok()
+
+    s = await Setup(tmp_path, {"UserPromptSubmit": hook("gate")}, [reply("ok")],
+                    answers={"gate": answer}).start("deploy it")
+    assert s.provider.requests == []
+    assert "Operation stopped by hook: Freeze is on." in await s.notices()
+    assert not [e for e in await s.events()
+                if isinstance(e, ExtensionRecorded) and e.kind == "turn_failed"]
+    await s.send("try again")
+    assert s.provider.requests == []
+    await s.send("now")
+    texts = [m.text for m in s.provider.requests[0].messages if m.role == "user"]
+    assert texts[:2] == ["deploy it", "Operation stopped by hook: Freeze is on."]
+    assert texts[2:4] == ["try again", "Operation stopped by hook"]
+    assert texts[-1] == "now"

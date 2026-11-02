@@ -178,12 +178,17 @@ def fallback_request(request: ModelRequest) -> ModelRequest:
     shares the main request's cache) errs or brings no summary, as Claude
     Code makes it: the same conversation and instruction under a plain
     summarizer system prompt, only the ``Read`` tool (with tool search on,
-    ``ToolSearch`` and the MCP tools too), each image as
-    :data:`IMAGE_PLACEHOLDER`, and no cache marks."""
+    ``ToolSearch`` and the MCP tools too, in that order, a name offered
+    twice kept once, the first), each image as :data:`IMAGE_PLACEHOLDER`,
+    and no cache marks."""
     searching = any(t.name == TOOL_SEARCH for t in request.tools)
-    tools = [t for t in request.tools if t.name in FALLBACK_TOOLS] + (
+    listed = [t for t in request.tools if t.name in FALLBACK_TOOLS] + (
         [t for t in request.tools if t.name == TOOL_SEARCH] +
         [t for t in request.tools if t.name.startswith(MCP_PREFIX)] if searching else [])
+    tools: list[Any] = []
+    for t in listed:
+        if all(t.name != kept.name for kept in tools):
+            tools.append(t)
     return msgspec.structs.replace(
         request, system=[SystemPart(text=FALLBACK_SYSTEM)], tools=tools,
         messages=[_without_images(m) for m in request.messages],
