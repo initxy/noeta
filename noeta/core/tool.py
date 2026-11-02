@@ -180,6 +180,12 @@ class Tool(Protocol):
       system drops a repeat of that key); ``None`` when the outcome cannot
       be told (then a ``retry_safe`` tool runs again, any other is answered
       "outcome unknown"). Asked before ``retry_safe``.
+    * ``silent_reply_after: Literal["call", "success"] | None = None`` —
+      a reply with nothing in it after a call of this tool since the
+      person's last message ends the turn instead of being asked to go on:
+      after any call (``"call"``: the answer tool, whose call is the
+      answer) or a successful one (``"success"``: a tool whose result is
+      meant to end the turn).
     * ``max_result_chars: int | None`` — the runner saves a text result
       longer than this (at most :data:`RESULT_CEILING_CHARS`, the default) to
       a file and sends a preview (``noeta.core.large_output``); ``None``

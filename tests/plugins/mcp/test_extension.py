@@ -338,6 +338,18 @@ def test_mcp_results_are_not_clearable() -> None:
     assert tool.clearable is False
 
 
+def test_a_tool_named_in_the_terminal_list_needs_no_reply(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    async def invoke(*_: Any) -> Any:
+        raise AssertionError
+
+    tool = McpTool(name="mcp__s__t", alias="s", remote="t", description="", input_schema={},
+                   invoke=invoke)
+    assert tool.silent_reply_after is None
+    monkeypatch.setenv("NOETA_TERMINAL_MCP_TOOLS", "mcp__x__y, mcp__s__t")
+    assert tool.silent_reply_after == "success"
+
+
 async def test_a_remote_http_server_works_end_to_end(store: SqliteStore) -> None:
     import httpx
 

@@ -18,6 +18,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, TaskEnded, ToolFinished
 from noeta.core.runner import Runtime
+from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
 from noeta.core.types import ModelRequest
 from noeta.plugins.structured_output import (
     ENFORCE,
@@ -119,6 +120,21 @@ async def test_ending_without_the_call_gets_one_reminder(store: SqliteStore) -> 
     assert last.role == "user" and last.text == ENFORCE and last.origin == "inline"
     assert ENFORCE.startswith(ENFORCE_TAG)
     assert structured_answer(await client.events(tid)) == {"a": 4}
+
+
+async def test_an_empty_reply_after_a_refused_call_ends_the_turn_without_the_nudge(
+        store: SqliteStore) -> None:
+    # Claude Code skips its empty-reply nudge after any StructuredOutput call
+    # since the prompt; the turn ends and the structured-output reminder follows.
+    provider = ScriptedProvider([reply("", ("StructuredOutput", {"a": "x"})), reply(""),
+                                 reply("", ("StructuredOutput", {"a": 5}))])
+    agent = Agent(name="s", model="m", extensions=[StructuredOutput()])
+    client, tid = await run(store, provider, agent, {"output_schema": SCHEMA})
+    assert len(provider.requests) == 3
+    third = provider.requests[2].messages
+    assert third[-1].text == ENFORCE
+    assert not any(m.text == EMPTY_REPLY_NUDGE for m in third)
+    assert structured_answer(await client.events(tid)) == {"a": 5}
 
 
 async def test_the_reminder_is_given_once_per_prompt(store: SqliteStore) -> None:
