@@ -258,3 +258,48 @@ async def test_prompt_stop_hook_reads_the_conversation() -> None:
     assert "Condition: The tests ran." in asked[0].messages[-1].text
     impossible = await run_prompt(hook, {}, complete, "main", transcript)
     assert impossible.data == {"systemMessage": "no tests exist"}
+
+
+def test_a_matcher_with_an_mcp_tools_old_name_still_fires(
+        caplog: pytest.LogCaptureFixture) -> None:
+    """MCP names now keep the server's case: a matcher written under the
+    old lower-cased naming, as a list or a regular expression, still
+    matches, and the log says so."""
+    assert Matcher("mcp__github__delete_repo", ()).matches("mcp__GitHub__delete_repo")
+    assert Matcher("Bash|mcp__github__delete_repo", ()).matches("mcp__GitHub__delete_repo")
+    assert Matcher("mcp__github__.*", ()).matches("mcp__GitHub__delete_repo")
+    assert not Matcher("mcp__gitlab__.*", ()).matches("mcp__GitHub__delete_repo")
+    assert "only by its old name" in caplog.text
+
+
+def test_an_mcp_tool_hook_finds_the_tool_by_its_old_name() -> None:
+    """``--permission-prompt-tool mcp__approver__ok`` and an ``mcp_tool``
+    hook written before MCP names kept their case still reach the tool."""
+    from noeta.core.extension import Extension
+    from noeta.core.tool import ToolContext, ToolOutput, text_output
+    from noeta.plugins.hooks.dispatch import _mcp_tool
+
+    class Approve:
+        name = "mcp__Approver__ok"
+        description = "d"
+        input_schema: dict[str, Any] = {"type": "object"}
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            return text_output("ok")
+
+    tool = Approve()
+
+    class Mcp(Extension):
+        name = "mcp"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            return [tool]
+
+    view = TaskView(state=TaskState(), extensions=[Mcp()])
+    hook = HookCommand(type="mcp_tool", server="approver", tool="ok")
+    assert _mcp_tool(view, hook) is tool
+    assert _mcp_tool(view, HookCommand(type="mcp_tool", server="Approver", tool="ok")) is tool
+    assert _mcp_tool(view, HookCommand(type="mcp_tool", server="other", tool="ok")) is None
+    denied = TaskView(state=TaskState(), extensions=[Mcp()],
+                      denied_tools=["mcp__approver__ok"])
+    assert _mcp_tool(denied, hook) is None

@@ -319,7 +319,27 @@ def test_a_tool_name_over_128_characters_is_not_offered(
     entry = _server_entry(McpServer(alias="s", command=["x"]),
                           [{"name": fits}, {"name": fits + "y"}, {"name": "ok"}])
     assert [t["name"] for t in entry["tools"]] == ["mcp__s__ok", "mcp__s__" + fits]
-    assert "129 characters, the limit is 128" in caplog.text
+    assert entry["too_long"] == 1
+    assert "1 of its tools are not offered" in caplog.text
+    assert "128-character limit" in caplog.text
+
+
+def test_a_long_server_name_that_drops_every_tool_is_named_to_the_model(
+        caplog: pytest.LogCaptureFixture) -> None:
+    # A server name so long that every tool name passes 128: the server's
+    # tools all go, the log says so once, and a fruitless ToolSearch names
+    # the server, so the model does not take it for a missing capability.
+    from noeta.plugins.mcp.extension import _server_entry
+    from noeta.plugins.tool_search.search import no_match_text
+    alias = "S" * 130
+    entry = _server_entry(McpServer(alias=alias, command=["x"]),
+                          [{"name": "a"}, {"name": "b"}])
+    assert entry["tools"] == [] and entry["too_long"] == 2
+    assert caplog.text.count("of its tools are not offered") == 1
+    text = no_match_text("github", {"servers": [entry], "down": {}})
+    assert f"{alias}: 2" in text and "longer than 128 characters" in text
+    assert no_match_text("github", {"servers": [], "down": {}}) == \
+        "No deferred tool matches 'github'."
 
 
 def test_descriptions_are_the_servers_own_capped(monkeypatch: pytest.MonkeyPatch) -> None:

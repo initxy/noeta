@@ -190,3 +190,35 @@ def test_openai_wires_shorten_a_long_tool_name_and_map_it_back() -> None:
         ToolUse(id="c3", name="Bash", input={})]), stop_reason="tool_use")
     restored = restore_tool_names(reply, request)
     assert [b.name for b in restored.message.content if isinstance(b, ToolUse)] == [long, "Bash"]
+
+
+def test_openai_wires_write_a_long_tool_name_one_way_in_text_too() -> None:
+    """The deferred-tool list, a ToolSearch result and an error naming a
+    tool carry the name the function list carries, every request alike;
+    a ToolSearch ``select:`` by that name loads the tool."""
+    from noeta.backends.providers._common import wire_tool_name
+    from noeta.core.types import ToolReference, ToolSpec
+    from noeta.plugins.tool_search import ToolSearchTool
+
+    long = "mcp__server__" + "x" * 100
+    short = wire_tool_name(long)
+    listing = Message(role="user", origin="system",
+                      content=[Text(text=f"Deferred tools:\n{long}\nmcp__s__ok")])
+    call = Message(role="assistant", content=[ToolUse(
+        id="c1", name="ToolSearch", input={"query": f"select:{long}"})])
+    found = Message(role="user", content=[
+        ToolResult(call_id="c1", content=[ToolReference(tool_name=long)])])
+    request = ModelRequest(model="m", messages=[user(f"use {long}."), listing, call, found],
+                           max_tokens=64, system=[],
+                           tools=[ToolSpec(name=long, description=f"{long} does x",
+                                           input_schema={})])
+    for body in (OpenAICompatProvider("https://x.test/v1", "k").build_body(request),
+                 OpenAIResponsesProvider("https://x.test/v1/responses", "k").build_body(
+                     request)):
+        text = str(body)
+        assert long not in text and short in text
+        assert "mcp__s__ok" in text  # a short name is left alone
+    # The model, seeing only the short name, can load the tool by it.
+    tool = ToolSearchTool({long: ToolSpec(name=long, description="d", input_schema={})})
+    assert tool.search(f"select:{short}") == [long]
+    assert tool.search(short) == [long]

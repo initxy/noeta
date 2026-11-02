@@ -625,6 +625,19 @@ def test_disallowing_bash_removes_its_companions() -> None:
     assert perms.disallowed == {"Bash", "Monitor", "TaskStop"}
 
 
+async def test_a_disallowed_mcp_tool_by_its_old_name_is_still_refused() -> None:
+    from noeta.core.extension import Deny, TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.core.types import ToolUse
+
+    perms = Permissions(disallowed_tools=["mcp__github__delete_repo"])
+    call = ToolUse(id="c", name="mcp__GitHub__delete_repo", input={})
+    gate = await perms.before_tool(TaskView(state=TaskState()), call)
+    assert isinstance(gate, Deny)
+    assert not perms._offered("mcp__GitHub__delete_repo")
+    assert perms._offered("mcp__GitHub__list")
+
+
 # ------------------------------------------------------------------ sub-agents
 
 

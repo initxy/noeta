@@ -25,6 +25,7 @@ from noeta.core.events import (
     TaskCreated,
 )
 from noeta.core.execenv import ExecEnv
+from noeta.core.mcp_names import named_in
 from noeta.core.tool import Tool, ToolOutput, tool_flag
 from noeta.core.types import (
     Effort,
@@ -190,9 +191,12 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
     loader of deferred tools), so the deferred tools it withheld are sent
     plain instead."""
     refused = set(denied)
+    listed = set(allowed) if allowed is not None else None
 
     def offered_name(name: str) -> bool:
-        return (allowed is None or name in allowed) and name not in refused
+        # An MCP tool may be listed by its old name (``noeta.core.mcp_names``).
+        return (listed is None or named_in(listed, name, "agent tools")) \
+            and not named_in(refused, name, "agent disallowedTools")
 
     tools: list[Tool] = []
     seen: set[str] = set()
@@ -385,8 +389,9 @@ class TaskView(records.CoreNotices):
         offering it wins, as for the model), or ``None``. How one plugin uses
         another's tool without importing it: model-visible tool names are a
         stable contract."""
-        if (self.allowed_tools is not None and name not in self.allowed_tools) \
-                or name in self.denied_tools:
+        if (self.allowed_tools is not None
+                and not named_in(set(self.allowed_tools), name, "agent tools")) \
+                or named_in(set(self.denied_tools), name, "agent disallowedTools"):
             return None
         for ext in self.extensions:
             for tool in ext.tools(self):

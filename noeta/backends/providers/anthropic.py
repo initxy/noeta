@@ -341,7 +341,8 @@ class AnthropicProvider:
         and diagnostics can see exactly what would be sent."""
         vision = model_admits_images(request.model)
         outbound, last_block, blocks_of = messages_to_wire(
-            request.messages, vision, self._system_turns)
+            request.messages, vision, self._system_turns,
+            tools=[t.name for t in request.tools])
         body: dict[str, Any] = {
             "model": request.model,
             "max_tokens": self._resolve_max_tokens(request),

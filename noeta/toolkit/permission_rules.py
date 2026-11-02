@@ -16,7 +16,9 @@
 * ``WebFetch(domain:example.com)`` (or ``*.example.com``) names a host.
 * ``mcp__server`` / ``mcp__server__*`` cover a server's tools,
   ``mcp__server__tool`` one tool; ``Agent(Explore)`` a sub-agent type;
-  ``Skill(name)`` a skill.
+  ``Skill(name)`` a skill. A rule written with an MCP tool's old name
+  (``noeta.core.mcp_names``: alias lower-cased and cut) still covers it,
+  with a warning in the log.
 
 A rule string that names a tool with no content covers every call of it.
 The permissions plugin and hook ``if`` conditions share this module;
@@ -34,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from noeta.core.mcp_names import legacy_names, warn_legacy
 from noeta.toolkit.shell import parse_argv, subcommands
 from noeta.toolkit.shell_syntax import hides_effects, parse
 
@@ -163,7 +166,10 @@ def match(rule: Rule, name: str, input: Mapping[str, Any], ctx: RuleContext, *,
     shell rule must cover every subcommand (deny and ask rules match any)."""
     name = ALIASES.get(name, name)
     if not _tool_matches(rule.tool, name):
-        return False
+        if not rule.tool.startswith("mcp__") or not any(
+                _tool_matches(rule.tool, old) for old in legacy_names(name)):
+            return False
+        warn_legacy("permission rule", rule.text, name)
     if rule.content is None:
         return True
     if name in SHELL_TOOLS:

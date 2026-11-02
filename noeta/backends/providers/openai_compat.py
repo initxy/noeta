@@ -30,6 +30,7 @@ from noeta.backends.providers._common import (
     image_data_url,
     is_host_injected,
     restore_tool_names,
+    shorten_names_in_text,
     tool_result_images,
     tool_result_text,
     translate_http_error,
@@ -234,7 +235,8 @@ class OpenAICompatProvider:
         if request.effort is not None:
             body["reasoning_effort"] = _EFFORT_MAP.get(request.effort, request.effort)
         # ``thinking`` has no Chat Completions equivalent; it is ignored.
-        return body
+        # One name per tool: the function list's, in the text as well.
+        return shorten_names_in_text(body)
 
 
 # ---------------------------------------------------------------------------

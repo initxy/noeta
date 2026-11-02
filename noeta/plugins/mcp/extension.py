@@ -61,6 +61,7 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
+from noeta.core.mcp_names import legacy_names, old_name, remember
 from noeta.core.questions import ask
 from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolReference
@@ -73,6 +74,7 @@ from noeta.plugins.mcp.config import (
     McpError,
     McpServer,
     describe_tool,
+    make_tool_name,
     map_server_names,
     tool_timeout_s,
 )
@@ -256,6 +258,8 @@ class Mcp(Extension):
                                              input_schema=t["input_schema"],
                                              sign_in=self._sign_in, deferred=deferred))
                     continue
+                if t.get("old_name"):
+                    remember(t["name"], t["old_name"])
                 tools.append(McpTool(name=t["name"], alias=server["alias"], remote=t["remote"],
                                      description=t["description"],
                                      loaded_description=t.get("loaded_description"),
@@ -739,14 +743,14 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]],
     kept = [r for r in raw if allow is None or r.get("name") in allow]
     names = map_server_names(server.alias, [r.get("name") for r in kept])
     tools: dict[str, dict[str, Any]] = {}
+    too_long: set[str] = set()
     for r in kept:
         remote = str(r.get("name"))
         name = names[remote]
         if name in tools:
             continue  # the same raw name advertised twice: keep the first
         if len(name) > NAME_MAX:
-            log.warning("mcp: %s: tool %r is not offered: its name has %d characters, the "
-                        "limit is %d", server.alias, name, len(name), NAME_MAX)
+            too_long.add(name)
             continue
         raw_meta = r.get("_meta")
         meta: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
@@ -760,6 +764,11 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]],
         listed, loaded = describe_tool(r.get("description"))
         tools[name] = {"name": name, "remote": remote, "description": listed,
                        "input_schema": schema}
+        old = old_name(server.alias, name[len(f"mcp__{server.alias}__"):], remote)
+        if name == make_tool_name(server.alias, remote) and old != name \
+                and old not in legacy_names(name):
+            # Settings written under the old naming still name it this way.
+            tools[name]["old_name"] = old
         hint = meta.get(SEARCH_HINT_META)
         if isinstance(hint, str) and hint.split():
             tools[name]["search_hint"] = " ".join(hint.split())
@@ -769,6 +778,15 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]],
             tools[name]["loaded_description"] = loaded
     entry: dict[str, Any] = {"alias": server.alias, "deferred": server.deferred,
                              "tools": [tools[n] for n in sorted(tools)]}
+    if too_long:
+        # Said once per listing, and to the model when a search finds
+        # nothing (``too_long``): a whole server can vanish this way when
+        # its own name is long.
+        entry["too_long"] = len(too_long)
+        log.warning("mcp: %s: %d of its tools are not offered: their names pass the "
+                    "%d-character limit (%s); a shorter server name in the settings "
+                    "shortens them", server.alias, len(too_long), NAME_MAX,
+                    ", ".join(sorted(too_long)[:3]) + (", ..." if len(too_long) > 3 else ""))
     if instructions:
         entry["instructions"] = cap_instructions(instructions)
     return entry

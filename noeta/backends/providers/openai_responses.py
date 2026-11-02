@@ -25,6 +25,7 @@ from noeta.backends.providers._common import (
     is_host_injected,
     model_admits_images,
     restore_tool_names,
+    shorten_names_in_text,
     tool_result_images,
     tool_result_text,
     translate_http_error,
@@ -226,7 +227,8 @@ class OpenAIResponsesProvider:
         # prompt-cache prefix at the first assistant turn.
         if self._reasoning_continuation != "off":
             body["include"] = ["reasoning.encrypted_content"]
-        return body
+        # One name per tool: the function list's, in the text as well.
+        return shorten_names_in_text(body)
 
 
 def _map_effort(request: ModelRequest) -> str | None:

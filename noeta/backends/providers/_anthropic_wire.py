@@ -4,7 +4,8 @@ the ``thinking`` parameter, and the prompt-cache breakpoints."""
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
+import logging
+from collections.abc import Collection, Sequence
 from typing import Any
 
 from noeta.backends.providers._common import (
@@ -14,6 +15,7 @@ from noeta.backends.providers._common import (
     tool_result_text,
 )
 from noeta.core import models
+from noeta.core.mcp_names import legacy_names
 from noeta.core.runner.texts import EMPTY_REPLY_NUDGE, INTERRUPTED_MARKER, REJECTED_MARKER
 from noeta.core.types import (
     Image,
@@ -28,6 +30,12 @@ from noeta.core.types import (
 
 #: ``Provider.family`` and ``Thinking.family`` for this adapter.
 FAMILY = "anthropic"
+
+log = logging.getLogger("noeta.providers.anthropic")
+
+#: A tool result whose every ``tool_reference`` named a tool the request
+#: does not offer (Claude Code sends such a result as a note, too).
+REFERENCES_REMOVED = "[Tool references removed: those tools are not offered now]"
 
 #: Anthropic's per-request cap on ``cache_control`` breakpoints.
 _MAX_CACHE_BREAKPOINTS = 4
@@ -44,8 +52,31 @@ MID_TURN_MESSAGE = (
 _CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
 
 
+class _References:
+    """Names a ``tool_reference`` may carry in one request: a tool the
+    request offers, or an MCP tool's old name (``noeta.core.mcp_names``)
+    sent as the tool's current one. A reference to anything else is left
+    out, as Claude Code leaves it out: the API refuses a reference to a tool
+    the request does not define."""
+
+    def __init__(self, tools: Collection[str]) -> None:
+        self.tools = frozenset(tools)
+        self._old: dict[str, str] | None = None
+
+    def resolve(self, name: str) -> str | None:
+        if name in self.tools:
+            return name
+        if self._old is None:
+            self._old = {o: n for n in sorted(self.tools) for o in legacy_names(n)}
+        found = self._old.get(name)
+        if found is None:
+            log.info("tool_reference to %r left out: the request does not offer it", name)
+        return found
+
+
 def messages_to_wire(
-    messages: Sequence[Message], vision: bool, system_turns: bool
+    messages: Sequence[Message], vision: bool, system_turns: bool,
+    tools: Collection[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any] | None], list[list[dict[str, Any]]]]:
     """``messages`` as wire turns, with each message's last wire block at or
     before it (what a ``cache_after`` index stamps) and its own wire blocks
@@ -55,7 +86,10 @@ def messages_to_wire(
     text and merges into the adjacent user wire turn. Only pairs touching an
     injected turn merge; plain consecutive user turns keep their 1:1
     rendering. Adjacent system turns join into one, their texts a blank line
-    apart. ``system_turns=False`` sends system turns as host text instead."""
+    apart. ``system_turns=False`` sends system turns as host text instead.
+    ``tools``: the names the request offers, which ``tool_reference``
+    blocks are held to (``None``: sent as recorded)."""
+    refs = _References(tools) if tools is not None else None
     outbound: list[dict[str, Any]] = []
     #: The dicts are shared by reference with ``outbound`` (merging spreads
     #: the same dicts), so stamping later lands on the body.
@@ -68,7 +102,7 @@ def messages_to_wire(
     for message in messages:
         if message.role == "system" and not system_turns:
             message = Message(role="user", content=message.content, origin="system")
-        wire = _message_to_wire(message, vision)
+        wire = _message_to_wire(message, vision, refs)
         blocks_of.append(list(wire["content"]))
         injected = is_host_injected(message)
         in_opening = opening and injected and wire["role"] == "user"
@@ -278,17 +312,19 @@ def _wrap_system_reminder(text: str) -> str:
     return f"<system-reminder>\n{neutralize_reserved_tags(text)}\n</system-reminder>"
 
 
-def _message_to_wire(message: Message, vision: bool) -> dict[str, Any]:
+def _message_to_wire(message: Message, vision: bool,
+                     refs: _References | None = None) -> dict[str, Any]:
     if message.role == "assistant":
         return _assistant_to_wire(message)
     if message.role == "system":
         return {"role": "system", "content": [
             {"type": "text", "text": neutralize_reserved_tags(b.text)}
             for b in message.content if isinstance(b, Text) and b.text]}
-    return _user_to_wire(message, vision)
+    return _user_to_wire(message, vision, refs)
 
 
-def _user_to_wire(message: Message, vision: bool) -> dict[str, Any]:
+def _user_to_wire(message: Message, vision: bool,
+                  refs: _References | None = None) -> dict[str, Any]:
     """A user message → one Anthropic user turn. ``tool_result`` blocks lead
     the turn (Anthropic wants them first, answering the preceding
     ``tool_use``); text and images follow in order. Thinking / tool-use blocks
@@ -302,7 +338,7 @@ def _user_to_wire(message: Message, vision: bool) -> dict[str, Any]:
                 {
                     "type": "tool_result",
                     "tool_use_id": block.call_id,
-                    "content": _tool_result_content(block, vision),
+                    "content": _tool_result_content(block, vision, refs),
                     "is_error": block.is_error,
                 }
             )
@@ -316,15 +352,20 @@ def _user_to_wire(message: Message, vision: bool) -> dict[str, Any]:
     return {"role": "user", "content": [*results, *rest]}
 
 
-def _tool_result_content(block: ToolResult, vision: bool) -> Any:
+def _tool_result_content(block: ToolResult, vision: bool,
+                         refs: _References | None = None) -> Any:
     """``tool_result.content`` accepts a bare string or a block array. With no
     images this is the **string**, keeping the text-only path compact. With
     images and a vision-capable model it is an array: one text block, then one
     base64 image block per image. A catalogued non-vision model gets the string
     plus a note, so it does not act as if the tool returned only text."""
-    refs = [b for b in block.content if isinstance(b, ToolReference)]
-    if refs:
-        return [{"type": "tool_reference", "tool_name": r.tool_name} for r in refs]
+    named = [b.tool_name for b in block.content if isinstance(b, ToolReference)]
+    if named:
+        if refs is not None:
+            named = list(dict.fromkeys(n for n in map(refs.resolve, named) if n is not None))
+            if not named:
+                return [{"type": "text", "text": REFERENCES_REMOVED}]
+        return [{"type": "tool_reference", "tool_name": n} for n in named]
     text = tool_result_text(block)
     images = tool_result_images(block)
     if block.block_list and (vision or not images):
