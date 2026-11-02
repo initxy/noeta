@@ -77,7 +77,7 @@ class Classifier:
             # off (no retry would ever fit).
             return Ask(prompt=ask.prompt, detail={**ask.detail, "classify": False}, firm=True)
         if call.name == HANDBACK_TOOL and done["decision"] in ("allow", "flag"):
-            return _handback_gate(call, done)
+            return _handback_gate(view, call, done)
         if done["decision"] == "allow":
             return Allow()
         if done.get("counted", True):
@@ -228,14 +228,22 @@ class Classifier:
         return view.prompt(f"{NAME}/auto_mode_classifier", self._template)
 
 
-def _handback_gate(call: ToolUse, done: Mapping[str, Any]) -> Gate:
+def _handback_gate(view: TaskView, call: ToolUse, done: Mapping[str, Any]) -> Gate:
     """A reviewed hand-back runs; one auto mode flagged (or could not
     review) runs with the warning its caller reads above the report, under
-    :data:`HANDBACK_REVIEW_KEY`, which only this layer sets."""
+    :data:`HANDBACK_REVIEW_KEY`, which only this layer sets.
+
+    The tool drops a value equal to the one the model wrote under the key
+    (its own), so the warning set here never equals that: a model that
+    wrote the warning's exact text gets it with a trailing newline (the
+    tool strips it). The rewritten call is gated again and kept as is."""
     wanted = {k: v for k, v in call.input.items() if k != HANDBACK_REVIEW_KEY}
     if done.get("decision") == "flag":
-        wanted[HANDBACK_REVIEW_KEY] = w.HANDBACK_UNREVIEWED if done.get("unreviewed") else \
+        note = w.HANDBACK_UNREVIEWED if done.get("unreviewed") else \
             w.HANDBACK_FLAGGED.format(reason=done.get("reason") or "")
+        written = next((c.use.input.get(HANDBACK_REVIEW_KEY) for c in view.state.calls
+                        if c.use.id == call.id), None)
+        wanted[HANDBACK_REVIEW_KEY] = note + "\n" if written == note else note
     return Allow() if wanted == call.input else Rewrite(input=wanted)
 
 

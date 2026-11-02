@@ -69,6 +69,9 @@ _FORMER_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 #: no longer skills), the newest few.
 _warned_deep: dict[str, None] = {}
 _WARNED_DEEP_KEEP = 1024
+#: Skills skipped because their name was taken, already warned about (a
+#: registry is loaded again with every new message), the newest few.
+_warned_taken: dict[tuple[str, str, str], None] = {}
 
 #: After the description of a skill found below the working directory: one
 #: that shares its name with another skill is named ``<dir>:<name>``
@@ -547,19 +550,29 @@ async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
             if desc.name in merged:
                 # Nested skills rank last: a scoped name never replaces a
                 # skill already known by it (a plugin's ``<plugin>:<name>``).
-                _log.warning("skill: %s: its name %r is taken by %s; skipped",
-                             desc.source_path, desc.name, merged[desc.name].source_path)
+                _warn_taken(desc, merged[desc.name])
                 continue
             merged[desc.name] = desc
             tier_of[desc.name] = tier
     for desc, tier in nested_commands:
         if desc.name in merged:
-            _log.warning("skill: %s: its name %r is taken by %s; skipped", desc.source_path,
-                         desc.name, merged[desc.name].source_path)
+            _warn_taken(desc, merged[desc.name])
             continue
         merged[desc.name] = desc
         tier_of[desc.name] = tier
     return SkillRegistry(merged, tier_of)
+
+
+def _warn_taken(desc: SkillDescription, holder: SkillDescription) -> None:
+    """Warn once that ``desc`` is skipped: ``holder`` has its name."""
+    key = (str(desc.source_path), desc.name, str(holder.source_path))
+    if key in _warned_taken:
+        return
+    if len(_warned_taken) >= _WARNED_DEEP_KEEP:
+        del _warned_taken[next(iter(_warned_taken))]
+    _warned_taken[key] = None
+    _log.warning("skill: %s: its name %r is taken by %s; skipped", desc.source_path,
+                 desc.name, holder.source_path)
 
 
 def strip_argument_placeholder(text: str) -> str:

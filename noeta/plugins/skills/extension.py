@@ -81,7 +81,7 @@ from noeta.toolkit.inline_commands import (
     run_inline_commands,
     strip_commands,
 )
-from noeta.toolkit.local_env import env_home
+from noeta.toolkit.local_env import env_home, is_local
 from noeta.toolkit.tokens import (
     LISTING_BUDGET_FRACTION,
     estimate_tokens,
@@ -409,6 +409,9 @@ class Skills(Extension):
         #: for itself; they go with the env).
         self._ancestors: weakref.WeakKeyDictionary[ExecEnv, dict[str, tuple[str, ...]]] = \
             weakref.WeakKeyDictionary()
+        #: The same for exec envs on this machine, by working directory
+        #: alone: a runner without an env makes a new local one per call.
+        self._local_ancestors: dict[str, tuple[str, ...]] = {}
 
     # ------------------------------------------------------------ discovery
 
@@ -469,16 +472,24 @@ class Skills(Extension):
         repository's root (the first with a ``.git``) or the filesystem's,
         never ``env``'s home directory (Claude Code's project directories),
         as ``env`` sees them. Remembered per exec env (a task's), so another
-        sandbox with the same working directory looks for itself."""
+        sandbox with the same working directory looks for itself; envs on
+        this machine share theirs. When ``env``'s home cannot be told (a
+        remote env's hiccup) only the working directory counts, and that
+        is not remembered."""
         cwd = env.cwd
-        try:
-            per_env = self._ancestors.setdefault(env, {})
-        except TypeError:  # an env that cannot be weakly referenced: no memory
-            per_env = {}
+        if is_local(env):
+            per_env = self._local_ancestors
+        else:
+            try:
+                per_env = self._ancestors.setdefault(env, {})
+            except TypeError:  # an env that cannot be weakly referenced: no memory
+                per_env = {}
         found = per_env.get(cwd)
         if found is not None:
             return found
         home = await env_home(env)
+        if home is None:
+            return (cwd,)
         out: list[str] = []
         d = cwd
         while d != home:
@@ -624,6 +635,15 @@ class Skills(Extension):
             have = list(state.get("unlocked") or [])
             return {**state, "unlocked": have + [n for n in data["names"] if n not in have]}
         return state
+
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed sub-agent) keeps the skills
+        the conversation loaded and listed, not what belongs to the source's
+        turns: a skill's turn model and effort, and records keyed by the
+        source's log seqs (which mean other events in the new log)."""
+        if not isinstance(state, dict):
+            return state
+        return {k: v for k, v in state.items() if k not in ("turn", "typed", "typed_fork")}
 
     @staticmethod
     def announced(state: Any) -> set[str]:
@@ -854,10 +874,10 @@ class Skills(Extension):
         request = await self._skill_guidance(view, request)
         state = view.ext_state(self.name) or {}
         turn = state.get("turn") or {}
-        if turn and not view.state.steps_in_turn \
-                and int(turn.get("since") or 0) <= _last_reply_seq(view):
-            # The first call of a turn, whoever opened it (a person, a
-            # notice, a background agent's report): a skill's model and
+        if turn and int(turn.get("since") or 0) < view.state.turn_seq:
+            # A later turn, whoever opened it (a person, a notice, a
+            # background agent's report) and however the loading one ended
+            # (a reply, a failed or stopped call): a skill's model and
             # effort were for the turn that loaded it.
             view.record(self.name, "turn_done", {})
             turn = {}
@@ -894,8 +914,7 @@ class Skills(Extension):
                          desc.effort, ", ".join(EFFORTS))
         model = _turn_model(view, desc)
         if model or effort:
-            # ``since``: the turn it was loaded in is the one after the
-            # newest reply then.
+            # ``since``: loaded at this seq; a turn opened after it ends it.
             view.record(self.name, "turn", {"name": desc.name, "model": model,
                                             "effort": effort, "since": view.state.last_seq})
 
@@ -1346,12 +1365,6 @@ def _local_ancestors(cwd: str) -> tuple[str, ...]:
             break
         d = parent
     return tuple(out) or (cwd,)
-
-
-def _last_reply_seq(view: TaskView) -> int:
-    """The log seq of the task's newest model reply (0 before the first)."""
-    return max((seq for m, seq in zip(view.state.history, view.state.history_seqs,
-                                      strict=False) if m.role == "assistant"), default=0)
 
 
 def _turn_model(view: TaskView, desc: SkillDescription) -> str | None:

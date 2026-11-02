@@ -84,6 +84,9 @@ REREAD_HEAD = (
     "any. The note that opened the instructions still applies.")
 #: One line per file shown earlier that is gone now.
 REMOVED_LINE = "This instruction file is gone and its instructions no longer apply: {path}"
+#: One line per file shown earlier that now has nothing to show (emptied, or
+#: only comments).
+EMPTIED_LINE = "This instruction file is now empty and its instructions no longer apply: {path}"
 LABELS = {
     MANAGED: "managed instructions set for this machine",
     USER: "the user's own instructions, for every project",
@@ -158,6 +161,10 @@ def _entry(f: InstructionFile, real: str) -> dict[str, Any]:
 def text_digest(text: str) -> str:
     """What the task remembers of a shown file's text to see it changed."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+#: The digest of a shown file left with nothing to show.
+EMPTY_DIGEST = text_digest("")
 
 
 class Instructions(Extension):
@@ -377,6 +384,7 @@ class Instructions(Extension):
         changed: list[tuple[str, str, str]] = []
         fresh: dict[str, str] = {}
         removed: list[str] = []
+        emptied: list[str] = []
         shown = [*state.get("files", []), *state.get("nested", [])]
         known = {e["path"] for e in shown} | set(state.get("names", []))
         current = {f.path: f for f in await self._start_files(reader, cwd)}
@@ -386,13 +394,20 @@ class Instructions(Extension):
             if before is None or path in fresh or path in removed:
                 continue
             text = current[path].text if path in current \
-                else await _reread(reader.env_for(e["kind"]), path)
+                else await _reread(reader.env_for(e["kind"]), path, empty="")
             if text is None:
                 # Gone only when it is not there: a read that failed (a
-                # remote env's hiccup) or a file left with nothing to show
-                # keeps what was shown.
+                # remote env's hiccup) keeps what was shown.
                 if await _absent(reader.env_for(e["kind"]), path):
                     removed.append(path)
+                continue
+            if text == "":
+                # Left with nothing to show (emptied, or only comments):
+                # its instructions no longer apply. Its digest becomes the
+                # empty text's, so later checks pass it by until it changes.
+                if before != EMPTY_DIGEST:
+                    fresh[path] = EMPTY_DIGEST
+                    emptied.append(path)
                 continue
             if text_digest(text) == before:
                 continue
@@ -413,11 +428,12 @@ class Instructions(Extension):
         index = str(Path(directory) / MEMORY_INDEX_FILE) if directory else None
         if memory is None and index in digests:
             removed.append(index)
-        if not changed and not removed:
+        if not changed and not removed and not emptied:
             return
         body = "\n\n".join([REREAD_HEAD, *(render_file(*f) for f in changed)]) \
             if changed else ""
-        lines = "\n".join(REMOVED_LINE.format(path=p) for p in removed)
+        lines = "\n".join([*(REMOVED_LINE.format(path=p) for p in removed),
+                           *(EMPTIED_LINE.format(path=p) for p in emptied)])
         data: dict[str, Any] = {"digests": fresh}
         if entries:
             data["files"] = entries
@@ -500,12 +516,14 @@ async def _real(env: ExecEnv, path: str) -> str:
         return posixpath.normpath(path)
 
 
-async def _reread(env: ExecEnv, path: str) -> str | None:
+async def _reread(env: ExecEnv, path: str, *, empty: str | None = None) -> str | None:
+    """The file's text to show; ``None`` when it cannot be read, ``empty``
+    when it has nothing to show."""
     raw = await read_text(env, path)
     if raw is None:
         return None
     text, _globs = clean(raw)
-    return text or None
+    return text or empty
 
 
 async def _absent(env: ExecEnv, path: str) -> bool:

@@ -359,14 +359,16 @@ class HandbackTool:
         sender = str(self._state.config.get(AGENT_ID_KEY) or self._state.task_id)
         # Set by the permission layer when auto mode flagged the report;
         # never the agent's own: a key the model wrote into its call is
-        # dropped unless a rewrite of the call put another value there.
+        # dropped unless a rewrite of the call put another value there
+        # (the layer never sets the model's exact value: it adds a
+        # newline, stripped here).
         note = input.get(HANDBACK_REVIEW_KEY)
-        if note is not None and note == _model_input(self._state, ctx.call_id).get(
+        if not isinstance(note, str) or note == _model_input(self._state, ctx.call_id).get(
                 HANDBACK_REVIEW_KEY):
-            note = None
+            note = ""
         if parent and ctx.post is not None:
             await ctx.post(Say(message=agent_message(
-                sender, report, note=note if isinstance(note, str) else ""), when="now"),
+                sender, report, note=note.strip()), when="now"),
                 task_id=parent, dedupe_key=f"subtasks:handback:{ctx.idempotency_key}")
         return ToolOutput(content=text_output(texts.HANDBACK_DONE).content, end_turn=report)
 

@@ -241,6 +241,14 @@ class Subtasks(Extension):
             return st
         return idle.reduce(st, kind, data) or st
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed sub-agent) starts its own
+        mention count: ``mentions_through`` is a seq of the source's log,
+        and the new log's prompts start below it."""
+        if not isinstance(state, dict):
+            return state
+        return {**state, "mentions_through": 0}
+
     def _state(self, state: TaskState) -> dict[str, Any]:
         st = state.ext.get(self.name)
         return {**self.initial_state(), **st} if isinstance(st, dict) else self.initial_state()
