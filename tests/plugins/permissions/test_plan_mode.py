@@ -483,3 +483,31 @@ async def test_a_rejected_plan_comes_back_with_the_rejection(store: SqliteStore,
                                  {"selected": [pl.CHOICE_KEEP]})
     assert result.is_error
     assert result.text == pl.KEEP_PLANNING_PLAN.format(plan="# Plan\n\n1. log\n")
+
+
+@pytest.mark.parametrize(("service", "pre", "classify"), [
+    ("auto", "default", False),   # the person left auto mode before planning
+    ("default", "auto", True),    # planning began in auto mode
+])
+async def test_a_sub_agent_plans_as_its_parent_does(
+        store: SqliteStore, tmp_path: Path, service: str, pre: str, classify: bool) -> None:
+    """A planning task's sub-agent uses the auto-mode classifier when its
+    parent's plan does, whatever the service's default mode."""
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.permissions.state import AUTO_DURING_PLAN, NAME, PermState
+
+    perms = Permissions(mode=service, plans_dir=str(tmp_path / "plans"))
+    parent = TaskState(ext={NAME: PermState(mode="plan", plan={
+        "path": str(tmp_path / "plans" / "p.md"), "pre_mode": pre, "entered_seq": 3,
+        AUTO_DURING_PLAN: classify})})
+    config = {"cwd": str(tmp_path), **perms.inherit(parent)}
+    assert config["permission_mode"] == "plan"
+    provider = ScriptedProvider([reply("done")])
+    rt = runtime(store, provider, agent([perms]))
+    client = Client(store)
+    tid = await client.create("a", "look around", config=config)
+    await rt.run_until_idle()
+    [entered] = [e.data for e in await events(client, tid)
+                 if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    assert entered["plan"]["pre_mode"] == pre
+    assert entered["plan"][AUTO_DURING_PLAN] is classify

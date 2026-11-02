@@ -176,6 +176,69 @@ async def test_a_skills_model_ends_with_its_turn_whoever_opens_the_next(h: Harne
         == ("claude-opus-5-5", None)
 
 
+async def test_a_skills_model_ends_with_its_turn_when_its_call_fails(h: Harness) -> None:
+    """The skill's model is refused (a gateway's 404): the turn fails with
+    no reply, and the next turn goes back to the task's model."""
+    from noeta.core.errors import Fatal
+
+    skill(ws(h), "deep", "description: Think hard.\nmodel: sonnet\neffort: high\n")
+    a = agent(model="claude-opus-5-5")
+    h.provider.add(reply("", ("Skill", {"skill": "deep"})), Fatal("no such model"),
+                   reply("back"))
+    tid = await h.start(a)
+    assert (h.provider.requests[1].model, h.provider.requests[1].effort) \
+        == ("claude-sonnet-5-5", "high")
+    await h.say(a, tid, "again")
+    assert (h.provider.requests[-1].model, h.provider.requests[-1].effort) \
+        == ("claude-opus-5-5", None)
+
+
+async def test_a_skills_model_ends_with_a_turn_stopped_before_its_call(h: Harness) -> None:
+    """The turn is stopped right after the skill loads, before any call on
+    its model: the next turn runs on the task's model."""
+    from noeta.core.tool import text_output
+
+    class Stop:
+        name = "Stop"
+        description = "Stop the turn."
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = True
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            await h.client.cancel(ctx.task_id, "stopped", turn_only=True)
+            return text_output("ok")
+
+    skill(ws(h), "deep", "description: Think hard.\nmodel: sonnet\neffort: high\n")
+    a = agent(model="claude-opus-5-5")
+    a = a.__class__(**{**a.__dict__, "tools": [Stop()]})
+    h.provider.add(reply("", ("Skill", {"skill": "deep"}), ("Stop", {})), reply("stopped"),
+                   reply("back"))
+    tid = await h.start(a)
+    assert await h.records(tid, "core", "turn_stopped")
+    await h.say(a, tid, "again")
+    assert [(r.model, r.effort) for r in h.provider.requests[1:]] \
+        == [("claude-opus-5-5", None)] * 2
+
+
+async def test_a_fork_does_not_take_the_sources_skill_model(h: Harness) -> None:
+    """A task continuing the conversation (a fork, a resumed sub-agent)
+    starts on its own model, whatever skill the source's turn loaded."""
+    from noeta.core.errors import Fatal
+
+    skill(ws(h), "deep", "description: Think hard.\nmodel: sonnet\neffort: high\n")
+    a = agent(model="claude-opus-5-5")
+    h.provider.add(reply("", ("Read", {"file_path": str(h.work / "x")})),
+                   reply("", ("Read", {"file_path": str(h.work / "y")})),
+                   reply("", ("Skill", {"skill": "deep"})), Fatal("no such model"), reply("forked"))
+    tid = await h.start(a)
+    fork = await h.client.create("a", "go on", history_from=tid)
+    await h.runtime(a).run_until_idle()
+    assert (h.provider.requests[-1].model, h.provider.requests[-1].effort) \
+        == ("claude-opus-5-5", None)
+    assert fork != tid
+
+
 async def test_a_skills_model_of_another_provider_is_ignored(h: Harness) -> None:
     """A Claude alias in a skill run by a task on another provider's model
     (or an unknown one) leaves the task's model: the request would fail."""
@@ -559,6 +622,33 @@ async def test_the_walk_up_stops_at_the_envs_home_and_is_kept_per_env() -> None:
     looked = len(plain.stats)
     assert await ext.ancestors(plain) == ("/home/u/proj/sub", "/home/u/proj")
     assert len(plain.stats) == looked
+
+
+async def test_the_walk_up_without_the_envs_home_stays_put_and_is_not_kept() -> None:
+    """A remote env whose home cannot be told this time (a hiccup): only
+    its working directory counts, never the directories above its home,
+    and the next look asks again."""
+    ext = Skills()
+    env = _Remote("/home/u/proj/sub", "", set())
+    assert await ext.ancestors(env) == ("/home/u/proj/sub",)
+    assert env.stats == []
+    env.home = "/home/u"
+    assert await ext.ancestors(env) == ("/home/u/proj/sub", "/home/u/proj")
+
+
+async def test_the_walk_up_is_kept_for_local_envs_made_per_call(tmp_path: Path) -> None:
+    """A runner without an env makes a local one per call: the walk up is
+    kept by working directory for every env on this machine."""
+    from noeta.backends.execenvs.local import LocalExecEnv
+
+    ext = Skills()
+    work = tmp_path / "repo" / "sub"
+    work.mkdir(parents=True)
+    (tmp_path / "repo" / ".git").mkdir()
+    first = await ext.ancestors(LocalExecEnv(str(work)))
+    assert first == (str(work), str(tmp_path / "repo"))
+    (tmp_path / "repo" / ".git").rmdir()
+    assert await ext.ancestors(LocalExecEnv(str(work))) == first
 
 
 async def test_a_command_added_to_a_commands_directory_of_any_name_is_found(

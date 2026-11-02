@@ -16,9 +16,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from noeta.core import records as core_records
 from noeta.core.events import (
     Answer,
     Compacted,
+    ExtensionRecorded,
     External,
     InputTaken,
     ModelReplied,
@@ -50,9 +52,11 @@ from noeta.plugins.permissions.decision import Decision, choices
 from noeta.plugins.permissions.rule_check import RuleCheck
 from noeta.plugins.permissions.rule_specs import rule_spec_text
 from noeta.plugins.permissions.state import (
+    AUTO_DURING_PLAN,
     INHERITED_RULES_KEY,
     NAME,
     PLAN_NAME_KEY,
+    PLAN_ORIGIN_KEY,
     PermState,
     auto_active,
     fold,
@@ -290,6 +294,10 @@ class Permissions(Extension):
             name = posixpath.splitext(posixpath.basename(path))[0]
         if isinstance(name, str) and name:
             out[PLAN_NAME_KEY] = name
+        plan = st.plan if isinstance(st, PermState) and mode == "plan" else None
+        if plan:
+            out[PLAN_ORIGIN_KEY] = {"pre_mode": plan.get("pre_mode"),
+                                    AUTO_DURING_PLAN: auto_active("plan", plan)}
         return out
 
     def initial_state(self) -> PermState:
@@ -446,9 +454,19 @@ class Permissions(Extension):
     async def on_start(self, view: TaskView) -> None:
         st = state_of(view)
         if st.mode is None and self.mode_of(view) == "plan":
-            md.plan_start(view, "plan", default_mode=self.mode, plans_dir=self.plans_dir,
+            # A sub-agent of a planning task plans as its parent does (the
+            # parent's plan origin), not as the service's default would.
+            origin = view.state.config.get(PLAN_ORIGIN_KEY)
+            origin = origin if isinstance(origin, dict) else {}
+            pre = origin.get("pre_mode")
+            if pre not in p.PERMISSION_MODES or pre == "plan" or (
+                    pre == "bypassPermissions" and self.disable_bypass):
+                pre = self.mode
+            classify = origin.get(AUTO_DURING_PLAN)
+            md.plan_start(view, "plan", default_mode=pre, plans_dir=self.plans_dir,
                           parent_plan=view.state.config.get(PLAN_NAME_KEY),
-                          auto_during_plan=self.auto_during_plan)
+                          auto_during_plan=self.auto_during_plan,
+                          classify=classify if isinstance(classify, bool) else None)
         elif st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
         offered = pm.modes_record(self._modes)
@@ -462,6 +480,18 @@ class Permissions(Extension):
 
             model = ev.response.model or str(view.state.config.get("model") or "")
             view.record(NAME, "cost", {"usd": price(model, ev.response.usage) if model else 0.0})
+        elif isinstance(ev, ExtensionRecorded) and ev.extension == core_records.CORE \
+                and self.budget.max_cost_usd is not None:
+            # What ``/cost`` counts besides replies: a reply the kernel
+            # dropped, and calls outside the conversation (a compaction's).
+            from noeta.core.models import price
+
+            core = core_records.decode(ev)
+            usage = core.usage if isinstance(core, (
+                core_records.Continue, core_records.TurnDone, core_records.Spent)) else None
+            if usage is not None:
+                model = getattr(core, "model", "") or str(view.state.config.get("model") or "")
+                view.record(NAME, "cost", {"usd": price(model, usage) if model else 0.0})
         elif isinstance(ev, InputTaken):
             for item in ev.items:
                 await self._on_input(view, item.body, recorded.seq)

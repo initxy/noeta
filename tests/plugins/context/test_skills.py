@@ -1095,3 +1095,23 @@ def test_a_skill_given_again_after_a_compaction_says_where_it_comes_from() -> No
     assert {n: skills._source(d, registry) for n, (d, _) in found.items()} == {
         "ws": "workspace", "below": "workspace", "mine": "user", "tools:p": "plugin",
         "given": "host"}
+
+
+async def test_a_nested_command_whose_name_is_taken_is_warned_about_once(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The same nested command in the user's and the project's commands
+    directories: the second is skipped, and said so once, not with every
+    load (a registry is loaded again with every new message)."""
+    import logging
+
+    user_dir, project_dir = tmp_path / "user", tmp_path / "project"
+    for d in (user_dir, project_dir):
+        (d / "sp").mkdir(parents=True)
+        (d / "sp" / "brain.md").write_text("---\ndescription: Think.\n---\nThink.\n")
+    env = LocalExecEnv(str(tmp_path))
+    tiers = [(str(user_dir), 1), (str(project_dir), 2)]
+    with caplog.at_level(logging.WARNING, logger="noeta.plugins.skills.registry"):
+        for _ in range(2):
+            reg = await load_registry(env, tiers, commands={d for d, _ in tiers})
+            assert reg.get("sp:brain") is not None
+    assert len([r for r in caplog.records if "is taken by" in r.getMessage()]) == 1

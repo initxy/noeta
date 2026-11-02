@@ -70,19 +70,22 @@ def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass:
 
 
 def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
-               parent_plan: Any = None, auto_during_plan: bool = True) -> None:
+               parent_plan: Any = None, auto_during_plan: bool = True,
+               classify: bool | None = None) -> None:
     """A task that starts in plan mode (its config's ``permission_mode``, a
     sub-agent of a planning task): recorded as entered with a plan file of
     its own, so it plans from its first request. A sub-agent's is named
     after its parent's plan (``parent_plan``): ``<name>-agent-<task id>.md``,
-    as Claude Code names it."""
+    as Claude Code names it. ``classify``: whether it plans with the
+    auto-mode classifier, when its parent's plan settled that."""
     pre = default_mode if default_mode != "plan" else "default"
+    if classify is None:
+        classify = plan_classifier_on(pre, auto_during_plan=auto_during_plan)
     path = (posixpath.join(plans_dir, f"{parent_plan}-agent-{view.task_id}.md")
             if isinstance(parent_plan, str) and pl.plan_name_ok(parent_plan)
             else pl.new_plan_path(plans_dir))
     view.record(NAME, "mode", {"mode": mode, "plan": {
-        "path": path, "pre_mode": pre, "entered_seq": 0,
-        AUTO_DURING_PLAN: plan_classifier_on(pre, auto_during_plan=auto_during_plan)}})
+        "path": path, "pre_mode": pre, "entered_seq": 0, AUTO_DURING_PLAN: classify}})
 
 
 def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str,

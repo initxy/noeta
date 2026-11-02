@@ -584,10 +584,10 @@ async def test_the_memory_index_is_read_again_with_the_next_message(
 
 async def test_a_file_that_cannot_be_read_now_is_not_called_gone(h: Harness) -> None:
     """Only a file that is not there is named as gone: a read that fails (a
-    remote env's hiccup) or a file left with nothing to show keeps what was
-    shown, with no note."""
+    remote env's hiccup) keeps what was shown, with no note; a file left
+    with nothing to show (only comments) is named as empty, once."""
     from noeta.backends.execenvs.local import LocalExecEnv
-    from noeta.plugins.instructions.extension import REREAD_HEAD
+    from noeta.plugins.instructions.extension import EMPTIED_LINE, REREAD_HEAD
 
     failing: set[str] = set()
 
@@ -601,12 +601,12 @@ async def test_a_file_that_cannot_be_read_now_is_not_called_gone(h: Harness) -> 
     (h.work / "NOETA.md").write_text("Use tabs.\n")
     (h.work / "NOETA.local.md").write_text("Mine.\n")
     a = agent()
-    h.provider.add(*(reply("ok") for _ in range(4)))
+    h.provider.add(*(reply("ok") for _ in range(5)))
     tid = await h.start(a)
 
     def notes() -> list[str]:
         return [m.text for m in h.last_messages()
-                if m.text.startswith(REREAD_HEAD) or "is gone" in m.text]
+                if m.text.startswith(REREAD_HEAD) or "no longer apply" in m.text]
 
     failing.add(str(h.work / "NOETA.md"))
     await h.say(a, tid, "a hiccup")
@@ -614,7 +614,10 @@ async def test_a_file_that_cannot_be_read_now_is_not_called_gone(h: Harness) -> 
     failing.clear()
     (h.work / "NOETA.local.md").write_text("<!-- nothing here yet -->\n")
     await h.say(a, tid, "emptied")
-    assert notes() == []
+    emptied = EMPTIED_LINE.format(path=h.work / "NOETA.local.md")
+    assert notes() == [emptied]
+    await h.say(a, tid, "still empty")
+    assert notes() == [emptied]
     (h.work / "NOETA.local.md").unlink()
     await h.say(a, tid, "removed")
     assert [n for n in notes() if "is gone" in n] != []

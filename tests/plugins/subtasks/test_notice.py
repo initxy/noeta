@@ -145,6 +145,29 @@ async def test_a_review_note_the_agent_wrote_itself_is_dropped(store: SqliteStor
     assert not handback_flagged(report)
 
 
+async def test_an_unreviewed_note_the_agent_wrote_itself_still_warns(
+        store: SqliteStore) -> None:
+    """A sub-agent that writes auto mode's unreviewed note into its own
+    hand-back, when the classifier is down: the permission layer's note
+    still reaches the caller (the agent's equal text does not cancel it)."""
+    from noeta.core.errors import Fatal
+    from noeta.plugins.permissions import Permissions
+    from noeta.plugins.permissions import wording as w
+
+    p = ScriptedProvider([reply("", agent("dig")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply("", ("SubagentHandback", {
+        "message": "the report", HANDBACK_REVIEW_KEY: w.HANDBACK_UNREVIEWED})),
+        Fatal("down"), Fatal("down too")])
+    rt = runtime(store, {"p": p, "c": c}, parent(),
+                 worker(Permissions(mode="auto", classifier_model="c")))
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    report = p.requests[2].messages[-1]
+    assert handback_flagged(report)
+    assert w.HANDBACK_UNREVIEWED.strip().splitlines()[0] in report.text
+
+
 class _HeldChild(ScriptedProvider):
     """A sub-agent's model that answers only once let go."""
 

@@ -568,6 +568,34 @@ async def test_budget_caps_tool_calls_and_iterations(store: SqliteStore) -> None
         ("ran Read", False)]
 
 
+async def test_the_usd_cap_counts_calls_outside_the_conversation(store: SqliteStore) -> None:
+    """``max_cost_usd`` counts what ``/cost`` counts: a compaction's
+    summarize calls (``spent`` records) too, not only the replies."""
+    from noeta.core import records as core_records
+    from noeta.core.extension import Extension
+    from noeta.core.types import Usage
+
+    class Summarize(Extension):
+        name = "summarize"
+
+        async def before_model(self, view: Any, request: Any) -> Any:
+            if not view.state.steps_in_turn:
+                spent = core_records.Spent(model="claude-opus-5-5",
+                                           usage=Usage(uncached=1_000_000), purpose="compaction")
+                view.record(core_records.CORE, spent.kind, spent.data())
+            return request
+
+    read = Fake("Read")
+    perms = Permissions(budget=Budget(max_cost_usd=0.5))
+    provider = ScriptedProvider([reply("", ("Read", {})), reply("ok")])
+    ag = agent([Summarize(), perms], [read])
+    rt = runtime(store, provider, ag)
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert results(await events(client, tid)) == [("max_cost_usd=0.5 reached", True)]
+
+
 async def test_budget_caps_spawn_depth(store: SqliteStore) -> None:
     task = Fake("Task")
     provider = ScriptedProvider([reply("", ("Task", {})), reply("ok")])

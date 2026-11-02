@@ -22,6 +22,11 @@ INHERITED_RULES_KEY = "permission_rules"
 #: from: its own plan file is ``<name>-agent-<child task id>.md`` (Claude
 #: Code's sub-agent plan file).
 PLAN_NAME_KEY = "plan_name"
+#: Task config key a child of a planning task reads the parent's plan origin
+#: from (``{"pre_mode", "auto_during_plan"}``): it plans as its parent does,
+#: with or without the auto-mode classifier, whatever the service's default
+#: mode.
+PLAN_ORIGIN_KEY = "plan_origin"
 
 
 @dataclass(frozen=True)

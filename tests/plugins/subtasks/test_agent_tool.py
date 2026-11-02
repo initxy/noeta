@@ -405,6 +405,25 @@ async def test_an_agent_mention_is_noted_once_per_prompt(store: SqliteStore) -> 
     assert [[m.text for m in r.messages].count(note) for r in p.requests] == [1, 1, 1]
 
 
+async def test_an_agent_mention_in_a_forks_prompt_is_noted(store: SqliteStore) -> None:
+    """A task continuing another's conversation counts its own prompts: the
+    source's count is a seq of the source's log."""
+    from noeta.plugins.subtasks.mentions import AGENT_MENTION
+
+    p = ScriptedProvider([reply("", ("ListAgents", {})), reply("", ("ListAgents", {})),
+                          reply("on it"), reply("forked")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    client = Client(store)
+    tid = await client.create("main", "ask @agent-scout please")
+    await rt.run_until_idle()
+    await client.create("main", "now @agent-scout again", history_from=tid)
+    await rt.run_until_idle()
+    note = AGENT_MENTION.format(type="scout")
+    texts_ = [m.text for m in p.requests[-1].messages]
+    at = next(i for i, t in enumerate(texts_) if "now @agent-scout again" in t)
+    assert any(note in t for t in texts_[at:])
+
+
 async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", ("ListAgents", {})), reply("", agent("dig", "scout")),
                           reply("", ("ListAgents", {})), reply("listed")])
