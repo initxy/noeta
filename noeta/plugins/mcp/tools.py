@@ -18,6 +18,7 @@ import posixpath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from noeta.core.mcp_names import named_in
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.mcp.config import (
     McpError,
@@ -88,7 +89,8 @@ class McpTool:
     def silent_reply_after(self) -> str | None:
         """``success`` for a tool named in ``NOETA_TERMINAL_MCP_TOOLS``: its
         result is meant to end the turn."""
-        return "success" if self.name in terminal_tools() else None
+        return "success" if named_in(terminal_tools(), self.name,
+                                     "NOETA_TERMINAL_MCP_TOOLS") else None
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         return await self._invoke(self, dict(input), ctx)

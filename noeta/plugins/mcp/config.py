@@ -10,7 +10,9 @@ of the server's tools. A full name over :data:`NAME_MAX` characters (the
 Messages API's limit) is not offered: the server's log says so and its other
 tools stay. A provider with a shorter limit maps names in its adapter
 (``noeta/backends/providers/_common.py`` ``wire_tool_name``). ``mcp__`` is a
-reserved prefix.
+reserved prefix. Settings and task histories written under noeta's earlier
+naming (alias lower-cased and cut to 32, names cut to 64) keep naming the
+tool their way (``noeta/core/mcp_names.py``).
 """
 
 from __future__ import annotations

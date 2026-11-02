@@ -721,3 +721,68 @@ async def test_the_opening_context_is_one_message_to_claude_code() -> None:
         "<system-reminder>\ninstructions\n</system-reminder>",
         "<system-reminder>\ncontext\n</system-reminder>\n", "hi\n",
         "<system-reminder>\nlater note\n</system-reminder>\n", "again"]
+
+
+def test_tool_references_are_held_to_the_tools_the_request_offers() -> None:
+    """A reference by an MCP tool's old name goes as the tool's current
+    name; one to a tool the request does not offer is left out, and a
+    result left with none says so in text (the API refuses a reference to
+    a tool the request does not define)."""
+    from noeta.backends.providers._anthropic_wire import REFERENCES_REMOVED
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.core.types import ModelRequest, ToolReference, ToolSpec
+
+    def refs(*names: str) -> ToolResult:
+        return ToolResult(call_id="c", content=[ToolReference(tool_name=n) for n in names])
+
+    def spec(name: str) -> ToolSpec:
+        return ToolSpec(name=name, description="d", input_schema={"type": "object"})
+
+    history = [user("q"),
+               Message(role="assistant", content=[ToolUse(id="c", name="ToolSearch",
+                                                          input={"query": "gh"})]),
+               Message(role="user", content=[
+                   refs("mcp__github__delete_repo", "WebFetch", "mcp__GitHub__list")])]
+    offered = [spec("ToolSearch"), spec("mcp__GitHub__delete_repo"), spec("mcp__GitHub__list")]
+    body = AnthropicProvider(api_key="k").build_body(
+        ModelRequest(model="m", messages=history, tools=offered, max_tokens=64))
+    content = body["messages"][2]["content"][0]["content"]
+    assert content == [{"type": "tool_reference", "tool_name": "mcp__GitHub__delete_repo"},
+                       {"type": "tool_reference", "tool_name": "mcp__GitHub__list"}]
+    # A request offering none of them (the compaction's fallback call keeps
+    # only Read when tool search is off).
+    bare = AnthropicProvider(api_key="k").build_body(
+        ModelRequest(model="m", messages=history, tools=[spec("Read")], max_tokens=64))
+    assert bare["messages"][2]["content"][0]["content"] == [
+        {"type": "text", "text": REFERENCES_REMOVED}]
+
+
+def test_the_compaction_fallback_call_sends_no_reference_to_a_tool_it_drops() -> None:
+    """The fallback summarize call keeps Read, ToolSearch and the MCP
+    tools; a loaded built-in deferred tool the history references
+    (WebFetch) is not among them, so its reference does not go."""
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.core.types import ModelRequest, ToolReference, ToolSpec
+    from noeta.plugins.compaction.summary import fallback_request
+
+    def spec(name: str) -> ToolSpec:
+        return ToolSpec(name=name, description="d", input_schema={"type": "object"})
+
+    history = [user("q"),
+               Message(role="assistant", content=[ToolUse(id="c", name="ToolSearch",
+                                                          input={"query": "web"})]),
+               Message(role="user", content=[ToolResult(call_id="c", content=[
+                   ToolReference(tool_name="WebFetch"),
+                   ToolReference(tool_name="mcp__db__query")])]),
+               user("summarize")]
+    main = ModelRequest(model="m", messages=history, max_tokens=64, tools=[
+        spec("Read"), spec("ToolSearch"), spec("WebFetch"), spec("mcp__db__query"),
+        ToolSpec(name="DeferredToolPlaceholder", description="d", input_schema={},
+                 defer_loading=True)])
+    body = AnthropicProvider(api_key="k").build_body(fallback_request(main))
+    offered = {t["name"] for t in body["tools"]}
+    sent = [b["tool_name"] for m in body["messages"] if isinstance(m["content"], list)
+            for blk in m["content"] if blk.get("type") == "tool_result"
+            and isinstance(blk.get("content"), list)
+            for b in blk["content"] if b.get("type") == "tool_reference"]
+    assert sent == ["mcp__db__query"] and set(sent) <= offered

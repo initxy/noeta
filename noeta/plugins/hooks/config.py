@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from noeta.core.mcp_names import legacy_names, warn_legacy
 from noeta.toolkit.hook_env import without_env
 from noeta.toolkit.permission_rules import Rule, parse_rule
 
@@ -135,6 +136,15 @@ class Matcher:
     def matches(self, subject: str | None) -> bool:
         if subject is None or self.pattern in ("", "*"):
             return True
+        if self._matches(subject):
+            return True
+        # An MCP tool's old name (noeta.core.mcp_names) still matches.
+        if any(self._matches(old) for old in legacy_names(subject)):
+            warn_legacy("hook matcher", self.pattern, subject)
+            return True
+        return False
+
+    def _matches(self, subject: str) -> bool:
         plain = r"[A-Za-z0-9_|, -]+" if self.lenient else r"[A-Za-z0-9_|]+"
         if re.fullmatch(plain, self.pattern):
             names = {n.strip() for n in re.split(r"[|,]" if self.lenient else r"\|",

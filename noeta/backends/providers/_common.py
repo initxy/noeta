@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import email.utils
-import hashlib
 import json
 import re
 from datetime import UTC, datetime
@@ -31,6 +30,7 @@ from noeta.core.errors import (
     RateLimited,
     Transient,
 )
+from noeta.core.mcp_names import SHORT_NAME_MAX, short_name
 from noeta.core.types import (
     Image,
     Message,
@@ -57,6 +57,7 @@ __all__ = [
     "neutralize_reserved_tags",
     "parse_retry_after",
     "restore_tool_names",
+    "shorten_names_in_text",
     "tool_result_text",
     "translate_http_error",
     "transport_error",
@@ -70,18 +71,41 @@ __all__ = [
 
 #: OpenAI's function-name limit (``^[a-zA-Z0-9_-]{1,64}$``); noeta's tool
 #: names follow the Messages API's 128 (an MCP tool's can pass 64).
-OPENAI_NAME_MAX = 64
-_NAME_HASH_LEN = 8
+OPENAI_NAME_MAX = SHORT_NAME_MAX
 
 
 def wire_tool_name(name: str, limit: int = OPENAI_NAME_MAX) -> str:
-    """``name`` as sent on a wire that takes at most ``limit`` characters: a
-    longer one is cut and ends in ``_`` plus 8 hex digits of its sha256, the
-    same every request, so the history's calls keep their names."""
-    if len(name) <= limit:
-        return name
-    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:_NAME_HASH_LEN]
-    return f"{name[: limit - _NAME_HASH_LEN - 1]}_{digest}"
+    """``name`` as sent on a wire that takes at most ``limit`` characters
+    (``noeta.core.mcp_names.short_name``)."""
+    return short_name(name, limit)
+
+
+#: An MCP tool name in text: the whole run of name characters.
+_MCP_NAME_IN_TEXT = re.compile(r"(?<![A-Za-z0-9_-])mcp__[A-Za-z0-9_-]+")
+
+
+def shorten_names_in_text(body: dict[str, Any],
+                          limit: int = OPENAI_NAME_MAX) -> dict[str, Any]:
+    """``body`` with every MCP tool name over ``limit`` characters written in
+    its strings (the deferred-tool list, a ``ToolSearch`` result, an error
+    naming a tool, a call's arguments) as :func:`wire_tool_name` writes it,
+    so the model reads one name for a tool on such a wire, the one its
+    function list carries. The rewrite is a function of the name alone,
+    the same every request, so a cached prefix is unchanged."""
+
+    def short(match: re.Match[str]) -> str:
+        return wire_tool_name(match.group(0), limit)
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, str):
+            return _MCP_NAME_IN_TEXT.sub(short, value) if "mcp__" in value else value
+        if isinstance(value, dict):
+            return {k: walk(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    return {k: walk(v) for k, v in body.items()}
 
 
 def restore_tool_names(response: ModelResponse, request: ModelRequest,

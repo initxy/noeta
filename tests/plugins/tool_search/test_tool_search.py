@@ -306,3 +306,13 @@ def test_other_wires_name_the_loaded_tools_as_text() -> None:
     request = ModelRequest(model="gpt-x", messages=[_result_message()])
     body = OpenAICompatProvider(api_key="k", base_url="http://x").build_body(request)
     assert any(m.get("content") == "Loaded: WebFetch" for m in body["messages"])
+
+
+def test_a_reference_by_an_mcp_tools_old_name_keeps_it_loaded() -> None:
+    """A task begun when MCP names were lower-cased keeps the tools it
+    loaded, and ``select:`` by the old name loads the tool."""
+    tools = [Fake("Read"), Fake("mcp__GitHub__list", deferred=True, last=True)]
+    assert "mcp__GitHub__list*" in names(specs(tools, ["mcp__github__list"]))
+    assert "mcp__GitHub__list*" not in names(specs(tools))
+    search = ToolSearchTool({t.name: t for t in tools if t.deferred})
+    assert search.search("select:mcp__github__list") == ["mcp__GitHub__list"]

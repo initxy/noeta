@@ -22,6 +22,7 @@ from noeta.core.large_output import (
     spill_path,
     task_spill_dir,
 )
+from noeta.core.mcp_names import legacy_names, warn_legacy
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import SUBJECT, TOOL_EVENTS, HookCommand, Matcher
@@ -278,7 +279,17 @@ def _mcp_tool(view: TaskView, hook: HookCommand) -> Tool | None:
     """An ``mcp_tool`` hook's tool, by its model-visible name (the MCP
     plugin's ``mcp__<server>__<tool>``, other characters made ``_``)."""
     name = f"mcp__{hook.server}__{hook.tool}"
-    return view.find_tool(name) or view.find_tool(re.sub(r"[^A-Za-z0-9_-]", "_", name))
+    found = view.find_tool(name) or view.find_tool(re.sub(r"[^A-Za-z0-9_-]", "_", name))
+    if found is not None:
+        return found
+    # Written with the tool's old name (noeta.core.mcp_names).
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+    for ext in view.extensions:
+        for tool in ext.tools(view):
+            if tool.name.startswith("mcp__") and safe in legacy_names(tool.name):
+                warn_legacy("mcp_tool hook", name, tool.name)
+                return view.find_tool(tool.name)
+    return None
 
 
 def _tool_runner(view: TaskView, kind: str, *, checked: bool = False) -> RunTool:
