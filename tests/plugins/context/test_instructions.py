@@ -502,12 +502,48 @@ async def test_a_changed_instruction_file_is_shown_again_with_the_next_message(
     assert len([m for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]) == 1
 
 
+async def test_a_removed_file_is_named_and_a_new_one_shown_with_the_next_message(
+        h: Harness) -> None:
+    """Claude Code's re-read compares the whole set of instruction files
+    with what it showed: a file gone is named, one that appeared is shown,
+    and one that comes back is shown again."""
+    from noeta.plugins.instructions.extension import REMOVED_LINE, REREAD_HEAD
+    (h.work / "NOETA.md").write_text("Use tabs.\n")
+    (h.work / "NOETA.local.md").write_text("Mine.\n")
+    a = agent()
+    h.provider.add(*(reply("ok") for _ in range(5)))
+    tid = await h.start(a)
+    (h.work / "NOETA.local.md").unlink()
+    rules = h.work / ".noeta" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "style.md").write_text("Short lines.\n")
+    await h.say(a, tid, "files moved")
+    [note] = [m.text for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]
+    assert note == (f"{REREAD_HEAD}\n\n{rules / 'style.md'} {PROJECT}:\n\nShort lines.\n\n"
+                    + REMOVED_LINE.format(path=h.work / "NOETA.local.md"))
+    def notes() -> list[str]:
+        return [m.text for m in h.last_messages()
+                if m.text.startswith(REREAD_HEAD) or "is gone" in m.text]
+
+    await h.say(a, tid, "nothing new")
+    assert notes() == [note]
+    (rules / "style.md").unlink()
+    await h.say(a, tid, "rule gone")
+    assert notes() == [note, REMOVED_LINE.format(path=rules / "style.md")]
+    (h.work / "NOETA.local.md").write_text("Mine again.\n")
+    await h.say(a, tid, "it is back")
+    back = notes()[-1]
+    assert back.startswith(REREAD_HEAD)
+    assert back.endswith("NOETA.local.md (the user's private instructions for this project, "
+                         "not part of the repository):\n\nMine again.")
+
+
 async def test_the_memory_index_is_read_again_with_the_next_message(
         h: Harness, tmp_path: Path) -> None:
     """Claude Code's re-read covers the auto-memory index too, and a file
     that was not there before: a memory saved this turn is in the index the
-    next message brings."""
-    from noeta.plugins.instructions.extension import REREAD_HEAD
+    next message brings, and an index deleted is named as gone."""
+    from noeta.plugins.instructions.extension import REMOVED_LINE, REREAD_HEAD
     (h.work / "NOETA.md").write_text("Use tabs.\n")
     home = tmp_path / "home"
     mem = Path(memory_dir_for(str(h.work), home))
@@ -530,3 +566,7 @@ async def test_the_memory_index_is_read_again_with_the_next_message(
     (mem / "MEMORY.md").write_text("- [Spaces](spaces.md) — the user wants spaces\n")
     await h.say(a, tid, "changed")
     assert len(reread()) == 2 and reread()[-1].endswith("the user wants spaces")
+    (mem / "MEMORY.md").unlink()
+    h.provider.add(reply("ok"))
+    await h.say(a, tid, "index gone")
+    assert REMOVED_LINE.format(path=mem / "MEMORY.md") in [m.text for m in h.last_messages()]

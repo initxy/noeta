@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import posixpath
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 from noeta.core.events import ExtensionRecorded, Recorded, ToolFinished
@@ -63,7 +64,7 @@ from noeta.plugins.instructions.files import (
     clean,
 )
 from noeta.toolkit.context import new_user_messages, read_text, task_env
-from noeta.toolkit.memory_index import MEMORY_DIR_KEY, read_memory_index
+from noeta.toolkit.memory_index import MEMORY_DIR_KEY, MEMORY_INDEX_FILE, read_memory_index
 from noeta.toolkit.tokens import chars_per_token
 from noeta.toolkit.tools import path_within
 
@@ -75,11 +76,14 @@ DEFAULT_INSTRUCTIONS_FILENAMES = FALLBACK_FILES
 
 PREAMBLE = ("Below are instructions from the codebase and the user. Follow them: they "
             "override your default behavior and must be followed exactly as written.")
-#: Heads the files shown again because their text changed.
+#: Heads the files shown again because their text changed, and those that
+#: appeared since.
 REREAD_HEAD = (
-    "These instruction files changed since they were shown earlier in this conversation and "
-    "were read again; each text below replaces the one shown before. The note that opened the "
-    "instructions still applies.")
+    "These instruction files are new, or changed since they were shown earlier in this "
+    "conversation, and were read again; each text below replaces the one shown before, if "
+    "any. The note that opened the instructions still applies.")
+#: One line per file shown earlier that is gone now.
+REMOVED_LINE = "This instruction file is gone and its instructions no longer apply: {path}"
 LABELS = {
     MANAGED: "managed instructions set for this machine",
     USER: "the user's own instructions, for every project",
@@ -228,7 +232,15 @@ class Instructions(Extension):
             return {**state, "nested": [*state["nested"], *data["files"]],
                     "digests": {**(state.get("digests") or {}), **_digests(data["files"])}}
         if kind in ("reread", "sent"):
-            return {**state, "digests": {**(state.get("digests") or {}), **data["digests"]}}
+            gone = set(data.get("removed") or ())
+            digests = {p: d for p, d in {**(state.get("digests") or {}),
+                                         **data["digests"]}.items() if p not in gone}
+            if not gone and not data.get("files"):
+                return {**state, "digests": digests}
+            return {**state, "digests": digests,
+                    "files": [*(e for e in state["files"] if e["path"] not in gone),
+                              *(data.get("files") or ())],
+                    "nested": [e for e in state["nested"] if e["path"] not in gone]}
         if kind in ("root", "file"):  # a log written before the directory walk
             return {**state, "names": [*state["names"], data["name"]],
                     "root": state["root"] or kind == "root"}
@@ -350,38 +362,66 @@ class Instructions(Extension):
                         message=user(render_nested(f.path, text), origin=self.origin))
 
     async def _reread_changed(self, view: TaskView) -> None:
-        """The files shown so far, read again: those whose text changed are
-        shown again under :data:`REREAD_HEAD` (a missing file is not); the
-        memory index too, also when it is new (Claude Code's re-read covers
-        its auto-memory index, and a file that was not there before)."""
+        """The files shown so far, read again, and the conversation's start
+        files looked for again: those whose text changed and those that
+        appeared since are shown under :data:`REREAD_HEAD`, and each shown
+        file that is gone is named (:data:`REMOVED_LINE`); the memory index
+        too, also when it is new (Claude Code's re-read compares the whole
+        set of files with what it showed, its auto-memory index included)."""
         state = view.ext_state(self.name) or {}
         digests: dict[str, str] = state.get("digests") or {}
         if not self.root:
             return
-        reader, _cwd = self._reader(view)
+        reader, cwd = self._reader(view)
         limit = nested_max_chars(self._model(view))
         changed: list[tuple[str, str, str]] = []
         fresh: dict[str, str] = {}
+        removed: list[str] = []
+        shown = [*state.get("files", []), *state.get("nested", [])]
+        known = {e["path"] for e in shown} | set(state.get("names", []))
+        current = {f.path: f for f in await self._start_files(reader, cwd)}
         nested = {e["path"] for e in state.get("nested", [])}
-        for e in [*state.get("files", []), *state.get("nested", [])]:
+        for e in shown:
             path, before = e["path"], digests.get(e["path"])
-            if before is None or path in fresh:
+            if before is None or path in fresh or path in removed:
                 continue
-            text = await _reread(reader.env_for(e["kind"]), path)
-            if text is None or text_digest(text) == before:
+            text = current[path].text if path in current \
+                else await _reread(reader.env_for(e["kind"]), path)
+            if text is None:
+                removed.append(path)
+                continue
+            if text_digest(text) == before:
                 continue
             fresh[path] = text_digest(text)
             if path in nested and e["kind"] != MANAGED:
                 text = cut_nested(path, text, limit)
             changed.append((path, e["kind"], text))
+        added = [f for p, f in current.items() if p not in known]
+        entries = [_entry(f, await _real(reader.env_for(f.kind), f.path)) for f in added]
+        for f in added:
+            fresh[f.path] = text_digest(f.text)
+            changed.append((f.path, f.kind, f.text))
         memory = await self._memory_index(view, pending=False)
         if memory is not None and digests.get(memory[0]) != text_digest(memory[2]):
             fresh[memory[0]] = text_digest(memory[2])
             changed.append(memory)
-        if changed:
-            body = "\n\n".join([REREAD_HEAD, *(render_file(*f) for f in changed)])
-            view.record(self.name, "reread", {"digests": fresh},
-                        message=user(body, origin=self.origin))
+        directory = None if self.managed_only else self._memory_dir(view, pending=False)
+        index = str(Path(directory) / MEMORY_INDEX_FILE) if directory else None
+        if memory is None and index in digests:
+            removed.append(index)
+        if not changed and not removed:
+            return
+        body = "\n\n".join([REREAD_HEAD, *(render_file(*f) for f in changed)]) \
+            if changed else ""
+        lines = "\n".join(REMOVED_LINE.format(path=p) for p in removed)
+        data: dict[str, Any] = {"digests": fresh}
+        if entries:
+            data["files"] = entries
+        if removed:
+            data["removed"] = removed
+        view.record(self.name, "reread", data,
+                    message=user("\n\n".join(t for t in (body, lines) if t),
+                                 origin=self.origin))
 
     async def _nested_files(self, reader: Reader, root: str,
                             target: str) -> list[InstructionFile]:
