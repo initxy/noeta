@@ -257,4 +257,9 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
   compaction, instructions), `ctxc-fixc2` (providers, MCP, web, plan); merged; open questions 8,
   9 and 11 of the first list are settled (StructuredOutput past `tools:` lists, first plan only,
   deny-covered shell reads bring nothing).
+- 2026-11-02 Gates after the review fixes: `make check` 2827 passed (coverage 89.18%); `make parity`
+  0 mismatches (11 accepted), own-words none; `make cluster` 14 passed; `make e2e` 7 passed; eval
+  0.955 against 0.953, "no regression". plan_mode_multi_file 0.89 again from one trial at the
+  420 s cap: its mean trial time (232 s) matches the earlier main-based run (245 s), so the cap,
+  not a behaviour change; worth a longer cap for that scenario.
 
