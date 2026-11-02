@@ -137,7 +137,8 @@ class Shell(Extension):
     Arguments a host sets:
 
     * ``background`` — offer background jobs (``run_in_background``,
-      ``Monitor``, ``TaskStop``); off = foreground ``Bash`` only.
+      ``Monitor``); off = foreground ``Bash`` only (``TaskStop`` stays, for
+      background agents and Workflow runs).
     * ``background_ends_with_turn`` — end a task's jobs when its turn ends
       (one-shot workers); the launch results then say so (0.6's
       ``HostConfig.background_ends_with_turn``).
@@ -159,7 +160,10 @@ class Shell(Extension):
         self.registry = registry if registry is not None else REGISTRY
         self.ends_with_turn = background_ends_with_turn
         if not background:
-            self._tools: list[Tool] = [BashTool(**(bash or {})), *_worktree_tools()]
+            # TaskStop also stops the agents and Workflow runs a task started
+            # in the background (Claude Code always offers it).
+            self._tools: list[Tool] = [BashTool(**(bash or {})), TaskStopTool(self.registry),
+                                       *_worktree_tools()]
         else:
             self.bash = BackgroundBash(self.registry, ends_with_turn=background_ends_with_turn,
                                        **(bash or {}))
