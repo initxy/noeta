@@ -514,3 +514,9 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   nested-command warning once; saved hook output named when marking fails. Left: an old ACP host
   folding a log with `spent` fails on read (released versions cannot change; new workers hand the
   task on with `NewerRecord`).
+- 2026-11-02 Gates after the confirm-review fixes (f82fef3a): `make check` 3068 passed (coverage
+  90%); `make parity` 0 mismatches (11 accepted), own-words none; `make cluster` 14 passed; `make
+  e2e` 7 passed. Eval not settled: the gateway stalled under load (two full runs 0.821 / 0.754
+  with 55 / 81 trials at the 420 s cap, clustered by trial index across all scenarios); a paired
+  control against 6df2bb7f at concurrency 2 each stopped at 9 timeouts in 20 trials (6df2bb7f 5 of
+  6, f82fef3a 4 of 14) while single probes answered in under 4 s. To rerun when the gateway holds.
