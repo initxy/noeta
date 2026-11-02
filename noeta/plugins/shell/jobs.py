@@ -9,8 +9,9 @@ and a stop of the root kills them all. A job runs through the task's
 ``ExecEnv`` with its output redirected to a log file inside that env, so the
 same code serves the local machine and a container: the model reads the
 file (its path is in the launch result and the end notice), a monitor tails
-it, and stopping the job (``TaskStop``) is cancelling the env's run (which
-kills its process group). A finished command's file ends with a blank line
+its stdout (kept beside it; its output file has stderr too), and stopping
+the job (``TaskStop``) is cancelling the env's run (which kills its process
+group). A finished command's file ends with a blank line
 and ``[exited with code N]``.
 
 A monitor's events go to the task that started the job while that task is
@@ -66,13 +67,16 @@ from noeta.plugins.shell.job_logs import DEFAULT_LOG_DIR, prepare_log_dir
 from noeta.plugins.shell.notices import (
     MonitorStream,
     event_body,
+    looks_like_prompt,
     monitor_end_summary,
     monitor_event,
     monitor_expired_note,
     shell_end_summary,
+    stalled_notice,
     task_notification,
     ws_end_summary,
 )
+from noeta.plugins.shell.output import background_exit_note
 from noeta.plugins.shell.websocket import NORMAL_CLOSES, run_ws
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.notices import NOTICE_GUARD
@@ -84,8 +88,6 @@ log = logging.getLogger("noeta.plugins.shell")
 DEFAULT_MAX_JOBS = 8
 #: Job ids: nine lower-case letters and digits, as Claude Code's.
 _ID_CHARS = string.ascii_lowercase + string.digits
-#: Characters of a monitor's stderr its end notice carries.
-STDERR_TAIL_CHARS = 2_000
 #: How often a monitor's log is read for new lines.
 MONITOR_POLL_S = 0.1
 #: Tasks remembered as ended (their notices go to the root) at most.
@@ -110,23 +112,35 @@ FOREGROUND_ALIVE_S = 30.0
 #: Ticks of 20 ms a foreground command's keeper is given to write what came
 #: once the command's shell exited.
 FOREGROUND_DRAIN_TICKS = 50
-#: Bytes of a job's output (and, for a monitor, of its stderr) its log keeps.
+#: Bytes of a job's output (and, for a monitor, of its stdout alone) its
+#: logs keep.
 DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
+#: Claude Code's watch for a background command stuck at a prompt: every
+#: ``STALL_CHECK_S`` its output file's size is read; once it has not grown
+#: for ``STALL_AFTER_S`` and its last ``STALL_TAIL_BYTES`` end in a line that
+#: asks for input, the model is told once.
+STALL_CHECK_S, STALL_AFTER_S, STALL_TAIL_BYTES = 5.0, 45.0, 1024
 
-#: Appends its stdin to the file ``$2`` as it comes (one read at a time, so
-#: a monitor sees each line at once) until the file holds ``$1`` bytes (one
-#: read more at most), then a line saying the rest was not kept, and reads
-#: the rest away: the writer never gets a broken pipe. Only ``sh`` tools.
+#: Appends its stdin to the file ``$2`` (and, given ``$3``, to that file
+#: too) as it comes (one read at a time, so a monitor sees each line at
+#: once) until ``$2`` holds ``$1`` bytes (one read more at most), then a
+#: line saying the rest was not kept, and reads the rest away: the writer
+#: never gets a broken pipe. Only ``sh`` tools.
 _KEEP_HEAD = r"""keep_head() {
   s=0
   while [ "$s" -lt "$1" ]; do
-    dd bs=65536 count=1 2>/dev/null >>"$2"
+    if [ -n "$3" ]; then
+      dd bs=65536 count=1 2>/dev/null | tee -a "$3" >>"$2"
+    else
+      dd bs=65536 count=1 2>/dev/null >>"$2"
+    fi
     t=$(wc -c <"$2")
     [ "$t" -gt "$s" ] || return 0
     s=$t
   done
   if [ "$(dd bs=1 count=1 2>/dev/null | wc -c)" -gt 0 ]; then
     printf '\n[output past %s bytes was not kept]\n' "$1" >>"$2"
+    [ -z "$3" ] || printf '\n[output past %s bytes was not kept]\n' "$1" >>"$3"
     cat >/dev/null
   fi
 }
@@ -208,7 +222,9 @@ class Job:
     tool_use_id: str
     env: ExecEnv
     out_path: str
-    err_path: str | None
+    #: A command monitor's stdout alone, read for its events; its output
+    #: file has stdout and stderr, for the model to read.
+    events_path: str | None
     post: Post
     release: Release | None = None
     #: The worker's hold on the tree, while the job runs.
@@ -231,6 +247,9 @@ class Job:
     foreground: bool = False
     #: Where a foreground command's shell writes its final directory (fd 3).
     cwd_path: str = ""
+    #: A ``Bash`` job's command as the model wrote it: what reads its exit
+    #: status (``""`` for a monitor, whose status 0 alone succeeds).
+    shell_command: str = ""
     #: Output bytes a monitor has already turned into events.
     tailed: int = 0
     decoder: Any = field(
@@ -245,6 +264,8 @@ class Job:
     proc: asyncio.Task[Any] | None = None
     task: asyncio.Task[None] | None = None
     sender: asyncio.Task[None] | None = None
+    #: Watches a background command for a stall at a prompt.
+    stall: asyncio.Task[None] | None = None
     done: asyncio.Event = field(default_factory=asyncio.Event)
     #: Says the job no longer works in its directory (a worktree is not
     #: removed under a running job).
@@ -272,7 +293,7 @@ def _keeping(out_path: str) -> str:
 def _files(job: Job) -> list[str]:
     """The job's files in its env."""
     keeping = _keeping(job.out_path) if job.cwd_path else ""
-    return [p for p in (job.out_path, job.err_path, job.alive_path, job.cwd_path, keeping) if p]
+    return [p for p in (job.out_path, job.events_path, job.alive_path, job.cwd_path, keeping) if p]
 
 
 class Registry:
@@ -284,8 +305,12 @@ class Registry:
                  foreground_alive_s: float = FOREGROUND_ALIVE_S,
                  ended_jobs_keep: int = ENDED_JOBS_KEEP,
                  roots_keep: int = ROOTS_KEEP,
-                 let_go_logs_max_bytes: int = LET_GO_LOGS_MAX_BYTES) -> None:
+                 let_go_logs_max_bytes: int = LET_GO_LOGS_MAX_BYTES,
+                 stall_check_s: float = STALL_CHECK_S,
+                 stall_after_s: float = STALL_AFTER_S) -> None:
         self.max_jobs = max_jobs
+        self.stall_check_s = stall_check_s
+        self.stall_after_s = stall_after_s
         self.ended_jobs_keep = ended_jobs_keep
         self.let_go_logs_max_bytes = let_go_logs_max_bytes
         #: Output logs of the jobs each root let go of, oldest first, with
@@ -348,7 +373,7 @@ class Registry:
                     argv: Sequence[str] | None = None,
                     ws: tuple[str, list[str]] | None = None,
                     ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
-                    foreground: bool = False) -> Job | str:
+                    foreground: bool = False, shell_command: str = "") -> Job | str:
         """Start a job, or return the refusal text. A ``foreground`` job
         (:attr:`Job.foreground`) also gets a file its fd 3 writes to. ``release`` is awaited
         once the job has ended and its end is posted (or it was refused);
@@ -363,7 +388,7 @@ class Registry:
                                 tool_use_id=tool_use_id, description=description, post=post,
                                 monitor_timeout_ms=monitor_timeout_ms, release=release,
                                 tree=tree, argv=argv, ws=ws, ws_resolve=ws_resolve,
-                                foreground=foreground)
+                                foreground=foreground, shell_command=shell_command)
         if isinstance(job, str) and release is not None:
             await release()
         return job
@@ -375,7 +400,7 @@ class Registry:
                      argv: Sequence[str] | None,
                      ws: tuple[str, list[str]] | None = None,
                      ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
-                     foreground: bool = False) -> Job | str:
+                     foreground: bool = False, shell_command: str = "") -> Job | str:
         # The cap counts background jobs only (what TaskStop can stop); a
         # foreground command is not held to it either: past its timeout it
         # moves to the background rather than being killed.
@@ -389,20 +414,22 @@ class Registry:
         except OSError as exc:
             return f"background jobs are unavailable: {exc}"
         out = posixpath.join(log_dir, f"{job_id}.output")
-        err = posixpath.join(log_dir, f"{job_id}.err") if monitor_timeout_ms else None
+        events = posixpath.join(log_dir, f"{job_id}.events") \
+            if monitor_timeout_ms and ws is None else None
         alive = (posixpath.join(log_dir, f"{job_id}.alive")
                  if tree is not None or foreground else "")
         cwd_file = posixpath.join(log_dir, f"{job_id}.cwd") if foreground else ""
         made = await env.run(
             ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
-             *[p for p in (out, err, alive, cwd_file) if p]], timeout=10)
+             *[p for p in (out, events, alive, cwd_file) if p]], timeout=10)
         if made.exit_code != 0:
             return "background jobs are unavailable: could not create the job's log file"
         job = Job(job_id=job_id, root_id=root_id, spawner_id=spawner_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
-                  env=env, out_path=out, err_path=err, post=post, release=release, ws=ws,
+                  env=env, out_path=out, events_path=events, post=post, release=release, ws=ws,
                   tree=tree, worker=tree.worker if tree is not None else self.worker,
-                  alive_path=alive, foreground=foreground, cwd_path=cwd_file)
+                  alive_path=alive, foreground=foreground, cwd_path=cwd_file,
+                  shell_command=shell_command)
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
@@ -418,12 +445,14 @@ class Registry:
             cap = str(self.log_max_bytes)
             keeper = "keep_tail" if foreground else "keep_head"
             keep_out = f"{keeper} {cap} {shlex.quote(out)}"
-            if err is not None:
+            if events is not None:
                 # stdout and stderr each through their own pipe: both are
                 # members of the pipeline, so both are written out before
-                # the shell exits.
-                pipeline = (f'{{ "$@" 2>&1 1>&4 4>&- | keep_head {cap} {shlex.quote(err)}; '
-                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | {keep_out}\n'
+                # the shell exits. Both go to the output file; stdout also
+                # to the events file the monitor reads.
+                pipeline = (f'{{ "$@" 2>&1 1>&4 4>&- | {keep_out}; '
+                            f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | '
+                            f'keep_head {cap} {shlex.quote(events)} {shlex.quote(out)}\n'
                             'exit "${PIPESTATUS[0]}"')
             elif foreground:
                 # Ends when the command's shell exits, as Claude Code's: a
@@ -452,6 +481,8 @@ class Registry:
                                                      output_cap=4096))
         job.task = asyncio.create_task(self._run(job, monitor_timeout_ms))
         job.sender = asyncio.create_task(self._send(job))
+        if not foreground:
+            self._watch_stall(job)
         if tree is not None:
             self.hold_with(job, tree)
         if alive and (self._keeper is None or self._keeper.done()):
@@ -519,6 +550,8 @@ class Registry:
             log.warning("background job %s failed to run: %s", job.job_id, exc)
             job.status, job.exit_code = "exited", 127
         finally:
+            if job.stall is not None:
+                job.stall.cancel()
             if expiry is not None:
                 expiry.cancel()
             if tail is not None:
@@ -656,7 +689,43 @@ class Registry:
             return False
         job.foreground = False
         job.release = release
+        self._watch_stall(job)
         return True
+
+    def _watch_stall(self, job: Job) -> None:
+        """Start watching a background command (not a monitor, whose silence
+        is normal) for a stall at a prompt."""
+        if job.monitor is None and job.ws is None and job.stall is None:
+            job.stall = asyncio.create_task(self._stall(job))
+
+    async def _stall(self, job: Job) -> None:
+        """Tell the model, once, when the job's output has not grown for
+        :attr:`stall_after_s` and its last line asks for input. Reads the
+        output file through the job's env, so it watches a job in a
+        container as well."""
+        loop = asyncio.get_running_loop()
+        size, quiet_since = 0, loop.time()
+        while job.status == "running":
+            await asyncio.sleep(self.stall_check_s)
+            try:
+                st = await job.env.stat(job.out_path)
+            except OSError:
+                continue
+            now = st.size if st is not None else 0
+            if now > size:
+                size, quiet_since = now, loop.time()
+                continue
+            if loop.time() - quiet_since < self.stall_after_s:
+                continue
+            tail = await self._tail_text(job.env, job.out_path, STALL_TAIL_BYTES)
+            if not looks_like_prompt(tail):
+                quiet_since = loop.time()
+                continue
+            if job.status == "running" and not job.fenced:
+                job.outbox.put_nowait(stalled_notice(
+                    task_id=job.job_id, tool_use_id=job.tool_use_id,
+                    output_file=job.out_path, description=job.description, tail=tail))
+            return
 
     def hold_with(self, job: Job, tree: TreeHold) -> None:
         """``job`` lives by ``tree`` from now on. Losing it (the tree
@@ -770,14 +839,15 @@ class Registry:
         stream = job.monitor
         if stream is None:
             return
+        path = job.events_path or job.out_path
         try:
-            st = await job.env.stat(job.out_path)
+            st = await job.env.stat(path)
         except OSError:
             return
         size = st.size if st is not None else 0
         if size <= job.tailed:
             return
-        data = await job.env.read_range(job.out_path, job.tailed, size - job.tailed)
+        data = await job.env.read_range(path, job.tailed, size - job.tailed)
         job.tailed += len(data)
         stream.feed(job.decoder.decode(data))
 
@@ -793,10 +863,16 @@ class Registry:
 
     @staticmethod
     def status_of(job: Job) -> str:
-        """``completed`` / ``failed`` / ``killed``, as the notice says."""
+        """``completed`` / ``failed`` / ``killed``, as the notice says. A
+        ``Bash`` job whose exit status is an answer (``grep`` matching
+        nothing) completed."""
         if job.status == "killed":
             return "killed"
-        ok = job.exit_code in NORMAL_CLOSES if job.ws is not None else job.exit_code == 0
+        if job.ws is not None:
+            ok = job.exit_code in NORMAL_CLOSES
+        else:
+            ok = job.exit_code == 0 or (job.monitor is None and background_exit_note(
+                job.shell_command, job.exit_code) is not None)
         return "completed" if ok else "failed"
 
     async def _end_notice(self, job: Job) -> str | None:
@@ -806,26 +882,21 @@ class Registry:
         if stream is None:
             if job.quiet:
                 return None
+            note = background_exit_note(job.shell_command, code) \
+                if status == "completed" else None
             return task_notification(
                 task_id=job.job_id, tool_use_id=job.tool_use_id, output_file=job.out_path,
-                status=status, summary=shell_end_summary(job.description, status, code))
+                status=status, summary=shell_end_summary(job.description, status, code, note))
         rest = stream.drain()
         if job.quiet:
             return None
-        stderr = ""
-        if job.err_path is not None:
-            stderr = (await self._tail_text(job.env, job.err_path, 4 * STDERR_TAIL_CHARS))
-            stderr = stderr[-STDERR_TAIL_CHARS:].rstrip()
-        parts = [rest] if rest else []
-        if stderr:
-            parts.append(f"stderr:\n{stderr}")
         summary = ws_end_summary(job.description, status, code) if job.ws is not None \
             else monitor_end_summary(job.description, status, code,
                                      produced_output=stream.saw_output)
         return task_notification(
-            task_id=job.job_id, tool_use_id=job.tool_use_id, status=status,
-            summary=summary,
-            body=event_body("\n".join(parts)) if parts else "")
+            task_id=job.job_id, tool_use_id=job.tool_use_id, status=status, summary=summary,
+            output_file=job.out_path if job.ws is None else "",
+            body=event_body(rest) if rest else "")
 
 
 #: The process-wide table every ``Shell`` extension shares unless

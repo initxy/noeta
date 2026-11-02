@@ -8,7 +8,9 @@ against the results recorded so far: a replay that blocks on agents
 without a result starts them (up to the concurrency cap) and the next
 child's end replays again, until the script returns. Only the results live
 in the task's log, so a run survives restarts and moves between workers;
-its end arrives as a ``<task-notification>``.
+its end arrives as a ``<task-notification>``. ``TaskStop`` stops a run
+(``noeta.toolkit.background_tasks.STOP_RUN``): it ends as ``killed``, its
+running agents are cancelled, and its notice says it was stopped.
 """
 
 from __future__ import annotations
@@ -21,13 +23,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from noeta.core import models
-from noeta.core.events import ChildEnded, InputTaken, Recorded, Say
+from noeta.core.events import Cancel, ChildEnded, External, InputTaken, Recorded, Say
 from noeta.core.extension import Extension, TaskView
 from noeta.core.tool import Tool
 from noeta.core.types import Message, user
 from noeta.plugins.workflow.engine import Engine, EngineMissing, Replay
 from noeta.plugins.workflow.tool import WorkflowTool, _ToolView
 from noeta.toolkit import notices
+from noeta.toolkit.background_tasks import STOP_RUN
 from noeta.toolkit.json_schema import schema_errors
 from noeta.toolkit.notices import NOTICE_GUARD, escape
 from noeta.toolkit.structured_output import SCHEMA_KEY, structured_answer
@@ -223,6 +226,9 @@ class Orchestration(Extension):
         if status == "completed":
             summary = f'Workflow "{run["name"]}" completed'
             result = json.dumps(value, ensure_ascii=False, indent=2)
+        elif status == "killed":
+            summary = f'Workflow "{run["name"]}" was stopped'
+            result = ""
         else:
             summary = f'Workflow "{run["name"]}" failed: {error}'
             result = error
@@ -291,9 +297,30 @@ class Orchestration(Extension):
         ev = recorded.event
         if not isinstance(ev, InputTaken):
             return
+        stopped: set[str] = set()
+        for item in ev.items:
+            body = item.body
+            if isinstance(body, External) and body.name == STOP_RUN \
+                    and isinstance(body.data, Mapping):
+                stopped |= await self._stop(view, str(body.data.get("run_id") or ""))
         ended = [i.body for i in ev.items if isinstance(i.body, ChildEnded)]
         if ended:
-            await self._settle(view, ended)
+            await self._settle(view, ended, stopped=stopped)
+
+    async def _stop(self, view: TaskView, rid: str) -> set[str]:
+        """End a running run as stopped and cancel its running agents (their
+        ends then change nothing: the run is no longer running). Returns the
+        run stopped, if any."""
+        run = self.runs(view).get(rid)
+        if run is None or run["status"] != "running":
+            return set()
+        for key, agent in run["agents"].items():
+            child = agent.get("child_id")
+            if child and key not in run["results"] and key not in run["failed"] \
+                    and view.state.children.get(child) is None:
+                view.enqueue(Cancel(reason="its workflow run was stopped"), task_id=child)
+        await self._end(view, run, "killed")
+        return {rid}
 
     async def on_start(self, view: TaskView) -> None:
         """Runs a crash left between an agent's end and the next replay."""
@@ -301,8 +328,9 @@ class Orchestration(Extension):
         await self._settle(view, missed, every_run=True)
 
     async def _settle(self, view: TaskView, ended: Sequence[ChildEnded], *,
-                      every_run: bool = False) -> None:
-        runs = {rid: dict(r) for rid, r in self.runs(view).items() if r["status"] == "running"}
+                      every_run: bool = False, stopped: set[str] | None = None) -> None:
+        runs = {rid: dict(r) for rid, r in self.runs(view).items()
+                if r["status"] == "running" and rid not in (stopped or ())}
         touched: set[str] = set()
         for e in ended:
             for rid, run in runs.items():

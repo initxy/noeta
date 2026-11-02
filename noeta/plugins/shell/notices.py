@@ -6,6 +6,7 @@ byte; the stream runs on the event loop instead of threads."""
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Callable
 
@@ -16,11 +17,13 @@ __all__ = [
     "MonitorStream",
     "event_body",
     "format_duration",
+    "looks_like_prompt",
     "lost_summary",
     "monitor_end_summary",
     "monitor_event",
     "monitor_expired_note",
     "shell_end_summary",
+    "stalled_notice",
     "task_notification",
     "ws_end_summary",
 ]
@@ -46,15 +49,47 @@ def event_body(text: str) -> str:
     return f"\n<event>{escape(text)}</event>"
 
 
-def shell_end_summary(description: str, status: str, exit_code: int | None) -> str:
-    """``status`` is ``completed`` / ``failed`` / ``killed``."""
+def shell_end_summary(description: str, status: str, exit_code: int | None,
+                      note: str | None = None) -> str:
+    """``status`` is ``completed`` / ``failed`` / ``killed``; ``note`` says
+    what a non-zero status that completed means (``No matches found``)."""
     if status == "completed":
-        code = f" (exit code {exit_code})" if exit_code is not None else ""
+        code = "" if exit_code is None else (
+            f" (exit code {exit_code}: {note})" if note else f" (exit code {exit_code})")
         return f'Background command "{description}" completed{code}'
     if status == "failed":
         code = f" with exit code {exit_code}" if exit_code is not None else ""
         return f'Background command "{description}" failed{code}'
     return f'Background command "{description}" was stopped'
+
+
+#: Last lines that ask the person something (Claude Code's patterns): a
+#: background command silent behind one is likely waiting for an answer
+#: nobody can type.
+_PROMPT_LINES = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"\(y/n\)", r"\[y/n\]", r"\(yes/no\)",
+    r"\b(?:Do you|Would you|Shall I|Are you sure|Ready to)\b.*\? *$",
+    r"Press (any key|Enter)", r"Continue\?", r"Overwrite\?"))
+
+
+def looks_like_prompt(output: str) -> bool:
+    """Whether the last line of ``output`` asks for input."""
+    last = output.rstrip().split("\n")[-1]
+    return any(p.search(last) for p in _PROMPT_LINES)
+
+
+def stalled_notice(*, task_id: str, tool_use_id: str, output_file: str, description: str,
+                   tail: str) -> str:
+    """A background command that went quiet behind a prompt: its last output
+    and what to do about it."""
+    return task_notification(
+        task_id=task_id, tool_use_id=tool_use_id, output_file=output_file,
+        summary=f'Background command "{description}" appears to be waiting for '
+                "interactive input",
+        trailing=("\nLast output:\n" + escape(tail.rstrip()) + "\nNobody can answer that "
+                  "prompt here. Stop the task and run the command again with its answer "
+                  "piped in (such as `yes | command`) or with a flag that skips the "
+                  "question, if it has one."))
 
 
 def lost_summary(description: str, *, monitor: bool, reason: str) -> str:

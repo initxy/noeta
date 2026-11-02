@@ -27,6 +27,7 @@ from noeta.plugins.workflow import Orchestration
 from noeta.plugins.workflow import engine as engine_module
 from noeta.plugins.workflow.engine import Engine
 from noeta.testing import reply
+from noeta.toolkit.background_tasks import STOP_RUN
 
 SCRIPT = """export const meta = {
   name: 'count-words',
@@ -149,6 +150,72 @@ async def test_a_workflow_runs_its_agents_and_notifies_its_end(store: SqliteStor
     assert len(children) == 3
     created = [(await client.events(c))[0].event for c in children]
     assert all(isinstance(c, TaskCreated) and c.agent == "general-purpose" for c in created)
+
+
+class _HeldModel(Model):
+    """A model whose workflow agents wait until let go."""
+
+    def __init__(self, *main: ModelResponse) -> None:
+        super().__init__(*main)
+        self.go = asyncio.Event()
+        self.waiting = 0
+
+    async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
+        first = request.messages[0].text if request.messages else ""
+        if first.startswith(("count ", "sum ")):
+            self.waiting += 1
+            await self.go.wait()
+        return await super().complete(request, on_delta)
+
+
+async def _until(check: Any) -> None:
+    for _ in range(500):
+        if await check():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out")
+
+
+async def test_task_stop_ends_a_run_and_cancels_its_agents(store: SqliteStore) -> None:
+    # TaskStop posts the run's stop: the run ends killed, its running agents
+    # are cancelled, nothing more starts, and its notice says it was stopped
+    # (Claude Code's).
+    model = _HeldModel(reply("", ("Workflow", {"script": SCRIPT, "args": ["ab", "abcd"]})),
+                       reply("started"), reply("stopping"), reply("stopped"))
+    rt = runtime(store, model, Orchestration(engine=Engine()))
+    client = Client(store)
+    tid = await client.create("main", "use a workflow to count")
+    stop = asyncio.Event()
+    serving = asyncio.create_task(rt.serve(stop))
+
+    async def agents_waiting() -> bool:
+        return model.waiting == 2
+
+    await _until(agents_waiting)
+    rid = next(e for e in (r.event for r in await client.events(tid))
+               if isinstance(e, ToolFinished)).meta["run_id"]
+    # TaskStop posts it during a turn; a signal opens none, so a message does.
+    await client.signal(tid, STOP_RUN, {"run_id": rid})
+    await client.send(tid, "stop it")
+
+    async def agents_ended() -> bool:
+        rows = await client.tasks(parent_id=tid)
+        return len(rows) == 2 and all(r.status == "ended" for r in rows)
+
+    await _until(agents_ended)
+    model.go.set()
+    await asyncio.sleep(0.2)
+    stop.set()
+    await serving
+    events = [r.event for r in await client.events(tid)]
+    ends = [e.data for e in events if isinstance(e, ExtensionRecorded)
+            and e.extension == "workflow" and e.kind == "ended"]
+    assert ends == [{"run_id": rid, "status": "killed", "error": ""}]
+    assert [r.end_status for r in await client.tasks(parent_id=tid)] == ["cancelled"] * 2
+    assert model.children == []  # no agent answered, and the sum never started
+    notice = model.parent[-1].messages[-1].text
+    assert "<status>killed</status>" in notice
+    assert '<summary>Workflow "count-words" was stopped</summary>' in notice
 
 
 async def test_resume_reuses_finished_agents(store: SqliteStore) -> None:

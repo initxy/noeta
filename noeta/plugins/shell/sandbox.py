@@ -1,6 +1,7 @@
 """``Bash`` under the env's sandbox (``noeta.toolkit.sandbox``): whether a
 command runs confined, the refusal when the sandbox is required but cannot
-start, and the sandbox section of the tool's description."""
+start, and what the model is told about the sandbox (Claude Code's
+``sandbox_instructions``, sent again whenever it changes)."""
 
 from __future__ import annotations
 
@@ -46,8 +47,18 @@ def _listing(paths: Sequence[str], limit: int = 8) -> str:
     return shown + (f" and {len(paths) - limit} more" if len(paths) > limit else "")
 
 
-def sandbox_description(base: str, sandbox: CommandSandbox, root: str) -> str:
-    """``Bash``'s description with the sandbox section for ``sandbox``."""
+#: What the model is told once commands no longer run confined, after it
+#: was told they do.
+SANDBOX_OFF = ("The Bash sandbox is now off: commands run without its limits, and what you "
+               "were told about it earlier no longer applies.")
+
+
+def sandbox_instructions(sandbox: CommandSandbox | None, root: str) -> str:
+    """What the model is told about the sandbox ``Bash`` commands run in
+    under ``root``; ``""`` when they run unconfined (no sandbox, or one that
+    cannot start)."""
+    if sandbox is None or sandbox.unavailable() is not None:
+        return ""
     s = sandbox.settings
     if s.filesystem_disabled:
         filesystem = "not confined: commands read and write as you do."
@@ -67,6 +78,5 @@ def sandbox_description(base: str, sandbox: CommandSandbox, root: str) -> str:
     escape = load_description("noeta.plugins.shell", "shell_sandbox_escape"
                               if s.allow_unsandboxed else "shell_sandbox_no_escape")
     section = load_description("noeta.plugins.shell", "shell_sandbox")
-    section = (section.replace("{filesystem}", filesystem).replace("{network}", network)
-               .replace("{escape}", escape))
-    return f"{base}\n\n{section}"
+    return (section.replace("{filesystem}", filesystem).replace("{network}", network)
+            .replace("{escape}", escape))

@@ -17,14 +17,15 @@ import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.errors import HeldElsewhere
-from noeta.core.events import External, Say
+from noeta.core.events import Cancel, External, Say
 from noeta.core.holds import Release, TreeHold
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Text
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.jobs import JOB_ENDED, Job
-from noeta.plugins.shell.notices import format_duration, monitor_expired_note
+from noeta.plugins.shell.notices import format_duration, looks_like_prompt, monitor_expired_note
 from noeta.plugins.shell.tools import HELD_ELSEWHERE
+from noeta.toolkit.background_tasks import STOP_RUN
 from noeta.toolkit.notices import NOTICE_GUARD
 
 
@@ -224,10 +225,15 @@ async def test_monitor_streams_lines_then_reports_the_end(h: Harness) -> None:
     assert texts[0] == (f"<task-notification>\n<task-id>{job_id}</task-id>\n"
                         "<summary>Monitor event: \"watch\"</summary>\n<event>a\nb</event>\n"
                         "</task-notification>")
+    # Claude Code's: stderr makes no event and no part of the end notice; it
+    # is in the output file the notice names, with stdout.
+    out_file = h.job(job_id).out_path
     assert texts[-1] == (f"<task-notification>\n<task-id>{job_id}</task-id>\n"
-                         "<tool-use-id>call_1</tool-use-id>\n<status>completed</status>\n"
+                         "<tool-use-id>call_1</tool-use-id>\n"
+                         f"<output-file>{out_file}</output-file>\n<status>completed</status>\n"
                          "<summary>Monitor \"watch\" stream ended</summary>\n"
-                         "<event>stderr:\noops</event>\n</task-notification>")
+                         "</task-notification>")
+    assert Path(out_file).read_text() == "a\nb\noops\n"
 
 
 async def test_monitor_expiry_sends_one_note_and_no_end_notice(h: Harness) -> None:
@@ -455,3 +461,122 @@ async def test_progress_that_fails_never_fails_the_command(h: Harness) -> None:
     ctx.progress = broken
     out = await bash.run({"command": "echo one; sleep 0.3; echo two"}, ctx)
     assert not out.is_error and text(out) == "one\ntwo"
+
+
+@pytest.mark.parametrize(("command", "status", "summary"), [
+    ("grep -q needle /dev/null", "completed",
+     'Background command "x" completed (exit code 1: No matches found)'),
+    ("git -C . diff --quiet --no-index /dev/null t.txt", "completed",
+     'Background command "x" completed (exit code 1: Files differ)'),
+    ("test -e /nonexistent", "completed",
+     'Background command "x" completed (exit code 1: Condition is false)'),
+    # After ``&&`` status 1 may be the earlier command's: Claude Code calls it failed.
+    ("true && grep -q needle /dev/null", "failed",
+     'Background command "x" failed with exit code 1'),
+    ("grep -q needle /nonexistent", "failed", 'Background command "x" failed with exit code 2'),
+    ("false", "failed", 'Background command "x" failed with exit code 1'),
+])
+async def test_a_background_search_that_finds_nothing_completed(
+        h: Harness, command: str, status: str, summary: str) -> None:
+    (h.tmp / "t.txt").write_text("t\n")
+    out = await h.call("Bash", command=command, description="x", run_in_background=True)
+    await h.settle(out.meta["job_id"])
+    notice = h.posts[-1][1]
+    assert f"<status>{status}</status>" in notice
+    assert f"<summary>{summary}</summary>" in notice
+
+
+async def test_a_background_command_stuck_at_a_prompt_is_reported_once(tmp_path: Path) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"), stall_check_s=0.05, stall_after_s=0.2)
+    h = Harness(tmp_path, registry, Shell(registry=registry))
+    out = await h.call("Bash", command="echo working; printf 'Overwrite? (y/n) '; sleep 30",
+                       description="copy", run_in_background=True)
+    job_id = out.meta["job_id"]
+    for _ in range(200):
+        if h.posts:
+            break
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.3)  # no second notice
+    assert len(h.posts) == 1
+    notice = h.posts[0][1]
+    assert notice.startswith(
+        f"<task-notification>\n<task-id>{job_id}</task-id>\n<tool-use-id>call_1</tool-use-id>"
+        f"\n<output-file>{h.job(job_id).out_path}</output-file>\n<summary>Background command "
+        '"copy" appears to be waiting for interactive input</summary>\n</task-notification>'
+        "\nLast output:\nworking\nOverwrite? (y/n)\n")
+    await stop(h, job_id)
+    await h.settle(job_id)
+
+
+async def test_a_quiet_command_or_monitor_without_a_prompt_is_not_reported(
+        tmp_path: Path) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"), stall_check_s=0.05, stall_after_s=0.1)
+    h = Harness(tmp_path, registry, Shell(registry=registry))
+    bash = await h.call("Bash", command="echo building; sleep 30", run_in_background=True)
+    monitor = await h.call("Monitor", command="printf 'Continue? '; sleep 30",
+                           description="m", timeout_ms=60_000)
+    await asyncio.sleep(0.5)
+    assert h.posts == []
+    for out in (bash, monitor):
+        await stop(h, out.meta["job_id"])
+        await h.settle(out.meta["job_id"])
+
+
+@pytest.mark.parametrize(("output", "prompt"), [
+    ("Proceed (y/n)", True), ("Do you want to continue? ", True), ("Press Enter to go", True),
+    ("Overwrite?", True), ("compiling 3/9", False), ("Done?\nnext line", False)])
+def test_what_counts_as_a_prompt(output: str, prompt: bool) -> None:
+    assert looks_like_prompt(output) is prompt
+
+
+async def test_task_stop_stops_this_tasks_background_agents_and_workflow_runs(
+        h: Harness) -> None:
+    # Claude Code's TaskStop stops any background task: an agent by its agent
+    # ID (a resumed one runs in a newer task), a Workflow run by its ID.
+    posted: list[tuple[Any, str | None, str | None]] = []
+    rows = {"t2": "running", "t3": "ended"}
+
+    async def post(body: Any, task_id: str | None = None,
+                   dedupe_key: str | None = None) -> None:
+        posted.append((body, task_id, dedupe_key))
+
+    async def task(task_id: str) -> Any:
+        status = rows.get(task_id)
+        return None if status is None else type("Row", (), {"status": status})()
+
+    state = {
+        "subtasks": {"agents": {
+            "a1": {"task_id": "t2", "description": "review the diff", "type": "Explore"},
+            "a3": {"task_id": "t3", "description": "done already", "type": "Explore"}}},
+        "workflow": {"runs": {
+            "wf_live01": {"status": "running", "name": "audit", "description": "Audit it"},
+            "wf_over01": {"status": "completed", "name": "old", "description": "Old"}}},
+    }
+    ctx = ToolContext(task_id="task", call_id="c", env=LocalExecEnv(str(h.tmp)), state=state,
+                      record=lambda *_: None, post=post, task=task, root_id="task")
+    stop_tool = h.tool("TaskStop")
+
+    async def stop_any(task_id: str) -> ToolOutput:
+        return await stop_tool.run({"task_id": task_id}, ctx)
+
+    out = await stop_any("a1")
+    assert json.loads(text(out)) == {
+        "message": "Successfully stopped task: a1 (review the diff)", "task_id": "a1",
+        "task_type": "local_agent", "command": "review the diff"}
+    body, target, _ = posted.pop()
+    assert isinstance(body, Cancel) and target == "t2"
+    assert json.loads(text(await stop_any("t2")))["task_type"] == "local_agent"
+    posted.clear()
+    assert text(await stop_any("a3")) == "TaskStop: Task a3 is not running (status: ended)"
+    out = await stop_any("wf_live01")
+    assert json.loads(text(out)) == {
+        "message": "Successfully stopped task: wf_live01 (Audit it)", "task_id": "wf_live01",
+        "task_type": "local_workflow", "command": "Audit it"}
+    [(body, target, key)] = posted
+    assert body == External(name=STOP_RUN, data={"run_id": "wf_live01"})
+    assert target is None and key == f"{STOP_RUN}:wf_live01"
+    assert text(await stop_any("wf_over01")) == (
+        "TaskStop: Task wf_over01 is not running (status: completed)")
+    # An unknown ID names the agents still running, as Claude Code does.
+    assert text(await stop_any("zzz")) == (
+        "TaskStop: No task found with ID: zzz. Running background agents: a1 (review the diff)")

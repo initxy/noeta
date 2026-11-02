@@ -23,6 +23,12 @@ under, of its loss (one notice per job either way, by its dedupe key).
 Stopping the root's turn, cancelling or ending the root kills every job of
 the tree without a notice; with ``background_ends_with_turn`` a job also
 dies, silently, when the turn of the task that started it ends.
+
+Unless the task starts in ``auto`` or ``bypassPermissions`` mode,
+``Bash``'s description steers file reading and editing to the dedicated
+tools, as Claude Code's does. The sandbox commands run in is described in
+a ``sandbox_instructions`` reminder, sent again whenever it changes (and
+after a compaction); one that went away is followed by a note that it is off.
 """
 
 from __future__ import annotations
@@ -43,16 +49,16 @@ from noeta.core.events import (
     TaskEnded,
     Waiting,
 )
-from noeta.core.extension import Extension, TaskView
+from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.store import HOLD_LOST
 from noeta.core.tool import Tool
-from noeta.core.types import user
+from noeta.core.types import Message, user
 from noeta.plugins.shell.bash import BashTool
 from noeta.plugins.shell.job_logs import DEFAULT_LOG_DIR
 from noeta.plugins.shell.jobs import JOB_ENDED, REGISTRY, Registry
 from noeta.plugins.shell.notices import lost_summary, task_notification
-from noeta.plugins.shell.sandbox import sandbox_description
-from noeta.plugins.shell.state import SHELL, ShellState, reduce_shell
+from noeta.plugins.shell.sandbox import SANDBOX_OFF, sandbox_instructions
+from noeta.plugins.shell.state import SANDBOX_KIND, SHELL, ShellState, reduce_shell
 from noeta.plugins.shell.tools import LOST_REASON, BackgroundBash, MonitorTool, TaskStopTool
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
 from noeta.toolkit.notices import NOTICE_GUARD
@@ -75,9 +81,18 @@ def lost_notice(job_id: str, job: Mapping[str, Any]) -> str:
 #: prompt files, the plugin pins): how far back a pickup looks for the take
 #: its last runner may have died after.
 _START_RECORDS = 4
-#: Sandboxed tool lists (one per sandbox settings and working directory) kept
-#: at most.
-SANDBOXED_KEEP = 64
+#: Where the sandbox instructions go among a request's harness notes: first,
+#: as Claude Code sends them.
+SANDBOX_ORDER = -20
+#: The permission modes a task may start in without ``Bash`` steering file
+#: work to the dedicated tools (Claude Code's: the auto-mode guidance says
+#: Bash is fine for it there).
+_UNSTEERED_MODES = ("auto", "bypassPermissions")
+#: The line that steers it, after the description's lines on the shell's state.
+_STEER_AFTER = "- Variables and functions you define do not survive between calls.\n"
+_STEER = ("- Do not run `cat`, `head`, `tail`, `sed`, `awk` or `echo` with this tool unless "
+          "you are told to or have checked that no dedicated tool can do the job: the "
+          "dedicated tool serves the user better.\n")
 
 
 def _ran_under(job: Mapping[str, Any], lost: Sequence[tuple[Any, Any]]) -> bool:
@@ -96,6 +111,24 @@ def _notice_key(job_id: str) -> str:
 
 def _worktree_tools() -> list[Tool]:
     return [EnterWorktreeTool(), ExitWorktreeTool()]
+
+
+def _steered(tools: list[Tool]) -> list[Tool]:
+    """``tools`` with ``Bash`` (the first) steering file work to the
+    dedicated tools."""
+    bash = copy.copy(tools[0])
+    assert _STEER_AFTER in bash.description
+    bash.description = bash.description.replace(_STEER_AFTER, _STEER_AFTER + _STEER, 1)
+    return [bash, *tools[1:]]
+
+
+def _starts_steered(view: TaskView) -> bool:
+    """Whether ``Bash`` steers file work for this task: decided by the
+    permission mode it is in (the permissions plugin's ``mode``, else its
+    config's) when it first asks."""
+    mode = getattr(view.ext_state("permissions"), "mode", None) \
+        or view.state.config.get("permission_mode")
+    return mode not in _UNSTEERED_MODES
 
 
 class Shell(Extension):
@@ -125,16 +158,14 @@ class Shell(Extension):
             registry = Registry(max_jobs=max_jobs or 8, log_dir=log_dir or DEFAULT_LOG_DIR)
         self.registry = registry if registry is not None else REGISTRY
         self.ends_with_turn = background_ends_with_turn
-        #: The tool list with ``Bash`` describing the sandbox, per settings
-        #: and working directory; the :data:`SANDBOXED_KEEP` used last.
-        self._sandboxed: dict[tuple[Any, str], list[Tool]] = {}
         if not background:
             self._tools: list[Tool] = [BashTool(**(bash or {})), *_worktree_tools()]
-            return
-        self.bash = BackgroundBash(self.registry, ends_with_turn=background_ends_with_turn,
-                                   **(bash or {}))
-        self._tools = [self.bash, MonitorTool(self.bash), TaskStopTool(self.registry),
-                       *_worktree_tools()]
+        else:
+            self.bash = BackgroundBash(self.registry, ends_with_turn=background_ends_with_turn,
+                                       **(bash or {}))
+            self._tools = [self.bash, MonitorTool(self.bash), TaskStopTool(self.registry),
+                           *_worktree_tools()]
+        self._steered_tools = _steered(self._tools)
 
     # ------------------------------------------------------------ state
 
@@ -153,20 +184,35 @@ class Shell(Extension):
                                     if j.get("status") != "running"})
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        sandbox = sandbox_of(view.env)
-        if sandbox is None or sandbox.unavailable() is not None:
-            return self._tools
+        st = view.ext_state(self.name)
+        steer = st.steer if isinstance(st, ShellState) and st.steer is not None \
+            else _starts_steered(view)
+        return self._steered_tools if steer else self._tools
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """Record once whether ``Bash`` steers file work (so a later mode
+        switch leaves its description, and the prompt cache, alone); the
+        sandbox instructions whenever they differ from what the model was
+        told."""
+        st = view.ext_state(self.name)
+        st = st if isinstance(st, ShellState) else ShellState()
+        if st.steer is None:
+            view.record(self.name, "steer", {"steer": _starts_steered(view)})
+        if view.find_tool("Bash") is None:
+            return ()
         root = str(getattr(view.env, "cwd", "") or "")
-        key = (sandbox.settings, root)
-        tools = self._sandboxed.pop(key, None)
-        if tools is None:
-            bash = copy.copy(self._tools[0])
-            bash.description = sandbox_description(bash.description, sandbox, root)
-            tools = [bash, *self._tools[1:]]
-            while len(self._sandboxed) >= SANDBOXED_KEEP:
-                del self._sandboxed[next(iter(self._sandboxed))]
-        self._sandboxed[key] = tools  # newest last
-        return tools
+        text = sandbox_instructions(sandbox_of(view.env), root)
+        if text == st.sandbox_told:
+            return ()
+        return (Reminder(text=text or SANDBOX_OFF, kind=SANDBOX_KIND, data={"text": text},
+                         role="system", order=SANDBOX_ORDER),)
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """After a compaction the sandbox instructions are told again."""
+        st = view.ext_state(self.name)
+        if view.keeps_tail is not None and isinstance(st, ShellState) and st.sandbox_told:
+            view.record(self.name, SANDBOX_KIND, {"text": ""})
+        return ()
 
     # ------------------------------------------------------------ lifecycle
 

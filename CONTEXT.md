@@ -49,8 +49,8 @@ plugins share) > `noeta/core`. `|` siblings never import each other, nor do two 
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name (`TaskView.find_tool`),
 inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
 others (memory's `dir` for instructions, permissions and fs, shell's `cwd` (permissions, hooks, fs),
-permissions' `mode` (permissions, hooks), instructions' files for hooks and its `start` for the classifier,
-structured_output's `answer` for workflow and front ends). Front ends import no plugin; they read permissions'
+permissions' `mode` (permissions, hooks, shell), instructions' files for hooks and its `start` for the classifier,
+structured_output's `answer` for workflow and front ends, subtasks' and workflow's for `TaskStop`: `toolkit/background_tasks.py`). Front ends import no plugin; they read permissions'
 `mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
 
 ## Ways in
