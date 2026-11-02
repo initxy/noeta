@@ -412,9 +412,9 @@ class Subtasks(Extension):
         text = None if view.state.parent_id else self.agent_list(view)
         if text and view.keeps_tail is not None:
             view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
-        texts = self.running_status(view) if view.keeps_tail is not None else []
-        if texts:
-            view.record(self.name, "task_status", {"texts": texts})
+        status = self.running_status(view) if view.keeps_tail is not None else []
+        if status:
+            view.record(self.name, "task_status", {"texts": status})
         return ()
 
     def running_status(self, view: TaskView) -> list[str]:
@@ -618,8 +618,7 @@ def _outcome(agent: Mapping[str, Any], agent_id: str, ended: ChildEnded,
         reason = ended.error
         summary = (texts.SUMMARY_STOPPED_BY_CALLER if reason == notices.STOPPED_BY_CALLER
                    else texts.SUMMARY_STOPPED_BY_USER if reason in ("", "cancelled")
-                   else texts.SUMMARY_STOPPED_WHY if reason
-                   else texts.SUMMARY_STOPPED)
+                   else texts.SUMMARY_STOPPED_WHY)
         return "killed", summary.format(description=description, reason=reason), ended.answer
     limit = step_limit(ended.answer)
     summary = (texts.SUMMARY_STEP_LIMIT.format(description=description, n=limit)

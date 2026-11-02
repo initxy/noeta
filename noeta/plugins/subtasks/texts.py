@@ -200,7 +200,6 @@ STEP_LIMIT_NOTE = ("Note: this agent stopped at its {n}-step limit before finish
                    "still working and had produced no report.")
 SUMMARY_FINISHED = 'Agent "{description}" finished'
 SUMMARY_FAILED = 'Agent "{description}" failed: {error}'
-SUMMARY_STOPPED = 'Agent "{description}" was stopped'
 SUMMARY_STOPPED_BY_CALLER = 'Agent "{description}" was stopped by you'
 SUMMARY_STOPPED_BY_USER = 'Agent "{description}" was stopped by the user'
 SUMMARY_STOPPED_WHY = 'Agent "{description}" was stopped: {reason}'
