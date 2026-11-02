@@ -507,3 +507,12 @@ def test_long_server_instructions_are_cut() -> None:
     assert cap_instructions("short") == "short"
     cut = cap_instructions("x" * 5000)
     assert cut == "x" * 4096 + "… [truncated]"
+
+
+def test_instruction_notes_order_by_name_and_keep_connected_servers() -> None:
+    from noeta.plugins.mcp.instructions import INSTRUCTIONS_GONE, instructions_delta
+    text = instructions_delta({}, {"zeta": "z", "alpha": "a"})
+    assert text.index("## alpha") < text.index("## zeta")
+    # Still connected, its instructions gone: not said to have disconnected.
+    assert instructions_delta({"alpha": "a"}, {}, {"alpha"}) == ""
+    assert INSTRUCTIONS_GONE in instructions_delta({"alpha": "a"}, {}, set())

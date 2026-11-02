@@ -443,7 +443,8 @@ class Mcp(Extension):
         if st.get("servers") is None:
             return ()
         now = {s["alias"]: s["instructions"] for s in st["servers"] if s.get("instructions")}
-        text = instructions_delta(st.get("told") or {}, now)
+        text = instructions_delta(st.get("told") or {}, now,
+                                  {s["alias"] for s in st["servers"]})
         if not text:
             return ()
         return (Reminder(text=text, kind="instructions", data={"servers": now},
