@@ -111,6 +111,19 @@ class ModelSpec:
     #: ``anthropic``) without one uses ``noreply@anthropic.com``, any other
     #: model without one gets no attribution note.
     coauthor_email: str | None = None
+    #: The ``max_tokens`` a request sends when nothing else sets one (Claude
+    #: Code's catalog ``default``); ``None`` sends ``max_output_tokens``, the
+    #: ceiling.
+    default_output_tokens: int | None = None
+    #: The effort sent with adaptive thinking when the request names none
+    #: (Claude Code's catalog ``default_effort``); ``None``: ``high``, Claude
+    #: Code's default for a model whose row names none.
+    default_effort: str | None = None
+
+    @property
+    def output_default(self) -> int:
+        """The ``max_tokens`` a request sends by default."""
+        return self.default_output_tokens or self.max_output_tokens
 
 
 
@@ -129,13 +142,15 @@ class ModelSpec:
 
 CATALOG: dict[str, ModelSpec] = {
     # --- Anthropic ---------------------------------------------------------
-    # The 5.5 family and Fable 5.1 as Claude Code 2.1.312's model catalog
-    # gives them: window, default output cap (what it sends), adaptive
-    # thinking, and its pricing tiers (5-min cache write, cache read).
+    # Every Claude row as Claude Code 2.1.312's model catalog gives it:
+    # window, output ceiling and default (what it sends), default effort,
+    # knowledge cutoff, adaptive thinking, and its pricing tiers (5-min cache
+    # write, cache read).
     "claude-opus-5-5": ModelSpec(
         real_model_id="claude-opus-5-5",
         display_name="Claude Opus 5.5",
         knowledge_cutoff="June 2026",
+        default_effort="medium",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=4.00,
@@ -148,6 +163,8 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-sonnet-5-5": ModelSpec(
         real_model_id="claude-sonnet-5-5",
         display_name="Claude Sonnet 5.5",
+        knowledge_cutoff="June 2026",
+        default_effort="medium",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=2.00,
@@ -160,6 +177,8 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-haiku-5-5": ModelSpec(
         real_model_id="claude-haiku-5-5",
         display_name="Claude Haiku 5.5",
+        knowledge_cutoff="June 2026",
+        default_effort="medium",
         context_window=1_000_000,
         max_output_tokens=128_000,
         # The base tier; past 100K prompt tokens the rates are five times these.
@@ -173,8 +192,11 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-fable-5-1": ModelSpec(
         real_model_id="claude-fable-5-1",
         display_name="Claude Fable 5.1",
+        knowledge_cutoff="June 2026",
+        default_output_tokens=64_000,
+        default_effort="high",
         context_window=1_000_000,
-        max_output_tokens=64_000,
+        max_output_tokens=128_000,
         input_price_per_mtok=10.00,
         output_price_per_mtok=50.00,
         cache_read_price_per_mtok=0.25,
@@ -185,6 +207,9 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-opus-5": ModelSpec(
         real_model_id="claude-opus-5",
         display_name="Claude Opus 5",
+        knowledge_cutoff="May 2026",
+        default_output_tokens=64_000,
+        default_effort="high",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=5.00,
@@ -197,6 +222,9 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-sonnet-5": ModelSpec(
         real_model_id="claude-sonnet-5",
         display_name="Claude Sonnet 5",
+        knowledge_cutoff="January 2026",
+        default_output_tokens=64_000,
+        default_effort="high",
         context_window=1_000_000,
         max_output_tokens=128_000,
         # Standard rates. An introductory $2.00 / $10.00 ran to 2026-08-31;
@@ -213,6 +241,9 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-opus-4-8": ModelSpec(
         real_model_id="claude-opus-4-8",
         display_name="Claude Opus 4.8",
+        knowledge_cutoff="January 2026",
+        default_output_tokens=64_000,
+        default_effort="high",
         context_window=1_000_000,
         max_output_tokens=128_000,
         input_price_per_mtok=5.00,
@@ -225,7 +256,11 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-sonnet-4-6": ModelSpec(
         real_model_id="claude-sonnet-4-6",
         display_name="Claude Sonnet 4.6",
-        context_window=1_000_000,
+        knowledge_cutoff="August 2025",
+        default_output_tokens=32_000,
+        # 1M only with the long-context beta, which Claude Code does not
+        # send by default.
+        context_window=200_000,
         max_output_tokens=128_000,
         input_price_per_mtok=3.00,
         output_price_per_mtok=15.00,
@@ -237,6 +272,8 @@ CATALOG: dict[str, ModelSpec] = {
     "claude-haiku-4-5": ModelSpec(
         real_model_id="claude-haiku-4-5",
         display_name="Claude Haiku 4.5",
+        knowledge_cutoff="February 2025",
+        default_output_tokens=32_000,
         context_window=200_000,
         max_output_tokens=64_000,
         input_price_per_mtok=1.00,

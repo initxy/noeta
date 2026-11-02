@@ -49,12 +49,13 @@ def _default_env(state: TaskState) -> ExecEnv:
 
 
 def catalog_output_ceiling(model: str) -> int:
-    """``model``'s output ceiling in the model catalog
-    (:mod:`noeta.core.models`; an unknown model gets the unknown-model cap)."""
+    """The ``max_tokens`` the model catalog (:mod:`noeta.core.models`) gives
+    ``model`` by default (``ModelSpec.output_default``, Claude Code's); an
+    unknown model gets the unknown-model cap."""
     from noeta.core import models
 
     spec = models.find_spec(model)
-    return spec.max_output_tokens if spec is not None else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
+    return spec.output_default if spec is not None else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
 
 
 @dataclass

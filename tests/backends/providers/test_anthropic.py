@@ -159,9 +159,10 @@ async def test_max_tokens_request_only_works_without_default() -> None:
 
 
 @respx.mock
-async def test_max_tokens_falls_back_to_the_catalogued_output_ceiling() -> None:
+async def test_max_tokens_falls_back_to_the_catalogued_default_output() -> None:
     body, _ = await _send(_req(model=_VISION_MODEL), default_max_tokens=None)
-    assert body["max_tokens"] == models.model_limits(_VISION_MODEL)[1]
+    spec = models.find_spec(_VISION_MODEL)
+    assert spec is not None and body["max_tokens"] == spec.output_default == 64_000
 
 
 # ---------------------------------------------------------------------------

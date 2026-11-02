@@ -495,3 +495,14 @@ def test_long_server_instructions_are_cut() -> None:
     assert cap_instructions("short") == "short"
     cut = cap_instructions("x" * 5000)
     assert cut == "x" * 4096 + "… [truncated]"
+
+
+def test_server_instructions_follow_the_agent_list_and_precede_the_skills() -> None:
+    # Claude Code's order in the joined system turn: deferred tools, agent
+    # types, MCP server instructions, skills.
+    from noeta.plugins.environment import ORDER_DEFERRED
+    from noeta.plugins.mcp.extension import INSTRUCTIONS_ORDER
+    from noeta.plugins.skills.extension import LISTING_ORDER
+    from noeta.plugins.subtasks.extension import AGENT_LIST_ORDER
+
+    assert ORDER_DEFERRED < AGENT_LIST_ORDER < INSTRUCTIONS_ORDER < LISTING_ORDER

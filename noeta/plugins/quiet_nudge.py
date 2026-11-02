@@ -2,12 +2,14 @@
 called tools, with no text for the user since their last message (or their
 answer to a question), the model is told (in a system turn) to keep the user
 posted when there is something worth saying. A long quiet stretch is nudged
-again after as many more such steps, up to three times."""
+again after as many more such steps, up to three times. As in Claude Code,
+only the models with the capability get it (:func:`gets_nudge`)."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
+from noeta.core import models
 from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.types import Message
 
@@ -19,6 +21,21 @@ MAX_NUDGES = 3
 ORDER = 60
 #: Calls the person answers: the quiet stretch starts again after one.
 ASKS_USER = frozenset({"AskUserQuestion", "ExitPlanMode"})
+
+#: Claude Code 2.1.312's models with the quiet-stretch reminder
+#: (``silent_turn_reminder``: Sonnet 5.5 by its catalog row, Opus 5.5 and
+#: Fable 5.1 by their prompt bundles), matched in the id as it matches its
+#: Claude models (``claude-opus-5-5[1m]``, ``us.anthropic.claude-opus-5-5``).
+NUDGE_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1",
+                "claude-mythos-5-1")
+
+
+def gets_nudge(model: str) -> bool:
+    """Whether ``model`` gets the quiet-stretch nudge (an alias resolves
+    first; any other model, Haiku 5.5 included, gets none)."""
+    real = models.resolve_alias(model).lower()
+    return any(known in real for known in NUDGE_MODELS)
+
 
 NUDGE = (
     "The user has heard nothing from you for a while. When you have something worth "
@@ -56,6 +73,8 @@ class QuietNudge(Extension):
         self.most = most
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        if not gets_nudge(str(view.state.config.get("model") or view.model or "")):
+            return ()
         text = view.prompt("reminder/quiet_nudge", NUDGE)
         since, nudges = quiet_steps(view.state.messages, text)
         if since < self.steps or nudges >= self.most:

@@ -39,6 +39,7 @@ from noeta.plugins.skills.gates import (
     pre_approved,
     script_gate,
 )
+from noeta.plugins.skills.guidance import drop_skill_guidance
 from noeta.plugins.skills.listing import listing_lines, render_listing, skill_digest
 from noeta.plugins.skills.registry import (
     SkillDescription,
@@ -633,7 +634,9 @@ class Skills(Extension):
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         """No model call answers a typed fork skill's message (its agent's
-        report opens a turn later)."""
+        report opens a turn later). The prompt's skill line goes only with
+        skills and the ``Skill`` tool (:func:`drop_skill_guidance`)."""
+        request = await self._skill_guidance(view, request)
         at = (view.ext_state(self.name) or {}).get("typed_fork")
         if at is None:
             return request
@@ -646,6 +649,14 @@ class Skills(Extension):
         if newest == at:
             raise TurnDone()
         return request
+
+    async def _skill_guidance(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+        if any(t.name == SKILL_TOOL for t in request.tools) \
+                and (await self.turn_registry(view)).names():
+            return request
+        system = [msgspec.structs.replace(p, text=drop_skill_guidance(p.text))
+                  for p in request.system]
+        return msgspec.structs.replace(request, system=system)
 
     def _note_variants(self, view: TaskView, registry: SkillRegistry, desc: SkillDescription,
                        origin: Origin | None) -> None:

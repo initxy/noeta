@@ -113,8 +113,9 @@ IDEMPOTENCY_META = "noeta/idempotencyKey"
 #: resolved first, once this many newer ones are.
 TASKS_KEEP = 256
 #: The servers' instructions in the joined system turn (``Reminder.order``):
-#: after the deferred tools, before the agent list.
-INSTRUCTIONS_ORDER = 35
+#: after the deferred tools and the agent list, before the skill listing
+#: (Claude Code's order).
+INSTRUCTIONS_ORDER = 45
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
