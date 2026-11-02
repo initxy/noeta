@@ -509,3 +509,69 @@ def test_long_server_instructions_are_cut() -> None:
     assert cap_instructions("short") == "short"
     cut = cap_instructions("x" * 5000)
     assert cut == "x" * 4096 + "… [truncated]"
+
+
+# ---------------------------------------------------------------- tool _meta
+
+
+def test_tool_meta_always_load_hint_and_visibility() -> None:
+    from noeta.plugins.mcp.extension import _server_entry
+    raw = [{"name": "loud", "_meta": {"anthropic/alwaysLoad": True,
+                                      "anthropic/searchHint": "  post a\nmessage "}},
+           {"name": "app_only", "_meta": {"ui": {"visibility": ["app"]}}},
+           {"name": "unreadable", "_meta": {"ui": "x"}},
+           {"name": "both", "_meta": {"ui": {"visibility": ["app", "model"]}}},
+           {"name": "plain"}]
+    entry = _server_entry(McpServer(alias="s", command=["x"]), raw)
+    by = {t["name"]: t for t in entry["tools"]}
+    assert sorted(by) == ["mcp__s__both", "mcp__s__loud", "mcp__s__plain"]
+    assert by["mcp__s__loud"]["always_load"] is True
+    assert by["mcp__s__loud"]["search_hint"] == "post a message"
+    assert "always_load" not in by["mcp__s__plain"]
+    quiet = _server_entry(McpServer(alias="s", command=["x"], defer_all=True), raw)
+    assert not any(t.get("always_load") for t in quiet["tools"])
+
+
+async def test_a_tool_marked_always_load_is_sent_from_the_first_request(
+        store: SqliteStore, pool: McpPool) -> None:
+    tools = json.dumps([
+        {"name": "loud", "inputSchema": {"type": "object"},
+         "_meta": {"anthropic/alwaysLoad": True, "anthropic/searchHint": "shout"}},
+        {"name": "quiet", "inputSchema": {"type": "object"}}])
+    provider = ScriptedProvider([reply("hi")])
+    agent = Agent(name="a", model="m", extensions=[
+        Mcp([server(deferred=True, FAKE_TOOLS=tools)], pool=pool), ToolSearch()])
+    await Client(store).create("a", "go")
+    await runtime(store, provider, agent).run_until_idle()
+    sent = {t.name: t.defer_loading for t in provider.requests[0].tools}
+    assert sent["mcp__fake__loud"] is False and "mcp__fake__quiet" not in sent
+
+
+async def test_a_fruitless_search_lists_a_down_server_again(
+        store: SqliteStore, pool: McpPool, tmp_path: Path) -> None:
+    flag = tmp_path / "up"
+    flaky = McpServer(alias="flaky", deferred=True, command=[
+        "sh", "-c", f'test -f "{flag}" || exit 1; exec "{sys.executable}" "{FAKE}"'])
+
+    class BringUp(Extension):
+        name = "bring_up"
+
+        async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+            flag.touch()
+            return request
+
+    provider = ScriptedProvider([
+        reply("", ("ToolSearch", {"query": "echo", "max_results": 5})),
+        reply("", ("ToolSearch", {"query": "echo", "max_results": 5})),
+        reply("done")])
+    agent = Agent(name="a", model="m", extensions=[Mcp([flaky], pool=pool), ToolSearch(),
+                                                   BringUp()])
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await runtime(store, provider, agent).run_until_idle()
+    evs = await events(client, tid)
+    assert [r.data["alias"] for r in records(evs, "server_down")] == ["flaky"]
+    assert [r.data["alias"] for r in records(evs, "server_up")] == ["flaky"]
+    first, second = (f.result for f in finished(evs))
+    assert "could not be reached" in texts(first)[0] and "flaky" in texts(first)[0]
+    assert [b.tool_name for b in second.content] == ["mcp__flaky__echo"]  # type: ignore[union-attr]

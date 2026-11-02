@@ -156,8 +156,10 @@ class McpServer:
     ``tools`` keeps only the named raw tools (``None`` = all advertised).
     ``call_timeout`` bounds one ``tools/call`` (``None``: :func:`tool_timeout_s`).
     ``deferred`` (the default) announces the server's tools by name only:
-    the model loads them with ``ToolSearch`` (the ``tool_search`` plugin);
-    ``False`` sends their schemas from the first request.
+    the model loads them with ``ToolSearch`` (the ``tool_search`` plugin),
+    except a tool whose ``_meta["anthropic/alwaysLoad"]`` is true; ``False``
+    sends their schemas from the first request. ``defer_all`` (the settings'
+    ``alwaysLoad: false``) defers every tool, whatever its ``_meta`` says.
     ``bare_elicitation`` declares the elicitation capability without its
     ``form`` / ``url`` modes, for servers that reject them.
     """
@@ -170,6 +172,7 @@ class McpServer:
     tools: Sequence[str] | None = None
     call_timeout: float | None = None
     deferred: bool = True
+    defer_all: bool = False
     type: str = ""
     headers_helper: str = ""
     oauth: OAuthSettings | None = None

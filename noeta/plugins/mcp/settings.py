@@ -104,6 +104,7 @@ def _server(name: str, spec: Any) -> McpServer:
     common: dict[str, Any] = {
         "alias": alias_for(name), "call_timeout": _call_timeout(spec.get("timeout")),
         "deferred": spec.get("alwaysLoad") is not True,
+        "defer_all": spec.get("alwaysLoad") is False,
         "bare_elicitation": spec.get("bareElicitationCapability") is True}
     if kind == "stdio":
         args = spec.get("args") or []

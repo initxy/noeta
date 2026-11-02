@@ -140,6 +140,7 @@ class WebSearchTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "search the web for up-to-date information"
 
     def __init__(self, transport: SearchTransport) -> None:
         self.transport = transport

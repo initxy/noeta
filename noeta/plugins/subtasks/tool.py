@@ -355,6 +355,7 @@ class SendMessageTool:
     clearable = False
     #: Claude Code lists it among the tools loaded on demand.
     deferred = True
+    search_hint = "send a message to a running agent or another session"
     input_schema = _schema({
         "to": {"description": texts.SEND_TO_PROP, "type": "string", "maxLength": 300},
         "message": {"description": texts.SEND_MESSAGE_PROP, "type": "string"},

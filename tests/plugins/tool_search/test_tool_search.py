@@ -23,6 +23,7 @@ from noeta.core.runner import Runtime
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, Text, ToolReference, ToolResult, ToolSpec
 from noeta.plugins.tool_search import PLACEHOLDER, ToolSearch, ToolSearchTool, loaded_tools
+from noeta.plugins.tool_search.search import search_hint
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -141,15 +142,41 @@ def test_keyword_ranking() -> None:
     assert schema["properties"]["max_results"]["default"] == 5
 
 
-def test_the_whole_name_counts_for_each_term_on_its_own() -> None:
+def test_the_raw_name_does_not_score() -> None:
+    # Claude Code's whole-name +3 reads the name's words joined (no
+    # ``mcp__``, no ``__``) and only while nothing scored: "mcp" boosts no MCP
+    # tool, and a term across the ``__`` boundary finds nothing.
     search = ToolSearchTool({t.name: t for t in [
         Fake("mcp__slack__list", description="List channels."),
         Fake("mcp__slack__send_message", description="Post to a channel."),
     ]})
-    # "slack" scores both alike; "ack__send" is only in one tool's whole
-    # name, which counts though "slack" already scored.
-    assert search.search("slack ack__send") == ["mcp__slack__send_message",
-                                                "mcp__slack__list"]
+    assert search.search("mcp") == []
+    assert search.search("ack__send") == []
+    assert search.search("send_mes") == ["mcp__slack__send_message"]
+
+
+def test_a_search_hint_scores_and_filters() -> None:
+    hinted = Fake("NotebookEdit", description="Edit a cell.")
+    hinted.search_hint = "Change Jupyter notebook cells"  # type: ignore[attr-defined]
+    search = ToolSearchTool({t.name: t for t in [
+        Fake("WebFetch", description="Fetch a page about jupyter."), hinted]})
+    assert search.search("jupyter") == ["NotebookEdit", "WebFetch"]  # +4 over +2
+    assert search.search("+cells edit") == ["NotebookEdit"]
+    assert search_hint(hinted) == "change jupyter notebook cells"
+
+
+async def test_no_match_names_the_mcp_servers_that_are_down() -> None:
+    search = ToolSearchTool({"Tool": Fake("Tool")})
+    ctx = ToolContext(task_id="t", call_id="c", env=None, record=lambda *_: None,
+                      state={"mcp": {"down": {"slack": "connection refused", "mail": ""}}})
+    out = await search.run({"query": "calendar", "max_results": 5}, ctx)
+    text = out.content[0].text  # type: ignore[union-attr]
+    assert text.startswith("No deferred tool matches 'calendar'.")
+    assert 'mail; slack: "connection refused"' in text and "connection failure" in text
+    plain = await search.run({"query": "calendar", "max_results": 5},
+                             ToolContext(task_id="t", call_id="c", env=None, state={},
+                                         record=lambda *_: None))
+    assert plain.content[0].text == "No deferred tool matches 'calendar'."  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize("limit", [float("inf"), float("-inf"), float("nan"), "5", None])

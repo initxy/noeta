@@ -65,8 +65,10 @@ class McpTool:
 
     def __init__(self, *, name: str, alias: str, remote: str, description: str,
                  input_schema: dict[str, Any], invoke: Invoke, deferred: bool = True,
-                 resume: Resume | None = None, loaded_description: str | None = None) -> None:
+                 resume: Resume | None = None, loaded_description: str | None = None,
+                 search_hint: str = "") -> None:
         self.name = name
+        self.search_hint = search_hint
         self.alias = alias
         self.remote = remote
         self.description = description
@@ -145,6 +147,7 @@ class ListMcpResourcesTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "list the resources of connected MCP servers"
     description = """
 Lists the resources that the configured MCP servers offer. Each entry has the \
 standard MCP resource fields and a `server` field naming the server it comes from.
@@ -193,6 +196,7 @@ class ReadMcpResourceTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "read one MCP resource by its URI"
     description = """
 Reads one resource from an MCP server, given the server's name and a resource's URI.
 
@@ -267,6 +271,7 @@ class ReadMcpResourceDirTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "list what an MCP directory resource contains"
     description = """
 Shows what one directory resource of an MCP server holds, one level down \
 (`resources/directory/read`); it does not descend into subdirectories.

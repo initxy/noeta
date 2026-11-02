@@ -443,6 +443,7 @@ class TaskStopTool:
     read_only = False
     clearable = False
     deferred = True
+    search_hint = "stop or kill a running background task"
     description = (
         "Stops a background task (a Bash command started with `run_in_background`, or a "
         "Monitor) by its ID.\n\n"
@@ -490,6 +491,8 @@ class MonitorTool:
     read_only = False
     clearable = False
     deferred = True
+    search_hint = ("watch or monitor a process, log or command and get each "
+                   "output line as a notification")
     #: Claude Code's Monitor result limit.
     max_result_chars = 10_000
 

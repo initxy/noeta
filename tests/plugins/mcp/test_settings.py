@@ -187,3 +187,11 @@ async def test_a_task_gets_the_settings_servers(store: SqliteStore, tmp_path: Pa
     listed = [r.event for r in st if getattr(r.event, "kind", "") == "listed"][-1]
     names = {t["name"] for srv in listed.data["servers"] for t in srv["tools"]}
     assert {"mcp__fake__echo", "mcp__proj__echo"} <= names
+
+
+def test_always_load_false_defers_every_tool(tmp_path: Path) -> None:
+    f = write(tmp_path / "s.json", {"mcpServers": {
+        "off": {"command": "x", "alwaysLoad": False}, "unset": {"command": "x"},
+        "on": {"command": "x", "alwaysLoad": True}}})
+    by = {s.alias: (s.deferred, s.defer_all) for s in read_servers([f])}
+    assert by == {"off": (True, True), "unset": (True, False), "on": (False, False)}

@@ -100,6 +100,7 @@ class EnterWorktreeTool:
     read_only = False
     clearable = False
     deferred = True
+    search_hint = "create an isolated git worktree and work inside it"
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         name, path = input.get("name"), input.get("path")
@@ -197,6 +198,7 @@ class ExitWorktreeTool:
     read_only = False
     clearable = False
     deferred = True
+    search_hint = "leave the worktree and go back to the original directory"
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         tree = _worktree(ctx)
