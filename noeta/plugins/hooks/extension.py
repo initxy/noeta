@@ -14,7 +14,7 @@ import httpx
 import msgspec
 
 from noeta.core import records
-from noeta.core.errors import TurnFailed
+from noeta.core.errors import TurnDone, TurnFailed
 from noeta.core.events import (
     Compacted,
     ExtensionRecorded,
@@ -35,6 +35,7 @@ from noeta.plugins.hooks.dispatch import (
     ASYNC_SIGNAL,
     CONTEXT_LABEL,
     NAME,
+    PROMPT_STOPPED,
     STOPPED_DEFAULT,
     SUCCESS_LABEL,
     Dispatcher,
@@ -43,6 +44,7 @@ from noeta.plugins.hooks.dispatch import (
     agent_fields,
     blocking_text,
     fold,
+    start_repeat,
 )
 from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
 from noeta.plugins.hooks.runners import Runner, run_command
@@ -100,13 +102,32 @@ def _for_model(event: str, reads: Sequence[Read]) -> list[str]:
     """What SessionStart / UserPromptSubmit hooks add for the model, each as
     Claude Code leads it: ``additionalContext`` as additional context, plain
     stdout as the hook's success."""
-    out: list[str] = []
+    return [text for text, _raw in _given(event, reads)]
+
+
+def _given(event: str, reads: Sequence[Read]) -> list[tuple[str, str]]:
+    """:func:`_for_model`'s texts, each with the hook's own words in it."""
+    out: list[tuple[str, str]] = []
     for r in reads:
         if r.context:
-            out.append(f"{event}{CONTEXT_LABEL}: {r.context}")
+            out.append((f"{event}{CONTEXT_LABEL}: {r.context}", r.context.strip()))
         elif r.text.strip():
-            out.append(f"{event}{SUCCESS_LABEL}: {r.text.strip()}")
+            out.append((f"{event}{SUCCESS_LABEL}: {r.text.strip()}", r.text.strip()))
     return out
+
+
+class _PromptStopped(Exception):
+    """A UserPromptSubmit hook answered ``continue: false``."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.text = text
+
+
+def _start_data(text: str, raw: str) -> dict[str, Any]:
+    """A SessionStart output's record: kept to tell a background answer that
+    only repeats it (:func:`start_repeat`)."""
+    return {"hook": text.split(": ", 1)[0], "event": "SessionStart", "texts": [raw]}
 
 
 def _text(message: Message) -> str:
@@ -268,8 +289,8 @@ class Hooks(Extension):
         for r in reads:
             if r.block is not None:
                 view.notify(f"SessionStart hook: {r.block}")
-        for text in _for_model("SessionStart", reads):
-            view.record(self.name, "context", {"hook": text.split(": ", 1)[0]},
+        for text, raw in _given("SessionStart", reads):
+            view.record(self.name, "context", _start_data(text, raw),
                         message=user(text, origin="system"))
 
     # ------------------------------------------------------------ reminders
@@ -288,17 +309,24 @@ class Hooks(Extension):
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SessionStart hook: {r.block}")
-            out.extend(Reminder(text=t, kind="context")
-                       for t in _for_model("SessionStart", reads))
+            out.extend(Reminder(text=t, kind="context", data=_start_data(t, raw))
+                       for t, raw in _given("SessionStart", reads))
         try:
             out.extend(await self._prompt_submit(view))
-        except TurnFailed:
+        except (TurnFailed, _PromptStopped) as ended:
             # The compaction's context is recorded as seen: keep what it
             # added for the next turn's request.
             for kept in out:
                 view.record(self.name, kept.kind, kept.data,
                             message=user(kept.text, origin=kept.origin))
-            raise
+            if isinstance(ended, TurnFailed):
+                raise
+            # As Claude Code: the prompt stays, the model is told the hook
+            # stopped it (and why), and the turn ends without a model call.
+            view.record(self.name, "prompt_stopped", {"hook": "UserPromptSubmit"},
+                        message=user(ended.text, origin="system"))
+            view.notify(ended.text)
+            raise TurnDone from None
         out.extend(await self._tool_batch(view))
         out.extend(Reminder(text=text, kind="async_delivered", data={"id": key})
                    for key, text in st.async_pending)
@@ -377,8 +405,8 @@ class Hooks(Extension):
                     if seq >= first and m.role == "user" and m.origin in ("human", "inline")}))
                 raise TurnFailed("blocked_by_hook", r.block)
             if r.stop is not None:
-                raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "
-                                                              "stopped the turn")
+                raise _PromptStopped(f"{PROMPT_STOPPED}: {r.stop}" if r.stop
+                                     else PROMPT_STOPPED)
         return [Reminder(text=t, kind="context") for t in _for_model("UserPromptSubmit", reads)]
 
     # ------------------------------------------------------------ tool calls
@@ -499,6 +527,14 @@ class Hooks(Extension):
                 await self._resumed(view)
             for b in signals:
                 if b.name == ASYNC_SIGNAL and isinstance(b.data, dict):
+                    if b.data.get("event") == "SessionStart" and start_repeat(
+                            self._d.state(view), str(b.data.get("command") or ""),
+                            [str(t) for t in b.data.get("texts") or ()]):
+                        # Claude Code leaves out a background SessionStart
+                        # answer the model already has from an earlier run.
+                        log.info("hooks: background SessionStart output of %s repeats "
+                                 "an earlier one; not given again", b.data.get("command"))
+                        continue
                     view.record(self.name, "async_response", b.data)
 
     async def _cwd_changed(self, view: TaskView, data: Any) -> None:

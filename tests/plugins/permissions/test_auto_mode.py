@@ -10,12 +10,13 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import Extension
-from noeta.core.types import Message, ModelRequest, Text, user
+from noeta.core.types import Message, ModelRequest, Text, ToolUse, user
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.permissions import classifier as c
 from noeta.testing import ScriptedProvider, reply
@@ -170,6 +171,53 @@ async def test_auto_requests_carry_betas_safeguards_and_guidance(store: SqliteSt
     assert "safeguards" not in second.vendor_fields and second.betas == first.betas
 
 
+class _RemoteEnv(LocalExecEnv):
+    """A local env that reports itself as another machine running macOS."""
+
+    local = False
+
+    async def run(self, argv: Any, **kw: Any) -> Any:  # type: ignore[override]
+        if list(argv) == ["uname", "-s"]:
+            return await super().run(["echo", "Darwin"], **kw)
+        return await super().run(argv, **kw)
+
+
+async def test_the_server_side_context_describes_the_tasks_exec_env(tmp_path: Path) -> None:
+    import os
+    import subprocess
+
+    from noeta.plugins.permissions import auto as a
+    from noeta.plugins.permissions import scope as sc
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "--allow-empty", "-m", "first"], check=True)
+    scope = sc.Scope(dirs=(str(repo),), home=str(tmp_path))
+    ctx = await a.server_context(scope, LocalExecEnv(str(repo)), plans_dir="/cfg/plans",
+                                 allow=[], deny=[], ask=[], auto_mode={})
+    # Claude Code's eleven settings sources: the user settings' directory,
+    # the working directory for the rest.
+    assert list(ctx["rule_roots"]) == list(a.RULE_ROOT_SOURCES) and len(a.RULE_ROOT_SOURCES) == 11
+    assert ctx["rule_roots"]["userSettings"] == "/cfg"
+    assert ctx["rule_roots"]["hostCredential"] == str(repo)
+    # The branch, as an API-key session sends it: status and visibility off.
+    assert ctx["git_state"] == {"cwd": str(repo), "root": str(repo), "branch": "trunk",
+                                "default_branch": None, "status": None, "visibility": None}
+    # The platform is the exec env's (another machine's macOS here), and
+    # paths count as case-sensitive there, as Claude Code says off Windows.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    remote = await a.server_context(sc.Scope(dirs=(str(plain),), home=str(tmp_path)),
+                                    _RemoteEnv(str(plain)), plans_dir="/cfg/plans",
+                                    allow=[], deny=[], ask=[], auto_mode={})
+    assert remote["platform"] == "macos" and remote["case_insensitive_paths"] is False
+    assert remote["home_dir"] == os.environ["HOME"]  # the env's, asked of it
+    assert remote["git_state"]["root"] is None and remote["git_state"]["branch"] is None
+    assert remote["git_state"]["error"] == "not_a_repo"
+
+
 async def test_auto_request_bytes_come_from_the_log(store: SqliteStore, tmp_path: Path) -> None:
     """The safeguards offer and the main betas follow the task's log, not
     the process: a fresh plugin (another worker, a restart) sends what the
@@ -232,12 +280,12 @@ def test_transcript_rendering_and_chunks() -> None:
     entries = c.transcript_entries(msgs, "5")
     assert [e.text for e in entries] == [
         '{"user":"fix it"}', '{"Bash":"make"}',
-        '{"AskUserQuestion":"\\"Which?\\" (Pick): 1. A"}',
+        '{"AskUserQuestion":"\\"Which?\\" [header: Pick] options: (1) \\"A\\""}',
         '{"user":"[User answered AskUserQuestion]: A"}',
         '{"WebFetch":"https://x: p"}', '{"mcp__s__t":"a=1 b=z"}']
     chunks = c.chunks(entries, ["2"])
     assert chunks == ['{"user":"fix it"}\n', '{"Bash":"make"}\n',
-                      '{"AskUserQuestion":"\\"Which?\\" (Pick): 1. A"}\n'
+                      '{"AskUserQuestion":"\\"Which?\\" [header: Pick] options: (1) \\"A\\""}\n'
                       '{"user":"[User answered AskUserQuestion]: A"}\n'
                       '{"WebFetch":"https://x: p"}\n', '{"mcp__s__t":"a=1 b=z"}\n']
     request = c.classifier_request(model="m", prompt="P", instructions="be nice",
@@ -245,6 +293,21 @@ def test_transcript_rendering_and_chunks() -> None:
     assert request.cache_after == [0] and request.cache_blocks == [(1, 3), (1, 4)]
     assert "<user_noeta_md>\n  be nice\n</user_noeta_md>" in request.messages[0].text
     assert "`ann`" in request.system[1].text
+
+
+def test_ask_user_question_shows_every_option_field() -> None:
+    # Claude Code's rendering: quoted question, header, multi-select flag,
+    # numbered options with description and preview, on one line each.
+    use = ToolUse(id="q", name="AskUserQuestion", input={"questions": [
+        {"question": "Which  layout?\n", "header": "UI", "multiSelect": True, "options": [
+            {"label": "Grid", "description": "two columns", "preview": "[a][b]\n[c][d]"},
+            {"label": 'Say "list"'}]},
+        "odd"]})
+    assert c.render_call(use) == (
+        '"Which layout?" [header: UI] [multiSelect] options: (1) "Grid" \u2014 two columns '
+        '[preview: [a][b] [c][d]] (2) "Say \\"list\\"" | [malformed question entry] odd')
+    assert c.render_call(ToolUse(id="q", name="AskUserQuestion", input={})) == \
+        c.MALFORMED_QUESTIONS
 
 
 @pytest.mark.parametrize("trusted", [False, True])
@@ -271,12 +334,25 @@ def test_verdict_parsing() -> None:
 
 
 def test_the_prompt_takes_the_persons_rules() -> None:
-    text = c.render_prompt(c.prompt_template(),
-                           {"environment": ["Trusted repo: acme/app"], "allow": [],
-                            "soft_deny": ["Never touch prod-db: drops data"], "hard_deny": []},
+    # Claude Code's autoMode lists replace the built-in text of their
+    # section; "$defaults" puts it back where it stands.
+    template = c.prompt_template()
+    plain = c.render_prompt(template, {}, [])
+    assert "<<" not in plain and "- **Trust Boundary Leak** —" in plain
+    assert "- **Security As Subject** —" in plain and "How to read a slot" in plain
+    text = c.render_prompt(template,
+                           {"environment": ["**Trusted repo**: acme/app"], "allow": [],
+                            "soft_deny": ["$defaults", "Never touch prod-db: drops data",
+                                          "$defaults"],
+                            "hard_deny": ["No crypto mining: never"]},
                            ["Bash(rm *)"])
     assert "<<" not in text
-    assert "- Trusted repo: acme/app" in text and "- Never touch prod-db" in text
+    assert "- **Trusted repo**: acme/app" in text and "How to read a slot" not in text
+    assert "- No crypto mining: never" in text and "- **Trust Boundary Leak** —" not in text
+    soft = text.index("- Never touch prod-db: drops data")
+    assert text.index("## 9.1 ") < soft < text.index("## 9.10 ")
+    assert text.count("## 9.1 ") == 1  # a second "$defaults" adds nothing
+    assert "- **Security As Subject** —" in text  # the allow list was left empty
     assert "Deny Rule Workaround" in text and "`Bash(rm *)`" in text
 
 

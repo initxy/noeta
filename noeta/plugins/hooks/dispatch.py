@@ -59,6 +59,9 @@ STOPPED_DEFAULT = "Execution stopped by {event} hook"
 OUTPUT_CAP = 10_000
 #: The inbox signal that carries a background hook's answer to its task.
 ASYNC_SIGNAL = "hooks.async_response"
+#: What the model is told when a UserPromptSubmit hook answers ``continue:
+#: false`` (Claude Code's words; ``: <reason>`` follows when it gave one).
+PROMPT_STOPPED = "Operation stopped by hook"
 #: How an ``asyncRewake`` hook's exit code 2 wakes the model (Claude Code's
 #: format; the hook name stands where its command would).
 REWAKE_TEXT = 'Stop hook blocking error from command "{name}": {output}'
@@ -135,6 +138,11 @@ class HookState:
     #: A tool hook's ``continue: false`` note, told once the turn has
     #: stopped (told while the call is open, it would start the turn again).
     stop_note: str | None = None
+    #: What SessionStart hooks gave the model since the last compaction,
+    #: oldest first: ``(command, texts)``, the command ``None`` for a hook
+    #: that answered at once (a background answer the same as the last one
+    #: is not given again).
+    start_texts: tuple[tuple[str | None, tuple[str, ...]], ...] = ()
 
 
 def fold(state: Any, kind: str, data: Any) -> HookState:
@@ -153,7 +161,8 @@ def fold(state: Any, kind: str, data: Any) -> HookState:
     if kind == "compacting":
         return replace(st, compact_trigger=str(data.get("trigger") or "auto"))
     if kind == "compact_seen":
-        return replace(st, compact_seen=int(data.get("through") or 0))
+        # What the model saw before the compaction is gone.
+        return replace(st, compact_seen=int(data.get("through") or 0), start_texts=())
     if kind == "once":
         return replace(st, once=st.once | {str(data.get("key"))})
     if kind == "batched":
@@ -165,8 +174,16 @@ def fold(state: Any, kind: str, data: Any) -> HookState:
     if kind == "async_response":
         texts = [str(t) for t in data.get("texts") or () if t]
         key = str(data.get("id") or "")
-        return replace(st, async_pending=(*st.async_pending,
-                                          *((f"{key}:{i}", t) for i, t in enumerate(texts))))
+        st = replace(st, async_pending=(*st.async_pending,
+                                        *((f"{key}:{i}", t) for i, t in enumerate(texts))))
+        if data.get("event") == "SessionStart":
+            command = data.get("command")
+            st = replace(st, start_texts=(*st.start_texts, (
+                str(command) if command is not None else "", tuple(texts))))
+        return st
+    if kind == "context" and data.get("event") == "SessionStart":
+        return replace(st, start_texts=(*st.start_texts,
+                                        (None, tuple(str(t) for t in data.get("texts") or ()))))
     if kind == "stop_pending":
         return replace(st, stop_note=str(data.get("text") or "") or None)
     if kind == "stopped":
@@ -181,6 +198,21 @@ def fold(state: Any, kind: str, data: Any) -> HookState:
             decided.pop(next(iter(decided)))
         return replace(st, permission=decided)
     return st
+
+
+def start_repeat(st: HookState, command: str, texts: Sequence[str]) -> bool:
+    """Whether a background SessionStart answer only repeats what the model
+    already has, as Claude Code judges it: the newest earlier SessionStart
+    output that could be the same (one that answered at once, or this
+    command's) holds every one of its texts."""
+    if not texts:
+        return False
+    for earlier, seen in reversed(st.start_texts):
+        if earlier is not None and earlier != command:
+            continue
+        if seen:
+            return all(t in seen for t in texts)
+    return False
 
 
 @dataclass(frozen=True)
@@ -414,8 +446,9 @@ class Dispatcher:
                  for i, t in enumerate((data.get("systemMessage"), context))
                  if isinstance(t, str) and t.strip()]
         if texts:
-            await view.post(External(name=ASYNC_SIGNAL, data={"id": key, "texts": texts}),
-                            dedupe_key=f"{NAME}:async:{view.task_id}:{key}")
+            await view.post(External(name=ASYNC_SIGNAL, data={
+                "id": key, "texts": texts, "event": payload.get("hook_event_name"),
+                "command": hook.label}), dedupe_key=f"{NAME}:async:{view.task_id}:{key}")
 
     async def run(self, event: str, view: TaskView, payload: Mapping[str, Any], *,
                   call: ToolUse | None = None, transcript: list[Message] | None = None,

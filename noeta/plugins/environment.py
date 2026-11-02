@@ -58,7 +58,7 @@ from noeta.core.types import Message, ModelRequest, ToolResult, system_message, 
 from noeta.toolkit.commands import is_command_message
 from noeta.toolkit.context import task_env
 from noeta.toolkit.deltas import AMBIENT_NOTE, changed
-from noeta.toolkit.local_env import is_local
+from noeta.toolkit.local_env import env_platform, is_local
 from noeta.toolkit.shell import harden_git
 from noeta.toolkit.ultrathink import ultrathink_effort, ultrathink_reminders
 from noeta.toolkit.usd_budget import BUDGET_KEY, usd_budget_reminders
@@ -278,22 +278,9 @@ async def capture_environment(env: ExecEnv, cwd: str, model: str,
         facts = await capture_facts(env, cwd)
     local = is_local(env)
     return render_environment(cwd, model, is_git=bool(facts["git"]), local=local,
-                              platform_name=sys.platform if local else await _env_platform(env),
+                              platform_name=await env_platform(env),
                               is_worktree=bool(facts.get("worktree")),
                               additional_dirs=facts.get("dirs") or ())
-
-
-async def _env_platform(env: ExecEnv) -> str:
-    """The exec env's platform in ``sys.platform``'s words (``linux``,
-    ``darwin``), from its ``uname -s``; ``""`` when it cannot be told."""
-    try:
-        out = await env.run(["uname", "-s"], timeout=5, output_cap=1024)
-    except Exception:  # noqa: BLE001 — capture is best-effort
-        return ""
-    if out.exit_code != 0 or out.timed_out:
-        return ""
-    name = out.stdout.decode("utf-8", errors="replace").strip().lower()
-    return name if name in ("linux", "darwin") or name.startswith("freebsd") else ""
 
 
 def valid_zone(name: Any) -> str | None:

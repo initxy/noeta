@@ -105,7 +105,8 @@ SHELL_FIRST_GUIDANCE = (
     "GNU and BSD tools.")
 AUTO_MODE_GUIDANCE = SHELL_FIRST_GUIDANCE.format(mode="Auto mode")
 BYPASS_MODE_GUIDANCE = SHELL_FIRST_GUIDANCE.format(mode="Bypass-permissions mode")
-#: Sent once auto mode is left (not for planning) after its note went out.
+#: Sent once auto mode is left after its note went out (planning keeps it,
+#: unless plan mode runs without the classifier).
 AUTO_MODE_EXITED = (
     "## Auto mode has ended\n\nAuto mode is off now. Go back to the dedicated tools for "
     "reading, searching and editing files.")

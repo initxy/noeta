@@ -17,7 +17,13 @@ from noeta.core.types import ToolResult
 from noeta.plugins.permissions import plan as pl
 from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import wording as w
-from noeta.plugins.permissions.state import NAME, PermState, auto_active, state_of
+from noeta.plugins.permissions.state import (
+    AUTO_DURING_PLAN,
+    NAME,
+    PermState,
+    auto_active,
+    state_of,
+)
 
 log = logging.getLogger("noeta.permissions")
 
@@ -39,9 +45,11 @@ PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
 
 
 def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass: bool,
-           plans_dir: str, by_command: bool = False) -> None:
+           plans_dir: str, by_command: bool = False, auto_during_plan: bool = True) -> None:
     """Record a switch from ``current`` to ``mode`` (asked for at log seq
-    ``seq``; ``by_command``: by a typed ``/plan``), when it is one."""
+    ``seq``; ``by_command``: by a typed ``/plan``), when it is one.
+    ``auto_during_plan``: plan mode keeps the auto-mode classifier (kept
+    with the plan: whether planning after auto mode leaves it)."""
     if not isinstance(mode, str) or mode not in p.PERMISSION_MODES:
         return
     if mode == "bypassPermissions" and disable_bypass:
@@ -54,12 +62,13 @@ def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass:
         st = state_of(view)
         path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
         data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq,
-                        **({"by_command": True} if by_command else {})}
+                        **({"by_command": True} if by_command else {}),
+                        **({} if auto_during_plan else {AUTO_DURING_PLAN: False})}
     view.record(NAME, "mode", data)
 
 
 def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
-               parent_plan: Any = None) -> None:
+               parent_plan: Any = None, auto_during_plan: bool = True) -> None:
     """A task that starts in plan mode (its config's ``permission_mode``, a
     sub-agent of a planning task): recorded as entered with a plan file of
     its own, so it plans from its first request. A sub-agent's is named
@@ -70,10 +79,12 @@ def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
             if isinstance(parent_plan, str) and pl.plan_name_ok(parent_plan)
             else pl.new_plan_path(plans_dir))
     view.record(NAME, "mode", {"mode": mode, "plan": {
-        "path": path, "pre_mode": pre, "entered_seq": 0}})
+        "path": path, "pre_mode": pre, "entered_seq": 0,
+        **({} if auto_during_plan else {AUTO_DURING_PLAN: False})}})
 
 
-def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str) -> bool:
+def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str,
+               auto_during_plan: bool = True) -> bool:
     """``EnterPlanMode``: record the switch to plan mode, as ``/plan``
     does; ``False`` when the task is planning already."""
     st = ctx.state.get(NAME)
@@ -83,7 +94,8 @@ def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str) -> bool:
         return False
     path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
     ctx.record(NAME, "mode", {"mode": "plan", "plan": {
-        "path": path, "pre_mode": current, "entered_seq": 0}})
+        "path": path, "pre_mode": current, "entered_seq": 0,
+        **({} if auto_during_plan else {AUTO_DURING_PLAN: False})}})
     return True
 
 

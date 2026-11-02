@@ -38,10 +38,11 @@ def notes(request: Any) -> str:
 
 
 async def _start(store: SqliteStore, tmp_path: Path, mode: str, *, tools: tuple[str, ...] = (
-        "Bash", "Write"), extra: tuple[Any, ...] = ()) -> tuple[Client, str, Any, Any]:
+        "Bash", "Write"), extra: tuple[Any, ...] = (),
+                 **kw: Any) -> tuple[Client, str, Any, Any]:
     provider = ScriptedProvider([reply("ok") for _ in range(12)])
     rt = runtime(store, provider, agent([Permissions(mode=mode,
-                                                     plans_dir=str(tmp_path / "plans")),
+                                                     plans_dir=str(tmp_path / "plans"), **kw),
                                          *extra], [Fake(t) for t in tools]))
     client = Client(store)
     tid = await client.create("a", "p1", config={"cwd": str(tmp_path)})
@@ -82,6 +83,31 @@ async def test_auto_to_plan_and_back_sends_only_the_plan_exit_note(
     assert PLAN_EXITED in third and GUIDANCE not in third and EXITED not in third
     # The plan file was never written: the note names no file.
     assert "plan file" not in third
+
+
+async def test_planning_without_the_classifier_leaves_auto_mode(
+        store: SqliteStore, tmp_path: Path) -> None:
+    # Claude Code with useAutoModeDuringPlan off: entering plan mode from
+    # auto mode ends auto mode (the exit note), and coming back to auto mode
+    # sends its note again.
+    client, tid, provider, rt = await _start(store, tmp_path, "auto", auto_during_plan=False)
+    await _prompt(client, tid, rt, "p2", "plan")
+    assert EXITED in notes(provider.requests[1])
+    await _prompt(client, tid, rt, "p3", "auto")
+    third = notes(provider.requests[2])
+    assert PLAN_EXITED in third and GUIDANCE in third and EXITED not in third
+
+
+async def test_planning_from_default_mode_owes_no_auto_mode_note(
+        store: SqliteStore, tmp_path: Path) -> None:
+    # The classifier screens a plan begun in default mode, but no auto-mode
+    # note was ever sent: none comes in plan mode, nor an exit note after.
+    client, tid, provider, rt = await _start(store, tmp_path, "default")
+    await _prompt(client, tid, rt, "p2", "plan")
+    assert GUIDANCE not in notes(provider.requests[1])
+    await _prompt(client, tid, rt, "p3", "default")
+    third = notes(provider.requests[2])
+    assert PLAN_EXITED in third and EXITED not in third and GUIDANCE not in third
 
 
 async def test_planning_after_auto_then_leaving_for_default_ends_auto_mode(

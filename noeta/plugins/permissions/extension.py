@@ -59,6 +59,7 @@ from noeta.plugins.permissions.state import (
 )
 from noeta.toolkit import permission_modes as pm
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.context import task_env
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -109,7 +110,9 @@ class Permissions(Extension):
       (absolute, ``~/...``, or relative to the working directory).
     * ``auto_mode`` — Claude Code's ``autoMode`` object for the auto-mode
       classifier: ``allow``, ``soft_deny``, ``hard_deny`` and
-      ``environment``, each a list of plain-language lines.
+      ``environment``, each a list of plain-language lines that replaces
+      the built-in text of its section (an entry ``"$defaults"`` puts the
+      built-in text at its place).
     * ``disable_bypass_mode`` — refuse ``bypassPermissions`` (Claude Code's
       ``disableBypassPermissionsMode``): as the starting mode, from a task's
       config (an agent file's ``permissionMode``) and as a switch.
@@ -438,7 +441,8 @@ class Permissions(Extension):
         st = state_of(view)
         if st.mode is None and self.mode_of(view) == "plan":
             md.plan_start(view, "plan", default_mode=self.mode, plans_dir=self.plans_dir,
-                          parent_plan=view.state.config.get(PLAN_NAME_KEY))
+                          parent_plan=view.state.config.get(PLAN_NAME_KEY),
+                          auto_during_plan=self.auto_during_plan)
         elif st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
         offered = pm.modes_record(self._modes)
@@ -480,10 +484,11 @@ class Permissions(Extension):
     def _switch(self, view: TaskView, mode: Any, seq: int, *, by_command: bool = False) -> None:
         md.switch(view, mode, seq, current=self.mode_of(view),
                   disable_bypass=self.disable_bypass, plans_dir=self.plans_dir,
-                  by_command=by_command)
+                  by_command=by_command, auto_during_plan=self.auto_during_plan)
 
     def _enter_plan_mode(self, ctx: ToolContext) -> bool:
-        return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir)
+        return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir,
+                             auto_during_plan=self.auto_during_plan)
 
     async def _remember(self, view: TaskView, answer: Answer) -> None:
         """An "always" allow remembers the rules the card showed; a choice
@@ -528,9 +533,9 @@ class Permissions(Extension):
             # Claude Code's auto-mode betas ride on every request while the
             # classifier judges the calls (plan mode with it included).
             return request
-        return a.auto_request(view, request, lambda: a.server_context(
-            self._check.scope(view), plans_dir=self.plans_dir,
-            allow=self._check.rules(view),
+        return await a.auto_request(view, request, lambda: a.server_context(
+            self._check.scope(view), task_env(view.env, view.state.config),
+            plans_dir=self.plans_dir, allow=self._check.rules(view),
             deny=self.deny_rules, ask=self.ask_rules, auto_mode=self.auto_mode))
 
     def _offered(self, name: str) -> bool:

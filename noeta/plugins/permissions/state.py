@@ -10,6 +10,9 @@ from noeta.core.extension import TaskView
 from noeta.toolkit import permission_modes as pm
 
 NAME = "permissions"
+#: In a plan record: ``False`` when plan mode did not keep the auto-mode
+#: classifier (absent: it did).
+AUTO_DURING_PLAN = "auto_during_plan"
 #: Decisions kept in the folded state (per call id).
 _KEEP = 256
 #: Task config key a child reads its parent's remembered rules from.
@@ -28,8 +31,8 @@ class PermState:
     rules: tuple[str, ...] = ()
     #: The mode switched to during the task (``None``: the starting one).
     mode: str | None = None
-    #: Plan mode: ``{"path", "pre_mode", "entered_seq", "by_command"}``,
-    #: kept after it ends.
+    #: Plan mode: ``{"path", "pre_mode", "entered_seq", "by_command",
+    #: "auto_during_plan"}`` (the last only when off), kept after it ends.
     plan: dict[str, Any] | None = None
     #: Plan-mode texts sent since planning began or the last compaction.
     plan_reminders: int = 0
@@ -175,9 +178,12 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
 
 
 def auto_active(mode: str | None, plan: dict[str, Any] | None) -> bool:
-    """Whether auto mode is in force: in it, or planning after it (the
-    classifier keeps screening while planning, Claude Code's default)."""
-    return mode == "auto" or (mode == "plan" and (plan or {}).get("pre_mode") == "auto")
+    """Whether auto mode is in force: in it, or planning after it while
+    the classifier keeps screening (Claude Code's ``useAutoModeDuringPlan``,
+    on unless the plan record says it was off)."""
+    plan = plan or {}
+    return mode == "auto" or (mode == "plan" and plan.get("pre_mode") == "auto"
+                              and plan.get(AUTO_DURING_PLAN, True) is not False)
 
 
 def _auto_exit(st: PermState, due: tuple[str, ...], mode: str,

@@ -26,6 +26,7 @@ from noeta.plugins.shell.sandbox import confine, sandbox_required
 from noeta.plugins.shell.state import SHELL, shell_state
 from noeta.plugins.shell.websocket import parse_ws
 from noeta.toolkit.background_tasks import STOP_RUN, background_agents, workflow_run
+from noeta.toolkit.notices import STOPPED_BY_CALLER
 from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
 from noeta.toolkit.shell_syntax import parse
 from noeta.toolkit.tools import Workspace, load_description, require_str, tool_error
@@ -512,7 +513,9 @@ class TaskStopTool:
             return tool_error(self.name, f"Task {task_id} is not running (status: ended)")
         if ctx.post is None:
             return tool_error(self.name, NOT_AVAILABLE)
-        await ctx.post(Cancel(reason="stopped with TaskStop"), task_id=agent.task_id)
+        # The caller stopped it: its end notice says so (Claude Code's "stopped
+        # by you").
+        await ctx.post(Cancel(reason=STOPPED_BY_CALLER), task_id=agent.task_id)
         return _stopped(task_id, "local_agent", agent.description)
 
 
