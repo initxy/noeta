@@ -393,6 +393,20 @@ def test_settings_files_can_disable_bypass_mode(tmp_path: Path) -> None:
     Permissions(**args)
 
 
+def test_settings_files_can_keep_plan_mode_off_the_classifier(tmp_path: Path) -> None:
+    """Claude Code's top-level ``useAutoModeDuringPlan``: any file that turns
+    it off turns it off."""
+    from noeta.cli.settings_files import load, permission_arguments
+
+    user, project = tmp_path / "user.json", tmp_path / "project.json"
+    user.write_text(json.dumps({"useAutoModeDuringPlan": False}))
+    project.write_text(json.dumps({"useAutoModeDuringPlan": True}))
+    args = permission_arguments(load([user, project]), {"auto_during_plan"})
+    assert args == {"auto_during_plan": False}
+    assert not Permissions(**args).auto_during_plan
+    assert permission_arguments(load([project]), {"auto_during_plan"}) == {}
+
+
 @pytest.mark.parametrize(("command", "rule"), [
     ("git -c core.pager=sh log", "Bash(git -c core.pager=sh log)"),
     ("git push origin main", "Bash(git push *)"),

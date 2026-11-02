@@ -10,14 +10,16 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from noeta.core.errors import ContextOverflow
 from noeta.core.events import ExtensionRecorded
-from noeta.core.extension import Allow, Ask, Deny, Gate, TaskView
+from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import classifier as c
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.state import NAME, PermState, state_of
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.notices import HANDBACK_REVIEW_KEY
 
 log = logging.getLogger("noeta.permissions")
 
@@ -33,6 +35,9 @@ MAIN_AUTO_BETAS = ("dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31")
 INSTRUCTIONS_PLUGIN = "instructions"
 #: Root tasks whose instructions are kept for their sub-agents' classifier.
 ROOTS_KEPT = 256
+#: The sub-agent's report tool: a block flags the report instead of
+#: refusing it (Claude Code's ``onBlock: "flag"``).
+HANDBACK_TOOL = "SubagentHandback"
 
 
 class Classifier:
@@ -49,16 +54,28 @@ class Classifier:
         #: Root task id -> the instruction texts it was shown, for its
         #: sub-agents, and the last seq of its log read.
         self._roots: OrderedDict[str, tuple[list[str], int]] = OrderedDict()
+        #: Verdicts recorded but maybe not folded yet: a hand-back rewritten
+        #: with its warning is gated again before the record lands.
+        self._fresh: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     async def answer(self, view: TaskView, call: ToolUse, ask: Ask) -> Gate | None:
         st = state_of(view)
-        done = st.classified.get(call.id)
+        done = st.classified.get(call.id) or self._fresh.get(call.id)
         if done is None:
             done = await self._run(view, call, st)
             view.record(NAME, "classified", done)
+            self._fresh[call.id] = done
+            while len(self._fresh) > ROOTS_KEPT:
+                self._fresh.popitem(last=False)
         if done.get("fallback"):
             return Ask(prompt=str(done.get("fallback")), detail={**ask.detail, "classify": False},
                        firm=True)
+        if done.get("too_long"):
+            # As Claude Code: the call is asked about as if auto mode were
+            # off (no retry would ever fit).
+            return Ask(prompt=ask.prompt, detail={**ask.detail, "classify": False}, firm=True)
+        if call.name == HANDBACK_TOOL and done["decision"] in ("allow", "flag"):
+            return _handback_gate(call, done)
         if done["decision"] == "allow":
             return Allow()
         if done.get("counted", True):
@@ -67,19 +84,34 @@ class Classifier:
 
     async def _run(self, view: TaskView, call: ToolUse, st: PermState) -> dict[str, Any]:
         out: dict[str, Any] = {"call_id": call.id}
+        handback = call.name == HANDBACK_TOOL
         try:
             verdict, demoted = await self._verdict(view, call, st)
+        except ContextOverflow:
+            log.warning("auto-mode classifier transcript too long for %s", call.name)
+            if handback:
+                return {**out, "decision": "deny", "counted": False,
+                        "reason": w.CLASSIFIER_TOO_LONG.format(name=call.name)}
+            return {**out, "decision": "ask", "too_long": True}
         except Exception as exc:  # noqa: BLE001 — no verdict holds the call back
             log.warning("auto-mode classifier failed for %s: %s", call.name, exc)
+            if handback:
+                return {**out, "decision": "flag", "unreviewed": True}
             return {**out, "decision": "deny", "counted": False,
                     "reason": w.CLASSIFIER_UNAVAILABLE}
         if demoted:
             view.record(NAME, "demoted")
         if verdict.block is None:
+            if handback:
+                return {**out, "decision": "flag", "unreviewed": True}
             return {**out, "decision": "deny", "counted": False,
                     "reason": w.CLASSIFIER_UNPARSED}
         if not verdict.block:
             return {**out, "decision": "allow"}
+        if handback:
+            # Delivered under a warning, not refused, and no denial counted.
+            return {**out, "decision": "flag", "reason": verdict.reason,
+                    "category": verdict.category}
         out.update(decision="deny", reason=verdict.reason, category=verdict.category)
         cons, total = st.consecutive_denials + 1, st.total_denials + 1
         if cons >= MAX_CONSECUTIVE_DENIALS or total >= MAX_TOTAL_DENIALS:
@@ -117,6 +149,8 @@ class Classifier:
                                            trusted=trusted)
             try:
                 response = await view.complete(request)
+            except ContextOverflow:
+                raise
             except Exception:
                 main = view.model or str(view.state.config.get("model") or "")
                 if not fast or model == main or self.model:
@@ -130,7 +164,13 @@ class Classifier:
         first = c.parse_stage1(await stage(1))
         if first.block is False:
             return first, demoted
-        return c.parse_stage2(await stage(2)), demoted
+        try:
+            return c.parse_stage2(await stage(2)), demoted
+        except ContextOverflow:
+            raise
+        except Exception as exc:  # noqa: BLE001 — stage 1's lean to block stands
+            log.warning("auto-mode classifier stage 2 failed for %s: %s", call.name, exc)
+            return c.Verdict(block=True, reason=w.CLASSIFIER_STAGE2_FAILED), demoted
 
     def _transcript(self, view: TaskView, call: ToolUse, st: PermState) -> list[str]:
         summary_at = len(view.state.compaction.lead) if view.state.compaction else None
@@ -143,10 +183,13 @@ class Classifier:
 
     async def _instructions(self, view: TaskView) -> str:
         """The project instructions the classifier is shown: the task's own,
-        or, for a sub-agent that runs without them (Explore, Plan), those its
-        root task was shown (Claude Code's classifier always has them)."""
+        or, for a sub-agent that runs without them or with the managed ones
+        only (Explore, Plan), those its root task was shown (Claude Code's
+        classifier always has the session's)."""
         texts = [m.text for m in await view.residents(lead=True) if m.text.strip()]
-        if texts or view.state.parent_id is None:
+        managed_only = any(getattr(e, "managed_only", False) for e in view.extensions
+                           if e.name == INSTRUCTIONS_PLUGIN)
+        if view.state.parent_id is None or (texts and not managed_only):
             return "\n\n".join(texts)
         return await self._root_instructions(view)
 
@@ -180,6 +223,17 @@ class Classifier:
         if self._template is None:
             self._template = c.prompt_template()
         return view.prompt(f"{NAME}/auto_mode_classifier", self._template)
+
+
+def _handback_gate(call: ToolUse, done: Mapping[str, Any]) -> Gate:
+    """A reviewed hand-back runs; one auto mode flagged (or could not
+    review) runs with the warning its caller reads above the report, under
+    :data:`HANDBACK_REVIEW_KEY`, which only this layer sets."""
+    wanted = {k: v for k, v in call.input.items() if k != HANDBACK_REVIEW_KEY}
+    if done.get("decision") == "flag":
+        wanted[HANDBACK_REVIEW_KEY] = w.HANDBACK_UNREVIEWED if done.get("unreviewed") else \
+            w.HANDBACK_FLAGGED.format(reason=done.get("reason") or "")
+    return Allow() if wanted == call.input else Rewrite(input=wanted)
 
 
 def auto_request(view: TaskView, request: ModelRequest,

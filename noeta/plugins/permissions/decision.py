@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from noeta.plugins.permissions import wording as w
+from noeta.toolkit.permission_rules import SHELL_TOOLS
 
 
 @dataclass(frozen=True)
@@ -25,8 +26,11 @@ class Decision:
     classify: bool = False
 
 
-def in_mode(mode: str, d: Decision, name: str) -> Decision:
-    """What the mode makes of an ask."""
+def in_mode(mode: str, d: Decision, name: str, *, plan_classifier: bool = False) -> Decision:
+    """What the mode makes of an ask. ``plan_classifier``: plan mode runs
+    with auto mode's classifier (Claude Code's ``useAutoModeDuringPlan``),
+    which answers every ask but plan mode's own refusals of a write (a file
+    edit, a tool that is not read-only), which stay the person's."""
     if d.kind != "ask":
         return d
     if mode == "dontAsk":
@@ -34,6 +38,9 @@ def in_mode(mode: str, d: Decision, name: str) -> Decision:
     if mode == "bypassPermissions" and not d.firm and d.why != "protected":
         return Decision("allow")
     if mode == "auto" and not d.firm:
+        return replace(d, classify=True)
+    if mode == "plan" and plan_classifier and not d.firm and not (
+            d.why == "plan" and name not in SHELL_TOOLS):
         return replace(d, classify=True)
     return d
 

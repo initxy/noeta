@@ -46,7 +46,8 @@ class Answer(Struct, tag="answer", tag_field="kind"):
 
 class ChildEnded(Struct, tag="child_ended", tag_field="kind"):
     """A child's end. ``last_usage`` is its newest model reply's usage (the
-    size of its context at the end), ``tool_calls`` the calls it finished."""
+    size of its context at the end), ``tool_calls`` the calls it finished,
+    ``output_tokens`` what all its model replies wrote."""
 
     child_id: str
     status: Literal["done", "failed", "cancelled"]
@@ -54,6 +55,7 @@ class ChildEnded(Struct, tag="child_ended", tag_field="kind"):
     error: str = ""
     last_usage: Usage | None = None
     tool_calls: int = 0
+    output_tokens: int = 0
 
 
 class TimerFired(Struct, tag="timer", tag_field="kind"):

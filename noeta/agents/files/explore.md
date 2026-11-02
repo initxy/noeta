@@ -4,6 +4,7 @@ description: 'Read-only search agent for wide searches: when an answer means swe
 model: inherit
 identity: You are an agent built on noeta, an open-source agent framework.
 disallowedTools: Agent, ExitPlanMode, Edit, Write, NotebookEdit
+omitClaudeMd: true
 plugins:
   - permissions
   - hooks
@@ -12,6 +13,7 @@ plugins:
   - mcp
   - fs: {tools: [Read]}
   - skills
+  - instructions
   - environment: {git_status: false}
   - subtasks
   - compaction

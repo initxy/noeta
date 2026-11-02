@@ -74,7 +74,8 @@ async def end(run: TaskRun, status: str, answer: str = "", error: str = "",
                 body=ChildEnded(child_id=run.task_id, status=status,  # type: ignore[arg-type]
                                 answer=answer, error=error,
                                 last_usage=run.state.last_usage,
-                                tool_calls=run.state.tool_calls),
+                                tool_calls=run.state.tool_calls,
+                                output_tokens=run.state.usage.output),
                 dedupe_key=f"child:{run.task_id}",
             ))
         try:

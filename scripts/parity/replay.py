@@ -109,6 +109,12 @@ class Replayer:
         self.stalls = threading.Event()
         #: noeta's plan file, once plan mode named it.
         self.plan_path = ""
+        #: Steps in which Claude Code asked a sub-agent's progress label,
+        #: and how far noeta's clock for that label is moved ahead: the label
+        #: comes 30 s into a sub-agent's run, which a replay does not last.
+        self.label_steps: set[str] = set()
+        self.clock_ahead = 0.0
+        self._labelled: set[int] = set()
 
     def fill(self, value: Any) -> Any:
         if isinstance(value, str):
@@ -180,6 +186,13 @@ class Replayer:
             if sub is not None:
                 i, script = sub
                 n = sum(1 for m in msgs if m.get("role") == "assistant")
+                if n == 1 and i not in self._labelled and self._step_name() in self.label_steps:
+                    # Past the label's 30 s before the sub-agent's third call,
+                    # where Claude Code's came (m1/0034).
+                    from noeta.plugins.subtasks.extension import PROGRESS_EVERY
+
+                    self._labelled.add(i)
+                    self.clock_ahead += PROGRESS_EVERY + 1
                 turns = script["turns"]
                 return ({"kind": f"subagent:{script['agent']}", "sub": i, "call": n + 1,
                          "step": self._step_name()},
@@ -405,6 +418,9 @@ class SessionReplay:
         for notice in app.notices:
             self.notes.append(f"noeta notice: {notice}")
         main = app.runtime.agents["main"]
+        from noeta.plugins.subtasks import extension as subtasks_ext
+
+        subtasks_ext._now = lambda: time.time() + self.replayer.clock_ahead
         async with app:
             if task_id is not None:
                 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -549,6 +565,11 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
         kinds = facts.Kinds(names, prompts=session_prompts(spec, name))
         scratch = scratch_root / (base or name)
         run = SessionReplay(name, sess, script, scratch, kinds)
+        cc_facts = contract_dir / f"{name}.json"
+        if cc_facts.exists():
+            run.replayer.label_steps = {
+                str(r.get("step")) for r in json.loads(cc_facts.read_text("utf-8"))["requests"]
+                if str(r.get("kind", "")).startswith("activity-summary")}
         run.prepare()
         subs = [*script.get("subagents", [])]
         if base:

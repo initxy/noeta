@@ -150,8 +150,9 @@ batch names it. Every agent built from agent files runs it. MCP tools are deferr
 An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (Claude Code's
 fields, plus `plugins` as names or `name: {arguments}` and `one_shot`) and the system prompt as
 body. A sub-agent runs in the background; in auto mode it ends its run with `SubagentHandback`,
-whose report reaches its caller as an `agent`-origin message, elsewhere its last reply is the
-result in its completion notice (`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
+whose report reaches its caller as an `agent`-origin message (one that ends without it delivers
+no report), elsewhere its last reply is the result in its completion notice
+(`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
 by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name

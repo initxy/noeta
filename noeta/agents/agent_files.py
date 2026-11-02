@@ -72,6 +72,10 @@ DEFAULT_IDENTITY = "You are noeta, an open-source coding agent."
 
 #: Model names that mean "the host's model".
 _INHERIT = frozenset({"", "inherit"})
+#: The built-in agents whose inherited model is capped at a family: Claude
+#: Code's Explore runs on Opus under a Fable caller (``inheritCap``), by
+#: source, so an Explore file of the user's takes the caller's model as is.
+BUILTIN_INHERIT_CAP = {"noeta.agents:explore.md": "opus"}
 #: Claude Code fields kept in ``AgentFile.extra``, and whether noeta acts on
 #: them (one it does not act on is logged once per file). ``skills``,
 #: ``mcpServers``, ``hooks``, ``memory`` and ``autoCompactWindow`` become
@@ -504,6 +508,8 @@ def build_agents(
             step_budget=f.max_turns or Agent.step_budget,
             # Claude Code's spelling: no model is "inherit" (the caller's).
             extra={**f.extra, "model": f.model or "inherit",
-                   **({"permissionMode": f.permission_mode} if f.permission_mode else {})},
+                   **({"permissionMode": f.permission_mode} if f.permission_mode else {}),
+                   **({"inheritCap": BUILTIN_INHERIT_CAP[f.source]}
+                      if not f.model and f.source in BUILTIN_INHERIT_CAP else {})},
         ))
     return agents

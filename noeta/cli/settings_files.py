@@ -60,8 +60,9 @@ class FileSettings:
     agent: str | None = None
     output_style: str | None = None
     #: ``allow`` / ``deny`` / ``ask`` rule lists (Claude Code's
-    #: ``Tool(spec)`` strings, unparsed), ``defaultMode`` and
-    #: ``additionalDirectories``.
+    #: ``Tool(spec)`` strings, unparsed), ``defaultMode``,
+    #: ``additionalDirectories`` and the top-level ``useAutoModeDuringPlan``
+    #: (kept here only when a file turns it off).
     permissions: dict[str, Any] = field(default_factory=dict)
     #: The ``sandbox`` object, merged (:func:`merge_sandbox`).
     sandbox: dict[str, Any] = field(default_factory=dict)
@@ -225,6 +226,9 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
             out.agent = data["agent"]
         if isinstance(data.get("outputStyle"), str) and data["outputStyle"]:
             out.output_style = data["outputStyle"]
+        if data.get("useAutoModeDuringPlan") is False:
+            # As Claude Code: any file that turns it off turns it off.
+            out.permissions["useAutoModeDuringPlan"] = False
         perms = data.get("permissions")
         if not isinstance(perms, dict):
             continue
@@ -255,8 +259,9 @@ def apply_env(settings: FileSettings) -> None:
 def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str, Any]:
     """The permissions plugin's arguments the settings give, as plain data:
     ``mode`` (``defaultMode``), ``allow`` / ``deny`` / ``ask`` (rule strings),
-    ``additional_directories`` and ``disable_bypass_mode``
-    (``disableBypassPermissionsMode: "disable"``); only those the plugin takes
+    ``additional_directories``, ``disable_bypass_mode``
+    (``disableBypassPermissionsMode: "disable"``) and ``auto_during_plan``
+    (the top-level ``useAutoModeDuringPlan``); only those the plugin takes
     (``accepted``, its argument names)."""
     perms = settings.permissions
     args: dict[str, Any] = {k: list(perms[k]) for k in RULE_LISTS if k in perms}
@@ -265,6 +270,8 @@ def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str
                                           for d in perms["additionalDirectories"]]
     if perms.get("disableBypassPermissionsMode") == "disable":
         args["disable_bypass_mode"] = True
+    if perms.get("useAutoModeDuringPlan") is False:
+        args["auto_during_plan"] = False
     if "defaultMode" in perms:
         if perms["defaultMode"] == "bypassPermissions" and args.get("disable_bypass_mode"):
             log.warning("settings: defaultMode bypassPermissions is disabled "
