@@ -228,7 +228,7 @@ class OpenAIResponsesProvider:
         if self._reasoning_continuation != "off":
             body["include"] = ["reasoning.encrypted_content"]
         # One name per tool: the function list's, in the text as well.
-        return shorten_names_in_text(body)
+        return shorten_names_in_text(body, (t.name for t in request.tools))
 
 
 def _map_effort(request: ModelRequest) -> str | None:

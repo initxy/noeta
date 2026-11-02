@@ -15,6 +15,7 @@ import base64
 import email.utils
 import json
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -84,17 +85,23 @@ def wire_tool_name(name: str, limit: int = OPENAI_NAME_MAX) -> str:
 _MCP_NAME_IN_TEXT = re.compile(r"(?<![A-Za-z0-9_-])mcp__[A-Za-z0-9_-]+")
 
 
-def shorten_names_in_text(body: dict[str, Any],
+def shorten_names_in_text(body: dict[str, Any], tools: Iterable[str],
                           limit: int = OPENAI_NAME_MAX) -> dict[str, Any]:
-    """``body`` with every MCP tool name over ``limit`` characters written in
-    its strings (the deferred-tool list, a ``ToolSearch`` result, an error
-    naming a tool, a call's arguments) as :func:`wire_tool_name` writes it,
-    so the model reads one name for a tool on such a wire, the one its
-    function list carries. The rewrite is a function of the name alone,
-    the same every request, so a cached prefix is unchanged."""
+    """``body`` with the names of the request's ``tools`` that pass
+    ``limit`` characters written in its strings (the deferred-tool list, a
+    ``ToolSearch`` result, an error naming a tool, a call's arguments) as
+    :func:`wire_tool_name` writes them, so the model reads one name for a
+    tool on such a wire, the one its function list carries. Any other
+    ``mcp__`` text (a file's content in a tool result, an edit's old string)
+    is left as written. The rewrite is a function of the name alone, the
+    same every request with that tool, so a cached prefix is unchanged; a
+    long-named deferred tool's mentions change once, when it is loaded."""
+    longs = {n: wire_tool_name(n, limit) for n in tools if len(n) > limit}
+    if not longs:
+        return body
 
     def short(match: re.Match[str]) -> str:
-        return wire_tool_name(match.group(0), limit)
+        return longs.get(match.group(0), match.group(0))
 
     def walk(value: Any) -> Any:
         if isinstance(value, str):

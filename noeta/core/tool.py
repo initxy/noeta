@@ -191,7 +191,8 @@ class Tool(Protocol):
     * ``async rule_inputs(input, view) -> Sequence[(input, allow_too)]`` —
       other inputs the permission rules also judge the call as (a ``Skill``
       call under its skill's former name): a deny or ask rule matching any
-      applies, an allow rule only one marked ``allow_too``.
+      applies, an allow rule (or a hook ``if`` whose hook allows) only one
+      marked ``allow_too``.
     * ``max_result_chars: int | None`` — the runner saves a text result
       longer than this (at most :data:`RESULT_CEILING_CHARS`, the default) to
       a file and sends a preview (``noeta.core.large_output``); ``None``

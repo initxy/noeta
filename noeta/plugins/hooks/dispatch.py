@@ -22,7 +22,7 @@ from noeta.core.large_output import (
     spill_path,
     task_spill_dir,
 )
-from noeta.core.mcp_names import legacy_names, warn_legacy
+from noeta.core.mcp_names import legacy_index, warn_legacy
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import SUBJECT, TOOL_EVENTS, HookCommand, Matcher
@@ -284,18 +284,50 @@ def _read_only_tools(view: TaskView) -> list[Tool]:
 def _mcp_tool(view: TaskView, hook: HookCommand) -> Tool | None:
     """An ``mcp_tool`` hook's tool, by its model-visible name (the MCP
     plugin's ``mcp__<server>__<tool>``, other characters made ``_``)."""
+    return _find_mcp_tool(view, hook)[0]
+
+
+def _find_mcp_tool(view: TaskView, hook: HookCommand) -> tuple[Tool | None, bool]:
+    """:func:`_mcp_tool`, and whether it was found by the tool's old name
+    (``noeta.core.mcp_names``; only one tool may have it): such a hook's
+    answer may block, never allow."""
     name = f"mcp__{hook.server}__{hook.tool}"
     found = view.find_tool(name) or view.find_tool(re.sub(r"[^A-Za-z0-9_-]", "_", name))
     if found is not None:
-        return found
-    # Written with the tool's old name (noeta.core.mcp_names).
+        return found, False
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", name)
-    for ext in view.extensions:
-        for tool in ext.tools(view):
-            if tool.name.startswith("mcp__") and safe in legacy_names(tool.name):
-                warn_legacy("mcp_tool hook", name, tool.name)
-                return view.find_tool(tool.name)
-    return None
+    index = legacy_index(t.name for ext in view.extensions for t in ext.tools(view)
+                         if t.name.startswith("mcp__"))
+    current = index.get(safe)
+    if current is None:
+        return None, False
+    warn_legacy("mcp_tool hook", name, current)
+    found = view.find_tool(current)
+    return found, found is not None
+
+
+def narrowed(event: str, read: Read) -> Read:
+    """``read`` without what would let a call through (a PreToolUse
+    ``allow`` / ``approve``, a PermissionRequest ``allow``): the answer of
+    a hook reached only by an old or former name, which may block, deny or
+    ask, never allow."""
+    specific, data = dict(read.specific), dict(read.data)
+    if event == "PreToolUse":
+        if specific.get("permissionDecision") == "allow":
+            specific.pop("permissionDecision")
+        if data.get("decision") == "approve":
+            data.pop("decision")
+    elif event == "PermissionRequest":
+        answer = specific.get("decision")
+        if isinstance(answer, dict) and answer.get("behavior") == "allow":
+            specific.pop("decision")
+    else:
+        return read
+    if specific == read.specific and data == read.data:
+        return read
+    log.warning("hooks: the %s hook %r reached the call only by a tool's or skill's former "
+                "name, so its allow is not taken", event, read.command)
+    return replace(read, specific=specific, data=data)
 
 
 def _tool_runner(view: TaskView, kind: str, *, checked: bool = False) -> RunTool:
@@ -379,20 +411,25 @@ class Dispatcher:
 
     def _select(self, event: str, view: TaskView, payload: Mapping[str, Any],
                 call: ToolUse | None,
-                inputs: Sequence[Mapping[str, Any]] = ()) -> list[HookCommand]:
+                inputs: Sequence[tuple[Mapping[str, Any], bool]] = ()
+                ) -> list[tuple[HookCommand, bool]]:
         """The hooks to run: matched on the event's subject, ``if`` met (by
         the call's input or one of ``inputs``, what the tool says it also
         reads as: a skill's former name), identical ones once, ``once``
-        hooks that have not run."""
+        hooks that have not run. Each with whether it was reached only by
+        a name that may not allow (an MCP tool's old name; a skill's former
+        name another skill also had): its answer may block, never allow."""
         subject_field = SUBJECT.get(event)
         subject = payload.get(subject_field) if subject_field else None
         done = self.state(view).once
         seen: set[str] = set()
-        out: list[HookCommand] = []
+        out: list[tuple[HookCommand, bool]] = []
         for m in self.matchers.get(event, ()):
-            if not m.matches(subject if isinstance(subject, str) else None):
+            by = m.matched_by(subject if isinstance(subject, str) else None)
+            if by is None:
                 continue
             for h in m.hooks:
+                narrow = by == "former"
                 if h.key in seen:
                     continue
                 if h.type == "http" and event == "SessionStart":
@@ -405,13 +442,17 @@ class Dispatcher:
                         continue
                     cwd = self.cwd(view) or os.getcwd()
                     ctx = RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
-                    if not any(match(h.condition, call.name, a, ctx)
-                               for a in (call.input, *inputs)):
+                    cond = h.condition
+                    wide = any(match(cond, call.name, a, ctx, former=False)
+                               for a, ok in ((call.input, True), *inputs) if ok)
+                    if not wide and not any(match(cond, call.name, a, ctx)
+                                            for a in (call.input, *(i for i, _ in inputs))):
                         continue
+                    narrow = narrow or not wide
                 if h.once and h.key in done:
                     continue
                 seen.add(h.key)
-                out.append(h)
+                out.append((h, narrow))
         return out
 
     async def _one(self, hook: HookCommand, payload: dict[str, Any], cwd: str | None,
@@ -488,12 +529,15 @@ class Dispatcher:
         and read their answers, in configuration order. ``record``: the
         person is told about failures and ``systemMessage``s, and ``once``
         hooks are remembered (off where records cannot be made)."""
-        inputs: list[Mapping[str, Any]] = []
+        inputs: list[tuple[Mapping[str, Any], bool]] = []
         if call is not None and event in TOOL_EVENTS and any(
                 h.condition is not None for m in self.matchers.get(event, ()) for h in m.hooks):
             # A hook written against a skill's former name still fires.
-            inputs = [a for a, _allow in await rule_inputs(view, call.name, call.input)]
-        hooks = self._select(event, view, payload, call, inputs)
+            inputs = await rule_inputs(view, call.name, call.input)
+        selected = self._select(event, view, payload, call, inputs)
+        hooks = [h for h, _ in selected]
+        narrow = {h.key for h, n in selected if n} | {
+            h.key for h in hooks if h.type == "mcp_tool" and _find_mcp_tool(view, h)[1]}
         subject = payload.get(SUBJECT.get(event, ""))
         if self.unreached(event, view, subject if isinstance(subject, str) else None):
             # The tool gates refuse the call; any other event goes on without
@@ -527,6 +571,8 @@ class Dispatcher:
                 elif record:
                     view.notify(f"{event} hook failed: {result.stderr.strip()[:300]}")
             read = replace(_read(event, result), command=hook.label)
+            if hook.key in narrow:
+                read = narrowed(event, read)
             if event not in UNCAPPED:
                 read = await self._capped(view, read, f"hook-{fired}-{len(out)}")
             message = read.data.get("systemMessage")

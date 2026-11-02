@@ -37,7 +37,7 @@ from noeta.core.extension import (
     Rewrite,
     TaskView,
 )
-from noeta.core.mcp_names import named_in
+from noeta.core.mcp_names import allowed_in, named_in
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, ModelRequest, ToolUse
 from noeta.plugins.permissions import auto as a
@@ -345,7 +345,7 @@ class Permissions(Extension):
         name = call.name
         if named_in(self.disallowed, name, "disallowed_tools"):
             return Deny(reason=p.DENIED_BY_POLICY.format(name=name))
-        if self.allowed is not None and not named_in(self.allowed, name, "allowed_tools"):
+        if self.allowed is not None and not allowed_in(self.allowed, name, "allowed_tools"):
             return Deny(reason=p.NOT_IN_ALLOWLIST.format(name=name))
         st = state_of(view)
         guard = self._guards(view, st, call)
@@ -546,7 +546,7 @@ class Permissions(Extension):
 
     def _offered(self, name: str) -> bool:
         return not named_in(self.disallowed, name, "disallowed_tools") and (
-            self.allowed is None or named_in(self.allowed, name, "allowed_tools"))
+            self.allowed is None or allowed_in(self.allowed, name, "allowed_tools"))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         if self.budget.max_tool_calls is not None:

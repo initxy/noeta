@@ -25,7 +25,7 @@ from noeta.core.events import (
     TaskCreated,
 )
 from noeta.core.execenv import ExecEnv
-from noeta.core.mcp_names import named_in
+from noeta.core.mcp_names import allowed_in, named_in
 from noeta.core.tool import Tool, ToolOutput, tool_flag
 from noeta.core.types import (
     Effort,
@@ -194,8 +194,9 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
     listed = set(allowed) if allowed is not None else None
 
     def offered_name(name: str) -> bool:
-        # An MCP tool may be listed by its old name (``noeta.core.mcp_names``).
-        return (listed is None or named_in(listed, name, "agent tools")) \
+        # An MCP tool's old name (``noeta.core.mcp_names``) refuses it, never
+        # offers it.
+        return (listed is None or allowed_in(listed, name, "agent tools")) \
             and not named_in(refused, name, "agent disallowedTools")
 
     tools: list[Tool] = []
@@ -390,7 +391,7 @@ class TaskView(records.CoreNotices):
         another's tool without importing it: model-visible tool names are a
         stable contract."""
         if (self.allowed_tools is not None
-                and not named_in(set(self.allowed_tools), name, "agent tools")) \
+                and not allowed_in(set(self.allowed_tools), name, "agent tools")) \
                 or named_in(set(self.denied_tools), name, "agent disallowedTools"):
             return None
         for ext in self.extensions:

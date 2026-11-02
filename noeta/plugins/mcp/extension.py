@@ -245,6 +245,12 @@ class Mcp(Extension):
         st = view.ext_state(self.name)
         if not st or st.get("servers") is None:
             return ()
+        for server in st["servers"]:
+            for t in server["tools"]:
+                if t.get("old_name"):
+                    # Kept known while offered (the table drops the least
+                    # recently offered first).
+                    remember(t["name"], t["old_name"])
         cached = self._tools.get(view.task_id)
         if cached is not None and cached[0] is st:
             return cached[1]
@@ -258,8 +264,6 @@ class Mcp(Extension):
                                              input_schema=t["input_schema"],
                                              sign_in=self._sign_in, deferred=deferred))
                     continue
-                if t.get("old_name"):
-                    remember(t["name"], t["old_name"])
                 tools.append(McpTool(name=t["name"], alias=server["alias"], remote=t["remote"],
                                      description=t["description"],
                                      loaded_description=t.get("loaded_description"),

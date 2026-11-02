@@ -193,3 +193,17 @@ def test_a_rule_with_an_mcp_tools_old_name_still_matches(
     assert m(old, f"mcp__gh__{raw}")
     # Rules for tools other than MCP ones are not widened.
     assert not m("bash", "Bash", command="ls")
+
+
+def test_an_allow_rule_never_matches_by_an_mcp_tools_old_name() -> None:
+    """An old name narrows only: a deny or ask rule matches by it, an allow
+    rule does not (it would reach a second server whose name folds or cuts
+    to the same)."""
+    long = "s" * 32
+    for rule, name in (("mcp__github", "mcp__GitHub__delete_repo"),
+                       ("mcp__github__*", "mcp__GitHub__delete_repo"),
+                       ("mcp__github__delete_repo", "mcp__GitHub__delete_repo"),
+                       (f"mcp__{long}", f"mcp__{long}s__drop")):
+        assert m(rule, name), rule
+        assert not m(rule, name, allow=True), rule
+    assert m("mcp__github", "mcp__github__x", allow=True)
