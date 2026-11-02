@@ -16,6 +16,7 @@ import msgspec
 
 from noeta.core import records
 from noeta.core.client import ClientAPI
+from noeta.core.errors import TurnDone
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
@@ -29,8 +30,8 @@ from noeta.core.extension import (
     Rewrite,
     TaskView,
 )
-from noeta.core.tool import Tool, ToolOutput, text_output
-from noeta.core.types import Message, Origin, ToolUse, user
+from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.types import Message, ModelRequest, Origin, ToolUse, user
 from noeta.plugins.skills import _frontmatter
 from noeta.plugins.skills.gates import (
     Enforcement,
@@ -40,9 +41,11 @@ from noeta.plugins.skills.gates import (
 )
 from noeta.plugins.skills.listing import listing_lines, render_listing, skill_digest
 from noeta.plugins.skills.registry import (
+    SkillDescription,
     SkillRegistry,
     index_dir,
     load_registry,
+    plugin_skill_name,
     render_body,
     render_command_body,
 )
@@ -140,6 +143,20 @@ WORKSPACE_AGENTS_SKILLS_DIR = ".agents/skills"
 NESTED_TIER = 5
 #: Announces the skills of a directory found below the working directory.
 NESTED_SKILLS = "Skills found in {dir}, now available through the Skill tool:"
+#: After an unscoped skill is loaded while skills of its name scoped to
+#: directories exist (Claude Code's note), one line per scoped skill.
+SCOPED_VARIANTS = (
+    "Skills of the same name as \"{name}\", scoped to directories, exist here:\n{lines}\n"
+    "The plain name always means the unscoped skill just loaded; a scoped one is reached only "
+    "by its full name. If the files you are working on lie under one of those directories, "
+    "call that skill with the Skill tool now and follow it instead, since it holds that "
+    "directory's own instructions; if your changes reach into several, run each one that "
+    "matches.")
+SCOPED_VARIANT_LINE = "- `{name}`: for files under {scope}/"
+#: A typed ``/<name>`` of a ``context: fork`` skill: its agent runs in the
+#: background and no model call answers the message (Claude Code's).
+TYPED_FORK = ("<local-command-stdout>The {name} skill is running in the background as agent "
+              "{id}.</local-command-stdout>")
 
 Rank = Callable[[TaskView], "Mapping[str, float] | Awaitable[Mapping[str, float]] | None"]
 
@@ -179,8 +196,18 @@ def _typed_command(text: str) -> tuple[str, str] | None:
     tagged = parse_command_message(text)
     if tagged is not None:
         return tagged[0], tagged[1].strip()
-    m = re.match(r"/([a-z0-9][a-z0-9-]*)(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
+    # A scoped name's directory may hold a "/" (``/apps/web:deploy``).
+    m = re.match(r"/([a-z0-9][a-z0-9-]*|[A-Za-z0-9][A-Za-z0-9_./-]*:[A-Za-z0-9_-]+)"
+                 r"(?:\s+|$)(.*)", text.lstrip(), re.DOTALL)
     return (m.group(1), m.group(2).strip()) if m else None
+
+
+def _scopes(cwd: str, nested: Sequence[str]) -> dict[str, str]:
+    """Each skill directory found below ``cwd`` -> the directory it serves
+    (the one holding its ``.noeta/skills`` or ``.agents/skills``), relative
+    to ``cwd``."""
+    return {root: os.path.relpath(os.path.dirname(os.path.dirname(root)), cwd)
+            for root in nested}
 
 
 def nested_dirs(state: Any) -> tuple[str, ...]:
@@ -204,6 +231,9 @@ class Skills(Extension):
 
     * ``dirs`` — the lowest tier: built-in, plugin and borrowed directories
       (``builtin_skills_dirs`` + ``extra_skill_dirs``).
+    * ``plugin_dirs`` — directory -> plugin name: a Claude Code plugin's
+      skill directories, in the lowest tier; their skills are named
+      ``<plugin>:<skill directory>``, as Claude Code names them.
     * ``global_agents_dir`` / ``global_dir`` — the user's ``~/.agents/skills`` /
       ``~/.noeta/skills`` tiers (``None`` = none, the 0.6 default).
     * ``workspace`` — mount the workspace tiers ``<cwd>/.agents/skills`` and
@@ -241,6 +271,7 @@ class Skills(Extension):
         self,
         *,
         dirs: Sequence[str | Path] = (),
+        plugin_dirs: Mapping[str, str] | None = None,
         global_agents_dir: str | Path | None = None,
         global_dir: str | Path | None = None,
         workspace: bool = True,
@@ -261,6 +292,8 @@ class Skills(Extension):
         if tool_enforcement not in ("off", "approval", "deny"):
             raise ValueError(f"Skills: unknown tool_enforcement {tool_enforcement!r}")
         self.dirs = [os.path.expanduser(str(d)) for d in dirs]
+        self.plugin_dirs = {os.path.expanduser(str(d)): str(name)
+                            for d, name in (plugin_dirs or {}).items()}
         self.global_agents_dir = os.path.expanduser(str(global_agents_dir)) \
             if global_agents_dir is not None else None
         self.global_dir = os.path.expanduser(str(global_dir)) if global_dir is not None else None
@@ -292,7 +325,7 @@ class Skills(Extension):
         """``(directory, keep-order tier)``, low precedence first; ``nested``
         are skill directories found below the working directory (deepest
         last), below every other."""
-        out = [(d, 0) for d in self.dirs]
+        out = [(d, 0) for d in [*self.dirs, *self.plugin_dirs]]
         first: list[tuple[str, int]] = []
         if self.global_agents_dir is not None:
             out.append((self.global_agents_dir, 1))
@@ -319,7 +352,12 @@ class Skills(Extension):
     async def registry(self, env: ExecEnv, state: Any = None) -> SkillRegistry:
         """The skills ``env`` sees, with the nested directories ``state``
         (this plugin's) recorded."""
-        return await load_registry(env, self.tiers(env.cwd, nested_dirs(state)))
+        return await self._load(env, self.tiers(env.cwd, nested_dirs(state)), nested_dirs(state))
+
+    async def _load(self, env: ExecEnv, tiers: Sequence[tuple[str, int]],
+                    nested: Sequence[str]) -> SkillRegistry:
+        return await load_registry(env, tiers, plugins=self.plugin_dirs,
+                                   scopes=_scopes(env.cwd, nested))
 
     async def turn_registry(self, view: TaskView) -> SkillRegistry:
         """The skills as found for the task: loaded again when new input was
@@ -327,14 +365,15 @@ class Skills(Extension):
         when :meth:`_refresh` saw their ``SKILL.md`` files change before a
         model call, not after every file a call touched."""
         env = task_env(view.env, view.state.config)
-        tiers = self.tiers(env.cwd, nested_dirs(view.ext_state(self.name)))
+        nested = nested_dirs(view.ext_state(self.name))
+        tiers = self.tiers(env.cwd, nested)
         key = (view.state.inbox_read, env.cwd, tuple(tiers),
                self._fingerprints.get(view.task_id))
         cached = self._turn_registries.pop(view.task_id, None)
         if cached is not None and cached[0] == key:
             registry = cached[1]
         else:
-            registry = await load_registry(env, tiers)
+            registry = await self._load(env, tiers, nested)
         self._turn_registries[view.task_id] = (key, registry)  # most recent last
         while len(self._turn_registries) > TURN_REGISTRIES_KEEP:
             del self._turn_registries[next(iter(self._turn_registries))]
@@ -409,6 +448,10 @@ class Skills(Extension):
             forks = {**(state.get("forks") or {}), data["call_id"]: data["prompt"]}
             # Needed until the call runs: the reply's calls, at most.
             return {**state, "forks": dict(list(forks.items())[-FORKS_KEEP:])}
+        if kind == "typed_fork":
+            return {**state, "typed_fork": data["input"]}
+        if kind == "typed_fork_done":
+            return {**state, "typed_fork": None}
         if kind == "nested":
             return {**state, "nested": [*(state.get("nested") or []), data["dir"]]}
         if kind == "unlocked":
@@ -447,13 +490,17 @@ class Skills(Extension):
     def _commands(self, cwd: str) -> list[Command]:
         found: dict[str, str] = {}
         for root, _tier in self.tiers(cwd):
+            plugin = self.plugin_dirs.get(root)
             for path in sorted(Path(root).rglob("SKILL.md")) if Path(root).is_dir() else []:
                 try:
                     fields, _body, _w = _frontmatter.parse(path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeDecodeError, _frontmatter.FrontmatterError):
                     continue
                 name = fields.get("name")
-                if name and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
+                if plugin is not None:
+                    name = plugin_skill_name(plugin, path.relative_to(root).as_posix(), root,
+                                             name)
+                if name and (plugin is not None or re.fullmatch(r"[a-z0-9][a-z0-9-]*", name)):
                     found[name] = fields.get("description", "")
         return [Command(name=n, description=d, template=command_message(n, "{args}"))
                 for n, d in sorted(found.items())]
@@ -521,6 +568,10 @@ class Skills(Extension):
             desc = registry.get(typed[0]) if typed else None
             if desc is not None and desc.paths and desc.name not in unlocked_skills(state):
                 desc = None
+            if typed and desc is not None and desc.fork \
+                    and view.find_tool(AGENT_TOOL) is not None:
+                await self._fork_typed(view, desc, typed[1], recorded.seq)
+                continue
             if typed and desc is not None:
                 prior = (state.get("active") or {}).get(desc.name)
                 data = activation_data(desc, "user", typed[1], view.cwd)
@@ -537,6 +588,79 @@ class Skills(Extension):
                     continue
                 self._record_invocation(view, {**data, "input": recorded.seq}, prior,
                                         "inline")
+                self._note_variants(view, registry, desc, "inline")
+
+    async def _fork_typed(self, view: TaskView, desc: SkillDescription, args: str,
+                          seq: int) -> None:
+        """A typed ``/<name>`` of a ``context: fork`` skill: its agent starts
+        at once, in the background, and the message gets no model call; the
+        agent's report arrives later as any agent's does (Claude Code
+        forks it; noeta's agents always run in the background)."""
+        call_id = f"skill-{seq}"
+        data = activation_data(desc, "user", args, view.cwd)
+        data["text"] = render_body(desc, args, view.cwd)
+        try:
+            prompt = (await self._expand(view, data, call_id))["text"]
+        except InlineCommandError as exc:
+            view.notify(str(exc))
+            view.record(self.name, "load_failed", {"name": desc.name},
+                        message=user(f"The skill could not load: {exc}", origin="inline"))
+            return
+        tool = view.find_tool(AGENT_TOOL)
+        assert tool is not None and view.env is not None
+
+        def spawn(agent: str, prompt: Any, *, config: Mapping[str, Any] | None = None,
+                  background: bool = True, queue: str | None = None,
+                  history_from: str | None = None, history_through: int | None = None) -> str:
+            return view.spawn(agent, prompt, config=config, queue=queue, key=call_id)
+
+        ctx = ToolContext(task_id=view.task_id, call_id=call_id, env=view.env,
+                          state=view.state.ext, record=view.record, spill_dir=view.spill_dir,
+                          spawn=spawn, root_id=view.state.root_id or view.task_id,
+                          model=view.model, prompt=view.prompt)
+        output = await tool.run({"description": FORK_DESCRIPTION.format(name=desc.name),
+                                 "prompt": prompt,
+                                 "subagent_type": desc.agent or DEFAULT_FORK_AGENT}, ctx)
+        text = "\n".join(getattr(c, "text", "") for c in output.content).strip()
+        if output.is_error:
+            view.notify(text)
+            view.record(self.name, "load_failed", {"name": desc.name}, message=user(
+                f"The skill could not start: {text}", origin="inline"))
+            return
+        view.record(self.name, "typed_fork", {"input": seq, "name": desc.name},
+                    message=user(TYPED_FORK.format(name=desc.name, id=output.meta["child_id"]),
+                                 origin="inline"))
+
+    async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+        """No model call answers a typed fork skill's message (its agent's
+        report opens a turn later)."""
+        at = (view.ext_state(self.name) or {}).get("typed_fork")
+        if at is None:
+            return request
+        view.record(self.name, "typed_fork_done", {})
+        if view.state.steps_in_turn:
+            return request
+        newest = max((seq for seq, m in zip(view.state.message_seqs, view.state.messages,
+                                            strict=False)
+                      if m.from_person and m.text), default=None)
+        if newest == at:
+            raise TurnDone()
+        return request
+
+    def _note_variants(self, view: TaskView, registry: SkillRegistry, desc: SkillDescription,
+                       origin: Origin | None) -> None:
+        """After an unscoped skill loaded: the skills of its name scoped to
+        directories, if any (Claude Code's note)."""
+        if desc.unqualified is not None:
+            return
+        variants = [d for d in registry.scoped(desc.name) if d.model_invocable]
+        if not variants:
+            return
+        lines = "\n".join(SCOPED_VARIANT_LINE.format(
+            name=d.name, scope=d.name[:-len(desc.name) - 1]) for d in variants)
+        text = view.prompt("reminder/skill_scoped_variants", SCOPED_VARIANTS)
+        view.record(self.name, "variants", {"name": desc.name}, message=user(
+            text.replace("{name}", desc.name).replace("{lines}", lines), origin=origin))
 
     async def _list_new(self, view: TaskView) -> None:
         """List the skills not listed yet, or whose description changed (the
@@ -586,6 +710,10 @@ class Skills(Extension):
         except InlineCommandError as exc:
             return text_output(str(exc), is_error=True)
         self._record_invocation(view, data, prior, self.origin)
+        registry = await self.turn_registry(view)
+        desc = registry.get(data["name"])
+        if desc is not None:
+            self._note_variants(view, registry, desc, self.origin)
         meta = {k: v for k, v in output.meta.items() if k != "skill_activation"}
         meta["skill"] = data["name"]
         return msgspec.structs.replace(output, meta=meta)
@@ -705,11 +833,13 @@ class Skills(Extension):
                 view.record(self.name, "nested", {"dir": root})
                 state = {**state, "nested": [*nested_dirs(state), root]}
                 registry = await self.registry(env, state)
-                # Only the skills not shadowed by one of the same name.
-                names = sorted(n for n, desc in found.items()
-                               if desc.model_invocable and not desc.paths
-                               and (won := registry.get(n)) is not None
-                               and won.source_path == desc.source_path)
+                # Under the names they are offered by (a scoped one when
+                # another skill has its name).
+                paths = {desc.source_path for desc in found.values()
+                         if desc.model_invocable and not desc.paths}
+                names = sorted(n for n in registry.names()
+                               if (won := registry.get(n)) is not None
+                               and won.source_path in paths)
                 if not names:
                     continue
                 # Names only here; the next model call lists them with their
@@ -749,8 +879,8 @@ class Skills(Extension):
         if fresh:
             self._record_listing(view, fresh, registry)
 
-    async def _expand(self, view: TaskView, data: dict[str, Any], call_id: str
-                      ) -> dict[str, Any]:
+    async def _expand(self, view: TaskView, data: dict[str, Any],
+                      call_id: str) -> dict[str, Any]:
         """``data`` with the commands of its text run (or blanked when the
         host turned them off); the text they produced is kept as
         ``rendered`` so a compaction re-attaches it without running them
@@ -804,7 +934,7 @@ class Skills(Extension):
             parts = [INVOKED_SKILLS_HEADER]
             used = 0
             for name, entry in reversed(active.items()):
-                desc = registry.get(name)
+                desc = registry.recorded(name)
                 if desc is not None:
                     text = _cut_skill(entry.get("rendered") or strip_commands(
                         render_command_body(desc, entry.get("args"), view.cwd), ""))
@@ -812,13 +942,29 @@ class Skills(Extension):
                     if used + size > INVOKED_SKILLS_BUDGET_TOKENS:
                         continue
                     used += size
-                    parts.append(f"### Skill: {desc.name}\nPath: {desc.base_dir or desc.name}"
-                                 f"\n\n{text}")
+                    parts.append(f"### Skill: {desc.name}\n"
+                                 f"Path: {self._source(desc, registry)}:{desc.name}\n\n{text}")
             if len(parts) > 1 and view.keeps_tail is not None:
                 view.record(self.name, "invoked_rehold", {"text": "\n\n".join(parts)})
         if view.keeps_tail is not None and state.get("listings"):
             view.record(self.name, "listing_rehold", {})
         return out
+
+    def _source(self, desc: SkillDescription, registry: SkillRegistry) -> str:
+        """Where a skill comes from, the label ahead of its name when it is
+        given again after a compaction (Claude Code's ``<source>:<name>``):
+        ``workspace`` (the workspace's own directories and those below the
+        working directory), ``user`` (the user's directories), ``plugin``
+        or ``host`` (the directories the host passed)."""
+        tier = registry.tier_of(desc.name)
+        if tier >= 3:
+            return "workspace"
+        if tier >= 1:
+            return "user"
+        source = desc.source_path or ""
+        if any(source.startswith(d.rstrip("/") + "/") for d in self.plugin_dirs):
+            return "plugin"
+        return "host"
 
 
 def _cut_skill(text: str) -> str:

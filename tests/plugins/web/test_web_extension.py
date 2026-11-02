@@ -23,10 +23,12 @@ from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import ModelRequest, ModelResponse, Text
 from noeta.plugins.web import Web
 from noeta.plugins.web.fetch import (
+    DOCS_DIGEST_INSTRUCTIONS,
     CrossHostRedirect,
     HttpFetchTransport,
     PageCache,
     WebFetchTool,
+    preapproved,
     upgrade_to_https,
 )
 from noeta.plugins.web.render import FetchedPage, html_to_markdown
@@ -157,7 +159,7 @@ def test_page_cache_expires_and_evicts() -> None:
     cache.put("a", "t", "m")
     cache.put("b", "t", "m")
     cache.put("c", "t", "m")
-    assert cache.entry("a") is None and cache.entry("c") == ("t", "m", False)
+    assert cache.entry("a") is None and cache.entry("c") == ("t", "m", False, "")
     now[0] = 901
     assert cache.entry("c") is None
 
@@ -185,6 +187,60 @@ async def test_http_transport_redirects_and_media() -> None:
         await transport.fetch("https://site.com/login")
     image = await transport.fetch("https://site.com/img")
     assert image.raw == b"x" and image.content_type == "image/png"
+    await client.aclose()
+
+
+def test_preapproved_sites_follow_claude_codes_rule() -> None:
+    for url in ("https://docs.python.org/3/library/os.html", "https://go.dev/doc",
+                "https://go.dev/doc/effective_go", "https://github.com/anthropics/x/issues/1",
+                "https://github.com/anthropic-experimental/x/blob/main/a.md",
+                "https://raw.githubusercontent.com/anthropics/x/refs/heads/main/a.md"):
+        assert preapproved(url), url
+    for url in ("https://go.dev/blog", "https://go.dev/docs", "https://go.dev/doc/../blog",
+                "https://go.dev/doc%2F..%2Fblog", "https://github.com/anthropic-experimental/x/pulls",
+                "https://raw.githubusercontent.com/anthropics/x/dev/a.md",
+                "https://docs.python.org.example.com/", "https://example.com/docs.python.org"):
+        assert not preapproved(url), url
+
+
+async def test_a_documentation_sites_markdown_is_the_result(tmp_path: Path) -> None:
+    digested: list[str] = []
+
+    async def digest(url: str, title: str, page: str, prompt: str) -> str:
+        digested.append(url)
+        return "summary"
+
+    def tool(page: str, ctype: str) -> tuple[WebFetchTool, FakeFetch]:
+        fetch = FakeFetch(page, ctype)
+        return WebFetchTool(fetch, digest_for=lambda _c: digest), fetch
+
+    md, fetch = tool("# Title\n\nBody.", "text/markdown; charset=utf-8")
+    out = await md.run({"url": "https://docs.python.org/3/x.md", "prompt": "p"}, _ctx(tmp_path))
+    assert text(out) == "# Title\n\nBody." and out.meta["markdown"] is True and not digested
+    # From the cache too, and from an offset.
+    out = await md.run({"url": "https://docs.python.org/3/x.md", "prompt": "q", "offset": 9},
+                       _ctx(tmp_path))
+    assert text(out) == "Body." and len(fetch.urls) == 1 and not digested
+    # Another site, HTML, or a page the window cannot hold go to the digest.
+    other, _ = tool("# Title", "text/markdown")
+    out = await other.run({"url": "https://example.com/x.md", "prompt": "p"}, _ctx(tmp_path))
+    html, _ = tool(PAGE, "text/html")
+    await html.run({"url": "https://docs.python.org/3/", "prompt": "p"}, _ctx(tmp_path))
+    long, _ = tool("x" * 100_000, "text/markdown")
+    await long.run({"url": "https://docs.python.org/3/", "prompt": "p"}, _ctx(tmp_path))
+    assert text(out) == "summary" and len(digested) == 3
+
+
+async def test_the_http_transport_asks_for_markdown_first() -> None:
+    accepts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        accepts.append(request.headers["accept"])
+        return httpx.Response(200, headers={"content-type": "text/markdown"}, content=b"# a")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    page = await HttpFetchTransport(client=client).fetch("https://docs.python.org/3/")
+    assert accepts == ["text/markdown, text/html, */*"] and page.content_type == "text/markdown"
     await client.aclose()
 
 
@@ -241,6 +297,29 @@ async def test_redirects_are_followed_ten_times_on_one_site() -> None:
     assert str(await HttpFetchTransport(client=client).fetch("https://s.com/0")) == "end"
     with pytest.raises(RuntimeError, match="too many redirects"):
         await HttpFetchTransport(client=client).fetch("https://s.com/-1")
+
+
+async def test_a_redirect_off_a_preapproved_path_counts_as_leaving_the_host() -> None:
+    """Claude Code's rule: from a preapproved path, a same-host redirect to a
+    path that is not preapproved is reported, not followed, so a page is
+    preapproved only where it was fetched from."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/anthropics/x":
+            return httpx.Response(301, headers={"location": "/other/y"})
+        if request.url.path == "/anthropics/old":
+            return httpx.Response(301, headers={"location": "https://www.github.com/anthropics/new"})
+        if request.url.path == "/someone/a":
+            return httpx.Response(301, headers={"location": "/someone/b"})
+        return httpx.Response(200, headers={"content-type": "text/markdown"}, content=b"# doc")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    transport = HttpFetchTransport(client=client)
+    with pytest.raises(CrossHostRedirect) as left:
+        await transport.fetch("https://github.com/anthropics/x")
+    assert left.value.location == "https://github.com/other/y"
+    assert str(await transport.fetch("https://github.com/anthropics/old")) == "# doc"
+    assert str(await transport.fetch("https://github.com/someone/a")) == "# doc"
+    await client.aclose()
 
 
 async def test_long_or_credentialed_urls_are_invalid(tmp_path: Path) -> None:
@@ -465,6 +544,27 @@ async def test_a_digest_needs_no_earlier_hook_in_this_process(tmp_path: Path) ->
     assert text(out) == "It costs 42." and [r.model for r in seen] == ["main-model"]
 
 
+async def test_a_documentation_site_gets_the_looser_digest_rules(tmp_path: Path) -> None:
+    # Claude Code 2.1.312: a preapproved documentation host's page may be
+    # answered with code samples and passages of it; other pages get the
+    # quoting rules.
+    seen: list[str] = []
+
+    async def complete(request: ModelRequest) -> ModelResponse:
+        seen.append(request.messages[0].text)
+        return reply("ok")
+
+    web = Web(fetch_transport=FakeFetch())
+    ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)), state={},
+                      record=lambda *_: None, model="m", complete=complete)
+    for url in ("https://docs.python.org/3/x.html", "https://e.com"):
+        await web.fetch.run({"url": url, "prompt": "how?"}, ctx)
+    docs, other = seen
+    assert docs.endswith(f"\n\nhow?\n\n{DOCS_DIGEST_INSTRUCTIONS.strip()}\n")
+    assert "125 characters" in other and "125 characters" not in docs
+    assert "song" in other
+
+
 def test_per_task_bindings_are_bounded() -> None:
     from noeta.core.tool import ToolContext
     from noeta.plugins.web import TASKS_KEPT
@@ -483,14 +583,18 @@ def test_the_user_agent_points_at_the_project() -> None:
 
 async def test_digest_runs_through_the_runner(store: SqliteStore, tmp_path: Path) -> None:
     def digest_reply(request: ModelRequest) -> ModelResponse:
-        assert request.model == "main-model" and request.max_tokens == 4096
-        assert not request.thinking and not request.tools
+        # Claude Code 2.1.312 (m1/0025): the identity line only, no tools, no
+        # thinking field, the model's ceiling and the session's effort.
+        assert request.model == "claude-opus-5-5" and request.max_tokens == 128_000
+        assert [p.text for p in request.system] == ["You are x."]
+        assert request.thinking is None and request.effort == "high" and not request.tools
         # Like every call made beside the step (a title, a summary), the
         # digest carries none of the headers a hook put on the main request.
         assert request.headers == {}
         prompt = request.messages[0].text
-        assert prompt.startswith("You are answering a request about a web page")
-        assert "\nRequest: price?\n" in prompt and "Price is 42" in prompt
+        assert prompt.startswith("\nFetched page:\n---\n# Top\n\nPrice is 42")
+        assert "\n---\n\nprice?\n\nAnswer the request briefly" in prompt
+        assert prompt.endswith("what it does hold.\n")
         return reply("The price is 42.")
 
     provider = ScriptedProvider([LOAD, reply("", ("WebFetch", {"url": "https://e.com",
@@ -505,7 +609,7 @@ async def test_digest_runs_through_the_runner(store: SqliteStore, tmp_path: Path
 
             return msgspec.structs.replace(request, headers={"x-request": "r1"})
 
-    agent = Agent(name="a", model="main-model",
+    agent = Agent(name="a", model="claude-opus-5-5", identity="You are x.", effort="high",
                   extensions=[Headers(), Web(fetch_transport=FakeFetch())])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  sleep=_no_sleep)

@@ -19,13 +19,11 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from noeta.toolkit.tools import truncate_bytes
-
 __all__ = [
     "DEFAULT_TIMEOUT_S",
     "DEFAULT_TOOL_TIMEOUT_S",
-    "DESCRIPTION_MAX_BYTES",
-    "INJECTION_MAX_BYTES",
+    "DESCRIPTION_MAX_CHARS",
+    "LOADED_DESCRIPTION_MAX_CHARS",
     "MAX_TIMEOUT_S",
     "MCP_PREFIX",
     "TRANSPORTS",
@@ -34,8 +32,9 @@ __all__ = [
     "McpError",
     "McpServer",
     "OAuthSettings",
-    "cap_injected",
+    "cap_text",
     "describe_tool",
+    "description_max_chars",
     "make_tool_name",
     "map_server_names",
     "request_timeout_s",
@@ -89,14 +88,14 @@ def tool_timeout_s(server_timeout: float | None) -> float:
         seconds = ms / 1000 if ms is not None else DEFAULT_TOOL_TIMEOUT_S
     return min(max(seconds, 1.0), MAX_TIMEOUT_S)
 
-#: Cap on a server-written tool description. It rides the tool list on every
-#: request for the rest of the task, so an essay is paid for forever.
-DESCRIPTION_MAX_BYTES = 1024
-
-#: Cap on server-written text that enters the conversation unasked (a
-#: prompt, a resource, a resource listing): it then sits in the history for
-#: the rest of the task.
-INJECTION_MAX_BYTES = 64 * 1024
+#: Claude Code's caps on server-written text the model reads on every request
+#: (a tool's description, a server's instructions), in characters: a deferred
+#: tool, sent only once ``ToolSearch`` has loaded it, gets the larger one.
+#: ``NOETA_MAX_MCP_DESCRIPTION_LENGTH`` (its
+#: ``CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH``) replaces both.
+DESCRIPTION_MAX_CHARS = 4096
+LOADED_DESCRIPTION_MAX_CHARS = 16_384
+_TRUNCATED = "… [truncated]"
 
 _ALIAS_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 _NAME_MAX = 64
@@ -209,27 +208,31 @@ class McpServer:
                 self.call_timeout, self.bare_elicitation)
 
 
-def cap_injected(text: str, *, kind: str) -> str:
-    """Server-written text that enters the conversation, bounded at
-    :data:`INJECTION_MAX_BYTES` with a marker naming ``kind``."""
-    if len(text.encode("utf-8")) <= INJECTION_MAX_BYTES:
-        return text
-    return (
-        truncate_bytes(text, INJECTION_MAX_BYTES)
-        + f"\n\n[truncated: MCP {kind} exceeded {INJECTION_MAX_BYTES} bytes]"
-    )
+def description_max_chars(*, loaded: bool = False) -> int:
+    """``NOETA_MAX_MCP_DESCRIPTION_LENGTH`` when it is a positive number, else
+    :data:`LOADED_DESCRIPTION_MAX_CHARS` for a ``loaded`` description and
+    :data:`DESCRIPTION_MAX_CHARS` otherwise."""
+    try:
+        value = int(os.environ.get("NOETA_MAX_MCP_DESCRIPTION_LENGTH", ""))
+    except ValueError:
+        value = 0
+    if value > 0:
+        return value
+    return LOADED_DESCRIPTION_MAX_CHARS if loaded else DESCRIPTION_MAX_CHARS
 
 
-def describe_tool(description: object) -> str:
-    """The model-facing description of one server tool: the server's own
-    text, unprefixed, capped."""
+def cap_text(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters, marked as cut."""
+    return text if len(text) <= limit else text[:limit] + _TRUNCATED
+
+
+def describe_tool(description: object) -> tuple[str, str]:
+    """The model-facing descriptions of one server tool, the server's own
+    text, unprefixed: ``(listed, loaded)``, the form sent while it is
+    offered outright and the one sent once ``ToolSearch`` loaded it."""
     text = description if isinstance(description, str) else ""
-    if len(text.encode("utf-8")) > DESCRIPTION_MAX_BYTES:
-        text = (
-            truncate_bytes(text, DESCRIPTION_MAX_BYTES)
-            + f"\n[truncated: description exceeded {DESCRIPTION_MAX_BYTES} bytes]"
-        )
-    return text
+    return (cap_text(text, description_max_chars()),
+            cap_text(text, description_max_chars(loaded=True)))
 
 
 def make_tool_name(alias: str, raw: object, *, disambiguate: bool = False) -> str:

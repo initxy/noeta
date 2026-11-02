@@ -13,8 +13,9 @@ from __future__ import annotations
 import logging
 import posixpath
 import re
-from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, replace
 
 from noeta.core.execenv import ExecEnv
 from noeta.plugins.skills import _frontmatter
@@ -31,6 +32,7 @@ __all__ = [
     "load_registry",
     "parse_list",
     "path_patterns",
+    "plugin_skill_name",
     "render_body",
     "render_command_body",
     "strip_argument_placeholder",
@@ -40,6 +42,16 @@ __all__ = [
 _log = logging.getLogger(__name__)
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+#: What a plugin skill's directory name keeps (Claude Code's).
+_PLUGIN_NAME_UNSAFE = re.compile(r"[^a-zA-Z0-9_-]")
+
+#: After the description of a skill found below the working directory: one
+#: that shares its name with another skill is named ``<dir>:<name>``
+#: (Claude Code's directory-scoped name) and says so; another says where it
+#: comes from.
+SCOPED_NOTE = (" (for files under {scope}/: when your changes are there, use it rather than "
+               "the plain \"{name}\" skill)")
+FOUND_BELOW_NOTE = " (from {dir}; meant for files under {scope}/)"
 
 #: Bound on one ``find`` listing of a skill directory.
 _LIST_OUTPUT_CAP = 8 * 1024 * 1024
@@ -78,6 +90,8 @@ class SkillDescription:
     #: (the default agent when unset) and its result comes back from there.
     fork: bool = False
     agent: str | None = None
+    #: A directory-scoped skill's own name (``deploy`` of ``apps/web:deploy``).
+    unqualified: str | None = None
 
     @property
     def base_dir(self) -> str | None:
@@ -103,6 +117,18 @@ class SkillRegistry:
     def get(self, name: str) -> SkillDescription | None:
         return self._skills.get(name)
 
+    def recorded(self, name: str) -> SkillDescription | None:
+        """The skill a task's log names ``name``: that skill, else the one
+        plugin skill ``<plugin>:<name>`` (logs written before a plugin's
+        skills were named so hold the bare name). Never for a model's call:
+        the ``Skill`` tool answers a bare name with the full one."""
+        found = self._skills.get(name)
+        if found is not None or ":" in name:
+            return found
+        former = [d for n, d in self._skills.items()
+                  if d.unqualified is None and n.endswith(f":{name}")]
+        return former[0] if len(former) == 1 else None
+
     def names(self) -> tuple[str, ...]:
         return tuple(self._skills)
 
@@ -119,6 +145,10 @@ class SkillRegistry:
     def conditional(self) -> tuple[SkillDescription, ...]:
         """The skills with ``paths``, by name."""
         return tuple(d for _, d in sorted(self._skills.items()) if d.paths)
+
+    def scoped(self, name: str) -> tuple[SkillDescription, ...]:
+        """The directory-scoped skills whose own name is ``name``, by name."""
+        return tuple(d for _, d in sorted(self._skills.items()) if d.unqualified == name)
 
 
 def _parse_disabled_flag(raw: str | None, path: str) -> bool:
@@ -137,10 +167,25 @@ def _parse_disabled_flag(raw: str | None, path: str) -> bool:
     return False
 
 
-def parse_skill(path: str, raw: str, resources: tuple[str, ...] = ()) -> SkillDescription | None:
+def plugin_skill_name(plugin: str, rel: str, root: str, front_name: str | None) -> str:
+    """A plugin's skill's name, as Claude Code names it: ``<plugin>:<the
+    skill's directory>``; a ``SKILL.md`` at the top of the plugin's skill
+    directory is named by its frontmatter ``name`` (else that directory)."""
+    skill_dir = posixpath.dirname(rel)
+    if skill_dir:
+        base = posixpath.basename(skill_dir)
+    else:
+        own = (front_name or "").strip()
+        base = own.removeprefix(f"{plugin}:") or posixpath.basename(root.rstrip("/"))
+    return f"{plugin}:{_PLUGIN_NAME_UNSAFE.sub('-', base)}"
+
+
+def parse_skill(path: str, raw: str, resources: tuple[str, ...] = (), *,
+                name: str | None = None) -> SkillDescription | None:
     """One SKILL.md text into a description, or ``None`` (logged) when it is
     unusable: bad frontmatter, a missing or invalid ``name``, no
-    ``description``."""
+    ``description``. ``name`` is given for a plugin's skill (named by its
+    directory); its frontmatter ``name`` is then not needed."""
     try:
         fields, body, warnings = _frontmatter.parse(raw)
     except _frontmatter.FrontmatterError as exc:
@@ -148,13 +193,20 @@ def parse_skill(path: str, raw: str, resources: tuple[str, ...] = ()) -> SkillDe
         return None
     for warning in warnings:
         _log.warning("skill: %s: %s", path, warning)
-    name = fields.get("name")
     if name is None:
-        _log.warning("skill: %s: missing required key 'name'; skipped", path)
-        return None
-    if not _NAME_PATTERN.match(name):
-        _log.warning("skill: %s: invalid 'name' value %r "
-                     "(must match ^[a-z0-9][a-z0-9-]*$); skipped", path, name)
+        # Only a name the caller gives (a plugin's) may carry a ':'; one a
+        # SKILL.md gives itself may not, so no file can pass for a plugin's
+        # skill or a directory-scoped one and take on its allow rules.
+        name = fields.get("name")
+        if name is None:
+            _log.warning("skill: %s: missing required key 'name'; skipped", path)
+            return None
+        if not _NAME_PATTERN.match(name):
+            _log.warning("skill: %s: invalid 'name' value %r "
+                         "(must match ^[a-z0-9][a-z0-9-]*$); skipped", path, name)
+            return None
+    elif not name.split(":", 1)[0]:
+        _log.warning("skill: %s: no plugin name; skipped", path)
         return None
     description = fields.get("description")
     if description is None:
@@ -199,9 +251,11 @@ def _rel(path: str, root: str) -> str | None:
     return None if rel.startswith("..") else rel
 
 
-async def index_dir(env: ExecEnv, root: str) -> dict[str, SkillDescription]:
+async def index_dir(env: ExecEnv, root: str,
+                    plugin: str | None = None) -> dict[str, SkillDescription]:
     """Index ``<root>/**/SKILL.md``. Candidates are sorted by relative path
-    and a duplicate name keeps the first."""
+    and a duplicate name keeps the first. ``plugin``: the plugin whose skill
+    directory ``root`` is (its skills are named ``<plugin>:<directory>``)."""
     files = await _list_files(env, root)
     rels = sorted(r for r in (_rel(f, root) for f in files) if r is not None)
     candidates = [r for r in rels if posixpath.basename(r) == "SKILL.md"]
@@ -217,7 +271,16 @@ async def index_dir(env: ExecEnv, root: str) -> dict[str, SkillDescription]:
             r2 for r2 in (_rel(r, skill_dir) if skill_dir else r for r in rels)
             if r2 is not None and posixpath.basename(r2) != "SKILL.md"
         ))
-        desc = parse_skill(path, raw, resources)
+        name = None
+        if plugin is not None:
+            front = None
+            if not skill_dir:
+                try:
+                    front = _frontmatter.parse(raw)[0].get("name")
+                except _frontmatter.FrontmatterError:
+                    front = None
+            name = plugin_skill_name(plugin, rel, root, front)
+        desc = parse_skill(path, raw, resources, name=name)
         if desc is None:
             continue
         if desc.name in skills:
@@ -228,15 +291,51 @@ async def index_dir(env: ExecEnv, root: str) -> dict[str, SkillDescription]:
     return skills
 
 
-async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]]) -> SkillRegistry:
+async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
+                        plugins: Mapping[str, str] | None = None,
+                        scopes: Mapping[str, str] | None = None) -> SkillRegistry:
     """Merge ``(directory, tier)`` pairs, low precedence first: a later
-    directory's skill shadows an earlier one of the same name."""
+    directory's skill shadows an earlier one of the same name. ``plugins``:
+    directory -> the plugin whose skills it holds. ``scopes``: a skill
+    directory found below the working directory -> the directory it serves
+    (relative to the working directory); such a skill never shadows another:
+    one whose name another skill has too is named ``<scope>:<name>``, as
+    Claude Code names directory-scoped skills, and each one's description
+    says which files it is for."""
+    plugins, scopes = plugins or {}, scopes or {}
     merged: dict[str, SkillDescription] = {}
     tier_of: dict[str, int] = {}
+    below: list[tuple[str, str, int, dict[str, SkillDescription]]] = []
     for root, tier in tiers:
-        for name, desc in (await index_dir(env, root)).items():
+        found = await index_dir(env, root, plugins.get(root))
+        if root in scopes:
+            below.append((root, scopes[root], tier, found))
+            continue
+        for name, desc in found.items():
             merged[name] = desc
             tier_of[name] = tier
+    named = Counter(name for _root, _scope, _tier, found in below for name in found)
+    plain = set(merged)
+    for root, scope, tier, found in below:
+        for name, desc in found.items():
+            if name in plain or named[name] > 1:
+                desc = replace(desc, name=f"{scope}:{name}", unqualified=name,
+                               description=desc.description
+                               + SCOPED_NOTE.format(scope=scope, name=name))
+            else:
+                where = posixpath.join(scope, posixpath.relpath(
+                    root, posixpath.dirname(posixpath.dirname(root))))
+                desc = replace(desc, description=desc.description
+                               + FOUND_BELOW_NOTE.format(dir=where, scope=scope))
+            if desc.name in merged:
+                # Nested skills rank last: a scoped name never replaces a
+                # skill already known by it (a plugin's ``<plugin>:<name>``,
+                # or the same directory's other skill folder).
+                _log.warning("skill: %s: its name %r is taken by %s; skipped",
+                             desc.source_path, desc.name, merged[desc.name].source_path)
+                continue
+            merged[desc.name] = desc
+            tier_of[desc.name] = tier
     return SkillRegistry(merged, tier_of)
 
 

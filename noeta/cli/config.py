@@ -426,8 +426,6 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
     plugin_agent: dict[str, str] = {}
-    #: ``<plugin>:<agent>`` (Claude Code's name for a plugin's agent) -> its name here.
-    qualified: dict[str, str] = {}
 
     def make_agents() -> list[Agent]:
         """The agents from the agent files and plugins found now; a plugin
@@ -439,9 +437,8 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                 log.warning("%s", notice)  # a worker has no front end to show it
         plugin_agent.clear()
         plugin_agent.update(plugins_agent(claude))
-        qualified.clear()
-        qualified.update({f"{p.name}:{a.name}": a.name for p in claude for a in p.agents})
-        files = [a for p in claude for a in p.agents if a.name not in BUILTIN_AGENTS]
+        # Named <plugin>:<agent>, a plugin's agent never takes a built-in one's name.
+        files = [a for p in claude for a in p.agents]
         own: list[AgentFile] = []
         if source("user"):
             own += read_agent_dir(home_dir.HOME / "agents")
@@ -485,11 +482,11 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         """The agent front ends start with: the settings' ``agent``, else
         the one a Claude Code plugin's settings name, else ``main``."""
         wanted = found.agent or plugin_agent.get("agent")
-        known = app.runtime.agents
-        # A plugin's agent is named <plugin>:<agent> in Claude Code.
-        name = wanted if not wanted or wanted in known else qualified.get(wanted, wanted)
-        app.main_agent = name if name and name in known else "main"
-        if wanted and name not in known:
+        # A plugin's agent by its bare name, as settings written before
+        # plugin agents were named <plugin>:<agent> give it.
+        named = app.runtime.agent(wanted) if wanted else None
+        app.main_agent = named.name if named is not None else "main"
+        if wanted and named is None:
             notice = (f"agent {wanted!r} (from the settings of "
                       f"{plugin_agent.get('source') if not found.agent else 'noeta'}) "
                       "is not an agent here; main is used")
@@ -543,16 +540,12 @@ def make_channels(tables: Mapping[str, Mapping[str, Any]]) -> list[Channel]:
     return out
 
 
-#: The built-in agents' names: a plugin's agent file never replaces one.
-BUILTIN_AGENTS = frozenset({"main", "general-purpose", "Explore", "Plan"})
-
-
 def claude_plugins(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()
                    ) -> tuple[list[ClaudePlugin], list[str]]:
     """The Claude Code plugin directories of ``~/.noeta/plugins``, for a
     trusted project ``<cwd>/.noeta/plugins``, and ``plugin_dirs`` (each one
     such directory or a directory of them; :mod:`noeta.cli.claude_plugins`),
-    with notices for the person (an agent named like a built-in one)."""
+    with notices for the person."""
     places = [(home_dir.HOME / "plugins", False)]
     if cwd and project_trusted(cwd):
         places.append((Path(cwd).expanduser().resolve() / ".noeta" / "plugins", True))
@@ -564,10 +557,7 @@ def claude_plugins(cwd: str | None, plugin_dirs: Sequence[str | Path] = ()
             else find_claude_plugins([(given, False)], data_home)
     policy = plugin_policy(managed_dir())
     found = [p for p in found if policy.admits(p.name)]
-    notices = [n for p in found for n in p.notices]
-    notices += [f"plugin {p.name}: agent {a.name!r} is a built-in agent's name; not loaded"
-                for p in found for a in p.agents if a.name in BUILTIN_AGENTS]
-    return found, notices
+    return found, [n for p in found for n in p.notices]
 
 
 def plugins_agent(plugins: Sequence[ClaudePlugin]) -> dict[str, str]:

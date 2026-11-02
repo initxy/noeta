@@ -22,8 +22,10 @@ from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
 from noeta.core.store import Status, TaskRow
 from noeta.host._errors import error_text
 from noeta.host.rewind import RESTORE_SIGNAL
+from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
+from noeta.toolkit.structured_output import SCHEMA_KEY, answer_schema_problem
 
 
 def token_digest(token: str) -> str:
@@ -42,7 +44,7 @@ _BYPASS = "bypassPermissions"
 #: are set by plugins and the server for the tasks they start; from a
 #: request they would loosen the permission gates.
 REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema",
-                  "timezone")
+                  "timezone", "interactive", "permission_prompt_tool")
 
 #: The signals a request may post: the ones front ends send. The others
 #: (a background job's end, a sub-agent's idle subscription …) are posted
@@ -101,6 +103,10 @@ class GuardedClient:
                 raise Refused(f"a request may not set the task config key {key!r} "
                               f"(only {', '.join(allowed)})")
         self._mode(config.get("permission_mode"))
+        if config.get(SCHEMA_KEY) is not None:
+            problem = answer_schema_problem(config[SCHEMA_KEY])
+            if problem is not None:
+                raise ValueError(f"{SCHEMA_KEY} is not a valid answer schema: {problem}")
         if not config.get("cwd"):
             return config
         return {**config, "cwd": self.check_cwd(config["cwd"])}
@@ -139,6 +145,11 @@ class GuardedClient:
             self._mode(data.get("mode"))
         if name == CONFIG_SIGNAL:
             data = self.check_config(data, CHANGEABLE_CONFIG)
+            if isinstance(data, Mapping) and data.get(CLIENT_HOOKS_KEY) is not None:
+                # Only taken away (a front end a person follows reopening
+                # the task): the record keeps other workers from running
+                # what a headless client's hook callbacks would judge.
+                raise Refused(f"a request may only remove {CLIENT_HOOKS_KEY!r}")
         return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key)
 
     async def cancel(self, task_id: str, reason: str = "", *,

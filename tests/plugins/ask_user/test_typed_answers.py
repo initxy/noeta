@@ -76,3 +76,15 @@ async def test_the_tool_takes_a_plain_string_for_one_question(tmp_path: Path) ->
     assert not done.result.is_error
     assert done.result.text.startswith('The user answered your questions: "Which db?"="sqlite"')
     await store.close()
+
+
+def test_a_json_answer_may_leave_questions_unanswered() -> None:
+    d = {**detail(question("First?", "x", "y"), question("Second?", "p", "q")),
+         "partial": True}
+    typed = typed_answer(d, '{"1": {"selected": ["p"]}}')
+    assert next_question(d, typed) is None
+    assert normalize_answer(typed, d["questions"], partial=True) == {
+        "1": {"selected": ["p"], "other": None}}
+    # Without "partial" the other questions are still asked one by one.
+    strict = typed_answer({**d, "partial": False}, '{"1": {"selected": ["p"]}}')
+    assert next_question(d, strict) is not None

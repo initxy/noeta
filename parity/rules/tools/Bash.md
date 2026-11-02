@@ -41,7 +41,7 @@ property carries its own `description`.
 | `tool.Bash.3` | When a command ends outside the working directories, the next call starts back in the starting folder; otherwise the directory carries over. | covered (resets to workspace root, adds a reset note) |
 | `tool.Bash.4` | Absolute paths are preferred; a `cd` inside a compound command may trigger a permission prompt. | covered |
 | `tool.Bash.5` | Environment variables and shell functions do not persist between calls. | covered |
-| `tool.Bash.6` | The shell is initialized from the user's login profile. | contradicts: noeta runs `bash -c` without the login profile, in noeta's own environment minus its credentials (`child_env`) |
+| `tool.Bash.6` | The shell is initialized from the user's login profile. | deviation — no rc snapshot or login profile; `bash -c` with noeta's environment minus its credentials (`deviations.md`) |
 | `tool.Bash.7` | Command output goes to the model; the user may not see it, so anything the user needs must be restated. | covered |
 | `tool.Bash.8` | `timeout` is in milliseconds, default 120000, maximum 600000 for a foreground command. | covered |
 | `tool.Bash.9` | `run_in_background` detaches the command; it keeps running across turns and wakes the model when it exits. No trailing `&` is needed. | covered |
@@ -58,6 +58,7 @@ property carries its own `description`.
 | `tool.Bash.20` | Git: when the attribution `<system-reminder>` is present, its lines close every commit message and PR description. | covered in the description (the attribution reminder itself: see `reminders.md`) |
 | `tool.Bash.21` | Default-mode variant only (`m2`): avoid `cat`, `head`, `tail`, `sed`, `awk`, `echo` unless told to or after confirming no dedicated tool fits; use the dedicated tool instead. In `auto` mode (baseline) this line is absent and the environment message instead says Bash is fine for reading, searching and small mechanical edits. | covered (no dedicated-tool steering; the default-mode variant is not built) |
 | `tool.Bash.22` | The description states no output-size cap. (Observed: a 12005-character output came back whole.) | covered (no cap stated; output past 30000 characters is still spilled to a file) |
+| `tool.Bash.23` | (bundle) A command matching the in-place write markers (`--write`, `--fix`, `sed -i`, formatters such as `black`, `ruff format`, `cargo fmt`) ends its result with the files the model had read that it changed (five, then a count) and a request to `Read` them before editing; the changed-file note still follows. | covered (`fs/shell_writes.py`; the timing differs: `deviations.md`) |
 
 ## Result shape
 

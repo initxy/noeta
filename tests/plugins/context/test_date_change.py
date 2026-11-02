@@ -1,10 +1,11 @@
 """The date note: told once when the day moves past the one the environment
-block gave, at the start of a turn; overridable text."""
+block gave, before any model call (mid-turn too); overridable text."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -57,6 +58,39 @@ async def test_told_once_when_the_day_changes(tmp_path: Path) -> None:
     await store.close()
 
 
+async def test_told_mid_turn_when_the_day_changes_between_model_calls(
+        tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", ("Probe", {})), reply("done")])
+    # The day turns while the tool runs: the second call of the turn is told.
+    env = Environment(today=lambda: "2026-10-27" if len(provider.requests) < 1
+                      else "2026-10-28")
+
+    class Probe:
+        name = "Probe"
+        description = "probe"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = True
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            from noeta.core.tool import text_output
+            return text_output("ok")
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", tools=[Probe()],
+                                                 extensions=[env])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: LocalExecEnv(str(tmp_path)),
+                 sleep=_no_sleep)
+    await Client(store).create("a", "hi")
+    await rt.run_until_idle()
+    assert len(provider.requests) == 2
+    first, second = ([m.text for m in r.messages if m.role == "system"
+                      and m.text.startswith("The date moved on")] for r in provider.requests)
+    assert first == []
+    assert len(second) == 1 and "today is 2026-10-28" in second[0]
+    await store.close()
+
+
 async def _first_request(tmp_path: Path, config: dict[str, object],
                          monkeypatch: pytest.MonkeyPatch, now: datetime) -> list[str]:
     class Clock(datetime):
@@ -98,3 +132,30 @@ async def test_without_the_users_zone_the_date_is_utc_and_says_so(
     texts = await _first_request(tmp_path, {}, monkeypatch, EVENING_UTC)
     [line] = [t for t in texts if t.startswith("The date today is")]
     assert line.startswith("The date today is 2026-10-28 in UTC; the user's own date may differ.")
+
+
+async def test_a_worker_whose_clock_lags_never_takes_the_date_back(tmp_path: Path) -> None:
+    # Near midnight the calls of one task can run on workers whose clocks
+    # differ by seconds: the date told only ever moves forward.
+    day = {"today": "2026-10-27"}
+    env = Environment(today=lambda: day["today"])
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("a"), reply("b"), reply("c"), reply("d")])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[env])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: LocalExecEnv(str(tmp_path)),
+                 sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "hi")
+    await rt.run_until_idle()
+
+    def notes(i: int) -> list[str]:
+        return [m.text for m in provider.requests[i].messages
+                if m.role == "system" and "date moved on" in m.text]
+
+    for i, today in enumerate(("2026-10-28", "2026-10-27", "2026-10-28"), 1):
+        day["today"] = today
+        await client.send(tid, f"msg {i}")
+        await rt.run_until_idle()
+    assert [len(notes(i)) for i in (1, 2, 3)] == [1, 1, 1]
+    assert all("2026-10-28" in n for n in notes(3))
+    await store.close()

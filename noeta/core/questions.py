@@ -3,11 +3,12 @@
 A tool asks by parking: ``return ToolOutput(park=ask({"question": ...}))``,
 and its ``resume`` reads the answer with ``read_answer(outcome, <the same
 ask(...)>)``. The detail is ``{"questions": [{"id", "question", "header"?,
-"options"?, "multiSelect"?}]}``; a question without options asks for free
-text. The person's answer is ``{"answers": {id: {"selected": [labels]} |
-{"other": text}}}``. Front ends need nothing from the asking plugin
-(``noeta.host.questions`` turns typed lines into an answer and checks it
-before posting).
+"options"?, "multiSelect"?}], "partial"?}``; a question without options
+asks for free text. The person's answer is ``{"answers": {id: {"selected":
+[labels]} | {"other": text}}}``; with ``"partial": true`` it may leave
+questions out (or empty), and only the answered ones are read. Front ends
+need nothing from the asking plugin (``noeta.host.questions`` turns typed
+lines into an answer and checks it before posting).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from noeta.core.tool import Park
 __all__ = [
     "AnswerValidationError",
     "ask",
+    "detail_partial",
     "detail_questions",
     "normalize_answer",
     "read_answer",
@@ -64,11 +66,14 @@ def ask(*questions: Mapping[str, Any]) -> Park:
     return Park(on="question", detail={"questions": out})
 
 
-def normalize_answer(raw: Any, questions: Sequence[Mapping[str, Any]]
-                     ) -> dict[str, dict[str, Any]]:
+def normalize_answer(raw: Any, questions: Sequence[Mapping[str, Any]], *,
+                     partial: bool = False) -> dict[str, dict[str, Any]]:
     """Validate an answer — ``{"answers": {...}}`` or the bare map, keyed by
     question id, each ``{"selected": [labels], "other": text}`` — and return
-    it normalised. Raises :class:`AnswerValidationError`."""
+    it normalised. With ``partial`` a question may be left out or answered
+    with nothing (no label, blank text): it is unanswered and missing from
+    the result; what is answered is checked all the same. Raises
+    :class:`AnswerValidationError`."""
     if not isinstance(raw, dict):
         raise AnswerValidationError("answer body must be an object")
     answers_raw = raw.get("answers") if "answers" in raw else raw
@@ -76,13 +81,15 @@ def normalize_answer(raw: Any, questions: Sequence[Mapping[str, Any]]
         raise AnswerValidationError("answers must be an object")
     by_id = {str(q.get("id")): q for q in questions}
     missing = sorted(set(by_id) - set(answers_raw))
-    if missing:
+    if missing and not partial:
         raise AnswerValidationError(f"missing answer(s): {', '.join(missing)}")
     unknown = sorted(set(answers_raw) - set(by_id))
     if unknown:
         raise AnswerValidationError(f"unknown answer id(s): {', '.join(unknown)}")
     out: dict[str, dict[str, Any]] = {}
     for qid, question in by_id.items():
+        if qid not in answers_raw:
+            continue
         answer = answers_raw[qid]
         if not isinstance(answer, dict):
             raise AnswerValidationError(f"answer {qid!r} must be an object")
@@ -98,6 +105,8 @@ def normalize_answer(raw: Any, questions: Sequence[Mapping[str, Any]]
             raise AnswerValidationError(f"answer {qid!r} other must be a string")
         has_other = isinstance(raw_other, str) and raw_other.strip() != ""
         if not selected and not has_other:
+            if partial:
+                continue
             raise AnswerValidationError(
                 f"answer {qid!r} must contain selected labels or 'other' text")
         allowed = {str(o.get("label")) for o in question.get("options") or []
@@ -121,6 +130,11 @@ def normalize_answer(raw: Any, questions: Sequence[Mapping[str, Any]]
     return out
 
 
+def detail_partial(detail: Mapping[str, Any]) -> bool:
+    """Whether a question's ``detail`` lets the answer leave questions out."""
+    return detail.get("partial") is True
+
+
 def detail_questions(detail: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The questions of a question's ``detail``, each with its ``id``."""
     qs = detail.get("questions") or []
@@ -138,7 +152,8 @@ def read_answer(outcome: Any, asked: Park | Mapping[str, Any]
                            and outcome.data is None):
         return None
     data = outcome.data if isinstance(outcome, Answer) else outcome
-    questions = detail_questions(asked.detail if isinstance(asked, Park) else asked)
+    detail = asked.detail if isinstance(asked, Park) else asked
+    questions = detail_questions(detail)
     if isinstance(data, str) and len(questions) == 1:
         data = {questions[0]["id"]: {"other": data}}
-    return normalize_answer(data, questions)
+    return normalize_answer(data, questions, partial=detail_partial(detail))

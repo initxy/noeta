@@ -125,6 +125,19 @@ _STAT = (
     f'else exit {_NOT_FOUND}; fi; echo $l'
 )
 
+#: ``stat_many``: each existing path's name and facts, NUL-separated; a
+#: missing one is left out. GNU ``stat`` takes them all at once; one
+#: without ``--printf`` (BusyBox, as on Alpine) is asked path by path.
+_STAT_MANY = (
+    'if stat --printf "" -- / >/dev/null 2>&1; then '
+    'stat -L --printf "%n\\0%s %.9Y %F\\0" -- "$@" 2>/dev/null; '
+    'else for p do s=$(stat -L -c "%s %.9Y %F" -- "$p" 2>/dev/null) '
+    '&& printf "%s\\0%s\\0" "$p" "$s"; done; fi; exit 0'
+)
+#: Bytes of paths one ``stat_many`` command carries at most (far below the
+#: kernel's argument limit).
+_STAT_MANY_ARG_BYTES = 100_000
+
 
 class ContainerExecEnv:
     """An ``ExecEnv`` over ``docker exec`` into a running container.
@@ -321,6 +334,30 @@ class ContainerExecEnv:
         size, mtime, kind = first.split(" ", 2)
         return FileStat(size=int(size), mtime=float(mtime), is_dir=kind == "directory",
                         is_symlink=link.strip() == "1")
+
+    async def stat_many(self, paths: Sequence[str]) -> list[FileStat | None]:
+        """``noeta.core.execenv.stat_many``: one ``docker exec`` per
+        :data:`_STAT_MANY_ARG_BYTES` of paths, not one per path."""
+        targets = [self._abs(p) for p in paths]
+        found: dict[str, FileStat] = {}
+        start = 0
+        while start < len(targets):
+            end, size = start, 0
+            while end < len(targets) and (end == start or size < _STAT_MANY_ARG_BYTES):
+                size += len(targets[end].encode("utf-8", errors="surrogateescape")) + 1
+                end += 1
+            result = await self._sh(_STAT_MANY, *targets[start:end])
+            fields = result.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+            for name, facts in zip(fields[0::2], fields[1::2], strict=False):
+                size_text, _, rest = facts.partition(" ")
+                mtime, _, kind = rest.partition(" ")
+                try:
+                    found[name] = FileStat(size=int(size_text), mtime=float(mtime),
+                                           is_dir=kind == "directory")
+                except ValueError:
+                    continue
+            start = end
+        return [found.get(t) for t in targets]
 
     async def realpath(self, path: str) -> str:
         target = self._abs(path)

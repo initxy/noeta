@@ -236,6 +236,17 @@ async def test_requests_cannot_set_the_config_plugins_own(
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "config", "data": {"permission_rules": ["Bash"]}})
         assert refused.status_code == 403
+        # A headless client's hook record may be taken away, not set.
+        refused = await http.post(f"/tasks/{task_id}/signals", json={
+            "name": "config", "data": {"client_hooks": {"client": "x", "events": {}}}})
+        assert refused.status_code == 403
+        taken = await http.post(f"/tasks/{task_id}/signals", json={
+            "name": "config", "data": {"client_hooks": None, "interactive": None}})
+        assert taken.status_code == 200
+        # An answer schema whose root is no object would fail every request.
+        bad = await http.post("/tasks", json={"agent": "main", "config": {
+            "output_schema": {"type": "array"}}})
+        assert bad.status_code == 400 and '"type": "object"' in bad.json()["error"]
 
 
 async def test_commands_run_only_in_the_servers_directories(

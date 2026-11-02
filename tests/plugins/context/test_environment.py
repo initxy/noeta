@@ -18,6 +18,7 @@ from noeta.core.events import ExtensionRecorded, Recorded, Waiting
 from noeta.core.execenv import RunResult
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState
+from noeta.plugins import environment
 from noeta.plugins.environment import Environment, render_git
 
 
@@ -83,6 +84,27 @@ async def test_a_repository_clean_filter_never_runs(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_parent_repository_clean_filter_never_runs_from_a_subdirectory(
+        tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    sub = repo / "src"
+    sub.mkdir(parents=True)
+    pwned = tmp_path / "PWNED"
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(repo)], check=True)
+    (sub / "a.txt").write_text("a\n")
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "filter.x.clean",
+                    f"touch {pwned}; cat"], check=True)
+    (repo / ".gitattributes").write_text("*.txt filter=x\n")
+    (sub / "a.txt").touch()
+    text = await _block(Environment(), _view(str(sub), LocalExecEnv(str(sub))))
+    assert not pwned.exists()
+    assert "Current branch: trunk" in text and "Status:\n(not captured)" in text
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 async def test_a_repository_signature_program_never_runs(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -131,6 +153,39 @@ async def test_a_submodule_clean_filter_never_runs(tmp_path: Path) -> None:
     assert "Current branch: trunk" in text
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_working_directory_below_the_repository_top_is_in_the_repository(
+        tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    sub = repo / "src" / "pkg"
+    sub.mkdir(parents=True)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(repo)], check=True)
+    (sub / "a.txt").write_text("a\n")
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
+    (sub / "b.txt").write_text("b\n")
+    text = await _block(Environment(), _view(str(sub), LocalExecEnv(str(sub))))
+    assert " - Is a git repository: true" in text
+    assert "Current branch: trunk" in text and "init" in text and "b.txt" in text
+    # Outside any repository: false, and no snapshot.
+    outside = tmp_path / "plain" / "deeper"
+    outside.mkdir(parents=True)
+    text = await _block(Environment(), _view(str(outside), LocalExecEnv(str(outside))))
+    assert " - Is a git repository: false" in text and "# Git status" not in text
+
+
+async def test_the_shell_line_names_the_shell_commands_run_in(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    bash = shutil.which("bash") or "bash"
+    monkeypatch.setenv("SHELL", "/opt/zsh-test/zsh")
+    assert environment._shell() == f"{bash} (the user's login shell is /opt/zsh-test/zsh)"
+    monkeypatch.setenv("SHELL", bash)
+    assert environment._shell() == bash
+    monkeypatch.delenv("SHELL")
+    assert environment._shell() == bash
+
+
 class FakeContainer:
     """An ExecEnv that is not the local one; records what it runs."""
 
@@ -165,6 +220,62 @@ async def test_a_container_env_is_asked_and_host_facts_left_out() -> None:
     for argv in env.argv:
         assert argv[:3] == ["git", "-c", "core.fsmonitor="] or argv[0] == "uname"
     assert any("status" in a for a in env.argv)
+
+
+async def test_a_container_subdirectory_finds_the_repository_above_it() -> None:
+    env = FakeContainer("/workspace")
+    asked: list[str] = []
+    stat = env.stat
+
+    async def recording(path: str) -> object | None:
+        asked.append(path)
+        return await stat(path)
+
+    env.stat = recording  # type: ignore[method-assign]
+    text = await _block(Environment(model="m"), _view("/workspace/src/app", env))
+    assert " - Is a git repository: true" in text and "Current branch: main" in text
+    assert asked[:3] == ["/workspace/src/app/.git", "/workspace/src/.git", "/workspace/.git"]
+
+
+async def test_a_long_status_is_cut_at_2000_characters_with_a_note() -> None:
+    lines = "".join(f"?? dir/file-{i:04d}-é.txt\n" for i in range(200))
+
+    class Busy(FakeContainer):
+        async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
+            if "status" in argv:
+                return RunResult(exit_code=0, stdout=lines.encode())
+            return await super().run(argv, **kw)
+
+    text = await _block(Environment(model="m"), _view("/workspace", Busy("/workspace")))
+    shown = text.split("Status:\n", 1)[1].split("\n\nRecent commits:", 1)[0]
+    assert shown == lines[:2000] + environment.GIT_STATUS_CUT_NOTE
+    assert "run `git status` with Bash" in shown
+    short = "?? a.txt\n?? b.txt\n"
+
+    class Quiet(FakeContainer):
+        async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
+            if "status" in argv:
+                return RunResult(exit_code=0, stdout=short.encode())
+            return await super().run(argv, **kw)
+
+    text = await _block(Environment(model="m"), _view("/workspace", Quiet("/workspace")))
+    assert "Status:\n?? a.txt\n?? b.txt\n\nRecent commits:" in text
+
+
+async def test_a_status_that_fails_or_times_out_is_not_called_clean() -> None:
+    # A home directory kept as a dotfiles repository: git status runs out
+    # of time, and the model must not be told the checkout is clean.
+    for result in (RunResult(exit_code=-1, stdout=b"", timed_out=True),
+                   RunResult(exit_code=128, stdout=b"")):
+        class Slow(FakeContainer):
+            async def run(self, argv: Sequence[str], _r: RunResult = result,
+                          **kw: Any) -> RunResult:
+                if "status" in argv:
+                    return _r
+                return await super().run(argv, **kw)
+
+        text = await _block(Environment(model="m"), _view("/workspace", Slow("/workspace")))
+        assert "Status:\n(not captured)\n" in text and "(clean)" not in text
 
 
 async def test_a_container_whose_platform_cannot_be_told_gets_no_platform_line() -> None:
@@ -490,3 +601,39 @@ async def test_a_model_claude_code_tells_no_budget_gets_no_budget(tmp_path: Path
 def test_the_budget_goes_to_the_models_claude_code_knows(model: str, told: bool) -> None:
     from noeta.plugins.environment import gets_budget
     assert gets_budget(model) is told
+
+
+async def test_a_compaction_gives_the_stored_snapshot_when_git_fails_or_is_slow(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    ext = Environment(model="m")
+    view = _view("/workspace", FakeContainer("/workspace"))
+    fresh = await ext._git_for_compaction(view, "stored")
+    assert fresh.startswith("Here is context") and " M src/x.py" in fresh
+    [rec] = view.pending
+    assert isinstance(rec, ExtensionRecorded) and rec.kind == "git" and rec.data["text"] == fresh
+
+    class Gone(FakeContainer):
+        async def stat(self, path: str) -> object | None:
+            raise OSError("container restarting")
+
+    view = _view("/workspace", Gone("/workspace"))
+    assert await ext._git_for_compaction(view, "stored") == "stored" and not view.pending
+
+    class Slow(FakeContainer):
+        async def run(self, argv: Sequence[str], **kw: Any) -> RunResult:
+            await asyncio.sleep(5)
+            return await super().run(argv, **kw)
+
+    monkeypatch.setattr(environment, "GIT_RECAPTURE_TIMEOUT_S", 0.05)
+    view = _view("/workspace", Slow("/workspace"))
+    assert await ext._git_for_compaction(view, "stored") == "stored" and not view.pending
+
+    class Plain(FakeContainer):
+        async def stat(self, path: str) -> object | None:
+            return None
+
+    # No longer a repository: no snapshot at all.
+    view = _view("/workspace", Plain("/workspace"))
+    assert await ext._git_for_compaction(view, "stored") == ""

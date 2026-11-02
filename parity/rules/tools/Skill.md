@@ -30,12 +30,12 @@ position 9 of 13 in the baseline list; also present for sub-agents. noeta's coun
 | `tool.Skill.1` | A skill is a packaged instruction set the user or project set up for one kind of task (deploy steps, review checklist, repo workflow). | covered |
 | `tool.Skill.2` | Available skills are listed, one line each, in a message in the conversation (the `role: "system"` message), not in the tool definition. | covered |
 | `tool.Skill.3` | When a listed skill covers the task, call this tool first; its instructions then replace the default approach for the turn. | covered |
-| `tool.Skill.4` | Some skills run in a sub-agent and return the finished result instead of loading instructions. | covered in the description; no `context: fork` yet |
-| `tool.Skill.5` | A skill that runs in the background answers with just an agent name; the outcome comes later in a task notification, and the model neither waits on it nor calls the skill again in the meantime. | covered in the description; no background skills yet |
+| `tool.Skill.4` | Some skills run in a sub-agent and return the finished result instead of loading instructions. | covered — a `context: fork` skill runs in a sub-agent through `Agent`, from the `Skill` tool and from a typed `/<name>` |
+| `tool.Skill.5` | A skill that runs in the background answers with just an agent name; the outcome comes later in a task notification, and the model neither waits on it nor calls the skill again in the meantime. | covered — fork skills run in the background (the foreground cases: `deviations.md`) |
 | `tool.Skill.6` | A user naming a skill, or typing `/<name>` ("slash command"), is a request to invoke it. | covered |
 | `tool.Skill.7` | `skill` is the exact listed name without a leading slash. | covered |
-| `tool.Skill.8` | Plugin skills are addressed as `plugin:skill`. | covered in the description; plugin skills are not named so yet |
-| `tool.Skill.9` | Skills scoped to a directory carry a path prefix (`apps/web:deploy`); when a scoped and an unscoped skill share a name, choose the scope that contains the files in hand, the deepest match first, falling back to the unscoped one. | covered in the description; scoped names are not built yet |
+| `tool.Skill.8` | Plugin skills are addressed as `plugin:skill`. | covered — a Claude Code plugin's skills are `<plugin>:<skill directory>`; a bare name is answered with the full one |
+| `tool.Skill.9` | Skills scoped to a directory carry a path prefix (`apps/web:deploy`); when a scoped and an unscoped skill share a name, choose the scope that contains the files in hand, the deepest match first, falling back to the unscoped one. | covered — a nested skill that shares a name is `<dir>:<name>` with a note; loading the unscoped one names the scoped ones; a bare name with only scoped ones lists them |
 | `tool.Skill.10` | Only listed names, or names the user typed explicitly, are valid. | covered |
 | `tool.Skill.11` | Built-in CLI commands (`/help`, `/clear`, …) are not skills. | covered |
 | `tool.Skill.12` | If a `<command-name>` block is already in the current turn, the skill is already loaded: follow it, do not call the tool again. | covered |

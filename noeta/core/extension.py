@@ -27,6 +27,7 @@ from noeta.core.events import (
 from noeta.core.execenv import ExecEnv
 from noeta.core.tool import Tool, ToolOutput, tool_flag
 from noeta.core.types import (
+    Effort,
     Message,
     ModelRequest,
     ModelResponse,
@@ -182,10 +183,12 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
                 denied: Sequence[str]) -> ToolOffer:
     """A task's tools for one step: every extension's (the first of a name
     wins), then each extension's ``tool_changes`` to them, the agent's allow
-    and deny lists applied to both (deny wins). An extension whose added
-    tool the lists refuse has its whole change set dropped: its withholds
-    and entries were computed alongside that tool (a loader of deferred
-    tools), so the deferred tools it withheld are sent plain instead."""
+    and deny lists applied to both (deny wins; not to a ``past_agent_lists``
+    tool, which its extension offers only when the task needs it). An
+    extension whose added tool the lists refuse has its whole change set
+    dropped: its withholds and entries were computed alongside that tool (a
+    loader of deferred tools), so the deferred tools it withheld are sent
+    plain instead."""
     refused = set(denied)
 
     def offered_name(name: str) -> bool:
@@ -195,7 +198,8 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
     seen: set[str] = set()
     for ext in exts:
         for t in ext.tools(view):
-            if offered_name(t.name) and t.name not in seen:
+            if (offered_name(t.name) or tool_flag(t, "past_agent_lists")) \
+                    and t.name not in seen:
                 seen.add(t.name)
                 tools.append(t)
     offered = tuple(tools)
@@ -292,6 +296,12 @@ class TaskView(records.CoreNotices):
     #: return inline are saved below it, in the task's exec env, for the
     #: model to read (``None``: nothing is saved).
     spill_dir: str | None = None
+    #: The identity line the task's requests open with (``identity/<agent>``):
+    #: a side request (a title, a page digest) opens with it too.
+    identity: str = ""
+    #: The task's effort (its config's, else its agent's); ``None`` for the
+    #: provider's default.
+    effort: Effort | None = None
 
     @property
     def task_id(self) -> str:

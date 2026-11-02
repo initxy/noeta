@@ -14,6 +14,8 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
 from noeta.plugins.instructions.files import matches
 from noeta.plugins.memory import Memory, memory_dir_for
+from noeta.plugins.permissions import Permissions
+from noeta.plugins.shell import Shell
 from noeta.plugins.skills import Skills
 from noeta.testing import reply
 from tests.plugins.context.conftest import Harness
@@ -115,6 +117,24 @@ async def test_layers_in_claude_codes_order(h: Harness, tmp_path: Path) -> None:
     assert "ts" not in text.split("always")[1].split("local")[0]
 
 
+async def test_managed_only_reads_just_the_machines_files(h: Harness, tmp_path: Path) -> None:
+    # An agent file's omitClaudeMd: Claude Code keeps only the managed
+    # policy files.
+    managed, user_dir = tmp_path / "managed", tmp_path / "noeta-home"
+    managed.mkdir()
+    (managed / "NOETA.md").write_text("policy\n")
+    user_dir.mkdir()
+    (user_dir / "NOETA.md").write_text("user\n")
+    (h.work / "NOETA.md").write_text("project\n")
+    a = agent(user_dir=str(user_dir), managed_dir=str(managed), managed_only=True)
+    h.provider.add(reply("ok"))
+    tid = await h.start(a)
+    [rec] = await h.records(tid, "instructions")
+    assert [f["kind"] for f in rec.data["files"]] == ["managed"]
+    text = h.provider.requests[0].messages[0].text
+    assert "policy" in text and "project\n" not in text and "user\n" not in text
+
+
 async def test_imports_follow_the_file_naming_them(h: Harness, tmp_path: Path) -> None:
     (h.work / "docs").mkdir()
     (h.work / "NOETA.md").write_text(
@@ -172,6 +192,33 @@ async def test_the_memory_index_ends_the_instructions_message(h: Harness, tmp_pa
         "conversations):\n\n- [Note](note.md) — a note")
 
 
+async def test_a_sub_agent_without_the_memory_plugin_is_shown_its_callers_index(
+        h: Harness, tmp_path: Path) -> None:
+    from noeta.plugins.subtasks import SubagentSpec, Subtasks
+
+    home = tmp_path / "home"
+    mem = Path(memory_dir_for(str(h.work), home))
+    mem.mkdir(parents=True)
+    (mem / "MEMORY.md").write_text("- [Note](note.md) — a note\n")
+    roster = Subtasks([SubagentSpec(name="helper", description="Helps.", agent="w")])
+    main = Agent(name="a", model="m", extensions=[
+        FileTools(), Memory(home=str(home)), Instructions(walk=False), roster])
+    # As Claude Code's general-purpose agent (Explore and Plan, without
+    # instruction files, are shown none).
+    helper = Agent(name="w", model="m", extensions=[FileTools(), Instructions(walk=False)])
+    h.provider.add(reply("", ("Agent", {"description": "d", "prompt": "help",
+                                        "subagent_type": "helper"})),
+                   reply("started"), reply("helped"), reply("thanks"))
+    await h.client.create("a", "go")
+    await h.runtime(main, helper).run_until_idle()
+    child = next(r for r in h.provider.requests if r.messages[-1].text == "help")
+    index = f"{mem / 'MEMORY.md'} (your auto memory index for this project, kept across " \
+        "conversations):\n\n- [Note](note.md) — a note"
+    assert child.messages[0].text.endswith(index)
+    # No memory section: the sub-agent's prompt does not name the directory.
+    assert str(mem) not in "".join(p.text for p in child.system)
+
+
 async def test_a_touched_file_brings_what_applies_to_it(h: Harness) -> None:
     pkg = h.work / "src" / "pkg"
     pkg.mkdir(parents=True)
@@ -198,6 +245,66 @@ async def test_a_touched_file_brings_what_applies_to_it(h: Harness) -> None:
     assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
     assert msgs[5].text == f"{pkg / 'NOETA.md'} {PROJECT}:\n\npkg rules"
     assert len(h.provider.requests[2].messages) == len(msgs) + 2
+
+
+async def test_a_file_a_shell_command_showed_brings_what_applies_to_it(h: Harness) -> None:
+    # As Claude Code: ``cat`` of a file is a read of it for the nested files.
+    pkg = h.work / "src" / "pkg"
+    pkg.mkdir(parents=True)
+    rules = h.work / ".noeta" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "py.md").write_text("---\npaths: src/**/*.py\n---\npython rule\n")
+    (pkg / "NOETA.md").write_text("pkg rules\n")
+    (pkg / "a.py").write_text("x = 1\n")
+    (h.work / "other").mkdir()
+    (h.work / "other" / "NOETA.md").write_text("other rules\n")
+    (h.work / "other" / "b.py").write_text("y = 2\n")
+    h.provider.add(
+        reply("", ("Bash", {"command": "cat src/pkg/a.py"})),
+        # Not a shell read (a pipe), and a grep that found nothing: no read.
+        reply("", ("Bash", {"command": "cat other/b.py | wc -l"})),
+        reply("", ("Bash", {"command": "grep zzz other/b.py"})),
+        reply("done"),
+    )
+    shell_agent = Agent(name="a", model="m",
+                        extensions=[FileTools(), Shell(), Instructions(walk=False)])
+    tid = await h.start(shell_agent)
+    recs = await h.records(tid, "instructions", "nested")
+    assert [Path(r.data["files"][0]["path"]).relative_to(h.work).as_posix() for r in recs] == [
+        ".noeta/rules/py.md", "src/pkg/NOETA.md"]
+    assert {r.data["trigger"] for r in recs} == {str(pkg / "a.py")}
+    msgs = h.provider.requests[1].messages
+    assert isinstance(msgs[2].content[0], ToolResult)
+    assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
+
+
+async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
+        h: Harness) -> None:
+    # As Claude Code: the file still counts as read, but its directory's
+    # instruction files and ``paths:`` rules are not brought in.
+    secrets = h.work / "secrets"
+    secrets.mkdir()
+    (secrets / "NOETA.md").write_text("secret rules\n")
+    (secrets / "x.txt").write_text("token\n")
+    open_dir = h.work / "open"
+    open_dir.mkdir()
+    (open_dir / "NOETA.md").write_text("open rules\n")
+    (open_dir / "y.txt").write_text("fine\n")
+    h.provider.add(
+        reply("", ("Bash", {"command": "cat secrets/x.txt"})),
+        reply("", ("Bash", {"command": "cat open/y.txt"})),
+        reply("done"),
+    )
+    guarded = Agent(name="a", model="m", extensions=[
+        Permissions(mode="default", trusted_workspace=True, deny=["Read(./secrets/**)"]),
+        FileTools(), Shell(), Instructions(walk=False)])
+    tid = await h.start(guarded)
+    reads = [r.data for r in await h.records(tid, "fs", "read")]
+    assert [(Path(d["path"]).relative_to(h.work).as_posix(), d.get("read_denied")) for d in reads
+            ] == [("secrets/x.txt", True), ("open/y.txt", None)]
+    recs = await h.records(tid, "instructions", "nested")
+    assert [Path(r.data["files"][0]["path"]).relative_to(h.work).as_posix() for r in recs] == [
+        "open/NOETA.md"]
 
 
 async def test_reads_outside_the_workspace_or_failing_discover_nothing(h: Harness) -> None:
@@ -269,10 +376,32 @@ async def test_residents_rehang_after_a_compaction(h: Harness, tmp_path: Path) -
     assert texts[0].endswith("- [Note](note.md) — a note")
     assert texts[1] == "(summary)"
     assert texts[2].startswith("These skills were invoked earlier")
-    assert "### Skill: deploy\nPath: " in texts[2]
+    # Each skill says where it comes from (Claude Code's ``<source>:<name>``).
+    assert "### Skill: deploy\nPath: workspace:deploy\n\n" in texts[2]
     assert "\n\nBase directory for this skill: " in texts[2] and "Activated" not in texts[2]
     assert texts[3].startswith("The following skills are available")
     assert len(texts) == 4
+
+
+async def test_a_plugin_skill_invoked_under_its_former_bare_name_is_given_again(
+        h: Harness) -> None:
+    """A log written when a plugin's skills had their own names (``ship``)
+    re-attaches the skill now named ``<plugin>:ship``."""
+    plugin = h.work.parent / "tools-plugin" / "skills"
+    (plugin / "ship").mkdir(parents=True)
+    (plugin / "ship" / "SKILL.md").write_text("---\nname: ship\ndescription: Ship.\n---\nGo.\n")
+    before = Agent(name="a", model="m", extensions=[
+        Skills(dirs=[str(plugin)]), FileTools(), MakeRoom()])
+    h.provider.add(reply("", ("Skill", {"skill": "ship"})), reply("done"))
+    tid = await h.start(before)
+    [act] = await h.records(tid, "skills", "activated")
+    assert act.data["name"] == "ship"
+    now = Agent(name="a", model="m", extensions=[
+        Skills(plugin_dirs={str(plugin): "tools"}), FileTools(), MakeRoom()])
+    h.provider.add(ContextOverflow("too long"), reply("fits"))
+    await h.say(now, tid, "next")
+    [again] = [m.text for m in h.last_messages() if m.text.startswith("These skills were")]
+    assert "### Skill: tools:ship\nPath: plugin:tools:ship\n\n" in again
 
 
 async def test_skills_given_again_are_capped_newest_first(h: Harness) -> None:

@@ -15,6 +15,7 @@ from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Text
+from noeta.plugins.fs._encoding import decode, encode, not_text, refusal
 from noeta.plugins.fs._missing import missing_file_message
 from noeta.plugins.fs._mutate import (
     WriteRoots,
@@ -261,10 +262,7 @@ class EditTool:
                 raw = await env.read_bytes(resolved)
             except OSError as exc:
                 return tool_error(self.name, f"read failed: {exc}")
-        try:
-            before = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return tool_error(self.name, f"{path!r} is not utf-8 text")
+        before = decode(raw)
         stale = False
         if not old:
             # Creating a file, or filling an empty one: nothing to have read.
@@ -284,6 +282,9 @@ class EditTool:
             )
             if refused is not None:
                 return refused
+            reason = not_text(raw)
+            if reason is not None:
+                return tool_error(self.name, refusal(reason))
             stale = changed_since_read(ctx, resolved, raw)
             in_view = seen_whole(ctx, resolved, raw)
             planned = self._replace(before, old, new, replace_all, stale,
@@ -294,7 +295,8 @@ class EditTool:
         rel = ws.relative(resolved)
         diff, added, removed = await file_diff(before, after, rel)
         skipped = not diff and before != after
-        after_bytes = after.encode("utf-8")
+        # The file's own encoding and byte-order mark (Claude Code's).
+        after_bytes = encode(after, raw)
         try:
             await env.write_bytes(resolved, after_bytes)
         except OSError as exc:

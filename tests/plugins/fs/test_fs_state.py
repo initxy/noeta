@@ -13,6 +13,7 @@ from noeta.plugins.fs import EditTool, ReadTool
 from noeta.plugins.fs.state import (
     FS,
     KIND_CHANGED,
+    KIND_CHECKED,
     KIND_READ,
     MAX_FILES,
     FileRead,
@@ -56,6 +57,8 @@ def test_only_the_most_recent_files_are_remembered() -> None:
     assert "/f0" not in state.reads and "/f5" not in state.reads
     assert "/f6" in state.reads and "/new" in state.reads
     assert f"/f{MAX_FILES + 4}" in state.reads
+    # What the check knew of a forgotten file goes with it.
+    assert set(state.noticed) <= set(state.reads) and "/f0" not in state.noticed
 
 
 def test_unknown_kind_leaves_the_state_unchanged() -> None:
@@ -172,3 +175,23 @@ async def test_the_read_is_recorded_under_the_canonical_path(h: Harness, ws: Pat
     assert data["path"] == str(ws / "a.py")
     assert len(data["digest"]) == 64
     assert data["mtime"] == (ws / "a.py").stat().st_mtime
+
+
+def test_checked_times_follow_the_remembered_files() -> None:
+    state = reduce_fs(None, KIND_READ, {"path": "/a", "digest": "d", "mtime": 1})
+    assert reduce_fs(state, KIND_CHECKED, {"path": "/b", "mtime": 2}) is state  # never read
+    assert reduce_fs(state, KIND_CHECKED, {"path": "/a", "mtime": True}) is state
+    state = reduce_fs(state, KIND_CHECKED, {"path": "/a", "mtime": 2})
+    assert state.checked == {"/a": 2.0}
+    state = reduce_fs(state, KIND_CHANGED, {"path": "/a", "digest": "e", "mtime": 3})
+    assert state.checked == {"/a": 3.0} and state.noticed == {"/a": "e"}
+    # A new read of the file starts over from its own time.
+    state = reduce_fs(state, KIND_READ, {"path": "/a", "digest": "e", "mtime": 3})
+    assert state.checked == {}
+
+
+def test_a_read_marked_as_a_window_without_a_range_is_one() -> None:
+    state = reduce_fs(None, KIND_READ, {"path": "/p", "digest": "d", "window": True})
+    assert state.reads["/p"].window and state.reads["/p"].range is None
+    plain = reduce_fs(None, KIND_READ, {"path": "/p", "digest": "d"})
+    assert not plain.reads["/p"].window

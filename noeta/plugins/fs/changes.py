@@ -1,8 +1,9 @@
 """What changed in a file the model read, for the note that tells it so:
 the changed lines of the file as it is now, numbered as ``Read`` numbers
 them, worked out against the file as the model last saw it whole (its last
-full ``Read`` result in the conversation, when no edit of the model's came
-after it). Nothing is kept outside the conversation, so a task on another
+full ``Read`` result in the conversation, or the output of a ``Bash``
+command that showed just that whole file, such as ``cat``, when no edit of
+the model's came after it). Nothing is kept outside the conversation, so a task on another
 worker finds the same; when that view is gone (compacted, partial, edited
 since) there is no snippet. A file the model read only in part (an offset
 or a limit) gets no note at all, as in Claude Code (``FileRead.window``)."""
@@ -14,7 +15,9 @@ import posixpath
 import re
 from collections.abc import Sequence
 
-from noeta.core.types import Message, ToolResult
+from noeta.core.large_output import output_cut
+from noeta.core.types import Message, ToolResult, ToolUse
+from noeta.toolkit.shell import NO_OUTPUT, shell_reads
 
 __all__ = ["CONTEXT_LINES", "MAX_SNIPPET_CHARS", "changed_lines", "seen_text"]
 
@@ -44,6 +47,11 @@ def seen_text(messages: Sequence[Message], path: str, cwd: str) -> str | None:
         if m.role != "assistant":
             continue
         for use in reversed(m.tool_uses):
+            if use.name == "Bash":
+                shown = _shown_by_command(use, results.get(use.id), cwd, path)
+                if shown is not None:
+                    return shown
+                continue
             if not _names(use.input, cwd, path):
                 continue
             if use.name in _WRITERS:
@@ -58,6 +66,28 @@ def seen_text(messages: Sequence[Message], path: str, cwd: str) -> str | None:
             if parsed is not None:
                 return parsed
     return None
+
+
+def _shown_by_command(use: ToolUse, result: ToolResult | None, cwd: str,
+                      path: str) -> str | None:
+    """The file at ``path`` as a ``Bash`` command that showed only that whole
+    file printed it, or ``None``."""
+    command = use.input.get("command")
+    reads = shell_reads(command) if isinstance(command, str) else []
+    if len(reads) != 1 or result is None or result.is_error:
+        return None
+    read = reads[0]
+    if read.grep or read.start is not None or read.tail is not None \
+            or posixpath.normpath(posixpath.join(cwd, read.path)) != path:
+        return None
+    printed = result.text
+    if output_cut(printed):
+        return None
+    if printed == NO_OUTPUT:
+        return ""
+    # The shell's result lost the file's last line break; most files end
+    # with one (one without shows its last line as changed).
+    return read.file_text(printed) + "\n"
 
 
 def _unnumbered(text: str) -> str | None:

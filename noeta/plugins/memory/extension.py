@@ -20,7 +20,7 @@ import logging
 import posixpath
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
@@ -32,10 +32,12 @@ from noeta.core import records
 from noeta.core.errors import ModelError
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
 from noeta.toolkit.context import read_task_text, task_env, task_files
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import (
+    MEMORY_DIR_KEY,
     MEMORY_INDEX_FILE,
     MEMORY_INDEX_MAX_BYTES,
     MEMORY_INDEX_MAX_LINES,
@@ -263,6 +265,15 @@ class Memory(Extension):
 
     def _dir(self, view: TaskView) -> str | None:
         return (view.ext_state(self.name) or {}).get("dir")
+
+    def inherit(self, state: TaskState) -> Mapping[str, Any]:
+        """The project's memory directory, for the sub-agents this task
+        starts (an agent's own memory is not passed on)."""
+        own = state.ext.get(self.name)
+        directory = own.get("dir") if isinstance(own, dict) else None
+        if self.agent_scope is not None or not isinstance(directory, str):
+            return {}
+        return {MEMORY_DIR_KEY: directory}
 
     # ------------------------------------------------------------ prompt
 

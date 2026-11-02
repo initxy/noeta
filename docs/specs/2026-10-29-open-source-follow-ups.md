@@ -37,6 +37,8 @@ its own spec before work starts.
 - [x] Tenant directories are per-machine copies read at worker start (D47). Moot: tenants are removed (owner, 2026-10-29; ADR-028).
 - [ ] The README's `git+https` install line is untested until the branch is pushed, and its relative links will not resolve on a PyPI page. Owner decision, with the push and the first release.
 
+- [ ] The 14 owner questions left by the context audit closure (`docs/specs/archive/2026-11-02-context-audit-closure.md`, "Open questions (owner)"): shell rc snapshot, bundled skills, `run_skill_script`, AskUserQuestion notes and skips, MCP prompt images, WebFetch preapproved hosts, ACP interactivity, a missing permission prompt tool, auto-mode inline skill commands, bare plugin agent names, the 64 KiB MCP cap, the one-piece fallback retry, headless keys and `client_hooks` on a clean `-p` exit, fs state replay cost. Each keeps the conservative choice written in that spec until the owner decides.
+
 ### Follow-ups
 - [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
 - [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.

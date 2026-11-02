@@ -20,6 +20,7 @@ from noeta.core.errors import (
     Fatal,
     MalformedToolArguments,
     RateLimited,
+    StreamBroken,
     Transient,
 )
 from noeta.core.types import (
@@ -554,10 +555,12 @@ async def test_response_tool_use_input_not_dict_raises() -> None:
 
 @respx.mock
 async def test_unparseable_success_body_raises_loudly() -> None:
-    """A non-SSE 200 yields no events: a loud failure, never a hollow reply."""
+    """A non-SSE 200 yields no events: a failure, never a hollow reply; one
+    the retry helper answers in one piece (Claude Code's fallback)."""
     respx.post(MESSAGES_ENDPOINT).mock(return_value=httpx.Response(200, content=b"not-json"))
-    with pytest.raises(Fatal, match="without a message_start"):
+    with pytest.raises(StreamBroken, match="without a message_start") as raised:
         await _provider().complete(_req())
+    assert raised.value.stream_retries == 0
 
 
 @respx.mock
@@ -565,8 +568,9 @@ async def test_malformed_sse_frame_raises_loudly() -> None:
     respx.post(MESSAGES_ENDPOINT).mock(
         return_value=sse_response(b"event: message_start\ndata: {not json}\n\n")
     )
-    with pytest.raises(Fatal, match="not valid JSON"):
+    with pytest.raises(StreamBroken, match="not valid JSON") as raised:
         await _provider().complete(_req())
+    assert raised.value.stream_retries == 0
 
 
 # ---------------------------------------------------------------------------
@@ -739,3 +743,27 @@ async def test_count_tokens_posts_one_user_message_with_the_counting_beta() -> N
     assert await _provider().count_tokens("claude-opus-5-5", "x") is None
 
 
+
+
+@respx.mock
+async def test_a_refused_count_is_not_asked_again_and_a_count_is_bounded_in_time() -> None:
+    """A gateway without ``/count_tokens``: the first refusal is remembered
+    per model, so later borderline results use the estimate without a
+    request; a 429, a 5xx or a timeout is not remembered."""
+    route = respx.post(f"{BASE_URL}/v1/messages/count_tokens").mock(
+        return_value=httpx.Response(404, json={}))
+    provider = _provider()
+    assert await provider.count_tokens("m1", "x") is None
+    assert await provider.count_tokens("m1", "y") is None
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == 10.0
+    route.mock(return_value=httpx.Response(200, text="<html/>"))
+    assert await provider.count_tokens("m2", "x") is None
+    assert await provider.count_tokens("m2", "x") is None
+    assert route.call_count == 2
+    for passing in (httpx.Response(429, json={}), httpx.Response(503, json={}),
+                    httpx.ReadTimeout("slow")):
+        route.mock(side_effect=[passing])
+        assert await provider.count_tokens("m3", "x") is None
+    route.mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+    assert await provider.count_tokens("m3", "x") == 7

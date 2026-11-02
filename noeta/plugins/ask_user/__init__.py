@@ -4,7 +4,9 @@ A valid call parks the task (``Park(on="question")``) with no result yet;
 the host answers with ``client.answer(task_id, call_id, data=...)`` (each
 question by id: ``{selected, other}``) and the call's result is prose naming
 each question and its answer (Claude Code's shape); ``meta`` keeps the
-structured answers.
+structured answers. The person may leave questions unanswered (the park
+detail says ``"partial": true``): those are left out of the result, and an
+answer that answers nothing says so.
 
 **Invalid answers.** An answer reaches the task through its inbox, already
 taken by the time the tool sees it, and ``client.answer`` deduplicates by
@@ -28,10 +30,13 @@ from noeta.core.events import Answer
 from noeta.core.extension import Extension, TaskView
 from noeta.core.questions import AnswerValidationError, normalize_answer
 from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
+from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY, can_ask
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
+
+    from noeta.core.loop.state import TaskState
 
 __all__ = [
     "ASK_USER_QUESTION_TOOL",
@@ -78,6 +83,8 @@ SINGLE_OPTION_ERROR = (
     "new call on their own.")
 #: Leads the result of a call whose posted answer did not fit the questions.
 INVALID_ANSWER_ERROR = "The user's answer could not be used: {error}"
+#: The result when the person answered none of the questions.
+NO_ANSWER = "The user answered none of the questions."
 
 DESCRIPTION = (resources.files("noeta.plugins.ask_user") / "descriptions"
                / "AskUserQuestion.md").read_text("utf-8").strip()
@@ -289,22 +296,25 @@ def validate_answer(call_input: dict[str, Any], data: Any) -> dict[str, dict[str
         raise AnswerValidationError(questions)
     if isinstance(data, str) and len(questions) == 1:
         data = {questions[0]["id"]: {"other": data}}
-    return normalize_answer(data, questions)
+    return normalize_answer(data, questions, partial=True)
 
 
 # ---------------------------------------------------------------- tool
 
 
 def render_answers(questions: list[dict[str, Any]], answers: dict[str, dict[str, Any]]) -> str:
-    """The result the model reads: each question with what the user chose
-    (labels, then any typed text), a chosen option's preview after it.
-    When some answer is the user's own text rather than listed options, the
-    closing line tells the model to read it as written: it may ask for
-    something other than a choice."""
+    """The result the model reads: each answered question with what the
+    user chose (labels, then any typed text), a chosen option's preview
+    after it; unanswered questions are left out. When some answer is the
+    user's own text rather than listed options, the closing line tells the
+    model to read it as written: it may ask for something other than a
+    choice."""
     parts: list[str] = []
     only_options = True
     for q in questions:
-        answer = answers.get(q["id"]) or {}
+        answer = answers.get(q["id"])
+        if not answer:
+            continue
         chosen = list(answer.get("selected") or [])
         other = answer.get("other")
         if isinstance(other, str) and other.strip():
@@ -318,6 +328,8 @@ def render_answers(questions: list[dict[str, Any]], answers: dict[str, dict[str,
         if previews:
             part += " selected preview:\n" + "\n".join(previews)
         parts.append(part)
+    if not parts:
+        return NO_ANSWER
     if only_options:
         return ("The user answered your questions: " + ", ".join(parts)
                 + ". Go on with these answers in mind.")
@@ -341,7 +353,8 @@ class AskUserQuestionTool:
         questions = validate_questions(input)
         if isinstance(questions, str):
             return text_output(questions, is_error=True)
-        return ToolOutput(park=Park(on="question", detail={"questions": questions}))
+        return ToolOutput(park=Park(on="question",
+                                    detail={"questions": questions, "partial": True}))
 
     async def resume(self, input: dict[str, Any], ctx: ToolContext, outcome: Any) -> ToolOutput:
         qid = ctx.call_id
@@ -361,7 +374,10 @@ class AskUserQuestionTool:
 
 
 class AskUser(Extension):
-    """Offers ``AskUserQuestion``. No constructor arguments."""
+    """Offers ``AskUserQuestion`` where a question can be answered: in a task
+    a person follows, or whose client answers prompts (Claude Code offers it
+    in a non-interactive session only with a permission prompt tool). Child
+    tasks inherit the task's say on that. No constructor arguments."""
 
     name = "ask_user"
 
@@ -369,4 +385,14 @@ class AskUser(Extension):
         self._tools: list[Tool] = [AskUserQuestionTool()]
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
-        return self._tools
+        # A question already asked stays answerable (its call resumes through
+        # the offered tool) when the task's say on asking changed meanwhile.
+        if can_ask(view.state.config) or any(
+                c.parked and c.result is None and (c.ran or c.use).name == ASK_USER_QUESTION_TOOL
+                for c in view.state.calls):
+            return self._tools
+        return ()
+
+    def inherit(self, state: TaskState) -> Mapping[str, Any]:
+        return {k: state.config[k] for k in (INTERACTIVE_KEY, PROMPT_TOOL_KEY)
+                if k in state.config}

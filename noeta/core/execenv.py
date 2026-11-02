@@ -3,6 +3,7 @@ machine; a container backend implements the same interface."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
@@ -34,7 +35,7 @@ class ExecEnv(Protocol):
     ``noeta.toolkit.sandbox.CommandSandbox`` commands may run inside; read by
     ``noeta.toolkit.sandbox.sandbox_of``) and ``temp_dir: str | None`` (a
     temporary directory of the env's own, for files a tool keeps for the task
-    such as background job logs).
+    such as background job logs), ``stat_many`` (see :func:`stat_many`).
     """
 
     #: The working directory paths are resolved against, as the env sees it.
@@ -83,3 +84,29 @@ class ExecEnv(Protocol):
     async def stat(self, path: str) -> FileStat | None:
         """``None`` when the path does not exist."""
         ...
+
+
+#: Paths ``stat_many`` stats at once on an env without its own ``stat_many``.
+_STAT_CONCURRENCY = 32
+
+
+async def stat_many(env: ExecEnv, paths: Sequence[str]) -> list[FileStat | None]:
+    """Size, modification time and kind of what each of ``paths`` names,
+    following symlinks, in order: ``None`` where nothing is there (a missing
+    path, a symlink to nothing) or it cannot be examined; ``is_symlink`` is
+    not reported. The env's own ``stat_many(paths)`` answers when it has one
+    (a remote env checks many paths in one round trip); otherwise each path
+    goes to ``env.stat``, a few at a time."""
+    own = getattr(env, "stat_many", None)
+    if own is not None:
+        return list(await own(paths))
+    gate = asyncio.Semaphore(_STAT_CONCURRENCY)
+
+    async def one(path: str) -> FileStat | None:
+        async with gate:
+            try:
+                return await env.stat(path)
+            except OSError:
+                return None
+
+    return list(await asyncio.gather(*(one(p) for p in paths)))

@@ -63,6 +63,7 @@ from noeta.host.questions import next_question, typed_answer
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.stream_json import noeta_version
 from noeta.host.usage import context_text, cost_text, tree_usage
+from noeta.toolkit.interactive import follow
 from noeta.toolkit.local_env import local_timezone
 from noeta.toolkit.permission_modes import (
     MODE_SIGNAL,
@@ -294,6 +295,8 @@ class NoetaAcpAgent:
     async def load_session(self, cwd: str, session_id: str,
                            **kw: Any) -> schema.LoadSessionResponse:
         await self._adopt(session_id)
+        # A person follows it now, whatever headless run had it before.
+        await follow(self.app.client, session_id)
         await self.app.client.signal(session_id, RESUMED_SIGNAL)
         self._cwd[session_id] = cwd
         log = self._logs[session_id] = SessionLog(cwd)

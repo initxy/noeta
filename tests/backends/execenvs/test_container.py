@@ -213,6 +213,34 @@ async def test_stat_and_realpath(env: ContainerExecEnv) -> None:
     assert await env.realpath("a/../missing/x") == f"{env.cwd}/missing/x"
 
 
+async def test_stat_many_is_one_command_per_batch(env: ContainerExecEnv,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import container as container_mod
+
+    await env.write_bytes("a b.txt", b"hello")
+    await env.run(["mkdir", "sub"])
+    await env.run(["ln", "-s", "gone", "dangling"])
+    calls: list[int] = []
+    sh = env._sh
+
+    async def counted(script: str, *args: str, stdin: bytes | None = None) -> Any:
+        calls.append(len(args))
+        return await sh(script, *args, stdin=stdin)
+
+    monkeypatch.setattr(env, "_sh", counted)
+    names = ["a b.txt", "sub", "nope", "dangling", "a b.txt/below"]
+    one, sub, *gone = await env.stat_many(names)
+    assert calls == [5]
+    assert one is not None and one.size == 5 and not one.is_dir
+    assert one.mtime == (await env.stat("a b.txt") or one).mtime
+    assert sub is not None and sub.is_dir and gone == [None, None, None]
+    # Past the argument budget the paths go out in more than one command.
+    monkeypatch.setattr(container_mod, "_STAT_MANY_ARG_BYTES", 40)
+    calls.clear()
+    many = await env.stat_many(["a b.txt"] * 5)
+    assert len(calls) > 1 and sum(calls) == 5 and all(s == one for s in many)
+
+
 # ---------------------------------------------------------------- the tools
 
 

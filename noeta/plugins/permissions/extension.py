@@ -16,7 +16,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from noeta.core import records
 from noeta.core.events import (
     Answer,
     Compacted,
@@ -204,7 +203,8 @@ class Permissions(Extension):
             raise ValueError(f"max_risk must be one of {p.KNOWN_RISK_LEVELS}; got {max_risk!r}")
         self.default_risk = default_risk
         self.max_risk = max_risk
-        self.allowed = frozenset(allowed_tools) if allowed_tools is not None else None
+        self.allowed = frozenset(allowed_tools) | p.HARNESS_TOOLS \
+            if allowed_tools is not None else None
         self.disallowed = p.expand_disallowed(disallowed_tools)
         self.trusted = trusted_workspace
         self.remember_to_project = remember_to_project
@@ -230,7 +230,6 @@ class Permissions(Extension):
                                         deny_rules=self.deny_rules, trusted=self.trusts)
         self._exit_plan = pl.ExitPlanModeTool()
         self._enter_plan = pl.EnterPlanModeTool(self._enter_plan_mode)
-        self._background: set[asyncio.Future[Any]] = set()
 
     def trusts(self, view: TaskView) -> bool:
         """Whether this task's working directory is a trusted workspace."""
@@ -437,8 +436,6 @@ class Permissions(Extension):
             mode = self.mode_of(view)
             view.record(NAME, "compacted", {"auto": mode == "auto", "plan": mode == "plan",
                                             "seq": recorded.seq})
-        elif isinstance(parked := records.decode(ev), records.Parked):
-            md.name_plan(view, parked, self._background)
 
     async def _on_input(self, view: TaskView, body: Any, seq: int) -> None:
         if isinstance(body, Answer):
@@ -450,7 +447,7 @@ class Permissions(Extension):
             view.record(NAME, "resumed")
         elif isinstance(body, External) and body.name == md.PLAN_NAME_SIGNAL:
             name = (body.data or {}).get("name") if isinstance(body.data, dict) else None
-            if isinstance(name, str) and name:
+            if isinstance(name, str) and name and state_of(view).plan_name is None:
                 view.record(NAME, "plan_name", {"name": name})
                 view.notify(f"plan: {name}")
         elif isinstance(body, Say) and body.message.role == "user" and \

@@ -55,9 +55,9 @@ def specs(tools: Sequence[Tool], loaded: Sequence[str] = ()) -> list[ToolSpec]:
             ToolReference(tool_name=n) for n in loaded])]), 1)
     changes = ToolSearch().tool_changes(TaskView(state=state), tools)
     if changes is None:
-        return request_tools(tools, {}, (), lambda t: t.description)
+        return request_tools(tools, {}, (), lambda _t, text: text)
     return request_tools([*tools, *changes.add], changes.withhold, changes.entries,
-                         lambda t: t.description)
+                         lambda _t, text: text)
 
 
 def test_no_deferred_tool_means_a_sorted_list_and_no_placeholder() -> None:
@@ -78,6 +78,15 @@ def test_a_listed_last_tool_keeps_the_placeholder_before_it() -> None:
              Fake("Handback", last=True), Fake("WebFetch", deferred=True)]
     assert names(specs(tools)) == ["Bash", "Read", "Skill", "ToolSearch", PLACEHOLDER + "*",
                                    "Handback"]
+
+
+def test_a_loaded_tool_is_sent_with_its_loaded_description() -> None:
+    long = Fake("mcp__s__t", deferred=True, last=True, description="short")
+    long.loaded_description = "long"  # type: ignore[attr-defined]
+    sent = {s.name: s.description for s in specs([Fake("Bash"), long], loaded=["mcp__s__t"])}
+    assert sent["mcp__s__t"] == "long"
+    plain = request_tools([long], {}, (), lambda _t, text: text, plain={"mcp__s__t"})
+    assert [s.description for s in plain] == ["short"]
 
 
 def test_the_placeholder_schema_is_bare() -> None:

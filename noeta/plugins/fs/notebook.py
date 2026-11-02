@@ -15,6 +15,7 @@ import secrets
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.plugins.fs._encoding import decode, encode, not_text, refusal
 from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
@@ -180,9 +181,12 @@ class NotebookEditTool:
                                           verb="editing")
         if refused is not None:
             return refused
+        reason = not_text(raw)
+        if reason is not None:
+            return tool_error(self.name, refusal(reason))
         try:
-            nb = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
+            nb = json.loads(decode(raw).removeprefix("\ufeff"))
+        except ValueError as exc:
             return tool_error(self.name, f"the notebook is not valid JSON: {exc}")
         cells = nb.get("cells") if isinstance(nb, dict) else None
         if not isinstance(cells, list):
@@ -195,7 +199,7 @@ class NotebookEditTool:
         replaced = cells[index].get("source") if index is not None and mode != "insert" else None
         old_source = "".join(replaced) if isinstance(replaced, list) else replaced
         done = _apply(cells, mode, index, cell_id, cell_type, source, ids=_has_cell_ids(nb))
-        body = (json.dumps(nb, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
+        body = encode(json.dumps(nb, indent=1, ensure_ascii=False) + "\n", raw)
         try:
             await env.write_bytes(resolved, body)
         except OSError as exc:

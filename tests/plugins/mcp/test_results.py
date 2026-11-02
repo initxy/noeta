@@ -92,6 +92,42 @@ async def test_cjk_text_counts_a_token_a_character(tmp_path: Path) -> None:
     assert "the server returned 30000 characters and only the first 25000 are shown" in note
 
 
+async def test_between_half_and_four_times_the_budget_the_provider_counts(
+        tmp_path: Path) -> None:
+    asked: list[int] = []
+
+    def counting(ratio: float | None) -> ToolContext:
+        async def count(text: str) -> int | None:
+            asked.append(len(text))
+            return None if ratio is None else int(len(text) * ratio)
+
+        c = ctx(tmp_path, spill=False)
+        c.count_tokens = count
+        return c
+
+    small = await render_result({"content": [{"type": "text", "text": "x" * 40_000}]},
+                                counting(1.0))
+    assert texts(small) == ["x" * 40_000] and asked == []  # 10,000 tokens: under half
+    huge = await render_result({"content": [{"type": "text", "text": "x" * 400_008}]},
+                               counting(0.01))
+    assert asked == [] and texts(huge)[-1].startswith("[output truncated")
+    # Estimated at 20,000 tokens, counted at 40,000: over, and cut to what the
+    # count lets through.
+    over = await render_result({"content": [{"type": "text", "text": "x" * 80_000}]},
+                               counting(0.5))
+    assert asked == [80_000]
+    cut, note = texts(over)
+    assert cut == "x" * 50_000 and note.startswith("[output truncated")
+    # Estimated over the budget, counted under it: shown whole.
+    fits = await render_result({"content": [{"type": "text", "text": "x" * 120_000}]},
+                               counting(0.2))
+    assert texts(fits) == ["x" * 120_000]
+    # A failed count leaves the estimate.
+    est = await render_result({"content": [{"type": "text", "text": "x" * 120_000}]},
+                              counting(None))
+    assert texts(est)[0] == "x" * 100_000
+
+
 async def test_the_budget_follows_max_mcp_output_tokens(tmp_path: Path,
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NOETA_MAX_MCP_OUTPUT_TOKENS", "2000")
@@ -143,6 +179,12 @@ async def test_a_binary_resource_is_saved_and_its_place_named(tmp_path: Path) ->
     out = await tool.run({"server": "docs", "uri": "file:///a.pdf"}, ctx(tmp_path, spill=False))
     first = json.loads(texts(out)[0])["contents"][0]
     assert "blob" not in first and "could not be saved" in first["text"]
+
+    # A large text resource is the tool's whole result: the runner's result
+    # limit saves it to a file, as for any tool (Claude Code caps it nowhere else).
+    result = {"contents": [{"uri": "file:///big.md", "text": "z" * 100_000}]}
+    out = await tool.run({"server": "docs", "uri": "file:///big.md"}, ctx(tmp_path))
+    assert json.loads(texts(out)[0])["contents"][0]["text"] == "z" * 100_000
 
 
 async def test_a_server_image_is_decoded_off_the_event_loop(

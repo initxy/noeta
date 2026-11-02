@@ -16,7 +16,9 @@ core.fsmonitor=``, no hooks), no signature program and no look inside
 submodules. A ``filter.<driver>.clean`` program has no off
 switch, so when the repository's own config (local or worktree scope)
 defines any filter driver the status is skipped. The capture is recorded
-when the task first starts and never changes under the prompt cache. noeta's
+when the task first starts, and taken again for a compaction (which starts
+the conversation over from its summary, as Claude Code does); in between it
+never changes under the prompt cache. noeta's
 own trigger for taking it again: Claude Code re-announces a changed session
 context when a session resumes (a new process); a durable task has no resume
 moment, so at the start of each later turn the branch and HEAD commit are
@@ -27,10 +29,12 @@ given in that turn. The model's own commits during a turn do not count.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 import posixpath
 import re
+import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -51,8 +55,15 @@ from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.shell import harden_git
 
-#: Git status beyond this is cut at a line boundary and marked.
-GIT_STATUS_MAX_BYTES = 2048
+#: Git status longer than this many characters is cut there (Claude Code's
+#: cut), and the note below follows.
+GIT_STATUS_MAX_CHARS = 2000
+GIT_STATUS_CUT_NOTE = ("\n... (cut here: the status runs past 2,000 characters; for the "
+                       "full list run `git status` with Bash)")
+#: A compaction waits this long for a new git snapshot, then gives the
+#: stored one again (each git call has 5 seconds; a slow container could
+#: otherwise add half a minute to the compaction).
+GIT_RECAPTURE_TIMEOUT_S = 10.0
 #: Commits listed in the git snapshot.
 RECENT_COMMITS = 5
 #: The snapshot's second line: taken at the start, or again for a message.
@@ -84,6 +95,11 @@ ORDER_DATE = 90
 
 
 async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
+    return await _git_or_none(env, cwd, *args) or ""
+
+
+async def _git_or_none(env: ExecEnv, cwd: str, *args: str) -> str | None:
+    """git's output, ``None`` when it failed or timed out."""
     argv = ["git", *args]
     if args and args[0] == "status":
         argv = harden_git(argv)
@@ -91,9 +107,9 @@ async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
     try:
         out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
     except Exception:  # noqa: BLE001 — capture is best-effort
-        return ""
+        return None
     if out.exit_code != 0 or out.timed_out:
-        return ""
+        return None
     return out.stdout.decode("utf-8", errors="replace")
 
 
@@ -118,23 +134,19 @@ async def _repo_defines_filters(env: ExecEnv, cwd: str) -> bool:
 
 
 async def _git_status(env: ExecEnv, cwd: str) -> str | None:
-    """The short status (``""`` when clean), ``None`` when not captured."""
+    """The short status (``""`` when clean), ``None`` when not captured
+    (skipped, or git failed or timed out: a huge tree such as a home
+    directory kept as a dotfiles repository)."""
     if await _repo_defines_filters(env, cwd):
         return None
     # Not inside submodules: their own config's filters are not checked.
-    status = (await _git(env, cwd, "status", "--short",
-                         "--ignore-submodules=dirty")).rstrip("\n")
-    encoded = status.encode("utf-8")
-    if len(encoded) <= GIT_STATUS_MAX_BYTES:
+    out = await _git_or_none(env, cwd, "status", "--short", "--ignore-submodules=dirty")
+    if out is None:
+        return None
+    status = out.rstrip("\n")
+    if len(status) <= GIT_STATUS_MAX_CHARS:
         return status
-    kept = encoded[:GIT_STATUS_MAX_BYTES].decode("utf-8", errors="ignore")
-    newline = kept.rfind("\n")
-    kept = kept[:newline] if newline >= 0 else ""
-    marker = (
-        f"({len(kept.splitlines())} of {len(status.splitlines())} changed "
-        "paths shown; the status is truncated — run `git status` for the rest.)"
-    )
-    return f"{kept}\n{marker}" if kept else marker
+    return status[:GIT_STATUS_MAX_CHARS] + GIT_STATUS_CUT_NOTE
 
 
 async def _main_branch(env: ExecEnv, cwd: str) -> str:
@@ -150,17 +162,42 @@ async def _main_branch(env: ExecEnv, cwd: str) -> str:
     return ""
 
 
+async def git_root(env: ExecEnv, cwd: str) -> str | None:
+    """The top of the git checkout ``cwd`` is in: the nearest of ``cwd`` and
+    its parents holding a ``.git`` (a directory, or a linked worktree's
+    file), looked up through ``env``; ``None`` outside any checkout."""
+    try:
+        return await _find_root(env, cwd)
+    except Exception:  # noqa: BLE001 — capture is best-effort
+        return None
+
+
+async def _find_root(env: ExecEnv, cwd: str) -> str | None:
+    """:func:`git_root`, raising what the env raised."""
+    path = posixpath.normpath(cwd)
+    while True:
+        if await env.stat(posixpath.join(path, ".git")) is not None:
+            return path
+        parent = posixpath.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+
+
 def _shell() -> str:
-    shell = os.environ.get("SHELL") or "unknown"
-    return "zsh" if "zsh" in shell else "bash" if "bash" in shell else shell
+    """The shell noeta's commands run in (``Bash`` runs ``bash -c`` from
+    ``PATH``), as Claude Code names the one its commands run in; the user's
+    login shell follows when it is another."""
+    bash = shutil.which("bash") or "bash"
+    login = os.environ.get("SHELL")
+    if not login or os.path.realpath(login) == os.path.realpath(bash):
+        return bash
+    return f"{bash} (the user's login shell is {login})"
 
 
 async def capture_git(env: ExecEnv, cwd: str, *, when: str = SNAPSHOT_AT_START) -> str:
     """The git snapshot for the first user turn (``""`` outside a repository)."""
-    try:
-        if await env.stat(posixpath.join(cwd, ".git")) is None:
-            return ""
-    except Exception:  # noqa: BLE001 — capture is best-effort
+    if await git_root(env, cwd) is None:
         return ""
     branch = (await _git(env, cwd, "rev-parse", "--abbrev-ref", "HEAD")).strip()
     status = await _git_status(env, cwd)
@@ -174,10 +211,7 @@ async def git_head(env: ExecEnv, cwd: str) -> str:
     """The branch and the commit it is at (``""`` outside a repository): what
     the person changes by switching branch or committing, which the model's
     own edits do not."""
-    try:
-        if await env.stat(posixpath.join(cwd, ".git")) is None:
-            return ""
-    except Exception:  # noqa: BLE001 — capture is best-effort
+    if await git_root(env, cwd) is None:
         return ""
     return (await _git(env, cwd, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")).strip()
 
@@ -209,10 +243,7 @@ def render_git(*, branch: str, main: str, user: str, status: str | None,
 
 async def capture_environment(env: ExecEnv, cwd: str, model: str) -> str:
     """The environment message's facts for ``cwd`` as ``env`` sees it."""
-    try:
-        is_git = await env.stat(posixpath.join(cwd, ".git")) is not None
-    except Exception:  # noqa: BLE001 — capture is best-effort
-        is_git = False
+    is_git = await git_root(env, cwd) is not None
     local = is_local(env)
     return render_environment(cwd, model, is_git=is_git, local=local,
                               platform_name=sys.platform if local else await _env_platform(env))
@@ -447,7 +478,7 @@ class Environment(Extension):
     * ``attribution`` — put the commit / PR attribution note there.
     * ``token_budget`` — the ``<total_tokens>`` budget a turn starts with
       (``0``: no budget notes, and the prompt's budget line taken out).
-    * ``date_change`` — tell the model, at the start of a turn, when the date
+    * ``date_change`` — tell the model, before any model call, when the date
       is no longer the one it was given (the prompt
       ``reminder/date_changed``, or ``reminder/date_changed_utc`` for UTC
       dates; ``{date}`` is today).
@@ -574,10 +605,13 @@ class Environment(Extension):
         else:
             out += self._deferred_delta(view, st)
             out += await self._git_again(view, st)
-        if not st.get("held") and self.date_change and not view.state.steps_in_turn \
-                and st.get("date"):
+        # Checked before every model call, as Claude Code does, so a long
+        # turn that runs past midnight is told too. Each call may run on
+        # another worker, whose clock can be a little behind: a date before
+        # the one last given is never told.
+        if not st.get("held") and self.date_change and st.get("date"):
             today, _ = self._today(view)
-            if st["date"] != today:
+            if today > str(st["date"]):
                 text = view.prompt("reminder/date_changed_utc", DATE_CHANGED_UTC_REMINDER) \
                     if st.get("utc") else view.prompt("reminder/date_changed",
                                                       DATE_CHANGED_REMINDER)
@@ -647,8 +681,10 @@ class Environment(Extension):
                          role="system", order=ORDER_DEFERRED)]
 
     async def lead_resident(self, view: TaskView) -> Sequence[Message]:
-        """Ahead of a compaction's summary, as Claude Code rebuilds it: the
-        git snapshot taken at the start, then the attribution note, or, when
+        """Ahead of a compaction's summary, as Claude Code rebuilds it: a
+        git snapshot taken now (the summary has replaced the earlier one, so
+        it shows what the conversation changed; none once the directory is
+        no longer a repository), then the attribution note, or, when
         messages stay after the summary, the date (a system turn, which
         follows the summary) and the note after those messages
         (``resident``). The environment and the deferred tools go out again
@@ -656,7 +692,11 @@ class Environment(Extension):
         st = view.ext_state(self.name)
         if view.keeps_tail is None or not isinstance(st, dict):
             return ()
-        out = [user(st["git"], origin="system")] if isinstance(st.get("git"), str) else []
+        out: list[Message] = []
+        if isinstance(st.get("git"), str):
+            snapshot = await self._git_for_compaction(view, st["git"])
+            if snapshot:
+                out.append(user(snapshot, origin="system"))
         if not view.keeps_tail and isinstance(st.get("attribution"), str):
             out.append(user(st["attribution"], origin="system"))
         date = view.keeps_tail and bool(st.get("date"))
@@ -665,6 +705,27 @@ class Environment(Extension):
         if isinstance(st.get("text"), str):
             view.record(self.name, "rehold", {"date": not date})
         return out
+
+    async def _git_for_compaction(self, view: TaskView, stored: str) -> str:
+        """The snapshot a compaction gives again: taken now (``""`` once the
+        directory is no longer a repository), or the stored one when taking
+        it fails or runs past :data:`GIT_RECAPTURE_TIMEOUT_S` seconds."""
+        env = task_env(view.env, view.state.config)
+        cwd = view.cwd or env.cwd
+
+        async def take() -> tuple[str, str]:
+            if await _find_root(env, cwd) is None:
+                return "", ""
+            snapshot = await capture_git(env, cwd)
+            return snapshot, (await git_head(env, cwd) if snapshot else "")
+
+        try:
+            snapshot, head = await asyncio.wait_for(take(), GIT_RECAPTURE_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 — the stored snapshot stands in
+            return stored
+        if snapshot:
+            view.record(self.name, "git", {"text": snapshot, "head": head})
+        return snapshot
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After the messages a compaction keeps: the attribution note."""

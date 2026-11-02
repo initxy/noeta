@@ -8,8 +8,12 @@ resource, an unusable image) becomes a one-line description. A result with
 only ``structuredContent`` is that JSON as text.
 
 A result is held to Claude Code's budget (25,000 tokens, or
-``NOETA_MAX_MCP_OUTPUT_TOKENS``, its ``MAX_MCP_OUTPUT_TOKENS``; text by
-``noeta.toolkit.tokens.estimate_tokens``, an image 1,600). A text-only result over it is saved
+``NOETA_MAX_MCP_OUTPUT_TOKENS``, its ``MAX_MCP_OUTPUT_TOKENS``), sized as
+Claude Code sizes it: estimated first (text by
+``noeta.toolkit.tokens.estimate_tokens``, an image 1,600); under half the
+budget it fits and text alone past four times it does not; in between the
+provider counts the text (``ToolContext.count_tokens``), the estimate standing
+in where it cannot. A text-only result over it is saved
 under the spill directory and the model gets only where, its size and format,
 and how to read it; with images, or nowhere to save, images that do not fit
 are left out and the text is cut to its head, marked at the end.
@@ -32,12 +36,20 @@ from noeta.core.types import Image, Text
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
 from noeta.toolkit.tools import save_spilled, spill_path
 
-__all__ = ["DEFAULT_MAX_OUTPUT_TOKENS", "IMAGE_TOKENS", "max_output_tokens", "render_result"]
+__all__ = [
+    "DEFAULT_MAX_OUTPUT_TOKENS", "IMAGE_TOKENS", "describe_block", "max_output_tokens",
+    "render_result",
+]
 
 #: Claude Code's budget for one MCP result, in tokens.
 DEFAULT_MAX_OUTPUT_TOKENS = 25_000
 #: What one image counts against it (Claude Code's estimate).
 IMAGE_TOKENS = 1_600
+#: Claude Code's band around the budget where an estimate is not trusted: a
+#: result estimated at most half the budget fits, text alone estimated past
+#: four times it does not, and the provider counts the rest.
+_FITS_UNDER = 0.5
+_OVER_PAST = 4
 _INLINE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 
 
@@ -60,7 +72,7 @@ def _decode_b64(data: object) -> bytes | None:
         return None
 
 
-def _describe_block(block: object) -> tuple[str, Image | None]:
+def describe_block(block: object) -> tuple[str, Image | None]:
     if not isinstance(block, dict):
         return "[unrecognised content block]", None
     kind = block.get("type")
@@ -122,6 +134,17 @@ def _saved_note(path: str, full: str, limit: int, *, as_json: bool) -> str:
             "you read if you could not read it all.")
 
 
+async def _text_tokens(blocks: list[Text | Image], estimated: int, images: int, limit: int,
+                       ctx: ToolContext) -> int:
+    """The result's text in tokens: ``estimated`` unless the whole result
+    falls in the band where Claude Code asks the provider for a count."""
+    if (estimated + images * IMAGE_TOKENS <= limit * _FITS_UNDER
+            or estimated > limit * _OVER_PAST or ctx.count_tokens is None or not estimated):
+        return estimated
+    counted = await ctx.count_tokens("\n".join(b.text for b in blocks if isinstance(b, Text)))
+    return counted if counted else estimated
+
+
 async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
     is_error = bool(result.get("isError"))
     content = result.get("content")
@@ -136,7 +159,7 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
                 continue
             non_text += 1
             # Decoding a server's image is CPU work: off the event loop.
-            line, image = await asyncio.to_thread(_describe_block, block)
+            line, image = await asyncio.to_thread(describe_block, block)
             if image is not None:
                 blocks.append(image)
             elif line:
@@ -160,14 +183,18 @@ async def render_result(result: dict[str, Any], ctx: ToolContext) -> ToolOutput:
                                    "tool output limit]"))
     budget -= fitting * IMAGE_TOKENS
     text_len = sum(len(b.text) for b in blocks if isinstance(b, Text))
-    if sum(estimate_tokens(b.text) for b in blocks if isinstance(b, Text)) > budget:
+    estimated = sum(estimate_tokens(b.text) for b in blocks if isinstance(b, Text))
+    tokens = await _text_tokens(blocks, estimated, len(images), limit, ctx)
+    # The estimate's units per counted token, to cut by the estimate.
+    scale = estimated / tokens if tokens and estimated else 1.0
+    if tokens > budget:
         full = "\n".join(b.text for b in blocks if isinstance(b, Text))
         saved = None if images else await _save(ctx, ".txt", full.encode("utf-8"))
         if saved is not None:
             blocks = [Text(text=_saved_note(saved, full, limit, as_json=from_structured))]
         else:
             cut: list[Text | Image] = []
-            left, shown = budget, 0
+            left, shown = int(budget * scale), 0
             for b in blocks:
                 if isinstance(b, Image):
                     cut.append(b)

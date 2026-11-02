@@ -31,6 +31,7 @@ import yaml
 
 from noeta.agents.agent_files import AgentFile, AgentFileError, parse_agent_file
 from noeta.cli.config import Settings
+from noeta.toolkit.hook_callbacks import HookCallbacks
 from noeta.toolkit.local_env import local_timezone
 
 #: Accepted for compatibility, not applied (value-taking, then flags).
@@ -64,7 +65,8 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
                     help='the tools offered ("default": all, "": none)')
     ap.add_argument("--add-dir", nargs="+", action="extend", default=[])
     ap.add_argument("--permission-prompt-tool",
-                    help='"stdio": the client answers permission prompts (can_use_tool)')
+                    help='"stdio": the client answers permission prompts (can_use_tool); '
+                         "an MCP tool name (mcp__<server>__<tool>): that tool answers them")
     ap.add_argument("--permission-prompts", choices=("host", "none"), default="host")
     ap.add_argument("--dangerously-skip-permissions", action="store_true")
     ap.add_argument("-c", "--continue", dest="continue_last", action="store_true",
@@ -169,6 +171,21 @@ def _json_or_file(value: str, flag: str) -> Any:
         raise FlagError(f"{flag}: not JSON: {exc}") from None
 
 
+def json_schema(value: str) -> dict[str, Any]:
+    """``--json-schema``: the schema, a JSON object whose root is an object
+    type (it becomes the ``StructuredOutput`` tool's input schema)."""
+    from noeta.toolkit.structured_output import answer_schema_problem
+
+    try:
+        schema = json.loads(value)
+    except ValueError as exc:
+        raise FlagError(f"--json-schema is not a valid JSON Schema: not JSON: {exc}") from None
+    problem = answer_schema_problem(schema)
+    if problem is not None:
+        raise FlagError(f"--json-schema is not a valid JSON Schema: {problem}")
+    return dict(schema)
+
+
 def setting_sources(args: argparse.Namespace) -> tuple[str, ...] | None:
     """``--setting-sources``: the settings layers read (``None``: all; the
     empty value Claude Code's SDK passes: none but the managed one)."""
@@ -201,6 +218,20 @@ def settings_layer(args: argparse.Namespace, scratch: Path) -> Path | None:
     path.write_text(text, "utf-8")
     path.chmod(0o600)
     return path
+
+
+def hooks_arguments(args: argparse.Namespace) -> dict[str, Any]:
+    """The hooks plugin's arguments: where the client's ``initialize``
+    hooks go (``callbacks``, handed to :func:`run` too), and the MCP tool
+    ``--permission-prompt-tool`` names."""
+    out: dict[str, Any] = {"callbacks": HookCallbacks()}
+    tool = args.permission_prompt_tool
+    if tool not in (None, "stdio") and args.permission_prompts == "host":
+        if not str(tool).startswith("mcp__") or "__" not in str(tool)[5:]:
+            raise FlagError(f"--permission-prompt-tool {tool}: must be \"stdio\" or an MCP "
+                            "tool name (mcp__<server>__<tool>)")
+        out["permission_prompt_tool"] = tool
+    return out
 
 
 def mcp_arguments(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -283,8 +314,10 @@ async def _stdin_lines(bad: list[str]) -> AsyncIterator[dict[str, Any]]:
             yield value
 
 
-async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str) -> int:
-    """Run headless on ``app`` (a ``LocalApp``); returns the exit code."""
+async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str,
+              hook_callbacks: HookCallbacks | None = None) -> int:
+    """Run headless on ``app`` (a ``LocalApp``; ``hook_callbacks``: those
+    its hooks plugin was given); returns the exit code."""
     from noeta.core.types import Message, Text
     from noeta.host.stream_json import HeadlessOptions, StreamJson, drive, find_latest_task
 
@@ -298,7 +331,13 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str) -> i
     if output == "stream-json" and not args.verbose:
         print("noeta: --output-format=stream-json requires --verbose", file=sys.stderr)
         return 1
-    schema = json.loads(args.json_schema) if args.json_schema else None
+    schema = None
+    if args.json_schema:
+        try:
+            schema = json_schema(args.json_schema)
+        except FlagError as exc:
+            print(f"noeta: {exc}", file=sys.stderr)
+            return 1
     mode = args.permission_mode
     if args.dangerously_skip_permissions:
         mode = "bypassPermissions"
@@ -318,11 +357,9 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str) -> i
             ask_client=args.permission_prompt_tool == "stdio"
             and args.permission_prompts == "host",
             resume=resume, fork=bool(args.fork), task_id=args.new_task_id,
+            hook_callbacks=hook_callbacks,
             config={**({"effort": s.effort} if s.effort else {}),
                     **({"timezone": zone} if (zone := local_timezone()) else {})})
-        if args.permission_prompt_tool not in (None, "stdio"):
-            print(f"noeta: --permission-prompt-tool {args.permission_prompt_tool}: only "
-                  "\"stdio\" is supported; permission prompts are refused", file=sys.stderr)
 
         async def emit(message: dict[str, Any]) -> None:
             if output == "stream-json":

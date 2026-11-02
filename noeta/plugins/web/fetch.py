@@ -5,7 +5,10 @@ returned. ``localhost`` and dotless host names are refused (Claude Code's
 rule: a local server is reached with ``curl``); ``http://`` is upgraded to
 ``https://`` (loopback addresses excepted); a redirect to another host is
 reported, not followed; pages are cached per task for 15 minutes. A page
-longer than one call's window is read from ``offset`` on. Deferred."""
+longer than one call's window is read from ``offset`` on. A Markdown body
+from one of Claude Code's preapproved documentation sites
+(:func:`preapproved`) is returned as it is when the rest of it from
+``offset`` is shorter than the window, with no digest. Deferred."""
 
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ import asyncio
 import ipaddress
 import mimetypes
 import posixpath
+import re
 import time
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
@@ -41,12 +45,15 @@ from noeta.toolkit.tools import (
 )
 
 __all__ = [
+    "DOCS_DIGEST_INSTRUCTIONS",
+    "PREAPPROVED_SITES",
     "CrossHostRedirect",
     "Digest",
     "FetchTransport",
     "HttpFetchTransport",
     "PageCache",
     "WebFetchTool",
+    "preapproved",
     "render_digest_prompt",
 ]
 
@@ -61,18 +68,92 @@ CACHE_MAX_ENTRIES = 16
 #: Claude Code's ``maxResultSizeChars`` for WebFetch.
 WEBFETCH_RESULT_LIMIT = 50_000
 _FETCH_SCHEMES = frozenset({"http", "https"})
+#: What a fetch asks for: Markdown first, as Claude Code asks.
+ACCEPT = "text/markdown, text/html, */*"
+
+#: Claude Code's preapproved documentation sites: a host name, or a host
+#: name and the path prefix that is preapproved on it.
+PREAPPROVED_SITES = frozenset({
+    "platform.claude.com", "code.claude.com", "claude.dev", "www.claude.dev",
+    "claude.com/docs", "modelcontextprotocol.io", "github.com/anthropics",
+    "github.com/anthropic-experimental", "raw.githubusercontent.com/anthropics",
+    "raw.githubusercontent.com/anthropic-experimental", "agentskills.io", "docs.python.org",
+    "en.cppreference.com", "docs.oracle.com", "learn.microsoft.com", "developer.mozilla.org",
+    "go.dev/doc", "go.dev/ref", "www.php.net", "docs.swift.org", "kotlinlang.org",
+    "ruby-doc.org", "doc.rust-lang.org", "www.typescriptlang.org", "react.dev", "angular.io",
+    "vuejs.org", "nextjs.org", "expressjs.com", "nodejs.org", "bun.sh", "jquery.com",
+    "getbootstrap.com", "tailwindcss.com", "d3js.org", "threejs.org", "redux.js.org",
+    "webpack.js.org", "jestjs.io", "reactrouter.com", "docs.djangoproject.com",
+    "flask.palletsprojects.com", "fastapi.tiangolo.com", "pandas.pydata.org", "numpy.org",
+    "www.tensorflow.org", "pytorch.org", "scikit-learn.org", "matplotlib.org",
+    "requests.readthedocs.io", "jupyter.org", "laravel.com", "symfony.com",
+    "wordpress.org/documentation", "docs.spring.io", "hibernate.org", "tomcat.apache.org",
+    "gradle.org", "maven.apache.org", "asp.net", "dotnet.microsoft.com", "blazor.net",
+    "reactnative.dev", "docs.flutter.dev", "developer.apple.com", "developer.android.com",
+    "keras.io", "spark.apache.org", "huggingface.co/docs", "www.kaggle.com/docs",
+    "www.mongodb.com", "redis.io", "www.postgresql.org", "dev.mysql.com", "www.sqlite.org",
+    "graphql.org", "prisma.io", "docs.getdbt.com", "docs.aws.amazon.com", "cloud.google.com",
+    "kubernetes.io", "www.docker.com", "www.terraform.io", "www.ansible.com",
+    "vercel.com/docs", "docs.stripe.com", "docs.netlify.com", "devcenter.heroku.com",
+    "dev.wix.com/docs", "cypress.io", "selenium.dev", "docs.unity.com",
+    "docs.unrealengine.com", "git-scm.com", "nginx.org", "httpd.apache.org",
+})
+_PREAPPROVED_HOSTS = frozenset(s for s in PREAPPROVED_SITES if "/" not in s)
+_PREAPPROVED_PREFIXES: dict[str, tuple[str, ...]] = {}
+for _site in sorted(PREAPPROVED_SITES - _PREAPPROVED_HOSTS):
+    _host, _, _prefix = _site.partition("/")
+    _PREAPPROVED_PREFIXES[_host] = (*_PREAPPROVED_PREFIXES.get(_host, ()), "/" + _prefix)
+#: On these hosts a preapproved prefix (an organization) covers only the
+#: repository's root and its ``main`` branch, except Anthropic's own.
+_REPOSITORY_HOSTS = frozenset({"github.com", "raw.githubusercontent.com"})
+_WHOLE_ORGANIZATION = "github.com/anthropics"
+_ENCODED_SEPARATOR = re.compile(r"%(25)*(2f|5c|2e)", re.IGNORECASE)
+_RAW_MAIN = re.compile(r"^/[^/]+/[^/]+/refs/heads/main/.")
+_REPOSITORY_MAIN = re.compile(r"^/[^/]+/[^/]+(/?|/(tree|blob)/main(/.*)?)$")
 
 
+def preapproved(url: str) -> bool:
+    """Whether ``url`` is on one of :data:`PREAPPROVED_SITES` (Claude Code's
+    rule: the host alone, or the host and a whole path segment prefix; an
+    encoded separator or dot in the path never matches)."""
+    try:
+        parsed = httpx.URL(url)
+    except Exception:  # noqa: BLE001 - a malformed URL is not preapproved
+        return False
+    return _preapproved_at(parsed.host.lower(), _raw_path(parsed))
+
+
+def _raw_path(url: httpx.URL) -> str:
+    return url.raw_path.decode("ascii", "replace").split("?", 1)[0] or "/"
+
+
+def _preapproved_at(host: str, path: str) -> bool:
+    if host in _PREAPPROVED_HOSTS:
+        return True
+    prefixes = _PREAPPROVED_PREFIXES.get(host)
+    if not prefixes or _ENCODED_SEPARATOR.search(path) or "\\" in path:
+        return False
+    for prefix in prefixes:
+        if path == prefix or path.startswith(prefix + "/"):
+            if host not in _REPOSITORY_HOSTS or host + prefix == _WHOLE_ORGANIZATION:
+                return True
+            pattern = _RAW_MAIN if host == "raw.githubusercontent.com" else _REPOSITORY_MAIN
+            return pattern.match(path) is not None
+    return False
+
+
+#: The digest's answering rules (``web/fetch_digest``), and the looser ones
+#: for a page from a preapproved documentation site (``web/fetch_digest_docs``).
 DIGEST_INSTRUCTIONS = load_description("noeta.plugins.web", "webfetch_digest")
+DOCS_DIGEST_INSTRUCTIONS = load_description("noeta.plugins.web", "webfetch_digest_docs")
 
 
-def render_digest_prompt(*, url: str, title: str, page_markdown: str, prompt: str,
+def render_digest_prompt(*, page_markdown: str, prompt: str,
                          instructions: str = DIGEST_INSTRUCTIONS) -> str:
-    """The one user message the digest model sees."""
-    return "\n".join([
-        instructions.strip(), "", f"Request: {prompt}", "", f"Page title: {title}",
-        f"Page URL: {url}", "", "Page content (Markdown):", page_markdown,
-    ])
+    """The one user message the digest model sees, in Claude Code's order:
+    the page between ``---`` lines, the request, then the answering rules."""
+    return (f"\nFetched page:\n---\n{page_markdown}\n---\n\n{prompt}\n\n"
+            f"{instructions.strip()}\n")
 
 
 #: ``(url, title, page_markdown, prompt) -> answer``; raises on failure.
@@ -80,9 +161,9 @@ Digest = Callable[[str, str, str, str], Awaitable[str]]
 
 
 class PageCache:
-    """The 15-minute per-URL page cache (successes only) of one task. A
-    binary body is cached as the note naming the file it was saved to
-    (``binary=True``), never as text."""
+    """The 15-minute per-URL page cache (successes only) of one task, with
+    each page's ``Content-Type``. A binary body is cached as the note naming
+    the file it was saved to (``binary=True``), never as text."""
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic,
                  ttl_seconds: float = CACHE_TTL_SECONDS,
@@ -90,24 +171,26 @@ class PageCache:
         self.clock = clock
         self._ttl = ttl_seconds
         self._max = max_entries
-        self._pages: dict[str, tuple[float, str, str, bool]] = {}
+        self._pages: dict[str, tuple[float, str, str, bool, str]] = {}
 
-    def entry(self, url: str) -> tuple[str, str, bool] | None:
-        """``(title, markdown, binary)`` for ``url``, or ``None``."""
+    def entry(self, url: str) -> tuple[str, str, bool, str] | None:
+        """``(title, markdown, binary, content_type)`` for ``url``, or
+        ``None``."""
         entry = self._pages.get(url)
         if entry is None:
             return None
-        expires_at, title, markdown, binary = entry
+        expires_at, title, markdown, binary, content_type = entry
         if self.clock() >= expires_at:
             del self._pages[url]
             return None
-        return title, markdown, binary
+        return title, markdown, binary, content_type
 
-    def put(self, url: str, title: str, markdown: str, *, binary: bool = False) -> None:
+    def put(self, url: str, title: str, markdown: str, *, binary: bool = False,
+            content_type: str = "") -> None:
         self._pages.pop(url, None)
         while len(self._pages) >= self._max:
             del self._pages[next(iter(self._pages))]
-        self._pages[url] = (self.clock() + self._ttl, title, markdown, binary)
+        self._pages[url] = (self.clock() + self._ttl, title, markdown, binary, content_type)
 
 
 def _is_loopback_url(url: str) -> bool:
@@ -227,8 +310,10 @@ class FetchTransport(Protocol):
 
 def _same_origin(a: str, b: str) -> bool:
     """Whether a redirect from ``a`` to ``b`` stays on the site: the same
-    scheme and port, the same host up to a leading ``www.``, and no
-    credentials in the target."""
+    scheme and port, the same host up to a leading ``www.``, no credentials
+    in the target, and, from a preapproved path, a target still on one
+    (Claude Code's rule: leaving it counts as leaving the host, so a page
+    is treated as preapproved only where it was fetched from)."""
     ua, ub = httpx.URL(a), httpx.URL(b)
     defaults = {"http": 80, "https": 443}
 
@@ -239,6 +324,11 @@ def _same_origin(a: str, b: str) -> bool:
         return host.removeprefix("www.")
 
     if ub.userinfo:
+        return False
+    bare = _site(ua.host.lower())
+    hosts = (ua.host.lower(), bare, "www." + bare)
+    if any(_preapproved_at(h, _raw_path(ua)) for h in hosts) \
+            and not any(_preapproved_at(h, _raw_path(ub)) for h in hosts):
         return False
     return (ua.scheme, _site(ua.host), _port(ua)) == (ub.scheme, _site(ub.host), _port(ub))
 
@@ -262,7 +352,8 @@ class HttpFetchTransport:
             current = url
             for _ in range(_MAX_REDIRECT_HOPS + 1):
                 async with client.stream("GET", current, follow_redirects=False,
-                                         headers={"User-Agent": self.user_agent}) as resp:
+                                         headers={"User-Agent": self.user_agent,
+                                                  "Accept": ACCEPT}) as resp:
                     if resp.is_redirect:
                         target = str(httpx.URL(current).join(resp.headers.get("location", "")))
                         if not _same_origin(current, target):
@@ -373,7 +464,7 @@ class WebFetchTool:
         if cached is not None and cached[2]:
             return text_output(cached[1], url=url)
         if cached is not None:
-            title, markdown, _ = cached
+            title, markdown, _, content_type = cached
         else:
             try:
                 fetched = await self.transport.fetch(url)
@@ -404,19 +495,25 @@ class WebFetchTool:
                         f"it was saved to {saved}]")
                 cache.put(url, "", note, binary=True)
                 return text_output(note, url=url)
+            content_type = fetched.content_type if isinstance(fetched, FetchedPage) else ""
             title, markdown = render(fetched)
             if not markdown.strip():
                 return text_output(
                     f"WebFetch got no readable text from {truncate_bytes(url, 100)} — the page "
                     "rendered to empty text (blocked, empty, or script-only); "
                     "try another source", is_error=True)
-            cache.put(url, title, markdown)
+            cache.put(url, title, markdown, content_type=content_type)
 
         start = _offset(input)
         total = len(markdown)
         if start >= total > 0:
             return text_output(f"Nothing is left to read from offset {start}: the page's text "
                                f"is {total} characters long.", url=url, chars=total)
+        if (total - start < INLINE_PAGE_MAX_CHARS and "text/markdown" in content_type
+                and preapproved(url)):
+            # A documentation site's own Markdown: the page itself, no digest.
+            body = await limit_output(markdown[start:], WEBFETCH_RESULT_LIMIT, ctx)
+            return text_output(body, url=url, chars=total, markdown=True)
         end = min(total, start + INLINE_PAGE_MAX_CHARS)
         page = markdown[start:end]
         more = (f"\n\n(The page continues: this covers characters {start}-{end} of {total}. "

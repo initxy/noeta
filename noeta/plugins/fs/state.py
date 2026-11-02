@@ -15,13 +15,21 @@ Kinds:
   the token ceiling, which counts as not read for ``Edit`` / ``Write`` and is
   never answered as unchanged; ``whole: false`` marks a view that was not
   the whole file (a window, or an edit made without the file in view), which
-  takes the file-state note off ``Edit``'s result. ``Edit`` and ``Write``
+  takes the file-state note off ``Edit``'s result; ``window: true`` marks a
+  view of some lines without a ``range`` to answer from (a command's output
+  cut to fit). A ``Bash`` command that showed a file records one too,
+  with ``"by": "Bash"``, the command's ``call_id`` and, for a file a deny
+  rule keeps from ``Read``, ``"read_denied": true``
+  (:mod:`noeta.plugins.fs.shell_reads`). ``Edit`` and ``Write``
   refuse to change a file without an entry whose digest still matches the
   bytes on disk. A successful write records the new digest, so consecutive
   edits chain without a re-read.
-- ``changed`` — ``{"path", "digest"}``: the model was told that ``path``
-  changed on disk since it read it (to those bytes); it is told once per
-  change.
+- ``changed`` — ``{"path", "digest", "mtime"?}``: the model was told that
+  ``path`` changed on disk since it read it (to those bytes, found at that
+  modification time); it is told once per change.
+- ``checked`` — ``{"path", "mtime"}``: the changed-file check found ``path``
+  under a new modification time holding bytes the model already has or was
+  told of; it is not read again until the time moves on.
 - ``forget_ranges`` — a compaction dropped the earlier results: no re-read is
   answered from them.
 - ``mentions`` — ``{"through", "path"?}``: the person's messages up to log
@@ -52,6 +60,7 @@ from noeta.core.types import Struct
 __all__ = [
     "FS",
     "KIND_CHANGED",
+    "KIND_CHECKED",
     "KIND_FORGET_RANGES",
     "KIND_IMAGES",
     "KIND_MENTIONS",
@@ -69,13 +78,15 @@ __all__ = [
 FS = "fs"
 KIND_READ = "read"
 KIND_CHANGED = "changed"
+KIND_CHECKED = "checked"
 KIND_FORGET_RANGES = "forget_ranges"
 KIND_NOTICE = "notice"
 KIND_NOTICE_SENT = "notice_sent"
 KIND_MENTIONS = "mentions"
 KIND_IMAGES = "images"
-#: Files remembered as read at most: the oldest are forgotten past it.
-MAX_FILES = 1000
+#: Files remembered as read at most (Claude Code's read-file state holds as
+#: many): the oldest are forgotten past it.
+MAX_FILES = 5000
 #: Attachments remembered for placing ahead of the person's text.
 MAX_ATTACHMENTS = 200
 
@@ -91,10 +102,12 @@ class FileRead(Struct):
     #: or what it wrote itself over such a view).
     whole: bool = True
     #: Recorded by a ``Read`` given an offset past the first line or a limit
-    #: (or cut to fit the token ceiling): no changed-file note follows it, as
-    #: Claude Code sends none for such a read. Kept when a compaction drops
-    #: ``range``.
+    #: (or cut to fit the token ceiling), or by a command that showed some
+    #: lines: no changed-file note follows it, as Claude Code sends none for
+    #: such a read. Kept when a compaction drops ``range``.
     window: bool = False
+    #: The ``Bash`` call whose output showed the file, for a command's read.
+    call_id: str | None = None
 
 
 class FsState(Struct):
@@ -103,6 +116,9 @@ class FsState(Struct):
     reads: dict[str, FileRead] = msgspec.field(default_factory=dict)
     #: Path -> the digest the model was last told the file changed to.
     noticed: dict[str, str] = msgspec.field(default_factory=dict)
+    #: Path -> the modification time the changed-file check last found the
+    #: file at with nothing new to tell (``changed`` / ``checked``).
+    checked: dict[str, float] = msgspec.field(default_factory=dict)
     #: Notes waiting to reach the model after the results they belong to.
     notices: list[str] = msgspec.field(default_factory=list)
     #: Log seq of the newest message of the person's whose mentions were
@@ -135,15 +151,25 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         if not (isinstance(lines, list) and len(lines) == 2
                 and all(isinstance(n, int) and not isinstance(n, bool) for n in lines)):
             lines = None
+        call_id = data.get("call_id")
+        # A copy of the map (the fold stays pure: a simulated fold shares
+        # this state) but no walk over it or ``checked`` in Python.
         reads = dict(base.reads)
         reads.pop(path, None)
+        dropped = []
         while len(reads) >= MAX_FILES:
-            del reads[next(iter(reads))]
+            oldest = next(iter(reads))
+            del reads[oldest]
+            dropped.append(oldest)
         reads[path] = FileRead(digest=digest, mtime=float(mtime), range=lines,
                                partial=data.get("partial") is True,
                                whole=data.get("whole") is not False,
-                               window=lines is not None and (lines[0] > 1 or lines[1] > 0))
-        return msgspec.structs.replace(base, reads=reads)
+                               window=data.get("window") is True or (
+                                   lines is not None and (lines[0] > 1 or lines[1] > 0)),
+                               call_id=call_id if isinstance(call_id, str) else None)
+        return msgspec.structs.replace(base, reads=reads,
+                                       checked=_without(base.checked, [path, *dropped]),
+                                       noticed=_without(base.noticed, dropped))
     if kind in (KIND_NOTICE, KIND_NOTICE_SENT):
         text = data.get("text")
         if not isinstance(text, str):
@@ -181,10 +207,37 @@ def reduce_fs(state: FsState | None, kind: str, data: Any) -> FsState:
         path, digest = data.get("path"), data.get("digest")
         if not isinstance(path, str) or not isinstance(digest, str):
             return base
-        noticed = {p: d for p, d in base.noticed.items() if p != path and p in base.reads}
+        noticed = dict(base.noticed)
+        noticed.pop(path, None)
         noticed[path] = digest
-        return msgspec.structs.replace(base, noticed=noticed)
+        return _checked(msgspec.structs.replace(base, noticed=noticed), path, data.get("mtime"))
+    if kind == KIND_CHECKED:
+        path = data.get("path")
+        if not isinstance(path, str) or path not in base.reads:
+            return base
+        return _checked(base, path, data.get("mtime"))
     return base
+
+
+def _checked(state: FsState, path: str, mtime: Any) -> FsState:
+    """``state`` with ``path`` found at ``mtime`` with nothing new to tell."""
+    if isinstance(mtime, bool) or not isinstance(mtime, (int, float)):
+        return state
+    checked = dict(state.checked)
+    checked.pop(path, None)
+    checked[path] = float(mtime)
+    return msgspec.structs.replace(state, checked=checked)
+
+
+def _without(entries: dict[str, Any], paths: list[str]) -> dict[str, Any]:
+    """``entries`` without ``paths`` (``entries`` itself when it holds none
+    of them, so nothing is copied)."""
+    if not any(p in entries for p in paths):
+        return entries
+    out = dict(entries)
+    for p in paths:
+        out.pop(p, None)
+    return out
 
 
 def current_fs_state(state: Mapping[str, Any]) -> FsState:

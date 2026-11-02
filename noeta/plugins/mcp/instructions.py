@@ -7,13 +7,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from noeta.plugins.mcp.config import cap_text, description_max_chars
 from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 
-__all__ = ["INSTRUCTIONS_MAX_CHARS", "cap_instructions", "instructions_delta"]
+__all__ = ["cap_instructions", "instructions_delta"]
 
-#: Server instructions beyond this are cut, as Claude Code cuts them (its
-#: default ``u$()``: 4,096 characters, then ``… [truncated]``).
-INSTRUCTIONS_MAX_CHARS = 4096
 INSTRUCTIONS_HEAD = (
     "# MCP Server Instructions\n"
     "These MCP servers gave instructions for using their tools and resources:")
@@ -22,9 +20,8 @@ INSTRUCTIONS_GONE = ("These MCP servers disconnected; their instructions above n
 
 
 def cap_instructions(text: str) -> str:
-    if len(text) <= INSTRUCTIONS_MAX_CHARS:
-        return text
-    return text[:INSTRUCTIONS_MAX_CHARS] + "… [truncated]"
+    """Server instructions cut as a listed tool's description is."""
+    return cap_text(text, description_max_chars())
 
 
 def instructions_delta(told: Mapping[str, str], now: Mapping[str, str]) -> str:

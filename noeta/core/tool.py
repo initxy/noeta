@@ -13,6 +13,7 @@ from noeta.core.holds import Release
 from noeta.core.records import CoreNotices
 from noeta.core.types import (
     Display,
+    Effort,
     Image,
     ModelRequest,
     ModelResponse,
@@ -111,6 +112,10 @@ class ToolContext(CoreNotices):
     allowed_outright: bool = False
     #: The model the task runs on (``""`` when not known).
     model: str = ""
+    #: The identity line the task's requests open with (``TaskView.identity``).
+    identity: str = ""
+    #: The task's effort (``TaskView.effort``).
+    effort: Effort | None = None
     #: ``prompt(name, default)``: the task's text for a named prompt
     #: (``noeta.core.prompts``).
     prompt: Callable[[str, str], str] = field(default=lambda _name, default: default)
@@ -149,10 +154,18 @@ class Tool(Protocol):
     * ``deferred: bool = False`` — named to the model by name only
       (``TaskView.deferred_tool_names``) and sent with ``defer_loading``; the
       ``tool_search`` plugin withholds it until the model loads it.
+    * ``loaded_description: str`` — the description sent instead of
+      ``description`` while the tool goes with ``defer_loading`` (the model
+      loaded it through ``ToolSearch``), as Claude Code gives such a tool a
+      longer one.
     * ``listed_last: bool = False`` — sent after the other tools (keeps a
       changing set of tools at the end of the cached prefix).
     * ``run_last: bool = False`` — runs after the reply's other calls
       (delegation).
+    * ``past_agent_lists: bool = False`` — offered whenever its extension
+      offers it, whatever the agent's tool allow and deny lists say: the task
+      cannot finish without it (the answer tool a requested answer schema
+      adds, as Claude Code adds it to every agent's tools).
     * ``async resume(input, ctx, outcome) -> ToolOutput`` — required of a
       tool that parks: ``outcome`` is the ``Answer`` for a question, or
       ``{child_id: ChildEnded}`` for children; ``None`` means the wait was
@@ -200,7 +213,8 @@ MAX_ATTEMPTS = 3
 
 
 def tool_flag(tool: Tool,
-              name: Literal["deferred", "listed_last", "run_last", "retry_safe"]) -> bool:
+              name: Literal["deferred", "listed_last", "run_last", "retry_safe",
+                            "past_agent_lists"]) -> bool:
     """One of ``tool``'s optional flags (see :class:`Tool`); ``False`` when
     the tool leaves it out."""
     return bool(getattr(tool, name, False))

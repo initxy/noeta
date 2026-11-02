@@ -34,7 +34,8 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 | `tool.Write.4` | For a partial change use `Edit`. | covered |
 | `tool.Write.5` | The description says nothing about parent directories, outside-workspace paths, placeholders or diffs. | covered |
 | `tool.Write.6` | Observed: the plan file is written with `Write` under the config dir's `plans/` folder, outside the project (`m1/0060`). | see `reminders.md` / plan mode |
-| `tool.Write.7` | Runtime: a directory path is refused with a hint to name the file; an overwritten file keeps its UTF-8 byte-order mark; the file-state note is always there (`CLAUDE.md` included). | covered |
+| `tool.Write.7` | Runtime: a directory path is refused with a hint to name the file; an overwritten file keeps its UTF-8 byte-order mark; the file-state note is always there (`CLAUDE.md` included). | covered (a UTF-16LE file stays UTF-16LE with its byte-order mark) |
+| `tool.Write.8` | (bundle) An existing not-text file is refused; the error says to delete it first to replace it with UTF-8 text. | covered |
 
 ## Result shape
 

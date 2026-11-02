@@ -55,6 +55,7 @@ Not in the description; read from the bundle's `Read` implementation.
 | `tool.Read.16` | Binary extensions (archives, executables, office, media, fonts, databases, ...) are refused before opening, except png/jpg/jpeg/gif/webp/pdf; device and `/proc` files are refused. | covered |
 | `tool.Read.17` | Images by extension; content is sniffed only without one; an image extension over other bytes is an error. The result is the image alone. PDFs by extension: empty, headerless or over 100 MB refused. | covered (a whole short PDF comes back as page images, `deviations.md`) |
 | `tool.Read.18` | An empty file or an offset past the end (lines counted with a final newline starting one more) answers with a warning instead of content; a leading byte-order mark is not shown. | covered (plain text, not `<system-reminder>`, `deviations.md`) |
+| `tool.Read.19` | (bundle) A file starting `FF FE` is read as UTF-16LE. A `FE FF` start, a NUL byte in the first 8,000 bytes or invalid UTF-8 makes it not text: it is still shown (bad bytes as U+FFFD), followed by a bracketed note that `Edit` and `Write` will refuse it and how to change it instead. | covered (`fs/_encoding.py`) |
 
 ## Result shape
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.skills.registry import (
     SkillDescription,
+    SkillRegistry,
     render_command_body,
     substitute_variables,
 )
@@ -78,9 +79,7 @@ class SkillTool:
         if desc is not None and not desc.model_invocable:
             return text_output(USER_ONLY_SKILL.format(name=name), is_error=True)
         if desc is None or name not in menu:
-            near = closest_name(name, menu)
-            hint = f" Did you mean {near}?" if near is not None else ""
-            return text_output(f"There is no skill named {name}.{hint}", is_error=True)
+            return text_output(not_found(name, registry, menu), is_error=True)
         args = input.get("args")
         if args is not None and not isinstance(args, str):
             return text_output("args must be a string", is_error=True)
@@ -88,6 +87,28 @@ class SkillTool:
             f"Starting skill: {name}. Its instructions follow.",
             skill_activation=activation_data(desc, "model", args, ctx.env.cwd),
         )
+
+
+def not_found(name: str, registry: SkillRegistry, menu: Sequence[str]) -> str:
+    """Why ``name`` is not a skill the model may load, and what it may have
+    meant: the plugin skill ending in ``:<name>``, the skills of that name
+    scoped to directories (Claude Code names neither by the bare name), or
+    a name within a small edit distance."""
+    head = f"There is no skill named {name}."
+    scoped = [d.name for d in registry.scoped(name) if d.name in menu]
+    full = [] if ":" in name else [n for n in menu if n.rsplit(":", 1)[-1] == name
+                                   and n != name and n not in scoped]
+    if full and len(full) + len(scoped) > 1:
+        return (f"{head} Several skills have that name: {', '.join([*full, *scoped])}. Call one "
+                "by its full name; a skill scoped to a directory is for the files under it.")
+    if full:
+        return f"{head} Did you mean {full[0]}? Call it by that full name."
+    if scoped:
+        return (f"{head} Skills of that name scoped to directories exist: "
+                f"{', '.join(scoped)}. Call the one whose directory holds the files you are "
+                "working on.")
+    near = closest_name(name, menu)
+    return head + (f" Did you mean {near}?" if near is not None else "")
 
 
 def closest_name(name: str, names: Sequence[str], max_distance: int = 2) -> str | None:

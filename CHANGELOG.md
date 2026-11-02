@@ -9,6 +9,99 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Context audit closure: what the model sees follows Claude Code 2.1.312 where it differed
+  without a written reason** (spec `2026-11-02-context-audit-closure`; kept differences are rows
+  in `parity/deviations.md`, which now has a pi / dsh column and no "Not yet matched" section).
+  - Environment: the git checkout is found from a working directory below its top ("Is a git
+    repository" true, git snapshot sent); the status is cut at 2,000 characters with a note; the
+    Shell line names the `bash` commands run in (plus the login shell when it differs); the
+    date-change note is checked before every model call; after a compaction the git snapshot is
+    taken again.
+  - Files: the changed-file note watches every remembered read file (up to 5,000) in one batch
+    (new optional `ExecEnv.stat_many`; one `docker exec` per ~100 KB of paths on a container);
+    UTF-16LE files are read and written in their encoding and a UTF-8 byte-order mark is kept;
+    not-text files (UTF-16BE, early NUL bytes, invalid UTF-8) are shown by `Read` with a note and
+    refused by `Edit` / `Write` / `NotebookEdit`; a file a read-only `Bash` command showed (`cat`,
+    `head`, `tail`, `sed -n`, a matching `grep`) counts as read, brings the nested instruction files
+    that apply to it, and is restored after a compaction; a command that rewrites files in place (a
+    formatter, `sed -i`) ends its result with the read files it changed.
+  - MCP: tool descriptions are cut at 4,096 characters plus `… [truncated]` (16,384 once loaded
+    through `ToolSearch`; `NOETA_MAX_MCP_DESCRIPTION_LENGTH`); prompts, resources and the resource
+    tools are no longer cut at 64 KB; a result between half and four times its budget is counted by
+    the provider where it can; prompt commands keep embedded resource text.
+  - `WebFetch` asks for Markdown first and returns a preapproved documentation site's Markdown
+    without a digest; the digest request follows Claude Code's order and rules (quote cap, no
+    verbatim copying, no legality remarks, no lyrics; looser rules for documentation sites).
+  - Side requests (title, plan name, digest) open with the identity line, use the model's output
+    ceiling and the task's effort, and leave `thinking` out on Anthropic models; a plan is named
+    once approved.
+  - Headless: `-p` and stream-json tasks are not interactive (task config `interactive`,
+    `permission_prompt_tool`): no title request, `AskUserQuestion` only when the client answers
+    prompts. `per-turn-control-2026-07-01` goes only to models with per-turn effort. A stream-json
+    client's `initialize.hooks` run (`hook_callback`), and `--permission-prompt-tool
+    mcp__<server>__<tool>` answers permission requests.
+  - **Breaking:** structured output goes through a `StructuredOutput` tool (`--json-schema`,
+    `initialize.jsonSchema`, the HTTP `output_schema`, workflow `agent({schema})`), with one
+    reminder and a cap of five refused calls (`error_max_structured_output_retries`); the main
+    conversation no longer sends the provider's `output_schema`, `Agent.output_schema` needs the
+    `structured_output` plugin (every agent built from agent files has it), and
+    `structured_answer()` returns the accepted call's value instead of parsing each turn's text.
+  - `AskUserQuestion` may be left partly or wholly unanswered.
+  - Skills: a Claude Code plugin's skills are `<plugin>:<skill directory>`, its agents and commands
+    `<plugin>:[<subdir>:]<name>`; a nested skill that shares a name is offered as `<dir>:<name>`
+    (a skill file cannot name itself with a `:`, and a scoped name never replaces another skill); a
+    typed `/<name>` of a `context: fork` skill starts its agent with no model call; a skill given
+    again after a compaction names its source. A skill's `` !`cmd` `` that would be asked about
+    still refuses the load in every mode (a deviation: Claude Code's auto mode hands it over).
+  - Sub-agents: prompts end with the token budget line; general-purpose sees its caller's
+    `MEMORY.md` index; the auto-mode classifier for a sub-agent without instructions sees its root
+    task's; an agent file's `omitClaudeMd` keeps the managed instruction files.
+  - A background job's notice that arrives during a turn is a system turn after the tool results;
+    Anthropic requests add Claude Code's newline where two user messages are joined.
+  - Providers: an Anthropic stream that breaks after it began goes on as a non-streaming call
+    (`max_tokens` at most 64,000, 300 s for the whole call), as Claude Code does for every call; a
+    one-piece call that times out goes back to streaming and is not retried in one piece, and a
+    one-piece body that is not JSON fails at once; a summarize call that is too long drops only as
+    many old rounds as the error says it is over. `AnthropicProvider.count_tokens` has a 10 s
+    timeout and stops asking for a model whose count the endpoint refused.
+  - Review fixes: MCP prompt and @-resource text keeps its 64 KiB cap; `WebFetch` treats a redirect
+    off a preapproved documentation path as leaving the host; only a task's first approved plan is
+    named; a shell read of a file a `Read` deny rule covers brings no instruction files; the
+    post-compaction restore resolves a command's relative path from where it ran; a failed or
+    timed-out `git status` shows `(not captured)`; the date-change note never goes back; the git
+    snapshot at a compaction is bounded to 10 s and falls back to the stored one; the changed-file
+    check skips files over 256 KB and shows at most 16,384 characters of changed lines per check;
+    container `stat_many` works with BusyBox `stat`; a file starting `FF FE` that is not UTF-16LE is
+    not text; a parked `AskUserQuestion` keeps its answer when a later run stops offering the tool;
+    `StructuredOutput`'s retry cap counts only refused calls since the prompt or the last accepted
+    answer, and the tool is offered even when an agent's `tools:` list leaves it out; workflow
+    children started before the upgrade that answer in JSON text finish normally; a task or skill
+    activation recorded under a plugin agent's or skill's bare name still resolves when one plugin
+    has that name.
+  - **Breaking** (besides the structured-output change above):
+    - A Claude Code plugin's skills, agents and commands are named `<plugin>:...`; the model, the
+      `Skill` tool, `subagent_type` and typed `/<name>` accept only the full name (a recorded task,
+      skill activation or settings `agent` key with a bare name still resolves when exactly one
+      plugin has that name). `noeta.cli.claude_plugins.plugin_settings()` returns
+      `skills.plugin_dirs` (directory -> plugin) instead of `skills.dirs`.
+    - A structured-output schema whose root is not `"type": "object"` is refused: `--json-schema`
+      exits with an error, `initialize` `jsonSchema` returns an error, an HTTP `output_schema` gets
+      400.
+    - Task config gains `interactive`, `permission_prompt_tool` and `client_hooks`
+      (`CHANGEABLE_CONFIG`); the terminal UI and ACP remove them when they reopen a task; an HTTP
+      config signal may remove `client_hooks` but not set it (403).
+    - For a task whose headless client registered hook callbacks, a process whose client has not
+      registered the same callbacks denies a call a recorded `PreToolUse` callback matches, and
+      denies (does not ask about) a call a recorded `PermissionRequest` callback matches; they used
+      to run unjudged. Child tasks carry the record; a reconnected client with the same callbacks
+      answers for them, and the terminal UI or ACP reopening the task clears the whole open tree.
+      A `-p` run that exits leaves the record, so those calls are denied until a front end reopens
+      the task.
+    - `offer_tools` skips an agent's allow and deny lists for tools flagged `past_agent_lists`
+      (`StructuredOutput`).
+    - The summarize call's own 64,000-token second attempt and `compaction.summary.RETRY_MAX_TOKENS`
+      are removed (the provider's non-streaming fallback replaces them); `Provider` gains the
+      optional `complete_whole`, `ExecEnv` the optional `stat_many`.
 - **An empty reply no longer fails the turn; the model is asked to go on, as in Claude Code.**
   A reply that ends (`end_turn`) with no text and no tool call (no content, empty text, or
   reasoning only) is still not recorded; the next request carries Claude Code's one-line

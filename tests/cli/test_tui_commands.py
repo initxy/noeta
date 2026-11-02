@@ -21,7 +21,7 @@ from noeta.cli.tui.widgets import Notice, PromptInput
 from noeta.core.agent import Agent
 from noeta.core.events import External
 from noeta.core.extension import Command, CommandContext, Extension
-from noeta.core.types import Image, Text
+from noeta.core.types import Image, Message, Text
 from noeta.host.local import LocalApp
 from noeta.plugins.checkpoints import Checkpoints
 from noeta.plugins.fs import FileTools
@@ -151,9 +151,13 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
         await settle(pilot, lambda: "/resume <n>" in shown(app))
         await type_line(pilot, f"/resume {app.listed.index(first) + 1}")
         await settle(pilot, lambda: app.task_id == first)
-        # The reopened task is told it was resumed (its plugins act on it).
-        posted = await app.local.store.inbox(first)
-        assert [p.body.name for p in posted if isinstance(p.body, External)] == [RESUMED_SIGNAL]
+        # The reopened task is told a person follows it, and that it was
+        # resumed (its plugins act on it).
+        posted = [p.body for p in await app.local.store.inbox(first)
+                  if isinstance(p.body, External)]
+        assert [b.name for b in posted] == ["config", RESUMED_SIGNAL]
+        assert posted[0].data == {"interactive": None, "permission_prompt_tool": None,
+                                  "client_hooks": None}
 
 
 async def test_reload_plugins_reports_what_changed(tmp_path: Path) -> None:
@@ -168,3 +172,40 @@ async def test_reload_plugins_reports_what_changed(tmp_path: Path) -> None:
         await type_line(pilot, "/reload-plugins")
         await settle(pilot, lambda: "plugins reloaded" in shown(app))
         assert "removed where" in shown(app) and "a notice" in shown(app)
+
+
+async def test_a_task_a_headless_run_resumed_is_interactive_again_in_the_tui(
+        tmp_path: Path) -> None:
+    """``noeta -p --resume`` marks the task not interactive for its run; the
+    terminal reopening it takes that back, so ``AskUserQuestion`` is offered
+    again (Claude Code decides per process)."""
+    from noeta.host.stream_json import HeadlessOptions, StreamJson, drive
+    from noeta.plugins.ask_user import AskUser
+
+    provider = ScriptedProvider([reply("first"), reply("headless"), reply("in the terminal")])
+    agent = Agent(name="main", model=MODEL, extensions=[AskUser()])
+
+    def local_app() -> LocalApp:
+        return LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                        env_for=lambda _s: None, own_tasks_only=True)
+
+    local = local_app()
+    async with local:
+        tid = await local.client.create("main", "start", config={"cwd": str(tmp_path)})
+        await local.client.wait(tid, timeout=10)
+        options = HeadlessOptions(model=MODEL, cwd=str(tmp_path), resume=tid)
+
+        async def emit(_m: Any) -> None:
+            return None
+
+        await drive(StreamJson(local, options, emit),
+                    prompt=Message(role="user", content=[Text(text="go")], origin="human"))
+    app = NoetaApp(local_app(), agent="main", model=MODEL, cwd=str(tmp_path), resume=tid)
+    async with app.run_test(size=(110, 40)) as pilot:
+        await settle(pilot, lambda: app.task_id == tid)
+        await type_line(pilot, "and now?")
+        await settle(pilot, lambda: len(provider.requests) == 3 and not app.busy)
+    names = [[t.name for t in r.tools] for r in provider.requests]
+    assert "AskUserQuestion" in names[0]
+    assert "AskUserQuestion" not in names[1]
+    assert "AskUserQuestion" in names[2]

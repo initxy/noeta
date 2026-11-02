@@ -66,7 +66,8 @@ async def test_origin_system_wrapped_and_merged_into_prev_user_turn() -> None:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "real human words"},
+                # Claude Code joins two user messages with a newline.
+                {"type": "text", "text": "real human words\n"},
                 {"type": "text", "text": "<system-reminder>\nhost says hi\n</system-reminder>"},
             ],
         }
@@ -80,7 +81,8 @@ async def test_origin_memory_before_user_merges_into_next_user_turn() -> None:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "<system-reminder>\nrecalled note\n</system-reminder>"},
+                {"type": "text",
+                 "text": "<system-reminder>\nrecalled note\n</system-reminder>\n"},
                 {"type": "text", "text": "the actual ask"},
             ],
         }
@@ -116,8 +118,8 @@ async def test_a_local_commands_tags_go_as_blocks_and_the_next_prompt_joins_them
     wire = await _wire_messages([user(command), user("go on")])
     assert len(wire) == 1
     assert [b["text"] for b in wire[0]["content"]] == [
-        "<command-name>/plan</command-name>\n<command-message>plan</command-message>",
-        "<local-command-stdout>Enabled plan mode</local-command-stdout>", "go on"]
+        "<command-name>/plan</command-name>\n<command-message>plan</command-message>\n",
+        "<local-command-stdout>Enabled plan mode</local-command-stdout>\n", "go on"]
     # Other text that holds a tag later stays whole.
     plain = await _wire_messages([user("see\n\n<command-name>x</command-name>")])
     assert isinstance(plain[0]["content"], str) or len(plain[0]["content"]) == 1
@@ -166,7 +168,7 @@ async def test_system_turns_can_ride_in_the_user_turn_instead() -> None:
     body, _ = await _send(_req(messages=[user("q"), system_message("note")]),
                           system_turns=False)
     assert body["messages"] == [{"role": "user", "content": [
-        {"type": "text", "text": "q"},
+        {"type": "text", "text": "q\n"},
         {"type": "text", "text": "<system-reminder>\nnote\n</system-reminder>"}]}]
 
 
@@ -179,6 +181,22 @@ async def test_a_message_sent_mid_turn_rides_with_the_tool_results() -> None:
     assert [b["type"] for b in blocks] == ["tool_result", "text"]
     assert blocks[1]["text"].startswith("While you were working, the user sent this message:\n"
                                         "also check y\n\n")
+
+
+@respx.mock
+async def test_a_mid_turn_message_joins_the_results_ahead_of_a_notice_taken_with_it() -> None:
+    # Claude Code 2.1.312: the person's message rides in the tool results'
+    # turn, a background job's end notice taken in the same step is the system
+    # turn after it (with the step's notes).
+    from noeta.core.types import system_message
+
+    wire = await _wire_messages([user("q"), _call(k="x"), _result(), system_message("job ended"),
+                                 _injected("also check y", "human"),
+                                 system_message("<total_tokens>9 tokens left</total_tokens>")])
+    assert [m["role"] for m in wire] == ["user", "assistant", "user", "system"]
+    assert [b["type"] for b in wire[2]["content"]] == ["tool_result", "text"]
+    assert wire[2]["content"][1]["text"].startswith("While you were working")
+    assert wire[3]["content"] == "job ended\n\n<total_tokens>9 tokens left</total_tokens>"
 
 
 @respx.mock
@@ -207,7 +225,8 @@ async def test_the_empty_reply_nudge_joins_the_prompt_before_the_environment() -
     wire = await _wire_messages([user("q"), system_message("# Environment"),
                                  user(EMPTY_REPLY_NUDGE, origin="inline")])
     assert [m["role"] for m in wire] == ["user", "system"]
-    assert [b["text"] for b in wire[0]["content"]] == ["q", EMPTY_REPLY_NUDGE]
+    # Claude Code 2.1.312 sends ``q\n`` there (run p-opus-first, request 2).
+    assert [b["text"] for b in wire[0]["content"]] == ["q\n", EMPTY_REPLY_NUDGE]
 
 
 @respx.mock
@@ -220,13 +239,42 @@ async def test_api_key_request_settings_follow_claude_code() -> None:
     root = uuid.uuid4().hex
     await _provider(device_id="d" * 64).complete(_req(model=_VISION_MODEL, root_id=root))
     sent = json.loads(route.calls.last.request.content)
-    assert route.calls.last.request.headers["anthropic-beta"] == ",".join(DEFAULT_BETAS)
+    # claude-opus-4-8 has no per-turn effort: Claude Code leaves that beta out.
+    assert route.calls.last.request.headers["anthropic-beta"] == ",".join(
+        b for b in DEFAULT_BETAS if b != "per-turn-control-2026-07-01")
     assert sent["thinking"] == {"type": "adaptive", "display": "updates"}
     assert sent["context_management"] == {
         "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
     assert sent["output_config"] == {"effort": "medium"}
     assert json.loads(sent["metadata"]["user_id"]) == {
         "device_id": "d" * 64, "account_uuid": "", "session_id": str(uuid.UUID(root))}
+
+
+@respx.mock
+@pytest.mark.parametrize(("model", "sent"), [
+    ("claude-opus-5-5", True), ("claude-opus-5-5[1m]", True),
+    ("us.anthropic.claude-sonnet-5-5-v1:0", True), ("claude-haiku-5-5", True),
+    ("claude-fable-5-1", True), ("claude-opus-5", False), ("claude-sonnet-4-6", False),
+    ("auto_model/alwaysday1_max", False), ("gpt-5.4", False)])
+async def test_the_per_turn_beta_goes_only_with_models_that_have_per_turn_effort(
+        model: str, sent: bool) -> None:
+    from noeta.backends.providers.anthropic import DEFAULT_BETAS, PER_TURN_BETA
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    await _provider().complete(_req(model=model, max_tokens=100))
+    betas = route.calls.last.request.headers["anthropic-beta"].split(",")
+    assert (PER_TURN_BETA in betas) is sent
+    assert [b for b in betas if b != PER_TURN_BETA] == [
+        b for b in DEFAULT_BETAS if b != PER_TURN_BETA]
+
+
+@respx.mock
+async def test_a_beta_set_the_host_chose_is_sent_as_given() -> None:
+    from noeta.backends.providers.anthropic import PER_TURN_BETA
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    await _provider(betas=("one", PER_TURN_BETA)).complete(_req(model="gpt-5.4", max_tokens=9))
+    assert route.calls.last.request.headers["anthropic-beta"] == f"one,{PER_TURN_BETA}"
 
 
 # ---------------------------------------------------------------------------
@@ -627,3 +675,17 @@ async def test_side_request_knobs_reach_the_wire() -> None:
     stamped = [b.get("cache_control") for b in body["messages"][1]["content"]]
     assert stamped == [None, EPHEMERAL, None]
 
+
+
+@respx.mock
+async def test_the_opening_context_is_one_message_to_claude_code() -> None:
+    # Claude Code sends the opening context (instructions, workspace context,
+    # attribution) as blocks of one message: no newline between them; the
+    # prompt joined after them adds one, as a later reminder does.
+    wire = await _wire_messages([
+        _injected("instructions", "system"), _injected("context", "system"),
+        user("hi"), _injected("later note", "system"), user("again")])
+    assert [b["text"] for b in wire[0]["content"]] == [
+        "<system-reminder>\ninstructions\n</system-reminder>",
+        "<system-reminder>\ncontext\n</system-reminder>\n", "hi\n",
+        "<system-reminder>\nlater note\n</system-reminder>\n", "again"]

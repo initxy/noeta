@@ -190,3 +190,75 @@ async def test_stopping_withdraws_the_question(store: SqliteStore) -> None:
 def test_question_texts_must_differ() -> None:
     error = validate_questions({"questions": [q(), q(header="Again")]})
     assert isinstance(error, str) and "Which auth?" in error
+
+
+async def test_unanswered_questions_are_left_out(store: SqliteStore) -> None:
+    two = {"questions": [q(), q(question="Layout?", header="UI")]}
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", two)), reply("ok")])
+    client, tid, rt = await start(store, provider)
+    [item] = pending(await client.events(tid), tid)
+    assert item.detail["partial"] is True
+    # What is answered is still checked; what is not may be left out.
+    with pytest.raises(AnswerValidationError, match="not an option"):
+        await answer_question(client, tid, item.request_id, {"1": {"selected": ["Nope"]}})
+    await answer_question(client, tid, item.request_id, {"1": {"selected": ["API key"]}})
+    await rt.run_until_idle()
+    [result] = finished(await events(client, tid))
+    assert not result.is_error
+    assert result.text == ('The user answered your questions: "Layout?"="API key". '
+                           "Go on with these answers in mind.")
+
+
+async def test_an_answer_with_nothing_in_it_says_so(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", {"questions": [q()]})),
+                                 reply("ok")])
+    client, tid, rt = await start(store, provider)
+    [item] = pending(await client.events(tid), tid)
+    # Blank typed text (what a front end sends for a question skipped) is no answer.
+    await answer_question(client, tid, item.request_id, {"answers": {"0": {"other": " "}}})
+    await rt.run_until_idle()
+    [result] = finished(await events(client, tid))
+    assert (result.text, result.is_error) == ("The user answered none of the questions.", False)
+
+
+def test_offered_only_where_a_question_can_be_answered() -> None:
+    """Claude Code's ``isEnabled``: off in a non-interactive session unless a
+    permission prompt tool answers; children inherit the say."""
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.ask_user import AskUser
+
+    plugin = AskUser()
+
+    def offered(config: dict[str, Any]) -> bool:
+        view = TaskView(state=TaskState(task_id="t", agent="main", config=config))
+        return [t.name for t in plugin.tools(view)] == ["AskUserQuestion"]
+
+    assert offered({}) and offered({"interactive": True})
+    assert not offered({"interactive": False})
+    assert not offered({"interactive": False, "permission_prompt_tool": "none"})
+    assert offered({"interactive": False, "permission_prompt_tool": "stdio"})
+    state = TaskState(task_id="t", agent="main",
+                      config={"interactive": False, "cwd": "/w"})
+    assert plugin.inherit(state) == {"interactive": False}
+    assert plugin.inherit(TaskState(task_id="t", agent="main")) == {}
+
+
+async def test_a_question_asked_before_the_task_stopped_asking_still_takes_its_answer(
+        store: SqliteStore) -> None:
+    """A task parked on a question, then resumed by a headless run that
+    answers no prompts (``AskUserQuestion`` no longer offered): the answer
+    still reaches the call, and the tool is not offered afterwards."""
+    from noeta.core.loop.state import CONFIG_SIGNAL
+
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", {"questions": [q()]})),
+                                 reply("thanks")])
+    client, tid, rt = await start(store, provider)
+    [item] = pending(await client.events(tid), tid)
+    await client.signal(tid, CONFIG_SIGNAL, {"interactive": False})
+    await answer_question(client, tid, item.request_id,
+                          {"answers": {"0": {"selected": ["API key"]}}})
+    await rt.run_until_idle()
+    [result] = finished(await events(client, tid))
+    assert not result.is_error and '"Which auth?"="API key"' in result.text
+    assert "AskUserQuestion" not in [t.name for t in provider.requests[-1].tools]

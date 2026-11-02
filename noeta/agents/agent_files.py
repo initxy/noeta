@@ -14,7 +14,7 @@ and whose body is its system prompt — Claude Code's agent file format, plus
     disallowedTools: Edit, Write  # optional: never offer these
     permissionMode: plan          # optional: the permission mode it runs in
     maxTurns: 50                  # optional: model calls per turn
-    omitClaudeMd: true            # optional: no project instructions
+    omitClaudeMd: true            # optional: only the managed instructions
     one_shot: true                # optional: end with the first turn's answer
     effort: high                  # optional
     identity: You are ...         # optional: the one-line identity block
@@ -89,8 +89,9 @@ _WARNED: set[tuple[str, str]] = set()
 
 #: Plugins every agent runs with, whether its file names them or not (a host
 #: setting can still turn one off): any plugin's tool may be deferred, and
-#: only ``tool_search`` loads deferred tools.
-ALWAYS_PLUGINS: tuple[str, ...] = ("tool_search",)
+#: only ``tool_search`` loads deferred tools; any task may be given an answer
+#: schema (``output_schema``), and only ``structured_output`` takes the answer.
+ALWAYS_PLUGINS: tuple[str, ...] = ("tool_search", "structured_output")
 
 PluginEntry = tuple[str, Mapping[str, Any]]
 #: The host's setting of one plugin: its arguments, a ready instance, or on/off.
@@ -484,9 +485,11 @@ def build_agents(
                 at = len(entries) - 1 if entries and entries[-1][0] == "compaction" \
                     else len(entries)
                 entries.insert(at, (name, {}))
-        exts = [plugin(name, args, overlays.get(name)) for name, args in entries
-                if settings.get(name, (True,))[0]
-                and not (f.omit_instructions and name == "instructions")]
+        # ``omitClaudeMd`` keeps only the machine's managed files (Claude Code).
+        exts = [plugin(name, {**args, "managed_only": True}
+                       if f.omit_instructions and name == "instructions" else args,
+                       overlays.get(name)) for name, args in entries
+                if settings.get(name, (True,))[0]]
         agents.append(Agent(
             name=f.name,
             model=models.resolve_alias(f.model) if f.model else model,

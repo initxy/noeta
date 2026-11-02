@@ -1,8 +1,10 @@
 """Claude Code's post-compaction file restore.
 
 After a summary, the files the newest successful ``Read`` / ``Edit`` /
-``Write`` calls touched are read again through the ``Read`` tool, newest
-first, at most 5, each within 5,000 tokens and 50,000 in all, skipping a
+``Write`` calls touched, and those a successful ``Bash`` command showed
+(``noeta.toolkit.shell.read_files``: ``cat``, ``head``, ``sed -n`` and the
+like, as Claude Code counts them), are read again through the ``Read``
+tool, newest first, at most 5, each within 5,000 tokens and 50,000 in all, skipping a
 file whose ``Read`` the kept messages already show and the instruction
 files. Each is recorded as a Read call and its result (or a too-large
 note) and given in the next request's system turn, so a resume folds them
@@ -12,12 +14,14 @@ back and never reads the disk again.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+import posixpath
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import Image, Message, ToolResult, ToolUse, user
 from noeta.plugins.compaction.estimate import messages_tokens
+from noeta.toolkit.shell import NO_OUTPUT, read_files
 
 POST_COMPACT_MAX_FILES_TO_RESTORE = 5
 POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
@@ -25,20 +29,49 @@ POST_COMPACT_TOKEN_BUDGET = 50_000
 
 READ_TOOL = "Read"
 _FILE_TOOLS = (READ_TOOL, "Edit", "Write")
+SHELL_TOOL = "Bash"
 #: Carried by the instructions resident; restoring them would repeat it.
 _INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "NOETA.local.md", "AGENTS.md"})
 
 
-def _touched(message: Message, succeeded: set[str]) -> list[tuple[str, str]]:
+def _touched(message: Message, succeeded: Mapping[str, str], cwd: str = "",
+             shown: Mapping[str, Sequence[str]] | None = None) -> list[tuple[str, str]]:
+    """``(path, tool)`` per file ``message``'s successful calls touched; a
+    path a command gave relative is taken from the directory the command
+    ran in when ``shown`` (call id -> the resolved paths the file tools
+    recorded for it) tells it, else from ``cwd``."""
     if message.role != "assistant":
         return []
     out: list[tuple[str, str]] = []
     for b in message.content:
-        if isinstance(b, ToolUse) and b.name in _FILE_TOOLS and b.id in succeeded:
+        if not isinstance(b, ToolUse) or b.id not in succeeded:
+            continue
+        if b.name in _FILE_TOOLS:
             path = b.input.get("file_path")
             if isinstance(path, str) and path:
                 out.append((path, b.name))
+        elif b.name == SHELL_TOOL and not b.input.get("run_in_background"):
+            command = b.input.get("command")
+            output = succeeded[b.id].strip()
+            files = read_files(command if isinstance(command, str) else "")
+            base = _ran_in(files, (shown or {}).get(b.id, ())) or cwd
+            for path, needs_match in files:
+                if not needs_match or (output and output != NO_OUTPUT):
+                    out.append((posixpath.normpath(posixpath.join(base, path)), b.name))
     return out
+
+
+def _ran_in(files: Sequence[tuple[str, bool]], resolved: Sequence[str]) -> str | None:
+    """The directory a command ran in, told by a resolved path the file
+    tools recorded for one of the relative paths it named."""
+    for path, _ in files:
+        if posixpath.isabs(path):
+            continue
+        rel = posixpath.normpath(path)
+        for full in resolved:
+            if full.endswith("/" + rel):
+                return full[:-len(rel) - 1] or "/"
+    return None
 
 
 def _basename(path: str) -> str:
@@ -46,7 +79,8 @@ def _basename(path: str) -> str:
 
 
 def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
-                 carried: Sequence[str] = ()) -> list[str]:
+                 carried: Sequence[str] = (), cwd: str = "",
+                 shown: Mapping[str, Sequence[str]] | None = None) -> list[str]:
     """Paths to restore, newest first. ``history`` is the whole uncompacted
     history and ``boundary`` the number of its messages the new summary
     covers. As Claude Code's read-file state, which a compaction resets to
@@ -54,17 +88,18 @@ def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
     after the previous compaction) count, then the files that compaction
     restored in full (``carried``); a file it could only name as too large,
     or left to its kept messages, is not restored again unless touched
-    since."""
+    since. A path a shell command gave relative is taken from where that
+    command ran (``shown``, as :func:`_touched` takes it), else ``cwd``."""
     succeeded = {
-        b.call_id for m in history for b in m.content
+        b.call_id: b.text for m in history for b in m.content
         if isinstance(b, ToolResult) and not b.is_error
     }
     kept_reads = {
-        path for m in history[boundary:] for path, tool in _touched(m, succeeded)
+        path for m in history[boundary:] for path, tool in _touched(m, succeeded, cwd, shown)
         if tool == READ_TOOL
     }
     touched = [path for message in reversed(history[since:])
-               for path, _tool in reversed(_touched(message, succeeded))]
+               for path, _tool in reversed(_touched(message, succeeded, cwd, shown))]
     recent: list[str] = []
     for path in [*touched, *carried]:
         if path in recent or path in kept_reads or _basename(path) in _INSTRUCTION_FILE_NAMES:

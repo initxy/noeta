@@ -3,7 +3,9 @@ fold of what they record (the files the model has read), and Claude Code's
 reminder when one of those files changed on disk since.
 
 The check runs before every model call (so right after the step whose
-command changed the file), over the most recently read files: a file whose
+command changed the file), over every file the fold still remembers as read
+(:data:`noeta.plugins.fs.state.MAX_FILES`, as Claude Code's read-file state),
+all examined in one :func:`noeta.core.execenv.stat_many`: a file whose
 modification time moved is hashed, and if its bytes are neither what the
 model read nor what it was already told about, the model is told once, in a
 system turn (the prompt ``reminder/file_changed``; ``{path}`` is the file),
@@ -12,6 +14,12 @@ in the conversation (:mod:`noeta.plugins.fs.changes`). A file last read with
 an offset or a limit is not checked, as in Claude Code. With those lines shown
 the file counts as read as it is now; otherwise ``Edit`` and ``Write`` refuse
 until the model reads it again.
+
+Files a ``Bash`` command showed (``cat``, ``head``, ``sed -n`` and the
+like) count as read too, as in Claude Code (:mod:`noeta.plugins.fs.shell_reads`);
+a command that rewrote files in place (a formatter, ``sed -i``) ends its
+result with a note naming the read files it changed
+(:mod:`noeta.plugins.fs.shell_writes`).
 
 A tool's own note for the model (``notice``: the paging hint of a read cut
 to fit the token ceiling) is sent as a reminder right after that call's
@@ -29,18 +37,23 @@ from typing import Any
 import msgspec
 
 from noeta.core.events import Compacted, Recorded
+from noeta.core.execenv import stat_many
 from noeta.core.extension import Extension, Reminder, TaskView
-from noeta.core.tool import Tool
-from noeta.core.types import ModelRequest
+from noeta.core.tool import Tool, ToolOutput
+from noeta.core.types import ModelRequest, ToolUse
+from noeta.plugins.fs._encoding import decode, not_text
 from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
 from noeta.plugins.fs.mentions import attach_mentions, hoist_attachments
 from noeta.plugins.fs.notebook import NotebookEditTool
 from noeta.plugins.fs.pasted import remove_task_images, save_pasted_images
-from noeta.plugins.fs.read import ReadTool
+from noeta.plugins.fs.read import _READ_MAX_FILE_BYTES, ReadTool
+from noeta.plugins.fs.shell_reads import record_shell_reads
+from noeta.plugins.fs.shell_writes import note_modified_reads
 from noeta.plugins.fs.state import (
     FS,
     KIND_CHANGED,
+    KIND_CHECKED,
     KIND_FORGET_RANGES,
     KIND_NOTICE_SENT,
     KIND_READ,
@@ -53,8 +66,6 @@ from noeta.toolkit.paths import plans_dir
 __all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
 
 
-#: How many of the most recently read files the check looks at.
-CHANGED_FILES_CHECKED = 20
 #: The note for a file changed outside the model's own edits (Claude Code's
 #: meaning), followed by the changed lines or a pointer to ``Read``.
 FILE_CHANGED_REMINDER = (
@@ -67,6 +78,12 @@ CHANGES_SHOWN = " These are the changed lines, numbered as in the file now:\n{sn
 CHANGES_NOT_SHOWN = " The changes are not shown here; read the file if you need what it holds now."
 #: Its place in a joined system turn: after the quiet nudge, before the budget note.
 ORDER_FILE_CHANGED = 70
+#: A changed file larger than this is not read back and gets no note
+#: (Claude Code reads it back through ``Read``, which refuses it whole).
+CHANGED_FILE_MAX_BYTES = _READ_MAX_FILE_BYTES
+#: Characters of changed lines one check shows in all; past them a note
+#: names the file without its lines (Claude Code's 16,384).
+CHANGED_LINES_BUDGET = 16_384
 
 _BY_NAME: dict[str, type[Tool]] = {
     "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "NotebookEdit": NotebookEditTool,
@@ -111,6 +128,11 @@ class FileTools(Extension):
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return self._tools
 
+    async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
+        output = await note_modified_reads(view, call, output)
+        await record_shell_reads(view, call, output)
+        return output
+
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         # The earlier Read results are gone: a re-read must return content.
         if isinstance(recorded.event, Compacted):
@@ -136,26 +158,34 @@ class FileTools(Extension):
                for text in st.notices]
         if view.env is None:
             return out
-        for path, read in list(st.reads.items())[-CHANGED_FILES_CHECKED:]:
-            if read.window:
+        watched = [(path, read) for path, read in st.reads.items() if not read.window]
+        try:
+            stats = await stat_many(view.env, [path for path, _ in watched])
+        except OSError:
+            return out
+        shown = 0
+        for (path, read), stat in zip(watched, stats, strict=True):
+            if stat is None or stat.is_dir or stat.mtime in (read.mtime, st.checked.get(path)) \
+                    or stat.size > CHANGED_FILE_MAX_BYTES:
                 continue
             try:
-                stat = await view.env.stat(path)
-                if stat is None or stat.is_dir or stat.mtime == read.mtime:
-                    continue
                 raw = await view.env.read_bytes(path)
             except OSError:
                 continue
             digest = hashlib.sha256(raw).hexdigest()
             if digest in (read.digest, st.noticed.get(path)):
+                # Known bytes under a new time: not hashed again until it moves.
+                view.record(FS, KIND_CHECKED, {"path": path, "mtime": stat.mtime})
                 continue
             text = view.prompt("reminder/file_changed", FILE_CHANGED_REMINDER).replace(
                 "{path}", path)
             before = seen_text(view.state.messages, path, view.cwd or view.env.cwd)
             snippet = None
-            if before is not None and b"\0" not in raw:
-                snippet = changed_lines(before, raw.decode("utf-8", errors="replace"))
+            if before is not None and not_text(raw) in (None, "not_utf8") \
+                    and shown < CHANGED_LINES_BUDGET:
+                snippet = changed_lines(before, decode(raw).removeprefix("\ufeff"))
             if snippet is not None:
+                shown += len(snippet)
                 text += CHANGES_SHOWN.format(snippet=snippet)
                 # The model now has the file as it is: an edit needs no re-read.
                 view.record(FS, KIND_READ, {"path": path, "digest": digest,
@@ -164,7 +194,8 @@ class FileTools(Extension):
                 text += CHANGES_NOT_SHOWN
             out.append(Reminder(text=text, kind=KIND_CHANGED, role="system",
                                 order=ORDER_FILE_CHANGED,
-                                data={"path": path, "digest": digest}))
+                                data={"path": path, "digest": digest,
+                                      "mtime": stat.mtime}))
         return out
 
 

@@ -111,7 +111,7 @@ def test_a_trailing_system_turn_stays_after_the_instruction() -> None:
     # Claude Code (m3/0009): the prompt and the instruction share the user
     # message; the token-count system turn follows unchanged.
     assert [b.text for b in req.messages[0].content] == [  # type: ignore[union-attr]
-        "read it", "SUMMARIZE"]
+        "read it\n", "SUMMARIZE"]  # joined as Claude Code joins two messages
     assert req.messages[0].origin == "human" and req.messages[1].role == "system"
 
 
@@ -182,6 +182,27 @@ def test_drop_oldest_rounds() -> None:
     assert summary.drop_oldest_rounds([user("only")]) is None
 
 
+def test_a_named_gap_drops_just_enough_rounds() -> None:
+    # Claude Code drops rounds until their tokens cover the gap the error
+    # names, keeping at least the last.
+    rounds = [user("x" * 400), Message(role="assistant", content=[Text(text="y" * 400)])] * 5
+    over = ContextOverflow("prompt is too long: 1010 tokens > 1000 maximum")
+    gap = summary.overflow_gap(over)
+    assert gap == 10
+    shorter = summary.drop_oldest_rounds(rounds, gap)
+    assert shorter is not None and len(shorter) == len(rounds)  # one round out, a stand-in in
+    assert shorter[0].text == summary.EARLIER_LEFT_OUT
+    # The stand-in from an earlier retry is not a round of its own.
+    again = summary.drop_oldest_rounds(shorter, gap)
+    assert again is not None and again[0].text != summary.EARLIER_LEFT_OUT
+    assert len(again) == len(shorter) - 2
+    # Never the last round (here a reply, behind its stand-in).
+    assert len(summary.drop_oldest_rounds(rounds, 10**9) or []) == 2
+    assert summary.overflow_gap(ContextOverflow("context window exceeded")) is None
+    assert summary.overflow_gap(ContextOverflow("x", body="Prompt is too long: 5 tokens > 9")) \
+        is None
+
+
 def test_summary_failure() -> None:
     def reply(*blocks: object) -> ModelResponse:
         return ModelResponse(message=Message(role="assistant", content=list(blocks)),  # type: ignore[arg-type]
@@ -240,3 +261,61 @@ def test_restore_candidates_follow_the_read_state_a_compaction_resets() -> None:
     # (big.txt got the too-large note, kept.txt sat in its kept messages).
     assert recent_files(history, len(history), since=7, carried=["/w/old.txt"]) == [
         "/w/new.txt", "/w/old.txt"]
+
+
+def _shell(call: str, command: str, output: str = "x", *, failed: bool = False
+           ) -> list[Message]:
+    return [Message(role="assistant", content=[
+                ToolUse(id=call, name="Bash", input={"command": command})]),
+            Message(role="user", content=[ToolResult(call_id=call, content=[Text(text=output)],
+                                                     is_error=failed)])]
+
+
+def test_files_a_shell_command_showed_are_restored_too() -> None:
+    """Claude Code's read-file state takes in what a ``Bash`` command
+    printed of a file (``cat``, ``head``, ``sed -n`` ...), so a compaction
+    restores it like a ``Read``; relative paths are taken from the task's
+    directory."""
+    from noeta.plugins.compaction.restore import recent_files
+    from noeta.toolkit.shell import NO_OUTPUT
+
+    history = [user("go"), *_read("a", "/w/read.txt"),
+               *_shell("b", "cat skills/x/SKILL.md"),
+               *_shell("c", "cat gone.txt", "No such file", failed=True),
+               *_shell("d", "grep -n nothing quiet.txt", NO_OUTPUT),
+               *_shell("e", "grep -n TODO found.txt", "3:TODO"),
+               *_shell("f", "cat a.txt | wc -l"),
+               *_shell("g", "head -n 5 ./src/a.py && echo --- && sed -n '1,9p' /abs/b.py"),
+               user("next")]
+    assert recent_files(history, len(history), cwd="/w") == [
+        "/abs/b.py", "/w/src/a.py", "/w/found.txt", "/w/skills/x/SKILL.md", "/w/read.txt"]
+
+
+def test_a_relative_path_a_command_showed_is_taken_from_where_it_ran() -> None:
+    """``cd frontend`` then ``cat package.json``: the restore reads
+    ``frontend/package.json`` (from the file tools' record of the call, else
+    the shell's directory), never the one in the task's directory."""
+    from noeta.plugins.compaction.restore import recent_files
+
+    history = [user("go"), *_shell("a", "cd frontend", ""),
+               *_shell("b", "cat package.json"), user("next")]
+    # The shell has moved on since; the record of call b says where it ran.
+    shown = {"b": ["/w/frontend/package.json"]}
+    assert recent_files(history, len(history), cwd="/w", shown=shown) == [
+        "/w/frontend/package.json"]
+    # Without a record of the call: the shell's directory now.
+    assert recent_files(history[:5], 5, cwd="/w/frontend") == ["/w/frontend/package.json"]
+
+
+def test_the_restore_finds_the_shell_directory_and_the_calls_by_name() -> None:
+    from noeta.plugins.compaction.extension import _shell_cwd, _shown_by_commands
+    from noeta.plugins.fs.state import FileRead, FsState
+    from noeta.plugins.shell.state import ShellState
+
+    ext = {"shell": ShellState(cwd="/w/frontend"),
+           "fs": FsState(reads={"/w/a": FileRead(digest="d"),
+                                "/w/frontend/package.json": FileRead(digest="d", call_id="b")})}
+    assert _shell_cwd(ext, "/w") == "/w/frontend"
+    assert _shell_cwd({}, "/w") == "/w"
+    assert _shown_by_commands(ext) == {"b": ["/w/frontend/package.json"]}
+    assert _shown_by_commands({}) == {}

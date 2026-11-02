@@ -15,8 +15,8 @@ from noeta.plugins.mcp import (
     list_resources,
     read_resource,
 )
-from noeta.plugins.mcp.config import INJECTION_MAX_BYTES, McpError, cap_injected
-from noeta.plugins.mcp.prompts import flatten_prompt, flatten_resource
+from noeta.plugins.mcp.config import McpError
+from noeta.plugins.mcp.prompts import INJECTION_MAX_BYTES, flatten_prompt, flatten_resource
 
 FAKE = str(Path(__file__).with_name("fake_server.py"))
 SERVER = McpServer(alias="fake", command=[sys.executable, FAKE])
@@ -53,12 +53,36 @@ async def test_an_unreachable_server_raises() -> None:
         await list_prompts([McpServer(alias="x", command=["/no/such"])], pool=pool)
 
 
-def test_injected_text_is_capped_with_a_marker() -> None:
-    big = "a" * (INJECTION_MAX_BYTES + 10)
-    out = cap_injected(big, kind="prompt")
-    assert out.endswith(f"[truncated: MCP prompt exceeded {INJECTION_MAX_BYTES} bytes]")
+def test_prompt_and_resource_text_is_capped_with_a_marker() -> None:
+    """The text sits in a durable task's history as a user message, so it is
+    cut at 64 KiB (a deviation: Claude Code sends it uncut)."""
+    fits = "a" * INJECTION_MAX_BYTES
+    assert flatten_prompt({"messages": [{"role": "user", "content": fits}]}) == fits
+    big = "é" * 200_000
+    prompt = flatten_prompt({"messages": [{"role": "user", "content": big}]})
+    assert prompt.endswith(f"\n\n[truncated: MCP prompt exceeded {INJECTION_MAX_BYTES} bytes]")
+    assert prompt.startswith("é" * (INJECTION_MAX_BYTES // 2))
+    assert len(prompt.encode()) < INJECTION_MAX_BYTES + 100
+    resource = flatten_resource({"contents": [{"text": big}]})
+    assert resource.endswith(f"[truncated: MCP resource exceeded {INJECTION_MAX_BYTES} bytes]")
     assert flatten_prompt({"messages": [{"role": "user", "content": "plain"},
                                         {"role": "user", "content": [
                                             {"type": "image", "data": ""},
-                                            {"type": "text", "text": "two"}]}]}) == "plain\n\ntwo"
+                                            {"type": "text", "text": "two"}]}]}) == (
+        "plain\n\n[image (unknown type) in the prompt: not shown, a command's message is "
+        "text]\n\ntwo")
     assert flatten_resource({"contents": [{"text": "x"}, {"blob": "AA=="}]}) == "x"
+
+
+def test_a_prompts_other_blocks_become_text_as_claude_code_carries_them() -> None:
+    # Claude Code 2.1.312 converts a prompt's blocks as a tool result's: an
+    # embedded resource's text under a line naming it, a link as a line.
+    text = flatten_prompt({"messages": [{"role": "user", "content": [
+        {"type": "resource", "resource": {"uri": "file:///a.md", "text": "notes"}},
+        {"type": "resource_link", "uri": "file:///b", "name": "b"},
+        {"type": "audio", "mimeType": "audio/wav", "data": "AAAA"},
+        {"type": "mystery"}]}]}, "fake")
+    assert text.split("\n\n") == [
+        "[resource file:///a.md from fake]\nnotes",
+        "[resource link: b <file:///b> (unknown type)]",
+        "[audio (audio/wav, 3 bytes): not shown]"]

@@ -252,3 +252,135 @@ def test_changed_lines_and_the_view_they_are_worked_out_against() -> None:
     assert seen_text(read, "/w/f.txt", "/w") == "one\n"
     assert seen_text([*read, *call(2, "Edit", file_path="/w/f.txt")], "/w/f.txt", "/w") is None
     assert seen_text(call(3, "Read", file_path="f.txt", offset=5), "/w/f.txt", "/w") is None
+
+
+class CountingEnv(LocalExecEnv):
+    """The local env, counting whole-file reads and how stats are asked for."""
+
+    def __init__(self, cwd: str) -> None:
+        super().__init__(cwd)
+        self.reads: list[str] = []
+        self.batches: list[int] = []
+
+    async def read_bytes(self, path: str) -> bytes:
+        self.reads.append(path)
+        return await super().read_bytes(path)
+
+    async def stat_many(self, paths: Any) -> Any:
+        self.batches.append(len(paths))
+        return await super().stat_many(paths)
+
+
+async def test_every_remembered_file_is_watched_in_one_batch(tmp_path: Path) -> None:
+    # Claude Code checks every file in its read-file state, not only the
+    # newest few; here the changed one is the oldest of 30.
+    work = tmp_path / "w"
+    work.mkdir()
+    files = [work / f"f{n}.txt" for n in range(30)]
+    for f in files:
+        f.write_text("same\n")
+    env = CountingEnv(str(work))
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([
+        reply("", *[("Read", {"file_path": str(f)}) for f in files]),
+        reply("read"),
+        reply("ok"),
+        reply("ok"),
+    ])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[FileTools()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: env, sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "read them")
+    await rt.run_until_idle()
+
+    _touch(files[0], "changed\n")
+    _touch(files[1], "same\n")  # a new time, the same bytes: nothing to tell
+    env.reads.clear()
+    env.batches.clear()
+    await client.send(tid, "go on")
+    await rt.run_until_idle()
+    [note] = _notes(provider.requests[2])
+    assert note.startswith(f"Note: {files[0]} changed on disk")
+    assert env.batches == [30]  # one stat_many for all of them
+    assert sorted(env.reads) == sorted([str(files[0]), str(files[1])])
+
+    env.reads.clear()
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    assert env.reads == []  # neither is read again until its time moves
+    assert len(_notes(provider.requests[3])) == 1  # the earlier note only
+    await store.close()
+
+
+async def test_a_utf16_file_s_changes_are_shown_decoded(tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    src = work / "wide.txt"
+    src.write_bytes(b"\xff\xfe" + "one\ntwo\n".encode("utf-16-le"))
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(src)})),
+        reply("", ("Format", {})),
+        reply("done"),
+    ])
+
+    class Wide(Formatter):
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            src.write_bytes(b"\xff\xfe" + "one\nTWO\n".encode("utf-16-le"))
+            st = src.stat()
+            os.utime(src, (st.st_atime, st.st_mtime + 5))
+            return text_output("formatted")
+
+    agent = Agent(name="a", model="m", tools=[Wide(src, "")], extensions=[FileTools()])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+    await Client(store).create("a", "go")
+    await rt.run_until_idle()
+    [note] = _notes(provider.requests[2])
+    assert note.endswith("numbered as in the file now:\n1\tone\n2\tTWO\n3\t")
+    await store.close()
+
+
+async def test_one_check_shows_at_most_16k_of_changed_lines_and_skips_large_files(
+        tmp_path: Path) -> None:
+    # As Claude Code: the changed lines of all notes of one check share
+    # 16,384 characters (later notes name the file only, and the file then
+    # needs a Read before an edit); a file over Read's whole-file limit is
+    # neither read back nor told about.
+    from noeta.plugins.fs import CHANGED_FILE_MAX_BYTES
+
+    work = tmp_path / "w"
+    work.mkdir()
+    files = [work / f"f{n}.txt" for n in range(4)]
+    for f in files:
+        f.write_text("".join(f"line {i:04d} old old old old old\n" for i in range(200)))
+    big = work / "big.txt"
+    big.write_text("x\n" * (CHANGED_FILE_MAX_BYTES // 2 + 10))
+    env = CountingEnv(str(work))
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([
+        reply("", *[("Read", {"file_path": str(f)}) for f in files],
+              ("Read", {"file_path": str(big), "allow_large": True})),
+        reply("read"),
+        reply("ok"),
+    ])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[FileTools()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: env, sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "read them")
+    await rt.run_until_idle()
+
+    for f in files:
+        _touch(f, "".join(f"line {i:04d} new new new new new\n" for i in range(200)))
+    _touch(big, "y\n" * (CHANGED_FILE_MAX_BYTES // 2 + 10))
+    env.reads.clear()
+    await client.send(tid, "go on")
+    await rt.run_until_idle()
+    notes = ["Note: " + n for m in _notes(provider.requests[2]) for n in m.split("Note: ")
+             if n.strip()]
+    assert sorted(n.split(" changed on disk")[0] for n in notes) == [
+        f"Note: {f}" for f in files]
+    shown = ["numbered as in the file now:" in n for n in notes]
+    assert shown.count(True) == 3 and not shown[-1]
+    assert str(big) not in env.reads
+    await store.close()

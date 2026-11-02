@@ -20,7 +20,7 @@ import logging
 import re
 import time
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 import msgspec
 from msgspec.structs import replace
@@ -55,7 +55,7 @@ from noeta.core.runner.runtime import Runtime
 from noeta.core.runner.snapshotting import SnapshotWriter
 from noeta.core.store import Claim, NewTask, Patch, Post, Snapshot, patch_for, pin_history
 from noeta.core.tool import Tool
-from noeta.core.types import Text, Thinking, ToolResult
+from noeta.core.types import Effort, Text, Thinking, ToolResult
 
 log = logging.getLogger("noeta.core.runner")
 
@@ -350,7 +350,7 @@ class TaskRun:
         self.state = fold(records, self.reducers, state=base)
 
     def _use_agent(self, name: str) -> None:
-        self.agent = self.rt.agents.get(name)
+        self.agent = self.rt.agent(name)
         self.exts = self.agent.all_extensions() if self.agent is not None else []
         self.reducers = {e.name: e.reduce for e in self.exts}
 
@@ -510,6 +510,18 @@ class TaskRun:
         """The task's model: its config's, else its agent's."""
         return str(self.state.config.get("model") or (self.agent.model if self.agent else ""))
 
+    @property
+    def identity(self) -> str:
+        """The identity line the task's requests open with (``identity/<agent>``)."""
+        agent = self.agent
+        return self.state.prompt(f"identity/{agent.name}", agent.identity) if agent else ""
+
+    @property
+    def effort(self) -> Effort | None:
+        """The task's effort: its config's, else its agent's."""
+        effort = self.state.config.get("effort") or (self.agent.effort if self.agent else None)
+        return cast("Effort | None", effort)
+
     def serves_queue(self, queue: str) -> bool:
         """Whether a child staged on ``queue`` could run now: not while this
         worker holds the tree and does not serve ``queue`` (a held tree's
@@ -526,7 +538,8 @@ class TaskRun:
                         denied_tools=self.agent.denied_tools if self.agent else (),
                         count_tokens=self.counter(model), read_log=self._read_log,
                         child_tasks=self._child_ids, serves_queue=self.serves_queue,
-                        spill_dir=self.rt.spill_root)
+                        spill_dir=self.rt.spill_root, identity=self.identity,
+                        effort=self.effort)
 
     async def _read_log(self, task_id: str, after: int = 0) -> Sequence[Recorded]:
         """``TaskView.read_log``: an unknown task reads as empty."""

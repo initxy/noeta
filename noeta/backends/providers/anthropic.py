@@ -16,16 +16,21 @@ and three ephemeral cache breakpoints (the two system blocks and the last
 message). Host context in the user's turn is framed as
 ``<system-reminder>``.
 
-**Every request is transported over SSE.** The non-streaming POST holds one
-socket idle for the whole generation and dies on the client timeout: a long
-answer on a 128K cap reliably outran 60 s and then burned the retry budget
-re-running the same doomed call. A streamed connection keeps producing bytes
-(Anthropic also sends ``ping`` events), so the timeout measures silence rather
-than total generation time.
+**Every request is transported over SSE first.** The non-streaming POST
+holds one socket idle for the whole generation and dies on the client
+timeout: a long answer on a 128K cap reliably outran 60 s and then burned the
+retry budget re-running the same doomed call. A streamed connection keeps
+producing bytes (Anthropic also sends ``ping`` events), so the timeout
+measures silence rather than total generation time. A stream that breaks
+after it began raises :class:`~noeta.core.errors.StreamBroken`, and the
+retry helper goes on with :meth:`AnthropicProvider.complete_whole`, Claude
+Code's fallback: the same body sent without streaming, its output capped at
+64,000 tokens, with a 300 s client timeout.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Sequence
 from contextlib import aclosing
@@ -56,11 +61,11 @@ from noeta.backends.providers._common import (
 )
 from noeta.backends.providers._sse import iter_sse_events
 from noeta.core import models
-from noeta.core.errors import Fatal
+from noeta.core.errors import Fatal, StreamBroken, TimedOut
 from noeta.core.provider import OnDelta
 from noeta.core.types import ModelRequest, ModelResponse
 
-__all__ = ["DEFAULT_BETAS", "FAMILY", "AnthropicProvider"]
+__all__ = ["DEFAULT_BETAS", "FAMILY", "PER_TURN_BETA", "AnthropicProvider", "per_turn_model"]
 
 _API_VERSION_DEFAULT = "2023-06-01"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
@@ -82,8 +87,29 @@ DEFAULT_BETAS: tuple[str, ...] = (
     "effort-2025-11-24",
     "thinking-display-updates-2026-08-18",
 )
+#: Claude Code sends this beta of its set only for a model whose catalog row
+#: has the ``per_turn_effort`` capability (2.1.312: the four below, matched
+#: in the id as it matches its Claude models: ``claude-opus-5-5[1m]``,
+#: ``us.anthropic.claude-opus-5-5-v1:0``).
+PER_TURN_BETA = "per-turn-control-2026-07-01"
+PER_TURN_MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5",
+                   "claude-fable-5-1")
+
+
+def per_turn_model(model: str) -> bool:
+    """Whether Claude Code sends :data:`PER_TURN_BETA` with ``model``."""
+    real = models.resolve_alias(model).lower()
+    return any(known in real for known in PER_TURN_MODELS)
+
+
 #: Effort sent with adaptive thinking when the request names none.
 _DEFAULT_EFFORT = "medium"
+#: Claude Code's ceilings for a call answered in one piece after a failed
+#: stream: its output and its client timeout (seconds).
+WHOLE_MAX_TOKENS = 64_000
+WHOLE_TIMEOUT_SECONDS = 300.0
+#: Client timeout of a token count: an estimate stands in when it passes.
+COUNT_TOKENS_TIMEOUT_SECONDS = 10.0
 
 
 class AnthropicProvider:
@@ -113,6 +139,7 @@ class AnthropicProvider:
         betas: Sequence[str] = DEFAULT_BETAS,
         device_id: str | None = None,
         system_turns: bool = True,
+        whole_timeout_seconds: float = WHOLE_TIMEOUT_SECONDS,
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment
         variable; an explicit argument still wins. Missing credentials raise
@@ -122,7 +149,9 @@ class AnthropicProvider:
         ``extra_headers`` entry wins); ``device_id`` the stable id in
         ``metadata.user_id`` (default: one per process). ``system_turns=False``
         is for an endpoint without mid-conversation ``system`` turns: they go
-        as ``<system-reminder>`` text in the user's turn instead."""
+        as ``<system-reminder>`` text in the user's turn instead.
+        ``whole_timeout_seconds`` bounds a call answered in one piece
+        (:meth:`complete_whole`) from start to end."""
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:
             raise ValueError(
@@ -132,6 +161,9 @@ class AnthropicProvider:
         self._default_max_tokens = default_max_tokens
         self._device_id = device_id
         self._system_turns = system_turns
+        self._whole_timeout = whole_timeout_seconds
+        #: Models whose token count the endpoint refused (:meth:`count_tokens`).
+        self._count_unavailable: set[str] = set()
         headers: dict[str, str] = {
             "x-api-key": resolved_key,
             "anthropic-version": anthropic_version,
@@ -142,6 +174,10 @@ class AnthropicProvider:
         if extra_headers:
             headers.update(extra_headers)
         self._betas = headers.get("anthropic-beta", "")
+        #: Claude Code's set, so its per-model rule applies (a set the host
+        #: chose is sent as given).
+        self._default_betas = tuple(betas) == DEFAULT_BETAS \
+            and "anthropic-beta" not in (extra_headers or {})
         self._client = httpx.AsyncClient(
             base_url=(base_url or "https://api.anthropic.com").rstrip("/"),
             headers=headers,
@@ -156,10 +192,14 @@ class AnthropicProvider:
         """The per-call headers: the request's own, and the beta header
         widened by ``request.betas``."""
         headers = dict(request.headers)
-        if request.betas:
-            have = [b for b in headers.get("anthropic-beta", self._betas).split(",") if b]
-            headers["anthropic-beta"] = ",".join(
-                [*have, *(b for b in request.betas if b not in have)])
+        given = headers.get("anthropic-beta", self._betas)
+        have = [b for b in given.split(",") if b]
+        if self._default_betas and "anthropic-beta" not in request.headers \
+                and not per_turn_model(request.model):
+            have = [b for b in have if b != PER_TURN_BETA]
+        have += [b for b in request.betas if b not in have]
+        if ",".join(have) != given:
+            headers["anthropic-beta"] = ",".join(have)
         return headers
 
     async def complete(
@@ -169,6 +209,7 @@ class AnthropicProvider:
         body = self.build_body(request)
         body["stream"] = True
         accumulator = StreamAccumulator(on_delta)
+        began = False
         try:
             async with self._client.stream(
                 "POST",
@@ -181,36 +222,87 @@ class AnthropicProvider:
                     # overflow markers, so the (small) error body is read first.
                     await response.aread()
                     raise translate_http_error(response)
+                began = True
                 async with aclosing(iter_sse_events(response.aiter_lines())) as events:
                     async for event_name, data in events:
                         accumulator.feed(event_name, data)
         except httpx.RequestError as exc:
-            # Timeouts and transport failures, including a disconnect
-            # mid-iteration, stay transient so the retry helper applies.
-            raise transport_error(exc) from exc
+            # Timeouts and transport failures stay transient so the retry
+            # helper applies. Once the stream began, a dropped connection is
+            # streamed again within the budget and silence once (Claude
+            # Code's counts) before the call goes on in one piece.
+            if not began:
+                raise transport_error(exc) from exc
+            silent = isinstance(exc, httpx.TimeoutException)
+            raise StreamBroken(f"Anthropic stream broke: {type(exc).__name__}: {exc}",
+                               stream_retries=1 if silent else None) from exc
         return parse_message(accumulator.message_payload(), request.model)
+
+    async def complete_whole(self, request: ModelRequest) -> ModelResponse:
+        """``request`` answered in one piece (no streaming), as Claude Code
+        sends a call whose stream failed: output at most
+        :data:`WHOLE_MAX_TOKENS`, the whole call (not each read) bounded by
+        the constructor's ``whole_timeout_seconds`` (:class:`TimedOut` past
+        it). A body that is not a JSON message (a proxy's HTML error page)
+        is :class:`Fatal`, as Claude Code does not retry it."""
+        guard_vision(request)
+        body = self.build_body(request)
+        body["max_tokens"] = min(int(body["max_tokens"]), WHOLE_MAX_TOKENS)
+        body["stream"] = False
+        try:
+            response = await asyncio.wait_for(self._client.post(
+                _MESSAGES_ENDPOINT, json=body, headers=self.request_headers(request) or None,
+                timeout=self._whole_timeout), self._whole_timeout)
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise TimedOut(f"Anthropic call in one piece got no answer within "
+                           f"{self._whole_timeout:g} s") from exc
+        except httpx.RequestError as exc:
+            raise transport_error(exc) from exc
+        if response.is_error:
+            raise translate_http_error(response)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise Fatal(_not_a_message(response), status=response.status_code,
+                        body=response.text[:2000]) from exc
+        if not isinstance(payload, dict):
+            raise Fatal(_not_a_message(response), status=response.status_code,
+                        body=response.text[:2000])
+        return parse_message(payload, request.model)
 
     async def count_tokens(self, model: str, text: str) -> int | None:
         """The exact input-token count of one user message holding ``text``
         (``/v1/messages/count_tokens``, as Claude Code measures a large tool
-        result); ``None`` when the endpoint gives no count."""
+        result); ``None`` when the endpoint gives no count. The request is
+        bounded by :data:`COUNT_TOKENS_TIMEOUT_SECONDS`, and a model the
+        endpoint refused (a gateway without it: a 4xx other than 429, or a
+        body with no count) is not asked again by this provider."""
         if not text:
             return 0
+        if model in self._count_unavailable:
+            return None
         body = {"model": model, "messages": [{"role": "user", "content": text}], "tools": []}
         betas = [b for b in self._client.headers.get("anthropic-beta", "").split(",") if b]
         try:
             response = await self._client.post(
                 _COUNT_TOKENS_ENDPOINT, json=body,
-                headers={"anthropic-beta": ",".join([*betas, _COUNT_TOKENS_BETA])})
+                headers={"anthropic-beta": ",".join([*betas, _COUNT_TOKENS_BETA])},
+                timeout=COUNT_TOKENS_TIMEOUT_SECONDS)
         except httpx.RequestError:
             return None
         if response.is_error:
+            if 400 <= response.status_code < 500 and response.status_code != 429:
+                self._count_unavailable.add(model)
             return None
         try:
-            count = response.json().get("input_tokens")
+            payload = response.json()
         except ValueError:
+            payload = None
+        count = payload.get("input_tokens") if isinstance(payload, dict) else None
+        if not isinstance(count, int):
+            self._count_unavailable.add(model)
             return None
-        return count if isinstance(count, int) else None
+        return count
 
     # ------------------------------------------------------------------
     # Outbound translation
@@ -290,3 +382,10 @@ class AnthropicProvider:
             "AnthropicProvider(default_max_tokens=...), or register the model "
             "in noeta.core.models"
         )
+
+
+def _not_a_message(response: httpx.Response) -> str:
+    """The error for a one-piece answer whose body is not a JSON message."""
+    kind = response.headers.get("content-type", "").split(";")[0].strip() or "no content type"
+    return (f"Anthropic answered HTTP {response.status_code} with a body that is not a "
+            f"JSON message ({kind}): a proxy or gateway may have intercepted the request")

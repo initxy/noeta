@@ -103,7 +103,7 @@ async def test_values_are_substituted_as_claude_code_does(
     assert ext(app, "main", "markdown_commands").render("deploy-tools:go", "") == (
         "Deploy to eu with [sensitive option 'token' not available in skill content]; "
         "${user_config.missing} stays.")
-    assert app.runtime.agents["deployer"].system_prompt == "Region eu\n"
+    assert app.runtime.agents["deploy-tools:deployer"].system_prompt == "Region eu\n"
     assert root.is_dir()
     await app.store.close()
 
@@ -158,12 +158,17 @@ async def test_a_plugins_agent_setting_picks_the_agent_front_ends_start_with(
     make_plugin(home / "plugins" / "deploy", settings={"agent": "deploy-tools:deployer",
                                                         "statusLine": {"type": "command"}})
     app = from_settings(load_settings(), cwd=str(tmp_path))
-    assert app.main_agent == "deployer"
+    assert app.main_agent == "deploy-tools:deployer"
     await app.store.close()
     # The person's own settings win over a plugin's.
     (home / "settings.json").write_text(json.dumps({"agent": "Explore"}))
     app = from_settings(load_settings(), cwd=str(tmp_path))
     assert app.main_agent == "Explore"
+    await app.store.close()
+    # Settings written before plugin agents were named <plugin>:<agent>.
+    (home / "settings.json").write_text(json.dumps({"agent": "deployer"}))
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    assert app.main_agent == "deploy-tools:deployer"
     await app.store.close()
     (home / "settings.json").write_text(json.dumps({"agent": "nobody"}))
     app = from_settings(load_settings(), cwd=str(tmp_path))

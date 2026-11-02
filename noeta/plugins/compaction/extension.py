@@ -395,7 +395,9 @@ class Compaction(Extension):
             if ext.seen_through is not None and ext.restored_paths is not None:
                 since = sum(1 for s in state.history_seqs if s <= ext.seen_through)
             restored, records, full = await restore_files(
-                recent_files(state.history, raw_cut, since=since, carried=carried),
+                recent_files(state.history, raw_cut, since=since, carried=carried,
+                             cwd=_shell_cwd(state.ext, view.cwd),
+                             shown=_shown_by_commands(state.ext)),
                 read_tool, self._restore_context(view, state))
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
@@ -468,12 +470,11 @@ class Compaction(Extension):
                                    extra)
         usage = Usage()
 
-        async def once(history: list[Message], ceiling: int | None
-                       ) -> ModelResponse | ModelError:
+        async def once(history: list[Message]) -> ModelResponse | ModelError:
             nonlocal usage
             assert view.complete is not None
             req = summary.summary_request(request, history, text, model=model,
-                                          max_tokens=ceiling or max_tokens)
+                                          max_tokens=max_tokens)
             try:
                 outcome = await view.complete(req)
             except ModelError as exc:
@@ -483,19 +484,15 @@ class Compaction(Extension):
 
         attempt = to_summarize
         dropped = False
-        outcome = await once(attempt, None)
+        outcome = await once(attempt)
         for _ in range(summary.MAX_SUMMARY_OVERFLOW_RETRIES):
             if not isinstance(outcome, ContextOverflow):
                 break
-            shorter = summary.drop_oldest_rounds(attempt)
+            shorter = summary.drop_oldest_rounds(attempt, summary.overflow_gap(outcome))
             if shorter is None:
                 break
             attempt, dropped = shorter, True
-            outcome = await once(attempt, None)
-        if isinstance(outcome, ModelError) and not isinstance(outcome, ContextOverflow):
-            ceiling = min(summary.RETRY_MAX_TOKENS,
-                          max_tokens or request.max_tokens or summary.RETRY_MAX_TOKENS)
-            outcome = await once(attempt, ceiling)
+            outcome = await once(attempt)
         note = summary.joined_text(outcome) if isinstance(outcome, ModelResponse) else ""
         failure = summary.summary_failure(outcome, note)
         if failure is not None:
@@ -504,3 +501,22 @@ class Compaction(Extension):
 
 
 __all__ = ["COMMAND", "Compaction", "CompactionState", "command_text"]
+
+
+def _shell_cwd(ext: Mapping[str, Any], task_cwd: str) -> str:
+    """Where the shell is now: the shell plugin's ``cwd`` record (read by
+    name, as its state is not this plugin's), else the task's directory."""
+    cwd = getattr(ext.get("shell"), "cwd", None)
+    return cwd if isinstance(cwd, str) and cwd else task_cwd
+
+
+def _shown_by_commands(ext: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Call id -> the resolved paths of the files that ``Bash`` call showed,
+    from the file tools' ``read`` records (read by name)."""
+    out: dict[str, list[str]] = {}
+    reads = getattr(ext.get("fs"), "reads", None)
+    for path, read in (reads.items() if isinstance(reads, dict) else ()):
+        call_id = getattr(read, "call_id", None)
+        if isinstance(call_id, str) and isinstance(path, str):
+            out.setdefault(call_id, []).append(path)
+    return out

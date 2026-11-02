@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import Allow, Ask, Deny, Gate, TaskView
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import classifier as c
@@ -27,6 +29,10 @@ MAX_TOTAL_DENIALS = 20
 #: classifier one, until its first compaction (as recorded).
 AUTO_BETAS = ("afk-mode-2026-01-31",)
 MAIN_AUTO_BETAS = ("dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31")
+#: The plugin whose ``start`` record holds the instructions a task was shown.
+INSTRUCTIONS_PLUGIN = "instructions"
+#: Root tasks whose instructions are kept for their sub-agents' classifier.
+ROOTS_KEPT = 256
 
 
 class Classifier:
@@ -40,6 +46,9 @@ class Classifier:
         self.deny_rules = deny_rules
         self.trusted = trusted
         self._template: str | None = None
+        #: Root task id -> the instruction texts it was shown, for its
+        #: sub-agents, and the last seq of its log read.
+        self._roots: OrderedDict[str, tuple[list[str], int]] = OrderedDict()
 
     async def answer(self, view: TaskView, call: ToolUse, ask: Ask) -> Gate | None:
         st = state_of(view)
@@ -133,7 +142,35 @@ class Classifier:
         return c.chunks(entries, [k for k in st.classified if k != call.id])
 
     async def _instructions(self, view: TaskView) -> str:
+        """The project instructions the classifier is shown: the task's own,
+        or, for a sub-agent that runs without them (Explore, Plan), those its
+        root task was shown (Claude Code's classifier always has them)."""
         texts = [m.text for m in await view.residents(lead=True) if m.text.strip()]
+        if texts or view.state.parent_id is None:
+            return "\n\n".join(texts)
+        return await self._root_instructions(view)
+
+    async def _root_instructions(self, view: TaskView) -> str:
+        """The instructions the root task was shown: its ``start`` record,
+        then each re-read of a changed file. The root's log is read on from
+        the last record seen, so a ``NOETA.md`` changed mid-session reaches
+        the sub-agent's classifier as it reached the root."""
+        root = view.state.root_id
+        if not root or view.read_log is None:
+            return ""
+        texts, seen = self._roots.get(root, ([], 0))
+        records = await view.read_log(root, seen)
+        texts = list(texts)
+        for rec in records:
+            seen = max(seen, rec.seq)
+            ev = rec.event
+            if (isinstance(ev, ExtensionRecorded) and ev.extension == INSTRUCTIONS_PLUGIN
+                    and ev.kind in ("start", "reread") and ev.message is not None):
+                texts.append(ev.message.text)
+        self._roots[root] = (texts, seen)
+        self._roots.move_to_end(root)
+        while len(self._roots) > ROOTS_KEPT:
+            self._roots.popitem(last=False)
         return "\n\n".join(texts)
 
     def _deny_texts(self, view: TaskView) -> list[str]:
