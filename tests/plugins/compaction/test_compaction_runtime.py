@@ -14,11 +14,13 @@ import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.core import records
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import ContextOverflow, Transient
-from noeta.core.events import Compacted, ExtensionRecorded, Waiting
+from noeta.core.events import Compacted, ExtensionRecorded, ModelReplied, Waiting
 from noeta.core.extension import Deny, Extension, TaskView
+from noeta.core.loop.state import fold
 from noeta.core.types import (
     Message,
     ModelRequest,
@@ -28,6 +30,7 @@ from noeta.core.types import (
     ToolUse,
     Usage,
 )
+from noeta.host.usage import TreeUsage, add_events
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.extension import command_text
 from noeta.plugins.compaction.summary import (
@@ -245,9 +248,36 @@ async def test_a_failed_auto_compaction_sends_the_request_and_stops_after_three(
     await assert_rebuilds(store, a, tid)
 
 
+async def test_every_summarize_call_counts_in_the_tasks_usage(store: SqliteStore) -> None:
+    """Failed summarize calls (and their fallback) cost too: each is recorded
+    in the log (``core`` / ``spent``), so the task's usage, ``/cost`` and the
+    USD budget count them on any worker."""
+    a = agent()
+    empty = ModelResponse(message=Message(role="assistant", content=[Text(text="")]),
+                          stop_reason="end_turn", usage=Usage(uncached=7, output=1))
+    model = Model([*(call() for _ in range(12)), answer("done")],
+                  summaries=[empty, empty, note_reply()])
+    _, tid = await run(store, a, model)
+    recs = await store.read(tid)
+    spent = [s for s in (records.decode(r.event) for r in recs) if isinstance(s, records.Spent)]
+    assert [(s.usage, s.purpose) for s in spent] == [
+        (Usage(uncached=7, output=1), "compaction"), (Usage(uncached=7, output=1), "compaction"),
+        (Usage(uncached=100, output=50), "compaction")]
+    assert all(s.model == "m" for s in spent)
+    replies = sum((r.event.response.usage for r in recs if isinstance(r.event, ModelReplied)),
+                  Usage())
+    state = fold(recs, {e.name: e.reduce for e in a.all_extensions()},
+                 {e.name: e.initial_state() for e in a.all_extensions()})
+    assert state.usage == replies + Usage(uncached=114, output=52)
+    total = TreeUsage()
+    add_events(total, recs)
+    assert total.usage == state.usage
+    await assert_rebuilds(store, a, tid)
+
+
 async def test_a_failed_summarize_call_is_retried_as_it_was(store: SqliteStore) -> None:
-    """Like any call, through the retry helper (whose fallback from a broken
-    stream is the provider's): no second summarize call of its own."""
+    """Like any call, through the retry helper: the retried call is the same
+    request (the fallback call comes only once the retries are spent)."""
     a = agent()
     model = Model([*(call() for _ in range(12)), answer("done")],
                   summaries=[Transient("stream cut"), note_reply()])

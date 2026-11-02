@@ -34,6 +34,7 @@ from typing import Any, Literal
 
 import msgspec
 
+from noeta.core import records as core_records
 from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
 from noeta.core.events import Compacted
 from noeta.core.extension import Command, CommandContext, Deny, Extension, Reminder, TaskView
@@ -517,6 +518,11 @@ class Compaction(Extension):
             except ModelError as exc:
                 return exc
             usage = usage + outcome.usage
+            # Every summarize call's cost counts in the task's usage (and its
+            # USD budget), the failed ones' too: the log says what was spent.
+            spent = core_records.Spent(model=outcome.model or model, usage=outcome.usage,
+                                  purpose="compaction")
+            view.record(core_records.CORE, spent.kind, spent.data())
             return outcome
 
         async def once(history: list[Message]) -> ModelResponse | ModelError:

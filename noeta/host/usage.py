@@ -80,6 +80,8 @@ def add_events(total: TreeUsage, events: list[Any], *, after: int = 0) -> None:
             if isinstance(core, (records.Continue, records.TurnDone)) and core.usage is not None:
                 total.add(core.model or model, core.usage,
                           rec.at - called_at if called_at else 0.0)
+            elif isinstance(core, records.Spent):
+                total.add(core.model or model, core.usage, 0.0)
 
 
 async def tree_usage(client: ClientAPI, task_id: str) -> TreeUsage:
