@@ -38,7 +38,7 @@ from noeta.core.extension import (
     TaskView,
 )
 from noeta.core.tool import Tool, ToolContext, ToolOutput
-from noeta.core.types import ModelRequest, ToolUse
+from noeta.core.types import Message, ModelRequest, ToolUse
 from noeta.plugins.permissions import auto as a
 from noeta.plugins.permissions import guards as g
 from noeta.plugins.permissions import modes as md
@@ -523,7 +523,12 @@ class Permissions(Extension):
         return output
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
-        return await md.mode_reminders(view, self.mode_of(view))
+        return [*md.plan_file_reminders(view), *await md.mode_reminders(view, self.mode_of(view))]
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """At a compaction: the plan file, given again with the next request."""
+        await md.plan_file_resident(view)
+        return ()
 
 
 # ---------------------------------------------------------------- helpers

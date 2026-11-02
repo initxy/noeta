@@ -17,7 +17,7 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
-    INDEX_MAX_BYTES,
+    INDEX_MAX_CHARS,
     INDEX_MAX_LINES,
     RECALL_HEAD,
     RECALL_MAX_FILES,
@@ -218,8 +218,21 @@ def test_the_index_is_cut_at_its_limits() -> None:
     assert f"{INDEX_MAX_LINES + 50} lines (limit {INDEX_MAX_LINES})" in cut
     wide = "\n".join("x" * 1000 for _ in range(40))
     cut = load_index(wide)
-    assert len(cut.split("\n> Note")[0].encode()) <= INDEX_MAX_BYTES
-    assert f"(limit {INDEX_MAX_BYTES})" in cut
+    assert len(cut.split("\n> Note")[0]) <= INDEX_MAX_CHARS
+    assert f"(limit {INDEX_MAX_CHARS})" in cut
+
+
+def test_the_index_limit_counts_characters_not_bytes() -> None:
+    """Claude Code measures the index by its length in characters: a CJK
+    index of 20,000 characters (60,000 UTF-8 bytes) is loaded whole."""
+    cjk = "\n".join("记" * 99 for _ in range(200))
+    assert len(cjk) < INDEX_MAX_CHARS < len(cjk.encode())
+    assert load_index(cjk) == cjk
+    wide = "\n".join("记" * 999 for _ in range(30))
+    cut = load_index(wide)
+    kept = cut.split("\n> Note")[0]
+    assert INDEX_MAX_CHARS - 1000 <= len(kept) <= INDEX_MAX_CHARS
+    assert f"{len(wide)} characters (limit {INDEX_MAX_CHARS})" in cut
 
 
 def _memory(directory: Path, name: str, desc: str, body: str, kind: str = "feedback") -> None:
@@ -251,6 +264,21 @@ async def test_recall_attaches_what_the_selector_picks(h: Harness, tmp_path: Pat
     await h.say(a, tid, "and this one")
     assert "tabs.md" not in h.provider.requests[-2].messages[0].text
     assert RECALL_MAX_FILES == 5
+
+
+async def test_the_recall_budget_counts_characters(h: Harness, tmp_path: Path) -> None:
+    """Claude Code's 61,440 budget of a conversation counts the recalled
+    text's length in characters, not its UTF-8 bytes."""
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "zh.md", "中文笔记", "用制表符缩进。")
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["zh.md"]})), reply("ok"))
+    tid = await h.start(a, goal="怎么缩进 this file")
+    (record,) = await h.records(tid, "memory", "recalled")
+    shown = (directory / "zh.md").read_text().strip()
+    assert record.data["bytes"] == len(shown) < len(shown.encode())
 
 
 def test_a_selector_reply_that_is_not_json_still_picks_listed_files() -> None:

@@ -22,6 +22,9 @@ class ShellState:
     jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: The worktree ``EnterWorktree`` moved the shell into (``worktree.py``).
     worktree: dict[str, Any] | None = None
+    #: Status lines of the jobs running at a compaction, owed to the next
+    #: request.
+    held_status: tuple[str, ...] = ()
 
 
 def reduce_shell(state: ShellState | None, kind: str, data: Any) -> ShellState:
@@ -33,6 +36,10 @@ def reduce_shell(state: ShellState | None, kind: str, data: Any) -> ShellState:
         cwd = data.get("cwd")
         return base if cwd is not None and not isinstance(cwd, str) \
             else replace(base, cwd=cwd or None)
+    if kind == "task_status":
+        return replace(base, held_status=tuple(str(t) for t in data.get("texts") or ()))
+    if kind == "task_status_sent":
+        return replace(base, held_status=())
     if kind == "worktree":
         tree = data.get("worktree")
         return replace(base, worktree=dict(tree) if isinstance(tree, Mapping) else None)

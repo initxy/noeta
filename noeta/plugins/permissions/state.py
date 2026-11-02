@@ -67,6 +67,9 @@ class PermState:
     compacted: bool = False
     #: The mode vocabulary last published for front ends (``modes`` record).
     offered: dict[str, Any] | None = None
+    #: The plan file read at a compaction, owed to the next request
+    #: (``{"path", "text"}``).
+    plan_file: dict[str, Any] | None = None
 
 
 def state_of(view: TaskView) -> PermState:
@@ -128,6 +131,10 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
         extra += ("plan_active",) if d.get("plan") else ()
         return replace(st, due=(*st.due, *extra), compacted=True,
                        guidance_after=int(d.get("seq") or st.guidance_after))
+    if kind == "plan_file":
+        return replace(st, plan_file=dict(d))
+    if kind == "plan_file_sent":
+        return replace(st, plan_file=None)
     if kind == "probed":
         return replace(st, probed=True)
     if kind == pm.MODES_KIND:

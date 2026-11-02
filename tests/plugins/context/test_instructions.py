@@ -12,7 +12,7 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ModelRequest, ToolResult
 from noeta.plugins.fs import FileTools
 from noeta.plugins.instructions import Instructions
-from noeta.plugins.instructions.files import matches
+from noeta.plugins.instructions.files import clean, matches
 from noeta.plugins.memory import Memory, memory_dir_for
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.shell import Shell
@@ -159,6 +159,19 @@ async def test_imports_follow_the_file_naming_them(h: Harness, tmp_path: Path) -
     assert "<!--" not in text and "never" not in text and "outside\n" not in text
 
 
+def test_only_comment_blocks_are_dropped() -> None:
+    """Claude Code's markdown lexer drops a comment that stands as a block;
+    one inside a paragraph, inline code, a code block or a list item stays."""
+    text = ("<!-- maintainers only -->\nUse tabs.\n<!-- a\nlong one -->\n\n"
+            "Keep <!-- inline --> this and `<!-- code -->`.\n"
+            "```\n<!-- fenced -->\n```\n- item\n  <!-- in the item -->\n"
+            "<!-- note --> after it\n<!-- never closed")
+    assert clean(text)[0] == (
+        "Use tabs.\nKeep <!-- inline --> this and `<!-- code -->`.\n"
+        "```\n<!-- fenced -->\n```\n- item\n  <!-- in the item -->\n"
+        " after it\n<!-- never closed")
+
+
 async def test_an_import_through_a_link_out_of_the_repository_is_not_read(
         h: Harness, tmp_path: Path) -> None:
     secret = tmp_path / "secret.md"
@@ -242,8 +255,8 @@ async def test_a_touched_file_brings_what_applies_to_it(h: Harness) -> None:
         ".noeta/rules/py.md", "src/AGENTS.md", "src/pkg/NOETA.md"]
     msgs = h.provider.requests[1].messages
     assert isinstance(msgs[2].content[0], ToolResult)
-    assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
-    assert msgs[5].text == f"{pkg / 'NOETA.md'} {PROJECT}:\n\npkg rules"
+    assert msgs[3].text == f"{rules / 'py.md'}:\n\npython rule"
+    assert msgs[5].text == f"{pkg / 'NOETA.md'}:\n\npkg rules"
     assert len(h.provider.requests[2].messages) == len(msgs) + 2
 
 
@@ -275,7 +288,7 @@ async def test_a_file_a_shell_command_showed_brings_what_applies_to_it(h: Harnes
     assert {r.data["trigger"] for r in recs} == {str(pkg / "a.py")}
     msgs = h.provider.requests[1].messages
     assert isinstance(msgs[2].content[0], ToolResult)
-    assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
+    assert msgs[3].text == f"{rules / 'py.md'}:\n\npython rule"
 
 
 async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
@@ -489,12 +502,48 @@ async def test_a_changed_instruction_file_is_shown_again_with_the_next_message(
     assert len([m for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]) == 1
 
 
+async def test_a_removed_file_is_named_and_a_new_one_shown_with_the_next_message(
+        h: Harness) -> None:
+    """Claude Code's re-read compares the whole set of instruction files
+    with what it showed: a file gone is named, one that appeared is shown,
+    and one that comes back is shown again."""
+    from noeta.plugins.instructions.extension import REMOVED_LINE, REREAD_HEAD
+    (h.work / "NOETA.md").write_text("Use tabs.\n")
+    (h.work / "NOETA.local.md").write_text("Mine.\n")
+    a = agent()
+    h.provider.add(*(reply("ok") for _ in range(5)))
+    tid = await h.start(a)
+    (h.work / "NOETA.local.md").unlink()
+    rules = h.work / ".noeta" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "style.md").write_text("Short lines.\n")
+    await h.say(a, tid, "files moved")
+    [note] = [m.text for m in h.last_messages() if m.text.startswith(REREAD_HEAD)]
+    assert note == (f"{REREAD_HEAD}\n\n{rules / 'style.md'} {PROJECT}:\n\nShort lines.\n\n"
+                    + REMOVED_LINE.format(path=h.work / "NOETA.local.md"))
+    def notes() -> list[str]:
+        return [m.text for m in h.last_messages()
+                if m.text.startswith(REREAD_HEAD) or "is gone" in m.text]
+
+    await h.say(a, tid, "nothing new")
+    assert notes() == [note]
+    (rules / "style.md").unlink()
+    await h.say(a, tid, "rule gone")
+    assert notes() == [note, REMOVED_LINE.format(path=rules / "style.md")]
+    (h.work / "NOETA.local.md").write_text("Mine again.\n")
+    await h.say(a, tid, "it is back")
+    back = notes()[-1]
+    assert back.startswith(REREAD_HEAD)
+    assert back.endswith("NOETA.local.md (the user's private instructions for this project, "
+                         "not part of the repository):\n\nMine again.")
+
+
 async def test_the_memory_index_is_read_again_with_the_next_message(
         h: Harness, tmp_path: Path) -> None:
     """Claude Code's re-read covers the auto-memory index too, and a file
     that was not there before: a memory saved this turn is in the index the
-    next message brings."""
-    from noeta.plugins.instructions.extension import REREAD_HEAD
+    next message brings, and an index deleted is named as gone."""
+    from noeta.plugins.instructions.extension import REMOVED_LINE, REREAD_HEAD
     (h.work / "NOETA.md").write_text("Use tabs.\n")
     home = tmp_path / "home"
     mem = Path(memory_dir_for(str(h.work), home))
@@ -517,3 +566,7 @@ async def test_the_memory_index_is_read_again_with_the_next_message(
     (mem / "MEMORY.md").write_text("- [Spaces](spaces.md) — the user wants spaces\n")
     await h.say(a, tid, "changed")
     assert len(reread()) == 2 and reread()[-1].endswith("the user wants spaces")
+    (mem / "MEMORY.md").unlink()
+    h.provider.add(reply("ok"))
+    await h.say(a, tid, "index gone")
+    assert REMOVED_LINE.format(path=mem / "MEMORY.md") in [m.text for m in h.last_messages()]

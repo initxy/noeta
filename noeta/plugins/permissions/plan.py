@@ -30,6 +30,7 @@ __all__ = [
     "ExitPlanModeTool",
     "plan_active_text",
     "plan_exited_text",
+    "plan_file_text",
     "plan_name_request",
     "plan_reentry_text",
 ]
@@ -143,6 +144,16 @@ def plan_reentry_text(path: str) -> str:
 
 def plan_exited_text(path: str) -> str:
     return PLAN_EXITED.format(path=path)
+
+
+#: After a compaction, whenever the task has a plan file (in plan mode or
+#: not): its path and whole text (Claude Code's ``plan_file_reference``).
+PLAN_FILE_REFERENCE = ("Plan mode left a plan, saved at {path}. Its text:\n\n{plan}\n\nIf it "
+                       "bears on the current work and is not finished yet, keep working from it.")
+
+
+def plan_file_text(path: str, plan: str) -> str:
+    return PLAN_FILE_REFERENCE.replace("{path}", path).replace("{plan}", plan)
 
 
 def plan_name_request(model: str, plan: str, *, identity: str = "",

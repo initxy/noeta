@@ -19,11 +19,20 @@ from noeta.core.client import Client
 from noeta.core.errors import ContextOverflow, Transient
 from noeta.core.events import Compacted, ExtensionRecorded, Waiting
 from noeta.core.extension import Deny, Extension, TaskView
-from noeta.core.types import Message, ModelRequest, ModelResponse, ToolUse, Usage
+from noeta.core.types import (
+    Message,
+    ModelRequest,
+    ModelResponse,
+    SystemPart,
+    Text,
+    ToolUse,
+    Usage,
+)
 from noeta.plugins.compaction import Compaction
 from noeta.plugins.compaction.extension import command_text
 from noeta.plugins.compaction.summary import (
     CONTINUE_NOTE,
+    FALLBACK_SYSTEM,
     HEAD_DROPPED_NOTE,
     KEPT_NOTE,
     SUMMARIZE_PROMPT,
@@ -195,18 +204,45 @@ async def test_overflow_summarizes_the_request_as_it_was_sent(store: SqliteStore
     assert [r.model for r in model.summarize_requests] == ["routed"]
 
 
-async def test_an_empty_reply_fails_the_turn(store: SqliteStore) -> None:
+async def test_an_empty_reply_takes_the_fallback_call(store: SqliteStore) -> None:
+    """Claude Code's second summarize call when the first brings no
+    summary: a plain summarizer system prompt, only ``Read``, no cache."""
     a = agent()
     empty = ModelResponse(
         message=Message(role="assistant", content=[ToolUse(id="x", name="Probe", input={})]),
         stop_reason="tool_use", usage=Usage(output=3))
     model = Model([*(call() for _ in range(12)), answer("done")], summaries=[empty])
     client, tid = await run(store, a, model)
-    last = (await events(client, tid))[-1]
-    assert last.detail["turn_failed"].startswith(
-        "compaction_summary_failed: empty summarize response (")
-    assert not await compactions(client, tid)
-    assert len(model.summarize_requests) == 1  # no tool-free retry
+    first, second = model.summarize_requests[:2]
+    assert second.system == [SystemPart(text=FALLBACK_SYSTEM)]
+    assert first.tools and second.tools == [] and second.cache_after == []
+    assert second.messages == first.messages
+    assert await compactions(client, tid)
+    assert (await events(client, tid))[-1].detail == {"answer": "done"}
+    await assert_rebuilds(store, a, tid)
+
+
+async def test_a_failed_auto_compaction_sends_the_request_and_stops_after_three(
+        store: SqliteStore) -> None:
+    """Claude Code's: a failed automatic compaction does not end the turn;
+    the request goes out uncompacted, and after three failures in a row
+    automatic compaction is off for the task. The log holds the count, so a
+    rebuilt request (another worker) is the one sent."""
+    a = agent()
+    empty = ModelResponse(message=Message(role="assistant", content=[Text(text="")]),
+                          stop_reason="end_turn", usage=Usage(output=1))
+    model = Model([*(call() for _ in range(12)), answer("done")], summaries=[empty] * 8)
+    client, tid = await run(store, a, model)
+    evs = await events(client, tid)
+    assert evs[-1].detail == {"answer": "done"}
+    assert not [e for e in evs if isinstance(e, Compacted)]
+    failed = [e.data for e in evs if isinstance(e, ExtensionRecorded) and e.kind == "failed"]
+    assert [d["failures"] for d in failed] == [1, 2, 3]
+    assert failed[0]["detail"].startswith("empty summarize response (")
+    # Each failure: the summarize call and its fallback; none after the third.
+    assert len(model.summarize_requests) == 6
+    assert len(model.requests) == 13
+    await assert_rebuilds(store, a, tid)
 
 
 async def test_a_failed_summarize_call_is_retried_as_it_was(store: SqliteStore) -> None:
@@ -226,10 +262,11 @@ async def test_an_overflowing_summarize_call_drops_the_oldest_rounds(
         store: SqliteStore) -> None:
     a = agent()
     model = Model([*(call() for _ in range(12)), answer("done")],
-                  summaries=[ContextOverflow("too long"), note_reply()])
+                  summaries=[ContextOverflow("too long"), ContextOverflow("too long"),
+                             note_reply()])
     client, tid = await run(store, a, model)
-    first, second = model.summarize_requests[:2]
-    assert first.messages[0].text == "go"
+    first, fallback, second = model.summarize_requests[:3]
+    assert first.messages[0].text == "go" and fallback.messages[0].text == "go"
     assert all(m.text != "go" for m in second.messages)
     (compacted, *_) = await compactions(client, tid)
     assert HEAD_DROPPED_NOTE in compacted.summary
@@ -393,3 +430,39 @@ def test_a_transcript_stays_in_the_project_directory_whatever_the_task_id(
 
     project = tmp_path / "home" / "projects" / project_slug(str(work))
     assert Path(written).parent == project and Path(written).resolve().parent == project
+
+
+async def test_the_plan_file_is_given_again_after_a_compaction(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Claude Code's ``plan_file_reference``: after a compaction the task's
+    plan file, path and whole text, whenever there is one (here in plan
+    mode), after the files read again and ahead of the skills."""
+    import re
+
+    from noeta.plugins.permissions import Permissions
+    from noeta.plugins.permissions.plan import plan_file_text
+
+    plans = tmp_path / "plans"
+    written: list[str] = []
+
+    def plan_then_call(request: ModelRequest) -> ModelResponse:
+        path = re.search(rf"{re.escape(str(plans))}/[\w-]+\.md", "\n".join(
+            m.text for m in request.messages))
+        assert path is not None
+        Path(path.group(0)).parent.mkdir(parents=True, exist_ok=True)
+        Path(path.group(0)).write_text("1. Probe.\n2. Report.\n")
+        written.append(path.group(0))
+        return call()(request)
+
+    a = agent(extensions=(Permissions(mode="default", plans_dir=str(plans), allow=["Probe"]),))
+    model = Model([plan_then_call, *(call() for _ in range(11)), answer("done")])
+    client = Client(store)
+    tid = await client.create(a.name, "go", config={"permission_mode": "plan"})
+    await runtime(store, a, model).run_until_idle()
+    assert await compactions(client, tid)
+    after = next(r for r in model.requests if r.messages[0].text.startswith(SUMMARY_PREAMBLE))
+    reference = plan_file_text(written[0], "1. Probe.\n2. Report.\n")
+    assert sum(m.text.count(reference) for m in after.messages if m.role == "system") == 1
+    later = model.requests[model.requests.index(after) + 1]
+    assert sum(m.text.count(reference) for m in later.messages) == 1  # sent once
+    await assert_rebuilds(store, a, tid)

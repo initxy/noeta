@@ -272,3 +272,11 @@ AGENT_LIST_TAIL = (
     "For independent pieces of work, start several agents in one message with several Agent "
     "calls so they run at the same time."
 )
+
+#: After a compaction, one per agent still running (Claude Code's
+#: ``task_status``): its description and id; then where its transcript is
+#: and that ``SendMessage`` reaches it, when they apply.
+STILL_RUNNING = ('Background agent "{description}" ({id}) is still running. Do not start it '
+                 "again; its completion notice will come by itself.")
+STILL_RUNNING_FILE = " Its transcript so far is at {path}."
+STILL_RUNNING_SEND = " To ask it how far it got before then, send it a message with SendMessage."
