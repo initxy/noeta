@@ -46,8 +46,7 @@ PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
 
 
 def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass: bool,
-           plans_dir: str, by_command: bool = False, auto_during_plan: bool = True,
-           auto_enabled: bool = False) -> None:
+           plans_dir: str, by_command: bool = False, auto_during_plan: bool = True) -> None:
     """Record a switch from ``current`` to ``mode`` (asked for at log seq
     ``seq``; ``by_command``: by a typed ``/plan``), when it is one. A plan
     records whether it runs with the auto-mode classifier
@@ -66,14 +65,12 @@ def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass:
         data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq,
                         **({"by_command": True} if by_command else {}),
                         AUTO_DURING_PLAN: plan_classifier_on(
-                            current, auto_during_plan=auto_during_plan,
-                            auto_enabled=auto_enabled)}
+                            current, auto_during_plan=auto_during_plan)}
     view.record(NAME, "mode", data)
 
 
 def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
-               parent_plan: Any = None, auto_during_plan: bool = True,
-               auto_enabled: bool = False) -> None:
+               parent_plan: Any = None, auto_during_plan: bool = True) -> None:
     """A task that starts in plan mode (its config's ``permission_mode``, a
     sub-agent of a planning task): recorded as entered with a plan file of
     its own, so it plans from its first request. A sub-agent's is named
@@ -85,12 +82,11 @@ def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
             else pl.new_plan_path(plans_dir))
     view.record(NAME, "mode", {"mode": mode, "plan": {
         "path": path, "pre_mode": pre, "entered_seq": 0,
-        AUTO_DURING_PLAN: plan_classifier_on(pre, auto_during_plan=auto_during_plan,
-                                             auto_enabled=auto_enabled)}})
+        AUTO_DURING_PLAN: plan_classifier_on(pre, auto_during_plan=auto_during_plan)}})
 
 
 def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str,
-               auto_during_plan: bool = True, auto_enabled: bool = False) -> bool:
+               auto_during_plan: bool = True) -> bool:
     """``EnterPlanMode``: record the switch to plan mode, as ``/plan``
     does; ``False`` when the task is planning already."""
     st = ctx.state.get(NAME)
@@ -101,9 +97,7 @@ def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str,
     path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
     ctx.record(NAME, "mode", {"mode": "plan", "plan": {
         "path": path, "pre_mode": current, "entered_seq": 0,
-        AUTO_DURING_PLAN: plan_classifier_on(
-            current, auto_during_plan=auto_during_plan,
-            auto_enabled=auto_enabled or st.auto_seen)}})
+        AUTO_DURING_PLAN: plan_classifier_on(current, auto_during_plan=auto_during_plan)}})
     return True
 
 

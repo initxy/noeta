@@ -582,8 +582,8 @@ async def test_a_reviewed_hand_back_runs_as_written(store: SqliteStore, tmp_path
 
 async def test_plan_mode_uses_the_classifier_for_what_it_would_ask(store: SqliteStore,
                                                                    tmp_path: Path) -> None:
-    """Claude Code's ``useAutoModeDuringPlan``: planning where auto mode is
-    available (here begun from it), a command that would be asked about goes
+    """Claude Code's ``useAutoModeDuringPlan``: planning begun in auto mode,
+    a command that would be asked about goes
     to the classifier (with auto mode's betas); a file edit stays plan
     mode's refusal for the person."""
     bash, edit = Fake("Bash"), Fake("Edit")
@@ -601,12 +601,11 @@ async def test_plan_mode_uses_the_classifier_for_what_it_would_ask(store: Sqlite
     assert isinstance(last, Waiting) and last.on == "approval"
 
 
-async def test_plan_mode_asks_the_person_where_auto_mode_is_not_enabled(
+async def test_plan_mode_from_default_asks_the_person(
         store: SqliteStore, tmp_path: Path) -> None:
-    """Planning begun in default mode on a host that does not run tasks in
-    auto mode: the person answers what plan mode would ask, with no
-    classifier call, no auto-mode betas and no server-side check (Claude
-    Code needs auto mode available for ``useAutoModeDuringPlan``)."""
+    """Planning begun in default mode: the person answers what plan mode
+    would ask, with no classifier call, no auto-mode betas and no
+    server-side check."""
     bash = Fake("Bash")
     provider = ScriptedProvider([reply("", ("Bash", {"command": "sed -i s/a/b/ x.py"}))])
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
@@ -620,49 +619,43 @@ async def test_plan_mode_asks_the_person_where_auto_mode_is_not_enabled(
     assert isinstance(last, Waiting) and last.on == "approval"
 
 
-async def test_plan_mode_from_default_uses_the_classifier_where_auto_mode_is_enabled(
+async def test_plan_mode_from_default_asks_the_person_on_an_auto_mode_host(
         store: SqliteStore, tmp_path: Path) -> None:
-    """A host that starts tasks in auto mode makes auto mode available: a
-    plan begun from default mode runs with the classifier, as Claude Code's
-    with its auto-mode gate open."""
+    """A person who switched to default mode chose to be asked: a plan begun
+    there leaves the asks to them even on a host that starts tasks in auto
+    mode and after the task was in auto mode (Claude Code would use the
+    classifier wherever its auto-mode gate is open; a deviation)."""
     bash = Fake("Bash")
-    provider = ScriptedProvider([
-        reply("ok"), reply("", ("Bash", {"command": "make"})), reply("<block>no"),
-        reply("done")])
+    provider = ScriptedProvider([reply("ok"), reply("", ("Bash", {"command": "make"}))])
     ag = agent([Permissions(plans_dir=str(tmp_path / "plans"))], [bash])
     rt = runtime(store, provider, ag.__class__(**{**ag.__dict__, "model": MODEL}))
     client = Client(store)
-    tid = await client.create("a", "go", config={"cwd": str(tmp_path),
-                                                 "permission_mode": "default"})
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
-    assert "afk-mode-2026-01-31" not in provider.requests[0].betas
+    assert "afk-mode-2026-01-31" in provider.requests[0].betas
+    await client.signal(tid, "permission_mode", {"mode": "default"})
     await client.signal(tid, "permission_mode", {"mode": "plan"})
     await client.send(tid, "plan it")
     await rt.run_until_idle()
-    assert bash.runs == [{"command": "make"}]
-    assert len(classifier_calls(provider)) == 1
-    assert "afk-mode-2026-01-31" in provider.requests[1].betas
+    assert not bash.runs and not classifier_calls(provider)
+    assert "afk-mode-2026-01-31" not in provider.requests[1].betas
+    last = (await events(client, tid))[-1]
+    assert isinstance(last, Waiting) and last.on == "approval"
 
 
-def test_auto_mode_is_available_once_the_task_has_been_in_it() -> None:
-    """On a host that starts tasks in default mode, a task that was switched
-    to auto mode plans with the classifier afterwards; a plan record from an
-    older log (no ``auto_during_plan``) keeps it only after auto mode."""
+def test_only_a_plan_begun_in_auto_mode_keeps_the_classifier() -> None:
+    """Settled on entry; a plan record from an older log (no
+    ``auto_during_plan``) keeps it only after auto mode."""
     from noeta.plugins.permissions import state as ps
 
-    st = ps.fold(ps.PermState(), "mode", {"mode": "default"})
-    assert not st.auto_seen
-    st = ps.fold(ps.fold(st, "mode", {"mode": "auto"}), "mode", {"mode": "default"})
-    assert st.auto_seen
     on = ps.plan_classifier_on
-    assert on("default", auto_during_plan=True, auto_enabled=st.auto_seen)
-    assert not on("default", auto_during_plan=True, auto_enabled=False)
-    assert on("auto", auto_during_plan=True, auto_enabled=False)
-    assert not on("bypassPermissions", auto_during_plan=True, auto_enabled=True)
-    assert not on("auto", auto_during_plan=False, auto_enabled=True)
+    assert on("auto", auto_during_plan=True)
+    assert not on("auto", auto_during_plan=False)
+    for pre in ("default", "acceptEdits", "dontAsk", "bypassPermissions"):
+        assert not on(pre, auto_during_plan=True)
     assert ps.auto_active("plan", {"pre_mode": "auto"})
     assert not ps.auto_active("plan", {"pre_mode": "default"})
-    assert ps.auto_active("plan", {"pre_mode": "default", "auto_during_plan": True})
+    assert ps.auto_active("plan", {"pre_mode": "auto", "auto_during_plan": True})
     assert not ps.auto_active("plan", {"pre_mode": "auto", "auto_during_plan": False})
 
 

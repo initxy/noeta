@@ -118,15 +118,13 @@ class Permissions(Extension):
       ``disableBypassPermissionsMode``): as the starting mode, from a task's
       config (an agent file's ``permissionMode``) and as a switch.
     * ``auto_during_plan`` — plan mode runs with the auto-mode classifier
-      when auto mode is available (Claude Code's top-level
+      when planning starts from auto mode (Claude Code's top-level
       ``useAutoModeDuringPlan``, default on): an ask in plan mode goes to the
       classifier, except a file tool's write and plan mode's refusal of a
       tool that is neither read-only nor a shell tool, which the person
-      answers. Auto mode is available when planning starts from it, when
-      ``mode`` is ``auto`` or when the task has been in auto mode; not when
-      planning starts from ``bypassPermissions``. Otherwise the person
-      answers every ask in plan mode, and requests carry no auto-mode
-      betas. Settled when plan mode is entered.
+      answers. A plan begun in any other mode leaves every ask to the
+      person, and its requests carry no auto-mode betas. Settled when plan
+      mode is entered.
 
     The rest are noeta's own:
 
@@ -404,11 +402,6 @@ class Permissions(Extension):
         plan record says (settled on entry: :func:`state.plan_classifier_on`)."""
         return mode == "plan" and auto_active(mode, state_of(view).plan)
 
-    def _auto_enabled(self, view: TaskView) -> bool:
-        """Auto mode is available to the task: the host starts tasks in it,
-        or the task has been in it (Claude Code's auto-mode gate)."""
-        return self.mode == "auto" or state_of(view).auto_seen
-
     def _counters(self, view: TaskView, st: PermState, call: ToolUse) -> g.Counters:
         before = 0
         for cl in view.state.calls:
@@ -454,8 +447,7 @@ class Permissions(Extension):
         if st.mode is None and self.mode_of(view) == "plan":
             md.plan_start(view, "plan", default_mode=self.mode, plans_dir=self.plans_dir,
                           parent_plan=view.state.config.get(PLAN_NAME_KEY),
-                          auto_during_plan=self.auto_during_plan,
-                          auto_enabled=self._auto_enabled(view))
+                          auto_during_plan=self.auto_during_plan)
         elif st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
         offered = pm.modes_record(self._modes)
@@ -497,13 +489,11 @@ class Permissions(Extension):
     def _switch(self, view: TaskView, mode: Any, seq: int, *, by_command: bool = False) -> None:
         md.switch(view, mode, seq, current=self.mode_of(view),
                   disable_bypass=self.disable_bypass, plans_dir=self.plans_dir,
-                  by_command=by_command, auto_during_plan=self.auto_during_plan,
-                  auto_enabled=self._auto_enabled(view))
+                  by_command=by_command, auto_during_plan=self.auto_during_plan)
 
     def _enter_plan_mode(self, ctx: ToolContext) -> bool:
         return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir,
-                             auto_during_plan=self.auto_during_plan,
-                             auto_enabled=self.mode == "auto")
+                             auto_during_plan=self.auto_during_plan)
 
     async def _remember(self, view: TaskView, answer: Answer) -> None:
         """An "always" allow remembers the rules the card showed; a choice

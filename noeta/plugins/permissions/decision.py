@@ -28,8 +28,8 @@ class Decision:
 
 def in_mode(mode: str, d: Decision, name: str, *, plan_classifier: bool = False) -> Decision:
     """What the mode makes of an ask. ``plan_classifier``: this plan runs
-    with auto mode's classifier (Claude Code's ``useAutoModeDuringPlan``,
-    only where auto mode is available), which answers every ask but two that
+    with auto mode's classifier (Claude Code's ``useAutoModeDuringPlan``;
+    noeta: only a plan begun in auto mode), which answers every ask but two that
     stay the person's: a file tool's write, and plan mode's refusal of a
     tool that is neither read-only nor a shell tool. A shell command plan
     mode would ask about (a write among them) runs on the classifier's

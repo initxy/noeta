@@ -78,8 +78,6 @@ class PermState:
     #: The plan file read at a compaction, owed to the next request
     #: (``{"path", "text"}``).
     plan_file: dict[str, Any] | None = None
-    #: The task has been in auto mode (auto mode is available to it).
-    auto_seen: bool = False
 
 
 def state_of(view: TaskView) -> PermState:
@@ -123,16 +121,14 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
             due = (*due, "plan_exited")
         due = _auto_exit(st, due, mode, plan)
         return replace(st, mode=mode, plan=plan, due=due, consecutive_denials=0,
-                       plan_reminders=reminders, plan_left=st.plan_left or left_plan,
-                       auto_seen=st.auto_seen or mode == "auto")
+                       plan_reminders=reminders, plan_left=st.plan_left or left_plan)
     if kind == "plan_exit":
         mode = str(d.get("mode") or "default")
         # Only the plan-exit note: the auto-mode note sent before planning
         # still stands (r2 m1).
         due = _auto_exit(st, (*st.due, "plan_exited"), mode, st.plan)
         return replace(st, mode=mode, due=due, plan_left=True,
-                       plan_named=st.plan_named or bool(d.get("named")),
-                       auto_seen=st.auto_seen or mode == "auto")
+                       plan_named=st.plan_named or bool(d.get("named")))
     if kind == "plan_name":
         name = d.get("name")
         return replace(st, plan_named=True, plan_name=st.plan_name
@@ -182,15 +178,13 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
     return st
 
 
-def plan_classifier_on(pre_mode: str, *, auto_during_plan: bool, auto_enabled: bool) -> bool:
+def plan_classifier_on(pre_mode: str, *, auto_during_plan: bool) -> bool:
     """Whether plan mode entered from ``pre_mode`` runs with the auto-mode
-    classifier, as Claude Code settles it on entry: ``useAutoModeDuringPlan``
-    (``auto_during_plan``) holds, planning did not start from
-    ``bypassPermissions``, and auto mode is available: planning began in it,
-    or ``auto_enabled`` (the host starts tasks in auto mode, or this task
-    has been in it)."""
-    return auto_during_plan and pre_mode != "bypassPermissions" and (
-        pre_mode == "auto" or auto_enabled)
+    classifier, settled on entry: ``useAutoModeDuringPlan``
+    (``auto_during_plan``) holds and planning began in auto mode. Claude
+    Code also uses it for a plan begun in another mode when its auto-mode
+    gate is open; noeta asks the person then (``parity/deviations.md``)."""
+    return auto_during_plan and pre_mode == "auto"
 
 
 def auto_active(mode: str | None, plan: dict[str, Any] | None) -> bool:
