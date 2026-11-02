@@ -51,6 +51,9 @@ class ToolGates:
         contexts: list[str] = []
         for r in reads:
             if r.stop is not None:
+                if r.stop:
+                    # Told only with a reason, as Claude Code tells it.
+                    self._d.stopped(view, f"PreToolUse:{call.name}", r.stop, later=True)
                 await self._d.stop_turn(view, r.stop)
                 return Deny(reason=r.stop or "stopped by a hook")
             chosen = r.specific.get("permissionDecision")

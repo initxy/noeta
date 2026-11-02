@@ -92,6 +92,14 @@ def tool_timeout_s(server_timeout: float | None) -> float:
         seconds = ms / 1000 if ms is not None else DEFAULT_TOOL_TIMEOUT_S
     return min(max(seconds, 1.0), MAX_TIMEOUT_S)
 
+def terminal_tools() -> frozenset[str]:
+    """``NOETA_TERMINAL_MCP_TOOLS`` (Claude Code's
+    ``CLAUDE_CODE_TERMINAL_MCP_TOOLS``): MCP tools, by their full names,
+    whose successful result ends the turn: no reply need follow one."""
+    raw = os.environ.get("NOETA_TERMINAL_MCP_TOOLS", "")
+    return frozenset(n.strip() for n in raw.split(",") if n.strip())
+
+
 #: Claude Code's caps on server-written text the model reads on every request
 #: (a tool's description, a server's instructions), in characters: a deferred
 #: tool, sent only once ``ToolSearch`` has loaded it, gets the larger one.

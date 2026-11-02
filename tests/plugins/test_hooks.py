@@ -67,7 +67,7 @@ async def test_user_prompt_submit_adds_context_and_sees_the_prompt(tmp_path: Pat
     hooks = {"UserPromptSubmit": _hook(f"cat > {seen}; echo 'The build is green.'")}
     provider, _client, _tid = await _run(tmp_path, hooks, [reply("a"), reply("b")],
                                          prompts=("first", "second"))
-    green = "UserPromptSubmit hook additional context: The build is green."
+    green = "UserPromptSubmit hook success: The build is green."
     assert _system(provider, 0) == [green]
     assert _system(provider, 1) == [green, green]
     payload = json.loads(seen.read_text())

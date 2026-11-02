@@ -60,6 +60,8 @@ from noeta.toolkit.context import task_env
 from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.shell import harden_git
+from noeta.toolkit.ultrathink import ultrathink_effort, ultrathink_reminders
+from noeta.toolkit.usd_budget import BUDGET_KEY, usd_budget_reminders
 
 #: Git status longer than this many characters is cut there (Claude Code's
 #: cut), and the note below follows.
@@ -668,6 +670,8 @@ class Environment(Extension):
       (default: the date in the task config's ``timezone``, the user's IANA
       zone a front end passes; without one, the UTC date, said to be UTC's,
       so a server never gives its own zone's date as the user's).
+    * ``critical_reminder`` — a text sent with every model call (an agent
+      definition's ``criticalSystemReminder_EXPERIMENTAL``, Claude Code's).
     """
 
     name = "environment"
@@ -677,7 +681,8 @@ class Environment(Extension):
                  attribution: bool = True, attribution_commit: str | None = None,
                  attribution_pr: str | None = None, language: str | None = None,
                  token_budget: int = TOKEN_BUDGET, date_change: bool = True,
-                 today: Callable[[], str] | None = None) -> None:
+                 today: Callable[[], str] | None = None,
+                 critical_reminder: str = "") -> None:
         self.model = model
         self.attribution_commit = attribution_commit
         self.attribution_pr = attribution_pr
@@ -689,6 +694,7 @@ class Environment(Extension):
         self.token_budget = token_budget
         self.date_change = date_change
         self.today = today
+        self.critical_reminder = critical_reminder
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         if not isinstance(data, dict):
@@ -745,7 +751,10 @@ class Environment(Extension):
 
     def inherit(self, state: TaskState) -> Mapping[str, Any]:
         zone = valid_zone(state.config.get("timezone"))
-        return {"timezone": zone} if zone else {}
+        out: dict[str, Any] = {"timezone": zone} if zone else {}
+        if state.config.get(BUDGET_KEY) is not None:
+            out[BUDGET_KEY] = state.config[BUDGET_KEY]  # the conversation's, told to all
+        return out
 
     @staticmethod
     def _dirs(view: TaskView) -> list[str]:
@@ -853,12 +862,18 @@ class Environment(Extension):
             left = max(self.token_budget - (spent - base), 0)
             out.append(Reminder(text=budget_note(left), kind="budget", data={"base": base},
                                 role="system", order=ORDER_BUDGET))
+        out += await usd_budget_reminders(view, ORDER_BUDGET + 1)
+        out += ultrathink_reminders(view)
+        if self.critical_reminder:
+            out.append(Reminder(text=self.critical_reminder, kind="critical_reminder", data={}))
         return out
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         """The main prompt's paragraphs for this model
         (:func:`with_model_paragraphs`); a model that is told no budget is
-        not shown the prompt's budget line either."""
+        not shown the prompt's budget line either. A turn the person asked to
+        ``ultrathink`` runs at ``xhigh`` effort (``noeta.toolkit.ultrathink``)."""
+        request = ultrathink_effort(view, request)
         budget = bool(self.token_budget and gets_budget(request.model))
         system = [msgspec.structs.replace(p, text=t) for p in request.system
                   if (t := self._prompt_text(p.text, request.model, budget)) is not None]

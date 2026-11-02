@@ -19,7 +19,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.mcp.config import McpError, McpServer, McpServerError, make_tool_name
+from noeta.plugins.mcp.config import (
+    McpError,
+    McpServer,
+    McpServerError,
+    make_tool_name,
+    terminal_tools,
+)
 from noeta.toolkit.tools import format_size, load_description, save_spilled, spill_path
 
 __all__ = [
@@ -77,6 +83,12 @@ class McpTool:
         self.deferred = deferred
         self._invoke = invoke
         self._resume = resume
+
+    @property
+    def silent_reply_after(self) -> str | None:
+        """``success`` for a tool named in ``NOETA_TERMINAL_MCP_TOOLS``: its
+        result is meant to end the turn."""
+        return "success" if self.name in terminal_tools() else None
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         return await self._invoke(self, dict(input), ctx)

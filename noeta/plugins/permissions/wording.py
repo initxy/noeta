@@ -95,10 +95,17 @@ TITLES = {"Bash": "Bash command", "Monitor": "Monitor command", "Write": "Create
 
 # ---------------------------------------------------------------- reminders
 
-#: Auto mode's note on using the shell for small jobs (``rem.auto-mode.*``).
-AUTO_MODE_GUIDANCE = (
-    "Auto mode is on, so the shell may also do small jobs: reading (cat, head, sed -n), "
+#: The note on using the shell for small jobs, sent in auto mode and in
+#: bypass-permissions mode (``rem.auto-mode.*``); ``{mode}`` names the mode.
+SHELL_FIRST_GUIDANCE = (
+    "{mode} is on, so the shell may also do small jobs: reading (cat, head, sed -n), "
     "searching (grep, find) and small mechanical edits (sed, heredocs, short scripts) "
     "instead of Read, Edit or Write. Use whichever fits. Prefer Edit or Write when a shell "
     "edit would be brittle: exact or multi-line replacements, or flags that differ between "
     "GNU and BSD tools.")
+AUTO_MODE_GUIDANCE = SHELL_FIRST_GUIDANCE.format(mode="Auto mode")
+BYPASS_MODE_GUIDANCE = SHELL_FIRST_GUIDANCE.format(mode="Bypass-permissions mode")
+#: Sent once auto mode is left (not for planning) after its note went out.
+AUTO_MODE_EXITED = (
+    "## Auto mode has ended\n\nAuto mode is off now. Go back to the dedicated tools for "
+    "reading, searching and editing files.")

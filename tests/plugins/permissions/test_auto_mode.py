@@ -182,7 +182,9 @@ async def test_auto_request_bytes_come_from_the_log(store: SqliteStore, tmp_path
     client = Client(store)
 
     def fresh() -> Any:
-        return runtime(store, provider, agent([Permissions(), Compaction()], []))
+        # The shell and a writing tool: the auto-mode note is for such agents.
+        return runtime(store, provider, agent([Permissions(), Compaction()],
+                                              [Fake("Bash"), Fake("Write")]))
 
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
     await fresh().run_until_idle()

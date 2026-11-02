@@ -372,6 +372,23 @@ async def test_list_agents_says_when_it_looked_at_the_newest_tasks_only(
     assert listed.endswith("\n" + texts.LIST_WINDOW_FULL.format(n=LIST_WINDOW))
 
 
+async def test_an_agent_mention_asks_the_model_to_start_that_agent(
+        store: SqliteStore) -> None:
+    from noeta.plugins.subtasks.mentions import AGENT_MENTION
+
+    p = ScriptedProvider([reply("on it"), reply("ok")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    client = Client(store)
+    tid = await client.create("main", 'ask @agent-scout and @agent-nobody, and @"scout (agent)"')
+    await rt.run_until_idle()
+    note = AGENT_MENTION.format(type="scout")
+    assert [m.text for m in p.requests[0].messages].count(note) == 1
+    assert not any('"nobody"' in m.text for m in p.requests[0].messages)
+    await client.send(tid, "thanks")
+    await rt.run_until_idle()
+    assert [m.text for m in p.requests[1].messages].count(note) == 1  # not again
+
+
 async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", ("ListAgents", {})), reply("", agent("dig", "scout")),
                           reply("", ("ListAgents", {})), reply("listed")])

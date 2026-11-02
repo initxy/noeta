@@ -87,7 +87,12 @@ class HookCommand:
     #: The permission rule a tool call must match (``if``).
     condition: Rule | None = None
     once: bool = False
+    #: ``async``: runs in the background; what its JSON answer adds for the
+    #: model (``additionalContext``, ``systemMessage``) reaches it later.
     background: bool = False
+    #: ``asyncRewake``: in the background, and an exit code 2 wakes the
+    #: model with the hook's output.
+    rewake: bool = False
     #: A failure (could not start, timed out, exit code other than 0 / 2)
     #: blocks like exit 2 (``onFailure: block``).
     block_on_failure: bool = False
@@ -194,7 +199,8 @@ def _hook(event: str, h: Mapping[str, Any], *, callbacks: bool = False) -> HookC
                 isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
             raise ValueError(f"{where}: 'env' must map names to strings")
         return HookCommand(command=command, args=args, env=tuple(env.items()),
-                           background=bool(h.get("async") or h.get("asyncRewake")), **common)
+                           background=bool(h.get("async") or h.get("asyncRewake")),
+                           rewake=bool(h.get("asyncRewake")), **common)
     if kind == "http":
         url = h.get("url")
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):

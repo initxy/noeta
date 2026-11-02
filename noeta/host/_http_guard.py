@@ -44,7 +44,7 @@ _BYPASS = "bypassPermissions"
 #: are set by plugins and the server for the tasks they start; from a
 #: request they would loosen the permission gates.
 REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema",
-                  "timezone", "interactive", "permission_prompt_tool")
+                  "timezone", "interactive", "permission_prompt_tool", "ultracode")
 
 #: The signals a request may post: the ones front ends send. The others
 #: (a background job's end, a sub-agent's idle subscription …) are posted
