@@ -125,6 +125,15 @@ class FileTools(Extension):
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return reduce_fs(state, kind, data)
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed conversation) attaches the
+        mentions and saves the pasted images of its own prompts: the
+        positions here are seqs of the source's log (the carried messages
+        sit at 0), and so are the keys of ``images``."""
+        if not isinstance(state, FsState):
+            return state
+        return msgspec.structs.replace(state, mentions_through=0, images_through=0, images={})
+
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return self._tools
 

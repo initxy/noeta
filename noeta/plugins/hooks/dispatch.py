@@ -22,7 +22,7 @@ from noeta.core.large_output import (
     spill_path,
     task_spill_dir,
 )
-from noeta.core.mcp_names import legacy_index, warn_legacy
+from noeta.core.mcp_names import legacy_index, legacy_names, warn_legacy
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import SUBJECT, TOOL_EVENTS, HookCommand, Matcher
@@ -310,6 +310,18 @@ def _find_mcp_tool(view: TaskView, hook: HookCommand) -> tuple[Tool | None, bool
     return found, found is not None
 
 
+def shared_old_name(view: TaskView, hook: HookCommand) -> list[str]:
+    """The current MCP tools whose old name (``noeta.core.mcp_names``) an
+    ``mcp_tool`` hook names when it names more than one of them (empty
+    otherwise): such a hook cannot tell which tool to call."""
+    if _mcp_tool(view, hook) is not None:
+        return []
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", f"mcp__{hook.server}__{hook.tool}")
+    owners = sorted(t.name for ext in view.extensions for t in ext.tools(view)
+                    if t.name.startswith("mcp__") and safe in legacy_names(t.name))
+    return owners if len(owners) > 1 else []
+
+
 def narrowed(event: str, read: Read) -> Read:
     """``read`` without what would let a call through (a PreToolUse
     ``allow`` / ``approve``, a PermissionRequest ``allow``): the answer of
@@ -474,6 +486,13 @@ class Dispatcher:
                 return await run_callback(
                     hook, payload, self.callbacks.call if self.callbacks is not None else None)
             if hook.type == "mcp_tool":
+                shared = shared_old_name(view, hook)
+                if shared:
+                    # Fail closed: a guard that cannot tell which tool it
+                    # means blocks rather than lets the event through.
+                    return HookResult(exit_code=2, stderr=(
+                        f"the hook names MCP tool {hook.tool!r} of server {hook.server!r} by an "
+                        f"old name that now fits {', '.join(shared)}; write the current name"))
                 return await run_mcp_tool(hook, payload, _mcp_tool(view, hook),
                                           _tool_runner(view, "mcp"))
             return await self.runner(hook, payload, cwd)

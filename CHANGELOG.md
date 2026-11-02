@@ -185,7 +185,12 @@ All notable changes to Noeta are documented here. The format is based on
     comments) is named once as no longer applying; `Budget.max_cost_usd` counts compaction calls
     and dropped replies, as `/cost` does; the skills walk-up stays put when a remote env's home
     cannot be read; saved hook output stays named when its directory cannot be marked; a nested
-    command whose name is taken is warned about once. `make parity` reports a
+    command whose name is taken is warned about once; an `mcp_tool` hook that names, by its old
+    name, a tool two servers now share blocks the event it guards instead of failing open. A task
+    that continues a conversation (`history_from`: a fork, a channel continuation, a CLI or HTTP
+    resume) runs its `UserPromptSubmit` hooks on its own prompts (they were skipped), attaches the
+    files its prompts @-mention and saves their pasted images, and recalls memory for them; the
+    walk up for skill folders on this machine is no longer cached. `make parity` reports a
     tool list missing from its data and compares cache marks and description changes per request.
 - **Context audit closure: what the model sees follows Claude Code 2.1.312 where it differed
   without a written reason** (spec `2026-11-02-context-audit-closure`; kept differences are rows

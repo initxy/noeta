@@ -636,9 +636,11 @@ async def test_the_walk_up_without_the_envs_home_stays_put_and_is_not_kept() -> 
     assert await ext.ancestors(env) == ("/home/u/proj/sub", "/home/u/proj")
 
 
-async def test_the_walk_up_is_kept_for_local_envs_made_per_call(tmp_path: Path) -> None:
-    """A runner without an env makes a local one per call: the walk up is
-    kept by working directory for every env on this machine."""
+async def test_the_walk_up_on_this_machine_sees_a_later_repository_change(
+        tmp_path: Path) -> None:
+    """On this machine the walk up is not remembered (a runner without an
+    env makes a local one per call, and a cache by directory would neither
+    see a ``.git`` removed later nor stay bounded by tasks)."""
     from noeta.backends.execenvs.local import LocalExecEnv
 
     ext = Skills()
@@ -648,7 +650,8 @@ async def test_the_walk_up_is_kept_for_local_envs_made_per_call(tmp_path: Path) 
     first = await ext.ancestors(LocalExecEnv(str(work)))
     assert first == (str(work), str(tmp_path / "repo"))
     (tmp_path / "repo" / ".git").rmdir()
-    assert await ext.ancestors(LocalExecEnv(str(work))) == first
+    again = await ext.ancestors(LocalExecEnv(str(work)))
+    assert again[:2] == first and len(again) > 2
 
 
 async def test_a_command_added_to_a_commands_directory_of_any_name_is_found(

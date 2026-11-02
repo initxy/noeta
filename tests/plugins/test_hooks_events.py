@@ -1040,3 +1040,25 @@ async def test_saved_hook_output_is_named_when_marking_its_directory_fails() -> 
     text = await capped(view, "z" * 12_000, "ups")  # type: ignore[arg-type]
     [path] = written
     assert path in text and len(text) < 11_000
+
+
+async def test_an_mcp_tool_hook_by_an_old_name_two_tools_share_blocks(tmp_path: Path) -> None:
+    """A guard that names, by its old name, a tool two servers now share
+    fails closed: the call it guards is blocked, not let through."""
+    class TwoServers(Extension):
+        name = "fake-mcp"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            out = []
+            for server in ("CHK", "Chk"):
+                tool = McpLike("{}").tools(view)[0]
+                tool.name = f"mcp__{server}__verify"
+                out.append(tool)
+            return out
+
+    hooks = {"PreToolUse": [{"matcher": "Read", "hooks": [{
+        "type": "mcp_tool", "server": "chk", "tool": "verify"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
+                    extensions=(TwoServers(),)).start()
+    [(text, is_error)] = await s.results()
+    assert is_error and "old name" in text and "hello" not in text

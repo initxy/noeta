@@ -520,3 +520,14 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   with 55 / 81 trials at the 420 s cap, clustered by trial index across all scenarios); a paired
   control against 6df2bb7f at concurrency 2 each stopped at 9 timeouts in 20 trials (6df2bb7f 5 of
   6, f82fef3a 4 of 14) while single probes answered in under 4 s. To rerun when the gateway holds.
+- 2026-11-02 Second confirm review: mergeable, with one P1 present on main already. Fixed on
+  `rr-cont` (from 712b3095): S-P1-1 → `Hooks.continue_state` resets the prompt and batch
+  positions and drops the source run's stop count, permission answers, unsent background output
+  and stop note (test: a blocking `UserPromptSubmit` hook on a `history_from` task, with and
+  without earlier turns); S-P2-1 → `FileTools.continue_state` resets `mentions_through`,
+  `images_through` and the seq-keyed `images` (tests: a fork's `@b.txt` attaches; the reset);
+  S-P3-2 → `Memory.continue_state` resets `through` and drops the seq-keyed recalls (test);
+  S-P3-3 → the local walk-up is not cached (test: a removed `.git` counts); S-P3-1 → an
+  `mcp_tool` hook naming an old name two tools share blocks (exit 2), documented in the
+  deviations row and CHANGELOG (test). No prompt text changed; the only new model-visible text is
+  that hook's block reason.

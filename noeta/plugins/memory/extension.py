@@ -231,6 +231,14 @@ class Memory(Extension):
     def initial_state(self) -> Any:
         return {"dir": None, "surfaced": [], "chars": 0}
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed conversation) recalls for its
+        own prompts: ``through`` and the recalls' keys are seqs of the
+        source's log (the carried messages sit at 0)."""
+        if not isinstance(state, dict):
+            return state
+        return {k: v for k, v in state.items() if k not in ("recent", "voided")} | {"through": 0}
+
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         state = state or self.initial_state()
         if kind == "dir":

@@ -3,6 +3,7 @@ points of a task and acts on what the hooks answer."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -248,6 +249,19 @@ class Hooks(Extension):
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return fold(state, kind, data)
+
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed conversation) checks its own
+        prompts: the positions here are seqs of the source's log (the
+        carried messages sit at 0), so a prompt hook would otherwise skip
+        the new log's first prompts. What belongs to the source's run (its
+        stop count, permission answers, unsent background output, a stop
+        note) stays there."""
+        if not isinstance(state, HookState):
+            return state
+        return dataclasses.replace(state, prompted_through=0, batched_through=0, stop_blocks=0,
+                                   stop_since=0, permission={}, async_pending=(),
+                                   stop_note=None)
 
     # ------------------------------------------------------------ start
 

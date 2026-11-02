@@ -409,9 +409,6 @@ class Skills(Extension):
         #: for itself; they go with the env).
         self._ancestors: weakref.WeakKeyDictionary[ExecEnv, dict[str, tuple[str, ...]]] = \
             weakref.WeakKeyDictionary()
-        #: The same for exec envs on this machine, by working directory
-        #: alone: a runner without an env makes a new local one per call.
-        self._local_ancestors: dict[str, tuple[str, ...]] = {}
 
     # ------------------------------------------------------------ discovery
 
@@ -471,14 +468,15 @@ class Skills(Extension):
         """The working directory and each directory above it, up to the
         repository's root (the first with a ``.git``) or the filesystem's,
         never ``env``'s home directory (Claude Code's project directories),
-        as ``env`` sees them. Remembered per exec env (a task's), so another
-        sandbox with the same working directory looks for itself; envs on
-        this machine share theirs. When ``env``'s home cannot be told (a
+        as ``env`` sees them. Remembered per remote exec env (a task's), so
+        another sandbox with the same working directory looks for itself;
+        on this machine the few ``stat`` calls are made each time, so a
+        ``.git`` added or removed later counts. When ``env``'s home cannot be told (a
         remote env's hiccup) only the working directory counts, and that
         is not remembered."""
         cwd = env.cwd
         if is_local(env):
-            per_env = self._local_ancestors
+            per_env = {}
         else:
             try:
                 per_env = self._ancestors.setdefault(env, {})
