@@ -122,25 +122,31 @@ DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
 STALL_CHECK_S, STALL_AFTER_S, STALL_TAIL_BYTES = 5.0, 45.0, 1024
 
 #: Appends its stdin to the file ``$2`` (and, given ``$3``, to that file
-#: too) as it comes (one read at a time, so a monitor sees each line at
-#: once) until ``$2`` holds ``$1`` bytes (one read more at most), then a
-#: line saying the rest was not kept, and reads the rest away: the writer
-#: never gets a broken pipe. Only ``sh`` tools.
+#: too while it holds less than ``$1`` bytes) as it comes (one read at a
+#: time, so a monitor sees each line at once) until ``$2`` holds ``$1`` bytes
+#: (one read more at most), then a line saying the rest was not kept, and
+#: reads the rest away: the writer never gets a broken pipe. A monitor's
+#: two keepers share its output file (stderr's ``$2``, stdout's ``$3``):
+#: each stops adding to it once it is full, so it stays within ``$1`` (a
+#: read more at most each). It ends when its stdin does, whatever the other
+#: keeper still writes. Only ``sh`` tools.
 _KEEP_HEAD = r"""keep_head() {
-  s=0
-  while [ "$s" -lt "$1" ]; do
-    if [ -n "$3" ]; then
-      dd bs=65536 count=1 2>/dev/null | tee -a "$3" >>"$2"
-    else
-      dd bs=65536 count=1 2>/dev/null >>"$2"
+  w=1
+  while [ "$(wc -c <"$2")" -lt "$1" ]; do
+    if [ -n "$3" ] && [ "$w" = 1 ] && [ "$(wc -c <"$3")" -ge "$1" ]; then
+      w=0
+      printf '\n[output past %s bytes was not kept]\n' "$1" >>"$3"
     fi
-    t=$(wc -c <"$2")
-    [ "$t" -gt "$s" ] || return 0
-    s=$t
+    if [ -n "$3" ] && [ "$w" = 1 ]; then
+      c=$(dd bs=65536 count=1 2>/dev/null | tee -a "$2" "$3" | wc -c)
+    else
+      c=$(dd bs=65536 count=1 2>/dev/null | tee -a "$2" | wc -c)
+    fi
+    [ "$c" -gt 0 ] || return 0
   done
   if [ "$(dd bs=1 count=1 2>/dev/null | wc -c)" -gt 0 ]; then
     printf '\n[output past %s bytes was not kept]\n' "$1" >>"$2"
-    [ -z "$3" ] || printf '\n[output past %s bytes was not kept]\n' "$1" >>"$3"
+    [ -z "$3" ] || [ "$w" = 0 ] || printf '\n[output past %s bytes was not kept]\n' "$1" >>"$3"
     cat >/dev/null
   fi
 }
@@ -702,14 +708,23 @@ class Registry:
         """Tell the model, once, when the job's output has not grown for
         :attr:`stall_after_s` and its last line asks for input. Reads the
         output file through the job's env, so it watches a job in a
-        container as well."""
+        container as well; any env's failure to read it is logged and the
+        watch goes on."""
+        try:
+            await self._watch_for_prompt(job)
+        except Exception:
+            log.exception("shell: the stall watch of job %s failed", job.job_id)
+
+    async def _watch_for_prompt(self, job: Job) -> None:
         loop = asyncio.get_running_loop()
         size, quiet_since = 0, loop.time()
         while job.status == "running":
             await asyncio.sleep(self.stall_check_s)
             try:
                 st = await job.env.stat(job.out_path)
-            except OSError:
+            except Exception:
+                log.warning("shell: cannot read the size of job %s's output", job.job_id,
+                            exc_info=True)
                 continue
             now = st.size if st is not None else 0
             if now > size:
