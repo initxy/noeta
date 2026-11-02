@@ -8,6 +8,7 @@ import inspect
 import logging
 import os
 import re
+import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -80,6 +81,7 @@ from noeta.toolkit.inline_commands import (
     run_inline_commands,
     strip_commands,
 )
+from noeta.toolkit.local_env import env_home
 from noeta.toolkit.tokens import (
     LISTING_BUDGET_FRACTION,
     estimate_tokens,
@@ -121,9 +123,10 @@ TURN_REGISTRIES_KEEP = 256
 ERASABLE_KEEP = 32
 FORKS_KEEP = 32
 #: One checksum of every ``SKILL.md`` (and a commands directory's ``*.md``;
-#: paths and text) under the directories given as arguments: changes when a
-#: skill is added, removed or edited.
-_FINGERPRINT = ('for d in "$@"; do case "$d" in */commands) n="*.md" ;; *) n=SKILL.md ;; '
+#: paths and text) under the directories given as arguments, each written
+#: ``c:<dir>`` for a commands directory and ``s:<dir>`` for a skills one:
+#: changes when a skill is added, removed or edited.
+_FINGERPRINT = ('for a in "$@"; do d="${a#?:}"; case "$a" in c:*) n="*.md" ;; *) n=SKILL.md ;; '
                 'esac; [ -d "$d" ] && find -L "$d" -type f -name "$n" -print -exec cat {} + ; '
                 'done 2>/dev/null | cksum')
 #: Calls whose file makes a skill with matching ``paths`` available and
@@ -131,7 +134,7 @@ _FINGERPRINT = ('for d in "$@"; do case "$d" in */commands) n="*.md" ;; *) n=SKI
 #: ``Bash`` command showed, which counts only for instruction files).
 FILE_TOOLS = frozenset({"Read", "Write", "Edit"})
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-#: Ancestor walks remembered, by working directory.
+#: Ancestor walks remembered per exec env, by working directory.
 ANCESTORS_KEEP = 256
 #: Loading one of these unscoped skills first looks for skill folders on
 #: the way to the repository's changed files (Claude Code's, for its
@@ -402,8 +405,10 @@ class Skills(Extension):
         #: ``Skill`` call: ``(task, call id)`` -> ``(Agent input, activation)``.
         self._forks_due: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
         #: The directories from a working directory up to its repository's
-        #: root, by working directory (each worker finds them for itself).
-        self._ancestors: dict[str, tuple[str, ...]] = {}
+        #: root, by exec env and working directory (each worker finds them
+        #: for itself; they go with the env).
+        self._ancestors: weakref.WeakKeyDictionary[ExecEnv, dict[str, tuple[str, ...]]] = \
+            weakref.WeakKeyDictionary()
 
     # ------------------------------------------------------------ discovery
 
@@ -462,13 +467,18 @@ class Skills(Extension):
     async def ancestors(self, env: ExecEnv) -> tuple[str, ...]:
         """The working directory and each directory above it, up to the
         repository's root (the first with a ``.git``) or the filesystem's,
-        never the home directory (Claude Code's project directories), as
-        ``env`` sees them."""
+        never ``env``'s home directory (Claude Code's project directories),
+        as ``env`` sees them. Remembered per exec env (a task's), so another
+        sandbox with the same working directory looks for itself."""
         cwd = env.cwd
-        found = self._ancestors.get(cwd)
+        try:
+            per_env = self._ancestors.setdefault(env, {})
+        except TypeError:  # an env that cannot be weakly referenced: no memory
+            per_env = {}
+        found = per_env.get(cwd)
         if found is not None:
             return found
-        home = os.path.expanduser("~")
+        home = await env_home(env)
         out: list[str] = []
         d = cwd
         while d != home:
@@ -482,9 +492,9 @@ class Skills(Extension):
             if parent == d:
                 break
             d = parent
-        if len(self._ancestors) >= ANCESTORS_KEEP:
-            del self._ancestors[next(iter(self._ancestors))]
-        self._ancestors[cwd] = found = tuple(out) or (cwd,)
+        if len(per_env) >= ANCESTORS_KEEP:
+            del per_env[next(iter(per_env))]
+        per_env[cwd] = found = tuple(out) or (cwd,)
         return found
 
     async def _tiers(self, env: ExecEnv, state: Any) -> list[tuple[str, int]]:
@@ -529,7 +539,9 @@ class Skills(Extension):
         found before the next model call (Claude Code watches the
         directories)."""
         env = task_env(view.env, view.state.config)
-        roots = [root for root, _tier in await self._tiers(env, view.ext_state(self.name))]
+        tiers = await self._tiers(env, view.ext_state(self.name))
+        commands = self.commands_dirs(tiers)
+        roots = [f"{'c' if root in commands else 's'}:{root}" for root, _tier in tiers]
         try:
             out = await env.run(["sh", "-c", _FINGERPRINT, "sh", *roots], timeout=10,
                                 output_cap=256)
@@ -646,6 +658,9 @@ class Skills(Extension):
         commands = self.commands_dirs(tiers)
         found: dict[str, str] = {}
         taken: set[str] = set()
+        # A command file in a subdirectory comes after the plugins: no file
+        # passes for a plugin's skill (``load_registry``'s rule).
+        later: list[SkillDescription] = []
         for root, _tier in tiers:
             base = Path(root)
             if not base.is_dir():
@@ -681,9 +696,17 @@ class Skills(Extension):
                                    own_dir=root not in commands or rel.endswith("SKILL.md"))
                 if desc is None:
                     continue
+                if root in commands and ":" in name:
+                    later.append(desc)
+                    continue
                 taken.add(name)
                 if desc.user_invocable:
                     found[name] = desc.description
+        for desc in later:
+            if desc.name not in taken:
+                taken.add(desc.name)
+                if desc.user_invocable:
+                    found[desc.name] = desc.description
         return [Command(name=n, description=d, template=command_message(n, "{args}"))
                 for n, d in sorted(found.items())]
 
@@ -707,8 +730,13 @@ class Skills(Extension):
             registry = registry or await self.registry(env)
             for name in pending:
                 desc = registry.get(name)
+                if desc is None and (desc := registry.formerly(name)) is not None:
+                    _log.warning("skills: preload %r: that skill is now named %r (its "
+                                 "directory's name); preload it by that name", name, desc.name)
                 if desc is None:
                     _log.warning("skills: preload %r is not an indexed skill; skipped", name)
+                    continue
+                if desc.name in state.get("active", {}):
                     continue
                 data = activation_data(desc, "preload", cwd=view.cwd,
                                        root_id=_root(view), effort=_effort(view))
@@ -745,9 +773,6 @@ class Skills(Extension):
         if not messages:
             return
         state = view.ext_state(self.name) or {}
-        if state.get("turn") and not view.state.steps_in_turn:
-            # A new turn: a skill's model and effort were for the last one.
-            view.record(self.name, "turn_done", {})
         registry = await self.turn_registry(view)
         for message in messages:
             self._note_mentions(view, registry, state, message.text)
@@ -829,6 +854,13 @@ class Skills(Extension):
         request = await self._skill_guidance(view, request)
         state = view.ext_state(self.name) or {}
         turn = state.get("turn") or {}
+        if turn and not view.state.steps_in_turn \
+                and int(turn.get("since") or 0) <= _last_reply_seq(view):
+            # The first call of a turn, whoever opened it (a person, a
+            # notice, a background agent's report): a skill's model and
+            # effort were for the turn that loaded it.
+            view.record(self.name, "turn_done", {})
+            turn = {}
         changes = {k: turn[k] for k in ("model", "effort") if turn.get(k)}
         if changes:
             request = msgspec.structs.replace(request, **changes)
@@ -860,10 +892,12 @@ class Skills(Extension):
         if desc.effort and effort is None:
             _log.warning("skills: %s: effort %r is not one of %s; ignored", desc.name,
                          desc.effort, ", ".join(EFFORTS))
-        model = models.resolve_alias(desc.model) if desc.model else None
+        model = _turn_model(view, desc)
         if model or effort:
+            # ``since``: the turn it was loaded in is the one after the
+            # newest reply then.
             view.record(self.name, "turn", {"name": desc.name, "model": model,
-                                            "effort": effort})
+                                            "effort": effort, "since": view.state.last_seq})
 
     async def _changed_files_skills(self, view: TaskView, desc: SkillDescription,
                                     registry: SkillRegistry) -> SkillRegistry:
@@ -1312,6 +1346,33 @@ def _local_ancestors(cwd: str) -> tuple[str, ...]:
             break
         d = parent
     return tuple(out) or (cwd,)
+
+
+def _last_reply_seq(view: TaskView) -> int:
+    """The log seq of the task's newest model reply (0 before the first)."""
+    return max((seq for m, seq in zip(view.state.history, view.state.history_seqs,
+                                      strict=False) if m.role == "assistant"), default=0)
+
+
+def _turn_model(view: TaskView, desc: SkillDescription) -> str | None:
+    """The model a skill's ``model`` names (an alias resolved), when the
+    task's provider can serve it: one of the task model's family in the
+    catalog. Otherwise ``None`` (logged): a Claude alias on a deployment
+    that serves another provider's models would fail every request of the
+    turn."""
+    if not desc.model:
+        return None
+    model = models.resolve_alias(desc.model)
+    task = models.resolve_alias(view.model) if view.model else ""
+    if model == task:
+        return model
+    family = models.model_family(model)
+    if family is None or family != models.model_family(task):
+        _log.warning("skills: %s: model %r is not a model of the task's provider (the task "
+                     "runs %r); the turn keeps the task's model", desc.name, desc.model,
+                     view.model)
+        return None
+    return model
 
 
 def _root(view: TaskView) -> str:

@@ -80,9 +80,10 @@ class FileSettings:
     skill_listing: dict[str, Any] = field(default_factory=dict)
 
 
-#: Claude Code's skill listing settings and the range each takes.
-SKILL_LISTING_KEYS = {"skillListingBudgetFraction": (0.0, 1.0),
-                      "skillListingMaxDescChars": (0.0, float("inf"))}
+#: Claude Code's skill listing settings, the range each takes and whether
+#: it is a whole number.
+SKILL_LISTING_KEYS = {"skillListingBudgetFraction": (0.0, 1.0, False),
+                      "skillListingMaxDescChars": (0.0, float("inf"), True)}
 
 #: Claude Code's ``--setting-sources`` names.
 SETTING_SOURCES = ("user", "project", "local")
@@ -246,10 +247,10 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
                                     if k in ("commit", "pr") and isinstance(v, str)})
         elif data.get("includeCoAuthoredBy") is False:
             out.attribution.update({"commit": "", "pr": ""})
-        for key, (low, high) in SKILL_LISTING_KEYS.items():
+        for key, (low, high, whole) in SKILL_LISTING_KEYS.items():
             value = data.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool) \
-                    and low < value <= high:
+                    and low < value <= high and (not whole or float(value).is_integer()):
                 out.skill_listing[key] = value
         if data.get("useAutoModeDuringPlan") is False:
             # As Claude Code: any file that turns it off turns it off.

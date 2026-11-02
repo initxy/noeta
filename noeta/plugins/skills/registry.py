@@ -33,6 +33,7 @@ __all__ = [
     "argument_names",
     "body_description",
     "display_label",
+    "former_name",
     "index_commands_dir",
     "index_dir",
     "load_registry",
@@ -61,6 +62,13 @@ NAME_MAX_CHARS = 256
 BODY_DESCRIPTION_MAX_CHARS = 100
 #: What a plugin skill's directory name keeps (Claude Code's).
 _PLUGIN_NAME_UNSAFE = re.compile(r"[^a-zA-Z0-9_-]")
+#: A name a ``SKILL.md`` could give itself before skills were named by
+#: their directories (noeta 0.6/1.0): see :func:`former_name`.
+_FORMER_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+#: ``SKILL.md`` files deeper than one level already warned about (they are
+#: no longer skills), the newest few.
+_warned_deep: dict[str, None] = {}
+_WARNED_DEEP_KEEP = 1024
 
 #: After the description of a skill found below the working directory: one
 #: that shares its name with another skill is named ``<dir>:<name>``
@@ -189,6 +197,34 @@ class SkillRegistry:
     def scoped(self, name: str) -> tuple[SkillDescription, ...]:
         """The directory-scoped skills whose own name is ``name``, by name."""
         return tuple(d for _, d in sorted(self._skills.items()) if d.unqualified == name)
+
+    def formerly(self, name: str) -> SkillDescription | None:
+        """The one skill that was named ``name`` before skills were named by
+        their directories (:func:`former_name`), when no skill is named so
+        now; ``None`` when none or several were."""
+        if name in self._skills:
+            return None
+        found = [d for d in self._skills.values() if former_name(d) == name]
+        return found[0] if len(found) == 1 else None
+
+
+def former_name(desc: SkillDescription) -> str | None:
+    """The name ``desc`` had before skills were named by their directories
+    (noeta 0.6/1.0 named a skill by its frontmatter ``name``, and a
+    directory-scoped one ``<scope>:<that name>``), when it differs from its
+    name now; ``None`` for a plugin's skill or a command file (their names
+    did not change). Old ``Skill(...)`` rules and preloads still find the
+    skill by it."""
+    shown = desc.display_name
+    if shown is None or not _FORMER_NAME.match(shown):
+        return None
+    if desc.unqualified is not None:
+        former = f"{desc.name[:-len(desc.unqualified) - 1]}:{shown}"
+    elif ":" in desc.name or not desc.own_dir:
+        return None
+    else:
+        former = shown
+    return former if former != desc.name else None
 
 
 def _parse_disabled_flag(raw: str | None, path: str) -> bool:
@@ -345,6 +381,10 @@ async def index_dir(env: ExecEnv, root: str, plugin: str | None = None, *,
     rels = sorted(r for r in (_rel(f, root) for f in files) if r is not None)
     candidates = [r for r in rels if posixpath.basename(r) == "SKILL.md"
                   and (r.count("/") == 1 or (plugin is not None and r == "SKILL.md"))]
+    if plugin is None:
+        _warn_deep(root, [r for r in rels if posixpath.basename(r) == "SKILL.md"
+                          and r.count("/") > 1
+                          and posixpath.join(r.split("/", 1)[0], "SKILL.md") not in rels])
     skills: dict[str, SkillDescription] = {}
     for rel in candidates:
         path = posixpath.join(root, rel)
@@ -380,6 +420,22 @@ async def index_dir(env: ExecEnv, root: str, plugin: str | None = None, *,
             continue
         skills[desc.name] = desc
     return skills
+
+
+def _warn_deep(root: str, rels: Sequence[str]) -> None:
+    """Warn once about each ``SKILL.md`` deeper than one level below a
+    skills directory (not inside another skill): it is not a skill, as in
+    Claude Code (noeta 1.0 read any depth)."""
+    for rel in rels:
+        path = posixpath.join(root, rel)
+        if path in _warned_deep:
+            continue
+        if len(_warned_deep) >= _WARNED_DEEP_KEEP:
+            del _warned_deep[next(iter(_warned_deep))]
+        _warned_deep[path] = None
+        _log.warning("skill: %s is not loaded: a skill is <skills directory>/<name>/SKILL.md, "
+                     "one level down; move its directory up to %s", path,
+                     posixpath.join(root, posixpath.basename(posixpath.dirname(rel))))
 
 
 def command_name(rel: str) -> str | None:
@@ -445,9 +501,15 @@ async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
     merged: dict[str, SkillDescription] = {}
     tier_of: dict[str, int] = {}
     below: dict[str, tuple[str, int, dict[str, SkillDescription]]] = {}
+    #: A command file in a subdirectory (``sp/brain.md`` -> ``sp:brain``),
+    #: kept back until the names a plugin or a directory scope gives are
+    #: known: no file may pass for one (and take on its rules).
+    nested_commands: list[tuple[SkillDescription, int]] = []
     for root, tier in tiers:
         if root in commands:
             found = await index_commands_dir(env, root)
+            nested_commands += [(d, tier) for n, d in found.items() if ":" in n]
+            found = {n: d for n, d in found.items() if ":" not in n}
         else:
             found = await index_dir(env, root, plugins.get(root),
                                     variables=variables.get(root, ()))
@@ -490,6 +552,13 @@ async def load_registry(env: ExecEnv, tiers: Sequence[tuple[str, int]], *,
                 continue
             merged[desc.name] = desc
             tier_of[desc.name] = tier
+    for desc, tier in nested_commands:
+        if desc.name in merged:
+            _log.warning("skill: %s: its name %r is taken by %s; skipped", desc.source_path,
+                         desc.name, merged[desc.name].source_path)
+            continue
+        merged[desc.name] = desc
+        tier_of[desc.name] = tier
     return SkillRegistry(merged, tier_of)
 
 

@@ -68,6 +68,9 @@ TEXT_EXTENSIONS = frozenset((
 _LIST_OUTPUT_CAP = 4 * 1024 * 1024
 
 _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+#: A line that closes a fenced block: a run of the opening fence's
+#: character at least as long, and nothing after it (CommonMark's).
+_FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
 _INLINE_CODE = re.compile(r"`+[^`\n]*`+")
 #: A line opening a comment block: at most three spaces, then ``<!--``.
@@ -218,7 +221,7 @@ def _drop_comment_blocks(text: str) -> str:
         line = lines[i]
         if fence is not None:
             out.append(line)
-            fence = None if line.strip().startswith(fence) else fence
+            fence = None if _closes(line, fence) else fence
             i += 1
             continue
         if not line.strip():
@@ -234,7 +237,7 @@ def _drop_comment_blocks(text: str) -> str:
         after_blank = False
         opened = _FENCE.match(line)
         if opened:
-            fence = opened.group(1)[0] * 3
+            fence = opened.group(1)
             out.append(line)
             i += 1
             continue
@@ -271,6 +274,12 @@ def _globs(value: object) -> tuple[str, ...]:
     return tuple(s for s in (str(i).strip() for i in items) if s)
 
 
+def _closes(line: str, fence: str) -> bool:
+    """Whether ``line`` closes the fenced block ``fence`` opened."""
+    m = _FENCE_CLOSE.match(line)
+    return m is not None and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence)
+
+
 def _outside_code(lines: list[str], change: Callable[[str], str]) -> list[str]:
     """``lines`` with ``change`` applied to every run of lines outside fenced
     code blocks."""
@@ -283,11 +292,11 @@ def _outside_code(lines: list[str], change: Callable[[str], str]) -> list[str]:
             if chunk:
                 out += change("\n".join(chunk)).split("\n")
                 chunk = []
-            fence = m.group(1)[0] * 3
+            fence = m.group(1)
             out.append(line)
         elif fence is not None:
             out.append(line)
-            if line.strip().startswith(fence):
+            if _closes(line, fence):
                 fence = None
         else:
             chunk.append(line)
