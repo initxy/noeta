@@ -54,6 +54,7 @@ from noeta.toolkit.context import task_env
 from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.shell import harden_git
+from noeta.toolkit.ultrathink import ultrathink_effort, ultrathink_reminders
 
 #: Git status longer than this many characters is cut there (Claude Code's
 #: cut), and the note below follows.
@@ -625,11 +626,14 @@ class Environment(Extension):
             left = max(self.token_budget - (spent - base), 0)
             out.append(Reminder(text=budget_note(left), kind="budget", data={"base": base},
                                 role="system", order=ORDER_BUDGET))
+        out += ultrathink_reminders(view)
         return out
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         """A model that is told no budget is not shown the prompt's budget
-        line either."""
+        line either. A turn the person asked to ``ultrathink`` runs at
+        ``xhigh`` effort (``noeta.toolkit.ultrathink``)."""
+        request = ultrathink_effort(view, request)
         if self.token_budget and gets_budget(request.model):
             return request
         system = [msgspec.structs.replace(p, text=_PROMPT_BUDGET_LINE.sub("", p.text))

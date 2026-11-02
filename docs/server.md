@@ -88,7 +88,8 @@ the loopback `Host` names are answered (DNS rebinding); on any other bind `Host`
 only against the names given with `--allow-host NAME` (repeatable), so name them.
 
 A request may set only the task config a client may (`model`, `effort`, `max_turns`, `cwd`,
-`permission_mode`, `output_schema`, `timezone`, `interactive`, `permission_prompt_tool`), post only the signals front ends send, and create tasks
+`permission_mode`, `output_schema`, `timezone`, `interactive`, `permission_prompt_tool`,
+`ultracode`), post only the signals front ends send, and create tasks
 only in the server's directory and its `--allow-root` paths. Host code embedding the API uses
 `create_app(client, token=...)` (or `token_sha256=`). `timezone` is the person's IANA zone
 (`Europe/Berlin`), which noeta's own front ends send: without it the model is given the UTC
@@ -100,7 +101,9 @@ nobody follows live (no title, no `AskUserQuestion` unless `permission_prompt_to
 the headless protocol does; the keys stay until a client sets them again (a config signal; the
 terminal UI and ACP take them away when they reopen a task). A config signal may remove, never
 set, `client_hooks`: the record of a headless client's hook callbacks
-(`noeta.toolkit.hook_callbacks`).
+(`noeta.toolkit.hook_callbacks`). `ultracode: true` is Claude Code's ultracode switch: the model
+is told to orchestrate with `Workflow` on every substantial task, and told again when it is
+taken away (`noeta.plugins.workflow.opt_in`).
 
 ## Several parties
 

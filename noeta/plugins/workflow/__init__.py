@@ -22,10 +22,11 @@ from typing import Any, Protocol
 
 from noeta.core import models
 from noeta.core.events import ChildEnded, InputTaken, Recorded, Say
-from noeta.core.extension import Extension, TaskView
+from noeta.core.extension import Extension, Reminder, TaskView
 from noeta.core.tool import Tool
 from noeta.core.types import Message, user
 from noeta.plugins.workflow.engine import Engine, EngineMissing, Replay
+from noeta.plugins.workflow.opt_in import opt_in_reminders, reduce_opt_in
 from noeta.plugins.workflow.tool import WorkflowTool, _ToolView
 from noeta.toolkit import notices
 from noeta.toolkit.json_schema import schema_errors
@@ -103,6 +104,9 @@ class Orchestration(Extension):
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = _st(state)
+        opted = reduce_opt_in(st, kind, data)
+        if opted is not None:
+            return opted
         runs = dict(st["runs"])
         rid = data.get("run_id") if isinstance(data, dict) else None
         run = dict(runs.get(rid) or {})
@@ -142,6 +146,10 @@ class Orchestration(Extension):
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return (WorkflowTool(self, view),)
+
+    async def reminders(self, view: TaskView) -> Sequence[Reminder]:
+        """The ``ultracode`` keyword and switch notes (``opt_in``)."""
+        return opt_in_reminders(view, _st(view.ext_state(self.name)))
 
     # ------------------------------------------------------------ driving
 
