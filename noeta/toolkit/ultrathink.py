@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 import msgspec
 
+from noeta.core import models
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.types import Message, ModelRequest, ToolResult
 from noeta.toolkit.interactive import interactive
@@ -45,11 +46,15 @@ def ultrathink_reminders(view: TaskView) -> Sequence[Reminder]:
 
 def ultrathink_effort(view: TaskView, request: ModelRequest) -> ModelRequest:
     """``request`` at ``xhigh`` effort when a prompt of the current turn has
-    the keyword and a person follows the task (Claude Code raises it only
-    in its interactive terminal); a prompt sent mid-turn raises the rest of
-    the turn."""
+    the keyword, a person follows the task (Claude Code raises it only in
+    its interactive terminal) and the model is a catalogued reasoning model
+    (Claude Code: one that takes an effort level); a prompt sent mid-turn
+    raises the rest of the turn."""
     if request.effort in _HIGH_ENOUGH or not interactive(view.state.config):
         return request
+    spec = models.find_spec(request.model)
+    if spec is None or not spec.is_reasoning:
+        return request  # a model not known to take an effort level
     for m in reversed(view.state.messages):
         if m.role == "assistant" and not m.tool_uses:
             break  # the previous turn's last reply

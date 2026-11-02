@@ -70,7 +70,7 @@ async def _session(store: SqliteStore, agent: Agent, steps: list[Any],
 
 
 async def test_ultrathink_adds_a_note_and_raises_the_turns_effort(store: SqliteStore) -> None:
-    agent = Agent(name="a", model="m", tools=[Probe()],
+    agent = Agent(name="a", model="claude-opus-5-5", tools=[Probe()],
                   extensions=[Environment(today=lambda: "2026-11-01")])
     client, tid, provider, runtime = await _session(
         store, agent, [reply("", ("Probe", {})), reply("deep"), reply("plain")])
@@ -85,9 +85,17 @@ async def test_ultrathink_adds_a_note_and_raises_the_turns_effort(store: SqliteS
     assert _texts(provider.requests[2]).count(ULTRATHINK_NOTE) == 1
 
 
+async def test_ultrathink_leaves_a_model_not_known_to_take_effort(store: SqliteStore) -> None:
+    agent = Agent(name="a", model="m", extensions=[Environment(today=lambda: "2026-11-01")])
+    client, tid, provider, runtime = await _session(store, agent, [reply("ok")])
+    await client.send(tid, "ultrathink")
+    await runtime().run_until_idle()
+    assert provider.requests[0].effort is None
+
+
 async def test_ultrathink_keeps_the_effort_when_nobody_follows_the_task(
         store: SqliteStore) -> None:
-    agent = Agent(name="a", model="m", effort="high",
+    agent = Agent(name="a", model="claude-opus-5-5", effort="high",
                   extensions=[Environment(today=lambda: "2026-11-01")])
     client, tid, provider, runtime = await _session(store, agent, [reply("ok")],
                                                     config={"interactive": False})
