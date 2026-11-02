@@ -41,9 +41,9 @@ findings reach front ends as a core notice of kind `findings`.
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.ReportFindings.r.1` | Not observed (never called). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.ReportFindings.r.1` | Not observed (never called). | n/a (not observed; noeta's result: `plugins/findings.py`) |
 
 ## Variants
 

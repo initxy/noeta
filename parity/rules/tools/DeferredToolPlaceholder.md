@@ -29,9 +29,9 @@ nothing required (unlike every other baseline tool).
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.DeferredToolPlaceholder.r.1` | Never called; no result. |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.DeferredToolPlaceholder.r.1` | Never called; no result. | covered (an entry, not a tool: a call to it is refused as an unknown tool) |
 
 ## Variants
 

@@ -50,8 +50,8 @@ events and notices in `noeta/plugins/shell/notices.py`).
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.Monitor.r.1` | Started (r2 `m5/0009`): one text naming the task id, when it expires unless the source ends first, that one notice comes at expiry and to re-arm if still needed, that each event will be notified, not to poll or sleep, and that an event arriving while waiting for the user is not their reply. noeta's says the same in its own words (`MonitorTool.run`). |
-| `tool.Monitor.r.2` | Each event (r2 `m5/0010`–`0012`): a user-role `<system-reminder>` with the background-notification guard (`reminders.md`, `rem.task-notification.2`), then `<task-notification>` with `<task-id>`, `<summary>` naming the monitor's description as a monitor event, and `<event>` holding the line(s). No `tool-use-id`, `output-file` or `status`. |
-| `tool.Monitor.r.3` | The end (r2 `m5/0013`): the same guard, then `<task-notification>` with `<task-id>`, `<tool-use-id>`, `<output-file>`, `<status>` `completed` and a `<summary>` saying the monitor's stream ended. noeta: `monitor_end_summary` in `notices.py`. |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.Monitor.r.1` | Started (r2 `m5/0009`): one text naming the task id, when it expires unless the source ends first, that one notice comes at expiry and to re-arm if still needed, that each event will be notified, not to poll or sleep, and that an event arriving while waiting for the user is not their reply. noeta's says the same in its own words (`MonitorTool.run`). | covered, in our wording (`MonitorTool.run`) |
+| `tool.Monitor.r.2` | Each event (r2 `m5/0010`–`0012`): a user-role `<system-reminder>` with the background-notification guard (`reminders.md`, `rem.task-notification.2`), then `<task-notification>` with `<task-id>`, `<summary>` naming the monitor's description as a monitor event, and `<event>` holding the line(s). No `tool-use-id`, `output-file` or `status`. | covered (`shell` notices) |
+| `tool.Monitor.r.3` | The end (r2 `m5/0013`): the same guard, then `<task-notification>` with `<task-id>`, `<tool-use-id>`, `<output-file>`, `<status>` `completed` and a `<summary>` saying the monitor's stream ended. noeta: `monitor_end_summary` in `notices.py`. | covered (`notices.py` `monitor_end_summary`) |

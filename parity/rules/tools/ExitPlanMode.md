@@ -38,12 +38,12 @@ other baseline tools).
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.ExitPlanMode.r.1` | On approval (m1/0063), a plain string: the user approved and coding may start, starting with the todo list if one applies. |
-| `tool.ExitPlanMode.r.2` | Then the saved plan path: `$CFG/plans/<adjective>-<adjective>-<noun>.md` (three random words, e.g. a "swirling-tickling-bubble" pattern), with a note that it can be consulted during implementation. |
-| `tool.ExitPlanMode.r.3` | Then a `## Approved Plan:` heading followed by the full plan file text. |
-| `tool.ExitPlanMode.r.4` | The plan was written with `Write` to that path before the call (the plan file lives under the config dir, not the project). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.ExitPlanMode.r.1` | On approval (m1/0063), a plain string: the user approved and coding may start, starting with the todo list if one applies. | covered (`permissions/plan.py` `APPROVED`, in our wording) |
+| `tool.ExitPlanMode.r.2` | Then the saved plan path: `$CFG/plans/<adjective>-<adjective>-<noun>.md` (three random words, e.g. a "swirling-tickling-bubble" pattern), with a note that it can be consulted during implementation. | covered (`plan.py` `new_plan_path`: two adjectives and a noun; the directory is `<noeta home>/plans`, `deviations.md`) |
+| `tool.ExitPlanMode.r.3` | Then a `## Approved Plan:` heading followed by the full plan file text. | covered (`## Approved Plan:` and the file's text) |
+| `tool.ExitPlanMode.r.4` | The plan was written with `Write` to that path before the call (the plan file lives under the config dir, not the project). | covered (the plan file is outside the project, writable in plan mode) |
 
 ## Variants
 

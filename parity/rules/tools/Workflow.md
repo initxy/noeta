@@ -44,9 +44,9 @@ child task).
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.Workflow.r.1` | Not observed (never called). Documented: a task id returned at once, completion as a `<task-notification>`, the saved script path in the result. |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.Workflow.r.1` | Not observed (never called). Documented: a task id returned at once, completion as a `<task-notification>`, the saved script path in the result. | covered (`workflow/tool.py` `STARTED` / `SAVED`: the run id at once, the saved script path, the end as a `<task-notification>`) |
 
 ## Variants
 

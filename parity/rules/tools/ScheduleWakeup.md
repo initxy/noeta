@@ -51,9 +51,9 @@ command), on the kernel's timers.
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.ScheduleWakeup.r.1` | Not observed (never called). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.ScheduleWakeup.r.1` | Not observed (never called). | n/a (not observed; noeta's result: `schedule` `WakeupTool`) |
 
 ## Variants
 

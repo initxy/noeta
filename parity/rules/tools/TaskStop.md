@@ -34,7 +34,7 @@ noeta's is `TaskStopTool` (`noeta/plugins/shell/tools.py`).
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.TaskStop.r.1` | Success (r2 `m5/0016`): a JSON object as text with `message` (stopped, with the id and the command in parentheses), `task_id`, `task_type` (`local_bash` for a background command) and `command`. noeta returns the same keys, `task_type` `monitor_ws` for a WebSocket monitor. |
-| `tool.TaskStop.r.2` | The stopped command sends no completion notification afterwards in the recording (r2 `m5/0016`–`0022`). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.TaskStop.r.1` | Success (r2 `m5/0016`): a JSON object as text with `message` (stopped, with the id and the command in parentheses), `task_id`, `task_type` (`local_bash` for a background command) and `command`. noeta returns the same keys, `task_type` `monitor_ws` for a WebSocket monitor. | covered (`shell/tools.py` `TaskStopTool`; `task_type` `monitor_ws` for a WebSocket monitor) |
+| `tool.TaskStop.r.2` | The stopped command sends no completion notification afterwards in the recording (r2 `m5/0016`–`0022`). | covered (the job is stopped quietly) |
