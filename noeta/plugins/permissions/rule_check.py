@@ -72,7 +72,7 @@ class RuleCheck:
             real = await real_path(view, target)
             if real != target:
                 seen.append(_with_path(args, real))
-        aliases = await _rule_inputs(view, call)
+        aliases = await r.rule_inputs(view, name, args)
         seen += [a for a, _allow in aliases]
         denied = next((m for a in seen if (m := r.first_match(self.deny_rules, name, a, ctx))
                        is not None), None)
@@ -255,13 +255,3 @@ async def spilled_file(view: TaskView, path: str, real: str) -> bool:
     root = posixpath.normpath(root)
     return _under(path, root) and _under(real, await real_path(view, root))
 
-
-async def _rule_inputs(view: TaskView,
-                       call: ToolUse) -> list[tuple[Mapping[str, Any], bool]]:
-    """What the called tool says its call also reads as for the rules
-    (``Tool.rule_inputs``); nothing when it says nothing."""
-    tool = view.find_tool(call.name)
-    get = getattr(tool, "rule_inputs", None)
-    if get is None:
-        return []
-    return list(await get(call.input, view))

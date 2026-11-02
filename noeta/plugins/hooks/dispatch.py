@@ -37,7 +37,7 @@ from noeta.plugins.hooks.runners import (
 )
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
 from noeta.toolkit.inline_commands import refusal
-from noeta.toolkit.permission_rules import RuleContext, match
+from noeta.toolkit.permission_rules import RuleContext, match, rule_inputs
 
 log = logging.getLogger("noeta.hooks")
 
@@ -361,9 +361,12 @@ class Dispatcher:
         return out
 
     def _select(self, event: str, view: TaskView, payload: Mapping[str, Any],
-                call: ToolUse | None) -> list[HookCommand]:
-        """The hooks to run: matched on the event's subject, ``if`` met,
-        identical ones once, ``once`` hooks that have not run."""
+                call: ToolUse | None,
+                inputs: Sequence[Mapping[str, Any]] = ()) -> list[HookCommand]:
+        """The hooks to run: matched on the event's subject, ``if`` met (by
+        the call's input or one of ``inputs``, what the tool says it also
+        reads as: a skill's former name), identical ones once, ``once``
+        hooks that have not run."""
         subject_field = SUBJECT.get(event)
         subject = payload.get(subject_field) if subject_field else None
         done = self.state(view).once
@@ -385,7 +388,8 @@ class Dispatcher:
                         continue
                     cwd = self.cwd(view) or os.getcwd()
                     ctx = RuleContext(root=cwd, home=os.path.expanduser("~"), cwd=cwd)
-                    if not match(h.condition, call.name, call.input, ctx):
+                    if not any(match(h.condition, call.name, a, ctx)
+                               for a in (call.input, *inputs)):
                         continue
                 if h.once and h.key in done:
                     continue
@@ -457,7 +461,12 @@ class Dispatcher:
         and read their answers, in configuration order. ``record``: the
         person is told about failures and ``systemMessage``s, and ``once``
         hooks are remembered (off where records cannot be made)."""
-        hooks = self._select(event, view, payload, call)
+        inputs: list[Mapping[str, Any]] = []
+        if call is not None and event in TOOL_EVENTS and any(
+                h.condition is not None for m in self.matchers.get(event, ()) for h in m.hooks):
+            # A hook written against a skill's former name still fires.
+            inputs = [a for a, _allow in await rule_inputs(view, call.name, call.input)]
+        hooks = self._select(event, view, payload, call, inputs)
         subject = payload.get(SUBJECT.get(event, ""))
         if self.unreached(event, view, subject if isinstance(subject, str) else None):
             # The tool gates refuse the call; any other event goes on without

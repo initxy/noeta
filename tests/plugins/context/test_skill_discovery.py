@@ -577,3 +577,19 @@ async def test_a_command_added_to_a_commands_directory_of_any_name_is_found(
     assert "- first: First." in listing(h)
     texts = [m.text for m in h.provider.requests[1].messages]
     assert any("- second: Second." in t for t in texts), texts
+
+
+async def test_an_old_name_if_hook_still_blocks_the_skill(h: Harness) -> None:
+    """A blocking ``PreToolUse`` hook with ``if: Skill(ship-it)``, written
+    when the frontmatter ``name`` named the skill, still fires for it."""
+    from noeta.plugins.hooks import Hooks
+
+    skill(ws(h), "deploy", "name: ship-it\ndescription: Ship.\n")
+    hooks = {"PreToolUse": [{"matcher": "Skill", "hooks": [
+        {"type": "command", "command": "echo 'no shipping' >&2; exit 2",
+         "if": "Skill(ship-it)"}]}]}
+    h.provider.add(reply("", ("Skill", {"skill": "deploy"})), reply("ok"))
+    tid = await h.start(agent(Hooks(hooks=hooks)))
+    [result] = await h.results(tid)
+    assert result.result.is_error and "no shipping" in result.result.text
+    assert await h.records(tid, "skills", "activated") == []
