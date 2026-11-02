@@ -396,7 +396,7 @@ async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
     config = {"SessionStart": hook("start", "startup|resume")}
     s = await Setup(tmp_path, config, [reply("a"), reply("b"), reply("c"), reply("d")],
                     answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
-    assert s.system_texts(0) == ["SessionStart hook additional context: source was startup"]
+    assert s.system_texts(0) == ["SessionStart hook success: source was startup"]
     await s.send("again")  # the same process: no new SessionStart
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
     # Another worker (or a restart: a fresh plugin) picking the task up is
@@ -411,7 +411,7 @@ async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
     await s.send("after a resume")
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "resume"]
     assert s.provider.requests[3].messages[-2].text == \
-        "SessionStart hook additional context: source was resume"
+        "SessionStart hook success: source was resume"
 
 
 async def test_compaction_events(tmp_path: Path) -> None:
@@ -793,3 +793,113 @@ async def test_post_model_switch_adds_context_for_the_new_model(tmp_path: Path) 
     [payload] = s.runner.payloads("switch")
     assert (payload["from_model"], payload["to_model"]) == ("m", "m2")
     assert any("Now on m2." in t for t in s.system_texts(1))
+
+
+# ---------------------------------------------------------------- the model told
+
+
+async def test_continue_false_is_told_to_the_model(tmp_path: Path) -> None:
+    """Claude Code's ``<hook name> hook stopped continuation: <reason>``:
+    PreToolUse only with a reason, PostToolUse with a default one."""
+    s = await Setup(tmp_path, {"PreToolUse": hook("pre")}, [reply("", READ_A), reply("next")],
+                    answers={"pre": ok({"continue": False, "stopReason": "Freeze is on."})}
+                    ).start()
+    await s.send("go on")
+    assert "PreToolUse:Read hook stopped continuation: Freeze is on." in s.system_texts(1)
+    s = await Setup(tmp_path / "post", {"PostToolUse": hook("post")},
+                    [reply("", READ_A), reply("next")],
+                    answers={"post": ok({"continue": False})}).start()
+    assert len(s.provider.requests) == 1
+    await s.send("go on")
+    assert "PostToolUse:Read hook stopped continuation: Execution stopped by PostToolUse hook" \
+        in s.system_texts(1)
+
+
+async def test_a_stop_hook_that_stops_continuation_is_told(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"Stop": hook("stop")}, [reply("done"), reply("next")],
+                    answers={"stop": ok({"continue": False})}).start()
+    await s.send("more")
+    assert "Stop hook stopped continuation: Stop hook prevented continuation" \
+        in s.system_texts(1)
+
+
+async def test_a_post_tool_batch_block_ends_the_turn_and_says_why(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"PostToolBatch": hook("batch", decision="block")},
+                    [reply("", READ_A), reply("next")],
+                    answers={"batch": ok({"decision": "block", "reason": "Lint failed."})}
+                    ).start()
+    assert len(s.provider.requests) == 1
+    await s.send("go on")
+    assert "PostToolBatch hook stopped continuation: Lint failed." in s.system_texts(1)
+
+
+async def test_plain_output_of_a_prompt_hook_is_its_success(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"UserPromptSubmit": hook("ups")}, [reply("ok")],
+                    answers={"ups": ok("Branch is main.")}).start()
+    assert s.system_texts(0) == ["UserPromptSubmit hook success: Branch is main."]
+
+
+async def test_hook_output_over_the_cap_is_saved_with_a_preview(tmp_path: Path) -> None:
+    long = "x" * 12_000
+    s = Setup(tmp_path, {"UserPromptSubmit": hook("ups")}, [reply("ok")],
+              answers={"ups": specific("UserPromptSubmit", additionalContext=long)})
+    spill = tmp_path / "spill"
+
+    def runtime() -> Runtime:
+        return Runtime(store=s.store, agents={"a": s.agent}, provider_for=lambda _m: s.provider,
+                       env_for=lambda _s: LocalExecEnv(str(s.work)), sleep=_no_sleep,
+                       spill_root=str(spill))
+
+    s.runtime = runtime  # type: ignore[method-assign]
+    await s.start()
+    [text] = s.system_texts(0)
+    assert text.startswith("UserPromptSubmit hook additional context: <persisted-output>")
+    assert len(text) < 3_000
+    [saved] = [p for p in spill.rglob("*.txt")]
+    assert saved.read_text() == long and str(saved) in text
+
+
+async def test_an_async_hooks_answer_reaches_the_next_model_call(tmp_path: Path) -> None:
+    release = asyncio.Event()
+
+    async def later(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
+        await release.wait()
+        return specific("PostToolUse", additionalContext="Tests passed.")
+
+    config = {"PostToolUse": [{"hooks": [{"type": "command", "command": "bg",
+                                          "async": True}]}]}
+    s = Setup(tmp_path, config, [reply("", READ_A), reply("done"), reply("again")])
+    s.hooks.runner = later
+    await s.start()
+    assert not any("Tests passed." in t for r in s.provider.requests for m in r.messages
+                   for t in [m.text])
+    release.set()
+    await asyncio.sleep(0.05)
+    # Delivered through the task's inbox: whichever worker runs it next.
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=later), FileTools()])
+    await s.send("more")
+    assert "Tests passed." in s.system_texts(2)
+    await s.send("and more")
+    assert s.system_texts(3).count("Tests passed.") == 1
+
+
+async def test_an_async_rewake_hook_wakes_the_model_on_exit_2(tmp_path: Path) -> None:
+    release = asyncio.Event()
+
+    async def later(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
+        await release.wait()
+        return HookResult(2, stderr="2 tests failed")
+
+    config = {"PostToolUse": [{"matcher": "Read", "hooks": [
+        {"type": "command", "command": "bg", "asyncRewake": True}]}]}
+    s = Setup(tmp_path, config, [reply("", READ_A), reply("done"), reply("fixing")])
+    s.hooks.runner = later
+    await s.start()
+    assert len(s.provider.requests) == 2
+    release.set()
+    await asyncio.sleep(0.05)
+    await s.runtime().run_until_idle()
+    assert len(s.provider.requests) == 3
+    assert s.provider.requests[2].messages[-1].text == \
+        'Stop hook blocking error from command "PostToolUse:Read": 2 tests failed'

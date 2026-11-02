@@ -14,8 +14,14 @@ from typing import Any
 
 import httpx
 
-from noeta.core.events import Cancel, ExtensionRecorded
+from noeta.core.events import Cancel, ExtensionRecorded, External, Say
 from noeta.core.extension import TaskView
+from noeta.core.large_output import (
+    large_output_message,
+    mark_spill_dir,
+    spill_path,
+    task_spill_dir,
+)
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import SUBJECT, TOOL_EVENTS, HookCommand, Matcher
@@ -42,10 +48,51 @@ KEEP = 256
 #: event, ``:<tool>`` for a tool's): Claude Code's labels.
 CONTEXT_LABEL = " hook additional context"
 BLOCK_LABEL = " hook blocking error"
+#: A SessionStart / UserPromptSubmit hook's plain stdout, and a
+#: ``continue: false`` the model is told about (Claude Code's labels).
+SUCCESS_LABEL = " hook success"
+STOPPED_LABEL = " hook stopped continuation"
+#: The stop reason when a hook gave none (Claude Code's, per event).
+STOPPED_DEFAULT = "Execution stopped by {event} hook"
+#: Characters of a hook's output for the model kept inline; past it the
+#: whole is saved to a file and a preview sent (Claude Code's 10,000).
+OUTPUT_CAP = 10_000
+#: The inbox signal that carries a background hook's answer to its task.
+ASYNC_SIGNAL = "hooks.async_response"
+#: How an ``asyncRewake`` hook's exit code 2 wakes the model (Claude Code's
+#: format; the hook name stands where its command would).
+REWAKE_TEXT = 'Stop hook blocking error from command "{name}": {output}'
 #: Why a call is refused on a worker that cannot ask the client whose hook
 #: callback would judge it.
 UNREACHED = ("a {event} hook of the client that runs this task cannot be asked from the "
              "worker running this step, so the call is refused")
+
+
+def stopped_text(name: str, reason: str) -> str:
+    """``continue: false`` as the model is told: ``<hook name> hook stopped
+    continuation: <reason>``."""
+    return f"{name}{STOPPED_LABEL}: {reason}"
+
+
+async def capped(view: TaskView, text: str, name: str) -> str:
+    """``text`` when it fits :data:`OUTPUT_CAP`; past it, saved whole to the
+    task's spill directory through its exec env (any worker reads it there)
+    and replaced by a preview, or cut around an elision when it cannot be
+    saved."""
+    if len(text) <= OUTPUT_CAP:
+        return text
+    saved: str | None = None
+    if view.spill_dir and view.env is not None:
+        path = spill_path(view.spill_dir, view.task_id, name)
+        try:
+            await view.env.write_bytes(path, text.encode("utf-8"))
+        except OSError:
+            log.warning("hooks: output of %s could not be saved", name, exc_info=True)
+        else:
+            await mark_spill_dir(view.env, task_spill_dir(view.spill_dir, view.task_id),
+                                 view.task_id)
+            saved = path
+    return large_output_message(text, OUTPUT_CAP, saved_to=saved)
 
 
 def blocking_text(name: str, read: Read) -> str:
@@ -82,6 +129,12 @@ class HookState:
     cwd: str | None = None
     #: The model as PostModelSwitch last reported it.
     model: str | None = None
+    #: What background hooks added for the model, not sent yet: ``(id,
+    #: text)``.
+    async_pending: tuple[tuple[str, str], ...] = ()
+    #: A tool hook's ``continue: false`` note, told once the turn has
+    #: stopped (told while the call is open, it would start the turn again).
+    stop_note: str | None = None
 
 
 def fold(state: Any, kind: str, data: Any) -> HookState:
@@ -109,6 +162,18 @@ def fold(state: Any, kind: str, data: Any) -> HookState:
         return replace(st, cwd=str(data.get("cwd") or "") or None)
     if kind == "model_seen":
         return replace(st, model=str(data.get("model") or "") or None)
+    if kind == "async_response":
+        texts = [str(t) for t in data.get("texts") or () if t]
+        key = str(data.get("id") or "")
+        return replace(st, async_pending=(*st.async_pending,
+                                          *((f"{key}:{i}", t) for i, t in enumerate(texts))))
+    if kind == "stop_pending":
+        return replace(st, stop_note=str(data.get("text") or "") or None)
+    if kind == "stopped":
+        return replace(st, stop_note=None)
+    if kind == "async_delivered":
+        return replace(st, async_pending=tuple(
+            p for p in st.async_pending if p[0] != data.get("id")))
     if kind == "permission":
         decided = dict(st.permission)
         decided[str(data.get("call_id"))] = {k: v for k, v in data.items() if k != "call_id"}
@@ -323,6 +388,35 @@ class Dispatcher:
         self._background.add(task)
         task.add_done_callback(self._background.discard)
 
+    async def _in_background(self, hook: HookCommand, payload: dict[str, Any], cwd: str | None,
+                             view: TaskView, name: str, key: str) -> None:
+        """A background hook, run to its end: what it has for the model goes
+        to the task's inbox (the store's, so whichever worker runs the task
+        next takes it). ``asyncRewake``: an exit code 2 wakes the model with
+        the hook's output. ``async``: its JSON answer's ``systemMessage`` and
+        ``additionalContext`` go with the next model call."""
+        result = await self._one(hook, payload, cwd, view, None)
+        if view.post is None:
+            return
+        if hook.rewake:
+            if result.exit_code != 2:
+                return
+            output = await capped(view, (result.stderr or result.stdout).strip(),
+                                  f"hook-{key}-stderr")
+            text = REWAKE_TEXT.format(name=name, output=output)
+            await view.post(Say(message=user(text, origin="system"), when="now"),
+                            dedupe_key=f"{NAME}:rewake:{view.task_id}:{key}")
+            return
+        data = result.data or {}
+        specific = data.get("hookSpecificOutput")
+        context = specific.get("additionalContext") if isinstance(specific, dict) else None
+        texts = [await capped(view, t.strip(), f"hook-{key}-{i}")
+                 for i, t in enumerate((data.get("systemMessage"), context))
+                 if isinstance(t, str) and t.strip()]
+        if texts:
+            await view.post(External(name=ASYNC_SIGNAL, data={"id": key, "texts": texts}),
+                            dedupe_key=f"{NAME}:async:{view.task_id}:{key}")
+
     async def run(self, event: str, view: TaskView, payload: Mapping[str, Any], *,
                   call: ToolUse | None = None, transcript: list[Message] | None = None,
                   record: bool = True) -> list[Read]:
@@ -344,9 +438,13 @@ class Dispatcher:
         for h in hooks:
             if h.once and record:
                 view.record(NAME, "once", {"key": h.key})
-        for h in hooks:
+        name = f"{event}:{call.name}" if call is not None and event in TOOL_EVENTS else event
+        # Names this firing among the task's (several calls of one step fire
+        # the same event): its background answers and saved outputs.
+        fired = f"{view.state.last_seq}-{event}" + (f"-{call.id}" if call is not None else "")
+        for i, h in enumerate(hooks):
             if h.background:
-                self.spawn(self._one(h, full, cwd, view, transcript))
+                self.spawn(self._in_background(h, full, cwd, view, name, f"{fired}-{i}"))
         now = [h for h in hooks if not h.background]
         results = await asyncio.gather(*(self._one(h, full, cwd, view, transcript)
                                          for h in now))
@@ -360,11 +458,44 @@ class Dispatcher:
                 elif record:
                     view.notify(f"{event} hook failed: {result.stderr.strip()[:300]}")
             read = replace(_read(event, result), command=hook.label)
+            read = await self._capped(view, read, f"hook-{fired}-{len(out)}")
             message = read.data.get("systemMessage")
             if record and isinstance(message, str) and message.strip():
                 view.notify(message.strip())
             out.append(read)
         return out
+
+    @staticmethod
+    async def _capped(view: TaskView, read: Read, name: str) -> Read:
+        """``read`` with its plain stdout and ``additionalContext`` within
+        :data:`OUTPUT_CAP` (:func:`capped`)."""
+        text = await capped(view, read.text, f"{name}-stdout")
+        context = read.specific.get("additionalContext")
+        specific = read.specific
+        if isinstance(context, str) and len(context) > OUTPUT_CAP:
+            specific = {**specific, "additionalContext": await capped(
+                view, context, f"{name}-additionalContext")}
+        if text == read.text and specific is read.specific:
+            return read
+        return replace(read, text=text, specific=specific)
+
+    def stopped(self, view: TaskView, name: str, reason: str, *, later: bool = False) -> None:
+        """Record ``continue: false`` for the model (:func:`stopped_text`);
+        ``later``: once the turn has stopped (:meth:`stop_told`)."""
+        text = stopped_text(name, reason)
+        if later:
+            view.record(NAME, "stop_pending", {"text": text})
+        else:
+            view.record(NAME, "stopped", {"hook": f"{name}{STOPPED_LABEL}"},
+                        message=user(text, origin="system"))
+
+    def stop_told(self, view: TaskView) -> None:
+        """The ``continue: false`` note a tool hook left, now that the turn
+        it stopped is over."""
+        text = self.state(view).stop_note
+        if text:
+            view.record(NAME, "stopped", {"hook": text.split(": ", 1)[0]},
+                        message=user(text, origin="system"))
 
     def blocks(self, view: TaskView, kind: str, name: str, reads: Sequence[Read]) -> None:
         """Record each hook's block for the model (:func:`blocking_text`)."""
@@ -385,8 +516,9 @@ class Dispatcher:
                             message=user(f"{label}: {text.strip()}", origin="system"))
 
     async def stop_turn(self, view: TaskView, reason: str) -> None:
-        """``continue: false``: the turn ends (the person sees why)."""
+        """``continue: false``: the turn ends (the person sees why). The stop
+        is posted with this hook's records, so what they tell the model is
+        written before the turn is stopped."""
         if reason:
             view.notify(reason)
-        if view.post is not None:
-            await view.post(Cancel(reason=reason or "stopped by a hook", turn_only=True))
+        view.enqueue(Cancel(reason=reason or "stopped by a hook", turn_only=True))

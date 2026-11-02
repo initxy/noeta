@@ -32,8 +32,11 @@ from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
 from noeta.plugins.hooks.config import HookCommand, Matcher, parse_hooks, read_settings
 from noeta.plugins.hooks.dispatch import (
+    ASYNC_SIGNAL,
     CONTEXT_LABEL,
     NAME,
+    STOPPED_DEFAULT,
+    SUCCESS_LABEL,
     Dispatcher,
     HookState,
     Read,
@@ -87,6 +90,23 @@ def _failure_kind(reason: str, detail: str) -> str:
     text = detail.lower()
     return next((kind for pattern, kind in _FAILURE_KINDS if re.search(pattern, text)),
                 "unknown")
+
+
+#: A Stop hook's ``continue: false`` without a reason (Claude Code's).
+STOPPED_STOP = "Stop hook prevented continuation"
+
+
+def _for_model(event: str, reads: Sequence[Read]) -> list[str]:
+    """What SessionStart / UserPromptSubmit hooks add for the model, each as
+    Claude Code leads it: ``additionalContext`` as additional context, plain
+    stdout as the hook's success."""
+    out: list[str] = []
+    for r in reads:
+        if r.context:
+            out.append(f"{event}{CONTEXT_LABEL}: {r.context}")
+        elif r.text.strip():
+            out.append(f"{event}{SUCCESS_LABEL}: {r.text.strip()}")
+    return out
 
 
 def _text(message: Message) -> str:
@@ -248,8 +268,9 @@ class Hooks(Extension):
         for r in reads:
             if r.block is not None:
                 view.notify(f"SessionStart hook: {r.block}")
-        self._d.context(view, "context", f"SessionStart{CONTEXT_LABEL}",
-                        [r.context or r.text for r in reads])
+        for text in _for_model("SessionStart", reads):
+            view.record(self.name, "context", {"hook": text.split(": ", 1)[0]},
+                        message=user(text, origin="system"))
 
     # ------------------------------------------------------------ reminders
 
@@ -267,8 +288,8 @@ class Hooks(Extension):
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SessionStart hook: {r.block}")
-            out.extend(Reminder(text=f"SessionStart{CONTEXT_LABEL}: {t}", kind="context")
-                       for t in (r.context or r.text for r in reads) if t)
+            out.extend(Reminder(text=t, kind="context")
+                       for t in _for_model("SessionStart", reads))
         try:
             out.extend(await self._prompt_submit(view))
         except TurnFailed:
@@ -279,6 +300,12 @@ class Hooks(Extension):
                             message=user(kept.text, origin=kept.origin))
             raise
         out.extend(await self._tool_batch(view))
+        out.extend(Reminder(text=text, kind="async_delivered", data={"id": key})
+                   for key, text in st.async_pending)
+        if st.stop_note:
+            # The turn the note was for ended some other way.
+            out.append(Reminder(text=st.stop_note, kind="stopped",
+                                data={"hook": st.stop_note.split(": ", 1)[0]}))
         return out
 
     async def _tool_batch(self, view: TaskView) -> list[Reminder]:
@@ -303,14 +330,17 @@ class Hooks(Extension):
         reads = await self._d.run("PostToolBatch", view, {"tool_calls": [
             {"tool_name": u.name, "tool_input": u.input, "tool_use_id": u.id,
              "tool_response": results[u.id].text} for u in uses]})
-        for r in reads:
-            if r.stop is not None:
-                raise TurnFailed("stopped_by_hook", r.stop or "a PostToolBatch hook stopped "
-                                                              "the turn")
-        out = [Reminder(text=blocking_text("PostToolBatch", r), kind="context")
-               for r in reads if r.block and r.block.strip()]
-        return out + [Reminder(text=f"PostToolBatch{CONTEXT_LABEL}: {r.context}", kind="context")
-                      for r in reads if r.context]
+        # A block or ``continue: false`` ends the turn, the model told why
+        # (the first reason given), as Claude Code ends it.
+        reasons = [r.block.strip() if r.block is not None else (r.stop or "")
+                   for r in reads if r.block is not None or r.stop is not None]
+        if reasons:
+            reason = next((x for x in reasons if x),
+                          STOPPED_DEFAULT.format(event="PostToolBatch"))
+            self._d.stopped(view, "PostToolBatch", reason)
+            raise TurnFailed("stopped_by_hook", reason)
+        return [Reminder(text=f"PostToolBatch{CONTEXT_LABEL}: {r.context}", kind="context")
+                for r in reads if r.context]
 
     async def _prompt_submit(self, view: TaskView) -> list[Reminder]:
         # Before every model call, not only a turn's first: a message sent
@@ -349,8 +379,7 @@ class Hooks(Extension):
             if r.stop is not None:
                 raise TurnFailed("stopped_by_hook", r.stop or "a UserPromptSubmit hook "
                                                               "stopped the turn")
-        return [Reminder(text=f"UserPromptSubmit{CONTEXT_LABEL}: {t}", kind="context")
-                for t in (r.context or r.text for r in reads) if t]
+        return [Reminder(text=t, kind="context") for t in _for_model("UserPromptSubmit", reads)]
 
     # ------------------------------------------------------------ tool calls
 
@@ -394,7 +423,10 @@ class Hooks(Extension):
                     shown = replaced if isinstance(replaced, str) else json.dumps(replaced)
                     output = msgspec.structs.replace(output, content=[Text(text=shown)])
             if r.stop is not None:
+                self._d.stopped(view, f"{event}:{call.name}",
+                                r.stop or STOPPED_DEFAULT.format(event=event), later=True)
                 await self._d.stop_turn(view, r.stop)
+                break
         self._d.blocks(view, "feedback", f"{event}:{call.name}", reads)
         self._d.context(view, "feedback", f"{event}:{call.name}{CONTEXT_LABEL}", notes)
         return output
@@ -440,11 +472,13 @@ class Hooks(Extension):
                 await self._cwd_changed(view, event.data)
             elif event.extension == INSTRUCTIONS_PLUGIN:
                 await self._instructions_record(view, event.kind, event.data)
-            elif event.extension == "core" and event.kind == "turn_done":
+            elif event.extension == "core" and event.kind in ("turn_stopped", "turn_failed"):
+                self._d.stop_told(view)
+            if event.extension == "core" and event.kind == "turn_done":
                 data = event.data if isinstance(event.data, dict) else {}
                 if data.get("reason") == records.EMPTY_REPLY:
                     await self._turn_ended(view, None)
-            elif event.extension == "core" and event.kind == "turn_failed":
+            if event.extension == "core" and event.kind == "turn_failed":
                 data = event.data if isinstance(event.data, dict) else {}
                 await self._stop_failure(view, str(data.get("reason") or ""),
                                          str(data.get("detail") or ""))
@@ -463,6 +497,9 @@ class Hooks(Extension):
                 await self._model_switched(view, event)
             if any(b.name == RESUMED_SIGNAL for b in signals):
                 await self._resumed(view)
+            for b in signals:
+                if b.name == ASYNC_SIGNAL and isinstance(b.data, dict):
+                    view.record(self.name, "async_response", b.data)
 
     async def _cwd_changed(self, view: TaskView, data: Any) -> None:
         """CwdChanged, when a command left the shell in another directory
@@ -627,7 +664,10 @@ class Hooks(Extension):
         if event == "SubagentStop":
             payload.update(agent_fields(view), agent_transcript_path="")
         reads = await self._d.run(event, view, payload, transcript=_answered(view.state.messages))
-        if any(r.stop is not None for r in reads):
+        stop = next((r.stop for r in reads if r.stop is not None), None)
+        if stop is not None:
+            # Claude Code names it the Stop hook in a sub-agent too.
+            self._d.stopped(view, "Stop", stop or STOPPED_STOP)
             return None
         reasons = [n for r in reads for n in (
             blocking_text(event, r) if r.block else None, r.context) if n]
