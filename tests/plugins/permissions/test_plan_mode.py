@@ -441,3 +441,45 @@ def test_a_task_keeps_the_first_plan_name() -> None:
     assert st.plan_name == "add-logging"
     # A log written before ``named``: the recorded name still counts.
     assert fold(PermState(), "plan_name", {"name": "x"}).plan_named
+
+
+async def _exit_plan(store: SqliteStore, tmp_path: Path, plan: str | None,
+                     answer: dict[str, Any]) -> tuple[Any, Any]:
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("planning"), reply("", LOAD),
+                                 reply("", ("ExitPlanMode", {})), reply("ok")])
+    rt = runtime(store, provider, agent([perms], []))
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path),
+                                                 "permission_mode": "plan"})
+    await rt.run_until_idle()
+    [entered] = [e.data for e in await events(client, tid)
+                 if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    if plan is not None:
+        path = Path(entered["plan"]["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(plan)
+    await client.send(tid, "ready")
+    await rt.run_until_idle()
+    [question] = [p for p in pending(await client.events(tid), tid) if p.kind == "question"]
+    await client.answer(tid, question.request_id, data={"answers": {"0": answer}})
+    await rt.run_until_idle()
+    result = [e for e in await events(client, tid) if isinstance(e, ToolFinished)][-1].result
+    return question, result
+
+
+async def test_exit_plan_mode_without_a_plan_file_still_asks(store: SqliteStore,
+                                                             tmp_path: Path) -> None:
+    """Claude Code asks with no plan written, and its approval says so."""
+    question, result = await _exit_plan(store, tmp_path, None,
+                                        {"selected": [pl.CHOICE_DEFAULT]})
+    assert question.detail["questions"][0]["question"] == pl.EXIT_NO_PLAN_QUESTION
+    assert not result.is_error and result.text == pl.APPROVED_NO_PLAN
+
+
+async def test_a_rejected_plan_comes_back_with_the_rejection(store: SqliteStore,
+                                                             tmp_path: Path) -> None:
+    _, result = await _exit_plan(store, tmp_path, "# Plan\n\n1. log\n",
+                                 {"selected": [pl.CHOICE_KEEP]})
+    assert result.is_error
+    assert result.text == pl.KEEP_PLANNING_PLAN.format(plan="# Plan\n\n1. log\n")

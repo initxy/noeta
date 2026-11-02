@@ -454,7 +454,10 @@ async def test_the_plan_file_is_given_again_after_a_compaction(
         written.append(path.group(0))
         return call()(request)
 
-    a = agent(extensions=(Permissions(mode="default", plans_dir=str(plans), allow=["Probe"]),))
+    # Plan mode off the classifier: its safeguards block names the exec
+    # env's directory, which the rebuild check below runs without.
+    a = agent(extensions=(Permissions(mode="default", plans_dir=str(plans), allow=["Probe"],
+                                      auto_during_plan=False),))
     model = Model([plan_then_call, *(call() for _ in range(11)), answer("done")])
     client = Client(store)
     tid = await client.create(a.name, "go", config={"permission_mode": "plan"})

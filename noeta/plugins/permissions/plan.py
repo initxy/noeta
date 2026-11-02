@@ -66,12 +66,18 @@ PLAN_EXITED = ("## Plan mode has ended\n\nYou have left plan mode: you may edit 
 APPROVED = ("The user approved the plan, so you can start coding now. If a todo list fits the "
             "work, begin by writing it.\n\nThe plan is saved at {path}; refer back to it as "
             "you implement.\n\n## Approved Plan:\n{plan}")
+#: Approval with no plan written (Claude Code asks then too).
+APPROVED_NO_PLAN = "The user approved leaving plan mode, so you can go ahead now."
 KEEP_PLANNING = ("The user did not approve the plan and wants you to keep planning; you are "
                  "still in plan mode.")
+#: A rejection without feedback: the rejected plan comes back with it.
+KEEP_PLANNING_PLAN = ("The user rejected the plan you proposed and chose to stay in plan mode "
+                      "instead of starting the work.\nRejected plan:\n{plan}")
 KEEP_PLANNING_FEEDBACK = KEEP_PLANNING + " What they said about it:\n{feedback}"
 NOT_IN_PLAN_MODE = ("Plan mode is not on, so there is no plan to approve. To plan first, call "
                     "EnterPlanMode; if your plan was already approved, go on implementing it.")
-NO_PLAN = "There is no plan at {path} yet. Write the plan there first, then call this tool."
+#: The approval question when no plan was written.
+EXIT_NO_PLAN_QUESTION = "Leave plan mode?"
 
 #: ``EnterPlanMode``'s result: what planning means until the plan is approved.
 ENTERED = ("Plan mode is on. Until the plan is approved:\n"
@@ -285,10 +291,12 @@ class ExitPlanModeTool:
         if plan is None:
             return tool_error(self.name, NOT_IN_PLAN_MODE)
         text = await read_plan(ctx, plan["path"])
-        if not text or not text.strip():
-            return tool_error(self.name, NO_PLAN.format(path=plan["path"]))
-        question = {"question": f"Here is the plan:\n\n{text}\n\nReady to start?",
-                    "header": "Plan", "options": _choices(str(plan.get("pre_mode") or "default"))}
+        # No plan file: asked all the same (Claude Code refuses only a
+        # teammate's call without a plan).
+        prompt = f"Here is the plan:\n\n{text}\n\nReady to start?" if text and text.strip() \
+            else EXIT_NO_PLAN_QUESTION
+        question = {"question": prompt, "header": "Plan",
+                    "options": _choices(str(plan.get("pre_mode") or "default"))}
         return ToolOutput(content=[], park=ask(question))
 
     async def resume(self, input: dict[str, Any], ctx: ToolContext,
@@ -296,8 +304,11 @@ class ExitPlanModeTool:
         plan = self._plan(ctx)
         if plan is None:
             return tool_error(self.name, NOT_IN_PLAN_MODE)
+        text = await read_plan(ctx, plan["path"]) or ""
+        rejected = text_output(KEEP_PLANNING_PLAN.format(plan=text) if text.strip()
+                               else KEEP_PLANNING, is_error=True)
         if outcome is None:
-            return text_output(KEEP_PLANNING, is_error=True)
+            return rejected
         pre_mode = str(plan.get("pre_mode") or "default")
         try:
             answers = read_answer(outcome, {"questions": [{"id": "0", "question": "",
@@ -305,17 +316,18 @@ class ExitPlanModeTool:
         except ValueError as exc:
             return tool_error(self.name, f"the answer could not be read: {exc}")
         if answers is None:
-            return text_output(KEEP_PLANNING, is_error=True)
+            return rejected
         answer = answers.get("0") or {}
         picked = (answer.get("selected") or [None])[0]
         mode = CHOICE_MODES.get(str(picked)) if picked else None
         if mode is None:
             feedback = (answer.get("other") or "").strip()
-            return text_output(KEEP_PLANNING_FEEDBACK.format(feedback=feedback) if feedback
-                               else KEEP_PLANNING, is_error=True)
-        text = await read_plan(ctx, plan["path"]) or ""
+            return text_output(KEEP_PLANNING_FEEDBACK.format(feedback=feedback), is_error=True) \
+                if feedback else rejected
         named = bool(text.strip()) and not getattr(ctx.state.get(NAME), "plan_named", False)
         ctx.record(NAME, "plan_exit", {"mode": mode, **({"named": True} if named else {})})
         if named:
             name_plan(ctx, text)
+        if not text.strip():
+            return text_output(APPROVED_NO_PLAN)
         return text_output(APPROVED.format(path=plan["path"], plan=text))

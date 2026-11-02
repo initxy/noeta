@@ -56,9 +56,11 @@ class RuleCheck:
             dirs.append(posixpath.normpath(d if posixpath.isabs(d) else posixpath.join(root, d)))
         return sc.Scope(dirs=tuple(dict.fromkeys(dirs)), home=home)
 
-    async def decide(self, view: TaskView, call: ToolUse, mode: str) -> Decision:
+    async def decide(self, view: TaskView, call: ToolUse, mode: str, *,
+                     plan_classifier: bool = False) -> Decision:
         """Claude Code's order: deny rules, ask rules, then what the tool
-        touches and the mode."""
+        touches and the mode. ``plan_classifier``: plan mode runs with auto
+        mode's classifier (``in_mode``)."""
         name, args = call.name, call.input
         scope = self.scope(view)
         ctx = r.RuleContext(root=scope.cwd, home=scope.home, cwd=scope.cwd)
@@ -81,10 +83,11 @@ class RuleCheck:
                 "ask", w.ASK_RULE.format(rule=asked.text, name=name), firm=True, why="rule"),
                 name)
         allow_rules = self.rules(view)
-        if mode == "auto":
+        classifying = mode == "auto" or (mode == "plan" and plan_classifier)
+        if classifying:
             allow_rules = tuple(x for x in allow_rules if not p.bypasses_classifier(x))
         found = await self._needs(view, call, mode, scope, ctx, allow_rules)
-        return in_mode(mode, found, name)
+        return in_mode(mode, found, name, plan_classifier=plan_classifier)
 
     async def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
                      ctx: r.RuleContext, allow_rules: Sequence[r.Rule]) -> Decision:

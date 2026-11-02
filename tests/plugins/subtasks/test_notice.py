@@ -1,0 +1,127 @@
+"""The completion notice's fields, as Claude Code writes them: who stopped
+an agent, the step limit, the kept worktree, an empty result left out, the
+token count, and a hand-back auto mode flagged."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from noeta.backends.stores.sqlite import SqliteStore
+from noeta.core.client import Client
+from noeta.core.events import ChildEnded
+from noeta.core.extension import Extension, Gate, Rewrite, TaskView
+from noeta.core.runner.texts import STEP_LIMIT_HEAD
+from noeta.core.types import ToolUse, Usage
+from noeta.plugins.subtasks import texts
+from noeta.plugins.subtasks.extension import _outcome, subagent_tokens, task_notification
+from noeta.plugins.subtasks.tool import agent_message, handback_flagged, handback_sender
+from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.notices import HANDBACK_REVIEW_KEY, STOPPED_BY_CALLER
+from tests.plugins.subtasks.test_agent_tool import agent, parent, runtime, worker
+
+HANDS_BACK = {"type": "scout", "description": "dig",
+              "config": {"subagent_type": "scout", "subagent_handback": True}}
+PLAIN = {"type": "scout", "description": "dig",
+         "config": {"subagent_type": "scout", "subagent_handback": False}}
+
+
+@pytest.fixture
+async def store(tmp_path: Path) -> AsyncIterator[SqliteStore]:
+    s = SqliteStore(str(tmp_path / "t.db"))
+    yield s
+    await s.close()
+
+
+def ended(**kw: Any) -> ChildEnded:
+    return ChildEnded(child_id="c1", **{"status": "done", **kw})
+
+
+@pytest.mark.parametrize(("reason", "summary"), [
+    (STOPPED_BY_CALLER, 'Agent "dig" was stopped by you'),
+    ("cancelled", 'Agent "dig" was stopped by the user'),
+    ("parent task done", 'Agent "dig" was stopped: parent task done'),
+])
+def test_who_stopped_the_agent(reason: str, summary: str) -> None:
+    status, said, result = _outcome(PLAIN, "a1", ended(status="cancelled", error=reason,
+                                                       answer=""), {}, ())
+    assert (status, said, result) == ("killed", summary, "")
+
+
+def test_a_failed_agent_keeps_its_error_in_the_summary_only() -> None:
+    status, summary, result = _outcome(PLAIN, "a1", ended(status="failed", error="boom"), {}, ())
+    assert (status, summary, result) == ("failed", 'Agent "dig" failed: boom', "")
+
+
+def test_the_step_limit_in_the_summary() -> None:
+    answer = f"{STEP_LIMIT_HEAD.format(n=40)}\n\nhalf done"
+    _, summary, result = _outcome(PLAIN, "a1", ended(answer=answer), {}, ())
+    assert summary == ('Agent "dig" stopped at its 40-step limit (partial result; '
+                       "SendMessage to its task-id to continue)")
+    assert result == answer
+    # An agent that had to hand back gets the note, and no report.
+    _, _, result = _outcome(HANDS_BACK, "a1", ended(answer=answer), {}, ())
+    assert result.startswith(texts.STEP_LIMIT_NOTE.format(n=40) + "\n")
+    assert "half done" not in result and "no report was delivered" in result
+
+
+def test_a_flagged_hand_back_points_at_the_warning() -> None:
+    _, _, result = _outcome(HANDS_BACK, "a1", ended(answer="r"), {"a1": "seen"}, {"a1"})
+    assert result == texts.RESULT_POINTER_FLAGGED.format(id="a1")
+
+
+def test_notice_fields_as_claude_codes() -> None:
+    usage = Usage(uncached=100, cache_read=900, output=7)
+    end = ended(last_usage=usage, output_tokens=50, tool_calls=3)
+    # The newest reply's input (cache included) plus every reply's output.
+    assert subagent_tokens(end) == 1050
+    text = task_notification(agent_id="a1", call_id="k1", status="completed",
+                             summary='Agent "dig" finished', result="", ended=end,
+                             duration_ms=5, worktree={"path": "/r/.noeta/worktrees/x",
+                                                      "branch": "worktree-x"})
+    assert "<result>" not in text
+    assert text.endswith(
+        "<usage><subagent_tokens>1050</subagent_tokens><tool_uses>3</tool_uses>"
+        "<duration_ms>5</duration_ms></usage>\n<worktree><worktreePath>/r/.noeta/worktrees/x"
+        "</worktreePath><worktreeBranch>worktree-x</worktreeBranch></worktree>\n"
+        "</task-notification>")
+
+
+def test_a_note_sits_above_the_frame() -> None:
+    msg = agent_message("a1", "the report", note="SECURITY WARNING: x\ny")
+    lines = msg.text.split("\n")
+    assert lines[2:5] == ["  SECURITY WARNING: x", "  y", texts.AGENT_MESSAGE_FRAME]
+    assert handback_sender(msg) == "a1" and handback_flagged(msg)
+    assert not handback_flagged(agent_message("a1", "the report"))
+
+
+class FlagHandback(Extension):
+    """Stands for the permission layer that flagged the report."""
+
+    name = "flag"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        if call.name == "SubagentHandback" and HANDBACK_REVIEW_KEY not in call.input:
+            return Rewrite(input={**call.input, HANDBACK_REVIEW_KEY: "SECURITY WARNING: x"})
+        return None
+
+
+async def test_a_flagged_report_reaches_the_caller_under_its_warning(
+        store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("dig")), reply("launched"), reply("careful"),
+                          reply("ok")])
+    c = ScriptedProvider([reply("", ("SubagentHandback", {"message": "the report"}))])
+    rt = runtime(store, {"p": p, "c": c}, parent(), worker(FlagHandback()))
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    report = p.requests[2].messages[-1]
+    assert "  SECURITY WARNING: x\n" + texts.AGENT_MESSAGE_FRAME in report.text
+    await client.send(tid, "thanks")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    pointer = texts.RESULT_POINTER_FLAGGED.format(id=child.task_id)
+    assert any(pointer in m.text for m in p.requests[3].messages)

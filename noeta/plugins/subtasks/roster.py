@@ -118,14 +118,41 @@ def _tools_column(agent: Any) -> str:
     return "*"
 
 
+#: Child config key: the model family an inherited model is capped at
+#: (consumed when the child's config is made, never stored).
+MODEL_CAP_KEY = "model_cap"
+#: Claude family ranks, lowest first (Claude Code's order).
+_FAMILY_RANK = {"haiku": 0, "sonnet": 1, "opus": 2, "fable": 3, "mythos": 3}
+
+
+def _family(model: str) -> str | None:
+    """A first-party Claude model id's family (``claude-<family>-...``)."""
+    parts = models.resolve_alias(model).split("-")
+    return parts[1] if len(parts) > 2 and parts[0] == "claude" else None
+
+
+def capped_model(model: str, cap: str) -> str | None:
+    """The model an agent capped at family ``cap`` runs on instead of
+    ``model`` when ``model`` ranks above it (a Fable caller's Explore runs on
+    Opus, as in Claude Code), else ``None``. Only a first-party Claude id is
+    capped; other providers' ids keep what they inherit."""
+    family = _family(model) if model else None
+    rank, limit = _FAMILY_RANK.get(family or ""), _FAMILY_RANK.get(cap)
+    if rank is None or limit is None or rank <= limit:
+        return None
+    return models.resolve_alias(cap)
+
+
 def _definition_config(agent: Agent) -> dict[str, Any]:
     """Child config an agent's definition asks for: its own model and effort
     (so the parent's are not inherited over them) and permission mode, from
     its agent file's fields (``Agent.extra``): ``model: inherit`` runs on the
-    caller's model."""
+    caller's model, below the cap a built-in agent may have (``inheritCap``)."""
     out: dict[str, Any] = {}
     if agent.extra.get("model") != "inherit":
         out["model"] = models.resolve_alias(agent.model)
+    elif isinstance(agent.extra.get("inheritCap"), str):
+        out[MODEL_CAP_KEY] = agent.extra["inheritCap"]
     if agent.effort:
         out["effort"] = agent.effort
     if agent.extra.get("permissionMode"):

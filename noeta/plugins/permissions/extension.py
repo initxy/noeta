@@ -113,6 +113,11 @@ class Permissions(Extension):
     * ``disable_bypass_mode`` — refuse ``bypassPermissions`` (Claude Code's
       ``disableBypassPermissionsMode``): as the starting mode, from a task's
       config (an agent file's ``permissionMode``) and as a switch.
+    * ``auto_during_plan`` — plan mode runs with the auto-mode classifier
+      (Claude Code's top-level ``useAutoModeDuringPlan``, default on): an ask
+      in plan mode goes to the classifier, except a file tool's write and
+      plan mode's refusal of a tool that is not read-only, which the person
+      answers. Not when planning started from ``bypassPermissions``.
 
     The rest are noeta's own:
 
@@ -157,6 +162,7 @@ class Permissions(Extension):
         additional_directories: Sequence[str] = (),
         auto_mode: Mapping[str, Sequence[str]] | None = None,
         disable_bypass_mode: bool = False,
+        auto_during_plan: bool = True,
         classifier_model: str | None = None,
         plans_dir: str | None = None,
         risk: Mapping[str, str] | None = None,
@@ -192,6 +198,7 @@ class Permissions(Extension):
         self.ask_rules = r.parse_rules(ask, "ask")
         self.additional_directories = tuple(_directory(d) for d in additional_directories)
         self.auto_mode = p.check_auto_mode(auto_mode)
+        self.auto_during_plan = bool(auto_during_plan)
         self.classifier_model = classifier_model
         self.plans_dir = plans_dir or str(default_plans_dir())
         self.risk = {**p.DEFAULT_RISK, **dict(risk or {})}
@@ -374,7 +381,18 @@ class Permissions(Extension):
     async def decide(self, view: TaskView, call: ToolUse) -> Decision:
         """Claude Code's order: deny rules, ask rules, then what the tool
         touches and the mode."""
-        return await self._check.decide(view, call, self.mode_of(view))
+        mode = self.mode_of(view)
+        return await self._check.decide(view, call, mode,
+                                        plan_classifier=self.plan_classifier(view, mode))
+
+    def plan_classifier(self, view: TaskView, mode: str) -> bool:
+        """Whether this task plans with the auto-mode classifier (Claude
+        Code: when ``useAutoModeDuringPlan`` holds, unless planning started
+        from ``bypassPermissions``)."""
+        if mode != "plan" or not self.auto_during_plan:
+            return False
+        plan = state_of(view).plan or {}
+        return plan.get("pre_mode") != "bypassPermissions"
 
     def _counters(self, view: TaskView, st: PermState, call: ToolUse) -> g.Counters:
         before = 0
@@ -506,8 +524,9 @@ class Permissions(Extension):
             if len(tools) != len(request.tools):
                 request = msgspec.structs.replace(request, tools=tools)
         mode = self.mode_of(view)
-        plan = state_of(view).plan or {}
-        if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
+        if mode != "auto" and not self.plan_classifier(view, mode):
+            # Claude Code's auto-mode betas ride on every request while the
+            # classifier judges the calls (plan mode with it included).
             return request
         return a.auto_request(view, request, lambda: a.server_context(
             self._check.scope(view), plans_dir=self.plans_dir,

@@ -263,11 +263,12 @@ _TAG_RE = re.compile(r"<(\s*/?\s*(?:user_noeta_md|untrusted_instructions))", re.
 
 def classifier_request(*, model: str, prompt: str, instructions: str, transcript: Sequence[str],
                        stage: int, fast: bool, user_name: str | None = None,
-                       trusted: bool = True) -> ModelRequest:
+                       trusted: bool = True, root_id: str | None = None) -> ModelRequest:
     """One stage's request. ``fast``: the classifier model takes thinking
     off; otherwise the main model gets the headroom and no thinking
     parameter. ``trusted``: the instructions come from a trusted workspace
-    and may count as the person's intent."""
+    and may count as the person's intent. ``root_id``: the task tree, so
+    the request names the main loop's session (``metadata.user_id``)."""
     identity = USER_IDENTITY.format(user=user_name or _user_name())
     head: list[Message] = []
     if instructions.strip():
@@ -290,7 +291,7 @@ def classifier_request(*, model: str, prompt: str, instructions: str, transcript
         thinking=False if fast else None,
         stop_sequences=[STOP] if stage == 1 else [],
         cache_after=[0] if head else [],
-        cache_blocks=marks)
+        cache_blocks=marks, root_id=root_id)
 
 
 def _user_name() -> str:
