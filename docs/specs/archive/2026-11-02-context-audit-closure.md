@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-02
 branch: ctx-audit-closure
 ---
@@ -270,4 +270,4 @@ Kept differences, each also a `parity/deviations.md` row (the pi / dsh column th
 - 2026-11-02 Confirm review N1: child tasks kept a copy of `client_hooks` naming the old client,
   so a reconnect left background children denying hooked calls; `HookCallbacks.answers` now
   checks the registered callbacks cover the record, and `interactive.follow` clears the open tree.
-
+- 2026-11-02 Confirm review clean after N1 (head 05394c90: `make check` 2830 passed, coverage 89.16 %; `make cluster` 14 passed). Merged into local main; the open owner questions above are carried in `docs/specs/2026-10-29-open-source-follow-ups.md`. Done; archived.
