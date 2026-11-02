@@ -35,6 +35,7 @@ __all__ = [
     "UNKNOWN_MODEL_MAX_OUTPUT_TOKENS",
     "ModelSpec",
     "catalog_models",
+    "default_effort",
     "find_spec",
     "model_family",
     "model_limits",
@@ -503,6 +504,18 @@ def find_spec(model_id: str) -> ModelSpec | None:
     if spec is None:
         spec = _EXTENSIONS.get(real)
     return spec
+
+
+#: The effort a model whose catalog row names no default is asked for
+#: (Claude Code's fallback).
+FALLBACK_EFFORT = "high"
+
+
+def default_effort(model: str) -> str:
+    """The effort a request on ``model`` uses when the task names none: the
+    catalog row's default, else Claude Code's ``high``."""
+    spec = find_spec(model)
+    return (spec.default_effort if spec is not None else None) or FALLBACK_EFFORT
 
 
 def model_family(model: str) -> str | None:

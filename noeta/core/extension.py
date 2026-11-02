@@ -292,6 +292,9 @@ class TaskView(records.CoreNotices):
     #: While a compaction asks for residents: whether the newest messages
     #: stay after its summary (``None`` outside a compaction).
     keeps_tail: bool | None = None
+    #: While a compaction asks for residents: the messages that stay after
+    #: its summary (a listing among them is still in view).
+    kept: Sequence[Message] = ()
     #: The spill root (``Runtime.spill_root``): tool outputs too long to
     #: return inline are saved below it, in the task's exec env, for the
     #: model to read (``None``: nothing is saved).
@@ -403,16 +406,17 @@ class TaskView(records.CoreNotices):
         """Record a compaction (the compaction extension's one core event)."""
         self.pending.append(event)
 
-    async def residents(self, *, lead: bool = False,
-                        keeps_tail: bool | None = None) -> list[Message]:
+    async def residents(self, *, lead: bool = False, keeps_tail: bool | None = None,
+                        kept: Sequence[Message] = ()) -> list[Message]:
         """Every extension's ``resident`` messages (``lead_resident`` with
         ``lead``), in extension order: what a compaction rebuilds after the
         kept messages (ahead of its summary). A compaction passes
         ``keeps_tail`` (whether messages stay after its summary), which the
-        extensions read as ``keeps_tail``. An extension that fails is logged
-        and skipped."""
+        extensions read as ``keeps_tail``, and the messages that stay
+        (``kept``). An extension that fails is logged and skipped."""
         out: list[Message] = []
         self.keeps_tail = keeps_tail
+        self.kept = kept
         try:
             for ext in self.extensions:
                 try:
@@ -421,6 +425,7 @@ class TaskView(records.CoreNotices):
                     log.exception("extension %s resident failed", ext.name)
         finally:
             self.keeps_tail = None
+            self.kept = ()
         return out
 
 

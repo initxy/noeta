@@ -23,6 +23,7 @@ from collections.abc import Collection, Mapping, Sequence
 from noeta.plugins.skills.registry import (
     SkillDescription,
     SkillRegistry,
+    display_label,
     strip_argument_placeholder,
 )
 from noeta.toolkit.tokens import estimate_tokens, prefix_within
@@ -93,11 +94,11 @@ def listing_summary(desc: SkillDescription) -> str:
     return desc.description
 
 
-def _menu_description(text: str) -> str:
+def _menu_description(text: str, max_chars: int = MENU_DESCRIPTION_MAX_CHARS) -> str:
     text = strip_argument_placeholder(text)
-    if len(text) <= MENU_DESCRIPTION_MAX_CHARS:
+    if len(text) <= max_chars:
         return text
-    return text[:MENU_DESCRIPTION_MAX_CHARS - 1] + _TRUNCATION_MARKER
+    return text[:max_chars - 1] + _TRUNCATION_MARKER
 
 
 def menu_keep_order(
@@ -112,12 +113,9 @@ def menu_keep_order(
     return tuple(sorted(names, key=key))
 
 
-def _entry_chars(name: str, description: str) -> int:
-    return len(roster_line(name, description)) + 1
-
-
 def fit_menu_to_budget(
-    entries: Sequence[tuple[str, str]], keep_order: Sequence[str], budget_chars: int
+    entries: Sequence[tuple[str, str]], keep_order: Sequence[str], budget_chars: int,
+    labels: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """The summary each name shows: full, short, or ``""`` (name only).
 
@@ -128,6 +126,11 @@ def fit_menu_to_budget(
     by_name = dict(entries)
     if len(by_name) != len(entries):
         raise ValueError("fit_menu_to_budget: duplicate names in entries")
+    shown = labels or {}
+
+    def _entry_chars(name: str, description: str) -> int:
+        return len(roster_line(shown.get(name, name), description)) + 1
+
     if sum(_entry_chars(n, d) for n, d in by_name.items()) <= budget_chars:
         return by_name
     bare = {n: _entry_chars(n, "") for n in by_name}
@@ -164,23 +167,29 @@ def fit_menu_to_budget(
 
 def listing_lines(
     registry: SkillRegistry, *, budget_chars: int, rank: Mapping[str, float] | None = None,
-    unlocked: Collection[str] = (),
+    unlocked: Collection[str] = (), only: Collection[str] | None = None,
+    max_desc_chars: int = MENU_DESCRIPTION_MAX_CHARS,
 ) -> tuple[tuple[str, str], ...]:
     """The roster as ``(name, line)`` pairs fitted to the budget, the
     narrowest scope first (the workspace's, then the user's, then the rest,
     as Claude Code lists them), by name within one. Skills with
     ``disable-model-invocation`` are left out, and so are skills with
-    ``paths`` not in ``unlocked``."""
+    ``paths`` not in ``unlocked``. ``only``: list just these skills (the
+    ones a later listing adds), fitted to the whole budget by themselves
+    (Claude Code's)."""
     entries: list[tuple[str, str]] = []
+    labels: dict[str, str] = {}
     for name in sorted(registry.model_invocable(unlocked),
                        key=lambda n: (-registry.tier_of(n), n)):
         desc = registry.get(name)
-        if desc is not None:
-            entries.append((name, _menu_description(listing_summary(desc))))
+        if desc is not None and (only is None or name in only):
+            entries.append((name, _menu_description(listing_summary(desc), max_desc_chars)))
+            labels[name] = display_label(desc, registry)
     if not entries:
         return ()
     names = tuple(n for n, _ in entries)
-    fitted = fit_menu_to_budget(entries, menu_keep_order(registry, names, rank), budget_chars)
+    fitted = fit_menu_to_budget(entries, menu_keep_order(registry, names, rank), budget_chars,
+                                labels)
     shortened = sum(1 for n, d in entries if fitted[n] and fitted[n] != d)
     name_only = sum(1 for n, d in entries if d and not fitted[n])
     if shortened or name_only:
@@ -189,8 +198,8 @@ def listing_lines(
             "(full roster %d characters, budget %d); trim the skill directories or raise "
             "Skills(budget_chars=...)",
             len(entries), shortened, name_only,
-            sum(_entry_chars(n, d) for n, d in entries), budget_chars)
-    return tuple((n, roster_line(n, fitted[n])) for n in names)
+            sum(len(roster_line(labels[n], d)) + 1 for n, d in entries), budget_chars)
+    return tuple((n, roster_line(labels[n], fitted[n])) for n in names)
 
 
 def render_listing(lines: Sequence[str]) -> str:

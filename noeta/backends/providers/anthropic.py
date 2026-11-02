@@ -121,16 +121,7 @@ PER_TURN_MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5",
                    "claude-fable-5-1")
 
 
-#: Effort sent with adaptive thinking when the request names none and the
-#: model's catalog row names no default (Claude Code's fallback).
-_DEFAULT_EFFORT = "high"
-
-
-def default_effort(model: str) -> str:
-    """The effort a request on ``model`` sends when it names none: the
-    catalog row's default, else Claude Code's ``high``."""
-    spec = models.find_spec(model)
-    return (spec.default_effort if spec is not None else None) or _DEFAULT_EFFORT
+default_effort = models.default_effort
 
 
 def per_turn_model(model: str) -> bool:

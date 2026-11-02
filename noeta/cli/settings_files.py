@@ -74,7 +74,14 @@ class FileSettings:
     #: file, but ``allow`` rules and ``additionalDirectories`` (which widen
     #: it) not from a project's files.
     sandbox_permissions: dict[str, Any] = field(default_factory=dict)
+    #: Claude Code's skill listing settings (``skillListingBudgetFraction``,
+    #: ``skillListingMaxDescChars``), the last file's of each.
+    skill_listing: dict[str, Any] = field(default_factory=dict)
 
+
+#: Claude Code's skill listing settings and the range each takes.
+SKILL_LISTING_KEYS = {"skillListingBudgetFraction": (0.0, 1.0),
+                      "skillListingMaxDescChars": (0.0, float("inf"))}
 
 #: Claude Code's ``--setting-sources`` names.
 SETTING_SOURCES = ("user", "project", "local")
@@ -238,6 +245,11 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
                                     if k in ("commit", "pr") and isinstance(v, str)})
         elif data.get("includeCoAuthoredBy") is False:
             out.attribution.update({"commit": "", "pr": ""})
+        for key, (low, high) in SKILL_LISTING_KEYS.items():
+            value = data.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                    and low < value <= high:
+                out.skill_listing[key] = value
         perms = data.get("permissions")
         if not isinstance(perms, dict):
             continue
