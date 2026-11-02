@@ -19,7 +19,7 @@ from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.state import NAME, PermState, state_of
 from noeta.toolkit import permission_rules as r
-from noeta.toolkit.local_env import env_platform, is_local
+from noeta.toolkit.local_env import env_home, env_platform, is_local
 from noeta.toolkit.notices import HANDBACK_REVIEW_KEY
 from noeta.toolkit.worktrees import git, repository_top
 
@@ -323,12 +323,7 @@ async def _home(env: ExecEnv, here: str) -> str:
     env or when it cannot be told)."""
     if is_local(env):
         return here
-    try:
-        out = await env.run(["sh", "-c", 'printf %s "$HOME"'], timeout=5, output_cap=4096)
-    except Exception:  # noqa: BLE001 — best-effort
-        return here
-    home = out.stdout.decode("utf-8", errors="replace").strip()
-    return home if out.exit_code == 0 and home.startswith("/") else here
+    return await env_home(env, here) or here
 
 
 def _platform(name: str) -> str:

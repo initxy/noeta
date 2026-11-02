@@ -278,7 +278,7 @@ async def test_the_recall_budget_counts_characters(h: Harness, tmp_path: Path) -
     tid = await h.start(a, goal="怎么缩进 this file")
     (record,) = await h.records(tid, "memory", "recalled")
     shown = (directory / "zh.md").read_text().strip()
-    assert record.data["bytes"] == len(shown) < len(shown.encode())
+    assert record.data["chars"] == len(shown) < len(shown.encode())
 
 
 def test_a_selector_reply_that_is_not_json_still_picks_listed_files() -> None:
@@ -548,3 +548,16 @@ async def test_a_sub_agent_recalls_nothing(tmp_path: Path) -> None:
     state.message_seqs.append(1)
     view = TaskView(state=state, complete=complete)
     assert await Memory(recall_model="small").reminders(view) == ()
+
+
+def test_a_recall_logged_with_its_former_bytes_key_still_counts() -> None:
+    """Recalls logged before the count's key was ``chars`` (``bytes``) fold
+    into the same count, and an erased one takes its share back off."""
+    ext = Memory()
+    state = ext.reduce(None, "recalled", {"paths": ["a.md"], "bytes": 10, "through": 1})
+    state = ext.reduce(state, "recalled", {"paths": ["b.md"], "chars": 5, "through": 2})
+    assert state["chars"] == 15
+    assert ext.reduce({"dir": None, "surfaced": [], "bytes": 7}, "recalled",
+                      {"paths": ["c.md"], "chars": 1, "through": 3})["chars"] == 8
+    erased = ext.reduce(state, "core.erased", {"seqs": [1]})
+    assert erased["chars"] == 5 and erased["surfaced"] == ["b.md"]

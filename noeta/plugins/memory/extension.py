@@ -229,7 +229,7 @@ class Memory(Extension):
     # ------------------------------------------------------------ state
 
     def initial_state(self) -> Any:
-        return {"dir": None, "surfaced": [], "bytes": 0}
+        return {"dir": None, "surfaced": [], "chars": 0}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         state = state or self.initial_state()
@@ -243,10 +243,9 @@ class Memory(Extension):
                 return {**state, "through": through,
                         "voided": [*(state.get("voided") or ()), through]}
             recent = [*(state.get("recent") or ()),
-                      {"through": through, "paths": data["paths"],
-                       "bytes": int(data.get("bytes") or 0)}]
+                      {"through": through, "paths": data["paths"], "chars": _chars(data)}]
             return {**state, "surfaced": [*state["surfaced"], *data["paths"]],
-                    "bytes": state["bytes"] + int(data.get("bytes") or 0),
+                    "chars": _chars(state) + _chars(data),
                     "through": through, "recent": recent[-ERASABLE_RECALLS:]}
         if kind == "checked":
             return {**state, "through": data["through"]}
@@ -257,7 +256,7 @@ class Memory(Extension):
             for recall in [r for r in state.get("recent") or () if r["through"] in seqs]:
                 gone = set(recall["paths"])
                 state = {**state, "surfaced": [p for p in state["surfaced"] if p not in gone],
-                         "bytes": max(0, state["bytes"] - recall["bytes"]),
+                         "chars": max(0, _chars(state) - _chars(recall)),
                          "recent": [r for r in state["recent"] if r is not recall],
                          "voided": [*(state.get("voided") or ()), recall["through"]]}
             return state
@@ -351,7 +350,7 @@ class Memory(Extension):
             return ()
         text, paths, used = found
         return (Reminder(text=text, kind="recalled", origin="memory",
-                         data={"paths": paths, "bytes": used, "through": through}),)
+                         data={"paths": paths, "chars": used, "through": through}),)
 
     def _drop_voided(self, view: TaskView) -> None:
         """Erase the recalls made for prompts a hook blocked: a hook listed
@@ -433,11 +432,10 @@ class Memory(Extension):
 
     async def _recall(self, view: TaskView, directory: str,
                       query: str) -> tuple[str, list[str], int] | None:
-        """The recalled text, the files attached and their characters (the
-        state's ``bytes``, its name from before it counted characters);
+        """The recalled text, the files attached and their characters;
         ``None`` when nothing is attached."""
         state = view.ext_state(self.name) or {}
-        if int(state.get("bytes") or 0) >= RECALL_TASK_CHARS:
+        if _chars(state) >= RECALL_TASK_CHARS:
             return None
         env = task_env(view.env, view.state.config)
         skip = {*(state.get("surfaced") or ()), *_read_files(view)}
@@ -473,7 +471,7 @@ class Memory(Extension):
                 _RECALL_WARNED.add(reason)
                 log.warning("memory: recall selector failed (%s); no memory recalled", reason)
             return None
-        budget = RECALL_TASK_CHARS - int(state.get("bytes") or 0)
+        budget = RECALL_TASK_CHARS - _chars(state)
         parts: list[str] = []
         paths: list[str] = []
         used = 0
@@ -492,3 +490,10 @@ class Memory(Extension):
         if not parts:
             return None
         return RECALL_HEAD + "\n\n" + "\n\n".join(parts), paths, used
+
+
+def _chars(entry: Mapping[str, Any]) -> int:
+    """The characters a recall record, a recall or the state counts:
+    ``chars``, or ``bytes``, its name in logs written before it counted
+    characters."""
+    return int(entry.get("chars", entry.get("bytes")) or 0)

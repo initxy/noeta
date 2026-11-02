@@ -33,12 +33,15 @@ import posixpath
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote, urlsplit
 
 from noeta.core.mcp_names import legacy_names, warn_legacy
 from noeta.toolkit.shell import parse_argv, subcommands
 from noeta.toolkit.shell_syntax import hides_effects, parse
+
+if TYPE_CHECKING:
+    from noeta.core.extension import TaskView
 
 __all__ = [
     "EDIT_TOOLS",
@@ -53,6 +56,7 @@ __all__ = [
     "parse_rule",
     "parse_rules",
     "path_pattern_matches",
+    "rule_inputs",
     "shell_rule_matches",
     "url_host",
 ]
@@ -421,3 +425,16 @@ def first_match(rules: Sequence[Rule], name: str, input: Mapping[str, Any],
         if match(rule, name, input, ctx, for_allow=for_allow):
             return rule
     return None
+
+
+async def rule_inputs(view: TaskView, name: str,
+                      input: Mapping[str, Any]) -> list[tuple[Mapping[str, Any], bool]]:
+    """Other inputs the called tool says rules also judge its call as
+    (``Tool.rule_inputs``: a ``Skill`` call under its skill's former name),
+    each with whether an allow rule may match it; ``[]`` when it says
+    nothing. Permission rules and hook ``if`` conditions both read them."""
+    tool = view.find_tool(name)
+    get = getattr(tool, "rule_inputs", None)
+    if get is None:
+        return []
+    return list(await get(input, view))

@@ -172,6 +172,16 @@ def test_only_comment_blocks_are_dropped() -> None:
         " after it\n<!-- never closed")
 
 
+def test_a_longer_fence_is_closed_only_by_one_as_long() -> None:
+    """A block opened with four backticks runs past a three-backtick line
+    (CommonMark's): a comment inside it stays, one after it goes."""
+    text = ("````\n```\n<!-- inside -->\n```\n````\n<!-- after -->\nUse tabs.\n"
+            "~~~\n``` not a close\n<!-- tilde -->\n~~~\n")
+    assert clean(text)[0] == (
+        "````\n```\n<!-- inside -->\n```\n````\nUse tabs.\n"
+        "~~~\n``` not a close\n<!-- tilde -->\n~~~")
+
+
 async def test_an_import_through_a_link_out_of_the_repository_is_not_read(
         h: Harness, tmp_path: Path) -> None:
     secret = tmp_path / "secret.md"
@@ -570,3 +580,41 @@ async def test_the_memory_index_is_read_again_with_the_next_message(
     h.provider.add(reply("ok"))
     await h.say(a, tid, "index gone")
     assert REMOVED_LINE.format(path=mem / "MEMORY.md") in [m.text for m in h.last_messages()]
+
+
+async def test_a_file_that_cannot_be_read_now_is_not_called_gone(h: Harness) -> None:
+    """Only a file that is not there is named as gone: a read that fails (a
+    remote env's hiccup) or a file left with nothing to show keeps what was
+    shown, with no note."""
+    from noeta.backends.execenvs.local import LocalExecEnv
+    from noeta.plugins.instructions.extension import REREAD_HEAD
+
+    failing: set[str] = set()
+
+    class Flaky(LocalExecEnv):
+        async def read_bytes(self, path: str) -> bytes:
+            if path in failing:
+                raise OSError("connection reset")
+            return await super().read_bytes(path)
+
+    h.env_for = lambda _s: Flaky(str(h.work))
+    (h.work / "NOETA.md").write_text("Use tabs.\n")
+    (h.work / "NOETA.local.md").write_text("Mine.\n")
+    a = agent()
+    h.provider.add(*(reply("ok") for _ in range(4)))
+    tid = await h.start(a)
+
+    def notes() -> list[str]:
+        return [m.text for m in h.last_messages()
+                if m.text.startswith(REREAD_HEAD) or "is gone" in m.text]
+
+    failing.add(str(h.work / "NOETA.md"))
+    await h.say(a, tid, "a hiccup")
+    assert notes() == []
+    failing.clear()
+    (h.work / "NOETA.local.md").write_text("<!-- nothing here yet -->\n")
+    await h.say(a, tid, "emptied")
+    assert notes() == []
+    (h.work / "NOETA.local.md").unlink()
+    await h.say(a, tid, "removed")
+    assert [n for n in notes() if "is gone" in n] != []

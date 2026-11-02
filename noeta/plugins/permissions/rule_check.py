@@ -66,12 +66,14 @@ class RuleCheck:
         ctx = r.RuleContext(root=scope.cwd, home=scope.home, cwd=scope.cwd)
         # A file tool reaches where a symlink points: a deny or ask rule on
         # either path applies.
-        seen = [args]
+        seen: list[Mapping[str, Any]] = [args]
         if name in r.READ_TOOLS or name in r.EDIT_TOOLS:
             target = scope.absolute(_path(args) or scope.cwd)
             real = await real_path(view, target)
             if real != target:
                 seen.append(_with_path(args, real))
+        aliases = await r.rule_inputs(view, name, args)
+        seen += [a for a, _allow in aliases]
         denied = next((m for a in seen if (m := r.first_match(self.deny_rules, name, a, ctx))
                        is not None), None)
         if denied is not None:
@@ -86,11 +88,13 @@ class RuleCheck:
         classifying = mode == "auto" or (mode == "plan" and plan_classifier)
         if classifying:
             allow_rules = tuple(x for x in allow_rules if not p.bypasses_classifier(x))
-        found = await self._needs(view, call, mode, scope, ctx, allow_rules)
+        found = await self._needs(view, call, mode, scope, ctx, allow_rules,
+                                  [a for a, allow in aliases if allow])
         return in_mode(mode, found, name, plan_classifier=plan_classifier)
 
     async def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
-                     ctx: r.RuleContext, allow_rules: Sequence[r.Rule]) -> Decision:
+                     ctx: r.RuleContext, allow_rules: Sequence[r.Rule],
+                     aliases: Sequence[Mapping[str, Any]] = ()) -> Decision:
         name, args = call.name, call.input
         if name == pl.EXIT_PLAN_MODE:
             return Decision("allow")
@@ -101,7 +105,8 @@ class RuleCheck:
             if mode in ("auto", "plan"):
                 return Decision("allow")
             return Decision("ask", w.ASK_ENTER_PLAN, firm=True, why="plan")
-        allowed = r.first_match(allow_rules, name, args, ctx, for_allow=True) is not None
+        allowed = any(r.first_match(allow_rules, name, a, ctx, for_allow=True) is not None
+                      for a in (args, *aliases))
         if name in r.READ_TOOLS:
             return await self._read(view, name, args, scope, ctx, allow_rules, allowed)
         if name in r.EDIT_TOOLS:
@@ -249,3 +254,4 @@ async def spilled_file(view: TaskView, path: str, real: str) -> bool:
         return False
     root = posixpath.normpath(root)
     return _under(path, root) and _under(real, await real_path(view, root))
+

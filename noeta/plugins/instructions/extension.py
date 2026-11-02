@@ -388,7 +388,11 @@ class Instructions(Extension):
             text = current[path].text if path in current \
                 else await _reread(reader.env_for(e["kind"]), path)
             if text is None:
-                removed.append(path)
+                # Gone only when it is not there: a read that failed (a
+                # remote env's hiccup) or a file left with nothing to show
+                # keeps what was shown.
+                if await _absent(reader.env_for(e["kind"]), path):
+                    removed.append(path)
                 continue
             if text_digest(text) == before:
                 continue
@@ -502,6 +506,14 @@ async def _reread(env: ExecEnv, path: str) -> str | None:
         return None
     text, _globs = clean(raw)
     return text or None
+
+
+async def _absent(env: ExecEnv, path: str) -> bool:
+    """Whether ``path`` is surely not there (a failed look says no)."""
+    try:
+        return await env.stat(path) is None
+    except Exception:  # noqa: BLE001 — cannot tell: not gone
+        return False
 
 
 def _touched(view: TaskView, event: Any) -> str | None:
