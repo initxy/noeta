@@ -52,7 +52,7 @@ Reducer = Callable[[Any, str, Any], Any]
 #: value removes the key.
 CONFIG_SIGNAL = "config"
 CHANGEABLE_CONFIG = ("model", "effort", "max_turns", "output_schema", "interactive",
-                     "permission_prompt_tool", "client_hooks", "ultracode")
+                     "permission_prompt_tool", "client_hooks", "ultracode", "max_budget_usd")
 
 
 @dataclass

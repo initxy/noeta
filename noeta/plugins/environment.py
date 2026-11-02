@@ -55,6 +55,7 @@ from noeta.toolkit.deltas import AMBIENT_NOTE, changed
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.shell import harden_git
 from noeta.toolkit.ultrathink import ultrathink_effort, ultrathink_reminders
+from noeta.toolkit.usd_budget import BUDGET_KEY, usd_budget_reminders
 
 #: Git status longer than this many characters is cut there (Claude Code's
 #: cut), and the note below follows.
@@ -553,7 +554,10 @@ class Environment(Extension):
 
     def inherit(self, state: TaskState) -> Mapping[str, Any]:
         zone = valid_zone(state.config.get("timezone"))
-        return {"timezone": zone} if zone else {}
+        out: dict[str, Any] = {"timezone": zone} if zone else {}
+        if state.config.get(BUDGET_KEY) is not None:
+            out[BUDGET_KEY] = state.config[BUDGET_KEY]  # the conversation's, told to all
+        return out
 
     async def on_start(self, view: TaskView) -> None:
         if view.ext_state(self.name):
@@ -626,6 +630,7 @@ class Environment(Extension):
             left = max(self.token_budget - (spent - base), 0)
             out.append(Reminder(text=budget_note(left), kind="budget", data={"base": base},
                                 role="system", order=ORDER_BUDGET))
+        out += await usd_budget_reminders(view, ORDER_BUDGET + 1)
         out += ultrathink_reminders(view)
         return out
 

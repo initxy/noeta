@@ -132,3 +132,24 @@ async def test_the_ultracode_switch_is_told_on_again_and_off(store: SqliteStore)
     await client.send(tid, "off now")
     await runtime().run_until_idle()
     assert told(ULTRACODE_EVERY + 1) == [ULTRACODE_OFF]
+
+
+async def test_a_usd_budget_is_told_before_every_call(store: SqliteStore) -> None:
+    """Claude Code's ``--max-budget-usd`` note: the conversation's cost so
+    far, the budget and what is left, before each model call."""
+    from noeta.core.types import Usage
+    from noeta.toolkit.usd_budget import budget_text
+
+    agent = Agent(name="a", model="claude-opus-5-5", tools=[Probe()],
+                  extensions=[Environment(today=lambda: "2026-11-01")])
+    used = Usage(uncached=1000, output=500)  # $0.014 on Opus 5.5
+    client, tid, provider, runtime = await _session(
+        store, agent, [reply("", ("Probe", {}), usage=used), reply("done", usage=used)],
+        config={"max_budget_usd": 2})
+    await client.send(tid, "go")
+    await runtime().run_until_idle()
+    first, second = provider.requests
+    assert budget_text(0, 2) == "USD budget: $0/$2; $2 remaining"
+    assert budget_text(0, 2) in [m.text for m in first.messages if m.role == "system"]
+    note = [m.text for m in second.messages if m.role == "system"][-1]
+    assert note.endswith(budget_text(0.014, 2))
