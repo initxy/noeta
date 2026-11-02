@@ -296,15 +296,26 @@ async def test_a_cross_server_name_clash_drops_the_second_server(
 # ---------------------------------------------------------------- naming
 
 
-def test_tool_names_are_provider_safe_and_stable() -> None:
+def test_tool_names_keep_case_and_length() -> None:
+    # Claude Code's: unsafe characters become "_", case kept, nothing cut.
     assert make_tool_name("gh", "list.issues") == "mcp__gh__list_issues"
-    long = make_tool_name("gh", "x" * 80)
-    assert len(long) == 64 and long.startswith("mcp__gh__x")
-    assert long == make_tool_name("gh", "x" * 80)
+    assert make_tool_name("GitHub", "List-Issues") == "mcp__GitHub__List-Issues"
+    assert make_tool_name("gh", "x" * 80) == "mcp__gh__" + "x" * 80
     names = map_server_names("gh", ["a.b", "a_b", "a-b"])
     assert names["a_b"] == "mcp__gh__a_b"  # the already-safe one keeps its name
     assert names["a.b"] != names["a_b"] and names["a.b"].startswith("mcp__gh__a_b_")
     assert len(set(names.values())) == 3
+
+
+def test_a_tool_name_over_128_characters_is_not_offered(
+        caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.plugins.mcp.config import McpServer
+    from noeta.plugins.mcp.extension import _server_entry
+    fits = "x" * (128 - len("mcp__s__"))
+    entry = _server_entry(McpServer(alias="s", command=["x"]),
+                          [{"name": fits}, {"name": fits + "y"}, {"name": "ok"}])
+    assert [t["name"] for t in entry["tools"]] == ["mcp__s__ok", "mcp__s__" + fits]
+    assert "129 characters, the limit is 128" in caplog.text
 
 
 def test_descriptions_are_the_servers_own_capped(monkeypatch: pytest.MonkeyPatch) -> None:

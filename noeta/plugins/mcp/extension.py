@@ -67,6 +67,7 @@ from noeta.core.types import Message
 from noeta.plugins.mcp.admin import McpAdmin
 from noeta.plugins.mcp.client import McpClient, RequestContext
 from noeta.plugins.mcp.config import (
+    NAME_MAX,
     McpAuthRequired,
     McpConfigError,
     McpError,
@@ -681,6 +682,10 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]],
         name = names[remote]
         if name in tools:
             continue  # the same raw name advertised twice: keep the first
+        if len(name) > NAME_MAX:
+            log.warning("mcp: %s: tool %r is not offered: its name has %d characters, the "
+                        "limit is %d", server.alias, name, len(name), NAME_MAX)
+            continue
         schema = r.get("inputSchema")
         if not isinstance(schema, dict):
             schema = {"type": "object", "additionalProperties": True}

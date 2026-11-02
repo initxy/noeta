@@ -55,8 +55,9 @@ _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 def alias_for(name: str) -> str:
-    """A server name as an alias (``^[a-z0-9_-]{1,32}$``)."""
-    return "".join(c if c.isalnum() or c in "_-" else "_" for c in name.lower())[:32] or "_"
+    """A server name as an alias: every character outside ``[A-Za-z0-9_-]``
+    replaced by ``_``, case kept, nothing cut (Claude Code's)."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", name) or "_"
 
 
 def _expand(value: str) -> str:

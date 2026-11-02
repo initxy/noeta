@@ -53,7 +53,7 @@ def test_the_claude_code_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "broken": "nope",
     }})
     http, stdio, sse, stream, ws = read_servers([f])
-    assert http == McpServer(alias="git_hub", url="https://x/mcp",
+    assert http == McpServer(alias="Git_Hub", url="https://x/mcp",
                              headers={"Authorization": "Bearer t0k"})
     assert http.transport == "http"
     assert stdio == McpServer(alias="files", command=["npx", "-y", "srv", ""], env={"K": "t0k"})
@@ -67,7 +67,8 @@ def test_the_claude_code_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert read_servers([tmp_path / "missing.json"]) == []
     (tmp_path / "junk.json").write_text("{")
     assert read_servers([tmp_path / "junk.json"]) == []
-    assert alias_for("") == "_" and len(alias_for("x" * 50)) == 32
+    assert alias_for("") == "_" and alias_for("x" * 50) == "x" * 50
+    assert alias_for("My Server.v2") == "My_Server_v2"
 
 
 def test_a_server_timeout_in_milliseconds(tmp_path: Path) -> None:

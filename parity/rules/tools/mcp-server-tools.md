@@ -17,7 +17,7 @@ How Claude Code presents a tool that an MCP server advertises. noeta equivalent:
 
 | id | rule | noeta today |
 |---|---|---|
-| `tool.mcp.1` | The tool name is `mcp__<server>__<tool>`, `<server>` being the configured server name. | covered |
+| `tool.mcp.1` | The tool name is `mcp__<server>__<tool>`, `<server>` being the configured server name and `<tool>` the server's tool name, each with every character outside `[A-Za-z0-9_-]` replaced by `_`, case kept, nothing cut; a tool whose full name passes 128 characters is not sent (the server's log says so, its other tools stay). (bundle) | covered (`noeta/plugins/mcp/config.py` `make_tool_name`, `settings.py` `alias_for`, `extension.py` `_server_entry`; two raw names that normalize alike get a hash suffix; an OpenAI-family adapter maps a name over 64 characters on the wire and back) |
 | `tool.mcp.2` | Every MCP server tool is **deferred by default**: its name appears in the environment message's deferred-tool list and it is not in `tools` until loaded with `ToolSearch` (`select:` form). | covered |
 | `tool.mcp.3` | Once loaded, the tool is sent with `defer_loading: true` and placed after all built-in tools, after `DeferredToolPlaceholder` (MCP tools come last). | covered |
 | `tool.mcp.4` | A loaded tool stays in `tools` for the rest of the conversation, including after compaction and after `--continue`. | covered |

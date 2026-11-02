@@ -29,10 +29,12 @@ from noeta.backends.providers._common import (
     guard_vision,
     image_data_url,
     is_host_injected,
+    restore_tool_names,
     tool_result_images,
     tool_result_text,
     translate_http_error,
     transport_error,
+    wire_tool_name,
 )
 from noeta.backends.providers._openai_compat_stream import (
     FAMILY,
@@ -182,7 +184,8 @@ class OpenAICompatProvider:
         # omits ``[DONE]`` but sent a ``finish_reason`` finished normally.
         if not accumulator.saw_done and not accumulator.finished:
             raise Transient("OpenAI stream ended without [DONE] or a finish_reason")
-        return parse_chat_payload(accumulator.terminal_payload(), request.model)
+        return restore_tool_names(
+            parse_chat_payload(accumulator.terminal_payload(), request.model), request)
 
     # ------------------------------------------------------------------
     # Outbound translation
@@ -204,7 +207,7 @@ class OpenAICompatProvider:
                 {
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name": wire_tool_name(tool.name),
                         "description": tool.description,
                         "parameters": tool.input_schema,
                     },
@@ -352,7 +355,7 @@ def _assistant_to_wire(
                     "id": block.id,
                     "type": "function",
                     "function": {
-                        "name": block.name,
+                        "name": wire_tool_name(block.name),
                         "arguments": encode_tool_arguments(block.input),
                     },
                 }
