@@ -16,8 +16,8 @@ All notable changes to Noeta are documented here. The format is based on
     - Models: the default `max_tokens` is the model's catalog default, not its ceiling (Opus 5,
       Sonnet 5 and Opus 4.8 128K → 64K; Sonnet 4.6 64K → 32K); a reasoning model whose row names
       no `default_effort` is asked for `high`, not `medium`; Sonnet 4.6's window is 200K, not 1M
-      (compaction starts near 187K; a host using the 1M beta lowers nothing and cannot raise it:
-      set `NOETA_AUTO_COMPACT_WINDOW` or register its own model id); Fable 5.1's ceiling is 128K,
+      (Claude Code's without its 1M option; compaction starts near 187K, and noeta has no 1M
+      option for it); Fable 5.1's ceiling is 128K,
       which a `compaction_model` on it now gets as `max_tokens`. Non-Claude models no longer get
       the quiet nudge. `WebSearch` without `mode` runs `extended`.
     - Hooks: a `UserPromptSubmit` hook's `continue: false` ends the turn as done with the prompt
