@@ -24,6 +24,38 @@ All notable changes to Noeta are documented here. The format is based on
       kept (it failed the turn); a `PostToolBatch` block ends the turn (it was context for the
       model).
     - Task config: `ultracode` and `max_budget_usd` are new changeable keys.
+    - MCP tool names keep the server's case and are no longer cut: a server `GitHub` gives
+      `mcp__GitHub__delete_repo` where it gave `mcp__github__delete_repo`; a name over 64
+      characters is no longer cut and hashed (over 128 the tool is not offered). Settings that name
+      a tool by its old name keep working, each match logged once: permission rules and "always
+      allow" grants, `allowed_tools` / `disallowed_tools`, agent tool lists, hook matchers and
+      `mcp_tool` hooks, `--permission-prompt-tool`, `NOETA_TERMINAL_MCP_TOOLS`, `ToolSearch
+      select:`. Migration: rewrite them with the new names (the warning names each).
+    - Skills are named by their directory, not their frontmatter `name`. The former name still
+      answers `Skill(...)` permission rules (deny and ask always; allow while no other skill had
+      that name), hook `if` conditions, `Skills(preload=...)` and an agent file's `skills:` (a
+      warning names the new name). Only `<skills dir>/<name>/SKILL.md` is a skill; a deeper one is
+      skipped with a warning. The user's skill directories win a name over the project's.
+      Migration: rename rules, hook conditions and preloads to the directory name; move deeper
+      skills up one level; rename a project skill that shares a user skill's name.
+    - Plan mode: a plan begun in auto mode keeps the auto-mode classifier for what plan mode would
+      ask (`useAutoModeDuringPlan`, default on; plugin argument `auto_during_plan`); file writes
+      stay with the person, and a shell command plan mode would ask about runs on the classifier's
+      word. A plan begun in any other mode asks the person as before, with no auto-mode betas or
+      classifier calls. With `auto_during_plan=False`, entering plan mode from auto mode ends auto
+      mode.
+    - `Permissions(auto_mode=...)`: each of `allow`, `soft_deny`, `hard_deny` and `environment`
+      replaces the built-in text of its classifier section, as Claude Code's `autoMode` does. A
+      list written the old way (`soft_deny: ["never touch prod"]`) drops the built-in blocks such
+      as force push and `rm -rf`; a `hard_deny` / `soft_deny` list without `"$defaults"` is logged
+      at load. Migration: put `"$defaults"` where the built-in rules go (`["$defaults", "never
+      touch prod"]`). A custom classifier prompt's `<<hard_deny_extra>>`, `<<soft_deny_extra>>`,
+      `<<allow_extra>>` and single `<<environment>>` slot are no longer filled: wrap each section's
+      built-in text in `<<hard_deny>>…<</hard_deny>>`, `<<soft_deny>>…<</soft_deny>>`,
+      `<<allow>>…<</allow>>`, `<<environment>>…<</environment>>` (`<<deny_rules>>` is unchanged).
+    - A new core record `spent` (a compaction's summarize calls) counts in a task's usage; a worker
+      running an older version hands a task whose log holds one to a newer worker (`NewerRecord`).
+      Migration: upgrade every worker of a store together.
     - Public names: `noeta.toolkit.side_requests.DEFAULT_EFFORT` is gone (use
       `noeta.core.models.default_effort(model)`); `MEMORY_INDEX_MAX_BYTES` → `MEMORY_INDEX_MAX_CHARS`,
       `INDEX_MAX_BYTES` → `INDEX_MAX_CHARS`, `RECALL_TASK_BYTES` → `RECALL_TASK_CHARS` (characters,
@@ -104,9 +136,7 @@ All notable changes to Noeta are documented here. The format is based on
     tools, images as `[image]`, no cache marks) when the first errs or brings no summary; after a
     compaction the task's plan file and a status line per running background agent, shell or
     monitor are given again.
-  - Sub-agents, plan mode, classifier: plan mode uses the auto-mode classifier for what it would
-    ask (`useAutoModeDuringPlan`, default on; plugin argument `auto_during_plan`), file writes stay
-    with the person; a flagged hand-back is delivered under a warning; an agent offered
+  - Sub-agents, plan mode, classifier: a flagged hand-back is delivered under a warning; an agent offered
     `SubagentHandback` that ends without it delivers no report; the completion notice has a
     `<worktree>` element, says who stopped the agent, uses the step-limit wording and omits an
     empty `<result>`, and `subagent_tokens` is the newest input plus all output (new
@@ -116,17 +146,32 @@ All notable changes to Noeta are documented here. The format is based on
     step and a read-only closing reminder. A classifier transcript too long for its window falls
     back to asking; a stage-2 error after a stage-1 block is a counted block; classifier requests
     carry the main loop's session id.
-  - **Breaking:** `Permissions(auto_mode=...)` lists replace the built-in text of their classifier
-    section, as Claude Code's `autoMode` does; `"$defaults"` keeps the built-in rules at that place.
   - Classifier: `AskUserQuestion` calls are shown in Claude Code's form (header, multiSelect,
     numbered options with description and preview); the `safeguards` context names Claude Code's
     eleven settings sources, the exec env's platform, home, git root and branch, and
-    `case_insensitive_paths` only on Windows. With `auto_during_plan=False`, entering plan mode
-    from auto mode ends auto mode.
+    `case_insensitive_paths` only on Windows; a sub-agent can no longer set the hand-back review
+    key itself.
   - Hooks: a `UserPromptSubmit` hook's `continue: false` keeps the prompt, tells the model the
     operation was stopped by the hook and ends the turn without a model call (it failed the turn);
     a background `SessionStart` answer that repeats the latest `SessionStart` output is left out.
     `TaskStop` on a background agent: its notice says the caller stopped it.
+  - Review fixes: hook output is capped only where it reaches the model (a long `PreCompact`
+    output reaches the summary request whole; a failed save cuts inline; background hook failures
+    are logged); the usage a host reads (`/cost`, the result message, HTTP `usage`,
+    `TaskState.usage`) and the USD budget note include compaction calls, failed ones too, and the
+    budget reads an ended task's log once; the `@agent-<type>` and `ultrathink` notes are made
+    once per prompt; a Monitor's output file stays within `log_max_bytes`; `Shell(background=False)`
+    offers `TaskStop` too; a Workflow run stopped with `TaskStop` tells only the person; a skill's
+    `model` / `effort` end with the turn that loaded it, whoever opens the next; a skill's `model`
+    of another provider family (or unknown to the catalog) is ignored with a warning; a
+    `.noeta/commands` file never takes a plugin skill's or a scoped skill's name; an instruction
+    file that cannot be read for a moment is not called gone; the walk up for skill folders stops
+    at the exec env's home and is kept per exec env; `skillListingMaxDescChars` must be a whole
+    number; a four-backtick fence is not closed by three; on the Anthropic wire a `tool_reference`
+    names only a tool the request offers (an old MCP name as the current one); on OpenAI-family
+    wires a name over 64 characters is written short in the request's text too; MCP tools dropped
+    for names over 128 characters are named by a fruitless `ToolSearch`. `make parity` reports a
+    tool list missing from its data and compares cache marks and description changes per request.
 - **Context audit closure: what the model sees follows Claude Code 2.1.312 where it differed
   without a written reason** (spec `2026-11-02-context-audit-closure`; kept differences are rows
   in `parity/deviations.md`, which now has a pi / dsh column and no "Not yet matched" section).
