@@ -75,6 +75,8 @@ async def test_stage_one_allows_and_read_only_work_skips_it(store: SqliteStore,
     assert texts[-3] == '{"Bash":"pytest -q"}\n'
     assert '{"user":"go"}' in texts[1] and '{"Bash":"ls && cat a.txt"}' in texts[1]
     assert texts[-1] == c.STAGE1_INSTRUCTION
+    # The main loop's session in metadata.user_id, as Claude Code's.
+    assert request.root_id == tid
     recorded = [e.data for e in await events(client, tid)
                 if isinstance(e, ExtensionRecorded) and e.kind == "classified"]
     assert [d["decision"] for d in recorded] == ["allow"]

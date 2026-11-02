@@ -140,13 +140,14 @@ class Classifier:
         model, fast = self._model(view, st)
         demoted = False
         trusted = self.trusted(view)
+        root = view.state.root_id or view.task_id or None
 
         async def stage(n: int) -> str:
             nonlocal model, fast, demoted
             assert view.complete is not None
             request = c.classifier_request(model=model, prompt=prompt, instructions=instructions,
                                            transcript=transcript, stage=n, fast=fast,
-                                           trusted=trusted)
+                                           trusted=trusted, root_id=root)
             try:
                 response = await view.complete(request)
             except ContextOverflow:
@@ -158,7 +159,7 @@ class Classifier:
                 model, fast, demoted = main, False, True
                 response = await view.complete(c.classifier_request(
                     model=model, prompt=prompt, instructions=instructions,
-                    transcript=transcript, stage=n, fast=False, trusted=trusted))
+                    transcript=transcript, stage=n, fast=False, trusted=trusted, root_id=root))
             return response.message.text
 
         first = c.parse_stage1(await stage(1))
