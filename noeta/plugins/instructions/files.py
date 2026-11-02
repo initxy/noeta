@@ -9,10 +9,10 @@ their own are dropped (Claude Code's markdown lexer: a comment inside a
 paragraph, inline code, a code block or a list item stays).
 ``@path`` mentions outside code import that file right after the one naming
 it, with the same kind, up to :data:`IMPORT_DEPTH_MAX` levels deep; a path is
-read at most once per discovery. Imports from repository files must stay
-inside the repository directory they were found in or the working directory
-(Claude Code asks before following one outside; noeta has no such prompt and
-skips it).
+read at most once per discovery. An import from a project or local file must
+stay, links resolved, inside the working directory or the folder of the file
+that began the import chain (Claude Code asks before following one outside
+the working directory; noeta has no such prompt and skips it).
 
 Everything is read through an ExecEnv: the task's for repository files, a
 local one for the user's and the machine's own directories.
