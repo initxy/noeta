@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
@@ -961,3 +963,60 @@ async def test_a_prompt_hooks_continue_false_keeps_the_prompt_and_tells_the_mode
     assert texts[:2] == ["deploy it", "Operation stopped by hook: Freeze is on."]
     assert texts[2:4] == ["try again", "Operation stopped by hook"]
     assert texts[-1] == "now"
+
+
+async def test_a_long_pre_compact_output_reaches_the_summary_request_whole(
+        tmp_path: Path) -> None:
+    # The summary request has no tools: a saved file and a preview would lose
+    # the instructions (Claude Code joins PreCompact output whole).
+    long = "Keep every file name. " * 600
+    s = Setup(tmp_path, {"PreCompact": hook("pre")}, [reply("first"), reply("summary")],
+              answers={"pre": ok(long)}, extensions=(Compaction(auto=False),))
+    spill = tmp_path / "spill"
+
+    def runtime() -> Runtime:
+        return Runtime(store=s.store, agents={"a": s.agent}, provider_for=lambda _m: s.provider,
+                       env_for=lambda _s: LocalExecEnv(str(s.work)), sleep=_no_sleep,
+                       spill_root=str(spill))
+
+    s.runtime = runtime  # type: ignore[method-assign]
+    await s.start()
+    await s.send(command_text(""))
+    assert long.strip() in s.provider.requests[1].messages[-1].text
+    assert not list(spill.rglob("*.txt"))
+
+
+class _BrokenEnv(LocalExecEnv):
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        raise RuntimeError("the remote env is gone")
+
+
+async def test_hook_output_that_cannot_be_saved_is_cut_inline(tmp_path: Path) -> None:
+    long = "y" * 12_000
+    s = Setup(tmp_path, {"UserPromptSubmit": hook("ups")}, [reply("ok")],
+              answers={"ups": specific("UserPromptSubmit", additionalContext=long)})
+
+    def runtime() -> Runtime:
+        return Runtime(store=s.store, agents={"a": s.agent}, provider_for=lambda _m: s.provider,
+                       env_for=lambda _s: _BrokenEnv(str(s.work)), sleep=_no_sleep,
+                       spill_root=str(tmp_path / "spill"))
+
+    s.runtime = runtime  # type: ignore[method-assign]
+    await s.start()
+    [text] = s.system_texts(0)
+    assert "<truncated-output>" in text and len(text) < 11_000
+    assert [e for e in await s.events() if isinstance(e, TaskEnded)] == []
+
+
+async def test_a_failing_background_hook_is_logged(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    s = Setup(tmp_path, {}, [])
+
+    async def broken() -> None:
+        raise RuntimeError("post failed")
+
+    with caplog.at_level(logging.ERROR, logger="noeta.hooks"):
+        s.hooks._d.spawn(broken())
+        await asyncio.sleep(0.01)
+    assert "a background hook failed" in caplog.text
+    assert not s.hooks._d._background
