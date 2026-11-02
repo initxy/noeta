@@ -9,6 +9,104 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Context re-audit closure: a second, independent audit's differences from Claude Code
+  2.1.312 are matched or written down** (spec `2026-11-02-context-reaudit-closure`; kept
+  differences are rows in `parity/deviations.md`).
+  - Parity: `make parity` compares each request's tool list in order, and a deferred-tool list
+    sent by only one side (it compared only a session's union of tools before).
+  - Models: Claude requests send Claude Code's per-model default `max_tokens` and effort (for
+    example Sonnet 4.6 32,000 / `high`), also on side requests (title, plan name, digest); every
+    Claude row has a knowledge cutoff; Sonnet 4.6's window is 200K. New `ModelSpec`
+    `default_output_tokens`, `default_effort` and `models.default_effort`. The Fable 5.1 identity
+    and Haiku 5.5 early-stopping paragraphs; the quiet nudge only for Opus 5.5, Sonnet 5.5 and
+    Fable 5.1; betas a request adds go in Claude Code's order.
+  - Prompt and environment: the "# Session-specific guidance" skill line only with skills and the
+    `Skill` tool; the model line uses the short name; the Shell line reads `bash (login shell:
+    zsh)`; main-branch fallback `origin/main`, `origin/master`, `main`; the git status is trimmed.
+    New notes Claude Code also sends: a model switch, told before the next call; linked-worktree and
+    shared-stash lines; additional working directories; "# Environment update" for repository,
+    worktree and directory changes; the `language` setting; `attribution.commit` / `attribution.pr`
+    and `includeCoAuthoredBy`. MCP server instructions follow the agent list.
+  - Reminders and modes: no empty-reply nudge after any `StructuredOutput` call or a tool in
+    `NOETA_TERMINAL_MCP_TOOLS`; `ultrathink` (note, and `xhigh` for an interactive turn on a
+    reasoning model) and `ultracode` (keyword note, task config `ultracode`); a USD budget note
+    before each call with `--max-budget-usd` (task config `max_budget_usd`); `@agent-<type>`
+    mentions; `criticalSystemReminder_EXPERIMENTAL` in `--agents` definitions; an @-mentioned file
+    already read and unchanged attaches nothing. Mode notes: the auto-mode shell-first note is
+    sent again only after auto mode was left or a compaction (none in `bypassPermissions`, a
+    deviation measured by the eval); an exit note when
+    leaving auto mode; the plan-exit note on any way out of plan mode; none for agents without
+    `Bash` plus `Edit`/`Write`. Two mode switches in one step both count.
+  - Hooks: plain stdout of `SessionStart` / `UserPromptSubmit` is "hook success"; `continue: false`
+    is told to the model and its stop is posted with the hook's records; a `PostToolBatch` block
+    ends the turn; `async` / `asyncRewake` output reaches the model through the task's inbox; hook
+    text over 10,000 characters is saved to a file with a preview.
+  - Shell: a background `grep`/`rg`/`find`/`diff`/`test`/`git diff`/`git grep` exiting 1 ends
+    `completed` with the meaning in its summary; a background command silent for 45 s behind a
+    prompt-like line brings one notice; a Monitor's stderr goes to its output file and the end
+    notice names it; `TaskStop` also stops the task's background agents and Workflow runs; the
+    sandbox is described in a `sandbox_instructions` note (again when it changes, after a
+    compaction, and once when it goes off), not in `Bash`'s description; outside `auto` and
+    `bypassPermissions`, `Bash`'s description steers `cat`/`head`/`tail`/`sed`/`awk`/`echo` to the
+    dedicated tools (decided once per task). A Workflow end notice names a dynamic workflow, gives
+    the call that resumes a failed or stopped run (or re-runs a completed one), lists failed
+    agents and reports agent count, tokens, tool uses and duration.
+  - Tools: `DeferredToolPlaceholder` is always second to last. MCP tool names keep case and are not
+    cut (a name over 128 characters is not offered; OpenAI-family adapters shorten names over 64 on
+    the wire and map calls back). Tool search uses search hints (built-in, and MCP
+    `_meta["anthropic/searchHint"]`) and Claude Code's whole-name scoring; a fruitless search names
+    the MCP servers that are down. Per-tool `_meta["anthropic/alwaysLoad"]` and
+    `_meta.ui.visibility` are honoured; a server's `alwaysLoad: false` defers every tool.
+    `WebSearch` `mode` is optional (default `extended`) and its result uses Claude Code's frame;
+    `ReadMcpResourceDirTool` uses Claude Code's result shape; `SendMessage` `to` is one line and
+    `message` defaults to `""`.
+  - Skills: a skill is named by its directory (its frontmatter `name` shown beside it), only
+    `<dir>/SKILL.md` one level down, described by its first line when it has no description, and
+    loaded with broken frontmatter ignored. Skills also come from the folders up to the repository
+    root, the managed directory, the additional directories, `.noeta/commands` /
+    `~/.noeta/commands` and a Claude Code plugin's commands; the first of a name wins (the user's
+    beats the project's); a nested `.noeta/skills` wins over `.agents/skills`. Frontmatter
+    `user-invocable`, and `model` / `effort` for the rest of the turn. Bodies fill in
+    `${CLAUDE_SESSION_ID}`, `${CLAUDE_EFFORT}`, a plugin's `${CLAUDE_PLUGIN_ROOT}`,
+    `${CLAUDE_PLUGIN_DATA}` and `${user_config.*}`. Later listings fit only new skills, ranked;
+    after a compaction the listing is rebuilt (leaving out skills a kept listing still shows) and a
+    skill given again is its text from when it loaded; usage counts once a minute per skill.
+    Loading `verify` or `code-review` looks for scoped skill folders by git's changed files. New
+    settings `skillListingBudgetFraction`, `skillListingMaxDescChars`,
+    `NOETA_SLASH_COMMAND_TOOL_CHAR_BUDGET`. `NotebookEdit` no longer finds skills.
+  - Memory and instruction files: `MEMORY.md` (25,000) and the task's recall budget (61,440)
+    count characters, not bytes; only HTML comments standing as blocks are dropped; a nested
+    file's header is its path; with each new message an instruction file that appeared is shown
+    and one that is gone is named.
+  - Compaction: a failed automatic compaction no longer ends the turn (the request goes out
+    uncompacted; after three failures in a row automatic compaction is off for the task); a
+    fallback summarize call (plain prompt, `Read`, with tool search also `ToolSearch` and the MCP
+    tools, images as `[image]`, no cache marks) when the first errs or brings no summary; after a
+    compaction the task's plan file and a status line per running background agent, shell or
+    monitor are given again.
+  - Sub-agents, plan mode, classifier: plan mode uses the auto-mode classifier for what it would
+    ask (`useAutoModeDuringPlan`, default on; plugin argument `auto_during_plan`), file writes stay
+    with the person; a flagged hand-back is delivered under a warning; an agent offered
+    `SubagentHandback` that ends without it delivers no report; the completion notice has a
+    `<worktree>` element, says who stopped the agent, uses the step-limit wording and omits an
+    empty `<result>`, and `subagent_tokens` is the newest input plus all output (new
+    `ChildEnded.output_tokens`); progress labels every 30 s; Explore and Plan see the managed
+    instruction files, Explore under a Fable caller runs on Opus; `ExitPlanMode` without a plan
+    file asks, a rejected plan comes back in the result; the Plan prompt gains the similar-features
+    step and a read-only closing reminder. A classifier transcript too long for its window falls
+    back to asking; a stage-2 error after a stage-1 block is a counted block; classifier requests
+    carry the main loop's session id.
+  - **Breaking:** `Permissions(auto_mode=...)` lists replace the built-in text of their classifier
+    section, as Claude Code's `autoMode` does; `"$defaults"` keeps the built-in rules at that place.
+  - Classifier: `AskUserQuestion` calls are shown in Claude Code's form (header, multiSelect,
+    numbered options with description and preview); the `safeguards` context names Claude Code's
+    eleven settings sources, the exec env's platform, home, git root and branch, and
+    `case_insensitive_paths` only on Windows. With `auto_during_plan=False`, entering plan mode
+    from auto mode ends auto mode.
+  - Hooks: a `UserPromptSubmit` hook's `continue: false` keeps the prompt, tells the model the
+    operation was stopped by the hook and ends the turn without a model call (it failed the turn);
+    a background `SessionStart` answer that repeats the latest `SessionStart` output is left out.
+    `TaskStop` on a background agent: its notice says the caller stopped it.
 - **Context audit closure: what the model sees follows Claude Code 2.1.312 where it differed
   without a written reason** (spec `2026-11-02-context-audit-closure`; kept differences are rows
   in `parity/deviations.md`, which now has a pi / dsh column and no "Not yet matched" section).

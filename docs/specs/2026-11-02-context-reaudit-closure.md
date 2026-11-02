@@ -224,7 +224,155 @@ deviation with a reason), **owner** (main's behaviour kept, row written, owner q
 
 ## Decisions
 
+Matched items need no entry: CC's way, with a test each (the branches' commits name them).
+Resolved items, with the evidence that settled them:
+
+- **P9** One recorded beta order; a beta noeta adds goes in at CC's place. `classifier_context` is
+  server-side input the model never reads (its field differences: rr-final).
+- **E10** The bundle (`XTn` / `Ekt` / `Rkt`) recomputes the environment once per prompt and sends
+  "# Environment update" for cwd, worktree, repository, extra directories (and scratchpad, `gh`,
+  proxy, which noeta does not show). Matched for noeta's facts; scope below.
+- **R21** `criticalSystemReminder_EXPERIMENTAL` is an `--agents` / SDK agent field sent with every
+  call (matched); `mcp_dropped_tools_delta` is CC's schema check of MCP tools (owner).
+- **S12** CC's skill discovery and `paths:` unlock run only from `Read` / `Write` / `Edit` (bundle
+  offsets 26229228, 27949542, 29441476), not from shell reads: CLO Q3 was wrong for skills; noeta
+  now matches (and `NotebookEdit` no longer finds skills).
+- **S16** CC loads managed, user, project (nearest first), additional directories, legacy
+  commands, plugins, first name wins. Matched.
+- **M6** The bundle's `oVe` cuts frontmatter from every instruction file (noeta already did).
+- **M7** CC's recall is gated off by default (`tengu_moth_copse` / `CLAUDE_MEMORY_STORES`); noeta's
+  is off unless `recall_model` is set. Match.
+- **C5, C6** see rows below.
+- **T15** `to` one line, at most 300 characters; `message` default `""`. Matched.
+- **T16** Three ScheduleWakeup variants keyed to the Anthropic cache TTL; row below.
+- **A1** CC reviews `SubagentHandback` as an ordinary transcript entry (m1/0035), as noeta did;
+  `<subagent_hand_back>` with severity scoring is CC's end-of-run review of an agent that ended
+  without handing back (owner). A flagged hand-back is now delivered under a warning (matched).
+- **A3** The bundle applies `useAutoModeDuringPlan` to plan mode entered from any mode except
+  `bypassPermissions` (`_LtL`, `y1n`, `_e()`). Matched.
+- **A5** CC builds a "Previous: …" line but never sends it (dead code in `Li()`); noeta sends none.
+- **A14** CC's `EnterPlanMode` asks only in diskless (remote) sessions; row below.
+- **cls.input.12 / .13** CC's meta and outcome lines sit behind switches that are off by default
+  (`vJe`, `J1r`, `thn`); noeta writes none, as CC's default. **cls.input.16** CC's `autoMode`
+  lists replace their section's built-in text (`"$defaults"` keeps it; `iAn`, `Mg`): matched.
+- **UserPromptSubmit `continue: false`** CC keeps the prompt (`promptKept: true`, `TRr`), adds
+  "Operation stopped by hook" and makes no model call: matched.
+- **Compaction fallback tools** the call site's `_a` is lodash `uniqBy` (names once, order kept,
+  no sort): matched.
+
+Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`, dsh
+`deepseek-ai/DeepSeek-Harness`):
+
+- **P1 / R7 (full text) / R10 one lean prompt for every model.** CC: models without
+  `lean_prompt` (Sonnet 5, Sonnet 4.6, Haiku 4.5) get the full prompt, `<system-reminder>`
+  carriers and the full auto-mode text; older and unknown models get the `Task*` tools and
+  `task_reminder`. pi: one prompt, no task tools. dsh: one prompt per deployment. noeta: one lean
+  prompt, plus the Fable 5.1 and Haiku 5.5 paragraphs. Why: a second prompt, a second reminder
+  carrier and four tools are whole features for models the replay never runs. Owner question 1.
+- **P5 `outputStyle`** read and ignored. CC: a different prompt opening and `# Output Style`. pi,
+  dsh: none. Why: a whole feature (style files, picker); a plugin's prompt part does it
+  (`examples/house-style`). Owner question 2.
+- **P6 identity line**: one noeta line; CC's variants name Claude Code. **P7** "rendered as
+  markdown", not a terminal: noeta's output also goes to HTTP clients, editors and channels.
+- **E7 managed attribution** lines are not told apart: noeta has no organization policy.
+- **E10 scope**: CC re-sends the environment when platform, shell or OS change; pi none; dsh cwd and
+  time. noeta tells repository, worktree and directory changes only. Why: a durable task may wake
+  on another worker of the same deployment while commands run in the task's exec env; re-sending
+  one worker's OS release would break the prompt cache for no change.
+- **R2 / R3 switches**: `ultrathink` raises effort when the task is interactive and the model is
+  catalogued `is_reasoning` (CC: its terminal, models with an effort table); `ultracode` is task
+  config, not an effort value (CC: a setting or `--effort ultracode`). pi, dsh: no keywords. Why: a
+  per-task decision every worker makes alike. **R18** "used" is the task tree's cost read from the
+  store (CC: its process's tracker): the same total `-p` enforces, on any worker. **MCP
+  instruction notes** keep being re-announced (CC only behind a flag gate): the model is told the
+  truth.
+- **R5 no shell-first note in `bypassPermissions`** (CC sends it there as in auto mode; pi, dsh:
+  none). Measured: the eval (DeepSeek V4.1, all trials in bypass mode) with the note scored
+  `deny_rule_respected` 0.78 and `read_over_shell_cat` 0.61 against the 1.00 / 0.89 baseline; an
+  A/B on the same head (9 trials each) gave 0.67 / 0.78 with the note and 0.89 / 0.83 without. The
+  misses edit a denied file through the shell. A deny rule holds in bypass mode too, and a note
+  inviting shell edits makes working around it likelier on an unattended server. Owner question 10.
+- **R21 MCP schema check** not built (CC drops tools whose schema the API would reject and tells
+  the model). Owner question 3.
+- **T2 `TaskStop`** by id only: noeta has no agent teams and `Agent` has no `name` (nor has CC's
+  baseline schema); dsh's `job_kill` is by id too. **T11** the steer decision is recorded in the
+  task log (CC: in memory per session), so every worker sends the same description.
+- **T13 `Write` 8 MB cap.** CC, pi: none; dsh: none found. Why: a call's content is logged and
+  resent with every later request; 128K output tokens is about 0.5 MB, so the cap stops only a
+  runaway call.
+- **Workflow end notice** without output file, transcripts, results journal, per-state counts, or
+  the 8,000-character cut. CC: all of them; pi: no Workflow; dsh: no journal, no resume. Why: a
+  run's results live in the task log, not a run directory.
+- **T3** two raw MCP names that normalize alike get a hash suffix (CC sends both, which the API
+  rejects; pi hashes over 64; dsh raw); on OpenAI-family wires a name over 64 is cut with a hash
+  and mapped back (CC speaks only the Messages API, 128; pi cuts to 64 everywhere).
+- **T6** a fruitless `ToolSearch` names down servers and the `mcp` plugin lists them again once a
+  turn; CC reconnects inside the call and also names connecting and policy-blocked servers. pi:
+  plain "no match". dsh: no search tool. Why: the tool set is fixed per turn in the log, so any
+  worker can serve the next step; noeta has no managed policy.
+- **T9** `WebSearch` keeps CC's frame with Tavily snippets where CC's search model writes a
+  summary (pi: none; dsh: hits and excerpts): a summary would cost a second model call per search.
+- **T14 preapproved `WebFetch` hosts** still asked per domain (CC: not asked; pi: no WebFetch;
+  dsh: per request). Owner question 4 (CLO Q6).
+- **T16** the 5-minute cache wording on every model (CC: by Anthropic TTL; pi, dsh: none): noeta's
+  Anthropic requests use the 5-minute TTL and other providers cache as long or longer.
+- **S1 directory-name characters**: letters, digits, marks, `_`, `.`, `-` (CC: any up to 256
+  characters without control characters or `<>`; pi `[a-z0-9-]`; dsh checked names). Why: `:`
+  marks plugin and scoped names that `Skill(<prefix>:*)` rules match, and a space would split a
+  typed `/<name> <args>`.
+- **S6 frontmatter** `hooks`, `shell: powershell`, `disallowed-tools` for fork agents not honoured
+  (pi, dsh: none of these). Why: skill-scoped hooks need a new mechanism in the hooks plugin; no
+  PowerShell tool; `Agent` has no parameter for them. Owner question 5 (hooks).
+- **S9 usage ranking** from the store's 200 newest tasks in a background scan (CC: its config
+  file; pi, dsh: none). Why: every worker ranks alike; waiting for the scan cost 2.9 s on a new
+  conversation's first reply.
+- **S10 listing settings**: `NOETA_SLASH_COMMAND_TOOL_CHAR_BUDGET`, no `skillOverrides` (pi: no
+  budget; dsh: an off switch). Why: noeta reads its own names; a per-skill switch table is a
+  settings feature. Owner question 6.
+- **M5 `@import` boundary** row reworded: the working directory or the folder of the chain's
+  first file, for project and local files.
+- **C5 threshold compaction for every window.** CC skips the threshold for a window no setting
+  chose and for a 1M window not set by settings, compacting only after the API refuses the prompt.
+  pi: threshold plus overflow; dsh: threshold plus overflow. Why: a refused 1M-token request costs a
+  full round trip, and a gateway overflow error noeta cannot recognize would fail the turn.
+- **C6 unknown-model window** 128,000 / 16,384 (CC 200,000 / 32,000; pi 128,000 / 16,384; dsh
+  1M with 256K or 128K output). Why: noeta serves gateway and self-hosted models, many with 128K;
+  a 200K assumption overflows before compaction fires. `register_models` or
+  `NOETA_AUTO_COMPACT_WINDOW` give real numbers.
+- **A1 end-of-run review** not built (CC: one more severity-scored classifier call over the
+  transcript of an auto-mode agent that ended without handing back; pi, dsh: no classifier). Why:
+  its text is not delivered anyway and every action was classified when it ran. Owner question 7.
+- **A2 headless**: a transcript too long for the classifier falls back to the ask in every host
+  (CC aborts a headless agent): noeta hosts answer asks their own way.
+- **A5 progress-label timing** at model-call boundaries against recorded times (CC: a 30 s timer):
+  works across workers.
+- **A13 `<untrusted_instructions>`** outside a trusted workspace (CC: always `<user_claude_md>`;
+  pi, dsh: no classifier). Why: CC runs only in folders its trust dialog accepted; noeta runs in
+  repositories nobody vetted, where a planted NOETA.md would speak for the person.
+- **Classifier context rule shape**: permission rules go as plain strings (CC: objects
+  `{rule, source, …}`; pi, dsh: no classifier). Why: the host passes noeta merged rule lists with no
+  settings source, so a source would be invented; with an API key the server does not run the
+  check, so the field is unread.
+- **A14 `EnterPlanMode` asks** in `default` / `acceptEdits` (CC asks only in remote sessions; pi:
+  no plan mode; dsh: only the person's `/plan`). Why: noeta runs server-side like CC's remote
+  sessions. Owner question 8.
+
 ## Open questions (owner)
+
+1. P1 / R10: give older Claude models CC's full prompt, `<system-reminder>` carrier and `Task*`
+   tools? Recommended: no, until someone runs those models.
+2. P5: support `outputStyle`? Recommended: no; a plugin's prompt part covers it.
+3. R21: drop MCP tools whose schema the API would reject, with CC's note? Recommended: yes, as a
+   follow-up spec (one bad schema fails every request).
+4. T14 (CLO Q6): let CC's preapproved documentation hosts through `WebFetch` unasked?
+   Recommended: yes, with an opt-out setting for unattended servers.
+5. S6: skill frontmatter `hooks:` active while the skill is loaded? Recommended: no, until asked.
+6. S10: read `skillOverrides`? Recommended: no.
+7. A1: CC's end-of-run review for an agent that ends without handing back? Recommended: no.
+8. A14: stop asking before `EnterPlanMode`, as CC's local sessions do? Recommended: keep asking.
+9. `--effort ultracode` and `--settings` in the CLI? Recommended: not until asked (task config
+   covers HTTP and SDK hosts).
+10. R5: send CC's shell-first note in `bypassPermissions` too? Recommended: no (eval above).
 
 ## Plan
 

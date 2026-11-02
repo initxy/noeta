@@ -104,7 +104,6 @@ SHELL_FIRST_GUIDANCE = (
     "edit would be brittle: exact or multi-line replacements, or flags that differ between "
     "GNU and BSD tools.")
 AUTO_MODE_GUIDANCE = SHELL_FIRST_GUIDANCE.format(mode="Auto mode")
-BYPASS_MODE_GUIDANCE = SHELL_FIRST_GUIDANCE.format(mode="Bypass-permissions mode")
 #: Sent once auto mode is left after its note went out (planning keeps it,
 #: unless plan mode runs without the classifier).
 AUTO_MODE_EXITED = (
