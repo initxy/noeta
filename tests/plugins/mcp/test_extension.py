@@ -204,9 +204,13 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
         ("DeferredToolPlaceholder", True), ("mcp__fake__echo", True)]
     early, search, echo, read, listing, folder, not_folder = (
         f.result for f in finished(await events(client, tid)))
-    assert folder.text == ("2 entries in file:///docs:\na.md  file:///docs/a.md\n"
-                           "sub/  file:///docs/sub")
-    assert not_folder.is_error and "could not list" in not_folder.text
+    assert folder.text == (
+        "Directory listing (2 entries):\na.md\nsub/\n"
+        '{"resources":[{"uri":"file:///docs/a.md","name":"a.md"},'
+        '{"uri":"file:///docs/sub","name":"sub","mimeType":"inode/directory"}]}')
+    # The server said no: an answer, not a failed call.
+    assert not not_folder.is_error and not_folder.text.startswith(
+        "fake did not list file:///notes.md: unknown")
     assert early.is_error and early.text.startswith(
         "InputValidationError: mcp__fake__echo is a deferred tool")
     assert [b.tool_name for b in search.content] == [  # type: ignore[union-attr]
@@ -575,3 +579,10 @@ async def test_a_fruitless_search_lists_a_down_server_again(
     first, second = (f.result for f in finished(evs))
     assert "could not be reached" in texts(first)[0] and "flaky" in texts(first)[0]
     assert [b.tool_name for b in second.content] == ["mcp__flaky__echo"]  # type: ignore[union-attr]
+
+
+def test_an_empty_directory_listing() -> None:
+    from noeta.plugins.mcp.tools import directory_listing
+    assert directory_listing([]) == 'Directory is empty.\n{"resources":[]}'
+    assert directory_listing([{"uri": "u", "name": "n"}]) == (
+        'Directory listing (1 entry):\nn\n{"resources":[{"uri":"u","name":"n"}]}')

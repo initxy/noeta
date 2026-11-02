@@ -34,6 +34,7 @@ __all__ = [
     "McpConfigError",
     "McpError",
     "McpServer",
+    "McpServerError",
     "OAuthSettings",
     "cap_text",
     "describe_tool",
@@ -114,6 +115,16 @@ class McpConfigError(ValueError):
 
 class McpError(Exception):
     """A transport, protocol or timeout fault talking to a server."""
+
+
+class McpServerError(McpError):
+    """The server answered a request with a JSON-RPC ``error``: it is up,
+    and refused or could not do what was asked."""
+
+    def __init__(self, message: str, code: object = None, detail: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
 
 
 class McpAuthRequired(McpError):
