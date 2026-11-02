@@ -24,7 +24,8 @@ A rule whose frontmatter has ``paths:`` is left out there. When a ``Read``,
 ``Edit``, ``Write`` or ``NotebookEdit`` touches a file inside the working
 directory (or a ``Bash`` command shows one, ``cat`` or ``head`` and the like:
 the file tools record it as read), the files that apply to it and were not
-shown yet follow the tool's result, one message each: the instruction files of every directory
+shown yet follow the tool's result, one message each (its path, no kind):
+the instruction files of every directory
 between the working directory and the file, and the ``paths:`` rules (the
 user's, the working directory's and its ancestors', and those directories')
 whose globs match it. A compaction puts them all, read again, ahead of its
@@ -107,6 +108,12 @@ SHELL_READ = ("fs", "read", "Bash")
 
 def render_file(path: str, kind: str, text: str) -> str:
     return f"{path} ({LABELS.get(kind, LABELS[PROJECT])}):\n\n{text}"
+
+
+def render_nested(path: str, text: str) -> str:
+    """A file a touched file brought: its path line names no kind (Claude
+    Code's nested file reminder)."""
+    return f"{path}:\n\n{text}"
 
 
 def render_instructions(files: Sequence[tuple[str, str, str]]) -> str:
@@ -340,7 +347,7 @@ class Instructions(Extension):
             real = await _real(reader.env_for(f.kind), f.path)
             text = f.text if f.kind == MANAGED else cut_nested(f.path, f.text, limit)
             view.record(self.name, "nested", {"files": [_entry(f, real)], "trigger": resolved},
-                        message=user(render_file(f.path, f.kind, text), origin=self.origin))
+                        message=user(render_nested(f.path, text), origin=self.origin))
 
     async def _reread_changed(self, view: TaskView) -> None:
         """The files shown so far, read again: those whose text changed are
@@ -427,7 +434,7 @@ class Instructions(Extension):
                 sent[e["path"]] = text_digest(text)
                 if e["kind"] != MANAGED:
                     text = cut_nested(e["path"], text, limit)
-                out.append(user(render_file(e["path"], e["kind"], text), origin=self.origin))
+                out.append(user(render_nested(e["path"], text), origin=self.origin))
         known = state.get("digests") or {}
         sent = {p: d for p, d in sent.items() if p in known and known[p] != d}
         sent.update({p: d for p, d in index.items() if known.get(p) != d})

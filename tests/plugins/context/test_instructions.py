@@ -255,8 +255,8 @@ async def test_a_touched_file_brings_what_applies_to_it(h: Harness) -> None:
         ".noeta/rules/py.md", "src/AGENTS.md", "src/pkg/NOETA.md"]
     msgs = h.provider.requests[1].messages
     assert isinstance(msgs[2].content[0], ToolResult)
-    assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
-    assert msgs[5].text == f"{pkg / 'NOETA.md'} {PROJECT}:\n\npkg rules"
+    assert msgs[3].text == f"{rules / 'py.md'}:\n\npython rule"
+    assert msgs[5].text == f"{pkg / 'NOETA.md'}:\n\npkg rules"
     assert len(h.provider.requests[2].messages) == len(msgs) + 2
 
 
@@ -288,7 +288,7 @@ async def test_a_file_a_shell_command_showed_brings_what_applies_to_it(h: Harnes
     assert {r.data["trigger"] for r in recs} == {str(pkg / "a.py")}
     msgs = h.provider.requests[1].messages
     assert isinstance(msgs[2].content[0], ToolResult)
-    assert msgs[3].text == f"{rules / 'py.md'} {PROJECT}:\n\npython rule"
+    assert msgs[3].text == f"{rules / 'py.md'}:\n\npython rule"
 
 
 async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
