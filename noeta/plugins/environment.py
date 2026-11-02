@@ -488,6 +488,8 @@ class Environment(Extension):
       (default: the date in the task config's ``timezone``, the user's IANA
       zone a front end passes; without one, the UTC date, said to be UTC's,
       so a server never gives its own zone's date as the user's).
+    * ``critical_reminder`` — a text sent with every model call (an agent
+      definition's ``criticalSystemReminder_EXPERIMENTAL``, Claude Code's).
     """
 
     name = "environment"
@@ -496,7 +498,8 @@ class Environment(Extension):
                  git_status: bool = True, git_refresh: bool = True,
                  attribution: bool = True,
                  token_budget: int = TOKEN_BUDGET, date_change: bool = True,
-                 today: Callable[[], str] | None = None) -> None:
+                 today: Callable[[], str] | None = None,
+                 critical_reminder: str = "") -> None:
         self.model = model
         self.model_name = model_name
         self.git_status = git_status
@@ -505,6 +508,7 @@ class Environment(Extension):
         self.token_budget = token_budget
         self.date_change = date_change
         self.today = today
+        self.critical_reminder = critical_reminder
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         if not isinstance(data, dict):
@@ -632,6 +636,8 @@ class Environment(Extension):
                                 role="system", order=ORDER_BUDGET))
         out += await usd_budget_reminders(view, ORDER_BUDGET + 1)
         out += ultrathink_reminders(view)
+        if self.critical_reminder:
+            out.append(Reminder(text=self.critical_reminder, kind="critical_reminder", data={}))
         return out
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:

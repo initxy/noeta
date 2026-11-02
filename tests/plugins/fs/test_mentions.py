@@ -183,6 +183,28 @@ async def test_only_the_persons_new_messages_are_expanded(tmp_path: Path, work: 
     assert attached(provider, 2) == []
 
 
+async def test_mentioning_a_file_already_read_and_unchanged_attaches_nothing(
+        tmp_path: Path, work: Path) -> None:
+    (work / "a.txt").write_text("a\n")
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("three")])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[FileTools()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: LocalExecEnv(str(work)),
+                 sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "see @a.txt")
+    await rt.run_until_idle()
+    await client.send(tid, "and @a.txt again")
+    await rt.run_until_idle()
+    assert len(attached(provider, 1)) == 1  # the first one only
+    (work / "a.txt").write_text("changed\n")
+    import os
+    os.utime(work / "a.txt", (1, 1))
+    await client.send(tid, "once more @a.txt")
+    await rt.run_until_idle()
+    assert len(attached(provider, 2)) == 2  # changed: attached again
+
+
 async def test_mentions_are_attached_on_the_server(tmp_path: Path, work: Path) -> None:
     pytest.importorskip("starlette")
     uvicorn = pytest.importorskip("uvicorn")

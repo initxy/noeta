@@ -29,6 +29,7 @@ from noeta.core.loop.state import TaskState
 from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
+from noeta.plugins.subtasks.mentions import mention_reminders
 from noeta.plugins.subtasks.roster import Roster, SubagentSpec, check_roster
 from noeta.plugins.subtasks.roster import agent_list as listing
 from noeta.plugins.subtasks.roster import agent_list_delta as roster_delta
@@ -288,6 +289,8 @@ class Subtasks(Extension):
                                 role="system", order=AGENT_LIST_ORDER))
         elif not st["held_list"]:
             out += self._agent_delta(view, st)
+        if not view.state.parent_id:
+            out += mention_reminders(view, self.roster_for(view))
         return out
 
     def _agent_delta(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:

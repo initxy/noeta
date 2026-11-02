@@ -209,6 +209,46 @@ def test_claude_code_fields_become_plugin_arguments(caplog: pytest.LogCaptureFix
     assert "cacheTtl" not in caplog.text  # once per file
 
 
+def test_a_critical_reminder_goes_with_every_model_call() -> None:
+    """``criticalSystemReminder_EXPERIMENTAL`` (Claude Code's ``--agents``
+    field): the environment plugin sends it with each call."""
+    import asyncio
+
+    from noeta.agents.agent_files import plugin_overlays
+    from noeta.backends.stores.sqlite import SqliteStore
+    from noeta.core.agent import Agent
+    from noeta.core.client import Client
+    from noeta.core.runner import Runtime
+    from noeta.plugins.environment import Environment
+    from noeta.testing import ScriptedProvider, reply
+
+    f = parse_agent_file("---\nname: rev\ncriticalSystemReminder_EXPERIMENTAL: Stay read-only."
+                         "\n---\nP\n", source="crit.md")
+    assert plugin_overlays(f) == [("environment", {"critical_reminder": "Stay read-only."})]
+
+    async def go() -> list[list[str]]:
+        store = SqliteStore(":memory:")
+        provider = ScriptedProvider([reply("a"), reply("b")])
+
+        async def no_sleep(_: float) -> None:
+            return None
+
+        agent = Agent(name="a", model="m", extensions=[
+            Environment(today=lambda: "2026-11-01", critical_reminder="Stay read-only.")])
+        rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                     env_for=lambda _s: None, sleep=no_sleep)  # type: ignore[arg-type,return-value]
+        client = Client(store)
+        tid = await client.create("a", "one")
+        await rt.run_until_idle()
+        await client.send(tid, "two")
+        await rt.run_until_idle()
+        await store.close()
+        return [[m.text for m in r.messages] for r in provider.requests]
+
+    first, second = asyncio.run(go())
+    assert first.count("Stay read-only.") == 1 and second.count("Stay read-only.") == 2
+
+
 def test_overlays_add_to_the_hosts_arguments_and_the_plugin() -> None:
     host_hooks = {"Stop": [{"hooks": [{"type": "command", "command": "host"}]}]}
     f = parse_agent_file(

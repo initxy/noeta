@@ -80,7 +80,8 @@ _INHERIT = frozenset({"", "inherit"})
 #: ``background`` is how every noeta sub-agent runs.
 _KEPT = {"isolation": True, "color": True, "background": True, "skills": True,
          "mcpServers": True, "hooks": True, "memory": True, "initialPrompt": True,
-         "autoCompactWindow": True, "cacheTtl": False, "observer": False,
+         "autoCompactWindow": True, "criticalSystemReminder_EXPERIMENTAL": True,
+         "cacheTtl": False, "observer": False,
          "observerMessage": False, "observeSubagents": False}
 #: Claude Code's agent memory scopes.
 MEMORY_SCOPES = ("user", "project", "local")
@@ -199,7 +200,9 @@ def plugin_overlays(f: AgentFile) -> list[PluginEntry]:
     MCP plugin's servers (a bare name refers to a server configured
     elsewhere: it only needs the plugin), ``hooks`` added to the hooks
     plugin's while this agent runs, ``memory`` an agent memory directory in
-    that scope, ``autoCompactWindow`` the compaction window."""
+    that scope, ``autoCompactWindow`` the compaction window,
+    ``criticalSystemReminder_EXPERIMENTAL`` a text the environment plugin
+    sends with every model call."""
     x = f.extra
     out: list[PluginEntry] = []
     if x.get("skills"):
@@ -220,6 +223,9 @@ def plugin_overlays(f: AgentFile) -> list[PluginEntry]:
         out.append(("hooks", {"hooks": without_env(hooks)}))
     if x.get("memory"):
         out.append(("memory", {"agent_scope": x["memory"], "agent_name": f.name}))
+    critical = x.get("criticalSystemReminder_EXPERIMENTAL")
+    if isinstance(critical, str) and critical.strip():
+        out.append(("environment", {"critical_reminder": critical}))
     if x.get("autoCompactWindow") is not None:
         out.append(("compaction", {"auto_compact_window": _tokens(x["autoCompactWindow"],
                                                                  f.source)}))
