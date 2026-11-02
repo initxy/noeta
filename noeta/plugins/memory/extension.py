@@ -5,7 +5,7 @@ Memory is a directory of markdown files, one fact per file, under
 repository's main checkout, else the working directory). The model writes
 and edits the files with the ordinary ``Write`` / ``Edit`` tools, as the
 memory section of the system prompt tells it. ``MEMORY.md``, the model's
-index, is read when the task starts (its first 200 lines and 25,000 bytes)
+index, is read when the task starts (its first 200 lines and 25,000 characters)
 and again after a compaction; when the agent runs the instructions plugin
 after this one, that plugin shows it with the instruction files (Claude
 Code's place for it), reading the directory this plugin records. With a
@@ -39,7 +39,7 @@ from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import (
     MEMORY_DIR_KEY,
     MEMORY_INDEX_FILE,
-    MEMORY_INDEX_MAX_BYTES,
+    MEMORY_INDEX_MAX_CHARS,
     MEMORY_INDEX_MAX_LINES,
     read_memory_index,
     trim_memory_index,
@@ -91,7 +91,7 @@ AGENT_SCOPES = ("user", "project", "local")
 
 INDEX_FILE = MEMORY_INDEX_FILE
 INDEX_MAX_LINES = MEMORY_INDEX_MAX_LINES
-INDEX_MAX_BYTES = MEMORY_INDEX_MAX_BYTES
+INDEX_MAX_CHARS = MEMORY_INDEX_MAX_CHARS
 #: The index as attached when the agent has no instructions plugin to show
 #: it: its path, then its text.
 INDEX_HEAD = ("Contents of {path} (your auto memory index for this project, kept across "
@@ -101,17 +101,19 @@ INDEX_HEAD = ("Contents of {path} (your auto memory index for this project, kept
 INSTRUCTIONS = "instructions"
 
 #: Recall: memories attached per message, the selector's output ceiling, and
-#: the bytes attached over a whole task.
+#: the characters attached over a whole task (Claude Code's budget counts
+#: the attached text's length).
 RECALL_MAX_FILES = 5
 RECALL_MAX_TOKENS = 512
-RECALL_TASK_BYTES = 61_440
+RECALL_TASK_CHARS = 61_440
 #: Recalls kept so a hook's erase of their prompt can take them back (a
 #: prompt is blocked before the model answers it: the newest few).
 ERASABLE_RECALLS = 8
 #: Erased prompt seqs remembered, for a recall recorded after the erase.
 ERASED_SEQS_KEEP = 64
-#: A recalled file shows at most its first lines and bytes, then
-#: :data:`RECALL_CUT_NOTE` (Claude Code's limits).
+#: A recalled file shows at most its first lines and UTF-8 bytes, then
+#: :data:`RECALL_CUT_NOTE` (Claude Code's limits: its file read counts
+#: bytes here).
 RECALL_FILE_MAX_LINES = 200
 RECALL_FILE_MAX_BYTES = 4096
 RECALL_CUT_NOTE = "> Only {what} of this memory are shown; Read {path} for the whole file."
@@ -131,7 +133,8 @@ _RECALL_SCHEMA = {
 
 
 def load_index(text: str) -> str:
-    """``MEMORY.md`` within its line and byte limits, with a note when cut."""
+    """``MEMORY.md`` within its line and character limits, with a note when
+    cut."""
     return trim_memory_index(text)
 
 
@@ -430,10 +433,11 @@ class Memory(Extension):
 
     async def _recall(self, view: TaskView, directory: str,
                       query: str) -> tuple[str, list[str], int] | None:
-        """The recalled text, the files attached and their bytes; ``None``
-        when nothing is attached."""
+        """The recalled text, the files attached and their characters (the
+        state's ``bytes``, its name from before it counted characters);
+        ``None`` when nothing is attached."""
         state = view.ext_state(self.name) or {}
-        if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
+        if int(state.get("bytes") or 0) >= RECALL_TASK_CHARS:
             return None
         env = task_env(view.env, view.state.config)
         skip = {*(state.get("surfaced") or ()), *_read_files(view)}
@@ -469,7 +473,7 @@ class Memory(Extension):
                 _RECALL_WARNED.add(reason)
                 log.warning("memory: recall selector failed (%s); no memory recalled", reason)
             return None
-        budget = RECALL_TASK_BYTES - int(state.get("bytes") or 0)
+        budget = RECALL_TASK_CHARS - int(state.get("bytes") or 0)
         parts: list[str] = []
         paths: list[str] = []
         used = 0
@@ -479,7 +483,7 @@ class Memory(Extension):
             if body is None:
                 continue
             shown = recalled_text(str(path), body.strip())
-            size = len(shown.encode("utf-8"))
+            size = len(shown)
             if used + size > budget:
                 break
             used += size
