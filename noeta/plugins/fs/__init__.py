@@ -129,7 +129,10 @@ class FileTools(Extension):
         """A continuing task (a fork, a resumed conversation) attaches the
         mentions and saves the pasted images of its own prompts: the
         positions here are seqs of the source's log (the carried messages
-        sit at 0), and so are the keys of ``images``."""
+        sit at 0), and so are the keys of ``images``. The carried messages'
+        pasted images are not saved again: their files are the source's,
+        and a path in the history stops working once the source's image
+        directory is cleaned."""
         if not isinstance(state, FsState):
             return state
         return msgspec.structs.replace(state, mentions_through=0, images_through=0, images={})

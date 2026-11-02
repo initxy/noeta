@@ -15,6 +15,7 @@ import httpx
 import msgspec
 
 from noeta.core import records
+from noeta.core.client import CONTINUED_AS_KEY
 from noeta.core.errors import TurnDone, TurnFailed
 from noeta.core.events import (
     Compacted,
@@ -256,12 +257,15 @@ class Hooks(Extension):
         carried messages sit at 0), so a prompt hook would otherwise skip
         the new log's first prompts. What belongs to the source's run (its
         stop count, permission answers, unsent background output, a stop
-        note) stays there."""
+        note) stays there: background hook output the source had not given
+        the model yet, and a hook's note that the source's turn was stopped,
+        are not carried. Its first start fires SessionStart with the source
+        Claude Code gives a resumed or forked session (:meth:`on_start`)."""
         if not isinstance(state, HookState):
             return state
         return dataclasses.replace(state, prompted_through=0, batched_through=0, stop_blocks=0,
                                    stop_since=0, permission={}, async_pending=(),
-                                   stop_note=None)
+                                   stop_note=None, continued=True)
 
     # ------------------------------------------------------------ start
 
@@ -284,6 +288,16 @@ class Hooks(Extension):
                     view.notify(f"SubagentStart hook: {r.block}")
             self._d.context(view, "context", f"SubagentStart{CONTEXT_LABEL}",
                             [r.context for r in reads])
+            return
+        if st.continued:
+            # A continued conversation (``history_from``): Claude Code's
+            # resume / fork sources; a rewind fires none.
+            source = str(view.state.config.get(CONTINUED_AS_KEY) or "fork")
+            view.record(self.name, "started", {"event": "SessionStart"})
+            if source in ("resume", "fork") and "SessionStart" in self.matchers:
+                reads = await self._d.run("SessionStart", view,
+                                          {"source": source, "model": view.model})
+                self._start_context(view, source, reads)
             return
         if "SessionStart" not in self.matchers or st.started:
             return

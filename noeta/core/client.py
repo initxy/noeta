@@ -25,6 +25,13 @@ from noeta.core.types import Image, Message, user
 
 Input = Union[str, Message]
 
+#: Config key of a task created with ``history_from``: how its
+#: conversation continues the source's, for ``SessionStart`` hooks'
+#: ``source`` (Claude Code's): ``"resume"`` (a channel thread carried on),
+#: ``"fork"`` (the default: a new branch of the conversation), or
+#: ``"rewind"`` (no ``SessionStart``, as Claude Code's rewind fires none).
+CONTINUED_AS_KEY = "continued_as"
+
 
 async def _message(value: Input) -> Message:
     if isinstance(value, str):

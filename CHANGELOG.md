@@ -186,9 +186,13 @@ All notable changes to Noeta are documented here. The format is based on
     and dropped replies, as `/cost` does; the skills walk-up stays put when a remote env's home
     cannot be read; saved hook output stays named when its directory cannot be marked; a nested
     command whose name is taken is warned about once; an `mcp_tool` hook that names, by its old
-    name, a tool two servers now share blocks the event it guards instead of failing open. A task
-    that continues a conversation (`history_from`: a fork, a channel continuation, a CLI or HTTP
-    resume) runs its `UserPromptSubmit` hooks on its own prompts (they were skipped), attaches the
+    name, a tool two servers now share blocks the event it guards instead of failing open (on
+    `Stop` / `SubagentStop` it fails, so the turn ends). A task that continues a conversation
+    fires SessionStart once with Claude Code's source: `fork` for `history_from` (HTTP,
+    `--fork-session`), `resume` for a channel thread carried on (new config key `continued_as`),
+    none for a rewind; what its hooks add reaches the model as at startup. Such a task (a fork, a
+    channel continuation, a CLI or HTTP resume) runs its `UserPromptSubmit` hooks on its own
+    prompts (they were skipped), attaches the
     files its prompts @-mention and saves their pasted images, and recalls memory for them; the
     walk up for skill folders on this machine is no longer cached. `make parity` reports a
     tool list missing from its data and compares cache marks and description changes per request.

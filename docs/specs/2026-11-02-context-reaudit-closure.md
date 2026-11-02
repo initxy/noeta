@@ -531,3 +531,14 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   `mcp_tool` hook naming an old name two tools share blocks (exit 2), documented in the
   deviations row and CHANGELOG (test). No prompt text changed; the only new model-visible text is
   that hook's block reason.
+- 2026-11-02 Third confirm review: rr-cont mergeable, four P3s closed on `rr-cont`. T-P3-3 → a
+  continued task fires SessionStart once with Claude Code's source (bundle: the resume path calls
+  its SessionStart runner with `resume` or `fork`, the source enum is startup / resume / clear /
+  compact / fork): `fork` for `history_from` by default (HTTP, `--fork-session`), `resume` for a
+  channel thread carried on (config `continued_as`), none for a rewind (CC's rewind fires none);
+  the CLI's own resume already fired `resume` (tests: the three sources and what reaches the model;
+  the channel and rewind configs). Model-visible: the hook's output, as
+  "SessionStart hook success: …" / additional context, as at startup. T-P3-1 / T-P3-2 → the
+  hooks and fs `continue_state` docstrings say what is not carried; a follow-ups line for pasted
+  images across a continuation. T-P3-4 → an `mcp_tool` hook by a shared old name fails rather
+  than blocks on `Stop` / `SubagentStop` (test; deviations row, CHANGELOG).

@@ -27,6 +27,7 @@ from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import SUBJECT, TOOL_EVENTS, HookCommand, Matcher
 from noeta.plugins.hooks.runners import (
+    FAILED,
     HookResult,
     Runner,
     RunTool,
@@ -128,6 +129,9 @@ class HookState:
     stop_since: int = 0
     #: SessionStart (startup) / SubagentStart has fired for this task.
     started: bool = False
+    #: A task continuing another's conversation that has not fired its
+    #: SessionStart (``resume`` / ``fork``) yet.
+    continued: bool = False
     #: The compaction SessionStart (compact) last fired after, by ``through``.
     compact_seen: int = 0
     #: What started the newest compaction (``manual`` / ``auto``).
@@ -168,7 +172,7 @@ def fold(state: Any, kind: str, data: Any) -> HookState:
         blocks = st.stop_blocks + 1 if since == st.stop_since else 1
         return replace(st, stop_blocks=blocks, stop_since=since)
     if kind == "started":
-        return replace(st, started=True)
+        return replace(st, started=True, continued=False)
     if kind == "compacting":
         return replace(st, compact_trigger=str(data.get("trigger") or "auto"))
     if kind == "compact_seen":
@@ -489,10 +493,15 @@ class Dispatcher:
                 shared = shared_old_name(view, hook)
                 if shared:
                     # Fail closed: a guard that cannot tell which tool it
-                    # means blocks rather than lets the event through.
-                    return HookResult(exit_code=2, stderr=(
-                        f"the hook names MCP tool {hook.tool!r} of server {hook.server!r} by an "
-                        f"old name that now fits {', '.join(shared)}; write the current name"))
+                    # means blocks rather than lets the event through, except
+                    # at a turn's end, where a block only asks the model to
+                    # go on (up to MAX_STOP_CONTINUATIONS rounds for nothing):
+                    # there it fails, and the turn ends.
+                    why = (f"the hook names MCP tool {hook.tool!r} of server {hook.server!r} by "
+                           f"an old name that now fits {', '.join(shared)}; write the current "
+                           "name")
+                    stop = payload.get("hook_event_name") in ("Stop", "SubagentStop")
+                    return HookResult(exit_code=FAILED if stop else 2, stderr=why)
                 return await run_mcp_tool(hook, payload, _mcp_tool(view, hook),
                                           _tool_runner(view, "mcp"))
             return await self.runner(hook, payload, cwd)
