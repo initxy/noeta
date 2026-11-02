@@ -59,7 +59,9 @@ PLAN_FILE_PRESENT = "A plan file already exists at {path}; change it with Edit o
 
 #: After ``ExitPlanMode`` is approved (``rem.plan-exited.*``).
 PLAN_EXITED = ("## Plan mode has ended\n\nYou have left plan mode: you may edit files, run "
-               "tools and take actions again. The approved plan is at {path} if you need it.")
+               "tools and take actions again.")
+#: Added when the plan file exists.
+PLAN_EXITED_FILE = " The plan file is at {path} if you need it."
 
 #: ``ExitPlanMode`` results.
 APPROVED = ("The user approved the plan, so you can start coding now. If a todo list fits the "
@@ -141,8 +143,9 @@ def plan_reentry_text(path: str) -> str:
     return PLAN_REENTRY.replace("{path}", path)
 
 
-def plan_exited_text(path: str) -> str:
-    return PLAN_EXITED.format(path=path)
+def plan_exited_text(path: str | None) -> str:
+    """The plan-exit note; ``path`` is the plan file when it exists."""
+    return PLAN_EXITED + (PLAN_EXITED_FILE.format(path=path) if path else "")
 
 
 def plan_name_request(model: str, plan: str, *, identity: str = "",

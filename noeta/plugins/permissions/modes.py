@@ -16,7 +16,7 @@ from noeta.core.types import ToolResult
 from noeta.plugins.permissions import plan as pl
 from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import wording as w
-from noeta.plugins.permissions.state import NAME, PermState, state_of
+from noeta.plugins.permissions.state import NAME, PermState, auto_active, state_of
 
 log = logging.getLogger("noeta.permissions")
 
@@ -117,28 +117,55 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
                 kind="plan_active", role="system", order=ORDER_PLAN))
             sent.append("plan_active")
             plan_noted = max(newest, entered)
-    if "plan_exited" in st.due and st.plan is not None:
-        out.append(Reminder(text=pl.plan_exited_text(st.plan["path"]), kind="plan_exited",
-                            role="system", order=ORDER_PLAN))
+    if "plan_exited" in st.due and st.plan is not None and mode != "plan":
+        path = st.plan["path"]
+        out.append(Reminder(text=pl.plan_exited_text(path if await _exists(view, path)
+                                                     else None),
+                            kind="plan_exited", role="system", order=ORDER_PLAN))
         sent.append("plan_exited")
-    # The main conversation's first request; a sub-agent's second (as
-    # Claude Code sends them).
-    replies = sum(1 for m in view.state.history if m.role == "assistant")
-    first = replies == (1 if view.state.parent_id else 0)
-    guidance = "auto_guidance" in st.due and _new_input(view, st.guidance_after) \
-        and view.state.parent_id is None
-    if mode == "auto" and (guidance or first):
-        out.append(Reminder(text=w.AUTO_MODE_GUIDANCE, kind="auto_guidance", role="system",
-                            order=ORDER_AUTO))
+    auto_noted = st.auto_noted
+    active = auto_active(mode, st.plan)
+    if "auto_exited" in st.due and not active:
+        if view.state.parent_id is None:
+            out.append(Reminder(text=w.AUTO_MODE_EXITED, kind="auto_exited", role="system",
+                                order=ORDER_AUTO))
+            sent.append("auto_exited")
+        auto_noted = False
+    if mode in ("auto", "bypassPermissions") and not auto_noted and _shell_first(view) \
+            and _guidance_due(view, st.guidance_after):
+        text = w.AUTO_MODE_GUIDANCE if mode == "auto" else w.BYPASS_MODE_GUIDANCE
+        out.append(Reminder(text=text, kind="auto_guidance", role="system", order=ORDER_AUTO))
         sent.append("auto_guidance")
+        auto_noted = True
+    # Owed notes a later switch made moot: the exit from auto mode when it
+    # is back on (or in a sub-agent), the plan texts once out of plan mode,
+    # the plan-exit note once planning again.
     stale = [k for k in st.due if k not in sent and (
-        (k == "auto_guidance" and (mode != "auto" or view.state.parent_id is not None))
+        k == "auto_exited"
         or (k in ("plan_active", "plan_reentry") and mode != "plan")
+        or (k == "plan_exited" and mode == "plan")
         or (k == "plan_reentry" and "plan_active" in sent))]
-    if sent or stale or plan_noted != st.plan_noted:
+    if sent or stale or plan_noted != st.plan_noted or auto_noted != st.auto_noted:
         view.record(NAME, "noted", {"kinds": [*sent, *stale], "plan_noted": plan_noted,
-                                    "plan_reminders": reminders})
+                                    "plan_reminders": reminders, "auto_noted": auto_noted})
     return out
+
+
+def _shell_first(view: TaskView) -> bool:
+    """Whether the auto-mode note fits the agent: it has the shell and a file
+    tool that writes (Claude Code sends none to an agent without them, such
+    as Explore)."""
+    return view.find_tool("Bash") is not None and any(
+        view.find_tool(name) is not None for name in ("Edit", "Write"))
+
+
+def _guidance_due(view: TaskView, after: int) -> bool:
+    """The auto-mode note goes with the main conversation's first request or
+    the next one with input newer than seq ``after`` (a compaction), and a
+    sub-agent's second (as Claude Code sends them)."""
+    if view.state.parent_id is not None:
+        return any(m.role == "assistant" for m in view.state.history)
+    return _new_input(view, after)
 
 
 async def _exists(view: TaskView, path: str) -> bool:
