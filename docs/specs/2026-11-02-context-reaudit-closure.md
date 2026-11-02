@@ -482,3 +482,9 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   watch, Monitor cap, keeper loop, USD reads, dead branch, `TaskStop` without background jobs,
   stopped Workflow notice, ultrathink once, fence close, settings int, fingerprint, recall key
   `chars`, CHANGED_FILES evidence, A14 reason, R5 numbers, A11 test, `tool_choice` docstring.
+- 2026-11-02 Gates after the review fixes (5370d2aa): `make check` 3045 passed (coverage 90%);
+  `make parity` 0 mismatches (11 accepted), own-words none; `make cluster` 14 passed; `make e2e`
+  7 passed; eval 0.946 against 0.953, "no regression": `plan_mode_started`, `mcp_tool_use` and
+  `injection_in_mcp_result` each lost trial #6 to the 420 s cap at the same moment (a gateway
+  stall, the other 8 trials full marks); `hook_block_adapts` 0.40 is known-noisy; the rest within
+  one trial.
