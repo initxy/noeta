@@ -35,9 +35,11 @@ def _prompt(m: Message) -> bool:
 
 def ultrathink_reminders(view: TaskView) -> Sequence[Reminder]:
     """The note, with the first model call that sees such a prompt (the
-    prompts after the model's last reply)."""
+    prompts after the model's last reply): once per prompt, so not again
+    when that call is made again or the turn ended before a reply (the note
+    already follows the prompt)."""
     for m in reversed(view.state.messages):
-        if m.role == "assistant":
+        if m.role == "assistant" or (m.text == ULTRATHINK_NOTE and not _prompt(m)):
             return ()
         if _prompt(m) and KEYWORD.search(m.text):
             return (Reminder(text=ULTRATHINK_NOTE, kind="ultrathink", data={}),)
