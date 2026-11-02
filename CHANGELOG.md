@@ -27,13 +27,18 @@ All notable changes to Noeta are documented here. The format is based on
     - MCP tool names keep the server's case and are no longer cut: a server `GitHub` gives
       `mcp__GitHub__delete_repo` where it gave `mcp__github__delete_repo`; a name over 64
       characters is no longer cut and hashed (over 128 the tool is not offered). Settings that name
-      a tool by its old name keep working, each match logged once: permission rules and "always
-      allow" grants, `allowed_tools` / `disallowed_tools`, agent tool lists, hook matchers and
-      `mcp_tool` hooks, `--permission-prompt-tool`, `NOETA_TERMINAL_MCP_TOOLS`, `ToolSearch
-      select:`. Migration: rewrite them with the new names (the warning names each).
+      a tool by its old name keep narrowing, never widening (each match logged once): deny and ask
+      rules, `disallowed_tools` and an agent's `disallowedTools` still match old names; allow
+      rules, remembered "always allow" grants, `allowed_tools` / `--allowedTools`, an agent's
+      `tools:` and a skill's `allowed-tools` match the current name only, so a tool named there by
+      its old name is asked about (or not offered). A hook reached only by an old name (matcher,
+      `if`, `mcp_tool` hook, `--permission-prompt-tool`) may block, deny or ask, but its allow is
+      ignored; an old name two current tools share resolves to neither. Migration: rewrite allow
+      entries and hooks with the current name (`mcp__GitHub` for `mcp__github`); the warning
+      names each.
     - Skills are named by their directory, not their frontmatter `name`. The former name still
       answers `Skill(...)` permission rules (deny and ask always; allow while no other skill had
-      that name), hook `if` conditions, `Skills(preload=...)` and an agent file's `skills:` (a
+      that name), hook `if` conditions (allowing only while unambiguous), `Skills(preload=...)` and an agent file's `skills:` (a
       warning names the new name). Only `<skills dir>/<name>/SKILL.md` is a skill; a deeper one is
       skipped with a warning. The user's skill directories win a name over the project's.
       Migration: rename rules, hook conditions and preloads to the directory name; move deeper
@@ -170,7 +175,17 @@ All notable changes to Noeta are documented here. The format is based on
     number; a four-backtick fence is not closed by three; on the Anthropic wire a `tool_reference`
     names only a tool the request offers (an old MCP name as the current one); on OpenAI-family
     wires a name over 64 characters is written short in the request's text too; MCP tools dropped
-    for names over 128 characters are named by a fruitless `ToolSearch`. `make parity` reports a
+    for names over 128 characters are named by a fruitless `ToolSearch`; OpenAI-family wires
+    rewrite only the request's own long tool names, never other `mcp__` text. A skill's `model` /
+    `effort` also end when the turn's call fails or the turn is stopped; a forked or resumed
+    sub-agent starts without the source's skill override and notes `@agent` mentions in its new
+    prompt; a sub-agent can no longer suppress the hand-back warning by writing it itself; a
+    sub-agent of a planning task plans as its parent does (new child config key `plan_origin`),
+    whatever the service's default mode; an instruction file emptied (or left with only
+    comments) is named once as no longer applying; `Budget.max_cost_usd` counts compaction calls
+    and dropped replies, as `/cost` does; the skills walk-up stays put when a remote env's home
+    cannot be read; saved hook output stays named when its directory cannot be marked; a nested
+    command whose name is taken is warned about once. `make parity` reports a
     tool list missing from its data and compares cache marks and description changes per request.
 - **Context audit closure: what the model sees follows Claude Code 2.1.312 where it differed
   without a written reason** (spec `2026-11-02-context-audit-closure`; kept differences are rows

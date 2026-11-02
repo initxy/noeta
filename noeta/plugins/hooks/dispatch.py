@@ -96,12 +96,16 @@ async def capped(view: TaskView, text: str, name: str) -> str:
         path = spill_path(view.spill_dir, view.task_id, name)
         try:
             await view.env.write_bytes(path, text.encode("utf-8"))
-            await mark_spill_dir(view.env, task_spill_dir(view.spill_dir, view.task_id),
-                                 view.task_id)
         except Exception:  # any exec env's failure: cut inline instead
             log.warning("hooks: output of %s could not be saved", name, exc_info=True)
         else:
-            saved = path
+            saved = path  # written: named even if marking the directory fails
+            try:
+                await mark_spill_dir(view.env, task_spill_dir(view.spill_dir, view.task_id),
+                                     view.task_id)
+            except Exception:  # unmarked: kept, not swept
+                log.warning("hooks: spill directory of %s not marked", view.task_id,
+                            exc_info=True)
     return large_output_message(text, OUTPUT_CAP, saved_to=saved)
 
 

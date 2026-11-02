@@ -377,6 +377,18 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   the prompt tool and `NOETA_TERMINAL_MCP_TOOLS`, each match logged once; the model sees only
   CC's names. Why: a deny rule that silently stops matching lets the tool run in bypass or auto
   mode. pi, dsh: no rename to carry.
+- **Legacy names narrow, never widen** (confirm review N-P1-1). An MCP tool's old name never
+  matches an allow (no call can prove no other server shares it: a server may be down, and a
+  project `.mcp.json` can add a case variant); a skill's former name allows only while no other
+  skill has it, checked against the whole registry at each call. A hook reached only by such a
+  name keeps its block, deny and ask and loses its allow; an old name two tools share resolves to
+  none. The old-name table stays process-wide (set-valued, LRU; each entry a pure function of the
+  server alias and raw tool name). An old dedupe-hash name cannot be traced back (row).
+- **A sub-agent of a planning task follows its parent's plan origin** (`plan_origin` in the child
+  config, from the parent's plan record), not the service's default mode, so the A3 rule holds
+  for the whole tree. **Turns are delimited by core** (`TaskState.turn_seq`), so a skill's
+  override ends with its turn however the turn ends. **The hand-back review key** written by the
+  permission layer never equals what the model wrote (a trailing newline on a tie).
 - **A skill's `model` of another provider family is ignored** with a warning. CC switches always
   (it speaks to one provider). pi, dsh: no per-skill model. Why: noeta's aliases are Claude ids; on
   an OpenAI-compatible or DeepSeek deployment the switch would fail every request of the turn.
@@ -488,3 +500,17 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   `injection_in_mcp_result` each lost trial #6 to the 420 s cap at the same moment (a gateway
   stall, the other 8 trials full marks); `hook_block_adapts` 0.40 is known-noisy; the rest within
   one trial.
+- 2026-11-02 Confirm review of c686df54..6df2bb7f (2 new P1, 4 P2, P3s) fixed on `rg-names`,
+  `rg-turns` and in the merge. Map: N-P1-1 → legacy names only narrow (deny / ask / disallowed);
+  allow, `allowed_tools`, agent `tools:`, skill `allowed-tools` take current names; hooks reached
+  by a legacy name keep block/deny/ask, lose allow (test: the allow-widen repro, wildcard and
+  32-character collision). N-P1-2 → `TaskState.turn_seq`; an override older than the turn is
+  dropped whatever ended the last turn (tests: 404 model, stopped turn). N-P2-1 → the permission
+  layer's note never equals the model's (test: classifier down, child writes the text). N-P2-2 /
+  N-P2-3 → `continue_state` drops `turn` / resets `mentions_through`. N-P2-4 → `plan_origin` to
+  children (tests both ways; deviations row and CHANGELOG). P3: short names only for offered
+  tools; ambiguous legacy names resolve to none; emptied instruction file named once; walk-up
+  without a readable home stays put, local envs share the cache; `max_cost_usd` counts `spent`;
+  nested-command warning once; saved hook output named when marking fails. Left: an old ACP host
+  folding a log with `spent` fails on read (released versions cannot change; new workers hand the
+  task on with `NewerRecord`).

@@ -1020,3 +1020,23 @@ async def test_a_failing_background_hook_is_logged(
         await asyncio.sleep(0.01)
     assert "a background hook failed" in caplog.text
     assert not s.hooks._d._background
+
+
+async def test_saved_hook_output_is_named_when_marking_its_directory_fails() -> None:
+    from types import SimpleNamespace
+
+    from noeta.plugins.hooks.dispatch import capped
+
+    written: dict[str, bytes] = {}
+
+    class Env:
+        async def write_bytes(self, path: str, data: bytes) -> None:
+            written[path] = data
+
+        async def stat(self, path: str) -> None:
+            raise RuntimeError("env lost")
+
+    view = SimpleNamespace(spill_dir="/spill", env=Env(), task_id="t1")
+    text = await capped(view, "z" * 12_000, "ups")  # type: ignore[arg-type]
+    [path] = written
+    assert path in text and len(text) < 11_000
