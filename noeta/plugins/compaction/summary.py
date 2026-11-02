@@ -12,12 +12,23 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from typing import Any
 from importlib import resources
 
 import msgspec
 
 from noeta.core.errors import ContextOverflow, Fatal, ModelError, RateLimited, Transient
-from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolResult, ToolUse, user
+from noeta.core.types import (
+    Image,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    SystemPart,
+    Text,
+    ToolResult,
+    ToolUse,
+    user,
+)
 from noeta.plugins.compaction.estimate import messages_tokens
 
 
@@ -134,6 +145,41 @@ def summary_request(main: ModelRequest, history: Sequence[Message], text: str, *
         max_tokens=max_tokens if max_tokens is not None else main.max_tokens,
         cache_after=[at - 1] if at > 0 else [], output_schema=None, tool_choice=None,
         betas=betas)
+
+
+#: The fallback summarize call's whole system prompt (Claude Code's second
+#: request when the one sharing the main request's cache fails).
+FALLBACK_SYSTEM = "You are an assistant whose task is to summarize a conversation."
+#: The one tool the fallback call offers, when the main request has it.
+FALLBACK_TOOLS = ("Read",)
+#: Stands in for an image the fallback call leaves out.
+IMAGE_PLACEHOLDER = "[image]"
+
+
+def _without_images(message: Message) -> Message:
+    def plain(block: Any) -> Any:
+        return Text(text=IMAGE_PLACEHOLDER) if isinstance(block, Image) else block
+
+    if not any(isinstance(b, Image) or (isinstance(b, ToolResult)
+                                        and any(isinstance(c, Image) for c in b.content))
+               for b in message.content):
+        return message
+    content = [msgspec.structs.replace(b, content=[plain(c) for c in b.content])
+               if isinstance(b, ToolResult) else plain(b) for b in message.content]
+    return msgspec.structs.replace(message, content=content)
+
+
+def fallback_request(request: ModelRequest) -> ModelRequest:
+    """The second summarize call, made when the first (``request``, which
+    shares the main request's cache) errs or brings no summary, as Claude
+    Code makes it: the same conversation and instruction under a plain
+    summarizer system prompt, only the ``Read`` tool, each image as
+    :data:`IMAGE_PLACEHOLDER`, and no cache marks."""
+    return msgspec.structs.replace(
+        request, system=[SystemPart(text=FALLBACK_SYSTEM)],
+        tools=[t for t in request.tools if t.name in FALLBACK_TOOLS],
+        messages=[_without_images(m) for m in request.messages],
+        cache_after=[], cache_blocks=[])
 
 
 def joined_text(response: ModelResponse) -> str:

@@ -319,3 +319,28 @@ def test_the_restore_finds_the_shell_directory_and_the_calls_by_name() -> None:
     assert _shell_cwd({}, "/w") == "/w"
     assert _shown_by_commands(ext) == {"b": ["/w/frontend/package.json"]}
     assert _shown_by_commands({}) == {}
+
+
+def test_the_fallback_summarize_request() -> None:
+    """Claude Code's fallback call: its own plain system prompt, only
+    ``Read``, images as ``[image]`` (in tool results too), no cache marks;
+    the conversation and the rest of the request as the first call's."""
+    from noeta.core.types import SystemPart, ToolSpec
+    pic = Image(media_type="image/png", data=b"x")
+    first = ModelRequest(
+        model="m", system=[SystemPart(text="main", cache=True)],
+        tools=[ToolSpec(name="Bash", description="", input_schema={}),
+               ToolSpec(name="Read", description="", input_schema={})],
+        messages=[user("look"), Message(role="user", content=[Text(text="see"), pic]),
+                  Message(role="assistant", content=[ToolUse(id="c", name="Read", input={})]),
+                  Message(role="user", content=[ToolResult(call_id="c", content=[pic])])],
+        cache_after=[2], cache_blocks=[(1, 0)], max_tokens=99)
+    fb = summary.fallback_request(first)
+    assert fb.system == [SystemPart(text=summary.FALLBACK_SYSTEM)]
+    assert [t.name for t in fb.tools] == ["Read"]
+    assert fb.cache_after == [] and fb.cache_blocks == [] and fb.max_tokens == 99
+    assert fb.messages[0] is first.messages[0]
+    assert fb.messages[1].content == [Text(text="see"), Text(text=summary.IMAGE_PLACEHOLDER)]
+    result = fb.messages[3].content[0]
+    assert isinstance(result, ToolResult)
+    assert result.content == [Text(text=summary.IMAGE_PLACEHOLDER)]

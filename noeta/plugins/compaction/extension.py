@@ -12,7 +12,11 @@ summary, an automatic compaction waits. The project instructions and the
 workspace context go ahead of the summary (a manual compaction puts them
 after the kept messages instead), then come the kept messages, then the
 files read recently and the invoked skills; the listings and the
-environment are given again with the next request.
+environment are given again with the next request. When the summarize
+call errs or brings no summary, a plainer fallback call is made; an
+automatic compaction that still fails lets the request go out as it is, and
+three failures in a row turn automatic compaction off for the task (Claude
+Code's).
 
 Everything a step sends is a pure function of the folded log, so a runner
 that restarts mid-step sends the same bytes: a compaction is the core
@@ -69,6 +73,12 @@ THRASHING_DETAIL = (
     f"{RAPID_REFILLS_TO_STOP} times in a row. A file or tool output is probably too large "
     "for the context window; read it in smaller parts, or start a new conversation.")
 
+#: Claude Code's failure breaker: an automatic compaction whose summary
+#: fails lets the request go out as it is; after this many failures in a
+#: row automatic compaction is off for the task (``/compact`` and the
+#: compaction after a context overflow still run).
+AUTO_FAILURES_TO_STOP = 3
+
 #: The ``/compact`` command and the text it puts in the conversation.
 COMMAND = "compact"
 COMMAND_DESCRIPTION = ("Summarize the conversation so far to free context "
@@ -111,6 +121,12 @@ class CompactionState:
     turn: int = -1
     step: int = 0
     rapid_refills: int = 0
+    #: Automatic compactions in a row whose summary failed, and where the
+    #: last one failed (person turns so far, model calls in that turn): the
+    #: request it was for went out as it was, so a runner rebuilding that
+    #: request does not try again.
+    failures: int = 0
+    failed_at: tuple[int, int] | None = None
 
 
 def _user_turns(state: TaskState) -> int:
@@ -184,10 +200,13 @@ class Compaction(Extension):
             return replace(st, restored=tuple(data.get("texts") or ()))
         if kind == "restored_sent":
             return replace(st, restored=())
+        if kind == "failed":
+            return replace(st, failures=int(data.get("failures") or 0),
+                           failed_at=(int(data.get("turn") or 0), int(data.get("step") or 0)))
         if kind != "compacted":
             return st
         seen, paths = data.get("seen_through"), data.get("restored_paths")
-        return replace(st, compactions=st.compactions + 1,
+        return replace(st, compactions=st.compactions + 1, failures=0, failed_at=None,
                        turn=int(data.get("turn") or 0), step=int(data.get("step") or 0),
                        rapid_refills=int(data.get("rapid_refills") or 0),
                        kept_replies=int(data.get("kept_replies") or 0),
@@ -251,6 +270,10 @@ class Compaction(Extension):
         cut = self._cut(state, n, manual=False)
         if cut is None or self._through(state, cut) is None:
             return request
+        ext = self._ext(state)
+        if ext.failures >= AUTO_FAILURES_TO_STOP \
+                or ext.failed_at == (_user_turns(state), state.steps_in_turn):
+            return request
         rapid = self._rapid_refills(state)
         if rapid >= RAPID_REFILLS_TO_STOP:
             log.warning("task %s: auto-compaction refilled %d times in a row; stopping",
@@ -259,8 +282,24 @@ class Compaction(Extension):
         extra = await self._instructions(view, "auto", "")
         if extra is None:
             return request
-        await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
-                            extra=extra, rapid_refills=rapid)
+        try:
+            await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
+                                extra=extra, rapid_refills=rapid)
+        except TurnFailed as exc:
+            if exc.reason != summary.SUMMARY_FAILED_REASON:
+                raise
+            # Claude Code's: the request goes out uncompacted (an overflow
+            # then compacts after it); three failures in a row turn
+            # automatic compaction off for the task.
+            failures = ext.failures + 1
+            log.warning("task %s: automatic compaction failed (%d in a row%s): %s",
+                        view.task_id, failures,
+                        "; off for this task" if failures >= AUTO_FAILURES_TO_STOP else "",
+                        exc.detail)
+            view.record(self.name, "failed", {"failures": failures, "turn": _user_turns(state),
+                                              "step": state.steps_in_turn,
+                                              "detail": exc.detail})
+            return request
         # Every extension builds the request again from the compacted
         # conversation (betas and notes that depend on it included).
         raise RequestStale()
@@ -470,17 +509,29 @@ class Compaction(Extension):
                                    extra)
         usage = Usage()
 
-        async def once(history: list[Message]) -> ModelResponse | ModelError:
+        async def call(req: ModelRequest) -> ModelResponse | ModelError:
             nonlocal usage
             assert view.complete is not None
-            req = summary.summary_request(request, history, text, model=model,
-                                          max_tokens=max_tokens)
             try:
                 outcome = await view.complete(req)
             except ModelError as exc:
                 return exc
             usage = usage + outcome.usage
             return outcome
+
+        async def once(history: list[Message]) -> ModelResponse | ModelError:
+            """The summarize call; when it errs or brings no summary, Claude
+            Code's fallback call."""
+            req = summary.summary_request(request, history, text, model=model,
+                                          max_tokens=max_tokens)
+            outcome = await call(req)
+            note = summary.joined_text(outcome) if isinstance(outcome, ModelResponse) else ""
+            failure = summary.summary_failure(outcome, note)
+            if failure is None:
+                return outcome
+            log.info("task %s: summarize call failed (%s); trying the fallback call",
+                     view.task_id, failure)
+            return await call(summary.fallback_request(req))
 
         attempt = to_summarize
         dropped = False
