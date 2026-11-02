@@ -193,7 +193,7 @@ class Subtasks(Extension):
     def initial_state(self) -> Any:
         return {"agents": {}, "tasks": {}, "handbacks": {}, "flagged": [], "pending": {},
                 "noticed": [], "reminded": False, "listed": False, "held_list": None,
-                "held_status": [], "progress": None, **idle.initial()}
+                "held_status": [], "progress": None, "mentions_through": 0, **idle.initial()}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = {**self.initial_state(), **(state or {})}
@@ -234,6 +234,11 @@ class Subtasks(Extension):
             return {**st, "held_status": list(data.get("texts") or ())}
         if kind == "task_status_sent":
             return {**st, "held_status": []}
+        if kind == "agent_mention":
+            through = data.get("through") if isinstance(data, dict) else None
+            if isinstance(through, int):
+                return {**st, "mentions_through": max(st["mentions_through"], through)}
+            return st
         return idle.reduce(st, kind, data) or st
 
     def _state(self, state: TaskState) -> dict[str, Any]:
@@ -367,7 +372,7 @@ class Subtasks(Extension):
         elif not st["held_list"]:
             out += self._agent_delta(view, st)
         if not view.state.parent_id:
-            out += mention_reminders(view, self.roster_for(view))
+            out += mention_reminders(view, self.roster_for(view), st["mentions_through"])
         return out
 
     def _agent_delta(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:

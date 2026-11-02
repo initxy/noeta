@@ -389,6 +389,22 @@ async def test_an_agent_mention_asks_the_model_to_start_that_agent(
     assert [m.text for m in p.requests[1].messages].count(note) == 1  # not again
 
 
+async def test_an_agent_mention_is_noted_once_per_prompt(store: SqliteStore) -> None:
+    """Not again when the call is made again (an empty reply asked to go
+    on), nor after a turn that ended without a reply."""
+    from noeta.plugins.subtasks.mentions import AGENT_MENTION
+
+    p = ScriptedProvider([reply(""), reply(""), reply("ok")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    client = Client(store)
+    tid = await client.create("main", "ask @agent-scout please")
+    await rt.run_until_idle()
+    await client.send(tid, "and now?")
+    await rt.run_until_idle()
+    note = AGENT_MENTION.format(type="scout")
+    assert [[m.text for m in r.messages].count(note) for r in p.requests] == [1, 1, 1]
+
+
 async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", ("ListAgents", {})), reply("", agent("dig", "scout")),
                           reply("", ("ListAgents", {})), reply("listed")])
