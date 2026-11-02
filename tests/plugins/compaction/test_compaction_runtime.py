@@ -430,3 +430,39 @@ def test_a_transcript_stays_in_the_project_directory_whatever_the_task_id(
 
     project = tmp_path / "home" / "projects" / project_slug(str(work))
     assert Path(written).parent == project and Path(written).resolve().parent == project
+
+
+async def test_the_plan_file_is_given_again_after_a_compaction(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Claude Code's ``plan_file_reference``: after a compaction the task's
+    plan file, path and whole text, whenever there is one (here in plan
+    mode), after the files read again and ahead of the skills."""
+    import re
+
+    from noeta.plugins.permissions import Permissions
+    from noeta.plugins.permissions.plan import plan_file_text
+
+    plans = tmp_path / "plans"
+    written: list[str] = []
+
+    def plan_then_call(request: ModelRequest) -> ModelResponse:
+        path = re.search(rf"{re.escape(str(plans))}/[\w-]+\.md", "\n".join(
+            m.text for m in request.messages))
+        assert path is not None
+        Path(path.group(0)).parent.mkdir(parents=True, exist_ok=True)
+        Path(path.group(0)).write_text("1. Probe.\n2. Report.\n")
+        written.append(path.group(0))
+        return call()(request)
+
+    a = agent(extensions=(Permissions(mode="default", plans_dir=str(plans), allow=["Probe"]),))
+    model = Model([plan_then_call, *(call() for _ in range(11)), answer("done")])
+    client = Client(store)
+    tid = await client.create(a.name, "go", config={"permission_mode": "plan"})
+    await runtime(store, a, model).run_until_idle()
+    assert await compactions(client, tid)
+    after = next(r for r in model.requests if r.messages[0].text.startswith(SUMMARY_PREAMBLE))
+    reference = plan_file_text(written[0], "1. Probe.\n2. Report.\n")
+    assert sum(m.text.count(reference) for m in after.messages if m.role == "system") == 1
+    later = model.requests[model.requests.index(after) + 1]
+    assert sum(m.text.count(reference) for m in later.messages) == 1  # sent once
+    await assert_rebuilds(store, a, tid)

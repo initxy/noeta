@@ -8,6 +8,7 @@ import logging
 import os
 import posixpath
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from noeta.core.extension import Reminder, TaskView
@@ -26,6 +27,10 @@ PLAN_NAME_SIGNAL = pl.PLAN_NAME_SIGNAL
 #: budget, after the skill list.
 ORDER_PLAN = 64
 ORDER_AUTO = 70
+#: The plan file given again after a compaction: after the files read
+#: again and the background tasks' status, ahead of the invoked skills
+#: (Claude Code's order).
+ORDER_PLAN_FILE = 15
 #: The local command wrapper ``/plan`` sends (Claude Code's tags).
 PLAN_COMMAND = ("<command-name>/plan</command-name>\n            <command-message>plan"
                 "</command-message>\n            <command-args>{args}</command-args>\n\n"
@@ -139,6 +144,36 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
         view.record(NAME, "noted", {"kinds": [*sent, *stale], "plan_noted": plan_noted,
                                     "plan_reminders": reminders})
     return out
+
+
+async def plan_file_resident(view: TaskView) -> None:
+    """At a compaction: the task's plan file, when it has one with text, is
+    read and held for the next request, in plan mode or not (Claude Code's
+    ``plan_file_reference``)."""
+    plan = state_of(view).plan
+    path = plan.get("path") if isinstance(plan, dict) else None
+    if view.keeps_tail is None or not isinstance(path, str):
+        return
+    text = await _read(view, path)
+    if text and text.strip():
+        view.record(NAME, "plan_file", {"path": path, "text": text})
+
+
+def plan_file_reminders(view: TaskView) -> list[Reminder]:
+    held = state_of(view).plan_file
+    if not held:
+        return []
+    return [Reminder(text=pl.plan_file_text(str(held["path"]), str(held["text"])),
+                     kind="plan_file_sent", data={}, role="system", order=ORDER_PLAN_FILE)]
+
+
+async def _read(view: TaskView, path: str) -> str | None:
+    try:
+        if view.env is not None:
+            return (await view.env.read_bytes(path)).decode("utf-8", "replace")
+        return await asyncio.to_thread(Path(path).read_text, "utf-8")
+    except Exception:  # noqa: BLE001 — absent or unreadable: no plan
+        return None
 
 
 async def _exists(view: TaskView, path: str) -> bool:
