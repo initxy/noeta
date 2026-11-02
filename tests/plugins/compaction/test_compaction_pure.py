@@ -344,3 +344,21 @@ def test_the_fallback_summarize_request() -> None:
     result = fb.messages[3].content[0]
     assert isinstance(result, ToolResult)
     assert result.content == [Text(text=summary.IMAGE_PLACEHOLDER)]
+
+
+def test_the_fallback_call_offers_tool_search_and_mcp_tools_when_searching() -> None:
+    """Claude Code's fallback offers ToolSearch and every MCP tool besides
+    Read when tool search is on, and only Read otherwise."""
+    from noeta.core.types import ToolSpec
+
+    def spec(name: str) -> ToolSpec:
+        return ToolSpec(name=name, description="", input_schema={})
+
+    tools = [spec("Bash"), spec("mcp__db__query"), spec("Read"), spec("ToolSearch"),
+             spec("mcp__gh__issue")]
+    fb = summary.fallback_request(ModelRequest(model="m", tools=tools))
+    assert [t.name for t in fb.tools] == ["Read", "ToolSearch", "mcp__db__query",
+                                          "mcp__gh__issue"]
+    plain = summary.fallback_request(ModelRequest(
+        model="m", tools=[t for t in tools if t.name != "ToolSearch"]))
+    assert [t.name for t in plain.tools] == ["Read"]

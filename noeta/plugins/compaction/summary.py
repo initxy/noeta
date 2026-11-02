@@ -150,8 +150,12 @@ def summary_request(main: ModelRequest, history: Sequence[Message], text: str, *
 #: The fallback summarize call's whole system prompt (Claude Code's second
 #: request when the one sharing the main request's cache fails).
 FALLBACK_SYSTEM = "You are an assistant whose task is to summarize a conversation."
-#: The one tool the fallback call offers, when the main request has it.
+#: The tool the fallback call offers, when the main request has it; with
+#: tool search on (the main request offers ``ToolSearch``), also
+#: ``ToolSearch`` and every MCP tool (``mcp__`` names), as Claude Code does.
 FALLBACK_TOOLS = ("Read",)
+TOOL_SEARCH = "ToolSearch"
+MCP_PREFIX = "mcp__"
 #: Stands in for an image the fallback call leaves out.
 IMAGE_PLACEHOLDER = "[image]"
 
@@ -173,11 +177,15 @@ def fallback_request(request: ModelRequest) -> ModelRequest:
     """The second summarize call, made when the first (``request``, which
     shares the main request's cache) errs or brings no summary, as Claude
     Code makes it: the same conversation and instruction under a plain
-    summarizer system prompt, only the ``Read`` tool, each image as
+    summarizer system prompt, only the ``Read`` tool (with tool search on,
+    ``ToolSearch`` and the MCP tools too), each image as
     :data:`IMAGE_PLACEHOLDER`, and no cache marks."""
+    searching = any(t.name == TOOL_SEARCH for t in request.tools)
+    tools = [t for t in request.tools if t.name in FALLBACK_TOOLS] + (
+        [t for t in request.tools if t.name == TOOL_SEARCH] +
+        [t for t in request.tools if t.name.startswith(MCP_PREFIX)] if searching else [])
     return msgspec.structs.replace(
-        request, system=[SystemPart(text=FALLBACK_SYSTEM)],
-        tools=[t for t in request.tools if t.name in FALLBACK_TOOLS],
+        request, system=[SystemPart(text=FALLBACK_SYSTEM)], tools=tools,
         messages=[_without_images(m) for m in request.messages],
         cache_after=[], cache_blocks=[])
 
