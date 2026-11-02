@@ -100,8 +100,11 @@ async def test_server_tools_are_offered_called_and_recorded_once(
                                  "mcp__fake__image", "mcp__fake__pid", "mcp__fake__sleep"]
     echo = next(t for t in first.tools if t.name == "mcp__fake__echo")
     assert echo.description == "Echo the text back." and not echo.defer_loading
-    # Server tools come last; the resource tools stay deferred.
-    assert [t.name for t in first.tools][:2] == ["ToolSearch", "DeferredToolPlaceholder"]
+    # Server tools come last, the placeholder second to last (before the
+    # last server tool); the resource tools stay deferred.
+    sent = [t.name for t in first.tools]
+    assert sent[0] == "ToolSearch" and sent[-2] == "DeferredToolPlaceholder"
+    assert all(n.startswith("mcp__") for n in sent[1:-2] + sent[-1:])
     evs = await events(client, tid)
     echo_r, fail_r, image_r = (f.result for f in finished(evs))
     assert texts(echo_r) == ["echo: hi"]

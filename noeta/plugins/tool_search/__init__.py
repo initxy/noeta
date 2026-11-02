@@ -14,9 +14,9 @@ with :data:`NOT_LOADED`), and the request always lists
 vendor's deferred-loading mode on from the first request.
 
 Order (the kernel's): every sent tool sorted by name, then the tools that
-declare ``listed_last`` (server tools) sorted by name. The placeholder goes
-right before the ``listed_last`` group; while that group is empty and no
-deferred tool is loaded, it goes right before the last tool.
+declare ``listed_last`` (server tools) sorted by name. The placeholder is
+always second to last: right before the last tool of that order, whatever
+it is (Claude Code inserts it at ``length - 1``).
 """
 
 from __future__ import annotations
@@ -71,9 +71,8 @@ class ToolSearch(Extension):
         loaded = loaded_tools(view.state)
         withhold = {n: NOT_LOADED.format(name=n) for n in deferred if n not in loaded}
         sent = [t for t in [*offered, *add] if t.name not in withhold]
-        head = sorted(t.name for t in sent if not tool_flag(t, "listed_last"))
-        last_group = any(tool_flag(t, "listed_last") for t in sent)
-        any_loaded = len(withhold) < len(deferred)
-        before = "" if last_group or any_loaded or not head else head[-1]
+        order = [*sorted(t.name for t in sent if not tool_flag(t, "listed_last")),
+                 *sorted(t.name for t in sent if tool_flag(t, "listed_last"))]
+        before = order[-1] if order else ""
         return ToolChanges(add=add, withhold=withhold,
                            entries=[ToolEntry(spec=placeholder_spec(), before=before)])

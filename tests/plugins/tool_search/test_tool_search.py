@@ -65,12 +65,18 @@ def test_no_deferred_tool_means_a_sorted_list_and_no_placeholder() -> None:
         "Agent", "Bash", "Write"]
 
 
-def test_the_placeholder_sits_before_the_last_tool_until_something_is_loaded() -> None:
+def test_the_placeholder_is_always_second_to_last() -> None:
+    # Claude Code splices it in at length - 1 (recorded m5: `Workflow,
+    # DeferredToolPlaceholder, Write` with Monitor loaded and no MCP tool).
     tools = [Fake("Write"), Fake("Read"), Fake("WebFetch", deferred=True),
-             Fake("mcp__s__t", deferred=True, last=True), Fake("ToolSearch")]
+             Fake("mcp__s__t", deferred=True, last=True), Fake("mcp__s__u", deferred=True,
+                                                               last=True), Fake("ToolSearch")]
     assert names(specs(tools)) == ["Read", "ToolSearch", PLACEHOLDER + "*", "Write"]
-    assert names(specs(tools, ["WebFetch", "mcp__s__t"])) == [
-        "Read", "ToolSearch", "WebFetch*", "Write", PLACEHOLDER + "*", "mcp__s__t*"]
+    assert names(specs(tools, ["WebFetch"])) == [
+        "Read", "ToolSearch", "WebFetch*", PLACEHOLDER + "*", "Write"]
+    assert names(specs(tools, ["WebFetch", "mcp__s__t", "mcp__s__u"])) == [
+        "Read", "ToolSearch", "WebFetch*", "Write", "mcp__s__t*", PLACEHOLDER + "*",
+        "mcp__s__u*"]
 
 
 def test_a_listed_last_tool_keeps_the_placeholder_before_it() -> None:
@@ -216,7 +222,7 @@ async def test_a_loaded_tool_is_sent_and_callable_and_survives_compaction(
     await rt.run_until_idle()
     first, _, after_load, after_compact = provider.requests
     assert names(first.tools) == ["Read", PLACEHOLDER + "*", "ToolSearch"]
-    assert names(after_load.tools) == ["Read", "ToolSearch", "WebFetch*", PLACEHOLDER + "*"]
+    assert names(after_load.tools) == ["Read", "ToolSearch", PLACEHOLDER + "*", "WebFetch*"]
     assert names(after_compact.tools) == names(after_load.tools)
     results = [r.event.result for r in await client.events(tid)
                if isinstance(r.event, ToolFinished)]
