@@ -22,6 +22,7 @@ from noeta.plugins.todos import (
     PROMPT_LINE,
     REMINDER,
     Todos,
+    canonical,
     gets_task_tools,
     turns_since,
 )
@@ -73,13 +74,28 @@ def _view(model: str, parent: str | None = None) -> TaskView:
 @pytest.mark.parametrize(("model", "gets"), [
     ("claude-sonnet-4-5", True), ("claude-sonnet-4-5-20250929", True), ("claude-opus-4-6", True),
     ("claude-opus-4-7", True), ("claude-haiku-4-5", True), ("claude-3-7-sonnet-latest", True),
-    ("us.anthropic.claude-sonnet-4-6", True),
+    ("claude-opus-4-1-20250805", True), ("claude-opus-4-20250514", True),
+    ("claude-sonnet-4-20250514", True), ("claude-opus-4", True), ("claude-sonnet-4", True),
+    ("claude-opus-4-0", True), ("anthropic.claude-opus-4-20250514-v1:0", True),
+    ("us.anthropic.claude-sonnet-4-6", True), ("eu.anthropic.claude-haiku-4-5-20251001-v1:0", True),
     ("arn:aws:bedrock:us-east-1:1:application-inference-profile/x", True),
-    ("opensource/deepseek_v4_1_flash", True), ("gpt-5.5", True),
+    ("opensource/deepseek_v4_1_flash", False), ("gpt-5.5", False), ("deepseek-chat", False),
     ("claude-opus-5-5", False), ("opus", False), ("sonnet", False), ("claude-fable-5-1", False),
     ("claude-haiku-5-5", False), ("claude-opus-4-8", False), ("claude-sonnet-5", False)])
 def test_the_models_claude_code_gives_the_tools(model: str, gets: bool) -> None:
     assert gets_task_tools(model) is gets
+
+
+@pytest.mark.parametrize(("model", "name"), [
+    ("claude-opus-4-20250514", "claude-opus-4-0"), ("claude-sonnet-4", "claude-sonnet-4-0"),
+    ("anthropic.claude-opus-4-20250514-v1:0", "claude-opus-4-0"),
+    ("claude-opus-4-1-20250805", "claude-opus-4-1"), ("claude-3-5-haiku-20241022",
+                                                      "claude-3-5-haiku"),
+    ("deepseek-v4-20260101", "deepseek-v4"),
+    # Claude Code's order, quirks included.
+    ("claude-opus-4-10", "claude-opus-4-1")])
+def test_claude_codes_canonical_names(model: str, name: str) -> None:
+    assert canonical(model) == name
 
 
 def test_switches_and_sub_agents() -> None:
@@ -182,11 +198,15 @@ def test_turns_count_content_blocks_and_skip_thinking() -> None:
 
     messages = [*step(ToolUse(id="1", name="TaskUpdate", input={})),
                 *step(Thinking(text="hm"), Text(text="a"), ToolUse(id="2", name="Probe",
-                                                                        input={})),
-                Message(role="system", content=[Text(text=REMINDER)]),
+                                                                    input={})),
                 *step(Text(text="b"))]
-    assert turns_since(messages, REMINDER) == (3, 1)
-    assert turns_since(messages[:2], REMINDER) == (0, 1)
+    # Never reminded: every turn shown counts.
+    assert turns_since(messages, messages, -1) == (3, 4)
+    # Reminded after the third turn of the history.
+    assert turns_since(messages, messages, 3) == (3, 1)
+    # A compaction left two turns: no count reaches back past it.
+    assert turns_since(messages[2:4], messages, -1) == (2, 2)
+    assert turns_since(messages[2:4], [*messages, *messages], 0) == (2, 2)
 
 
 async def test_input_repairs_and_hints() -> None:

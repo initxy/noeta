@@ -1,9 +1,10 @@
 """Claude Code's task list: ``TaskCreate`` / ``TaskGet`` / ``TaskUpdate`` /
 ``TaskList`` (deferred) and the reminder after ten model turns without them.
 
-As in Claude Code 2.1.312, only the models that predate its lean prompt
-(:data:`OLDER_MODELS`) and models it does not know (any model that is not a
-Claude model, such as DeepSeek) get them; the Claude 5 family gets none.
+As in Claude Code 2.1.312, only the Claude models that predate its lean
+prompt (:data:`OLDER_MODELS`, by Claude Code's canonical name) and Bedrock
+application inference profiles get them by default; the Claude 5 family and
+every other model (DeepSeek, a gateway's routing name) get none.
 ``all_models = true`` gives every model the tools (Claude Code's
 ``CLAUDE_CODE_ENABLE_TODO_TOOLS``); ``enabled = false``, the switch every
 plugin has, takes them from every model.
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from noeta.core import models
@@ -28,24 +30,34 @@ from noeta.core.types import Message, Thinking, ToolUse
 from noeta.plugins.todos.state import TodoState, reduce_todos
 from noeta.plugins.todos.tools import CREATE, NAME, UPDATE, task_tools
 
-__all__ = ["OLDER_MODELS", "REMINDER", "TURNS", "Todos", "gets_task_tools", "turns_since"]
+__all__ = ["OLDER_MODELS", "REMINDER", "TURNS", "Todos", "canonical", "gets_task_tools",
+           "turns_since"]
 
 #: Claude Code 2.1.312's models that get the task tools (its list of the
-#: models older than the lean prompt), matched in the id as Claude Code
-#: matches its canonical names (``claude-sonnet-4-5-20250929``,
-#: ``us.anthropic.claude-haiku-4-5-...``).
+#: models older than the lean prompt), by canonical name (:func:`canonical`).
 OLDER_MODELS = ("claude-3-opus", "claude-3-sonnet", "claude-3-haiku", "claude-3-5-sonnet",
                 "claude-3-5-haiku", "claude-3-7-sonnet", "claude-opus-4-0", "claude-opus-4-1",
                 "claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-4-0",
                 "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-haiku-4-5")
-#: A Claude model Claude Code knows by name: one not in :data:`OLDER_MODELS`
-#: gets no task tools.
-_CLAUDE = re.compile(r"claude-(?:\d|opus|sonnet|haiku|fable|mythos)")
+#: Claude Code's canonical names, checked in its order: the first name the id
+#: contains (a pattern: matches) is the model's.
+_CANONICAL: tuple[str | tuple[re.Pattern[str], str], ...] = (
+    "claude-fable-5-1", "claude-fable-5", "claude-mythos-5-1", "claude-mythos-5",
+    "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
+    "claude-opus-4-6", "claude-opus-4-5", "claude-opus-4-1",
+    (re.compile(r"claude-opus-4(?!-\d(?!\d))"), "claude-opus-4-0"),
+    "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-sonnet-4-5",
+    (re.compile(r"claude-sonnet-4(?!-\d(?!\d))"), "claude-sonnet-4-0"),
+    "claude-haiku-5-5", "claude-haiku-4-5", "claude-3-7-sonnet", "claude-3-5-sonnet",
+    "claude-3-5-haiku", "claude-3-opus", "claude-3-sonnet", "claude-3-haiku")
+_DATE = re.compile(r"-\d{8}$")
 #: Model turns (non-thinking content blocks) without a task tool, and since
 #: the last reminder, that earn a reminder (Claude Code's 10 and 10).
 TURNS = 10
 #: Its place in a joined system turn: after the turn notes, before the budget.
 ORDER = 72
+#: The reminder's record kind.
+REMINDER_KIND = "task_reminder"
 
 REMINDER = (
     "The task tools haven't been used recently. If you're working on tasks that would "
@@ -61,39 +73,55 @@ PROMPT_LINE = ("Use TaskCreate to plan and track work. Mark each task completed 
 _PROMPT_BEFORE = "# Session-specific guidance"
 
 
+def canonical(model: str) -> str:
+    """Claude Code's canonical name of ``model`` (its ``kK``): the first of
+    its Claude names the id contains, else the id without a date suffix."""
+    for entry in _CANONICAL:
+        if isinstance(entry, str):
+            if entry in model:
+                return entry
+        elif entry[0].search(model):
+            return entry[1]
+    return _DATE.sub("", model)
+
+
 def gets_task_tools(model: str) -> bool:
     """Whether Claude Code 2.1.312 gives ``model`` the task tools: an older
-    Claude model, a Bedrock application inference profile, or any model
-    that is not a Claude model it knows (an alias resolves first)."""
-    real = models.resolve_alias(model).lower()
-    if "application-inference-profile" in real or any(m in real for m in OLDER_MODELS):
-        return True
-    return _CLAUDE.search(real) is None
+    Claude model or a Bedrock application inference profile (an alias
+    resolves first)."""
+    name = canonical(models.resolve_alias(model))
+    return "application-inference-profile" in name or name in OLDER_MODELS
 
 
-def turns_since(messages: Sequence[Message], reminder: str) -> tuple[int, int]:
-    """Model turns since the last ``TaskCreate`` / ``TaskUpdate`` call, and
-    since the last reminder (whose text starts with ``reminder``'s first
-    line). A turn is one non-thinking content block of a reply, as Claude
-    Code keeps each block of a reply as its own message."""
-    head = reminder.split("\n", 1)[0]
-    since_use = since_reminder = 0
-    used = reminded = False
+def _blocks(messages: Sequence[Message]) -> int:
+    """Model turns in ``messages``: non-thinking content blocks of replies
+    (Claude Code keeps each block of a reply as its own message)."""
+    return sum(1 for m in messages if m.role == "assistant"
+               for b in m.content if not isinstance(b, Thinking))
+
+
+def turns_since(messages: Sequence[Message], history: Sequence[Message],
+                reminded_at: int) -> tuple[int, int]:
+    """Model turns since the last ``TaskCreate`` / ``TaskUpdate`` call in
+    ``messages`` (the conversation as the model sees it), and since the last
+    reminder, given at turn ``reminded_at`` of ``history`` (``-1``: never).
+    Neither count reaches back past a compaction, as Claude Code counts in
+    the compacted conversation."""
+    since_use = 0
     for m in reversed(messages):
-        if m.role == "assistant":
-            for block in reversed(m.content):
-                if isinstance(block, Thinking):
-                    continue
-                if not used and isinstance(block, ToolUse) and block.name in (CREATE, UPDATE):
-                    used = True
-                if not used:
-                    since_use += 1
-                if not reminded:
-                    since_reminder += 1
-        elif not reminded and m.text.startswith(head):
-            reminded = True
-        if used and reminded:
-            break
+        if m.role != "assistant":
+            continue
+        for block in reversed(m.content):
+            if isinstance(block, Thinking):
+                continue
+            if isinstance(block, ToolUse) and block.name in (CREATE, UPDATE):
+                break
+            since_use += 1
+        else:
+            continue
+        break
+    shown = _blocks(messages)
+    since_reminder = shown if reminded_at < 0 else min(shown, _blocks(history) - reminded_at)
     return since_use, since_reminder
 
 
@@ -110,6 +138,9 @@ class Todos(Extension):
         return TodoState()
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
+        if kind == REMINDER_KIND:
+            st = state if isinstance(state, TodoState) else TodoState()
+            return replace(st, reminded_at=int((data or {}).get("turn", 0)))
         return reduce_todos(state, kind, data)
 
     def active(self, view: TaskView) -> bool:
@@ -131,16 +162,21 @@ class Todos(Extension):
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         if not self.active(view) or not view.state.messages or not _offered(view, UPDATE):
             return ()
-        text = view.prompt(f"reminder/{NAME}", REMINDER)
-        since_use, since_reminder = turns_since(view.state.messages, text)
+        st = view.ext_state(NAME)
+        st = st if isinstance(st, TodoState) else TodoState()
+        since_use, since_reminder = turns_since(view.state.messages, view.state.history,
+                                                st.reminded_at)
         if since_use < TURNS or since_reminder < TURNS:
             return ()
-        st = view.ext_state(NAME)
-        items = st.items if isinstance(st, TodoState) else ()
+        text = view.prompt(f"reminder/{NAME}", REMINDER)
+        items = st.items
         if items:
             text += REMINDER_LIST + "\n".join(f"#{i.id}. [{i.status}] {i.subject}"
                                               for i in items)
-        return (Reminder(text=text, kind="task_reminder", role="system", order=ORDER),)
+        # The turn it is given at is recorded with it (``reduce``), so the
+        # next count needs no text to find it by.
+        return (Reminder(text=text, kind=REMINDER_KIND, role="system", order=ORDER,
+                         data={"turn": _blocks(view.state.history)}),)
 
 
 def _offered(view: TaskView, name: str) -> bool:

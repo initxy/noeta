@@ -46,6 +46,9 @@ class TodoState:
     items: tuple[Item, ...] = ()
     #: The highest id ever given out (deleted ones included).
     highest: int = 0
+    #: The model turn of the task's history the last reminder came after
+    #: (``-1``: none yet).
+    reminded_at: int = -1
 
     def get(self, item_id: str) -> Item | None:
         return next((i for i in self.items if i.id == item_id), None)

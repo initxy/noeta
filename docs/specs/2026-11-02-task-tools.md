@@ -40,11 +40,15 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
 ## Decisions
 
 - **D1 One plugin, `todos`, in the main agent.** Its tools and reminder are offered when the
-  task's model is one CC gives them to: CC's list of older Claude models (`OLDER_MODELS`:
-  Claude 3.x, Opus 4.0-4.7, Sonnet 4.0-4.6, Haiku 4.5) matched in the id, a Bedrock application
-  inference profile, or any model that is not a Claude model CC knows by name (DeepSeek, a
-  gateway's routing name). The Claude 5 family and Opus 4.8 get none. CC: the same rule
-  (`FY`), checked on every request. Why: owner's call, CC's gating as the default.
+  task's model is one CC gives them to: CC's canonical name of the model (`canonical`, CC's `kK`:
+  its ordered Claude names, `claude-opus-4(?!-\d(?!\d))` read as `claude-opus-4-0` and the same
+  for Sonnet, else the id without a date suffix) is in its list of older Claude models
+  (`OLDER_MODELS`: Claude 3.x, Opus 4.0-4.7, Sonnet 4.0-4.6, Haiku 4.5), or the model is a
+  Bedrock application inference profile. The Claude 5 family, Opus 4.8 and every model that is
+  not Claude (DeepSeek, a gateway's routing name) get none. CC: the same rule (`FY`: `zqt()` is
+  the canonical name, a string for any model once one is set), checked on every request;
+  recorded: `cc-unknown/001.json` (an unknown model) has no `Task*` tool, `m7` (Sonnet 4.5)
+  lists all four. Why: owner's call, CC's gating as the default.
 - **D2 The switch is `all_models`, not `enabled`.** `[plugins.todos] all_models = true` offers
   the tools to every model (CC's `CLAUDE_CODE_ENABLE_TODO_TOOLS`); `enabled = false` (every
   plugin's switch) takes them from every model. CC: two variables, plus background sessions and
@@ -62,7 +66,9 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
 - **D4 Reminder trigger as CC's.** A turn is one non-thinking content block of a reply (CC keeps
   each block as its own message); at least 10 since the last `TaskCreate` / `TaskUpdate` call and
   10 since the last reminder, checked before every model call, and only while `TaskUpdate` is
-  offered. It lists every task (CC reads the whole list for it). Carrier: a system turn after the
+  offered. The reminder records the history's turn count it came after (`task_reminder` record,
+  folded into `reminded_at`), so the next count does not look for its (overridable) text; neither
+  count reaches back past a compaction. It lists every task (CC reads the whole list for it). Carrier: a system turn after the
   turn notes (order 72). CC sends it to these models as `<system-reminder>` in the user turn;
   noeta sends every per-step note to every model as a system turn (`rem.all.1`, the Main prompt
   row in `parity/deviations.md`).
@@ -108,8 +114,8 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
 
 ## Acceptance criteria
 
-- The four tools and the reminder reach DeepSeek and the older Claude models, and no Claude 5
-  model; `all_models` and `enabled` switch them.
+- The four tools and the reminder reach the older Claude models and no other model by default;
+  `all_models` and `enabled` switch them.
 - The list folds the same on another runtime and in a fork; sub-agents get no tools.
 - Gates green; `make parity` 0 mismatches, at most 11 accepted deviations; no eval regression
   without a cause.
@@ -118,6 +124,10 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
 
 - The descriptions' blank lines are reconstructed (Context); a recording of CC with an older
   model that loads the tools would settle them (owner question 1).
+
+- Follow-up, not in this branch: `quiet_nudge` finds its earlier nudges by their (overridable)
+  text, as `todos` did; moving it to a recorded count changes how a quiet stretch's nudges are
+  counted, a change of its own.
 
 ## Owner questions
 
@@ -132,3 +142,8 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
   these tools. `make check` green before starting.
 - 2026-11-02: plugin, tests and eval scenario in; one smoke trial on DeepSeek V4.1 made all six
   changes in two parallel batches without a task list (0.50).
+- 2026-11-02: review: CC gives unknown models no task tools (`zqt()` is the canonical name, a
+  string for any model); gating now by CC's canonical name (`kK` ported: `claude-opus-4-20250514`
+  and Bedrock ids count); the reminder found by its record, not its text. The first paired eval
+  was stopped (it measured the wrong default). The eval scenario switches the plugin on
+  (`all_models`), since DeepSeek gets it off by default.

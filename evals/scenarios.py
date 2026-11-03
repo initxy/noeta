@@ -945,6 +945,9 @@ SCENARIOS: list[Scenario] = [
               "6. Add a \"## Usage\" section to README.md saying how to run the CLI "
               "(python -m shop.cli)."),
         setup=fx.shop,
+        # The eval model (DeepSeek) gets no task tools by default, as in
+        # Claude Code: switched on here.
+        plugins=lambda _dirs: {"todos": {"all_models": True}},
         score=score_todo_list,
         tags=("todos",),
     ),
