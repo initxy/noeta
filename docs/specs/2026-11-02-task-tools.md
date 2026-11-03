@@ -108,8 +108,8 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
 - [x] Tests: `tests/plugins/test_todos.py`
 - [x] Eval scenario `todo_list_multi_step` (tag `todos`)
 - [x] Docs: `parity/rules/reminders.md` rem.absent.1, `parity/deviations.md`, CHANGELOG
-- [ ] Gates: `make check`, `make parity`, `make cluster`, `make e2e`
-- [ ] Eval: full suite paired (main vs branch, DeepSeek V4.1, 9 trials, concurrency 2); A/B of
+- [x] Gates: `make check`, `make parity`, `make cluster`, `make e2e`
+- [x] Eval: full suite paired (main vs branch, DeepSeek V4.1, 9 trials, concurrency 2); A/B of
   `todo_list_multi_step` with the plugin on and off
 
 ## Acceptance criteria
@@ -147,3 +147,14 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
   and Bedrock ids count); the reminder found by its record, not its text. The first paired eval
   was stopped (it measured the wrong default). The eval scenario switches the plugin on
   (`all_models`), since DeepSeek gets it off by default.
+- 2026-11-03: gates on 7939f2a7: `make check` 3139 passed, coverage 90%; `make parity` 0
+  mismatches (11 accepted); `make cluster` 14 passed; `make e2e` 7 passed.
+- 2026-11-03: eval, DeepSeek V4.1, 9 trials, paired, concurrency 2: main 0.961, branch 0.944 on
+  main's 32 scenarios (branch 0.931 with `todo_list_multi_step`); 5 of 594 trials timed out
+  (`delegate_parallel_review`). No scenario past its tolerance; the largest drops
+  (`concise_direct_answer` 1.00 -> 0.72, answers of 44-86 words; `delegate_parallel_review`
+  0.44 -> 0.11, baseline 0.33) are noise: with the plugin off by default for DeepSeek the
+  branch sends byte-for-byte main's requests (checked on a scripted session).
+- 2026-11-03: A/B of `todo_list_multi_step`, 9 each: on 0.50, off 0.50. With the tools on,
+  DeepSeek never loaded them through `ToolSearch` (0 searches, 0 tasks) and made all six
+  changes in two parallel batches either way. Baseline row added (0.50, the paired branch run).
