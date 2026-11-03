@@ -43,6 +43,9 @@ its own spec before work starts.
 
 - [ ] The 4 owner questions left by the context final closure (`docs/specs/archive/2026-11-02-context-final-closure.md`, "Open questions (owner)"): a withheld instruction file is reported to the person only (as the bundle renders it), `.git/info/exclude` for `settings.local.json`, `null` for an optional argument passes the input check, Haiku 4.5 thinks with a 31,999-token budget by default. Each keeps the choice written there until the owner decides.
 
+- [ ] The 4 owner questions left by the task tools (`docs/specs/archive/2026-11-02-task-tools.md`, "Owner questions"): record Claude Code once with an older model that loads the task tools to check the reconstructed blank lines, `TaskCreated`/`TaskCompleted` hooks, clearing a finished list, `all_models` versus making `enabled = true` reach plugins. Each keeps the recommended choice written there until the owner decides.
+- [ ] `quiet_nudge` finds its earlier nudges by their overridable text (as the task reminder did before 7939f2a7); find them by their record. Follow-up spec.
+
 ### Follow-ups
 - [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
 - [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.

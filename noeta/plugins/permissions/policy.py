@@ -62,6 +62,10 @@ DEFAULT_RISK: Mapping[str, str] = {
     "ReportFindings": "low",
     "Workflow": "low",
     "StructuredOutput": "low",
+    "TaskCreate": "low",
+    "TaskGet": "low",
+    "TaskUpdate": "low",
+    "TaskList": "low",
 }
 
 #: Tools auto mode lets through without the classifier (they read, or only
@@ -72,6 +76,7 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
     "ExitPlanMode", "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
     "ListAgents", "TaskStop",
     "StructuredOutput", "ReportFindings", "ScheduleWakeup",
+    "TaskCreate", "TaskGet", "TaskUpdate", "TaskList",
 })
 
 #: Tools an allowlist (``--tools``, ``allowed_tools``) never removes: how the

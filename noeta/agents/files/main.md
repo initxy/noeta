@@ -12,6 +12,7 @@ plugins:
   - instructions
   - environment
   - quiet_nudge
+  - todos
   - subtasks:
       agents: ["*"]
       inherit_config: [cwd, model, effort, permission_mode]

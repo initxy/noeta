@@ -107,7 +107,7 @@ deviation with a reason), **owner** (main's behaviour kept, row written, owner q
 
 ### Models and nudges (`rr-prompt-env`)
 - **R9** Quiet nudge only for models with the capability. **match**.
-- **R10** Task tools + `task_reminder` on older Claude models and unknown models. **owner**
+- **R10** Task tools + `task_reminder` on older Claude models. **owner**
   (with P1); fixes `rem.absent.1`.
 
 ### Shell, background jobs, sandbox (`rr-shell`)
@@ -276,7 +276,7 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
 
 - **P1 / R7 (full text) / R10 one lean prompt for every model.** CC: models without
   `lean_prompt` (Sonnet 5, Sonnet 4.6, Haiku 4.5) get the full prompt, `<system-reminder>`
-  carriers and the full auto-mode text; older and unknown models get the `Task*` tools and
+  carriers and the full auto-mode text; older Claude models get the `Task*` tools and
   `task_reminder`. pi: one prompt, no task tools. dsh: one prompt per deployment. noeta: one lean
   prompt, plus the Fable 5.1 and Haiku 5.5 paragraphs. Why: a second prompt, a second reminder
   carrier and four tools are whole features for models the replay never runs. Owner question 1.

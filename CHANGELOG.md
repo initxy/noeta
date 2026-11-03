@@ -7,6 +7,18 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code's task list as the plugin `todos`** (spec `2026-11-02-task-tools`): `TaskCreate`,
+  `TaskGet`, `TaskUpdate`, `TaskList` (deferred) and a reminder after ten model turns without
+  them, for the models Claude Code 2.1.312 gives them to: older Claude models (Claude 3.x,
+  Opus 4.0-4.7, Sonnet 4.0-4.6, Haiku 4.5, by Claude Code's canonical name, so
+  `claude-opus-4-20250514` too) and Bedrock application inference profiles; the Claude 5
+  family and every other model (DeepSeek, a gateway's routing name) get none. The main agent runs it;
+  `[plugins.todos] all_models = true` offers the tools to every model, `enabled = false` to none.
+  The list is a fold of the task's log (any worker, after a compaction, in a fork); sub-agents
+  get no task tools. Those models' system prompt gains Claude Code's one task-tools line.
+
 ### Changed
 
 - **Context final closure: the third audit's differences from Claude Code 2.1.312 are matched or
