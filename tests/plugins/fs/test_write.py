@@ -50,8 +50,8 @@ async def test_write_existing_path_without_read_rejected(h: Harness, ws: Path) -
     out = await h.call(WriteTool(), file_path="exists.txt", content="new\n")
     assert out.is_error
     assert text_of(out) == (
-        "Write: Read the file first: overwriting a file this conversation has not "
-        "read is refused."
+        "<tool_use_error>Read the file first: overwriting a file this conversation has not "
+        "read is refused.</tool_use_error>"
     )
     assert (ws / "exists.txt").read_text() == "old\n"
 
@@ -109,8 +109,8 @@ async def test_a_write_of_noeta_md_has_the_file_state_note(h: Harness, ws: Path)
 async def test_write_onto_a_directory_says_to_name_the_file(h: Harness, ws: Path) -> None:
     (ws / "pkg").mkdir()
     out = await h.call(WriteTool(), file_path="pkg", content="x")
-    assert text_of(out) == ("Write: pkg is a directory. To create a file in it, put the file's "
-                            "name at the end of file_path.")
+    assert text_of(out) == ("<tool_use_error>pkg is a directory. To create a file in it, put the file's "
+                            "name at the end of file_path.</tool_use_error>")
 
 
 async def test_an_overwrite_keeps_the_files_byte_order_mark(h: Harness, ws: Path) -> None:
@@ -140,8 +140,8 @@ async def test_write_existing_path_stale_read_rejected(h: Harness, ws: Path) -> 
     out = await h.call(WriteTool(), file_path="stale.txt", content="v3\n")
     assert out.is_error
     assert text_of(out) == (
-        "Write: File has been modified since it was read. Read it again before "
-        "overwriting it."
+        "<tool_use_error>File has been modified since it was read. Read it again before "
+        "overwriting it.</tool_use_error>"
     )
     assert target.read_text() == "v2-changed-on-disk\n"
 
@@ -171,7 +171,7 @@ async def test_write_exceeds_cap_rejected(h: Harness, ws: Path) -> None:
     out = await h.call(WriteTool(), file_path="big.txt", content=big)
     assert out.is_error
     assert text_of(out) == (
-        f"Write: content {WRITE_FILE_MAX_BYTES + 1}B exceeds {WRITE_FILE_MAX_BYTES}B cap"
+        f"<tool_use_error>content {WRITE_FILE_MAX_BYTES + 1}B exceeds {WRITE_FILE_MAX_BYTES}B cap</tool_use_error>"
     )
     assert not (ws / "big.txt").exists()
 
@@ -186,7 +186,7 @@ async def test_write_over_old_64k_limit_accepted(h: Harness, ws: Path) -> None:
 async def test_write_escape_rejected(h: Harness, ws: Path) -> None:
     out = await h.call(WriteTool(), file_path="/tmp/x.txt", content="x")
     assert out.is_error
-    assert text_of(out) == f"Write: path '/tmp/x.txt' resolves outside workspace {str(ws)!r}"
+    assert text_of(out) == f"<tool_use_error>path '/tmp/x.txt' resolves outside workspace {str(ws)!r}</tool_use_error>"
 
 
 async def test_write_dotdot_escape_rejected(h: Harness, ws: Path) -> None:
@@ -256,7 +256,7 @@ async def test_write_keeps_file_permissions(h: Harness, ws: Path) -> None:
 async def test_write_arg_validation(h: Harness, args: dict[str, Any], message: str) -> None:
     out = await WriteTool().run(args, h.ctx())
     assert out.is_error
-    assert text_of(out) == f"Write: {message}"
+    assert text_of(out) == f"<tool_use_error>Write {message}</tool_use_error>"
 
 
 # -- allowed_path_globs -------------------------------------------------------
@@ -274,8 +274,8 @@ async def test_restricted_write_rejects_path_outside_whitelist(h: Harness, ws: P
     out = await h.call(tool, file_path="src/main.py", content="print()\n")
     assert out.is_error
     assert text_of(out) == (
-        "Write: path 'src/main.py' is outside the writable allow-list "
-        "(plans/*.md); this agent may only write matching paths"
+        "<tool_use_error>path 'src/main.py' is outside the writable allow-list "
+        "(plans/*.md); this agent may only write matching paths</tool_use_error>"
     )
     assert not (ws / "src").exists()
 

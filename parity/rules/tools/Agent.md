@@ -33,7 +33,7 @@ counterpart is `Agent` (`noeta/plugins/subtasks/tool.py`, `descriptions/agent.md
 |---|---|---|
 | `tool.Agent.1` | The tool launches an agent for complex, multi-step work; each agent type has its own capabilities and tool set. | covered |
 | `tool.Agent.2` | The list of agent types is not in the tool definition; it is announced in the conversation (the `role: "system"` message, see `main-prompt.md`). | covered |
-| `tool.Agent.3` | `subagent_type: "fork"` copies the caller: the fork inherits the whole conversation and always runs on the caller's model; a `model` value is ignored for it. | covered |
+| `tool.Agent.3` | `subagent_type: "fork"` copies the caller: the fork inherits the whole conversation and always runs on the caller's model; a `model` value is ignored for it. The fork's new turn is a `<fork-boilerplate>` block (it is a worker fork, not the parent; the history above is inherited background; carry out one directive and stop; hard rules: start no sub-agents, report once with no follow-up questions or next steps; guidelines the directive may override: stay in scope, open with a one-line restatement of the task, be brief, list commits) followed by `Your directive: <prompt>`; in the fork's copy, the `Agent` call that started it is answered as having started the fork, which is the fork itself, and the parent's other open calls as the parent's (2.1.312 bundle). | covered — `subtasks/texts.py` `FORK_DIRECTIVE` (our words, the tag and lead kept); the starting call answered with `core/loop/state.py` `STARTED_CALL` (the call found by the source's `spawned` record), other open calls `CONTINUED_CALL` |
 | `tool.Agent.4` | Any other `subagent_type`, or none, starts a fresh agent; none means the general-purpose type. | covered |
 | `tool.Agent.5` | Cost framing: a fresh agent knows only its prompt, the caller sees only its summary, and detail is lost in both directions without either side knowing what was missed. | covered |
 | `tool.Agent.6` | The caller cannot watch an agent work; it can only wait for it or cancel it. | covered |
@@ -45,7 +45,7 @@ counterpart is `Agent` (`noeta/plugins/subtasks/tool.py`, `descriptions/agent.md
 | `tool.Agent.12` | Once work is delegated, do not also do it yourself; wait for the result. | covered |
 | `tool.Agent.13` | When unsure whether to spawn, don't. | covered |
 | `tool.Agent.14` | Brief the agent as a peer: the goal, what is already ruled out, pointers to files/docs instead of pasted content, an explicit narrow scope; the brief is its only context, and failing to write a clear brief means the task is not understood yet. | covered |
-| `tool.Agent.15` | A fork works in the background, and its tool output never enters the caller's context; a fork itself must do the work, not delegate again. | covered |
+| `tool.Agent.15` | A fork works in the background, and its tool output never enters the caller's context; a fork itself must do the work, not delegate again (its frame says so, `tool.Agent.3`). | covered — the frame's first hard rule; a fork's `Agent` call is refused (`FORK_IN_FORK`) |
 | `tool.Agent.16` | Sub-agents run in the background; the caller is notified when one finishes. | covered |
 | `tool.Agent.17` | Never invent or predict a pending agent's result; the completion notice is never something the model writes itself; if the user asks before it arrives, say it is still running. | covered (background ack says not to fabricate) |
 | `tool.Agent.18` | The user does not see the agent's final report; the caller passes on the parts that matter. | covered |

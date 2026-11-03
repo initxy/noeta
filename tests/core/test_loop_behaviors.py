@@ -277,7 +277,8 @@ async def test_unknown_tool_answers_only_that_call(store: SqliteStore) -> None:
     provider = ScriptedProvider([reply("", ("Nope", {}), ("Probe", {})), reply("done")])
     client, tid = await run(store, provider, Agent(name="a", model="m", tools=[probe]))
     results = [e.result for e in await events(client, tid) if isinstance(e, ToolFinished)]
-    assert results[0].text == texts.UNKNOWN_TOOL.format(name="Nope") and results[0].is_error
+    assert results[0].text == "<tool_use_error>Error: No such tool available: Nope</tool_use_error>"
+    assert results[0].is_error
     assert probe.runs == 1
 
 

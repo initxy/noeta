@@ -136,13 +136,14 @@ async def test_runs_in_the_workspace(h: Harness, ws: Path) -> None:
 async def test_bad_input_is_refused(h: Harness) -> None:
     for command in ("", "   ", None, 3):
         out = await h.call(BashTool(), command=command)
-        assert out.is_error and text_of(out) == "Bash: requires non-empty 'command'"
+        assert out.is_error and text_of(out) == "<tool_use_error>Bash requires non-empty 'command'</tool_use_error>"
 
 
 async def test_background_is_refused_without_the_extension(h: Harness, ws: Path) -> None:
     out = await bash(h, f"touch {ws / 'ran'}", run_in_background=True)
     assert out.is_error
-    assert text_of(out) == "Bash: background execution is not available on this host"
+    assert text_of(out) == (
+        "<tool_use_error>Background execution is not available on this host.</tool_use_error>")
     assert not (ws / "ran").exists()
 
 
@@ -185,11 +186,11 @@ async def test_a_long_leading_sleep_is_blocked_before_it_runs(h: Harness, ws: Pa
     out = await bash(h, f"sleep 110 && touch {marker}", tool)
     assert out.is_error
     assert text_of(out) == (
-        f"Bash: Blocked: sleep 110 followed by: touch {marker}. To wait until "
+        f"<tool_use_error>Blocked: sleep 110 followed by: touch {marker}. To wait until "
         "something is true, run an until-loop under Monitor (`until <check>; do "
         "sleep 2; done`); to wait for a command of yours, start it with "
         "run_in_background: true. Do not get around this with a chain of shorter "
-        "sleeps."
+        "sleeps.</tool_use_error>"
     )
     assert not marker.exists()
 

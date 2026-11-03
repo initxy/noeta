@@ -24,6 +24,7 @@ from noeta.core.large_output import ReplyBudget, bound_result
 from noeta.core.runner import closing, texts
 from noeta.core.store import NewTask, Post
 from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
+from noeta.core.tool_input import NO_SUCH_TOOL, check_input, tool_use_error
 from noeta.core.types import Delta, Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
@@ -143,7 +144,17 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         withheld = offer.withheld.get(c.use.name)
         if withheld is not None:
             # Not in the request the model saw: refused before any gate.
-            await run.append([run.error_result(c.use.id, withheld)])
+            await run.append([run.error_result(c.use.id, tool_use_error(withheld))])
+            continue
+        known = tools.get(c.use.name)
+        # Claude Code checks the arguments against the schema before any gate,
+        # and the gates and the tool get them coerced (from the logged call,
+        # so every worker derives the same input).
+        checked, problems = (c.use.input, None) \
+            if known is None or tool_flag(known, "unchecked_input") \
+            else check_input(known.name, known.input_schema, c.use.input)
+        if problems is not None:
+            await run.append([run.error_result(c.use.id, tool_use_error(problems))])
             continue
         answer = run.state.answers.get(c.use.id)
         if answer is not None and answer.decision == "deny" and isinstance(answer.data, dict) \
@@ -162,7 +173,9 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
                     answer.data))], is_error=True), end_turn="",
                 note=texts.REJECTED_MARKER)])
             continue
-        use, verdict = await resolve(run, view, c.use)
+        call = c.use if checked == c.use.input else ToolUse(
+            id=c.use.id, name=c.use.name, input=dict(checked))
+        use, verdict = await resolve(run, view, call)
         if isinstance(verdict, Deny):
             await run.append([run.error_result(use.id, verdict.reason or "denied")])
             continue
@@ -171,7 +184,8 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             continue
         tool = tools.get(use.name)
         if tool is None:
-            await run.append([run.error_result(use.id, texts.UNKNOWN_TOOL.format(name=use.name))])
+            await run.append([run.error_result(
+                use.id, tool_use_error(NO_SUCH_TOOL.format(name=use.name)))])
             continue
         if isinstance(verdict, Allow) and verdict.outright:
             outright.add(use.id)

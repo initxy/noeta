@@ -39,6 +39,7 @@ from noeta.toolkit.tools import SCHEMA_DIALECT as SCHEMA_DIALECT
 from noeta.toolkit.tools import (
     Workspace,
     error_output,
+    input_error,
     limit_output,
     load_description,
     path_within,
@@ -169,12 +170,12 @@ class BashTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         command = input.get("command")
         if not isinstance(command, str) or not command.strip():
-            return tool_error(self.name, "requires non-empty 'command'")
+            return input_error(f"{self.name} requires non-empty 'command'")
         if input.get("run_in_background"):
-            return tool_error(self.name, "background execution is not available on this host")
+            return input_error("Background execution is not available on this host.")
         described = long_leading_sleep(command) if self.refuses_long_sleep else None
         if described is not None:
-            return tool_error(self.name, _blocked_sleep(described))
+            return input_error(_blocked_sleep(described))
         timeout_s = resolve_timeout(input.get("timeout"), self.timeout_s)
 
         env = ctx.env

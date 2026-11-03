@@ -13,7 +13,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import TaskEnded, Waiting
-from noeta.core.loop.state import CONTINUED_CALL, Call, TaskState, continued
+from noeta.core.loop.state import CONTINUED_CALL, STARTED_CALL, Call, TaskState, continued
 from noeta.core.runner import Runtime
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
@@ -165,7 +165,9 @@ async def test_a_fork_answers_the_calls_its_source_still_had_open(store: SqliteS
     msgs = c.requests[0].messages
     assert msgs[1].role == "assistant" and len(msgs[1].tool_uses) == 2
     results = [b for b in msgs[2].content if isinstance(b, ToolResult)]
-    assert [r.text for r in results] == [CONTINUED_CALL, CONTINUED_CALL]
+    # The call that started the fork says so; the other is the source's.
+    assert [r.text for r in results] == [CONTINUED_CALL, STARTED_CALL]
+    assert [r.is_error for r in results] == [True, False]
     assert msgs[-1].text == "you are the fork"
 
 

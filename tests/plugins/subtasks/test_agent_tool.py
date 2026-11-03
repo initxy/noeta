@@ -21,10 +21,10 @@ from noeta.core.client import Client
 from noeta.core.errors import Fatal
 from noeta.core.events import Recorded, TaskCreated, TaskEnded, ToolFinished
 from noeta.core.extension import Ask, Extension, Gate, TaskView
-from noeta.core.loop.state import TaskState
+from noeta.core.loop.state import STARTED_CALL, TaskState
 from noeta.core.runner import Runtime
 from noeta.core.tool import ToolContext
-from noeta.core.types import Message, ModelRequest, ToolUse, Usage
+from noeta.core.types import Message, ModelRequest, ToolResult, ToolUse, Usage
 from noeta.host.pending import pending_tree
 from noeta.host.usage import tree_usage
 from noeta.plugins.shell import Registry, Shell
@@ -454,13 +454,19 @@ async def test_refusals(store: SqliteStore) -> None:
     # A bad Agent call is refused by itself: the reply's other calls run.
     assert out[0] == (texts.EMPTY_PROMPT, True)
     assert out[1] == ("seen", False) and out[2][0].startswith("The agent was launched")
-    assert out[3] == (texts.BAD_CHOICE.format(
-        field="model", choices="sonnet, opus, haiku, fable", value="gpt"), True)
+    # Arguments the schema refuses are refused before any gate, in Claude
+    # Code's words.
+    assert out[3] == (
+        "<tool_use_error>InputValidationError: Agent failed due to the following issue:\n"
+        "The parameter `model` is invalid: Invalid option: expected one of "
+        '"sonnet"|"opus"|"haiku"|"fable"</tool_use_error>', True)
     unknown = texts.SPAWN_DENIED.format(reason=texts.UNKNOWN_AGENT.format(
         name="nobody", available="fork, general-purpose, scout"))
     assert out[4:6] == [(unknown, True), ("seen", False)]
     assert out[6] == (texts.SPAWN_DENIED.format(reason=texts.NO_REMOTE), True)
-    assert out[7] == (texts.MISSING_FIELDS, True)
+    assert out[7] == (
+        "<tool_use_error>InputValidationError: Agent failed due to the following issue:\n"
+        "The required parameter `prompt` is missing</tool_use_error>", True)
     assert len(await client.tasks(parent_id=tid)) == 1
 
 
@@ -549,7 +555,14 @@ async def test_a_fork_starts_from_the_callers_conversation(store: SqliteStore) -
     assert created.history_from == tid and created.config["fork"] is True
     fork_request = p.requests[2]
     assert texts_of(fork_request)[0] == "the original task"
-    assert texts_of(fork_request)[-2:] == ["you are the fork", texts.HANDBACK_REMINDER]
+    directive = texts.FORK_DIRECTIVE.format(prompt="you are the fork")
+    assert directive.startswith("<fork-boilerplate>\n")
+    assert directive.endswith("</fork-boilerplate>\nYour directive: you are the fork")
+    assert texts_of(fork_request)[-2:] == [directive, texts.HANDBACK_REMINDER]
+    # The inherited Agent call is the one that started the fork: it says so.
+    [started] = [b for m in fork_request.messages for b in m.content
+                 if isinstance(b, ToolResult)]
+    assert started.text == STARTED_CALL and not started.is_error
     assert fork_request.tools[-1].name == "SubagentHandback"
 
 

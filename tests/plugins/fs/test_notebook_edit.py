@@ -56,7 +56,7 @@ async def test_a_cell_can_be_named_by_its_index(h: Harness, ws: Path) -> None:
     assert not out.is_error, text_of(out)
     assert _cells(path)[1]["source"] == ["# New"]
     out = await h.call(tool, notebook_path="a.ipynb", cell_id="cell-2", new_source="x")
-    assert text_of(out) == "NotebookEdit: no cell at index 2 in the notebook"
+    assert text_of(out) == "<tool_use_error>no cell at index 2 in the notebook</tool_use_error>"
 
 
 async def test_an_index_naming_no_cell_object_is_refused(h: Harness, ws: Path) -> None:
@@ -67,7 +67,7 @@ async def test_an_index_naming_no_cell_object_is_refused(h: Harness, ws: Path) -
     out = await h.call(NotebookEditTool(), notebook_path="a.ipynb", cell_id="cell-0",
                        new_source="x")
     assert out.is_error
-    assert text_of(out) == "NotebookEdit: the cell at index 0 is not a cell object"
+    assert text_of(out) == "<tool_use_error>the cell at index 0 is not a cell object</tool_use_error>"
 
 
 async def test_a_notebook_before_4_5_gets_no_cell_ids(h: Harness, ws: Path) -> None:

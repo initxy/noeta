@@ -115,6 +115,30 @@ LAUNCHED_OUTPUT_FILE = (
 )
 
 # Child side.
+#: A fork's first message: the frame that tells it it is the fork, around the
+#: caller's prompt (the tag and the ``Your directive:`` lead are Claude
+#: Code's).
+FORK_DIRECTIVE = (
+    "<fork-boilerplate>\n"
+    "You are a fork. The conversation above belongs to the agent that started you: it is "
+    "background you inherited, not your own situation, and you are not that agent carrying "
+    "on. Carry out the single directive below, then stop.\n"
+    "Hard rules:\n"
+    "- Start no agents with the Agent tool. Advice above about forking was for the parent; "
+    "you are the fork, so do the work yourself.\n"
+    "- Deliver one report, then stop: no follow-up questions, no suggested next steps, no "
+    "waiting on the user.\n"
+    "Guidelines (the directive may override them):\n"
+    "- Keep to the directive. Other forks may own nearby work; if you notice something "
+    "outside yours, mention it in one sentence and move on.\n"
+    "- Begin the report with one line restating your task, so the parent sees at a glance "
+    "whether you drifted.\n"
+    "- Be as brief as the answer allows, and no briefer: plain text, no preamble, no "
+    "commentary on how you worked.\n"
+    "- If you made commits, list their paths and hashes in the report.\n"
+    "</fork-boilerplate>\n"
+    "Your directive: {prompt}"
+)
 HANDBACK_REMINDER = (
     "Deliver your final report with SubagentHandback: when the work is done, call "
     "SubagentHandback({message: <your complete report>}) as your last step; the call ends your "

@@ -20,7 +20,7 @@ from typing import Any
 from noeta.core.execenv import ExecEnv, RunResult
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Image, Text
-from noeta.toolkit.tools import format_size, tool_error
+from noeta.toolkit.tools import format_size, input_error, tool_error
 
 __all__ = [
     "MAX_READ_TOKENS",
@@ -146,8 +146,8 @@ async def read_pdf(
                           f"{display} does not start with a %PDF- header, so it is not a PDF.")
     total = await page_count(env, path, cwd)
     span = _page_span(pages, total)
-    if isinstance(span, str):
-        return tool_error(tool_name, span)
+    if isinstance(span, str):  # the pages asked for do not fit the PDF
+        return input_error(span)
     images = await _render_pages(env, path, cwd, *span)
     if isinstance(images, str):
         return tool_error(tool_name, images)

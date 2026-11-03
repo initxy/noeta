@@ -107,6 +107,37 @@ async def test_read_only_commands_run_and_others_offer_a_rule(store: SqliteStore
     assert saved == {"permissions": {"allow": ["Bash(npm run *)"]}}
 
 
+async def test_saved_rules_stay_out_of_git_status(store: SqliteStore, tmp_path: Path) -> None:
+    # Claude Code keeps the file out of ``git status`` (it uses the global
+    # excludes file; noeta the repository's own ``.git/info/exclude``).
+    import subprocess
+
+    project = tmp_path / "repo"
+    (project / "sub").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "npm run build"})),
+                                 reply("ok"),
+                                 reply("", ("Bash", {"command": "make it"})), reply("ok")])
+    client, tid, rt = await start(store, provider,
+                                  Permissions(mode="default", trusted_workspace=True), [bash],
+                                  cwd=project / "sub")
+    [item] = pending(await client.events(tid), tid)
+    await client.answer(tid, item.request_id, "allow", always=True)
+    await rt.run_until_idle()
+    exclude = project / ".git" / "info" / "exclude"
+    assert exclude.read_text().splitlines()[-1] == "/sub/.noeta/settings.local.json"
+    status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
+                            cwd=project, capture_output=True, text=True, check=True).stdout
+    assert "settings.local.json" not in status
+    await client.send(tid, "again")
+    await rt.run_until_idle()
+    [item] = pending(await client.events(tid), tid)
+    await client.answer(tid, item.request_id, "allow", always=True)
+    await rt.run_until_idle()
+    assert exclude.read_text().count("settings.local.json") == 1
+
+
 @pytest.mark.parametrize("trusted", [False, True])
 async def test_always_answers_reach_the_project_only_when_the_tasks_cwd_is_trusted(
         store: SqliteStore, tmp_path: Path, trusted: bool) -> None:

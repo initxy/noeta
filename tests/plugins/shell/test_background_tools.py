@@ -142,8 +142,8 @@ async def test_task_stop_stops_a_job_and_sends_no_notice(h: Harness) -> None:
     # Claude Code sends no completion notification after a TaskStop.
     out = await h.call("Bash", command="echo keep; sleep 5", run_in_background=True)
     job_id = out.meta["job_id"]
-    assert text(await stop(h, "nope12345")) == "TaskStop: No task found with ID: nope12345"
-    assert text(await h.call("TaskStop")) == "TaskStop: requires a non-empty 'task_id'"
+    assert text(await stop(h, "nope12345")) == "<tool_use_error>No task found with ID: nope12345</tool_use_error>"
+    assert text(await h.call("TaskStop")) == "<tool_use_error>TaskStop requires a non-empty 'task_id'</tool_use_error>"
     stopped = await stop(h, job_id)
     assert not stopped.is_error
     assert json.loads(text(stopped)) == {
@@ -154,12 +154,12 @@ async def test_task_stop_stops_a_job_and_sends_no_notice(h: Harness) -> None:
     assert len(h.posts) == posted
     again = await h.call("TaskStop", shell_id=job_id)
     assert again.is_error and text(again) == (
-        f"TaskStop: Task {job_id} is not running (status: killed)")
+        f"<tool_use_error>Task {job_id} is not running (status: killed)</tool_use_error>")
     done = await h.call("Bash", command="true", run_in_background=True)
     await h.settle(done.meta["job_id"])
     finished = await stop(h, done.meta["job_id"])
     assert text(finished) == (
-        f"TaskStop: Task {done.meta['job_id']} is not running (status: completed)")
+        f"<tool_use_error>Task {done.meta['job_id']} is not running (status: completed)</tool_use_error>")
 
 
 def test_monitor_and_task_stop_are_deferred(h: Harness) -> None:
@@ -248,9 +248,9 @@ async def test_monitor_expiry_sends_one_note_and_no_end_notice(h: Harness) -> No
 
 async def test_monitor_needs_command_and_description(h: Harness) -> None:
     assert text(await h.call("Monitor", description="x")) == (
-        "Monitor: requires non-empty 'command' (or 'ws')")
+        "<tool_use_error>Monitor requires non-empty 'command' (or 'ws')</tool_use_error>")
     assert text(await h.call("Monitor", command="true")) == (
-        "Monitor: requires non-empty 'description'")
+        "<tool_use_error>Monitor requires non-empty 'description'</tool_use_error>")
 
 
 async def test_a_finished_spawners_notices_go_to_the_root(h: Harness) -> None:
@@ -567,7 +567,7 @@ async def test_task_stop_stops_this_tasks_background_agents_and_workflow_runs(
     assert isinstance(body, Cancel) and target == "t2"
     assert json.loads(text(await stop_any("t2")))["task_type"] == "local_agent"
     posted.clear()
-    assert text(await stop_any("a3")) == "TaskStop: Task a3 is not running (status: ended)"
+    assert text(await stop_any("a3")) == "<tool_use_error>Task a3 is not running (status: ended)</tool_use_error>"
     out = await stop_any("wf_live01")
     assert json.loads(text(out)) == {
         "message": "Successfully stopped task: wf_live01 (Audit it)", "task_id": "wf_live01",
@@ -576,7 +576,7 @@ async def test_task_stop_stops_this_tasks_background_agents_and_workflow_runs(
     assert body == External(name=STOP_RUN, data={"run_id": "wf_live01"})
     assert target is None and key == f"{STOP_RUN}:wf_live01"
     assert text(await stop_any("wf_over01")) == (
-        "TaskStop: Task wf_over01 is not running (status: completed)")
+        "<tool_use_error>Task wf_over01 is not running (status: completed)</tool_use_error>")
     # An unknown ID names the agents still running, as Claude Code does.
     assert text(await stop_any("zzz")) == (
-        "TaskStop: No task found with ID: zzz. Running background agents: a1 (review the diff)")
+        "<tool_use_error>No task found with ID: zzz. Running background agents: a1 (review the diff)</tool_use_error>")

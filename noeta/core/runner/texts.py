@@ -31,7 +31,6 @@ INTERRUPTED_MARKER = "[Request interrupted by user]\n"
 #: A call a permission callback refused without stopping the turn (an
 #: ``Answer`` whose data says ``"interrupt": false``) and gave no reason for.
 DENIED_BY_CALLBACK = "Permission to use {name} was denied."
-UNKNOWN_TOOL = "No tool named {name!r} is available in this task; use one of the offered tools."
 
 #: Output-limit recovery, copied from Claude Code (2.1.300).
 OUTPUT_LIMIT_RESUME_NUDGE = (

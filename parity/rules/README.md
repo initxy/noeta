@@ -14,7 +14,7 @@ rule by its id.
 | file | covers |
 |---|---|
 | `main-prompt.md` | the main system prompt by section, the `role: "system"` environment message |
-| `tools/<Tool>.md` | one per tool the baseline sends (including deferred tools loaded through `ToolSearch`) |
+| `tools/<Tool>.md` | one per tool the baseline sends in full (including deferred tools loaded through `ToolSearch`), plus `EnterPlanMode` from the bundle and `common.md` (how a refused call is answered, any tool); the deferred names no recorded session loads (`CronCreate`, `CronDelete`, `CronList`, `EnterWorktree`, `ExitWorktree`, `NotebookEdit`, `ReadMcpResourceDirTool`, `SendMessage`, `WebSearch`) have no file: their descriptions were checked against the bundle by the closure specs, not row by row |
 | `reminders.md` | every `<system-reminder>` and wrapper kind seen in the recordings |
 | `compaction.md` | the compaction request, the post-compaction layout, auto-compaction trigger |
 | `subagent.md` | the sub-agent system prompt, tool set, how results reach the parent |

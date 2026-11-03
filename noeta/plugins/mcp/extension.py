@@ -79,7 +79,7 @@ from noeta.plugins.mcp.config import (
     tool_timeout_s,
 )
 from noeta.plugins.mcp.elicitation import elicitation_questions, elicitation_result
-from noeta.plugins.mcp.instructions import cap_instructions, instructions_delta
+from noeta.plugins.mcp.instructions import cap_instructions, instructions_delta, status_note
 from noeta.plugins.mcp.pool import McpPool, default_pool
 from noeta.plugins.mcp.prompts import McpPrompt, expand_prompt, list_prompts
 from noeta.plugins.mcp.results import render_result
@@ -119,6 +119,9 @@ TASKS_KEEP = 256
 #: after the deferred tools and the agent list, before the skill listing
 #: (Claude Code's order).
 INSTRUCTIONS_ORDER = 45
+#: Servers that could not connect or wait for a sign-in, right after the
+#: deferred-tool list (Claude Code tells them in that list's delta).
+STATUS_ORDER = 31
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
@@ -234,6 +237,8 @@ class Mcp(Extension):
             st["down"] = {k: v for k, v in st["down"].items() if k != data["alias"]}
         elif kind == "instructions":
             st["told"] = dict(data["servers"])
+        elif kind == "status":
+            st["status_told"] = {"down": dict(data["down"]), "sign_in": list(data["sign_in"])}
         return st
 
     # ------------------------------------------------------------ tools
@@ -457,19 +462,47 @@ class Mcp(Extension):
         st = view.ext_state(self.name) or {}
         if st.get("servers") is None:
             return ()
+        out: list[Reminder] = []
+        status = self._status(view, st)
+        if status is not None:
+            out.append(status)
         now = {s["alias"]: s["instructions"] for s in st["servers"] if s.get("instructions")}
         text = instructions_delta(st.get("told") or {}, now,
                                   {s["alias"] for s in st["servers"]})
+        if text:
+            out.append(Reminder(text=text, kind="instructions", data={"servers": now},
+                                role="system", order=INSTRUCTIONS_ORDER))
+        return out
+
+    def _status(self, view: TaskView, st: Mapping[str, Any]) -> Reminder | None:
+        """Servers that could not connect or wait for a sign-in, told when
+        that set of servers changed since last told (from the task's log, so any
+        worker tells the same), as Claude Code tells them up front: a model
+        that never searches would take the missing tools for a missing
+        capability. A set that emptied is recorded, not told."""
+        down = dict(st.get("down") or {})
+        sign_in = sorted(s["alias"] for s in st.get("servers") or ()
+                         if any(t.get("stub") for t in s.get("tools") or ()))
+        told = st.get("status_told") or {"down": {}, "sign_in": []}
+        # Which servers, not their error text: a new wording of the same
+        # failure is no news.
+        if set(down) == set(told.get("down") or ()) \
+                and sign_in == sorted(told.get("sign_in") or ()):
+            return None
+        data = {"down": down, "sign_in": sign_in}
+        text = status_note(down, sign_in)
         if not text:
-            return ()
-        return (Reminder(text=text, kind="instructions", data={"servers": now},
-                         role="system", order=INSTRUCTIONS_ORDER),)
+            view.record(self.name, "status", data)
+            return None
+        return Reminder(text=text, kind="status", data=data, role="system", order=STATUS_ORDER)
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction the instructions are told again in full."""
         st = view.ext_state(self.name) or {}
         if view.keeps_tail is not None and st.get("told"):
             view.record(self.name, "instructions", {"servers": {}})
+        if view.keeps_tail is not None and st.get("status_told"):
+            view.record(self.name, "status", {"down": {}, "sign_in": []})
         return ()
 
     # ------------------------------------------------------------ lifecycle

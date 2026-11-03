@@ -42,6 +42,7 @@ from noeta.backends.providers._anthropic_stream import StreamAccumulator, parse_
 from noeta.backends.providers._anthropic_user_id import user_id
 from noeta.backends.providers._anthropic_wire import (
     FAMILY,
+    MIN_THINKING_BUDGET,
     apply_cache_control,
     bare_strings,
     messages_to_wire,
@@ -276,6 +277,15 @@ class AnthropicProvider:
         guard_vision(request)
         body = self.build_body(request)
         body["max_tokens"] = min(int(body["max_tokens"]), WHOLE_MAX_TOKENS)
+        thinking = body.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            # The budget stays under the lower cap (Claude Code's), and
+            # thinking goes when the cap leaves no room for the API's least.
+            budget = min(int(thinking["budget_tokens"]), body["max_tokens"] - 1)
+            if budget < MIN_THINKING_BUDGET:
+                del body["thinking"]
+            else:
+                body["thinking"] = {**thinking, "budget_tokens": budget}
         body["stream"] = False
         try:
             response = await asyncio.wait_for(self._client.post(
@@ -378,7 +388,7 @@ class AnthropicProvider:
             body["output_config"] = {
                 "format": {"type": "json_schema", "schema": dict(request.output_schema)}
             }
-        thinking = thinking_param(request)
+        thinking = thinking_param(request, int(body["max_tokens"]))
         if thinking is not None:
             body["thinking"] = thinking
         adaptive = thinking is not None and thinking["type"] == "adaptive"

@@ -68,6 +68,8 @@ class McpTool:
 
     read_only = False
     clearable = False
+    #: The server checks its own input (Claude Code passes it on as sent).
+    unchecked_input = True
     listed_last = True
 
     def __init__(self, *, name: str, alias: str, remote: str, description: str,

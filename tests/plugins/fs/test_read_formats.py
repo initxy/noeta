@@ -97,8 +97,8 @@ async def test_a_long_pdf_needs_pages(h: Harness, ws: Path) -> None:
     out = await h.call(ReadTool(), file_path="doc.pdf")
     assert out.is_error
     assert text_of(out) == (
-        'Read: The PDF has 12 pages, more than one read takes. Pass pages to read '
-        'a range (such as pages: "1-5"), at most 20 pages per read.'
+        '<tool_use_error>The PDF has 12 pages, more than one read takes. Pass pages to read '
+        'a range (such as pages: "1-5"), at most 20 pages per read.</tool_use_error>'
     )
 
 
@@ -114,14 +114,14 @@ async def test_bad_or_too_wide_pages_are_refused(h: Harness, ws: Path) -> None:
     (ws / "doc.pdf").write_bytes(_pdf(2))
     bad = await h.call(ReadTool(), file_path="doc.pdf", pages="1,3")
     assert text_of(bad) == (
-        'Read: Invalid pages parameter: "1,3". Give one page ("3") or one range '
+        '<tool_use_error>Invalid pages parameter: "1,3". Give one page ("3") or one range '
         '("1-5"), not a list. To read several pages or ranges, read each one '
-        "separately. Pages are 1-indexed."
+        "separately. Pages are 1-indexed.</tool_use_error>"
     )
     wide = await h.call(ReadTool(), file_path="doc.pdf", pages="1-21")
     assert text_of(wide) == (
-        'Read: The page range "1-21" covers more than 20 pages, the most one read '
-        "takes. Ask for a shorter range."
+        '<tool_use_error>The page range "1-21" covers more than 20 pages, the most one read '
+        "takes. Ask for a shorter range.</tool_use_error>"
     )
     open_ended = await h.call(ReadTool(), file_path="doc.pdf", pages="3-")
     assert "covers more than 20 pages" in text_of(open_ended)

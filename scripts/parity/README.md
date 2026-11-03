@@ -98,7 +98,9 @@ replies in `script/`:
   ADR-020 allows that where it serves parity. A thinking block keeps its
   place but its text is replaced by a placeholder.
 - `parity/rules/*.md` and `parity/rules/tools/*.md` (one file per tool the
-  recorded sessions send, the MCP server's tools sharing one, 21 files):
+  recorded sessions send in full, the MCP server's tools sharing one, plus
+  `EnterPlanMode` from the bundle and `common.md` for refused calls, 23
+  files; `parity/rules/README.md` names the deferred tools without one):
   Claude Code's rules restated in our words, with
   sha256 hashes of the source texts (no-copy rule in `parity/rules/README.md`,
   which also indexes them). `parity/rules/source_hash.py` computes those

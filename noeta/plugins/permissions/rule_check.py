@@ -56,6 +56,21 @@ class RuleCheck:
             dirs.append(posixpath.normpath(d if posixpath.isabs(d) else posixpath.join(root, d)))
         return sc.Scope(dirs=tuple(dict.fromkeys(dirs)), home=home)
 
+    async def read_deny_rule(self, view: TaskView, path: str) -> str | None:
+        """The deny rule that keeps ``Read`` from ``path`` (or from where it
+        leads), as written; ``None`` when no deny rule covers it. Modes and
+        ask rules play no part."""
+        scope = self.scope(view)
+        ctx = r.RuleContext(root=scope.cwd, home=scope.home, cwd=scope.cwd)
+        target = scope.absolute(path)
+        seen = [{"file_path": target}]
+        real = await real_path(view, target)
+        if real != target:
+            seen.append({"file_path": real})
+        denied = next((m for a in seen if (m := r.first_match(self.deny_rules, "Read", a, ctx))
+                       is not None), None)
+        return denied.text if denied is not None else None
+
     async def decide(self, view: TaskView, call: ToolUse, mode: str, *,
                      plan_classifier: bool = False) -> Decision:
         """Claude Code's order: deny rules, ask rules, then what the tool

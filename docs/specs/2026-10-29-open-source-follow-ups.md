@@ -41,6 +41,8 @@ its own spec before work starts.
 
 - [ ] The 12 owner questions left by the context re-audit closure (`docs/specs/archive/2026-11-02-context-reaudit-closure.md`, "Open questions (owner)"): older Claude models' full prompt, `outputStyle`, dropping MCP tools with schemas the API rejects, WebFetch preapproved hosts, skill frontmatter `hooks:`, `skillOverrides`, an end-of-run review for agents that do not hand back, asking before `EnterPlanMode`, `--effort ultracode` and `--settings`, the shell-first note in `bypassPermissions`, a 1M window option for Sonnet 4.6, the not-loaded hint for OpenAI short names. Each keeps the recommended choice written there until the owner decides.
 
+- [ ] The 4 owner questions left by the context final closure (`docs/specs/archive/2026-11-02-context-final-closure.md`, "Open questions (owner)"): a withheld instruction file is reported to the person only (as the bundle renders it), `.git/info/exclude` for `settings.local.json`, `null` for an optional argument passes the input check, Haiku 4.5 thinks with a 31,999-token budget by default. Each keeps the choice written there until the owner decides.
+
 ### Follow-ups
 - [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
 - [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.

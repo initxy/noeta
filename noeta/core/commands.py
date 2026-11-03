@@ -22,6 +22,7 @@ __all__ = [
     "expand_command",
     "expand_with",
     "list_commands",
+    "offered_commands",
     "parse_command",
     "run_typed",
 ]
@@ -67,6 +68,13 @@ async def _offered(extensions: Sequence[Extension], ctx: CommandContext
                 seen.add(c.name)
                 out.append((ext, c))
     return out
+
+
+async def offered_commands(extensions: Sequence[Extension], ctx: CommandContext
+                           ) -> list[Command]:
+    """Every command ``extensions`` (a task's, ``TaskView.extensions``)
+    offer, first offer of a name kept."""
+    return [c for _e, c in await _offered(extensions, ctx)]
 
 
 async def list_commands(agent: Agent, ctx: CommandContext) -> list[Command]:

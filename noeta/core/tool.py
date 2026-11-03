@@ -193,6 +193,10 @@ class Tool(Protocol):
       call under its skill's former name): a deny or ask rule matching any
       applies, an allow rule (or a hook ``if`` whose hook allows) only one
       marked ``allow_too``.
+    * ``unchecked_input: bool = False`` — its input goes to it unchecked
+      (an MCP server's tool, a host function: Claude Code passes those on
+      as sent); every other tool's input is checked against its schema
+      before any gate (``noeta.core.tool_input``).
     * ``max_result_chars: int | None`` — the runner saves a text result
       longer than this (at most :data:`RESULT_CEILING_CHARS`, the default) to
       a file and sends a preview (``noeta.core.large_output``); ``None``
@@ -227,7 +231,7 @@ MAX_ATTEMPTS = 3
 
 def tool_flag(tool: Tool,
               name: Literal["deferred", "listed_last", "run_last", "retry_safe",
-                            "past_agent_lists"]) -> bool:
+                            "past_agent_lists", "unchecked_input"]) -> bool:
     """One of ``tool``'s optional flags (see :class:`Tool`); ``False`` when
     the tool leaves it out."""
     return bool(getattr(tool, name, False))

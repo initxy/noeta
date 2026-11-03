@@ -123,7 +123,7 @@ async def test_read_last_line_without_newline_counts(h: Harness, ws: Path) -> No
 async def test_read_missing_file_path_rejected(h: Harness) -> None:
     out = await h.call(ReadTool())
     assert out.is_error
-    assert text_of(out) == "Read: requires non-empty 'file_path'"
+    assert text_of(out) == "<tool_use_error>Read requires non-empty 'file_path'</tool_use_error>"
 
 
 async def test_read_rejects_an_empty_path(h: Harness) -> None:
@@ -135,20 +135,20 @@ async def test_read_not_a_file(h: Harness, ws: Path) -> None:
     (ws / "adir").mkdir()
     out = await h.call(ReadTool(), file_path="adir")
     assert out.is_error
-    assert text_of(out) == "Read: not a file: 'adir'"
+    assert text_of(out) == "<tool_use_error>not a file: 'adir'</tool_use_error>"
 
 
 async def test_read_missing_file(h: Harness, ws: Path) -> None:
     out = await h.call(ReadTool(), file_path="nope.txt")
     assert out.is_error
-    assert text_of(out) == f"Read: No file at that path (the working directory is {ws})."
+    assert text_of(out) == f"<tool_use_error>No file at that path (the working directory is {ws}).</tool_use_error>"
 
 
 async def test_read_missing_file_suggests_another_extension(h: Harness, ws: Path) -> None:
     (ws / "app.ts").write_text("x\n")
     out = await h.call(ReadTool(), file_path="app.js")
     assert text_of(out) == (
-        f"Read: No file at that path (the working directory is {ws}). Did you mean app.ts?")
+        f"<tool_use_error>No file at that path (the working directory is {ws}). Did you mean app.ts?</tool_use_error>")
 
 
 async def test_read_missing_file_suggests_the_path_inside_the_workspace(
@@ -156,7 +156,7 @@ async def test_read_missing_file_suggests_the_path_inside_the_workspace(
     (ws / "src").mkdir()
     (ws / "src" / "m.py").write_text("x\n")
     out = await h.call(ReadTool(), file_path=str(ws.parent / "src" / "m.py"))
-    assert text_of(out).endswith(f"Did you mean {ws / 'src' / 'm.py'}?")
+    assert text_of(out).endswith(f"Did you mean {ws / 'src' / 'm.py'}?</tool_use_error>")
 
 
 @pytest.mark.parametrize("path", ["/dev/zero", "/dev/stdin", "/dev/tty", "/dev/pts/3",
@@ -164,7 +164,7 @@ async def test_read_missing_file_suggests_the_path_inside_the_workspace(
 async def test_read_refuses_device_and_process_files(h: Harness, path: str) -> None:
     out = await h.call(ReadTool(), file_path=path)
     assert out.is_error
-    assert text_of(out) == f"Read: Read does not read device or process files, and {path} is one."
+    assert text_of(out) == f"<tool_use_error>Read does not read device or process files, and {path} is one.</tool_use_error>"
 
 
 async def test_read_reaches_outside_the_workspace(h: Harness, ws: Path) -> None:
@@ -190,8 +190,8 @@ async def test_read_refuses_a_binary_extension_unopened(h: Harness, ws: Path, na
     out = await h.call(ReadTool(), file_path=name)
     ext = name[name.rindex("."):].lower()
     assert text_of(out) == (
-        f"Read: Read does not open binary files, and a {ext} file is one. Open it with a "
-        "skill made for the format, or with a shell command or script that understands it.")
+        f"<tool_use_error>Read does not open binary files, and a {ext} file is one. Open it with a "
+        "skill made for the format, or with a shell command or script that understands it.</tool_use_error>")
 
 
 async def test_read_stray_invalid_bytes_decoded_leniently(h: Harness, ws: Path) -> None:
@@ -230,9 +230,9 @@ async def test_read_image_kind_follows_the_extension(h: Harness, ws: Path) -> No
     out = await h.call(ReadTool(), file_path="fake.png")
     assert out.is_error
     assert text_of(out) == (
-        "Read: fake.png has an image extension, but its bytes are not a PNG, JPEG, GIF or "
+        "<tool_use_error>fake.png has an image extension, but its bytes are not a PNG, JPEG, GIF or "
         "WebP image (often a saved error or login page). Check it with `file`, or look at "
-        "it as text through Bash (`head -c 500`).")
+        "it as text through Bash (`head -c 500`).</tool_use_error>")
     (ws / "pic.txt").write_bytes(_PNG)
     assert not images_of(await h.call(ReadTool(), file_path="pic.txt"))
 
@@ -470,7 +470,7 @@ async def test_an_unchanged_range_is_not_sent_twice(h: Harness, ws: Path) -> Non
         return text_of(await tool.run({"file_path": "a.txt", **input}, ctx))
 
     assert (await read()).startswith("1\tone")
-    assert (await read(offset=0)).startswith("File unchanged since you last read this range")
+    assert (await read(offset=0)).startswith("Wasted call: this range of the file has not changed")
     # An extension's own read (a compaction restoring files) gets the content.
     assert text_of(await h.call(tool, file_path="a.txt")).startswith("1\tone")
     assert await read(limit=1) == "1\tone"
@@ -491,7 +491,7 @@ async def test_an_unchanged_range_must_repeat_the_same_arguments(h: Harness, ws:
 
     assert (await read()).startswith("1\tone")
     assert (await read(limit=2000)).startswith("1\tone")
-    assert (await read(limit=2000)).startswith("File unchanged")
+    assert (await read(limit=2000)).startswith("Wasted call")
 
 
 async def test_an_unchanged_notebook_is_not_sent_twice(h: Harness, ws: Path) -> None:
@@ -506,7 +506,7 @@ async def test_an_unchanged_notebook_is_not_sent_twice(h: Harness, ws: Path) -> 
         return text_of(await tool.run({"file_path": "n.ipynb"}, ctx))
 
     assert (await read()).startswith('<cell id="a">')
-    assert (await read()).startswith("File unchanged")
+    assert (await read()).startswith("Wasted call")
 
 
 def test_a_compaction_forgets_read_ranges() -> None:

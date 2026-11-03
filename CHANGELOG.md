@@ -9,6 +9,40 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Context final closure: the third audit's differences from Claude Code 2.1.312 are matched or
+  written down** (spec `2026-11-02-context-final-closure`; kept differences are rows in
+  `parity/deviations.md`).
+  - **Breaking** (what a host or an existing task may notice; each follows Claude Code):
+    - Every call's input is checked against its tool's schema before any permission check; a
+      misfit (a missing or unexpected argument, a wrong type, a value outside an enum) is refused
+      as `<tool_use_error>InputValidationError: …</tool_use_error>`. MCP tools, `function_tool`
+      tools and the answer tool are not checked (`Tool.unchecked_input`); a `null` for an optional
+      argument counts as leaving it out. A value that fits only through Claude Code's coercions
+      (`"false"`, `"5"`, JSON text for an array) reaches the permission checks and the tool
+      converted.
+    - Errors that refuse a call before the tool acts come back inside `<tool_use_error>` with no
+      tool-name prefix (an unknown or not-loaded tool, `Edit`'s string not found, a file not read
+      first, a missing file, a task id that names nothing running); an unknown tool reads
+      `Error: No such tool available: <name>`. Failures while a tool works keep `<Tool>: <message>`.
+    - Instruction files (and the memory index) a `Read` deny rule covers are not loaded; the person
+      gets a notice per file.
+    - Haiku 4.5 (a catalogued Claude model without adaptive thinking) is sent
+      `thinking: {type: "enabled", budget_tokens}` when thinking is on and `max_tokens` is over
+      1,024 (not while a tool loop begun without thinking goes on); it was sent no `thinking`.
+      Agent hooks' requests go without thinking.
+    - A saved "always" rule adds `.noeta/settings.local.json` to the repository's
+      `.git/info/exclude`.
+  - A fork starts with a `<fork-boilerplate>` frame around its directive, and its copy of the
+    starting `Agent` call says the fork is itself.
+  - A whole `Read` of an instruction file shown and unchanged says it is already in context; the
+    repeated-read note calls the read wasted.
+  - The post-compaction restore skips the instruction files shown, the memory index and the plan
+    file by exact path (it skipped any `NOETA.md` / `AGENTS.md` by name and restored the plan
+    file).
+  - MCP servers that failed to connect or wait for a sign-in are told to the model when that set
+    changes; several SessionStart contexts are one message; a bare unknown `/command` gets a note
+    that nothing ran; `EnterPlanMode`'s description is complete.
+
 - **Context re-audit closure: a second, independent audit's differences from Claude Code
   2.1.312 are matched or written down** (spec `2026-11-02-context-reaudit-closure`; kept
   differences are rows in `parity/deviations.md`).

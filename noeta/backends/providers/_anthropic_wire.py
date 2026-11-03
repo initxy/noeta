@@ -192,24 +192,47 @@ def _join(turn: dict[str, Any], blocks: list[dict[str, Any]], *, newline: bool =
     turn["content"] = [*content, *blocks]
 
 
-def thinking_param(request: ModelRequest) -> dict[str, str] | None:
+def thinking_param(request: ModelRequest, max_tokens: int) -> dict[str, Any] | None:
     """``thinking`` → the Messages ``thinking`` parameter.
 
     ``False`` is an explicit ``{"type": "disabled"}``, ``None`` leaves the
-    parameter out. ``True`` asks for ``{"type": "adaptive"}`` only on a model
-    catalogued as a reasoning model: on an unknown or non-reasoning model
-    (Haiku 4.5 takes only the older budget form) the parameter is left out
-    and the vendor default applies, which is what every request carried
-    before the field became a bool.
+    parameter out. ``True`` asks for ``{"type": "adaptive"}`` on a model
+    catalogued as a reasoning model, and, as Claude Code does, for the older
+    budget form on a catalogued Claude model without adaptive thinking
+    (Haiku 4.5): the budget is the model's output ceiling less one, within
+    ``max_tokens`` less one and at least 1,024. On a model the catalog does
+    not know, the parameter is left out and the vendor default applies.
     """
     if request.thinking is None:
         return None
     if not request.thinking:
         return {"type": "disabled"}
     spec = models.find_spec(request.model)
-    if spec is not None and spec.is_reasoning:
+    if spec is None:
+        return None
+    if spec.is_reasoning:
         return {"type": "adaptive", "display": "updates"}
+    if spec.real_model_id.startswith("claude-") and max_tokens > MIN_THINKING_BUDGET \
+            and not _open_tool_loop_without_thinking(request):
+        budget = max(MIN_THINKING_BUDGET, min(max_tokens - 1, spec.max_output_tokens - 1))
+        return {"type": "enabled", "budget_tokens": budget}
     return None
+
+
+#: The smallest budget the Messages API takes; a request whose ``max_tokens``
+#: leaves no room for it goes without thinking.
+MIN_THINKING_BUDGET = 1024
+
+
+def _open_tool_loop_without_thinking(request: ModelRequest) -> bool:
+    """Whether the request continues a tool loop whose assistant turn has no
+    thinking block (begun before thinking was sent, as by an earlier
+    version): the API refuses budget thinking there, so it waits for the
+    next turn."""
+    last = next((m for m in reversed(request.messages) if m.role == "assistant"), None)
+    return last is not None and bool(last.tool_uses) \
+        and not any(isinstance(b, Thinking) for b in last.content) \
+        and any(isinstance(b, ToolResult) for b in request.messages[-1].content)
 
 
 def bare_strings(outbound: list[dict[str, Any]]) -> None:
