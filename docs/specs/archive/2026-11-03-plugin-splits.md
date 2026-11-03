@@ -1,7 +1,6 @@
 ---
-status: active
+status: done
 created: 2026-11-03
-branch: plan-mode-plugin
 ---
 
 # Plugin splits: plan mode, budget caps, repetition guard, empty-reply re-ask
@@ -128,3 +127,7 @@ only into the extension of the same name.
   breaking note for hosts listing plugins themselves (P2), `also_folding` map, kernel empty-reply
   cap and exception handling, `resolve_ask` on own asks, old planning log without `plan_mode`,
   reserved `permissions` record kinds in `docs/extending.md` (P3).
+- 2026-11-03: after the review fixes: make check 3515 passed, parity 0 mismatches (11 accepted),
+  cluster 14 passed, e2e 7 passed; eval (9 trials, concurrency 3) plan_mode_read_only,
+  plan_mode_started, plan_mode_multi_file, deny_rule_respected, denied_not_circumvented 1.00
+  each, no timeouts. Done; archived.
