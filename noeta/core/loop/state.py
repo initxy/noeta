@@ -251,12 +251,21 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         reducer = reducers.get(ev.extension)
         if reducer is not None:
             state.ext[ev.extension] = reducer(state.ext.get(ev.extension), ev.kind, ev.data)
+        for name in _folding(reducers, ev.extension):
+            state.ext[name] = reducers[name](state.ext.get(name), ev.kind, ev.data)
         if ev.message is not None:
             if state.calls:
                 state.held.append(ev.message)
             else:
                 state._add(ev.message, rec.seq)
     return state
+
+
+def _folding(reducers: Mapping[str, Reducer], extension: str) -> list[str]:
+    """The extensions besides ``extension`` whose reducers fold its records
+    too (``Extension.folds``; a reducer is its extension's bound ``reduce``)."""
+    return [name for name, reduce in reducers.items() if name != extension
+            and extension in getattr(getattr(reduce, "__self__", None), "folds", ())]
 
 
 def _on_model_replied(state: TaskState, ev: ModelReplied, seq: int) -> None:

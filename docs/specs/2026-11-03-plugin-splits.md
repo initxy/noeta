@@ -1,0 +1,87 @@
+---
+status: active
+created: 2026-11-03
+branch: plan-mode-plugin
+---
+
+# Plugin splits: plan mode, budget caps, repetition guard, empty-reply re-ask
+
+## Goal
+
+Owner, 2026-11-03: plan mode is its own plugin (rarely used), the permissions plugin can simply
+be switched off, and the budget caps, the repetition guard and the empty-reply re-ask become
+plugins of their own. Each is a built-in plugin on the public plugin interface, switchable with
+`[plugins.<name>] enabled`, works with the others on or off, keeps its state in the task log, and
+replays logs written before the split the same. Model-visible requests stay byte-identical with
+the default plugins (`make parity` 0 mismatches, golden requests unchanged).
+
+## Non-goals
+
+- Changing what any of these do with the default plugins on.
+- Moving the read-only shell-command check out of the permissions plugin (plan mode alone asks
+  about every shell command instead).
+
+## Context
+
+Before: plan mode, budget caps and the repetition guard lived in `noeta/plugins/permissions`;
+the empty-reply re-ask in the kernel (`noeta/core/runner/closing.py`). The kernel folds a record
+only into the extension of the same name.
+
+## Decisions
+
+- Plan mode is `noeta/plugins/plan_mode` (`PlanMode`, name `plan_mode`), placed right after
+  `permissions` in every built-in agent and in `DEFAULT_PLUGINS`, so the reminders' order and the
+  tool order are unchanged.
+- The task's mode stays the `permissions` `mode` / `plan_exit` records: front ends read them
+  there, and a log from before the split has every plan record there. `plan_mode` writes its
+  switches into and out of plan mode under that name and folds that name back through a new,
+  general kernel mechanism, `Extension.folds` (record names besides its own whose records reach
+  its `reduce`). Unavoidable kernel change: without it a plugin cannot read records written under
+  another name when that plugin is off, nor replay an old log's plan records.
+- `plan_mode`'s own records (`noted`, `compacted`, `plan_name`, `plan_file`, the reminders) are
+  under `plan_mode`; the kinds keep the names they had under `permissions`, so one fold reads
+  both.
+- Switches: `plan_mode` records every switch into plan mode (`/plan`, the signal, `EnterPlanMode`,
+  a task starting in plan mode) and `ExitPlanMode`'s exit; the permissions plugin records every
+  switch to another mode (it knows which modes the host allows). Without the permissions plugin,
+  `plan_mode` records those too.
+- A task starting in plan mode: `plan_mode` asks the permissions plugin (by duck type, as the
+  instructions plugin asks `read_deny_rule`) whether the task starts planning (`mode_of`) and from
+  which mode (`plan_start_mode`), so the records are the same as before.
+- `useAutoModeDuringPlan` (`auto_during_plan`) is a `PlanMode` argument: it is settled into the
+  plan record on entry, which the permissions plugin reads.
+- Permissions without `plan_mode`: `plan` is left out of the published `modes`, ignored as a
+  switch, a config `permission_mode` or the default mode (default mode then).
+- `plan_mode` without permissions: while planning, a call is asked about unless its tool is
+  read-only, it writes the plan file, it is a plan-mode tool, or no plugin offers the tool as its
+  own (`ToolSearch`). `ExitPlanMode` asks the person in every mode, as in Claude Code (its
+  approval is the tool's own question; bypass does not skip a tool that needs the person).
+  `EnterPlanMode` is not asked about (nothing is without the permissions plugin).
+
+## Plan
+
+- [x] `Extension.folds` in the kernel fold
+- [x] `noeta/plugins/plan_mode` (state, notes, tools, extension); permissions keeps only what may
+      run while planning and the auto-mode notes
+- [x] agents, settings (`useAutoModeDuringPlan`), compaction's plan-file read, evals' plans_dir
+- [x] tests: plan mode alone, permissions alone, neither, an old log replayed
+- [x] docs: `docs/extending.md`, parity rules, CHANGELOG
+- [ ] budget caps split
+- [ ] repetition guard split
+- [ ] empty-reply re-ask split
+- [ ] gates: check, parity, cluster, e2e; targeted eval
+
+## Acceptance criteria
+
+- `make parity` 0 mismatches with the same 11 accepted deviations; golden requests unchanged.
+- Each plugin works alone and off (tests); old logs replay the same (tests).
+- `make check`, `make cluster`, `make e2e` green; the targeted eval does not regress.
+
+## Risks
+
+- A front end that sends a mode switch in the same inbox batch right after `/plan` now gets the
+  switch applied first (the permissions plugin folds the batch before `plan_mode`).
+
+## Progress log
+
+- 2026-11-03: plan mode split; parity 0 mismatches (11 accepted), full test suite green.

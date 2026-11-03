@@ -463,6 +463,11 @@ class Extension:
     #: after the agent's own plugins; an installed package's is ignored, and
     #: ``enabled = false`` in the host's setting still turns it off.
     add_to: ClassVar[tuple[str, ...]] = ()
+    #: Record names besides its own whose records ``reduce`` also folds,
+    #: into this extension's state: a plugin split out of another keeps
+    #: reading the records it wrote under the old name (old logs replay the
+    #: same), and records front ends read by name stay where they are.
+    folds: ClassVar[tuple[str, ...]] = ()
 
     def initial_state(self) -> Any:
         return None

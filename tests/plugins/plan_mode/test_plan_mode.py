@@ -16,9 +16,9 @@ from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import CommandContext
 from noeta.host.pending import pending
 from noeta.plugins.permissions import Permissions
-from noeta.plugins.permissions import plan as pl
+from noeta.plugins.plan_mode import plan as pl
 from noeta.testing import ScriptedProvider, reply
-from tests.plugins.permissions.helpers import Fake, agent, events, runtime
+from tests.plugins.permissions.helpers import Fake, agent, events, runtime, with_plans
 
 
 @pytest.fixture
@@ -52,7 +52,7 @@ class Namer(ScriptedProvider):
 async def test_planning_end_to_end(store: SqliteStore, tmp_path: Path) -> None:
     write = Fake("Write")
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
-    ag = agent([perms], [write])
+    ag = agent(with_plans(perms), [write])
     provider = Namer([reply("planned")])
     rt = runtime(store, provider, ag)
     client = Client(store)
@@ -109,7 +109,7 @@ async def test_exit_plan_mode_outside_plan_mode_and_keep_planning(store: SqliteS
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("", LOAD), reply("", ("ExitPlanMode", {})),
                                  reply("ok")])
-    rt = runtime(store, provider, agent([perms], []))
+    rt = runtime(store, provider, agent(with_plans(perms), []))
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
@@ -133,7 +133,7 @@ async def test_the_plan_is_named_once_approved_not_when_shown(store: SqliteStore
     # person approves, from the plan's first 1,000 characters; a plan sent
     # back is not named.
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
-    ag = agent([perms], [])
+    ag = agent(with_plans(perms), [])
     provider = Namer([reply("planning")])
     rt = runtime(store, provider, ag)
     client = Client(store)
@@ -177,7 +177,7 @@ async def test_only_the_first_approved_plan_of_a_task_is_named(store: SqliteStor
     # (``if(!D&&Bg(K()))return``, and again when the name arrives): a second
     # approved plan in the same task asks for no name.
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
-    ag = agent([perms], [])
+    ag = agent(with_plans(perms), [])
     provider = Namer([reply("planning")])
     rt = runtime(store, provider, ag)
     client = Client(store)
@@ -223,7 +223,7 @@ async def test_enter_plan_mode_asks_the_person_then_plans(store: SqliteStore,
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("", ENTER), reply("", ("EnterPlanMode", {})),
                                  reply("planning")])
-    rt = runtime(store, provider, agent([perms], []))
+    rt = runtime(store, provider, agent(with_plans(perms), []))
     client = Client(store)
     tid = await client.create("a", "add caching", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
@@ -246,7 +246,7 @@ async def test_enter_plan_mode_in_auto_mode_needs_no_approval(store: SqliteStore
     perms = Permissions(mode="auto", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("", ENTER), reply("", ("EnterPlanMode", {})),
                                  reply("", ("EnterPlanMode", {})), reply("planning")])
-    rt = runtime(store, provider, agent([perms], []))
+    rt = runtime(store, provider, agent(with_plans(perms), []))
     client = Client(store)
     tid = await client.create("a", "add caching", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
@@ -282,7 +282,7 @@ async def test_a_task_created_in_plan_mode_plans_from_its_first_request(
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("", ("Write", {"file_path": str(tmp_path / "a.py")})),
                                  reply("ok")])
-    rt = runtime(store, provider, agent([perms], [write]))
+    rt = runtime(store, provider, agent(with_plans(perms), [write]))
     client = Client(store)
     tid = await client.create("a", "add caching",
                               config={"cwd": str(tmp_path), "permission_mode": "plan"})
@@ -299,7 +299,7 @@ async def test_a_switch_that_comes_with_the_prompt_is_told_at_once(
         store: SqliteStore, tmp_path: Path) -> None:
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("ok")])
-    rt = runtime(store, provider, agent([perms], []))
+    rt = runtime(store, provider, agent(with_plans(perms), []))
     client = Client(store)
     tid = await client.create("a", config={"cwd": str(tmp_path)})
     await client.signal(tid, "permission_mode", {"mode": "plan"})
@@ -315,7 +315,7 @@ async def test_the_plan_text_follows_claude_codes_cadence(
     form; full again on every fifth text."""
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("ok") for _ in range(26)])
-    rt = runtime(store, provider, agent([perms], []))
+    rt = runtime(store, provider, agent(with_plans(perms), []))
     client = Client(store)
     tid = await client.create("a", "p1", config={"cwd": str(tmp_path),
                                                  "permission_mode": "plan"})
@@ -353,7 +353,7 @@ async def test_a_prompt_that_arrives_mid_turn_counts_toward_the_cadence_at_once(
                         risk={"Inject": "low"})
     provider = ScriptedProvider([*[reply("ok") for _ in range(4)],
                                  reply("", ("Inject", {})), reply("ok")])
-    rt = runtime(store, provider, agent([perms], [Inject()]))
+    rt = runtime(store, provider, agent(with_plans(perms), [Inject()]))
     tid = await client.create("a", "p1", config={"cwd": str(tmp_path),
                                                  "permission_mode": "plan"})
     await rt.run_until_idle()
@@ -369,7 +369,7 @@ async def test_planning_again_with_a_plan_file_reads_it_first(
         store: SqliteStore, tmp_path: Path) -> None:
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("ok") for _ in range(3)])
-    rt = runtime(store, provider, agent([perms], []))
+    rt = runtime(store, provider, agent(with_plans(perms), []))
     client = Client(store)
     tid = await client.create("a", "plan it", config={"cwd": str(tmp_path),
                                                       "permission_mode": "plan"})
@@ -412,7 +412,7 @@ async def test_a_sub_agent_of_a_planning_task_plans_too(
     provider = ScriptedProvider([reply("", ("Spawn", {})),
                                  reply("", ("Write", {"file_path": str(tmp_path / "a.py")})),
                                  reply("child done"), reply("parent done")])
-    rt = runtime(store, provider, agent([perms], [Spawn(), write]))
+    rt = runtime(store, provider, agent(with_plans(perms), [Spawn(), write]))
     client = Client(store)
     tid = await client.create("a", "plan it", config={"cwd": str(tmp_path),
                                                       "permission_mode": "plan"})
@@ -433,14 +433,14 @@ async def test_a_sub_agent_of_a_planning_task_plans_too(
 
 
 def test_a_task_keeps_the_first_plan_name() -> None:
-    from noeta.plugins.permissions.state import PermState, fold
+    from noeta.plugins.plan_mode.state import PlanState, fold
 
-    st = fold(PermState(), "plan_exit", {"mode": "default", "named": True})
+    st = fold(PlanState(), "plan_exit", {"mode": "default", "named": True})
     assert st.plan_named and st.plan_name is None
     st = fold(fold(st, "plan_name", {"name": "add-logging"}), "plan_name", {"name": "other"})
     assert st.plan_name == "add-logging"
     # A log written before ``named``: the recorded name still counts.
-    assert fold(PermState(), "plan_name", {"name": "x"}).plan_named
+    assert fold(PlanState(), "plan_name", {"name": "x"}).plan_named
 
 
 async def _exit_plan(store: SqliteStore, tmp_path: Path, plan: str | None,
@@ -448,7 +448,7 @@ async def _exit_plan(store: SqliteStore, tmp_path: Path, plan: str | None,
     perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
     provider = ScriptedProvider([reply("planning"), reply("", LOAD),
                                  reply("", ("ExitPlanMode", {})), reply("ok")])
-    rt = runtime(store, provider, agent([perms], []))
+    rt = runtime(store, provider, agent(with_plans(perms), []))
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path),
                                                  "permission_mode": "plan"})
@@ -494,16 +494,19 @@ async def test_a_sub_agent_plans_as_its_parent_does(
     """A planning task's sub-agent uses the auto-mode classifier when its
     parent's plan does, whatever the service's default mode."""
     from noeta.core.loop.state import TaskState
-    from noeta.plugins.permissions.state import AUTO_DURING_PLAN, NAME, PermState
+    from noeta.plugins.permissions.state import PermState
+    from noeta.plugins.plan_mode.state import AUTO_DURING_PLAN, PlanState
 
     perms = Permissions(mode=service, plans_dir=str(tmp_path / "plans"))
-    parent = TaskState(ext={NAME: PermState(mode="plan", plan={
-        "path": str(tmp_path / "plans" / "p.md"), "pre_mode": pre, "entered_seq": 3,
-        AUTO_DURING_PLAN: classify})})
-    config = {"cwd": str(tmp_path), **perms.inherit(parent)}
+    plan = {"path": str(tmp_path / "plans" / "p.md"), "pre_mode": pre, "entered_seq": 3,
+            AUTO_DURING_PLAN: classify}
+    parent = TaskState(ext={"permissions": PermState(mode="plan", plan=plan),
+                            "plan_mode": PlanState(mode="plan", plan=plan)})
+    exts = with_plans(perms)
+    config = {"cwd": str(tmp_path), **{k: v for e in exts for k, v in e.inherit(parent).items()}}
     assert config["permission_mode"] == "plan"
     provider = ScriptedProvider([reply("done")])
-    rt = runtime(store, provider, agent([perms]))
+    rt = runtime(store, provider, agent(with_plans(perms)))
     client = Client(store)
     tid = await client.create("a", "look around", config=config)
     await rt.run_until_idle()

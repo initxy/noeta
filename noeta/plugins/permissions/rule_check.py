@@ -13,7 +13,6 @@ from typing import Any
 from noeta.core.extension import TaskView
 from noeta.core.types import ToolUse
 from noeta.plugins.permissions import deny_paths as dp
-from noeta.plugins.permissions import plan as pl
 from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
@@ -184,9 +183,9 @@ class RuleCheck:
                      ctx: r.RuleContext, allow_rules: Sequence[r.Rule],
                      aliases: Sequence[Mapping[str, Any]] = ()) -> Decision:
         name, args = call.name, call.input
-        if name == pl.EXIT_PLAN_MODE:
+        if name == p.EXIT_PLAN_MODE:
             return Decision("allow")
-        if name == pl.ENTER_PLAN_MODE:
+        if name == p.ENTER_PLAN_MODE:
             # Only a person agrees to plan mode, except where the classifier
             # already judges every action (in plan mode it may let read-only
             # actions through that would otherwise be asked about).

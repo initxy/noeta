@@ -282,13 +282,19 @@ def apply_env(settings: FileSettings) -> None:
     os.environ.update(settings.env)
 
 
+def plan_mode_arguments(settings: FileSettings) -> dict[str, Any]:
+    """The plan-mode plugin's arguments the settings give:
+    ``auto_during_plan`` (the top-level ``useAutoModeDuringPlan``)."""
+    return {"auto_during_plan": False} \
+        if settings.permissions.get("useAutoModeDuringPlan") is False else {}
+
+
 def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str, Any]:
     """The permissions plugin's arguments the settings give, as plain data:
     ``mode`` (``defaultMode``), ``allow`` / ``deny`` / ``ask`` (rule strings),
-    ``additional_directories``, ``disable_bypass_mode``
-    (``disableBypassPermissionsMode: "disable"``) and ``auto_during_plan``
-    (the top-level ``useAutoModeDuringPlan``); only those the plugin takes
-    (``accepted``, its argument names)."""
+    ``additional_directories`` and ``disable_bypass_mode``
+    (``disableBypassPermissionsMode: "disable"``); only those the plugin
+    takes (``accepted``, its argument names)."""
     perms = settings.permissions
     args: dict[str, Any] = {k: list(perms[k]) for k in RULE_LISTS if k in perms}
     if "additionalDirectories" in perms:
@@ -296,8 +302,6 @@ def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str
                                           for d in perms["additionalDirectories"]]
     if perms.get("disableBypassPermissionsMode") == "disable":
         args["disable_bypass_mode"] = True
-    if perms.get("useAutoModeDuringPlan") is False:
-        args["auto_during_plan"] = False
     if "defaultMode" in perms:
         if perms["defaultMode"] == "bypassPermissions" and args.get("disable_bypass_mode"):
             log.warning("settings: defaultMode bypassPermissions is disabled "

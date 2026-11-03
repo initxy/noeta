@@ -12,7 +12,7 @@ Claude Code 2.1.312 · baseline `m1` · rules in our words (see `../README.md`).
 Ends plan mode by asking the user to approve the plan the model wrote to the plan file.
 **Deferred** (`defer_loading: true`): listed by name in the deferred-tool list and loaded in
 m1 with `ToolSearch` `select:ExitPlanMode` after `/plan`; from then on sorted into the list by
-name (between `Edit` and `ListAgents`). noeta: `noeta/plugins/permissions/plan.py` (deferred, main agent only; the approval is a question with the mode choices).
+name (between `Edit` and `ListAgents`). noeta: `noeta/plugins/plan_mode/plan.py` (deferred, main agent only; the approval is a question with the mode choices).
 
 ## Parameters
 
@@ -40,7 +40,7 @@ other baseline tools).
 
 | id | shape (observed) | noeta today |
 |---|---|---|
-| `tool.ExitPlanMode.r.1` | On approval (m1/0063), a plain string: the user approved and coding may start, starting with the todo list if one applies. | covered (`permissions/plan.py` `APPROVED`, in our wording) |
+| `tool.ExitPlanMode.r.1` | On approval (m1/0063), a plain string: the user approved and coding may start, starting with the todo list if one applies. | covered (`plan_mode/plan.py` `APPROVED`, in our wording) |
 | `tool.ExitPlanMode.r.2` | Then the saved plan path: `$CFG/plans/<adjective>-<adjective>-<noun>.md` (three random words, e.g. a "swirling-tickling-bubble" pattern), with a note that it can be consulted during implementation. | covered (`plan.py` `new_plan_path`: two adjectives and a noun; the directory is `<noeta home>/plans`, `deviations.md`) |
 | `tool.ExitPlanMode.r.3` | Then a `## Approved Plan:` heading followed by the full plan file text. | covered (`## Approved Plan:` and the file's text) |
 | `tool.ExitPlanMode.r.4` | The plan was written with `Write` to that path before the call (the plan file lives under the config dir, not the project). | covered (the plan file is outside the project, writable in plan mode) |

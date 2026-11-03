@@ -21,6 +21,22 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Plugin splits** (spec `2026-11-03-plugin-splits`): parts of the permissions plugin and the
+  kernel became built-in plugins of their own, each switchable with `[plugins.<name>] enabled`.
+  - **Plan mode is the plugin `plan_mode`** (on by default in every built-in agent): `/plan`,
+    `EnterPlanMode` / `ExitPlanMode`, the plan file and its name, the plan-mode notes. With
+    `[plugins.permissions] enabled = false` plan mode still plans read-only (every call of a tool
+    that is not read-only, the plan file's write aside, is asked about, shell commands included)
+    and `ExitPlanMode` still asks the person; with `[plugins.plan_mode] enabled = false` there are
+    no plan tools, no `/plan`, no plan-mode notes, and `plan` is neither offered to front ends nor
+    taken as a switch or a starting mode. The mode stays the `permissions` `mode` / `plan_exit`
+    records front ends read; a log written before the split replays the same.
+  - **Breaking**: `Permissions(auto_during_plan=...)` is `PlanMode(auto_during_plan=...)`
+    (`useAutoModeDuringPlan` in the settings files goes there); a host building agents by hand
+    adds `PlanMode(plans_dir=...)` next to `Permissions` to keep plan mode.
+  - New extension mechanism: `Extension.folds` names other record names whose records also reach
+    the extension's `reduce` (how a split-out plugin keeps reading its old records).
+
 - **Context final closure: the third audit's differences from Claude Code 2.1.312 are matched or
   written down** (spec `2026-11-02-context-final-closure`; kept differences are rows in
   `parity/deviations.md`).

@@ -7,6 +7,7 @@ disallowedTools: Agent, ExitPlanMode, Edit, Write, NotebookEdit
 omitClaudeMd: true
 plugins:
   - permissions
+  - plan_mode
   - hooks
   - shell
   - web

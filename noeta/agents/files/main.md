@@ -3,6 +3,7 @@ name: main
 model: inherit
 plugins:
   - permissions
+  - plan_mode
   - hooks
   - shell
   - fs

@@ -2,9 +2,10 @@
 
 * :class:`Permissions` — Claude Code's permission system over every tool
   call: the six modes, ``allow`` / ``deny`` / ``ask`` rules, working
-  directories and protected paths, the auto-mode classifier, plan mode with
-  ``ExitPlanMode`` and ``/plan``; plus budget caps, the repetition guard,
-  declarative PreToolUse rules and ``can_use_tool``.
+  directories and protected paths, the auto-mode classifier and what may
+  run while planning (plan mode itself is ``noeta.plugins.plan_mode``); plus
+  budget caps, the repetition guard, declarative PreToolUse rules and
+  ``can_use_tool``.
 """
 
 from noeta.plugins.permissions.extension import (
