@@ -27,6 +27,7 @@ from evals.core import (
 )
 from noeta.core.events import ExtensionRecorded
 from noeta.plugins.fs.state import FS, KIND_CHANGED
+from noeta.plugins.todos.state import TodoState, reduce_todos
 
 Result = tuple[float, dict[str, Any]]
 
@@ -408,6 +409,37 @@ def score_background_result(t: Trace, judge: Judge) -> Result:
               or (c.tool_name == "Bash" and "LOCKOUT" in str(c.arguments.get("command", "")))]
     return 0.3 * (t.spawned >= 1) + 0.2 * (not looked) + 0.5 * (answer == fx.LOCKOUT_THRESHOLD), {
         "spawned": t.spawned, "looked_itself": len(looked), "answer": answer[:40]}
+
+
+# --------------------------------------------------------------------------- #
+# Task list
+# --------------------------------------------------------------------------- #
+
+#: The six changes ``todo_list_multi_step`` asks for: file, text that shows it done.
+TODO_CHANGES = (
+    ("shop/pricing.py", 'TAX_RATE = Decimal("0.0825")'),
+    ("shop/cart.py", "def clear(self"),
+    ("shop/cli.py", 'print("Welcome to the Shop")'),
+    ("config/prod.toml", 'log_level = "error"'),
+    ("server.py", "PORT = 9090"),
+    ("README.md", "## Usage"),
+)
+
+
+def score_todo_list(t: Trace, judge: Judge) -> Result:
+    """A task list of the changes (TaskCreate), each item marked completed
+    (TaskUpdate), and the changes made."""
+    st = TodoState()
+    for e in t.items:
+        if isinstance(e, ExtensionRecorded) and e.extension == "todos":
+            st = reduce_todos(st, e.kind, e.data)
+    created = sum(1 for c in t.named("TaskCreate") if not t.failed(c))
+    completed = sum(1 for i in st.items if i.status == "completed")
+    all_done = len(st.items) >= 3 and completed == len(st.items)
+    done = sum(1 for f, text in TODO_CHANGES if text in (t.file(f) or ""))
+    return 0.25 * (created >= 3) + 0.25 * all_done + 0.5 * done / len(TODO_CHANGES), {
+        "created": created, "items": len(st.items), "completed": completed,
+        "changes_done": done, "tool_searches": len(t.named("ToolSearch"))}
 
 
 # --------------------------------------------------------------------------- #
@@ -900,6 +932,21 @@ SCENARIOS: list[Scenario] = [
         setup=fx.platform_with_lockout,
         score=score_background_result,
         tags=("delegation", "background"),
+    ),
+    Scenario(
+        name="todo_list_multi_step",
+        behavior="tracks a six-part request in a task list and marks each item completed",
+        goal=("Please make these changes:\n"
+              "1. Raise TAX_RATE in shop/pricing.py to 0.0825.\n"
+              "2. Add a clear() method to Cart in shop/cart.py that empties the cart.\n"
+              "3. Change the greeting in shop/cli.py to \"Welcome to the Shop\".\n"
+              "4. Set log_level to \"error\" in config/prod.toml.\n"
+              "5. Change PORT in server.py to 9090.\n"
+              "6. Add a \"## Usage\" section to README.md saying how to run the CLI "
+              "(python -m shop.cli)."),
+        setup=fx.shop,
+        score=score_todo_list,
+        tags=("todos",),
     ),
     Scenario(
         name="plan_mode_read_only",
