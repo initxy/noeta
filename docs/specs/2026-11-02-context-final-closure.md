@@ -86,6 +86,17 @@ as a deviation written as what CC does / what noeta does / why it is better, wit
 - **Rows:** `rem.quiet-nudge.4` names Mythos 5.1; the Fable / Mythos `bash_output_audience_note`
   joins the lean-prompt deviation row.
 
+## Open questions (owner)
+
+1. F2: the audit read CC as telling the model about a withheld instruction file; the bundle's
+   model rendering of `withheld_memory` is empty, so noeta tells only the person (matched to
+   the bundle). Confirm.
+2. F8: `.git/info/exclude` instead of the user's global excludes file (deviation row). Confirm.
+3. F3: a `null` for an optional argument passes the schema check (deviation row; CC refuses).
+   Confirm.
+4. F9: Haiku 4.5 now thinks with a 31,999-token budget by default, as CC; more output tokens
+   per call on that model. Confirm.
+
 ## Plan
 
 - [x] F1 fork frame and starting-call answer; tests.
