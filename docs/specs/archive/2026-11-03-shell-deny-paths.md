@@ -1,7 +1,6 @@
 ---
 status: done
 created: 2026-11-03
-branch: shell-deny-paths
 ---
 
 # Shell paths held to deny rules
