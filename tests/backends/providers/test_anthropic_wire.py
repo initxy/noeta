@@ -203,8 +203,8 @@ async def test_a_mid_turn_message_joins_the_results_ahead_of_a_notice_taken_with
 async def test_the_empty_reply_nudge_joins_the_user_turn_before_the_steps_notes() -> None:
     # Claude Code 2.1.312: the nudge rides in the tool results' turn, and the
     # step's system note still ends the request (and carries the cache mark).
-    from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
     from noeta.core.types import system_message
+    from noeta.toolkit.empty_reply import EMPTY_REPLY_NUDGE
 
     wire = await _wire_messages(
         [user("q"), _call(k="x"), _result(),
@@ -219,8 +219,8 @@ async def test_the_empty_reply_nudge_joins_the_user_turn_before_the_steps_notes(
 
 @respx.mock
 async def test_the_empty_reply_nudge_joins_the_prompt_before_the_environment() -> None:
-    from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
     from noeta.core.types import system_message
+    from noeta.toolkit.empty_reply import EMPTY_REPLY_NUDGE
 
     wire = await _wire_messages([user("q"), system_message("# Environment"),
                                  user(EMPTY_REPLY_NUDGE, origin="inline")])

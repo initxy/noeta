@@ -13,7 +13,7 @@ as a deferred name and no recorded session loads it, so the rules come from the 
 Asks to switch the conversation into plan mode, where the model explores and designs an approach
 for the user to approve before writing code. **Deferred** (`defer_loading: true`); its search
 hint is about switching to plan mode to design an approach before coding. noeta:
-`noeta/plugins/permissions/plan.py` (`EnterPlanModeTool`, `descriptions/enter_plan_mode.md`).
+`noeta/plugins/plan_mode/plan.py` (`EnterPlanModeTool`, `descriptions/enter_plan_mode.md`).
 
 ## Parameters
 

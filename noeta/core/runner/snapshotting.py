@@ -106,7 +106,7 @@ class SnapshotWriter:
         seq, data = self._newest
         try:
             state = fold(await run.store.read(run.task_id, after=seq), run.reducers,
-                         state=snapshots.decode(data))
+                         state=snapshots.decode(data), also=run.also)
         except Exception:  # a snapshot is only ever an optimization
             log.warning("task %s: could not fold a snapshot", run.task_id, exc_info=True)
             return

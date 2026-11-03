@@ -343,6 +343,7 @@ class AskUserQuestionTool:
     description = DESCRIPTION
     input_schema = INPUT_SCHEMA
     read_only = False
+    safe_while_planning = True
     #: An answer cannot be fetched again, so it is never cleared.
     clearable = False
 

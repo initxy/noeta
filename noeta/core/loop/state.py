@@ -44,6 +44,9 @@ from noeta.core.types import (
 )
 
 Reducer = Callable[[Any, str, Any], Any]
+#: Record name -> the other extensions whose reducers fold its records too
+#: (``Extension.folds``): :func:`also_folding`.
+AlsoFolds = Mapping[str, Sequence[str]]
 
 
 #: The signal that changes a running task's config
@@ -104,9 +107,14 @@ class TaskState:
     #: Consecutive ``ModelCalled`` without a reply (crash/retry loop guard);
     #: a deliberate ``continue`` (output cap, empty reply) starts it again.
     model_attempts: int = 0
-    #: The model was asked to go on after an empty reply and has not replied
-    #: since, nor has a new message come in: another empty reply ends the turn.
+    #: The turn went on after an empty reply (a ``continue`` with reason
+    #: ``empty_reply``) and the model has not replied since, nor has a new
+    #: message come in (``Extension.on_empty_reply`` reads it).
     empty_nudged: bool = False
+    #: Empty replies in a row the turn went on after (``continue`` entries
+    #: with reason ``empty_reply`` and no reply since): the kernel ends the
+    #: turn at ``MAX_EMPTY_REPLIES`` whatever the extensions say.
+    empty_replies: int = 0
     #: Texts of the replies that make up the current answer: one reply, or a
     #: reply plus its continuations after hitting the output cap.
     answer_parts: list[str] = field(default_factory=list)
@@ -203,8 +211,22 @@ def new_state(initial_ext: Mapping[str, Any] | None = None) -> TaskState:
     return TaskState(ext=dict(initial_ext or {}))
 
 
-def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> TaskState:
-    """Fold one recorded event into ``state`` (in place) and return it."""
+def also_folding(extensions: Iterable[Any]) -> dict[str, list[str]]:
+    """Record name -> the extensions (by name) that also fold its records
+    (``Extension.folds``), computed once per agent."""
+    out: dict[str, list[str]] = {}
+    for ext in extensions:
+        for other in getattr(ext, "folds", ()):
+            if other != ext.name:
+                out.setdefault(other, []).append(ext.name)
+    return out
+
+
+def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer],
+          also: AlsoFolds | None = None) -> TaskState:
+    """Fold one recorded event into ``state`` (in place) and return it;
+    ``also`` routes a record to the extensions that fold another's
+    (:func:`also_folding`)."""
     ev = rec.event
     state.last_seq = rec.seq
     if isinstance(ev, TaskCreated):
@@ -251,6 +273,9 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer]) -> T
         reducer = reducers.get(ev.extension)
         if reducer is not None:
             state.ext[ev.extension] = reducer(state.ext.get(ev.extension), ev.kind, ev.data)
+        for name in (also or {}).get(ev.extension, ()):
+            if name in reducers:
+                state.ext[name] = reducers[name](state.ext.get(name), ev.kind, ev.data)
         if ev.message is not None:
             if state.calls:
                 state.held.append(ev.message)
@@ -263,6 +288,7 @@ def _on_model_replied(state: TaskState, ev: ModelReplied, seq: int) -> None:
     resp = ev.response
     state.model_attempts = 0
     state.empty_nudged = False
+    state.empty_replies = 0
     state.usage = state.usage + resp.usage
     state.last_usage = resp.usage
     state.last_stop = resp.stop_reason
@@ -350,6 +376,7 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
             state.usage = state.usage + core.usage
         if core.reason == records.EMPTY_REPLY:
             state.empty_nudged = True
+            state.empty_replies += 1
     elif isinstance(core, records.TurnDone):
         if core.usage is not None:
             state.usage = state.usage + core.usage
@@ -366,7 +393,7 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
 
 
 def fold_on_copy(state: TaskState, events: Sequence[Event],
-                 reducers: Mapping[str, Reducer]) -> TaskState:
+                 reducers: Mapping[str, Reducer], also: AlsoFolds | None = None) -> TaskState:
     """``state`` with ``events`` folded in after its last seq, on a copy the
     live state never sees (``state`` itself when there are none)."""
     if not events:
@@ -384,7 +411,7 @@ def fold_on_copy(state: TaskState, events: Sequence[Event],
             copies[f.name] = type(value)(value)
     sim = dataclasses.replace(state, **copies)
     for i, event in enumerate(events, 1):
-        apply(sim, Recorded(seq=state.last_seq + i, at=0.0, event=event), reducers)
+        apply(sim, Recorded(seq=state.last_seq + i, at=0.0, event=event), reducers, also)
     return sim
 
 
@@ -436,10 +463,11 @@ def fold(
     reducers: Mapping[str, Reducer],
     initial_ext: Mapping[str, Any] | None = None,
     state: TaskState | None = None,
+    also: AlsoFolds | None = None,
 ) -> TaskState:
     st = state if state is not None else new_state(initial_ext)
     for rec in records:
-        apply(st, rec, reducers)
+        apply(st, rec, reducers, also)
     return st
 
 
@@ -566,6 +594,7 @@ def _erase(state: TaskState, seqs: set[int]) -> None:
 def _close_turn(state: TaskState, seq: int) -> None:
     state.turn_open = False
     state.model_attempts = 0
+    state.empty_replies = 0
     state.continuing = False
     if state.queued:
         for m in state.queued:

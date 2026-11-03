@@ -3,6 +3,9 @@ name: main
 model: inherit
 plugins:
   - permissions
+  - plan_mode
+  - budget
+  - repetition_guard
   - hooks
   - shell
   - fs
@@ -23,6 +26,7 @@ plugins:
   - title
   - workflow
   - mcp
+  - empty_reply
   - compaction
 ---
 

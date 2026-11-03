@@ -48,6 +48,7 @@ from noeta.cli.settings_files import (
     apply_env,
     managed_dir,
     permission_arguments,
+    plan_mode_arguments,
     settings_layers,
 )
 from noeta.cli.settings_files import load as load_file_settings
@@ -330,7 +331,8 @@ def _base_plugin_settings(found: FileSettings, cwd: str | None,
                  "project": project_trusted if project else False},
          "skills": _skills_settings(found, write_roots),
          "instructions": {"user_dir": str(home_dir.HOME), "managed_dir": str(managed_dir())},
-         "permissions": permission_args, "fs": {"write_roots": write_roots},
+         "permissions": permission_args, "plan_mode": plan_mode_arguments(found),
+         "fs": {"write_roots": write_roots},
          "environment": environment_arguments(found)})
 
 

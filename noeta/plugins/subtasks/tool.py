@@ -230,6 +230,7 @@ class AgentTool:
     name = texts.AGENT_TOOL
     description = load_description("noeta.plugins.subtasks", "agent")
     read_only = False
+    safe_while_planning = True
     clearable = False
     #: Spawns after the reply's ordinary calls have run.
     run_last = True
@@ -342,6 +343,7 @@ class HandbackTool:
     name = texts.HANDBACK_TOOL
     description = load_description("noeta.plugins.subtasks", "subagent_handback")
     read_only = False
+    safe_while_planning = True
     clearable = False
     #: Last in the sub-agent's tool list, after the deferred-tool placeholder.
     listed_last = True
@@ -394,6 +396,7 @@ class SendMessageTool:
     name = texts.SEND_TOOL
     description = load_description("noeta.plugins.subtasks", "send_message")
     read_only = False
+    safe_while_planning = True
     clearable = False
     #: Claude Code lists it among the tools loaded on demand.
     deferred = True

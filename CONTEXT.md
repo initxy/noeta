@@ -106,7 +106,7 @@ What a host says about one plugin, by name: its arguments (`enabled: false` amon
 it off), a ready `Extension`, or on/off. One table at every level (`build_agents`,
 `default_agents`, `from_settings`, `config.toml` `[plugins.<name>]`); argument tables of one
 plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
-to an agent without copying its file. The built-in agents keep memory and MCP off until set.
+to an agent without copying its file. The built-in agents keep memory, MCP and the repetition guard off until set.
 A secret is written as a reference, `{env:NAME}` or `{keyring:service/user}`, resolved only when
 the plugin is made (`agent_files.resolve_secrets`).
 
@@ -129,7 +129,7 @@ The one capability-plugin interface (`noeta/core/extension.py`): tools, `tool_ch
 computed from the others'), context parts, commands, reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
 an approving Allow satisfies asks that are not firm), `resolve_ask` (answers asks before the
 call parks), `after_tool`, `on_event`, `reduce`, `continue_state`, `inherit`, `on_context_overflow`,
-`before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is
+`on_empty_reply`, `before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is
 optional. Commands (`commands(ctx)` / `run_command`) are slash commands front ends list and
 expand through `noeta/core/commands.py`. A `before_model` that raises `TurnDone` ends the turn
 without a model call (`/compact`); `RequestStale` has the request built again (a compaction).

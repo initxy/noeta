@@ -11,6 +11,8 @@ from noeta.core.client import Client
 from noeta.core.extension import Extension
 from noeta.core.runner import Runtime
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.plugins.permissions import Permissions
+from noeta.plugins.plan_mode import PlanMode
 from noeta.testing import ScriptedProvider
 
 
@@ -48,6 +50,12 @@ def agent(exts: Sequence[Extension], tools: Sequence[Any] = (), name: str = "a",
           one_shot: bool = False) -> Agent:
     return Agent(name=name, model="m", extensions=tuple(exts), tools=tuple(tools),
                  one_shot=one_shot)
+
+
+def with_plans(perms: Permissions, **plan_mode: Any) -> list[Extension]:
+    """``perms`` and the plan-mode plugin, its plan files where ``perms``
+    lets them be written."""
+    return [perms, PlanMode(plans_dir=perms.plans_dir, **plan_mode)]
 
 
 async def events(client: Client, tid: str) -> list[Any]:

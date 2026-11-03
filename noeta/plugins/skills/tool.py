@@ -53,6 +53,7 @@ class SkillTool:
 
     name = SKILL_TOOL
     read_only = False
+    safe_while_planning = True
     clearable = False
 
     def __init__(self, owner: Skills) -> None:

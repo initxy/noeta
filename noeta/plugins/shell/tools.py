@@ -447,6 +447,7 @@ class TaskStopTool:
 
     name = "TaskStop"
     read_only = False
+    safe_while_planning = True
     clearable = False
     deferred = True
     search_hint = "stop or kill a running background task"

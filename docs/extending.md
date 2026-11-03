@@ -19,6 +19,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | run shell / HTTP hooks in Claude Code's format | settings `hooks`, or a Claude Code plugin's `hooks/hooks.json` (InstructionsLoaded included) | `noeta/plugins/hooks` |
 | add a slash command | `commands()` / `run_command()`, or `commands/*.md` in a Claude Code plugin | `noeta/core/commands.py` |
 | keep state across restarts and machines | `view.record(name, kind, data)` + `reduce()` (never a new event type) | `noeta/core/extension.py` |
+| fold records written under another name (a plugin split out of another; records front ends read by name) | `folds = ("other",)`: those records reach `reduce` too | `noeta/core/extension.py` |
 | wake a task later | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | ask the person something | `ask(...)` (the call parks, the task holds no worker) | `noeta/core/questions.py` |
 | add an agent or sub-agent | an agent markdown file (Claude Code's format plus `plugins`) | `noeta/agents/agent_files.py` |
@@ -41,6 +42,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | offer a tool only when the model asks for it | `deferred = True` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
 | keep text across a compaction, or take part in one | `resident` / `lead_resident`; `before_compact`; `on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/types.py` |
+| go on after a reply with no text and no tool call (the turn ends otherwise) | `on_empty_reply(view, response)` → the message to go on with, or `None` (as `noeta/plugins/empty_reply.py` does) | `noeta/core/extension.py` |
 | block a prompt, or keep a turn going (as UserPromptSubmit and Stop hooks do) | `reminders` + `view.erase_messages` + raise `TurnFailed`; `on_event` on `ModelReplied` posting `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
 ## Writing a plugin
@@ -75,7 +77,14 @@ The four examples are each one file, a short README and a test `make check` runs
 
 A plugin that replaces a built-in one front ends read keeps its name and records:
 `permissions` (`mode`, `modes`: the mode shown and cycled) and `checkpoints` (`snapshot`:
-rewind).
+rewind). `plan_mode` writes its switches as `permissions` `mode` / `plan_exit` records and folds
+them back (`folds`), so plan mode works with the permissions plugin off (it then asks about
+every call that is neither read-only nor `safe_while_planning`, the plan file's write aside),
+and the permissions plugin offers no `plan` mode with `plan_mode` off. A replacement
+`permissions` plugin therefore never writes these record kinds with another meaning: `mode`,
+`plan_exit`, `modes` (front ends, `plan_mode`), `plan_name`, `noted`, `compacted`, `plan_file`,
+`plan_file_sent` (`plan_mode`, from logs before the split), `step`, `tool_call`, `cost`
+(`budget`, likewise).
 
 ### A package
 

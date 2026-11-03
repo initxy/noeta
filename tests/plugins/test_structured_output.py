@@ -18,8 +18,8 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, TaskEnded, ToolFinished
 from noeta.core.runner import Runtime
-from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
 from noeta.core.types import ModelRequest
+from noeta.plugins.empty_reply import EmptyReply
 from noeta.plugins.structured_output import (
     ENFORCE,
     ENFORCE_TAG,
@@ -27,6 +27,7 @@ from noeta.plugins.structured_output import (
     structured_answer,
 )
 from noeta.testing import ScriptedProvider, reply
+from noeta.toolkit.empty_reply import EMPTY_REPLY_NUDGE
 
 SCHEMA = {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"],
           "additionalProperties": False}
@@ -128,7 +129,7 @@ async def test_an_empty_reply_after_a_refused_call_ends_the_turn_without_the_nud
     # since the prompt; the turn ends and the structured-output reminder follows.
     provider = ScriptedProvider([reply("", ("StructuredOutput", {"a": "x"})), reply(""),
                                  reply("", ("StructuredOutput", {"a": 5}))])
-    agent = Agent(name="s", model="m", extensions=[StructuredOutput()])
+    agent = Agent(name="s", model="m", extensions=[StructuredOutput(), EmptyReply()])
     client, tid = await run(store, provider, agent, {"output_schema": SCHEMA})
     assert len(provider.requests) == 3
     third = provider.requests[2].messages

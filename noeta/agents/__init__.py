@@ -37,16 +37,18 @@ __all__ = [
 #: The extensions of an agent file that names none (a Claude Code agent
 #: file): the general-purpose sub-agent's.
 DEFAULT_PLUGINS: tuple[PluginEntry, ...] = (
-    ("permissions", {}), ("hooks", {}), ("shell", {}), ("web", {}), ("mcp", {}),
-    ("fs", {}), ("skills", {}), ("instructions", {}), ("environment", {}), ("subtasks", {}),
+    ("permissions", {}), ("plan_mode", {}), ("budget", {}), ("repetition_guard", {}),
+    ("hooks", {}), ("shell", {}), ("web", {}), ("mcp", {}), ("fs", {}), ("skills", {}),
+    ("instructions", {}), ("environment", {}), ("subtasks", {}), ("empty_reply", {}),
     # Last: the summarize call reuses the request as the others left it.
     ("compaction", {}),
 )
 
 
 #: Plugins the built-in agents name that need the host's say-so: memory
-#: writes under a directory, MCP starts the servers it is given.
-OFF_UNLESS_SET: frozenset[str] = frozenset({"memory", "mcp"})
+#: writes under a directory, MCP starts the servers it is given, and the
+#: repetition guard is not Claude Code's.
+OFF_UNLESS_SET: frozenset[str] = frozenset({"memory", "mcp", "repetition_guard"})
 
 
 def builtin_agent_files() -> list[AgentFile]:
@@ -70,7 +72,7 @@ def default_agents(
 
     ``plugins``, ``add`` and ``made`` are :func:`~noeta.agents.agent_files.build_agents`'s:
     per plugin name its arguments, a ready instance, or ``False``. The
-    plugins in :data:`OFF_UNLESS_SET` (memory, MCP) stay off until
+    plugins in :data:`OFF_UNLESS_SET` (memory, MCP, the repetition guard) stay off until
     ``plugins`` has a setting for them. ``main_kw`` replaces fields of
     ``main`` (``name``, ``system_prompt``, ...)."""
     settings: dict[str, PluginSetting] = {name: False for name in OFF_UNLESS_SET}

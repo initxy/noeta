@@ -183,7 +183,7 @@ class StructuredOutput(Extension):
             response = ev.response
             if response.message.tool_uses or response.stop_reason == "max_tokens" \
                     or not response.message.text.strip():
-                return  # a call, a continuation, or the core's empty-reply nudge
+                return  # a call, a continuation, or an empty reply going on
             self._enforce(view, recorded.seq)
         elif isinstance(ev, ExtensionRecorded) and ev.extension == "core" \
                 and ev.kind == "turn_done" and isinstance(ev.data, dict) \

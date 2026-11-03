@@ -18,10 +18,11 @@ from noeta.core.events import External
 from noeta.core.questions import ask, read_answer
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Effort, ModelRequest, user
+from noeta.plugins.plan_mode.state import MODE_RECORDS, NAME, PlanState
 from noeta.toolkit.side_requests import side_request
 from noeta.toolkit.tools import SCHEMA_DIALECT, input_error, load_description, tool_error
 
-log = logging.getLogger("noeta.permissions")
+log = logging.getLogger("noeta.plan_mode")
 
 __all__ = [
     "ENTER_PLAN_MODE",
@@ -37,18 +38,17 @@ __all__ = [
 
 EXIT_PLAN_MODE = "ExitPlanMode"
 ENTER_PLAN_MODE = "EnterPlanMode"
-NAME = "permissions"
 
 #: The plan-mode instructions (``rem.plan-active.*``); ``{path}`` is the
 #: plan file, ``{exists}`` says whether it is there yet.
-PLAN_ACTIVE = load_description("noeta.plugins.permissions", "plan_mode")
+PLAN_ACTIVE = load_description("noeta.plugins.plan_mode", "plan_mode")
 #: The short form sent between full ones; ``{path}`` is the plan file.
-PLAN_ACTIVE_SPARSE = load_description("noeta.plugins.permissions", "plan_mode_sparse")
+PLAN_ACTIVE_SPARSE = load_description("noeta.plugins.plan_mode", "plan_mode_sparse")
 #: A sub-agent's form (it plans read-only and answers in its final message).
-PLAN_ACTIVE_SUBAGENT = load_description("noeta.plugins.permissions", "plan_mode_subagent")
+PLAN_ACTIVE_SUBAGENT = load_description("noeta.plugins.plan_mode", "plan_mode_subagent")
 #: Ahead of the plan-mode text when planning starts again with a plan file
 #: from an earlier planning session; ``{path}`` is the plan file.
-PLAN_REENTRY = load_description("noeta.plugins.permissions", "plan_mode_reentry")
+PLAN_REENTRY = load_description("noeta.plugins.plan_mode", "plan_mode_reentry")
 #: Claude Code's cadence: a plan-mode text no sooner than this many prompts
 #: after the last one, and the full text on every fifth (the first included).
 PLAN_TURNS_BETWEEN = 5
@@ -225,12 +225,12 @@ def _choices(pre_mode: str) -> list[dict[str, str]]:
 
 
 class EnterPlanModeTool:
-    """Switches the task to plan mode (the permissions gate asks the person
-    first unless the task is in auto mode). ``enter`` records the switch and
-    says whether one happened."""
+    """Switches the task to plan mode (the permissions plugin's gate asks
+    the person first unless the task is in auto mode). ``enter`` records
+    the switch and says whether one happened."""
 
     name = ENTER_PLAN_MODE
-    description = load_description("noeta.plugins.permissions", "enter_plan_mode")
+    description = load_description("noeta.plugins.plan_mode", "enter_plan_mode")
     input_schema: dict[str, Any] = {
         "$schema": SCHEMA_DIALECT,
         "type": "object",
@@ -254,7 +254,7 @@ class ExitPlanModeTool:
     the work goes on in, or keeps planning with their feedback."""
 
     name = EXIT_PLAN_MODE
-    description = load_description("noeta.plugins.permissions", "exit_plan_mode")
+    description = load_description("noeta.plugins.plan_mode", "exit_plan_mode")
     input_schema: dict[str, Any] = {
         "$schema": SCHEMA_DIALECT,
         "type": "object",
@@ -285,9 +285,9 @@ class ExitPlanModeTool:
 
     def _plan(self, ctx: ToolContext) -> dict[str, Any] | None:
         st = ctx.state.get(NAME)
-        plan = getattr(st, "plan", None)
-        mode = getattr(st, "mode", None)
-        return dict(plan) if isinstance(plan, dict) and mode == "plan" else None
+        if not isinstance(st, PlanState) or st.mode != "plan" or st.plan is None:
+            return None
+        return dict(st.plan)
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         plan = self._plan(ctx)
@@ -327,8 +327,9 @@ class ExitPlanModeTool:
             feedback = (answer.get("other") or "").strip()
             return text_output(KEEP_PLANNING_FEEDBACK.format(feedback=feedback), is_error=True) \
                 if feedback else rejected
-        named = bool(text.strip()) and not getattr(ctx.state.get(NAME), "plan_named", False)
-        ctx.record(NAME, "plan_exit", {"mode": mode, **({"named": True} if named else {})})
+        st = ctx.state.get(NAME)
+        named = bool(text.strip()) and not (isinstance(st, PlanState) and st.plan_named)
+        ctx.record(MODE_RECORDS, "plan_exit", {"mode": mode, **({"named": True} if named else {})})
         if named:
             name_plan(ctx, text)
         if not text.strip():

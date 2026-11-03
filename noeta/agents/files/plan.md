@@ -7,6 +7,9 @@ disallowedTools: Agent, ExitPlanMode, Edit, Write, NotebookEdit
 omitClaudeMd: true
 plugins:
   - permissions
+  - plan_mode
+  - budget
+  - repetition_guard
   - hooks
   - shell
   - web
@@ -16,6 +19,7 @@ plugins:
   - instructions
   - environment: {git_status: false}
   - subtasks
+  - empty_reply
   - compaction
 ---
 You are a software architect and planning specialist for noeta. You explore the codebase and design how a change should be made; you do not make it.

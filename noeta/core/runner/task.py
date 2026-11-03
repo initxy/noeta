@@ -47,7 +47,7 @@ from noeta.core.events import (
 )
 from noeta.core.extension import Extension, TaskView, ToolOffer, offer_tools, task_cwd
 from noeta.core.loop import decide
-from noeta.core.loop.state import TaskState, apply, continued, fold, new_state
+from noeta.core.loop.state import TaskState, also_folding, apply, continued, fold, new_state
 from noeta.core.prompts import load_overrides
 from noeta.core.records import CORE
 from noeta.core.runner import closing, texts, timers
@@ -110,6 +110,7 @@ class TaskRun:
         self.agent: Agent | None = None
         self.exts: list[Extension] = []
         self.reducers: dict[str, Any] = {}
+        self.also: dict[str, list[str]] = {}
         self._step: asyncio.Task[Any] | None = None
         self._lost = False
         #: When the claim's lease runs out by this process's monotonic clock
@@ -347,12 +348,13 @@ class TaskRun:
             data = snapshots.encode(base)
             if data is not None:
                 self.snapshots.known(0, data, records)
-        self.state = fold(records, self.reducers, state=base)
+        self.state = fold(records, self.reducers, state=base, also=self.also)
 
     def _use_agent(self, name: str) -> None:
         self.agent = self.rt.agent(name)
         self.exts = self.agent.all_extensions() if self.agent is not None else []
         self.reducers = {e.name: e.reduce for e in self.exts}
+        self.also = also_folding(self.exts)
 
     def _snapshots_on(self) -> bool:
         return self.rt.snapshot_every > 0 and self.agent is not None \
@@ -389,7 +391,7 @@ class TaskRun:
         if stored is None or state is None or state.agent != agent:
             return False
         records = await self.store.read(self.task_id, after=stored.seq)
-        self.state = fold(records, self.reducers, state=state)
+        self.state = fold(records, self.reducers, state=state, also=self.also)
         self.snapshots.known(stored.seq, stored.data, records)
         return True
 
@@ -409,7 +411,7 @@ class TaskRun:
         base = await self._history(source[0].event if source else None, initial, depth + 1,
                                    first.history_from)
         return continued(fold([r for r in source if through is None or r.seq <= through],
-                              self.reducers, initial, state=base),
+                              self.reducers, initial, state=base, also=self.also),
                          {e.name: e.continue_state for e in self.exts},
                          started_by=_spawning_call(source, task_id))
 
@@ -487,7 +489,7 @@ class TaskRun:
             at = write.result().at
             recs = [Recorded(seq=base + i, at=at, event=e) for i, e in enumerate(events, 1)]
             for rec in recs:
-                apply(self.state, rec, self.reducers)
+                apply(self.state, rec, self.reducers, self.also)
             self.snapshots.count(events)
             if cancelled:
                 raise asyncio.CancelledError()

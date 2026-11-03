@@ -21,6 +21,55 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Plugin splits** (spec `2026-11-03-plugin-splits`): parts of the permissions plugin and the
+  kernel became built-in plugins of their own, each switchable with `[plugins.<name>] enabled`.
+  - **Plan mode is the plugin `plan_mode`** (on by default in every built-in agent): `/plan`,
+    `EnterPlanMode` / `ExitPlanMode`, the plan file and its name, the plan-mode notes. With
+    `[plugins.permissions] enabled = false` plan mode still plans read-only (every call of a tool
+    that is not read-only, the plan file's write aside, is asked about, shell commands included)
+    and `ExitPlanMode` still asks the person; with `[plugins.plan_mode] enabled = false` there are
+    no plan tools, no `/plan`, no plan-mode notes, and `plan` is neither offered to front ends nor
+    taken as a switch or a starting mode. The mode stays the `permissions` `mode` / `plan_exit`
+    records front ends read; a log written before the split replays the same.
+  - **Breaking**: `Permissions(auto_during_plan=...)` is `PlanMode(auto_during_plan=...)`
+    (`useAutoModeDuringPlan` in the settings files goes there); a host building agents by hand
+    adds `PlanMode(plans_dir=...)` next to `Permissions` to keep plan mode.
+  - **The budget caps are the plugin `budget`** (`BudgetCaps`, on by default in every built-in
+    agent, as Claude Code's SDK has `maxTurns` / `maxBudgetUsd`): `max_iterations` (or
+    `max_turns`), `max_tool_calls`, `max_cost_usd`, `max_spawned_subtasks`, `max_subtask_depth`
+    (default 3), `spawn_tools`, set in `[plugins.budget]`. They hold with the permissions plugin
+    off; a log from before the split keeps its counts. **Breaking**: `Permissions(budget=...,
+    max_turns=..., spawn_tools=...)` and `noeta.plugins.permissions.Budget` are gone.
+  - **The repetition guard is the plugin `repetition_guard`** (`RepetitionGuard`: `threshold`
+    default 3, `action` `require_approval` or `deny`, `window` 8). Claude Code has none, so the
+    built-in agents keep it off until a host sets `[plugins.repetition_guard]` (it was off by
+    default before too: `repetition_threshold=0`). Its ask goes to the person, not to the
+    permissions plugin's `can_use_tool`. **Breaking**: `Permissions(repetition_threshold=...,
+    repetition_action=..., repetition_window=...)` and `noeta.plugins.permissions.RepetitionPolicy`
+    are gone.
+  - **The empty-reply nudge is the plugin `empty_reply`, on by default.** The kernel no longer asks
+    the model to go on after a reply with no text and no tool call: a new extension hook,
+    `Extension.on_empty_reply(view, response)`, returns the message to go on with (the core records
+    it in the same `continue` entry, reason `empty_reply`), and with no answer the turn ends quietly
+    (`turn_done`, reason `empty_reply`, the reply's usage kept). The plugin keeps Claude Code's
+    behavior unchanged: once per step, not after a `Tool.silent_reply_after` tool. Every built-in
+    agent and `DEFAULT_PLUGINS` run it; `[plugins.empty_reply] enabled = false` turns it off, and
+    then the first empty reply ends the turn. Old logs replay unchanged. `EMPTY_REPLY_NUDGE` moved
+    from `noeta.core.runner.texts` to `noeta.toolkit.empty_reply`.
+  - **Breaking, for hosts that list plugins themselves**: an agent file with its own
+    `plugins:` list, and an SDK host building `Permissions` by hand, lose plan mode, the
+    sub-agent depth cap of 3 and the empty-reply re-ask unless they add `plan_mode`, `budget`
+    and `empty_reply` (`PlanMode`, `BudgetCaps`, `EmptyReply`).
+  - New tool flag `safe_while_planning` (set on `Agent`, `SubagentHandback`, `SendMessage`,
+    `AskUserQuestion`, `Skill`, `TaskStop`, `ScheduleWakeup`, `Workflow` and the task-list tools):
+    plan mode without the permissions plugin lets these run, as the permissions plugin does.
+  - The kernel ends a turn after 3 empty replies in a row whatever `on_empty_reply` says, and an
+    extension whose `on_empty_reply` fails has no opinion.
+  - The permissions plugin's `can_use_tool` and classifier answer its own ask on a call that
+    another plugin (the repetition guard) also asks about; that ask then goes to the person.
+  - New extension mechanism: `Extension.folds` names other record names whose records also reach
+    the extension's `reduce` (how a split-out plugin keeps reading its old records).
+
 - **Context final closure: the third audit's differences from Claude Code 2.1.312 are matched or
   written down** (spec `2026-11-02-context-final-closure`; kept differences are rows in
   `parity/deviations.md`).

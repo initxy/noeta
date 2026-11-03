@@ -21,7 +21,8 @@ from noeta.host.acp import NoetaAcpAgent
 from noeta.host.local import LocalApp
 from noeta.plugins.fs import FileTools
 from noeta.plugins.permissions import Permissions
-from noeta.plugins.permissions import plan as pl
+from noeta.plugins.plan_mode import PlanMode
+from noeta.plugins.plan_mode import plan as pl
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -53,7 +54,8 @@ async def test_the_plan_file_is_the_editors_plan(tmp_path: Path,
                             "new_string": "- [x] one"})),
         reply("planned")])
     agent = Agent(name="main", model="m", extensions=[
-        FileTools(), Permissions(mode="bypassPermissions", plans_dir=str(tmp_path / "plans"))])
+        FileTools(), Permissions(mode="bypassPermissions", plans_dir=str(tmp_path / "plans")),
+        PlanMode(plans_dir=str(tmp_path / "plans"))])
     app = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
                    env_for=lambda _s: LocalExecEnv(str(tmp_path)))
     acp_agent = NoetaAcpAgent(app)

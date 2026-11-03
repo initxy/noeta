@@ -21,7 +21,7 @@ from noeta.plugins.permissions import Permissions
 from noeta.plugins.permissions import classifier as c
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from tests.plugins.permissions.helpers import Fake, agent, events, runtime
+from tests.plugins.permissions.helpers import Fake, agent, events, runtime, with_plans
 
 MODEL = "claude-opus-5-5"
 
@@ -35,8 +35,9 @@ async def store(tmp_path: Path) -> AsyncIterator[SqliteStore]:
 
 async def start(store: SqliteStore, provider: ScriptedProvider, tools: list[Any],
                 cwd: Path, perms: Permissions | None = None,
-                config: dict[str, Any] | None = None) -> tuple[Client, str]:
-    ag = agent([perms or Permissions()], tools)
+                config: dict[str, Any] | None = None,
+                auto_during_plan: bool = True) -> tuple[Client, str]:
+    ag = agent(with_plans(perms or Permissions(), auto_during_plan=auto_during_plan), tools)
     ag = ag.__class__(**{**ag.__dict__, "model": MODEL})
     rt = runtime(store, provider, ag)
     client = Client(store)
@@ -627,7 +628,7 @@ async def test_plan_mode_from_default_asks_the_person_on_an_auto_mode_host(
     classifier wherever its auto-mode gate is open; a deviation)."""
     bash = Fake("Bash")
     provider = ScriptedProvider([reply("ok"), reply("", ("Bash", {"command": "make"}))])
-    ag = agent([Permissions(plans_dir=str(tmp_path / "plans"))], [bash])
+    ag = agent(with_plans(Permissions(plans_dir=str(tmp_path / "plans"))), [bash])
     rt = runtime(store, provider, ag.__class__(**{**ag.__dict__, "model": MODEL}))
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
@@ -647,8 +648,8 @@ def test_only_a_plan_begun_in_auto_mode_keeps_the_classifier() -> None:
     """Settled on entry; a plan record from an older log (no
     ``auto_during_plan``) keeps it only after auto mode."""
     from noeta.plugins.permissions import state as ps
+    from noeta.plugins.plan_mode.state import plan_classifier_on as on
 
-    on = ps.plan_classifier_on
     assert on("auto", auto_during_plan=True)
     assert not on("auto", auto_during_plan=False)
     for pre in ("default", "acceptEdits", "dontAsk", "bypassPermissions"):
@@ -663,9 +664,9 @@ async def test_plan_mode_asks_the_person_when_the_setting_is_off(store: SqliteSt
                                                                  tmp_path: Path) -> None:
     bash = Fake("Bash")
     provider = ScriptedProvider([reply("", ("Bash", {"command": "make"}))])
-    perms = Permissions(plans_dir=str(tmp_path / "plans"), auto_during_plan=False)
+    perms = Permissions(plans_dir=str(tmp_path / "plans"))
     client, tid = await start(store, provider, [bash], tmp_path, perms,
-                              config={"permission_mode": "plan"})
+                              config={"permission_mode": "plan"}, auto_during_plan=False)
     assert not classifier_calls(provider) and not bash.runs
     assert "afk-mode-2026-01-31" not in provider.requests[0].betas
     last = (await events(client, tid))[-1]

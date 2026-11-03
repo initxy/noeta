@@ -7,6 +7,9 @@ disallowedTools: Agent, ExitPlanMode, Edit, Write, NotebookEdit
 omitClaudeMd: true
 plugins:
   - permissions
+  - plan_mode
+  - budget
+  - repetition_guard
   - hooks
   - shell
   - web
@@ -16,6 +19,7 @@ plugins:
   - instructions
   - environment: {git_status: false}
   - subtasks
+  - empty_reply
   - compaction
 ---
 You are a file-search specialist for noeta: you find your way around codebases quickly and thoroughly.

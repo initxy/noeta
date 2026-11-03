@@ -1,9 +1,9 @@
 """The one extension interface.
 
 Everything beyond the core loop (permissions, subtasks, compaction, memory,
-skills, MCP, background shells) is an ``Extension``. Every method is
-optional. An extension keeps durable state by recording
-``ExtensionRecorded`` entries (``view.record``) and folding them in
+skills, MCP, background shells, asking again after an empty reply) is an
+``Extension``. Every method is optional. An extension keeps durable state by
+recording ``ExtensionRecorded`` entries (``view.record``) and folding them in
 ``reduce``; the core never grows an event type for an extension.
 """
 
@@ -330,9 +330,10 @@ class TaskView(records.CoreNotices):
         on a copy: what the next fold will see (a compaction made earlier in
         the same ``before_model`` round included). ``reducers`` folds those
         extensions' own records too."""
-        from noeta.core.loop.state import fold_on_copy
+        from noeta.core.loop.state import also_folding, fold_on_copy
 
-        return fold_on_copy(self.state, self.pending, dict(reducers or {}))
+        return fold_on_copy(self.state, self.pending, dict(reducers or {}),
+                            also_folding(self.extensions))
 
     def prompt(self, name: str, default: str) -> str:
         """The prompt text ``name`` for this task (``noeta.core.prompts``)."""
@@ -463,6 +464,11 @@ class Extension:
     #: after the agent's own plugins; an installed package's is ignored, and
     #: ``enabled = false`` in the host's setting still turns it off.
     add_to: ClassVar[tuple[str, ...]] = ()
+    #: Record names besides its own whose records ``reduce`` also folds,
+    #: into this extension's state: a plugin split out of another keeps
+    #: reading the records it wrote under the old name (old logs replay the
+    #: same), and records front ends read by name stay where they are.
+    folds: ClassVar[tuple[str, ...]] = ()
 
     def initial_state(self) -> Any:
         return None
@@ -573,6 +579,17 @@ class Extension:
         is what the person asked the summary to focus on. Return text to add
         to those instructions, a ``Deny`` to skip this compaction, or
         ``None``. The compacting extension asks every extension in order."""
+        return None
+
+    async def on_empty_reply(self, view: TaskView, response: ModelResponse) -> Message | None:
+        """The model ended its reply (``end_turn``) with no text and no tool
+        call; ``response`` is that reply, which is not recorded. Return a
+        message to go on with: the core records it, with the reply's usage,
+        in a ``continue`` entry (reason ``empty_reply``) and calls the model
+        again. ``None``: no opinion. Asked in extension order; the first
+        message wins. When none comes, the turn ends without an answer
+        (``turn_done``, reason ``empty_reply``). How often to go on is the
+        extension's to keep (``TaskState.empty_nudged``)."""
         return None
 
     async def on_context_overflow(self, view: TaskView, request: ModelRequest) -> bool:

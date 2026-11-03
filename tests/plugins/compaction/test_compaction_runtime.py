@@ -470,7 +470,8 @@ async def test_the_plan_file_is_given_again_after_a_compaction(
     import re
 
     from noeta.plugins.permissions import Permissions
-    from noeta.plugins.permissions.plan import plan_file_text
+    from noeta.plugins.plan_mode import PlanMode
+    from noeta.plugins.plan_mode.plan import plan_file_text
 
     plans = tmp_path / "plans"
     written: list[str] = []
@@ -486,8 +487,8 @@ async def test_the_plan_file_is_given_again_after_a_compaction(
 
     # Plan mode off the classifier: its safeguards block names the exec
     # env's directory, which the rebuild check below runs without.
-    a = agent(extensions=(Permissions(mode="default", plans_dir=str(plans), allow=["Probe"],
-                                      auto_during_plan=False),))
+    a = agent(extensions=(Permissions(mode="default", plans_dir=str(plans), allow=["Probe"]),
+                          PlanMode(plans_dir=str(plans), auto_during_plan=False)))
     model = Model([plan_then_call, *(call() for _ in range(11)), answer("done")])
     client = Client(store)
     tid = await client.create(a.name, "go", config={"permission_mode": "plan"})

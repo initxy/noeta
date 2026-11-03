@@ -17,7 +17,7 @@ from noeta.core.client import Client
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.permissions import wording as w
 from noeta.testing import ScriptedProvider, reply
-from tests.plugins.permissions.helpers import Fake, agent, runtime
+from tests.plugins.permissions.helpers import Fake, agent, runtime, with_plans
 
 GUIDANCE = "Auto mode is on"
 BYPASS = "Bypass-permissions mode is on"
@@ -42,9 +42,10 @@ async def _start(store: SqliteStore, tmp_path: Path, mode: str, *, tools: tuple[
         "Bash", "Write"), extra: tuple[Any, ...] = (),
                  **kw: Any) -> tuple[Client, str, Any, Any]:
     provider = ScriptedProvider([reply("ok") for _ in range(12)])
-    rt = runtime(store, provider, agent([Permissions(mode=mode,
-                                                     plans_dir=str(tmp_path / "plans"), **kw),
-                                         *extra], [Fake(t) for t in tools]))
+    plan_kw = {k: kw.pop(k) for k in ("auto_during_plan",) if k in kw}
+    perms = Permissions(mode=mode, plans_dir=str(tmp_path / "plans"), **kw)
+    rt = runtime(store, provider, agent([*with_plans(perms, **plan_kw), *extra],
+                                        [Fake(t) for t in tools]))
     client = Client(store)
     tid = await client.create("a", "p1", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()

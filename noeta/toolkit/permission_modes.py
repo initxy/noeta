@@ -34,6 +34,9 @@ MODE_NAMES: dict[str, str] = {
     "bypassPermissions": "Bypass permissions (ask for nothing)",
 }
 MODE_SIGNAL = "permission_mode"
+#: The plugin that offers plan mode (``plan``) and records the switches into
+#: it; without it a task has no plan mode.
+PLAN_MODE_PLUGIN = "plan_mode"
 #: Claude Code's mode names noeta takes as another name for its own.
 MODE_ALIASES: dict[str, str] = {"manual": "default"}
 

@@ -290,12 +290,14 @@ async def _drive(cfg: EvalConfig, agents: list[Agent], sc: Scenario, ws: Path, r
 
 
 def _plugins(cfg: EvalConfig, sc: Scenario, dirs: TrialDirs) -> dict[str, Any]:
-    # Plan files go to the trial's own directory: the permissions plugin
-    # names it, and the file tools may write there (they otherwise allow
-    # only the home's plans directory, which concurrent trials share).
+    # Plan files go to the trial's own directory: the plan-mode plugin
+    # names it, the permissions plugin lets it be written, and the file
+    # tools may write there (they otherwise allow only the home's plans
+    # directory, which concurrent trials share).
     plans = str(dirs.root / "plans")
     plugins: dict[str, Any] = {"memory": {"directory": str(dirs.memory) + "/"},
                                "permissions": {"plans_dir": plans},
+                               "plan_mode": {"plans_dir": plans},
                                "fs": {"write_roots": [plans]}}
     if sc.small_window:
         from noeta.core.models import model_limits

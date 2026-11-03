@@ -68,6 +68,10 @@ DEFAULT_RISK: Mapping[str, str] = {
     "TaskList": "low",
 }
 
+#: The plan-mode plugin's tools (their names are the contract).
+EXIT_PLAN_MODE = "ExitPlanMode"
+ENTER_PLAN_MODE = "EnterPlanMode"
+
 #: Tools auto mode lets through without the classifier (they read, or only
 #: talk to the person); every other call that needs no permission elsewhere
 #: is still classified (an ``Agent`` spawn, a sub-agent's hand-back).
