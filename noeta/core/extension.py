@@ -330,9 +330,10 @@ class TaskView(records.CoreNotices):
         on a copy: what the next fold will see (a compaction made earlier in
         the same ``before_model`` round included). ``reducers`` folds those
         extensions' own records too."""
-        from noeta.core.loop.state import fold_on_copy
+        from noeta.core.loop.state import also_folding, fold_on_copy
 
-        return fold_on_copy(self.state, self.pending, dict(reducers or {}))
+        return fold_on_copy(self.state, self.pending, dict(reducers or {}),
+                            also_folding(self.extensions))
 
     def prompt(self, name: str, default: str) -> str:
         """The prompt text ``name`` for this task (``noeta.core.prompts``)."""

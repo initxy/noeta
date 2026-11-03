@@ -16,7 +16,7 @@ from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, Recorded, ToolFinished, Waiting
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import fold
+from noeta.core.loop.state import also_folding, fold
 from noeta.host.pending import pending
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.permissions.state import PermState
@@ -193,7 +193,7 @@ def test_a_log_from_before_the_split_replays_the_same(tmp_path: Path) -> None:
     log = [Recorded(seq=i + 1, at=0.0, event=ExtensionRecorded(
         extension="permissions", kind=kind, data=data)) for i, (kind, data) in enumerate(old)]
     for exts in ([PlanMode()], [Permissions(), PlanMode()]):
-        state = fold(log, {e.name: e.reduce for e in exts})
+        state = fold(log, {e.name: e.reduce for e in exts}, also=also_folding(exts))
         st = state.ext["plan_mode"]
         assert isinstance(st, PlanState)
         assert st.mode == "acceptEdits" and st.plan is not None and st.plan["path"] == path
@@ -204,3 +204,94 @@ def test_a_log_from_before_the_split_replays_the_same(tmp_path: Path) -> None:
     perms = fold(log, {"permissions": Permissions().reduce}).ext["permissions"]
     assert isinstance(perms, PermState) and perms.mode == "acceptEdits"
     assert perms.plan is not None and perms.due == ()
+
+
+def test_coordination_tools_may_run_while_planning() -> None:
+    """The tools the permissions plugin rates low risk that are not
+    read-only say so themselves, so plan mode alone lets them run."""
+    from noeta.core.tool import tool_flag
+    from noeta.plugins.ask_user import AskUserQuestionTool
+    from noeta.plugins.schedule import WakeupTool
+    from noeta.plugins.shell.tools import TaskStopTool
+    from noeta.plugins.skills.tool import SkillTool
+    from noeta.plugins.subtasks.tool import AgentTool, HandbackTool, SendMessageTool
+    from noeta.plugins.todos.tools import TaskCreateTool, TaskUpdateTool
+    from noeta.plugins.workflow.tool import WorkflowTool
+
+    for cls in (AskUserQuestionTool, WakeupTool, TaskStopTool, SkillTool, AgentTool,
+                HandbackTool, SendMessageTool, TaskCreateTool, TaskUpdateTool, WorkflowTool):
+        assert tool_flag(cls, "safe_while_planning"), cls  # type: ignore[arg-type]
+
+
+async def test_plan_mode_alone_lets_the_person_be_asked_and_tasks_be_listed(
+        store: SqliteStore, tmp_path: Path) -> None:
+    from noeta.plugins.ask_user import AskUser
+    from noeta.plugins.todos import Todos
+
+    question = {"questions": [{"question": "Which approach?", "header": "Approach",
+                               "multiSelect": False,
+                               "options": [{"label": "A", "description": "a"},
+                                           {"label": "B", "description": "b"}]}]}
+    ag = agent([PlanMode(plans_dir=str(tmp_path / "plans")), AskUser(),
+                Todos(all_models=True)], [])
+    provider = ScriptedProvider([
+        reply("", ("TaskCreate", {"subject": "explore", "description": "look around"})),
+        reply("", ("AskUserQuestion", question))])
+    rt = runtime(store, provider, ag)
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path),
+                                                 "permission_mode": "plan"})
+    await rt.run_until_idle()
+    [created] = [e for e in await events(client, tid) if isinstance(e, ToolFinished)]
+    assert not created.result.is_error
+    kinds = [p.kind for p in pending(await client.events(tid), tid)]
+    assert kinds == ["question"]
+
+
+async def test_a_planning_sub_agent_starts_and_reports_without_permissions(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """A sub-agent of a planning task plans too; with plan mode alone the
+    ``Agent`` call starts it and its report comes back without anyone being
+    asked (outside auto mode its last reply is the report)."""
+    from noeta.core.agent import Agent
+    from noeta.core.events import TaskEnded
+    from noeta.plugins.subtasks import SubagentSpec, Subtasks
+    from tests.plugins.subtasks.conftest import runtime as subtasks_runtime
+
+    plans = str(tmp_path / "plans")
+    roster = [SubagentSpec(name="general-purpose", description="Looks.", agent="worker")]
+    main = Agent(name="main", model="p", extensions=[Subtasks(roster), PlanMode(plans_dir=plans)])
+    worker = Agent(name="worker", model="c",
+                   extensions=[Subtasks(()), PlanMode(plans_dir=plans)])
+    p = ScriptedProvider([reply("", ("Agent", {"description": "look", "prompt": "look",
+                                               "subagent_type": "general-purpose"})),
+                          reply("launched"), reply("thanks")])
+    c = ScriptedProvider([reply("found it")])
+    rt = subtasks_runtime(store, {"p": p, "c": c}, main, worker)
+    client = Client(store)
+    tid = await client.create("main", "plan", config={"cwd": str(tmp_path),
+                                                      "permission_mode": "plan"})
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    end = [r.event for r in await client.events(child.task_id)][-1]
+    assert isinstance(end, TaskEnded) and end.answer == "found it"
+    assert any("Plan mode is on" in m.text for m in c.requests[0].messages)
+    assert not pending(await client.events(tid), tid)
+
+
+def test_a_log_left_planning_reads_as_its_starting_mode_without_plan_mode() -> None:
+    """A log from before the split that was planning, read by a host
+    without the plan-mode plugin: the mode the plan began in."""
+    from types import SimpleNamespace
+
+    from noeta.core.loop.state import TaskState
+
+    perms = Permissions(mode="default")
+    st = PermState(mode="plan", plan={"path": "/p.md", "pre_mode": "acceptEdits"})
+
+    def view(*exts: Any) -> Any:
+        return SimpleNamespace(ext_state=lambda name: st, pending=[], extensions=exts,
+                               state=TaskState(config={}))
+
+    assert perms.mode_of(view(perms)) == "acceptEdits"
+    assert perms.mode_of(view(perms, PlanMode())) == "plan"

@@ -172,6 +172,7 @@ class _TaskTool:
     description: str
     input_schema: dict[str, Any]
     read_only = False
+    safe_while_planning = True
     clearable = False
     deferred = True
     #: A call records only together with its result: running it again

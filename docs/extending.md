@@ -79,8 +79,12 @@ A plugin that replaces a built-in one front ends read keeps its name and records
 `permissions` (`mode`, `modes`: the mode shown and cycled) and `checkpoints` (`snapshot`:
 rewind). `plan_mode` writes its switches as `permissions` `mode` / `plan_exit` records and folds
 them back (`folds`), so plan mode works with the permissions plugin off (it then asks about
-every call that is not read-only, the plan file's write aside), and the permissions plugin
-offers no `plan` mode with `plan_mode` off.
+every call that is neither read-only nor `safe_while_planning`, the plan file's write aside),
+and the permissions plugin offers no `plan` mode with `plan_mode` off. A replacement
+`permissions` plugin therefore never writes these record kinds with another meaning: `mode`,
+`plan_exit`, `modes` (front ends, `plan_mode`), `plan_name`, `noted`, `compacted`, `plan_file`,
+`plan_file_sent` (`plan_mode`, from logs before the split), `step`, `tool_call`, `cost`
+(`budget`, likewise).
 
 ### A package
 

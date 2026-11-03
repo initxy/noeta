@@ -287,12 +287,17 @@ class Permissions(Extension):
 
     def mode_of(self, view: TaskView) -> str:
         """The task's current permission mode (plan mode only with the
-        plan-mode plugin, or as recorded)."""
+        plan-mode plugin)."""
         st = state_of(view)
         plans = _plans(view)
-        if st.mode == "plan":
+        recorded = st.mode
+        if recorded == "plan" and plans:
             return "plan"
-        for mode in (st.mode, view.state.config.get("permission_mode"), self.mode):
+        if recorded == "plan":
+            # A log left planning, read without the plan-mode plugin: the
+            # mode the plan began in.
+            recorded = (st.plan or {}).get("pre_mode") or "default"
+        for mode in (recorded, view.state.config.get("permission_mode"), self.mode):
             if isinstance(mode, str) and mode in p.PERMISSION_MODES and not (
                     mode == "bypassPermissions" and self.disable_bypass) \
                     and (plans or mode != "plan"):
@@ -374,14 +379,23 @@ class Permissions(Extension):
 
     async def resolve_ask(self, view: TaskView, call: ToolUse,
                           asks: Sequence[Ask]) -> Gate | None:
+        """Answers this plugin's own asks (``can_use_tool``, else the
+        classifier); another plugin's ask on the same call still goes to the
+        person once these are allowed."""
         mine = [x for x in asks if x.detail.get("by") == NAME]
-        if not mine or len(mine) != len(asks):
+        others = [x for x in asks if x.detail.get("by") != NAME]
+        if not mine:
             return None
         if self.can_use_tool is not None:
-            return await self._auto(view, call)
-        if not all(x.detail.get("classify") for x in mine):
+            resolved: Gate | None = await self._auto(view, call)
+        elif all(x.detail.get("classify") for x in mine):
+            resolved = await self._classifier.answer(view, call, mine[0])
+        else:
             return None
-        return await self._classifier.answer(view, call, mine[0])
+        if not others or isinstance(resolved, (Deny, Rewrite)):
+            return resolved
+        # Allowed (or handed to the person): the others' asks stand.
+        return others[0] if len(others) == 1 and isinstance(resolved, Allow) else None
 
     async def _auto(self, view: TaskView, call: ToolUse) -> Gate:
         decision = state_of(view).auto.get(call.id)

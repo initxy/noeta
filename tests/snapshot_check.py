@@ -31,15 +31,15 @@ async def check_both_ways(run: Any) -> None:
     if run.agent is None:
         return
     records = await run.store.read(run.task_id)
-    full = fold(records, run.reducers, state=await _fresh(run, records))
+    full = fold(records, run.reducers, state=await _fresh(run, records), also=run.also)
     assert run.state == full, f"{run.task_id}: the loaded state differs from a full fold " \
                               f"in {_diff(run.state, full)}"
     n = len(records)
     for k in sorted({round(i * n / SPLITS) for i in range(SPLITS + 1)}):
-        prefix = fold(records[:k], run.reducers, state=await _fresh(run, records))
+        prefix = fold(records[:k], run.reducers, state=await _fresh(run, records), also=run.also)
         data = snapshots.encode(prefix)
         if data is None:
             continue  # not snapshotted: the log is folded from the start
-        state = fold(records[k:], run.reducers, state=snapshots.decode(data))
+        state = fold(records[k:], run.reducers, state=snapshots.decode(data), also=run.also)
         assert state == full, f"{run.task_id}: snapshot at seq {k} + tail differs from a " \
                               f"full fold in {_diff(state, full)}"

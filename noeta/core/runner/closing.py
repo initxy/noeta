@@ -5,6 +5,7 @@ still open, so the conversation never keeps a call without a result."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,8 @@ from noeta.core.types import Message, ModelResponse, user
 
 if TYPE_CHECKING:
     from noeta.core.runner.task import TaskRun
+
+log = logging.getLogger("noeta.core.runner")
 
 
 async def stop_turn(run: TaskRun, call_ids: Sequence[str]) -> None:
@@ -127,16 +130,28 @@ async def continue_after_cap(run: TaskRun, *, dropped: ModelResponse | None = No
     return True
 
 
+#: Empty replies in a row a turn goes on after, at most (Claude Code's
+#: re-ask goes on after one per step).
+MAX_EMPTY_REPLIES = 3
+
+
 async def after_empty_reply(run: TaskRun, response: ModelResponse) -> bool:
     """The model ended its reply with no text and no tool call (reasoning
     alone counts as nothing). The reply is not recorded (its usage is). An
     extension may go on with a message (``Extension.on_empty_reply``, the
-    first one wins); otherwise the turn ends without an answer."""
+    first one wins; one that fails is skipped); otherwise, or after
+    :data:`MAX_EMPTY_REPLIES` in a row, the turn ends without an answer."""
     model, usage = response.model or run.model, response.usage
     view = run.view()
     message: Message | None = None
-    for ext in run.exts:
-        message = await ext.on_empty_reply(view, response)
+    # A hard stop the extensions cannot talk the kernel out of: so many
+    # empty replies in a row, and the turn ends.
+    for ext in run.exts if run.state.empty_replies < MAX_EMPTY_REPLIES else ():
+        try:
+            message = await ext.on_empty_reply(view, response)
+        except Exception:  # a failing extension has no opinion
+            log.exception("extension %s on_empty_reply failed", ext.name)
+            message = None
         if message is not None:
             break
     # In one append with what the extensions recorded meanwhile.

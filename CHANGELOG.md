@@ -56,6 +56,17 @@ All notable changes to Noeta are documented here. The format is based on
     agent and `DEFAULT_PLUGINS` run it; `[plugins.empty_reply] enabled = false` turns it off, and
     then the first empty reply ends the turn. Old logs replay unchanged. `EMPTY_REPLY_NUDGE` moved
     from `noeta.core.runner.texts` to `noeta.toolkit.empty_reply`.
+  - **Breaking, for hosts that list plugins themselves**: an agent file with its own
+    `plugins:` list, and an SDK host building `Permissions` by hand, lose plan mode, the
+    sub-agent depth cap of 3 and the empty-reply re-ask unless they add `plan_mode`, `budget`
+    and `empty_reply` (`PlanMode`, `BudgetCaps`, `EmptyReply`).
+  - New tool flag `safe_while_planning` (set on `Agent`, `SubagentHandback`, `SendMessage`,
+    `AskUserQuestion`, `Skill`, `TaskStop`, `ScheduleWakeup`, `Workflow` and the task-list tools):
+    plan mode without the permissions plugin lets these run, as the permissions plugin does.
+  - The kernel ends a turn after 3 empty replies in a row whatever `on_empty_reply` says, and an
+    extension whose `on_empty_reply` fails has no opinion.
+  - The permissions plugin's `can_use_tool` and classifier answer its own ask on a call that
+    another plugin (the repetition guard) also asks about; that ask then goes to the person.
   - New extension mechanism: `Extension.folds` names other record names whose records also reach
     the extension's `reduce` (how a split-out plugin keeps reading its old records).
 

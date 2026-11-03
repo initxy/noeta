@@ -14,7 +14,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, Recorded, ToolFinished
 from noeta.core.extension import Extension
-from noeta.core.loop.state import fold
+from noeta.core.loop.state import also_folding, fold
 from noeta.plugins.budget import BudgetCaps, BudgetState
 from noeta.plugins.permissions import Permissions
 from noeta.testing import ScriptedProvider, reply
@@ -107,5 +107,5 @@ def test_a_log_from_before_the_split_keeps_its_counts() -> None:
         extension="permissions", kind=kind, data=data)) for i, (kind, data) in enumerate(old)]
     log.append(Recorded(seq=9, at=0.0, event=ExtensionRecorded(extension="budget", kind="step")))
     caps = BudgetCaps()
-    st = fold(log, {caps.name: caps.reduce}).ext["budget"]
+    st = fold(log, {caps.name: caps.reduce}, also=also_folding([caps])).ext["budget"]
     assert st == BudgetState(steps=3, tool_calls=1, cost_usd=0.25)

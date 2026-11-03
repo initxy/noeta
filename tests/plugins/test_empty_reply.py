@@ -271,3 +271,40 @@ async def test_its_log_is_the_one_the_core_wrote_before(store: SqliteStore) -> N
     assert len(a.messages) == 2 and a.messages[-1].text == EMPTY_REPLY_NUDGE
     assert (a.messages, a.empty_nudged, a.answer_parts, a.usage, a.turn_open) == \
         (b.messages, b.empty_nudged, b.answer_parts, b.usage, b.turn_open)
+
+
+async def test_the_kernel_ends_the_turn_after_too_many_empty_replies(
+        store: SqliteStore) -> None:
+    """An extension that always goes on cannot keep the turn alive: the
+    kernel stops at ``MAX_EMPTY_REPLIES`` in a row."""
+    from noeta.core.extension import Extension
+    from noeta.core.runner.closing import MAX_EMPTY_REPLIES
+
+    class Always(Extension):
+        name = "always"
+
+        async def on_empty_reply(self, view: Any, response: Any) -> Message | None:
+            return user("go on", origin="inline")
+
+    provider = ScriptedProvider([reply("") for _ in range(MAX_EMPTY_REPLIES + 5)])
+    client, tid = await run(store, provider, Agent(name="a", model="m", extensions=[Always()]))
+    assert len(provider.requests) == MAX_EMPTY_REPLIES + 1
+    evs = await events(client, tid)
+    assert isinstance(evs[-1], Waiting) and evs[-1].detail == {"answer": ""}
+
+
+async def test_a_failing_extension_has_no_opinion(store: SqliteStore) -> None:
+    from noeta.core.extension import Extension
+
+    class Broken(Extension):
+        name = "broken"
+
+        async def on_empty_reply(self, view: Any, response: Any) -> Message | None:
+            raise RuntimeError("boom")
+
+    provider = ScriptedProvider([reply(""), reply("hello")])
+    client, tid = await run(store, provider,
+                            Agent(name="a", model="m", extensions=[Broken(), EmptyReply()]))
+    assert provider.requests[1].messages[-1].text == EMPTY_REPLY_NUDGE
+    evs = await events(client, tid)
+    assert isinstance(evs[-1], Waiting) and evs[-1].detail == {"answer": "hello"}

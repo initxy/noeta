@@ -68,3 +68,31 @@ def test_off_in_the_built_in_agents_unless_set() -> None:
     assert isinstance(guard, RepetitionGuard) and guard.policy.threshold == 4
     with pytest.raises(ValueError, match="action"):
         RepetitionGuard(action="ask")
+
+
+@pytest.mark.parametrize("verdict", [True, False])
+async def test_can_use_tool_still_answers_the_permissions_ask(
+        store: SqliteStore, tmp_path: Path, verdict: bool) -> None:
+    """The permissions plugin answers its own ask through ``can_use_tool``
+    even when the guard asks too; the guard's ask then goes to the person,
+    unless ``can_use_tool`` refused the call."""
+    write = Fake("Write")
+    seen: list[str] = []
+
+    def can_use_tool(name: str, _input: dict[str, Any]) -> bool:
+        seen.append(name)
+        return verdict
+
+    perms = Permissions(mode="default", can_use_tool=can_use_tool)
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": str(tmp_path / "x")}))
+                                 for _ in range(3)])
+    rt = runtime(store, provider, agent([perms, RepetitionGuard()], [write]))
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    items = pending(await client.events(tid), tid)
+    if verdict:
+        assert len(write.runs) == 2 and seen == ["Write"] * 3
+        assert [i.prompt for i in items] == [LOOP.replace("'Read'", "'Write'")]
+    else:
+        assert not write.runs and not items

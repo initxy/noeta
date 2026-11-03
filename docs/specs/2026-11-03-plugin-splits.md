@@ -51,10 +51,18 @@ only into the extension of the same name.
 - `useAutoModeDuringPlan` (`auto_during_plan`) is a `PlanMode` argument: it is settled into the
   plan record on entry, which the permissions plugin reads.
 - Permissions without `plan_mode`: `plan` is left out of the published `modes`, ignored as a
-  switch, a config `permission_mode` or the default mode (default mode then).
+  switch, a config `permission_mode` or the default mode (default mode then); a log left
+  planning reads as the plan's `pre_mode`.
+- `Extension.folds` is resolved once per agent into a record name -> extra folders map
+  (`also_folding`), passed to `fold` / `apply` (review finding: no reducer introspection).
+- The permissions plugin's `resolve_ask` answers its own asks even when another plugin asks on
+  the same call; once allowed, that other ask goes to the person.
 - `plan_mode` without permissions: while planning, a call is asked about unless its tool is
-  read-only, it writes the plan file, it is a plan-mode tool, or no plugin offers the tool as its
-  own (`ToolSearch`). `ExitPlanMode` asks the person in every mode, as in Claude Code (its
+  read-only or flagged `safe_while_planning` (a general tool flag, set on the tools the
+  permissions plugin rates low risk that are not read-only: `Agent`, `SubagentHandback`,
+  `SendMessage`, `AskUserQuestion`, `Skill`, `TaskStop`, `ScheduleWakeup`, `Workflow`, the
+  task-list tools), it writes the plan file, it is a plan-mode tool, or no plugin offers the tool
+  as its own (`ToolSearch`). `ExitPlanMode` asks the person in every mode, as in Claude Code (its
   approval is the tool's own question; bypass does not skip a tool that needs the person).
   `EnterPlanMode` is not asked about (nothing is without the permissions plugin).
 
@@ -77,7 +85,9 @@ only into the extension of the same name.
   without the plugin does on the first empty reply). The kernel still writes the `continue` /
   `turn_done` records (reason `empty_reply`) with the same shape, and `empty_nudged` stays in its
   fold, derived from them, so old logs replay the same. The nudge text moved to
-  `noeta/toolkit/empty_reply.py`, where the Anthropic adapter still finds it by its words.
+  `noeta/toolkit/empty_reply.py`, where the Anthropic adapter still finds it by its words. The
+  kernel keeps a hard stop: after `MAX_EMPTY_REPLIES` (3) empty replies in a row the turn ends
+  whatever the extensions say, and a failing `on_empty_reply` counts as no opinion.
 
 ## Plan
 
@@ -114,3 +124,7 @@ only into the extension of the same name.
   1) on plan_mode_read_only, plan_mode_started, plan_mode_multi_file, deny_rule_respected,
   denied_not_circumvented 1.00 each, todo_reminder_long_run 0.40 (all equal to the baseline), no
   timeouts, empty-reply nudges 0.
+- 2026-11-03: independent review fixed in one pass: `safe_while_planning` tool flag (P1), the
+  breaking note for hosts listing plugins themselves (P2), `also_folding` map, kernel empty-reply
+  cap and exception handling, `resolve_ask` on own asks, old planning log without `plan_mode`,
+  reserved `permissions` record kinds in `docs/extending.md` (P3).

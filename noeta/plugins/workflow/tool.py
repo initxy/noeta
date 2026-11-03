@@ -40,6 +40,7 @@ class WorkflowTool:
     name = TOOL
     description = load_description("noeta.plugins.workflow", "workflow")
     read_only = False
+    safe_while_planning = True
     clearable = False
     input_schema: dict[str, Any] = {
         "$schema": SCHEMA_DIALECT,

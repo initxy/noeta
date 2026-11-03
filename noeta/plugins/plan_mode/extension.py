@@ -18,7 +18,7 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
-from noeta.core.tool import Tool, ToolContext
+from noeta.core.tool import Tool, ToolContext, tool_flag
 from noeta.core.types import Message, ToolUse
 from noeta.plugins.plan_mode import notes as nt
 from noeta.plugins.plan_mode import plan as pl
@@ -59,9 +59,10 @@ class PlanMode(Extension):
     ``ExitPlanMode``; a front end switches it with the ``permission_mode``
     signal. With the permissions plugin, it judges every call (plan mode's
     limits included). Without it, this plugin keeps planning read-only by
-    itself: a call of a tool that is not read-only, other than a write to
-    the plan file, is asked about (a shell command too: telling a
-    read-only one apart is the permissions plugin's)."""
+    itself: a call of a tool that is neither read-only nor
+    ``safe_while_planning``, other than a write to the plan file, is asked
+    about (a shell command too: telling a read-only one apart is the
+    permissions plugin's)."""
 
     name = NAME
     folds = (MODE_RECORDS,)
@@ -132,7 +133,8 @@ class PlanMode(Extension):
         tool = view.find_tool(call.name)
         # A tool no plugin offers as its own (one a plugin builds from the
         # others', such as ToolSearch, or none at all) changes nothing.
-        if tool is None or getattr(tool, "read_only", False) is True:
+        if tool is None or getattr(tool, "read_only", False) is True \
+                or tool_flag(tool, "safe_while_planning"):
             return None
         if call.name in EDIT_TOOLS and self._plan_file(view, st, call):
             return None
