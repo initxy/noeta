@@ -405,6 +405,14 @@ def test_an_mcp_tool_hook_by_an_old_name_two_tools_share_finds_neither() -> None
         assert _find_mcp_tool(view(*tools), hook) == (None, False)
     exact = named("mcp__approver__ok")
     assert _find_mcp_tool(view(one, exact), hook) == (exact, False)
+    # Such a hook fails closed: the two owners are named, and the dispatch
+    # answers it with a block (exit 2) instead of a failure that lets the
+    # event through.
+    from noeta.plugins.hooks.dispatch import shared_old_name
+    assert shared_old_name(view(one, named("mcp__APPROVER__ok")), hook) == [
+        "mcp__APPROVER__ok", "mcp__Approver__ok"]
+    assert shared_old_name(view(one), hook) == []
+    assert shared_old_name(view(one, exact), hook) == []
 
 
 def test_a_narrowed_answer_keeps_its_deny_and_drops_its_allow() -> None:

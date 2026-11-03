@@ -3,6 +3,7 @@ points of a task and acts on what the hooks answer."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -14,6 +15,7 @@ import httpx
 import msgspec
 
 from noeta.core import records
+from noeta.core.client import CONTINUED_AS, CONTINUED_AS_KEY
 from noeta.core.errors import TurnDone, TurnFailed
 from noeta.core.events import (
     Compacted,
@@ -249,6 +251,22 @@ class Hooks(Extension):
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return fold(state, kind, data)
 
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed conversation) checks its own
+        prompts: the positions here are seqs of the source's log (the
+        carried messages sit at 0), so a prompt hook would otherwise skip
+        the new log's first prompts. What belongs to the source's run (its
+        stop count, permission answers, unsent background output, a stop
+        note) stays there: background hook output the source had not given
+        the model yet, and a hook's note that the source's turn was stopped,
+        are not carried. Its first start fires SessionStart with the source
+        Claude Code gives a resumed or forked session (:meth:`on_start`)."""
+        if not isinstance(state, HookState):
+            return state
+        return dataclasses.replace(state, prompted_through=0, batched_through=0, stop_blocks=0,
+                                   stop_since=0, permission={}, async_pending=(),
+                                   stop_note=None, continued=True)
+
     # ------------------------------------------------------------ start
 
     async def on_start(self, view: TaskView) -> None:
@@ -270,6 +288,25 @@ class Hooks(Extension):
                     view.notify(f"SubagentStart hook: {r.block}")
             self._d.context(view, "context", f"SubagentStart{CONTEXT_LABEL}",
                             [r.context for r in reads])
+            return
+        if st.continued:
+            # A continued conversation (``history_from``): Claude Code's
+            # resume / fork sources; a rewind fires none. Only before the
+            # task's own first reply: a continuation that ran before this
+            # rule existed folds to ``continued`` too, mid-conversation.
+            source = view.state.config.get(CONTINUED_AS_KEY) or "fork"
+            if source not in CONTINUED_AS:
+                log.warning("hooks: %s %r is none of %s; taken as fork", CONTINUED_AS_KEY,
+                            source, ", ".join(CONTINUED_AS))
+                source = "fork"
+            view.record(self.name, "started", {"event": "SessionStart"})
+            replied = any(m.role == "assistant" and seq > 0 for seq, m in
+                          zip(view.state.message_seqs, view.state.messages, strict=False))
+            if source in ("resume", "fork") and not replied \
+                    and "SessionStart" in self.matchers:
+                reads = await self._d.run("SessionStart", view,
+                                          {"source": source, "model": view.model})
+                self._start_context(view, source, reads)
             return
         if "SessionStart" not in self.matchers or st.started:
             return

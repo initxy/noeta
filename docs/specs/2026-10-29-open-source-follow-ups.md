@@ -57,6 +57,7 @@ its own spec before work starts.
 - [x] Claude Code plugin skills and agents are named `<plugin>:<name>` (0ab0f24f).
 - [x] `${CLAUDE_PLUGIN_ROOT}` in Claude Code plugin skill bodies (spec 2026-11-02-context-reaudit-closure, S13).
 - [ ] A Claude Code plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
+- [ ] A task that continues a conversation (`history_from`) does not save its carried messages' pasted images again: their paths are the source task's, which stop working once the source's image directory is cleaned (spec 2026-11-02-context-reaudit-closure, review T-P3-2). Copy them on continuation, or keep the source's directory while a continuation lives. Follow-up spec.
 - [ ] `Runtime._running` is a set, not a count: a task reclaimed by another slot while its previous run is still finishing is dropped from it by that run's `finally`, and a later `CommitUnknown` claim could then adopt it again at the same epoch (two unlikely events together). Count runs per task, or compare claim objects. Follow-up spec.
 - [ ] A redelivered channel message that arrives after its task ended is handled again in the continuation task (a one-shot agent answers twice). Follow-up spec.
 - [ ] Workspace trust per task: an isolated sub-agent's worktree is not trusted, so "always" answers there are not saved to the project; `project_trusted` reads files on the event loop. Follow-up spec.

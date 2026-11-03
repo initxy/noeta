@@ -120,6 +120,11 @@ async def test_a_message_landing_as_the_task_ends_moves_on(store: SqliteStore) -
     assert await deliver(EndsFirst(store), task_id="chat-1", agent="main", message="late",
                          dedupe_key="d1") == "chat-1.2"
     assert await says(store, "chat-1.2") == ["late"]
+    # A thread carried on is Claude Code's resumed session (SessionStart).
+    from noeta.core.client import CONTINUED_AS_KEY
+    from noeta.core.events import TaskCreated
+    first = (await client.events("chat-1.2"))[0].event
+    assert isinstance(first, TaskCreated) and first.config[CONTINUED_AS_KEY] == "resume"
 
 
 async def _end(store: SqliteStore, task_id: str) -> None:

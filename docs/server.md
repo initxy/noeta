@@ -89,7 +89,7 @@ only against the names given with `--allow-host NAME` (repeatable), so name them
 
 A request may set only the task config a client may (`model`, `effort`, `max_turns`, `cwd`,
 `permission_mode`, `output_schema`, `timezone`, `interactive`, `permission_prompt_tool`,
-`ultracode`), post only the signals front ends send, and create tasks
+`ultracode`, `continued_as`), post only the signals front ends send, and create tasks
 only in the server's directory and its `--allow-root` paths. Host code embedding the API uses
 `create_app(client, token=...)` (or `token_sha256=`). `timezone` is the person's IANA zone
 (`Europe/Berlin`), which noeta's own front ends send: without it the model is given the UTC
@@ -103,7 +103,9 @@ terminal UI and ACP take them away when they reopen a task). A config signal may
 set, `client_hooks`: the record of a headless client's hook callbacks
 (`noeta.toolkit.hook_callbacks`). `ultracode: true` is Claude Code's ultracode switch: the model
 is told to orchestrate with `Workflow` on every substantial task, and told again when it is
-taken away (`noeta.plugins.workflow.opt_in`).
+taken away (`noeta.plugins.workflow.opt_in`). `continued_as` says how a task created with
+`history_from` continues its source, for SessionStart hooks: `fork` (the default), `resume`, or
+`rewind` (none fires); another value is refused.
 
 ## Several parties
 

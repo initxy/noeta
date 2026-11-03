@@ -561,3 +561,13 @@ def test_a_recall_logged_with_its_former_bytes_key_still_counts() -> None:
                       {"paths": ["c.md"], "chars": 1, "through": 3})["chars"] == 8
     erased = ext.reduce(state, "core.erased", {"seqs": [1]})
     assert erased["chars"] == 5 and erased["surfaced"] == ["b.md"]
+
+
+def test_a_continued_task_recalls_for_its_own_prompts(tmp_path: Path) -> None:
+    """``through`` and the recalls' keys are seqs of the source's log; a task
+    continuing the conversation starts them over."""
+    from noeta.plugins.memory import Memory
+    st = {"dir": "/m", "surfaced": ["a.md"], "chars": 10, "through": 40,
+          "recent": [{"through": 40, "paths": ["a.md"], "chars": 10}], "voided": [12]}
+    out = Memory(home=str(tmp_path)).continue_state(st)
+    assert out == {"dir": "/m", "surfaced": ["a.md"], "chars": 10, "through": 0}

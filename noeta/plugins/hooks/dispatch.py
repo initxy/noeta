@@ -22,11 +22,12 @@ from noeta.core.large_output import (
     spill_path,
     task_spill_dir,
 )
-from noeta.core.mcp_names import legacy_index, warn_legacy
+from noeta.core.mcp_names import legacy_index, legacy_names, warn_legacy
 from noeta.core.tool import Tool, ToolContext, ToolOutput
 from noeta.core.types import Message, Text, ToolUse, user
 from noeta.plugins.hooks.config import SUBJECT, TOOL_EVENTS, HookCommand, Matcher
 from noeta.plugins.hooks.runners import (
+    FAILED,
     HookResult,
     Runner,
     RunTool,
@@ -128,6 +129,9 @@ class HookState:
     stop_since: int = 0
     #: SessionStart (startup) / SubagentStart has fired for this task.
     started: bool = False
+    #: A task continuing another's conversation that has not fired its
+    #: SessionStart (``resume`` / ``fork``) yet.
+    continued: bool = False
     #: The compaction SessionStart (compact) last fired after, by ``through``.
     compact_seen: int = 0
     #: What started the newest compaction (``manual`` / ``auto``).
@@ -168,7 +172,7 @@ def fold(state: Any, kind: str, data: Any) -> HookState:
         blocks = st.stop_blocks + 1 if since == st.stop_since else 1
         return replace(st, stop_blocks=blocks, stop_since=since)
     if kind == "started":
-        return replace(st, started=True)
+        return replace(st, started=True, continued=False)
     if kind == "compacting":
         return replace(st, compact_trigger=str(data.get("trigger") or "auto"))
     if kind == "compact_seen":
@@ -308,6 +312,18 @@ def _find_mcp_tool(view: TaskView, hook: HookCommand) -> tuple[Tool | None, bool
     warn_legacy("mcp_tool hook", name, current)
     found = view.find_tool(current)
     return found, found is not None
+
+
+def shared_old_name(view: TaskView, hook: HookCommand) -> list[str]:
+    """The current MCP tools whose old name (``noeta.core.mcp_names``) an
+    ``mcp_tool`` hook names when it names more than one of them (empty
+    otherwise): such a hook cannot tell which tool to call."""
+    if _mcp_tool(view, hook) is not None:
+        return []
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", f"mcp__{hook.server}__{hook.tool}")
+    owners = sorted(t.name for ext in view.extensions for t in ext.tools(view)
+                    if t.name.startswith("mcp__") and safe in legacy_names(t.name))
+    return owners if len(owners) > 1 else []
 
 
 def narrowed(event: str, read: Read) -> Read:
@@ -474,6 +490,18 @@ class Dispatcher:
                 return await run_callback(
                     hook, payload, self.callbacks.call if self.callbacks is not None else None)
             if hook.type == "mcp_tool":
+                shared = shared_old_name(view, hook)
+                if shared:
+                    # Fail closed: a guard that cannot tell which tool it
+                    # means blocks rather than lets the event through, except
+                    # at a turn's end, where a block only asks the model to
+                    # go on (up to MAX_STOP_CONTINUATIONS rounds for nothing):
+                    # there it fails, and the turn ends.
+                    why = (f"the hook names MCP tool {hook.tool!r} of server {hook.server!r} by "
+                           f"an old name that now fits {', '.join(shared)}; write the current "
+                           "name")
+                    stop = payload.get("hook_event_name") in ("Stop", "SubagentStop")
+                    return HookResult(exit_code=FAILED if stop else 2, stderr=why)
                 return await run_mcp_tool(hook, payload, _mcp_tool(view, hook),
                                           _tool_runner(view, "mcp"))
             return await self.runner(hook, payload, cwd)

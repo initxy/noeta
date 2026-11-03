@@ -329,3 +329,33 @@ async def test_a_directory_is_listed_whole(tmp_path: Path, work: Path) -> None:
     [listing] = attached(provider)
     names = listing.content[1].text.split("\n")[1:]  # type: ignore[union-attr]
     assert len(names) == 1100 and names[-1] == "f1099"
+
+
+async def test_a_continued_task_attaches_its_own_mentions(tmp_path: Path, work: Path) -> None:
+    """A task that continues a conversation attaches the files its own
+    prompts mention: the source's position is a seq of the source's log."""
+    (work / "a.txt").write_text("a\n")
+    (work / "b.txt").write_text("b\n")
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("three"), reply("four")])
+    rt = Runtime(store=store, agents={"a": Agent(name="a", model="m", extensions=[FileTools()])},
+                 provider_for=lambda _m: provider, env_for=lambda _s: LocalExecEnv(str(work)),
+                 sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "hi")
+    await rt.run_until_idle()
+    await client.send(tid, "more")
+    await rt.run_until_idle()
+    await client.send(tid, "see @a.txt")
+    await rt.run_until_idle()
+    await client.create("a", "now see @b.txt", history_from=tid)
+    await rt.run_until_idle()
+    assert [m for m in provider.requests[-1].messages
+            if "b.txt" in m.text and m.origin == "system"]
+
+
+def test_a_continued_task_starts_its_own_mention_and_image_positions() -> None:
+    from noeta.plugins.fs.state import FsState
+    st = FsState(mentions_through=9, images_through=9, images={"9": ["/x.png"]})
+    out = FileTools().continue_state(st)
+    assert (out.mentions_through, out.images_through, out.images) == (0, 0, {})

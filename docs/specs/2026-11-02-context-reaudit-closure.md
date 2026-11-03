@@ -520,3 +520,30 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   with 55 / 81 trials at the 420 s cap, clustered by trial index across all scenarios); a paired
   control against 6df2bb7f at concurrency 2 each stopped at 9 timeouts in 20 trials (6df2bb7f 5 of
   6, f82fef3a 4 of 14) while single probes answered in under 4 s. To rerun when the gateway holds.
+- 2026-11-02 Second confirm review: mergeable, with one P1 present on main already. Fixed on
+  `rr-cont` (from 712b3095): S-P1-1 → `Hooks.continue_state` resets the prompt and batch
+  positions and drops the source run's stop count, permission answers, unsent background output
+  and stop note (test: a blocking `UserPromptSubmit` hook on a `history_from` task, with and
+  without earlier turns); S-P2-1 → `FileTools.continue_state` resets `mentions_through`,
+  `images_through` and the seq-keyed `images` (tests: a fork's `@b.txt` attaches; the reset);
+  S-P3-2 → `Memory.continue_state` resets `through` and drops the seq-keyed recalls (test);
+  S-P3-3 → the local walk-up is not cached (test: a removed `.git` counts); S-P3-1 → an
+  `mcp_tool` hook naming an old name two tools share blocks (exit 2), documented in the
+  deviations row and CHANGELOG (test). No prompt text changed; the only new model-visible text is
+  that hook's block reason.
+- 2026-11-02 Third confirm review: rr-cont mergeable, four P3s closed on `rr-cont`. T-P3-3 → a
+  continued task fires SessionStart once with Claude Code's source (bundle: the resume path calls
+  its SessionStart runner with `resume` or `fork`, the source enum is startup / resume / clear /
+  compact / fork): `fork` for `history_from` by default (HTTP, `--fork-session`), `resume` for a
+  channel thread carried on (config `continued_as`), none for a rewind (CC's rewind fires none);
+  the CLI's own resume already fired `resume` (tests: the three sources and what reaches the model;
+  the channel and rewind configs). Model-visible: the hook's output, as
+  "SessionStart hook success: …" / additional context, as at startup. T-P3-1 / T-P3-2 → the
+  hooks and fs `continue_state` docstrings say what is not carried; a follow-ups line for pasted
+  images across a continuation. T-P3-4 → an `mcp_tool` hook by a shared old name fails rather
+  than blocks on `Stop` / `SubagentStop` (test; deviations row, CHANGELOG).
+- 2026-11-02 Fourth confirm review: two P3s closed on `rr-cont`. A continuation's SessionStart
+  fires only before the task's own first reply, so a continuation that ran before the rule (it
+  folds as continued again) fires none mid-conversation (test: an old-plugin run, then the new
+  one). `continued_as` takes `resume` / `fork` / `rewind`: the HTTP guard refuses another value
+  (400), and the hooks plugin logs one from elsewhere and takes it as `fork` (tests).

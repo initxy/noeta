@@ -416,6 +416,32 @@ async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
         "SessionStart hook success: source was resume"
 
 
+async def test_a_continued_conversation_fires_session_start_as_claude_code_does(
+        tmp_path: Path) -> None:
+    """A task created with ``history_from`` fires SessionStart once, with
+    Claude Code's source: ``fork`` by default (a new branch, as
+    ``--fork-session``), ``resume`` for a channel thread carried on, none
+    for a rewind. What the hook says reaches the model as at startup."""
+    from noeta.core.client import CONTINUED_AS_KEY
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply(f"r{i}") for i in range(8)],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+    sources = []
+    for continued_as in (None, "resume", "rewind"):
+        extra = {CONTINUED_AS_KEY: continued_as} if continued_as else {}
+        n = len(s.provider.requests)
+        await s.client.create("a", "go on", config={"cwd": str(s.work), **extra},
+                              history_from=s.tid)
+        await s.runtime().run_until_idle()
+        sources = [p["source"] for p in s.runner.payloads("start")]
+        texts = [m.text for m in s.provider.requests[n].messages if m.origin == "system"]
+        if continued_as == "rewind":
+            assert "source was rewind" not in "\n".join(texts)
+        else:
+            assert f"SessionStart hook success: source was {continued_as or 'fork'}" in texts
+    assert sources == ["startup", "fork", "resume"]
+
+
 async def test_compaction_events(tmp_path: Path) -> None:
     hooks = {"PreCompact": hook("pre", "manual"), "PostCompact": hook("post"),
              "SessionStart": hook("start", "compact")}
@@ -1040,3 +1066,87 @@ async def test_saved_hook_output_is_named_when_marking_its_directory_fails() -> 
     text = await capped(view, "z" * 12_000, "ups")  # type: ignore[arg-type]
     [path] = written
     assert path in text and len(text) < 11_000
+
+
+async def test_an_mcp_tool_hook_by_an_old_name_two_tools_share_blocks(tmp_path: Path) -> None:
+    """A guard that names, by its old name, a tool two servers now share
+    fails closed: the call it guards is blocked, not let through."""
+    class TwoServers(Extension):
+        name = "fake-mcp"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            out = []
+            for server in ("CHK", "Chk"):
+                tool = McpLike("{}").tools(view)[0]
+                tool.name = f"mcp__{server}__verify"
+                out.append(tool)
+            return out
+
+    hooks = {"PreToolUse": [{"matcher": "Read", "hooks": [{
+        "type": "mcp_tool", "server": "chk", "tool": "verify"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
+                    extensions=(TwoServers(),)).start()
+    [(text, is_error)] = await s.results()
+    assert is_error and "old name" in text and "hello" not in text
+
+
+async def test_a_stop_guard_by_a_shared_old_name_fails_rather_than_blocks(
+        tmp_path: Path) -> None:
+    """At a turn's end a block only sends the model round again; a Stop
+    ``mcp_tool`` hook naming an old name two tools share fails instead, so
+    the turn ends at once with the person told."""
+    class TwoServers(Extension):
+        name = "fake-mcp"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            out = []
+            for server in ("CHK", "Chk"):
+                tool = McpLike("{}").tools(view)[0]
+                tool.name = f"mcp__{server}__verify"
+                out.append(tool)
+            return out
+
+    hooks = {"Stop": [{"hooks": [{"type": "mcp_tool", "server": "chk", "tool": "verify"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("done"), reply("again")],
+                    extensions=(TwoServers(),)).start()
+    assert len(s.provider.requests) == 1
+    assert any("old name" in n for n in await s.notices())
+
+
+async def test_a_continuation_that_already_replied_fires_no_session_start(
+        tmp_path: Path) -> None:
+    """A continuation that ran before continued conversations fired
+    SessionStart (its log has no record of it) folds as continued; after
+    the upgrade it must not fire one mid-conversation."""
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply(f"r{i}") for i in range(6)],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+
+    class Before(Hooks):  # the plugin as it was: no start for a continuation
+        async def on_start(self, view: TaskView) -> None:
+            return None
+
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Before(hooks=config, runner=s.runner), FileTools()])
+    s.tid = await s.client.create("a", "go on", config={"cwd": str(s.work)},
+                                  history_from=s.tid)
+    await s.runtime().run_until_idle()
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.send("after the upgrade")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
+
+
+async def test_an_unknown_continued_as_is_taken_as_fork(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.core.client import CONTINUED_AS_KEY
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply("a"), reply("b")],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+    with caplog.at_level(logging.WARNING, logger="noeta.hooks"):
+        await s.client.create("a", "go on", config={"cwd": str(s.work),
+                                                     CONTINUED_AS_KEY: "sideways"},
+                              history_from=s.tid)
+        await s.runtime().run_until_idle()
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "fork"]
+    assert "sideways" in caplog.text
