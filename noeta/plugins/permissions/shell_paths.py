@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 
 from noeta.toolkit.shell_syntax import Word
 
-__all__ = ["READERS", "WRITERS", "command_paths", "unwrap"]
+__all__ = ["READERS", "WRITERS", "Paths", "command_paths", "unwrap"]
 
 Args = Sequence[Word]
 
@@ -23,11 +24,14 @@ _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _DURATION = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 
 
-def unwrap(words: Args) -> list[Word]:
+def unwrap(words: Args) -> tuple[list[Word], str | None]:
     """``words`` without leading assignments and the programs that only run
-    the rest (``time``, ``nohup``, ``timeout <duration>``, ``nice``,
-    ``stdbuf``, ``env``, ``command``, ``builtin``, ``noglob``)."""
+    the rest: Claude Code's (``time``, ``nohup``, ``timeout <duration>``,
+    ``nice``, ``stdbuf``, ``env``, ``command``, ``builtin``, ``noglob``) and
+    noeta's own (``xargs``, ``sudo``, ``doas``), each with its options; and
+    the directory an ``env -C`` moves to (``None``: none)."""
     w = list(words)
+    chdir: str | None = None
     while w:
         head = w[0].text
         if _ENV_ASSIGN.match(head):
@@ -35,30 +39,28 @@ def unwrap(words: Args) -> list[Word]:
         elif head in ("time", "nohup"):
             w = w[2:] if w[1:2] and w[1].text == "--" else w[1:]
         elif head == "timeout":
-            i = 1
-            while i < len(w) and w[i].text.startswith("-"):
-                i += 2 if w[i].text in ("-s", "--signal", "-k", "--kill-after") else 1
+            i = _skip_options(w, 1, ("-s", "--signal", "-k", "--kill-after"))
             if i >= len(w) or not _DURATION.match(w[i].text):
-                return w
+                return w, chdir
             w = w[i + 1:]
         elif head == "nice":
-            if w[1:2] and w[1].text == "-n" and len(w) > 2:
-                w = w[3:]
-            elif w[1:2] and re.match(r"^-\d+$", w[1].text):
-                w = w[2:]
-            else:
-                w = w[1:]
-            if w and w[0].text == "--":
-                w = w[1:]
-        elif head == "stdbuf":
             i = 1
-            while i < len(w) and w[i].text.startswith("-"):
-                i += 2 if w[i].text in ("-i", "-o", "-e") else 1
-            w = w[i:]
+            while i < len(w) and w[i].text.startswith("-") and w[i].text != "--":
+                i += 2 if w[i].text in ("-n", "--adjustment") else 1
+            w = w[i + 1:] if i < len(w) and w[i].text == "--" else w[i:]
+        elif head == "stdbuf":
+            w = w[_skip_options(w, 1, ("-i", "-o", "-e", "--input", "--output", "--error")):]
         elif head == "env":
             i = 1
             while i < len(w) and (w[i].text.startswith("-") or _ENV_ASSIGN.match(w[i].text)):
-                i += 2 if w[i].text in ("-u", "--unset", "-C", "--chdir", "-S") else 1
+                t = w[i].text
+                if t in ("-C", "--chdir") and i + 1 < len(w):
+                    chdir = _join(chdir or "", w[i + 1].text)
+                elif t.startswith("--chdir="):
+                    chdir = _join(chdir or "", t.partition("=")[2])
+                elif t.startswith("-C") and len(t) > 2:
+                    chdir = _join(chdir or "", t[2:])
+                i += 2 if t in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string") else 1
             w = w[i:]
         elif head == "command":
             i = 1
@@ -67,13 +69,31 @@ def unwrap(words: Args) -> list[Word]:
             if i < len(w) and w[i].text == "--":
                 i += 1
             if i >= len(w) or w[i].text.startswith("-"):
-                return w
+                return w, chdir
             w = w[i:]
         elif head in ("builtin", "noglob"):
             w = w[1:]
+        elif head == "xargs":
+            w = w[_skip_options(w, 1, ("-a", "--arg-file", "-d", "--delimiter", "-E", "-e",
+                                       "-I", "-i", "-L", "-l", "-n", "--max-args", "-P",
+                                       "--max-procs", "-s", "--max-chars")):]
+        elif head in ("sudo", "doas"):
+            w = w[_skip_options(w, 1, ("-u", "--user", "-g", "--group", "-C", "-D",
+                                       "--chdir", "-h", "--host", "-p", "--prompt", "-r",
+                                       "-t", "-U")):]
         else:
-            return w
-    return w
+            return w, chdir
+    return w, chdir
+
+
+def _skip_options(w: Sequence[Word], i: int, valued: tuple[str, ...]) -> int:
+    """The index after the options from ``i`` (``valued`` ones take the next
+    word; ``--`` is skipped too)."""
+    while i < len(w) and w[i].text.startswith("-") and w[i].text != "-":
+        if w[i].text == "--":
+            return i + 1
+        i += 2 if w[i].text in valued else 1
+    return i
 
 
 def _positional(args: Args) -> list[Word]:
@@ -360,35 +380,61 @@ READERS: dict[str, Callable[[Args], list[Word]]] = {
     "sed": _sed, "jq": _jq, "git": _git, "man": _man, "tr": _tr,
 }
 
-#: Programs whose operands Claude Code holds to ``Edit`` deny rules.
-WRITERS = frozenset({"mkdir", "touch", "rm", "rmdir", "mv", "cp", "sed", "tee"})
+#: Programs whose operands are held to ``Edit`` deny rules: Claude Code's,
+#: and ``ln`` and ``install`` (noeta: every operand, as for ``cp``).
+WRITERS = frozenset({"mkdir", "touch", "rm", "rmdir", "mv", "cp", "sed", "tee", "ln", "install"})
 
 _DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
 
 
-def command_paths(words: Args) -> tuple[list[Word], list[Word]]:
-    """``(writes, reads)``: the words of one simple command that name paths
-    it writes and paths it reads. A ``cp`` / ``mv`` source and a
-    ``sed -i`` file count as both; ``sed`` without ``-i`` only reads."""
-    w = unwrap(words)
+@dataclass
+class Paths:
+    """What one simple command names: paths it writes, paths it reads,
+    trees it removes or moves whole (everything under them changes), and
+    the directory relative paths resolve from when it moves (``env -C``)."""
+
+    writes: list[Word] = field(default_factory=list)
+    reads: list[Word] = field(default_factory=list)
+    trees: list[Word] = field(default_factory=list)
+    chdir: str | None = None
+
+
+def command_paths(words: Args) -> Paths:
+    """The paths of one simple command. A ``cp`` / ``mv`` source and a
+    ``sed -i`` file count as both written and read; ``sed`` without ``-i``
+    only reads; a recursive ``rm`` and an ``mv`` source are trees."""
+    w, chdir = unwrap(words)
     if not w or not w[0].plain:
-        return [], []
+        return Paths(chdir=chdir)
     head, args = w[0].text, w[1:]
     if head == "sed":
         files = _sed(args)
-        return (files, files) if _sed_in_place(args) else ([], files)
+        return Paths(files if _sed_in_place(args) else [], files, chdir=chdir)
     if head in WRITERS:
         found = _positional(args)
-        if head in ("cp", "mv"):
+        if head in ("cp", "mv", "install"):
             sources = found[:-1] if not _target_dir_given(args) else found
             extra = [Word(a.text.partition("=")[2]) for a in args
                      if a.text.startswith("--target-directory=")]
-            return found + extra, sources
+            return Paths(found + extra, sources, sources if head == "mv" else [], chdir)
         if head == "tee":
             found = [x for x in found if x.text not in _DEVICES]
-        return found, []
+        if head == "rm" and _recursive(args):
+            return Paths(found, [], found, chdir)
+        return Paths(found, [], chdir=chdir)
     reader = READERS.get(head)
-    return ([], reader(args)) if reader is not None else ([], [])
+    return Paths(reads=reader(args), chdir=chdir) if reader is not None else Paths(chdir=chdir)
+
+
+def _recursive(args: Args) -> bool:
+    for a in args:
+        t = a.text
+        if t == "--":
+            return False
+        if t == "--recursive" or (t.startswith("-") and not t.startswith("--")
+                                  and ("r" in t or "R" in t)):
+            return True
+    return False
 
 
 def _target_dir_given(args: Args) -> bool:

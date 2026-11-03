@@ -622,6 +622,96 @@ async def test_a_shell_read_elsewhere_is_not_refused(store: SqliteStore, tmp_pat
     assert [r["command"] for r in bash.runs] == [command]
 
 
+_EVASIVE_WRITES = [
+    "sed -i 's/a/b/' config/prod.toml  # bump",
+    "cat > config/prod.toml <<'EOF'\nx\nEOF",
+    "cat <<EOF > notes.txt\n$(rm config/prod.toml)\nEOF",
+    "(cd config && sed -i s/a/b/ prod.toml)",
+    "{ rm config/prod.toml; }",
+    "sed -i \"s/v/$(date)/\" config/prod.toml",
+    "echo `rm config/prod.toml`",
+    "sed -i s/a/b/ config/*.toml", "rm config/prod.*", "cd config && rm *.toml",
+    "echo x >& config/prod.toml", "nice --adjustment=5 rm config/prod.toml",
+    "nice -n 5 rm config/prod.toml", "env -C config rm prod.toml", "\\rm config/prod.toml",
+    "xargs rm config/prod.toml", "sudo rm config/prod.toml", "cd config; cd ..; rm prod.toml",
+    "cd config && cd sub && sed -i s/a/b/ ../prod.toml", "pushd config && rm prod.toml",
+    "ln -sf /etc/passwd config/prod.toml", "install -m644 a config/prod.toml",
+    "sed -i s/a/b/ link.toml", "rm -rf config", "mv config old", "rm -r ./config/",
+    "echo 'unbalanced > config/prod.toml",
+]
+
+
+@pytest.mark.parametrize("command", _EVASIVE_WRITES)
+async def test_a_shell_write_is_refused_however_it_is_spelled(
+        store: SqliteStore, tmp_path: Path, command: str) -> None:
+    """Comments, heredocs, subshells, substitutions, globs, wrappers, links,
+    directory changes and a recursive removal do not get a write past an
+    ``Edit`` deny rule (bypass mode, which runs everything else)."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "prod.toml").write_text("x\n")
+    (tmp_path / "config" / "dev.toml").write_text("x\n")
+    (tmp_path / "link.toml").symlink_to(tmp_path / "config" / "prod.toml")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Edit(./config/prod.toml)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=tmp_path)
+    [(text, err)] = results(await events(client, tid))
+    assert err and "Edit(./config/prod.toml)" in text and not bash.runs
+
+
+@pytest.mark.parametrize("command", [
+    "cat *.txt", "grep key *", "cat ./secret.txt | tee /dev/stderr", "cat secr?t.txt",
+    "wc -l $(ls) < secret.txt", "(cat secret.txt)", "cat secret.txt # just looking"])
+async def test_a_shell_read_is_refused_however_it_is_spelled(
+        store: SqliteStore, tmp_path: Path, command: str) -> None:
+    (tmp_path / "secret.txt").write_text("key\n")
+    (tmp_path / "other.txt").write_text("x\n")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Read(./secret.txt)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=tmp_path)
+    [(text, err)] = results(await events(client, tid))
+    assert err and "Read(./secret.txt)" in text and not bash.runs
+
+
+_EVERYDAY = [
+    "git status", "git diff", "git log -p -- config", "git diff HEAD~1 -- '*.toml'",
+    "rg log_level config", "grep -rn log_level .", "cat config/dev.toml", "ls -la config",
+    "cat > notes.md <<'EOF'\nconfig/prod.toml stays as it is\nEOF",
+    "python -c 'print(1)'", "npm test", "make check 2>&1 | tail -5",
+    "sed -i s/a/b/ config/dev.toml", "rm -rf build", "mkdir -p build && cp config/dev.toml build/",
+    "find . -path './node_modules/*' -prune -o -name '*.py' -print",
+    "for f in config/dev.toml; do echo $f; done", "echo $(date) >> log.txt",
+    "cd config && cat dev.toml", "mv config/dev.toml config/dev.bak",
+    "cat 'config/prod[1].toml'", "echo hi > /dev/stderr", "head -n 5 config/dev.toml",
+]
+
+
+@pytest.mark.parametrize("command", _EVERYDAY)
+async def test_everyday_commands_run_beside_an_edit_deny_rule(
+        store: SqliteStore, tmp_path: Path, command: str) -> None:
+    """With an ``Edit`` deny rule on one file, ordinary commands that leave
+    it alone still run in bypass mode."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "prod.toml").write_text("x\n")
+    (tmp_path / "config" / "dev.toml").write_text("x\n")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Edit(./config/prod.toml)"])
+    await start(store, provider, perms, [bash], cwd=tmp_path)
+    assert [r["command"] for r in bash.runs] == [command]
+
+
+@pytest.mark.parametrize("command", [*_EVERYDAY, *_EVASIVE_WRITES])
+async def test_nothing_is_refused_without_a_deny_rule(store: SqliteStore, tmp_path: Path,
+                                                      command: str) -> None:
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Bash(shutdown *)", "WebFetch"])
+    await start(store, provider, perms, [bash], cwd=tmp_path)
+    assert [r["command"] for r in bash.runs] == [command]
+
+
 async def test_a_write_deny_rule_does_not_cover_a_shell_write(store: SqliteStore,
                                                               tmp_path: Path) -> None:
     """Only ``Edit`` rules judge shell writes, as in Claude Code."""

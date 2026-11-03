@@ -33,6 +33,16 @@ SHELL_WRITE_DENIED = ("Permission to use {name} was refused: the command writes 
 SHELL_READ_DENIED = ("Permission to use {name} was refused: the command reads {path}, which "
                      "the permission rule {rule} keeps from being read. " + WORK_AROUND
                      + STOP_AND_EXPLAIN)
+#: A shell command removing or moving a directory that holds a path an
+#: ``Edit`` deny rule names.
+SHELL_TREE_DENIED = ("Permission to use {name} was refused: the command removes or moves "
+                     "{path}, which holds {inner}, and the permission rule {rule} keeps that "
+                     "from being changed. " + WORK_AROUND + STOP_AND_EXPLAIN)
+#: A shell command that cannot be read apart, naming a path a deny rule covers.
+SHELL_OPAQUE_DENIED = ("Permission to use {name} was refused: the command cannot be read apart "
+                       "into its commands, and it names {path}, which the permission rule "
+                       "{rule} covers. Split it into plain commands that leave that path alone. "
+                       + WORK_AROUND + STOP_AND_EXPLAIN)
 OUTSIDE_WRITE = ("{name} only writes inside the working directories ({dirs}); {path} is "
                  "outside them. If it must change, ask the user to add its directory to the "
                  "additional directories.")

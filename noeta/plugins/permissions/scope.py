@@ -38,7 +38,6 @@ from noeta.plugins.permissions.read_only_programs import (
     git_operands_ok,
     parse_flags,
 )
-from noeta.plugins.permissions.shell_paths import command_paths
 from noeta.toolkit.protected_paths import (
     OPEN_SUBDIRS,
     PROTECTED_DIRS,
@@ -54,7 +53,6 @@ __all__ = [
     "READ_ONLY",
     "Part",
     "Scope",
-    "deny_targets",
     "file_command_paths",
     "is_protected",
     "read_only",
@@ -133,11 +131,6 @@ class Part:
     #: The files its output redirections name (absolute, as written; a
     #: target bash expands is taken as it reads).
     redirects: tuple[str, ...] = field(default=())
-    #: The paths it writes and reads as Claude Code's shell path check
-    #: reads them (absolute), for the ``Edit`` and ``Read`` deny rules (see
-    #: :func:`deny_targets`).
-    targets: tuple[str, ...] = field(default=())
-    read_targets: tuple[str, ...] = field(default=())
 
 
 def _path_ok(word: Word, scope: Scope, *, lead_glob: bool = False) -> bool:
@@ -394,42 +387,6 @@ def _file_writes(cmd: Command, scope: Scope) -> tuple[str, ...] | None:
     return tuple(scope.absolute(w.text) for w in paths)
 
 
-# ---------------------------------------------------------------- deny targets
-
-#: Input redirections that read a file (a descriptor duplicated reads none).
-_INPUT_REDIRECTS = frozenset({"<", "<&"})
-
-
-def deny_targets(cmd: Command, scope: Scope, *,
-                 relative: bool = True) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """``(writes, reads)``: the paths ``cmd``'s words name for writing and
-    for reading as Claude Code's shell path check reads them
-    (:mod:`shell_paths`), and its input redirections, absolute. A word
-    bash expands is left out (it cannot be told), and so is a glob among
-    the writes; a glob among the reads is kept as written (the caller
-    expands it). ``relative`` false: only absolute paths (the directory
-    is unknown)."""
-    writes, reads = command_paths(cmd.words)
-    reads = [*reads, *(r.target for r in cmd.redirects
-                       if r.op in _INPUT_REDIRECTS and not re.match(r"^(\d+|-)$", r.target.text)
-                       and r.target.text not in _READ_DEVICES)]
-
-    def resolve(words: Sequence[Word], *, glob: bool) -> tuple[str, ...]:
-        out: list[str] = []
-        for w in words:
-            if w.expands or w.brace or w.lead_glob or (w.glob and not glob) or (
-                    w.tilde and not (w.text == "~" or w.text.startswith("~/"))):
-                continue
-            if not relative and not (w.tilde or posixpath.isabs(w.text)):
-                continue
-            out.append(scope.absolute(w.text))
-        return tuple(out)
-    return resolve(writes, glob=False), resolve(reads, glob=True)
-
-
-_READ_DEVICES = frozenset({"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty"})
-
-
 # ---------------------------------------------------------------- whole commands
 
 
@@ -458,8 +415,9 @@ def _next_cwds(cmd: Command, cwds: list[str] | None, scope: Scope) -> list[str] 
     return list(dict.fromkeys([*cwds, *(scope.at(c).absolute(target) for c in cwds)]))
 
 
-#: Redirection operators that write their target.
-_OUTPUT_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>"})
+#: Redirection operators that write their target (``>&`` when it names a
+#: file, not a descriptor).
+_OUTPUT_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&"})
 
 
 def parts(command: str, scope: Scope) -> list[Part] | None:
@@ -472,15 +430,7 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
     cwds: list[str] | None = [scope.cwd]
     for cmd in parsed.commands:
         if cwds is None:
-            # Where it runs is unknown: only absolute paths can be told.
-            redirected = tuple(
-                scope.absolute(r.target.text) for r in cmd.redirects
-                if r.op in _OUTPUT_REDIRECTS and not harmless_redirect(r)
-                and (r.target.tilde or posixpath.isabs(r.target.text)))
-            written, read = deny_targets(cmd, scope, relative=False)
-            out.append(Part(cmd.text, False, None, tuple(cmd.argv),
-                            targets=tuple(dict.fromkeys((*written, *redirected))),
-                            read_targets=read))
+            out.append(Part(cmd.text, False, None, tuple(cmd.argv)))
             continue
         seen: list[str] = []
         here = [replace(scope.at(c), seen=seen) for c in cwds]
@@ -492,11 +442,8 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
         redirected = tuple(dict.fromkeys(
             s.absolute(r.target.text) for s in here for r in cmd.redirects
             if r.op in _OUTPUT_REDIRECTS and not harmless_redirect(r) and r.target.text))
-        both = [deny_targets(cmd, s) for s in here]
         out.append(Part(cmd.text, ro, writes, tuple(cmd.argv),
-                        tuple(dict.fromkeys(seen)) if ro else (), redirected,
-                        tuple(dict.fromkeys(t for w, _r in both for t in w)),
-                        tuple(dict.fromkeys(t for _w, r in both for t in r))))
+                        tuple(dict.fromkeys(seen)) if ro else (), redirected))
         cwds = _next_cwds(cmd, cwds, scope)
         if cwds is not None and not all(scope.contains(c) for c in cwds):
             cwds = None

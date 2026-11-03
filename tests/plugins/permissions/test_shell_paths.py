@@ -3,6 +3,9 @@ shell path check reads them."""
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from noeta.plugins.permissions.shell_paths import command_paths
@@ -11,8 +14,8 @@ from noeta.toolkit.shell_syntax import parse
 
 def paths(command: str) -> tuple[list[str], list[str]]:
     [cmd] = parse(command).commands
-    writes, reads = command_paths(cmd.words)
-    return [w.text for w in writes], [w.text for w in reads]
+    found = command_paths(cmd.words)
+    return [w.text for w in found.writes], [w.text for w in found.reads]
 
 
 @pytest.mark.parametrize(("command", "writes", "reads"), [
@@ -59,6 +62,49 @@ def paths(command: str) -> tuple[list[str], list[str]]:
     ("command -v cat", [], []),
     ("noglob cat a", [], ["a"]),
     ("python a.py", [], []),
+    ("nice --adjustment=5 rm a", ["a"], []),
+    ("nice -n 5 -- rm a", ["a"], []),
+    ("xargs -n 1 rm a", ["a"], []),
+    ("sudo -u root rm a", ["a"], []),
+    ("ln -sf /etc/passwd a", ["/etc/passwd", "a"], []),
+    ("install -m644 a b", ["a", "b"], ["a"]),
+    ("stdbuf --output=L -- cat a", [], ["a"]),
 ])
+
 def test_command_paths(command: str, writes: list[str], reads: list[str]) -> None:
     assert paths(command) == (writes, reads)
+
+
+def test_trees_and_env_chdir() -> None:
+    [cmd] = parse("env -C config rm -rf sub").commands
+    found = command_paths(cmd.words)
+    assert found.chdir == "config" and [w.text for w in found.trees] == ["sub"]
+    [cmd] = parse("mv a b dest").commands
+    assert [w.text for w in command_paths(cmd.words).trees] == ["a", "b"]
+    [cmd] = parse("rm -f a").commands
+    assert command_paths(cmd.words).trees == []
+
+
+async def test_resolve_paths_expands_globs_and_links_in_one_call(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from noeta.plugins.permissions.shell_check import resolve_paths
+
+    (tmp_path / "a.toml").write_text("")
+    (tmp_path / "b.toml").write_text("")
+    (tmp_path / "l").symlink_to(tmp_path / "a.toml")
+    view: Any = SimpleNamespace(env=None)
+    got = await resolve_paths(view, [(f"{tmp_path}/*.toml", True), (f"{tmp_path}/l", False)])
+    assert (f"{tmp_path}/a.toml", f"{tmp_path}/a.toml") in got
+    assert (f"{tmp_path}/b.toml", f"{tmp_path}/b.toml") in got
+    assert (f"{tmp_path}/l", f"{tmp_path}/a.toml") in got
+
+    class Failing:
+        async def run(self, *_a: Any, **_k: Any) -> Any:
+            raise OSError("down")
+
+        async def realpath(self, path: str) -> str:
+            return path + ".real"
+
+    view = SimpleNamespace(env=Failing())
+    assert await resolve_paths(view, [("/x", False)]) == [("/x", "/x.real")]
