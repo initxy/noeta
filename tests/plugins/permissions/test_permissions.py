@@ -573,6 +573,55 @@ async def test_a_shell_write_elsewhere_is_not_refused(store: SqliteStore, tmp_pa
     assert [r["command"] for r in bash.runs] == [command]
 
 
+_SHELL_READS = [
+    "cat secret.txt", "head -n 5 secret.txt", "tail -f secret.txt", "grep -n key secret.txt",
+    "grep -r -e key secret.txt", "rg key secret.txt", "cp secret.txt out.txt", "mv secret.txt x",
+    "wc -l < secret.txt", "awk '{{print $1}}' secret.txt", "sed -n 1p secret.txt",
+    "sed -i s/a/b/ secret.txt", "jq . secret.txt", "git diff secret.txt",
+    "git grep key -- secret.txt", "diff other.txt secret.txt", "base64 secret.txt",
+    "sort -u secret.txt", "cd sub && cat ../secret.txt", "timeout 5 cat secret.txt",
+    "nice -n 5 cat secret.txt", "env A=1 cat secret.txt", "find secret.txt -type f",
+    "ls -l secret.txt", "md5sum secret.txt", "cut -d , -f 1 secret.txt", "cat secret.t*",
+    "ls; cd sub; cat {ws}/secret.txt", "grep -f secret.txt other.txt",
+]
+
+
+@pytest.mark.parametrize("mode", ["bypassPermissions", "acceptEdits", "default", "auto"])
+@pytest.mark.parametrize("command", _SHELL_READS)
+async def test_a_read_deny_rule_refuses_a_shell_read(
+        store: SqliteStore, tmp_path: Path, mode: str, command: str) -> None:
+    """Claude Code checks the paths its path-checked shell readers name
+    (and an input redirection, a ``cp`` / ``mv`` source, a ``sed -i``
+    file) against ``Read`` deny rules, before any mode lets the command
+    through."""
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "secret.txt").write_text("key\n")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([
+        reply("", ("Bash", {"command": command.format(ws=tmp_path)})), reply("ok")])
+    perms = Permissions(mode=mode, deny=["Read(./secret.txt)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=tmp_path)
+    [(text, err)] = results(await events(client, tid))
+    assert err and "Read(./secret.txt)" in text and str(tmp_path / "secret.txt") in text
+    assert not bash.runs
+
+
+@pytest.mark.parametrize("command", [
+    "cat other.txt", "grep secret.txt other.txt", "awk '/secret.txt/' other.txt",
+    "jq .secret other.json", "echo secret.txt", "cat $F", "rm secret.txt",
+    "echo x > secret.txt", "git log secret.txt", "less secret.txt"])
+async def test_a_shell_read_elsewhere_is_not_refused(store: SqliteStore, tmp_path: Path,
+                                                     command: str) -> None:
+    """A pattern or filter naming the file, a write (``Read`` rules do not
+    judge writes) and a program Claude Code does not path-check run."""
+    (tmp_path / "secret.txt").write_text("key\n")
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Read(./secret.txt)"])
+    await start(store, provider, perms, [bash], cwd=tmp_path)
+    assert [r["command"] for r in bash.runs] == [command]
+
+
 async def test_a_write_deny_rule_does_not_cover_a_shell_write(store: SqliteStore,
                                                               tmp_path: Path) -> None:
     """Only ``Edit`` rules judge shell writes, as in Claude Code."""

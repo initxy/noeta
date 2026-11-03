@@ -38,6 +38,7 @@ from noeta.plugins.permissions.read_only_programs import (
     git_operands_ok,
     parse_flags,
 )
+from noeta.plugins.permissions.shell_paths import command_paths
 from noeta.toolkit.protected_paths import (
     OPEN_SUBDIRS,
     PROTECTED_DIRS,
@@ -51,7 +52,6 @@ __all__ = [
     "PROTECTED_DIRS",
     "PROTECTED_FILES",
     "READ_ONLY",
-    "WRITERS",
     "Part",
     "Scope",
     "deny_targets",
@@ -133,10 +133,11 @@ class Part:
     #: The files its output redirections name (absolute, as written; a
     #: target bash expands is taken as it reads).
     redirects: tuple[str, ...] = field(default=())
-    #: The paths a file command, ``sed -i`` or ``tee`` names (absolute),
-    #: read off the words loosely, for the ``Edit`` deny rules (see
+    #: The paths it writes and reads as Claude Code's shell path check
+    #: reads them (absolute), for the ``Edit`` and ``Read`` deny rules (see
     #: :func:`deny_targets`).
     targets: tuple[str, ...] = field(default=())
+    read_targets: tuple[str, ...] = field(default=())
 
 
 def _path_ok(word: Word, scope: Scope, *, lead_glob: bool = False) -> bool:
@@ -395,66 +396,38 @@ def _file_writes(cmd: Command, scope: Scope) -> tuple[str, ...] | None:
 
 # ---------------------------------------------------------------- deny targets
 
-#: Commands whose path operands Claude Code holds to ``Edit`` deny rules
-#: (its path-checked writers: the file commands and ``tee``).
-WRITERS = FILE_COMMANDS | {"tee"}
-#: Leading words that only run the rest of the command.
-_PASS_THROUGH = frozenset({"command", "builtin", "noglob"})
+#: Input redirections that read a file (a descriptor duplicated reads none).
+_INPUT_REDIRECTS = frozenset({"<", "<&"})
 
 
-def deny_targets(cmd: Command, scope: Scope, *, relative: bool = True) -> tuple[str, ...]:
-    """The paths a writer (:data:`WRITERS`) names, absolute: every operand
-    (a ``cp`` source too), and for ``sed`` only with ``-i``, after its
-    script. Read off loosely (any flag skipped) since they only ever
-    refuse; a word bash expands is left out (it cannot be told), as is a
-    relative one when ``relative`` is false (the directory is unknown)."""
-    words = list(cmd.words)
-    while words and (_ENV_ASSIGN.match(words[0].text) or (
-            words[0].plain and words[0].text in _PASS_THROUGH)):
-        words = words[1:]
-    if not words or not words[0].plain or words[0].text not in WRITERS:
-        return ()
-    head, rest = words[0].text, words[1:]
-    operands: list[Word] = []
-    in_place = has_script = False
-    i = 0
-    while i < len(rest):
-        a = rest[i].text
-        if a == "--":
-            operands += rest[i + 1:]
-            break
-        if a.startswith("-") and a != "-":
-            if head == "sed":
-                if a in ("-e", "--expression", "-f", "--file"):
-                    has_script = True
-                    i += 1
-                elif a.startswith(("--expression=", "--file=")):
-                    has_script = True
-                elif a.startswith("--in-place") or (not a.startswith("--") and "i" in a):
-                    in_place = True
-            elif head in ("cp", "mv") and a in ("-t", "-S", "--suffix"):
-                if a == "-t" and i + 1 < len(rest):
-                    operands.append(rest[i + 1])
-                i += 1
-            elif head in ("cp", "mv") and a.startswith("--target-directory="):
-                operands.append(Word(a.partition("=")[2]))
-        else:
-            operands.append(rest[i])
-        i += 1
-    if head == "sed":
-        if not in_place:
-            return ()
-        if not has_script:
-            operands = operands[1:]
-    out: list[str] = []
-    for w in operands:
-        if w.expands or w.glob or w.brace or (
-                w.tilde and not (w.text == "~" or w.text.startswith("~/"))):
-            continue
-        if not relative and not (w.tilde or posixpath.isabs(w.text)):
-            continue
-        out.append(scope.absolute(w.text))
-    return tuple(out)
+def deny_targets(cmd: Command, scope: Scope, *,
+                 relative: bool = True) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(writes, reads)``: the paths ``cmd``'s words name for writing and
+    for reading as Claude Code's shell path check reads them
+    (:mod:`shell_paths`), and its input redirections, absolute. A word
+    bash expands is left out (it cannot be told), and so is a glob among
+    the writes; a glob among the reads is kept as written (the caller
+    expands it). ``relative`` false: only absolute paths (the directory
+    is unknown)."""
+    writes, reads = command_paths(cmd.words)
+    reads = [*reads, *(r.target for r in cmd.redirects
+                       if r.op in _INPUT_REDIRECTS and not re.match(r"^(\d+|-)$", r.target.text)
+                       and r.target.text not in _READ_DEVICES)]
+
+    def resolve(words: Sequence[Word], *, glob: bool) -> tuple[str, ...]:
+        out: list[str] = []
+        for w in words:
+            if w.expands or w.brace or w.lead_glob or (w.glob and not glob) or (
+                    w.tilde and not (w.text == "~" or w.text.startswith("~/"))):
+                continue
+            if not relative and not (w.tilde or posixpath.isabs(w.text)):
+                continue
+            out.append(scope.absolute(w.text))
+        return tuple(out)
+    return resolve(writes, glob=False), resolve(reads, glob=True)
+
+
+_READ_DEVICES = frozenset({"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty"})
 
 
 # ---------------------------------------------------------------- whole commands
@@ -504,8 +477,10 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
                 scope.absolute(r.target.text) for r in cmd.redirects
                 if r.op in _OUTPUT_REDIRECTS and not harmless_redirect(r)
                 and (r.target.tilde or posixpath.isabs(r.target.text)))
-            out.append(Part(cmd.text, False, None, tuple(cmd.argv), targets=tuple(
-                dict.fromkeys((*deny_targets(cmd, scope, relative=False), *redirected)))))
+            written, read = deny_targets(cmd, scope, relative=False)
+            out.append(Part(cmd.text, False, None, tuple(cmd.argv),
+                            targets=tuple(dict.fromkeys((*written, *redirected))),
+                            read_targets=read))
             continue
         seen: list[str] = []
         here = [replace(scope.at(c), seen=seen) for c in cwds]
@@ -517,9 +492,11 @@ def parts(command: str, scope: Scope) -> list[Part] | None:
         redirected = tuple(dict.fromkeys(
             s.absolute(r.target.text) for s in here for r in cmd.redirects
             if r.op in _OUTPUT_REDIRECTS and not harmless_redirect(r) and r.target.text))
-        targets = tuple(dict.fromkeys(t for s in here for t in deny_targets(cmd, s)))
+        both = [deny_targets(cmd, s) for s in here]
         out.append(Part(cmd.text, ro, writes, tuple(cmd.argv),
-                        tuple(dict.fromkeys(seen)) if ro else (), redirected, targets))
+                        tuple(dict.fromkeys(seen)) if ro else (), redirected,
+                        tuple(dict.fromkeys(t for w, _r in both for t in w)),
+                        tuple(dict.fromkeys(t for _w, r in both for t in r))))
         cwds = _next_cwds(cmd, cwds, scope)
         if cwds is not None and not all(scope.contains(c) for c in cwds):
             cwds = None

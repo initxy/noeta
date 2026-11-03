@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import posixpath
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -17,6 +18,7 @@ from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.decision import Decision, in_mode
 from noeta.plugins.permissions.shell_check import (
+    expand_glob,
     real_path,
     real_scope,
     shell_decision,
@@ -24,6 +26,9 @@ from noeta.plugins.permissions.shell_check import (
 )
 from noeta.plugins.permissions.state import inherited_rules, state_of
 from noeta.toolkit import permission_rules as r
+
+#: A path with glob characters: judged by what it expands to as well.
+_GLOB = re.compile(r"[*?\[]")
 
 
 class RuleCheck:
@@ -99,7 +104,7 @@ class RuleCheck:
         if denied is not None:
             return Decision("deny", w.DENIED_BY_RULE.format(name=name, rule=denied.text))
         if name in r.SHELL_TOOLS:
-            refused = await self._shell_write_denied(view, name, args, scope, ctx)
+            refused = await self._shell_path_denied(view, name, args, scope, ctx)
             if refused is not None:
                 return refused
         asked = next((m for a in seen if (m := r.first_match(self.ask_rules, name, a, ctx))
@@ -116,23 +121,39 @@ class RuleCheck:
                                   [a for a, allow in aliases if allow])
         return in_mode(mode, found, name, plan_classifier=plan_classifier)
 
-    async def _shell_write_denied(self, view: TaskView, name: str, args: Mapping[str, Any],
-                                  scope: sc.Scope, ctx: r.RuleContext) -> Decision | None:
+    async def _shell_path_denied(self, view: TaskView, name: str, args: Mapping[str, Any],
+                                 scope: sc.Scope, ctx: r.RuleContext) -> Decision | None:
         """A refusal when the command writes a path an ``Edit`` deny rule
-        covers (as written or where its links lead): Claude Code's shell
-        path check, which no mode gets past. Every directory the command
-        may be in by then counts."""
+        covers or reads one a ``Read`` deny rule covers (as written or
+        where its links lead; a read glob by what it expands to): Claude
+        Code's shell path check, which no mode gets past. Every directory
+        the command may be in by then counts."""
         command = args.get("command")
         if not self.deny_rules or not isinstance(command, str):
             return None
         found = sc.parts(command, shell_scope(view, scope))
         for part in found or ():
-            for path in dict.fromkeys((*part.targets, *part.redirects)):
-                for seen in dict.fromkeys((path, await real_path(view, path))):
-                    rule = r.first_match(self.deny_rules, "Edit", {"file_path": seen}, ctx)
-                    if rule is not None:
-                        return Decision("deny", w.SHELL_WRITE_DENIED.format(
-                            name=name, path=path, rule=rule.text))
+            for kind, paths in (("Edit", (*part.targets, *part.redirects)),
+                                ("Read", part.read_targets)):
+                for path in dict.fromkeys(paths):
+                    hit = await self._denied_path(view, kind, path, ctx)
+                    if hit is not None:
+                        text = w.SHELL_WRITE_DENIED if kind == "Edit" else w.SHELL_READ_DENIED
+                        return Decision("deny", text.format(name=name, path=hit[0],
+                                                            rule=hit[1]))
+        return None
+
+    async def _denied_path(self, view: TaskView, kind: str, path: str,
+                           ctx: r.RuleContext) -> tuple[str, str] | None:
+        """``(path, rule)`` when a ``kind`` deny rule covers ``path``."""
+        paths = [path]
+        if kind == "Read" and _GLOB.search(path):
+            paths += await expand_glob(view, path) or []
+        for each in paths:
+            for seen in dict.fromkeys((each, await real_path(view, each))):
+                rule = r.first_match(self.deny_rules, kind, {"file_path": seen}, ctx)
+                if rule is not None:
+                    return each, rule.text
         return None
 
     async def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
