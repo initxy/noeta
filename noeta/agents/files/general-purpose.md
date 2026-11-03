@@ -7,6 +7,7 @@ plugins:
   - permissions
   - plan_mode
   - budget
+  - repetition_guard
   - hooks
   - shell
   - web

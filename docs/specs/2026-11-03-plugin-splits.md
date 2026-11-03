@@ -63,6 +63,13 @@ only into the extension of the same name.
   only cap set by default, the sub-agent depth of 3, was on before too). Flat arguments, so
   `[plugins.budget]` sets them. Its counts are its own records; it folds `permissions` too, where
   a log from before the split has them (`step`, `tool_call`, `cost`).
+- The repetition guard is `noeta/plugins/repetition_guard.py` (`RepetitionGuard`, name
+  `repetition_guard`). Owner's rule for model-crutch plugins is "follow Claude Code", which has
+  no repetition guard: the built-in agents name it but keep it off until a host sets
+  `[plugins.repetition_guard]` (`OFF_UNLESS_SET`, as memory and MCP). It was already off by
+  default (`repetition_threshold=0`), so no default behavior changes and parity is unaffected.
+  Stateless (reads the conversation). Its ask is its own (`by: repetition_guard`), so a host's
+  `can_use_tool` on the permissions plugin no longer answers it.
 
 ## Plan
 
@@ -73,7 +80,7 @@ only into the extension of the same name.
 - [x] tests: plan mode alone, permissions alone, neither, an old log replayed
 - [x] docs: `docs/extending.md`, parity rules, CHANGELOG
 - [x] budget caps split
-- [ ] repetition guard split
+- [x] repetition guard split
 - [ ] empty-reply re-ask split
 - [ ] gates: check, parity, cluster, e2e; targeted eval
 
@@ -92,3 +99,5 @@ only into the extension of the same name.
 
 - 2026-11-03: plan mode split; parity 0 mismatches (11 accepted), full test suite green.
 - 2026-11-03: budget caps split; full test suite green.
+- 2026-11-03: repetition guard split; it was already off by default (threshold 0), contrary to
+  the brief's premise.

@@ -781,16 +781,6 @@ async def test_webfetch_asks_per_host_and_remembers_it(store: SqliteStore) -> No
 # ------------------------------------------------------------------ guards
 
 
-async def test_repetition_guard_asks_on_the_third_identical_call(store: SqliteStore) -> None:
-    read = Fake("Read")
-    provider = ScriptedProvider([reply("", ("Read", {"p": 1})), reply("", ("Read", {"p": 1})),
-                                 reply("", ("Read", {"p": 1}))])
-    client, tid, _ = await start(store, provider, Permissions(repetition_threshold=3), [read])
-    [item] = pending(await client.events(tid), tid)
-    assert item.prompt == ("tool 'Read' called with identical arguments 3 times in a row "
-                           "(repetition threshold 3); suspected loop")
-
-
 async def test_pre_tool_use_rules_tighten_and_bash_rules_cover_monitor(
         store: SqliteStore) -> None:
     monitor, read = Fake("Monitor"), Fake("Read")

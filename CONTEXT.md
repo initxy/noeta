@@ -106,7 +106,7 @@ What a host says about one plugin, by name: its arguments (`enabled: false` amon
 it off), a ready `Extension`, or on/off. One table at every level (`build_agents`,
 `default_agents`, `from_settings`, `config.toml` `[plugins.<name>]`); argument tables of one
 plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
-to an agent without copying its file. The built-in agents keep memory and MCP off until set.
+to an agent without copying its file. The built-in agents keep memory, MCP and the repetition guard off until set.
 A secret is written as a reference, `{env:NAME}` or `{keyring:service/user}`, resolved only when
 the plugin is made (`agent_files.resolve_secrets`).
 

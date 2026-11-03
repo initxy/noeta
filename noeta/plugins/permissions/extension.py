@@ -2,8 +2,8 @@
 tool call — modes, ``allow`` / ``deny`` / ``ask`` rules, the working
 directories, protected paths, the auto-mode classifier and what plan mode
 may run (plan mode itself is the plan-mode plugin's) — plus noeta's own
-guards (the repetition guard, host PreToolUse rules, ``can_use_tool``).
-The budget caps are the budget plugin's."""
+guards (host PreToolUse rules, ``can_use_tool``). The budget caps and the
+repetition guard are plugins of their own."""
 
 from __future__ import annotations
 
@@ -145,8 +145,7 @@ class Permissions(Extension):
     * ``allowed_tools`` / ``disallowed_tools`` — filter the offered tools by
       name (removed from the request, and denied if called anyway).
       Disallowing ``Bash`` also removes Monitor and TaskStop.
-    * ``repetition_threshold`` / ``repetition_action`` /
-      ``repetition_window``; ``pre_tool_use`` (:class:`guards.PreToolUseRule`).
+    * ``pre_tool_use`` (:class:`guards.PreToolUseRule`).
     * ``can_use_tool`` — ``(tool, input) -> bool`` (sync or async) that
       answers this extension's asks instead of a person; recorded with
       ``resolver="can_use_tool"``.
@@ -178,9 +177,6 @@ class Permissions(Extension):
         trusted_workspace: bool | Callable[[str], bool] = False,
         remember_to_project: bool = True,
         webfetch_allowed_hosts: Iterable[str] = (),
-        repetition_threshold: int = 0,
-        repetition_action: g.RepetitionAction = "require_approval",
-        repetition_window: int = 8,
         pre_tool_use: Sequence[g.PreToolUseRule] = (),
         can_use_tool: CanUseTool | None = None,
     ) -> None:
@@ -220,8 +216,6 @@ class Permissions(Extension):
         self.disallowed = p.expand_disallowed(disallowed_tools)
         self.trusted = trusted_workspace
         self.remember_to_project = remember_to_project
-        self.repetition = g.RepetitionPolicy(repetition_threshold, repetition_action,
-                                             repetition_window)
         self.pre_rules = tuple(g.check_pre_rule(f"pre_tool_use[{i}]", rule)
                                for i, rule in enumerate(pre_tool_use))
         self.can_use_tool = can_use_tool
@@ -350,20 +344,13 @@ class Permissions(Extension):
             "choices": choices(decision), "classify": decision.classify})
 
     def _guards(self, view: TaskView, call: ToolUse) -> Gate | None:
-        """noeta's own guards: the risk ceiling, the repetition guard and the
-        host's PreToolUse rules."""
+        """noeta's own guards: the risk ceiling and the host's PreToolUse
+        rules."""
         name = call.name
         risk = self.risk.get(name, self.default_risk)
         if self.max_risk is not None and (
                 p.KNOWN_RISK_LEVELS.index(risk) > p.KNOWN_RISK_LEVELS.index(self.max_risk)):
             return Deny(reason=p.RISK_EXCEEDS.format(name=name, risk=risk, ceiling=self.max_risk))
-        if self.repetition.threshold > 0:
-            history = g.recent_calls(view.state.messages, call.id, self.repetition.window)
-            rep = g.repetition_verdict(self.repetition, call, history)
-            if rep is not None and rep[0] == "deny":
-                return Deny(reason=rep[1])
-            if rep is not None:
-                return Ask(prompt=rep[1], detail={"by": NAME, "tool": name}, firm=True)
         hook = g.pre_tool_use_verdict(self.pre_rules, call)
         if hook is not None and hook[0] == "deny":
             return Deny(reason=hook[1])

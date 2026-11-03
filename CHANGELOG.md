@@ -40,6 +40,13 @@ All notable changes to Noeta are documented here. The format is based on
     (default 3), `spawn_tools`, set in `[plugins.budget]`. They hold with the permissions plugin
     off; a log from before the split keeps its counts. **Breaking**: `Permissions(budget=...,
     max_turns=..., spawn_tools=...)` and `noeta.plugins.permissions.Budget` are gone.
+  - **The repetition guard is the plugin `repetition_guard`** (`RepetitionGuard`: `threshold`
+    default 3, `action` `require_approval` or `deny`, `window` 8). Claude Code has none, so the
+    built-in agents keep it off until a host sets `[plugins.repetition_guard]` (it was off by
+    default before too: `repetition_threshold=0`). Its ask goes to the person, not to the
+    permissions plugin's `can_use_tool`. **Breaking**: `Permissions(repetition_threshold=...,
+    repetition_action=..., repetition_window=...)` and `noeta.plugins.permissions.RepetitionPolicy`
+    are gone.
   - New extension mechanism: `Extension.folds` names other record names whose records also reach
     the extension's `reduce` (how a split-out plugin keeps reading its old records).
 

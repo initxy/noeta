@@ -1,78 +1,15 @@
-"""Guards: the repetition (loop) guard and the host's declarative
-PreToolUse rules. Each check is a pure function of its
+"""Guards: the host's declarative PreToolUse rules. Each check is a pure function of its
 configuration, the call, and numbers folded from the task's log."""
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import Any, Literal
 
-from noeta.core.types import Message, ToolUse
-
-# ---------------------------------------------------------------- repetition
-
-RepetitionAction = Literal["require_approval", "deny"]
-
-
-@dataclass(frozen=True)
-class RepetitionPolicy:
-    """``threshold`` consecutive identical calls (counting the proposed one)
-    trip ``action``; ``threshold <= 0`` is off. ``window`` bounds how many
-    recent calls are looked at."""
-
-    threshold: int = 3
-    action: RepetitionAction = "require_approval"
-    window: int = 8
-
-
-def _key(use: ToolUse) -> tuple[str, str]:
-    return use.name, json.dumps(use.input, sort_keys=True, separators=(",", ":"), default=str)
-
-
-def recent_calls(messages: Sequence[Message], before: str, window: int) -> list[ToolUse]:
-    """The last ``window`` tool calls of the conversation before call
-    ``before`` (calls of the same reply that precede it count)."""
-    out: list[ToolUse] = []
-    found = False
-    for m in reversed(messages):
-        if m.role != "assistant":
-            continue
-        for use in reversed(m.tool_uses):
-            if not found:
-                if use.id == before:
-                    found = True
-                continue
-            out.append(use)
-            if len(out) >= window:
-                return list(reversed(out))
-        found = True  # an earlier reply: everything in it precedes the call
-    return list(reversed(out))
-
-
-def repetition_verdict(p: RepetitionPolicy, call: ToolUse,
-                       history: Sequence[ToolUse]) -> tuple[RepetitionAction, str] | None:
-    if p.threshold <= 0:
-        return None
-    key = _key(call)
-    run = 0
-    for prior in reversed(history):
-        if _key(prior) != key:
-            break
-        run += 1
-    consecutive = run + 1
-    if consecutive < p.threshold:
-        return None
-    reason = (
-        f"tool {call.name!r} called with identical arguments "
-        f"{consecutive} times in a row (repetition threshold "
-        f"{p.threshold}); suspected loop"
-    )
-    return p.action, reason
-
+from noeta.core.types import ToolUse
 
 # ---------------------------------------------------------------- PreToolUse
 
