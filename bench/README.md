@@ -14,6 +14,23 @@ The reference agent is harbor's built-in `claude-code` agent pinned to Claude
 Code **2.1.312**; the default model is `opensource/deepseek_v4_1_flash` through
 the gateway's Anthropic Messages endpoint, effort `high`, for both agents.
 
+## Why these benchmarks (checked 2026-11-03)
+
+Public coding-agent boards in use, and their latest versions, as of 2026-11-03:
+
+| Board | Latest | Status | Used here |
+|---|---|---|---|
+| Terminal-Bench | 4.0 (tbench.ai) | the agent board's headline since 2.1 saturated (top models 87–92 % on 2.1); Claude Code is a listed agent | yes, 54 of 66 tasks |
+| SWE-bench Verified | 500 tasks | saturated (top ~97 %), archived by some boards | no |
+| SWE-bench Pro | public set, 731 tasks | the current headline board for repository-level fixes | no: 731 large images per run is beyond one machine for two agents twice, and a fixed public set can leak into training data; a candidate for a larger machine |
+| SWE-rebench | monthly windows of fresh GitHub tasks | fresh by design (issues after the model's data), same scaffold for every model | yes, the July 2026 window (111 tasks), the newest harbor offered when chosen |
+
+Terminal-Bench 4.0 measures the agent in a terminal, with Claude Code as its reference
+agent; SWE-rebench measures repository fixes on tasks the model cannot have seen, at a cost
+one machine can run twice for both agents. The board versions above come from public summaries of the boards (which disagree on model
+names and scores) and harbor's dataset registry; the boards' own pages (tbench.ai,
+swe-rebench.com, Scale's SWE-bench Pro page) are the source of truth.
+
 ## What's here
 
 | File | Role |
