@@ -269,9 +269,12 @@ async def test_a_log_stops_growing_at_its_cap_and_says_so(tmp_path: Path, monito
     kept, note = text.split("\n[output past 1000 bytes was not kept]\n")
     assert 1000 <= len(kept) <= 1000 + 65536 and set(kept) == {"x"}
     assert note == "\n[exited with code 0]\n" or (monitor and note == "")
-    if monitor:  # its output file has what it kept of stdout, the note and stderr
+    if monitor:  # its output file has what it kept of stdout, the note and stderr:
+        # each stream keeps its half of the cap there, whatever order the
+        # two keepers run in (stderr's line is never crowded out by stdout).
         out = Path(job.out_path).read_text()
-        assert "\n[output past 1000 bytes was not kept]\n" in out and "late\n" in out
+        assert out.count("\n[output past 500 bytes was not kept]\n") == 1, out[-300:]
+        assert "late\n" in out
 
 
 async def test_a_monitors_output_file_stays_within_the_cap(tmp_path: Path) -> None:
@@ -289,7 +292,7 @@ async def test_a_monitors_output_file_stays_within_the_cap(tmp_path: Path) -> No
     await asyncio.wait_for(job.done.wait(), 10)
     out = Path(job.out_path).read_text()
     assert len(out) <= cap + 2 * 65536 + 200
-    assert f"[output past {cap} bytes was not kept]" in out
+    assert f"[output past {cap // 2} bytes was not kept]" in out
     events = Path(job.events_path or "").read_text()
     assert events.startswith("o" * cap)
 
@@ -634,3 +637,16 @@ async def test_the_stall_watch_survives_an_env_that_fails_to_read(
         await asyncio.wait_for(registry._stall(job), 5)
     assert Broken.calls == 3
     assert "cannot read the size of job j's output" in caplog.text
+
+
+def test_a_late_keeper_keeps_its_share_of_a_full_shared_file(tmp_path: Path) -> None:
+    # The race that lost a monitor's stderr: stdout's keeper filled the
+    # shared output file before stderr's keeper first looked. Each keeper
+    # counts only its own bytes, so stderr's line is kept and no second note
+    # is written.
+    shared = tmp_path / "out"
+    shared.write_text("x" * 5000 + "\n[output past 500 bytes was not kept]\n")
+    script = _KEEP_HEAD + f"printf 'late\\n' | keep_head 500 {shared}\n"
+    subprocess.run(["bash", "-c", script], check=True, timeout=10)
+    text = shared.read_text()
+    assert text.endswith("late\n") and text.count("was not kept") == 1

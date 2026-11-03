@@ -547,3 +547,11 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   folds as continued again) fires none mid-conversation (test: an old-plugin run, then the new
   one). `continued_as` takes `resume` / `fork` / `rewind`: the HTTP guard refuses another value
   (400), and the hooks plugin logs one from elsewhere and takes it as `fork` (tests).
+- 2026-11-02 After merging rr-cont (aad2495d), `test_a_log_stops_growing_at_its_cap_and_says_so[True]`
+  failed once under eval load: the code, not the test, was wrong. Since 00c92f7f a monitor's two
+  keepers measured the shared output file: when stdout filled it before stderr's keeper first
+  looked, stderr's line was dropped and a second "not kept" note written. Each keeper now counts
+  only its own bytes, stdout and stderr each keep half of the cap in the shared file, so the
+  result no longer depends on the order. Tests: the race itself (a keeper starting on a full
+  shared file keeps its line, one note); the monitor test asserts one note. 50 of 50 runs passed
+  under load (8 at a time beside a full `pytest -n auto`).

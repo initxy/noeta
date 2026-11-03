@@ -122,31 +122,34 @@ DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
 STALL_CHECK_S, STALL_AFTER_S, STALL_TAIL_BYTES = 5.0, 45.0, 1024
 
 #: Appends its stdin to the file ``$2`` (and, given ``$3``, to that file
-#: too while it holds less than ``$1`` bytes) as it comes (one read at a
-#: time, so a monitor sees each line at once) until ``$2`` holds ``$1`` bytes
-#: (one read more at most), then a line saying the rest was not kept, and
-#: reads the rest away: the writer never gets a broken pipe. A monitor's
-#: two keepers share its output file (stderr's ``$2``, stdout's ``$3``):
-#: each stops adding to it once it is full, so it stays within ``$1`` (a
-#: read more at most each). It ends when its stdin does, whatever the other
-#: keeper still writes. Only ``sh`` tools.
+#: too until it has added ``$4`` bytes there) as it comes (one read at a
+#: time, so a monitor sees each line at once) until it has added ``$1``
+#: bytes to ``$2`` (one read more at most), then a line saying the rest was
+#: not kept, and reads the rest away: the writer never gets a broken pipe.
+#: Each keeper counts only what it wrote itself, so a monitor's two
+#: keepers, which share its output file (stderr's ``$2``, stdout's ``$3``),
+#: each keep their own half of the cap there whatever order their output
+#: comes in, and the file stays within the cap (a read more at most each).
+#: It ends when its stdin does. Only ``sh`` tools.
 _KEEP_HEAD = r"""keep_head() {
-  w=1
-  while [ "$(wc -c <"$2")" -lt "$1" ]; do
-    if [ -n "$3" ] && [ "$w" = 1 ] && [ "$(wc -c <"$3")" -ge "$1" ]; then
+  s=0 t=0 w=1
+  while [ "$s" -lt "$1" ]; do
+    if [ -n "$3" ] && [ "$w" = 1 ] && [ "$t" -ge "$4" ]; then
       w=0
-      printf '\n[output past %s bytes was not kept]\n' "$1" >>"$3"
+      printf '\n[output past %s bytes was not kept]\n' "$4" >>"$3"
     fi
     if [ -n "$3" ] && [ "$w" = 1 ]; then
       c=$(dd bs=65536 count=1 2>/dev/null | tee -a "$2" "$3" | wc -c)
+      t=$((t + c))
     else
       c=$(dd bs=65536 count=1 2>/dev/null | tee -a "$2" | wc -c)
     fi
     [ "$c" -gt 0 ] || return 0
+    s=$((s + c))
   done
   if [ "$(dd bs=1 count=1 2>/dev/null | wc -c)" -gt 0 ]; then
     printf '\n[output past %s bytes was not kept]\n' "$1" >>"$2"
-    [ -z "$3" ] || [ "$w" = 0 ] || printf '\n[output past %s bytes was not kept]\n' "$1" >>"$3"
+    [ -z "$3" ] || [ "$w" = 0 ] || printf '\n[output past %s bytes was not kept]\n' "$4" >>"$3"
     cat >/dev/null
   fi
 }
@@ -452,13 +455,16 @@ class Registry:
             keeper = "keep_tail" if foreground else "keep_head"
             keep_out = f"{keeper} {cap} {shlex.quote(out)}"
             if events is not None:
+                # A monitor's output file is shared: each stream keeps half.
+                half = str(max(1, self.log_max_bytes // 2))
+                keep_out = f"keep_head {half} {shlex.quote(out)}"
                 # stdout and stderr each through their own pipe: both are
                 # members of the pipeline, so both are written out before
                 # the shell exits. Both go to the output file; stdout also
                 # to the events file the monitor reads.
                 pipeline = (f'{{ "$@" 2>&1 1>&4 4>&- | {keep_out}; '
                             f'exit "${{PIPESTATUS[0]}}"; }} 4>&1 | '
-                            f'keep_head {cap} {shlex.quote(events)} {shlex.quote(out)}\n'
+                            f'keep_head {cap} {shlex.quote(events)} {shlex.quote(out)} {half}\n'
                             'exit "${PIPESTATUS[0]}"')
             elif foreground:
                 # Ends when the command's shell exits, as Claude Code's: a

@@ -165,7 +165,8 @@ All notable changes to Noeta are documented here. The format is based on
     are logged); the usage a host reads (`/cost`, the result message, HTTP `usage`,
     `TaskState.usage`) and the USD budget note include compaction calls, failed ones too, and the
     budget reads an ended task's log once; the `@agent-<type>` and `ultrathink` notes are made
-    once per prompt; a Monitor's output file stays within `log_max_bytes`; `Shell(background=False)`
+    once per prompt; a Monitor's output file stays within `log_max_bytes`, stdout and stderr each keeping half
+    of it whatever order they come in; `Shell(background=False)`
     offers `TaskStop` too; a Workflow run stopped with `TaskStop` tells only the person; a skill's
     `model` / `effort` end with the turn that loaded it, whoever opens the next; a skill's `model`
     of another provider family (or unknown to the catalog) is ignored with a warning; a
