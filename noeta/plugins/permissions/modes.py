@@ -8,6 +8,7 @@ import logging
 import os
 import posixpath
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from noeta.core.extension import Reminder, TaskView
@@ -16,7 +17,14 @@ from noeta.core.types import ToolResult
 from noeta.plugins.permissions import plan as pl
 from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import wording as w
-from noeta.plugins.permissions.state import NAME, PermState, state_of
+from noeta.plugins.permissions.state import (
+    AUTO_DURING_PLAN,
+    NAME,
+    PermState,
+    auto_active,
+    plan_classifier_on,
+    state_of,
+)
 
 log = logging.getLogger("noeta.permissions")
 
@@ -26,6 +34,10 @@ PLAN_NAME_SIGNAL = pl.PLAN_NAME_SIGNAL
 #: budget, after the skill list.
 ORDER_PLAN = 64
 ORDER_AUTO = 70
+#: The plan file given again after a compaction: after the files read
+#: again and the background tasks' status, ahead of the invoked skills
+#: (Claude Code's order).
+ORDER_PLAN_FILE = 15
 #: The local command wrapper ``/plan`` sends (Claude Code's tags).
 PLAN_COMMAND = ("<command-name>/plan</command-name>\n            <command-message>plan"
                 "</command-message>\n            <command-args>{args}</command-args>\n\n"
@@ -34,9 +46,11 @@ PLAN_COMMAND_HEAD = "<command-name>/plan</command-name>"
 
 
 def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass: bool,
-           plans_dir: str, by_command: bool = False) -> None:
+           plans_dir: str, by_command: bool = False, auto_during_plan: bool = True) -> None:
     """Record a switch from ``current`` to ``mode`` (asked for at log seq
-    ``seq``; ``by_command``: by a typed ``/plan``), when it is one."""
+    ``seq``; ``by_command``: by a typed ``/plan``), when it is one. A plan
+    records whether it runs with the auto-mode classifier
+    (:func:`plan_classifier_on`)."""
     if not isinstance(mode, str) or mode not in p.PERMISSION_MODES:
         return
     if mode == "bypassPermissions" and disable_bypass:
@@ -49,26 +63,33 @@ def switch(view: TaskView, mode: Any, seq: int, *, current: str, disable_bypass:
         st = state_of(view)
         path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
         data["plan"] = {"path": path, "pre_mode": current, "entered_seq": seq,
-                        **({"by_command": True} if by_command else {})}
+                        **({"by_command": True} if by_command else {}),
+                        AUTO_DURING_PLAN: plan_classifier_on(
+                            current, auto_during_plan=auto_during_plan)}
     view.record(NAME, "mode", data)
 
 
 def plan_start(view: TaskView, mode: str, *, default_mode: str, plans_dir: str,
-               parent_plan: Any = None) -> None:
+               parent_plan: Any = None, auto_during_plan: bool = True,
+               classify: bool | None = None) -> None:
     """A task that starts in plan mode (its config's ``permission_mode``, a
     sub-agent of a planning task): recorded as entered with a plan file of
     its own, so it plans from its first request. A sub-agent's is named
     after its parent's plan (``parent_plan``): ``<name>-agent-<task id>.md``,
-    as Claude Code names it."""
+    as Claude Code names it. ``classify``: whether it plans with the
+    auto-mode classifier, when its parent's plan settled that."""
     pre = default_mode if default_mode != "plan" else "default"
+    if classify is None:
+        classify = plan_classifier_on(pre, auto_during_plan=auto_during_plan)
     path = (posixpath.join(plans_dir, f"{parent_plan}-agent-{view.task_id}.md")
             if isinstance(parent_plan, str) and pl.plan_name_ok(parent_plan)
             else pl.new_plan_path(plans_dir))
     view.record(NAME, "mode", {"mode": mode, "plan": {
-        "path": path, "pre_mode": pre, "entered_seq": 0}})
+        "path": path, "pre_mode": pre, "entered_seq": 0, AUTO_DURING_PLAN: classify}})
 
 
-def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str) -> bool:
+def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str,
+               auto_during_plan: bool = True) -> bool:
     """``EnterPlanMode``: record the switch to plan mode, as ``/plan``
     does; ``False`` when the task is planning already."""
     st = ctx.state.get(NAME)
@@ -78,7 +99,8 @@ def enter_plan(ctx: ToolContext, *, default_mode: str, plans_dir: str) -> bool:
         return False
     path = (st.plan or {}).get("path") or pl.new_plan_path(plans_dir)
     ctx.record(NAME, "mode", {"mode": "plan", "plan": {
-        "path": path, "pre_mode": current, "entered_seq": 0}})
+        "path": path, "pre_mode": current, "entered_seq": 0,
+        AUTO_DURING_PLAN: plan_classifier_on(current, auto_during_plan=auto_during_plan)}})
     return True
 
 
@@ -117,28 +139,88 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
                 kind="plan_active", role="system", order=ORDER_PLAN))
             sent.append("plan_active")
             plan_noted = max(newest, entered)
-    if "plan_exited" in st.due and st.plan is not None:
-        out.append(Reminder(text=pl.plan_exited_text(st.plan["path"]), kind="plan_exited",
-                            role="system", order=ORDER_PLAN))
+    if "plan_exited" in st.due and st.plan is not None and mode != "plan":
+        path = st.plan["path"]
+        out.append(Reminder(text=pl.plan_exited_text(path if await _exists(view, path)
+                                                     else None),
+                            kind="plan_exited", role="system", order=ORDER_PLAN))
         sent.append("plan_exited")
-    # The main conversation's first request; a sub-agent's second (as
-    # Claude Code sends them).
-    replies = sum(1 for m in view.state.history if m.role == "assistant")
-    first = replies == (1 if view.state.parent_id else 0)
-    guidance = "auto_guidance" in st.due and _new_input(view, st.guidance_after) \
-        and view.state.parent_id is None
-    if mode == "auto" and (guidance or first):
+    auto_noted = st.auto_noted
+    active = auto_active(mode, st.plan)
+    if "auto_exited" in st.due and not active:
+        if view.state.parent_id is None:
+            out.append(Reminder(text=w.AUTO_MODE_EXITED, kind="auto_exited", role="system",
+                                order=ORDER_AUTO))
+            sent.append("auto_exited")
+        auto_noted = False
+    # Claude Code sends the same note in bypassPermissions mode; noeta does
+    # not: with it the eval model worked around a deny rule through the
+    # shell more often (parity/deviations.md).
+    if mode == "auto" and not auto_noted and _shell_first(view) \
+            and _guidance_due(view, st.guidance_after):
         out.append(Reminder(text=w.AUTO_MODE_GUIDANCE, kind="auto_guidance", role="system",
                             order=ORDER_AUTO))
         sent.append("auto_guidance")
+        auto_noted = True
+    # Owed notes a later switch made moot: the exit from auto mode when it
+    # is back on (or in a sub-agent), the plan texts once out of plan mode,
+    # the plan-exit note once planning again.
     stale = [k for k in st.due if k not in sent and (
-        (k == "auto_guidance" and (mode != "auto" or view.state.parent_id is not None))
+        k == "auto_exited"
         or (k in ("plan_active", "plan_reentry") and mode != "plan")
+        or (k == "plan_exited" and mode == "plan")
         or (k == "plan_reentry" and "plan_active" in sent))]
-    if sent or stale or plan_noted != st.plan_noted:
+    if sent or stale or plan_noted != st.plan_noted or auto_noted != st.auto_noted:
         view.record(NAME, "noted", {"kinds": [*sent, *stale], "plan_noted": plan_noted,
-                                    "plan_reminders": reminders})
+                                    "plan_reminders": reminders, "auto_noted": auto_noted})
     return out
+
+
+async def plan_file_resident(view: TaskView) -> None:
+    """At a compaction: the task's plan file, when it has one with text, is
+    read and held for the next request, in plan mode or not (Claude Code's
+    ``plan_file_reference``)."""
+    plan = state_of(view).plan
+    path = plan.get("path") if isinstance(plan, dict) else None
+    if view.keeps_tail is None or not isinstance(path, str):
+        return
+    text = await _read(view, path)
+    if text and text.strip():
+        view.record(NAME, "plan_file", {"path": path, "text": text})
+
+
+def plan_file_reminders(view: TaskView) -> list[Reminder]:
+    held = state_of(view).plan_file
+    if not held:
+        return []
+    return [Reminder(text=pl.plan_file_text(str(held["path"]), str(held["text"])),
+                     kind="plan_file_sent", data={}, role="system", order=ORDER_PLAN_FILE)]
+
+
+async def _read(view: TaskView, path: str) -> str | None:
+    try:
+        if view.env is not None:
+            return (await view.env.read_bytes(path)).decode("utf-8", "replace")
+        return await asyncio.to_thread(Path(path).read_text, "utf-8")
+    except Exception:  # noqa: BLE001 — absent or unreadable: no plan
+        return None
+
+
+def _shell_first(view: TaskView) -> bool:
+    """Whether the auto-mode note fits the agent: it has the shell and a file
+    tool that writes (Claude Code sends none to an agent without them, such
+    as Explore)."""
+    return view.find_tool("Bash") is not None and any(
+        view.find_tool(name) is not None for name in ("Edit", "Write"))
+
+
+def _guidance_due(view: TaskView, after: int) -> bool:
+    """The auto-mode note goes with the main conversation's first request or
+    the next one with input newer than seq ``after`` (a compaction), and a
+    sub-agent's second (as Claude Code sends them)."""
+    if view.state.parent_id is not None:
+        return any(m.role == "assistant" for m in view.state.history)
+    return _new_input(view, after)
 
 
 async def _exists(view: TaskView, path: str) -> bool:

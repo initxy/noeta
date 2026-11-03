@@ -1,6 +1,6 @@
 """``Bash`` with a sandboxed env: which commands are confined, the refusal
 when the sandbox is required and cannot start, the violations note, the
-description's sandbox section, background jobs; and real confinement where
+sandbox reminder, background jobs; and real confinement where
 bubblewrap works."""
 
 from __future__ import annotations
@@ -17,10 +17,14 @@ import pytest
 
 from noeta.backends.execenvs import sandbox as sb
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.core.events import Say
+from noeta.core.events import ExtensionRecorded, Say
+from noeta.core.extension import TaskView
+from noeta.core.loop.state import TaskState
 from noeta.core.tool import ToolContext
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.bash import BashTool
+from noeta.plugins.shell.sandbox import SANDBOX_OFF
+from noeta.plugins.shell.state import SANDBOX_KIND, ShellState, reduce_shell
 from noeta.toolkit.sandbox import SandboxSettings
 from tests.plugins.conftest import Harness, text_of
 
@@ -102,49 +106,73 @@ async def test_an_unavailable_sandbox(ws: Path) -> None:
     assert not (await h.call(BashTool(), command="git --version")).is_error
 
 
-@dataclass
-class View:
-    env: Any
+def _view(shell: Shell, env: Any, state: ShellState | None = None,
+          denied: tuple[str, ...] = ()) -> TaskView:
+    task = TaskState(task_id="t", ext={"shell": state} if state is not None else {})
+    return TaskView(state=task, env=env, extensions=[shell], denied_tools=denied)
 
 
-def test_the_description_gains_a_sandbox_section(ws: Path) -> None:
+async def _told(shell: Shell, env: Any, state: ShellState) -> tuple[str, ShellState] | None:
+    """The sandbox reminder for ``env`` after ``state``, and the state it
+    leaves; ``None`` when nothing is sent."""
+    view = _view(shell, env, state)
+    found = [r for r in await shell.reminders(view) if r.kind == SANDBOX_KIND]
+    if not found:
+        return None
+    [reminder] = found
+    assert reminder.role == "system"
+    return reminder.text, reduce_shell(state, SANDBOX_KIND, reminder.data)
+
+
+async def test_the_sandbox_is_told_in_a_reminder_again_when_it_changes(ws: Path) -> None:
+    # Claude Code's sandbox_instructions: not part of Bash's description, a
+    # harness note sent when it differs from the last one, a note when it is off.
     shell = Shell(background=False)
-    plain = shell.tools(View(LocalExecEnv(str(ws))))  # type: ignore[arg-type]
-    assert "Sandbox:" not in plain[0].description
+    plain = LocalExecEnv(str(ws))
+    assert "sandbox" not in shell.tools(_view(shell, plain))[0].description.lower()
+    st = ShellState()
+    assert await _told(shell, plain, st) is None
     env, _ = fake_env(ws, allowed_domains=("github.com",), allow_write=("out",),
                       deny_read=("~/private",))
-    tools = shell.tools(View(env))  # type: ignore[arg-type]
-    text = tools[0].description
-    assert text.startswith(plain[0].description)
-    assert "Sandbox:" in text and f"`{ws}`" in text and f"`{ws}/out`" in text
+    assert "sandbox" not in shell.tools(_view(shell, env))[0].description.lower()
+    told = await _told(shell, env, st)
+    assert told is not None
+    text, st = told
+    assert text.startswith("Bash sandbox:") and f"`{ws}`" in text and f"`{ws}/out`" in text
     assert "`github.com`" in text and "`~/private`" in text
     assert "dangerouslyDisableSandbox: true" in text and "<sandbox_violations>" in text
-    assert shell.tools(View(env))[0] is tools[0]  # cached  # type: ignore[arg-type]
+    assert await _told(shell, env, st) is None  # unchanged: nothing
     held, _ = fake_env(ws, allow_unsandboxed=False, http_proxy_port=9000,
                        filesystem_disabled=True)
-    text = shell.tools(View(held))[0].description  # type: ignore[arg-type]
+    told = await _told(shell, held, st)
+    assert told is not None
+    text, st = told
     assert "switched off" in text and "user's proxy" in text and "not confined" in text
     none, _ = fake_env(ws)
-    assert "no host can be reached" in shell.tools(View(none))[0].description  # type: ignore[arg-type]
+    told = await _told(shell, none, st)
+    assert told is not None and "no host can be reached" in told[0]
     broken, fake = fake_env(ws)
     fake.reason = "no"
-    assert shell.tools(View(broken))[0].description == plain[0].description  # type: ignore[arg-type]
+    told = await _told(shell, broken, told[1])
+    assert told is not None and told[0] == SANDBOX_OFF
+    assert await _told(shell, broken, told[1]) is None
+    # Nothing for a task without Bash.
+    view = _view(shell, env, ShellState(), denied=("Bash",))
+    assert [r for r in await shell.reminders(view) if r.kind == SANDBOX_KIND] == []
 
 
-def test_the_sandboxed_tool_lists_kept_are_bounded(ws: Path,
-                                                   monkeypatch: pytest.MonkeyPatch) -> None:
-    import noeta.plugins.shell as shell_plugin
-
-    monkeypatch.setattr(shell_plugin, "SANDBOXED_KEEP", 2)
+async def test_a_compaction_tells_the_sandbox_again(ws: Path) -> None:
     shell = Shell(background=False)
-    envs = []
-    for n in range(3):
-        (ws / str(n)).mkdir()
-        env, _ = fake_env(ws / str(n))
-        envs.append(env)
-        shell.tools(View(env))  # type: ignore[arg-type]
-    assert len(shell._sandboxed) == 2
-    assert [k[1] for k in shell._sandboxed] == [str(ws / "1"), str(ws / "2")]
+    env, _ = fake_env(ws)
+    told = await _told(shell, env, ShellState())
+    assert told is not None
+    view = _view(shell, env, told[1])
+    view.keeps_tail = True
+    await shell.resident(view)
+    [rec] = view.pending
+    assert isinstance(rec, ExtensionRecorded) and (rec.kind, rec.data) == (SANDBOX_KIND,
+                                                                           {"text": ""})
+    assert await _told(shell, env, reduce_shell(told[1], SANDBOX_KIND, rec.data)) is not None
 
 
 async def test_background_jobs_run_sandboxed(tmp_path: Path) -> None:

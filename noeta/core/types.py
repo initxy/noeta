@@ -173,8 +173,8 @@ class ModelRequest(Struct):
     cache_blocks: list[tuple[int, int]] = msgspec.field(default_factory=list)
     headers: dict[str, str] = msgspec.field(default_factory=dict)
     #: ``"auto"`` / ``"none"`` / ``"any"``; ``None`` sends nothing (the vendor
-    #: default). The summarize call sets ``"none"`` so a summarizer cannot
-    #: answer with a tool call.
+    #: default). The step-limit round sets ``"none"``; the summarize call
+    #: sends nothing, as Claude Code's (its tools stay for the cache prefix).
     tool_choice: str | None = None
     #: The task tree the call serves (its root task's id); an adapter may
     #: send it as the vendor's per-conversation id.

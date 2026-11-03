@@ -1,6 +1,7 @@
 """Pieces the three adapters share: tool-argument JSON codec, ``Retry-After``
 parsing, HTTP error translation (including context-overflow detection), the
-host-injected preamble, reserved-tag neutralization and the vision guard.
+host-injected preamble, reserved-tag neutralization, the vision guard and the
+tool-name mapping for wires with a shorter name limit.
 
 Only pieces that are genuinely independent of any wire shape belong here; each
 adapter's real differences stay in that adapter — how it extracts the raw
@@ -14,10 +15,12 @@ import base64
 import email.utils
 import json
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
+import msgspec
 
 from noeta.core import models
 from noeta.core.errors import (
@@ -28,7 +31,17 @@ from noeta.core.errors import (
     RateLimited,
     Transient,
 )
-from noeta.core.types import Image, Message, ModelRequest, Text, ToolReference, ToolResult
+from noeta.core.mcp_names import SHORT_NAME_MAX, short_name
+from noeta.core.types import (
+    Image,
+    Message,
+    ModelRequest,
+    ModelResponse,
+    Text,
+    ToolReference,
+    ToolResult,
+    ToolUse,
+)
 
 __all__ = [
     "HOST_INJECTED_PREAMBLE",
@@ -44,10 +57,78 @@ __all__ = [
     "model_admits_images",
     "neutralize_reserved_tags",
     "parse_retry_after",
+    "restore_tool_names",
+    "shorten_names_in_text",
     "tool_result_text",
     "translate_http_error",
     "transport_error",
+    "wire_tool_name",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Tool names on a wire with a shorter limit
+# ---------------------------------------------------------------------------
+
+#: OpenAI's function-name limit (``^[a-zA-Z0-9_-]{1,64}$``); noeta's tool
+#: names follow the Messages API's 128 (an MCP tool's can pass 64).
+OPENAI_NAME_MAX = SHORT_NAME_MAX
+
+
+def wire_tool_name(name: str, limit: int = OPENAI_NAME_MAX) -> str:
+    """``name`` as sent on a wire that takes at most ``limit`` characters
+    (``noeta.core.mcp_names.short_name``)."""
+    return short_name(name, limit)
+
+
+#: An MCP tool name in text: the whole run of name characters.
+_MCP_NAME_IN_TEXT = re.compile(r"(?<![A-Za-z0-9_-])mcp__[A-Za-z0-9_-]+")
+
+
+def shorten_names_in_text(body: dict[str, Any], tools: Iterable[str],
+                          limit: int = OPENAI_NAME_MAX) -> dict[str, Any]:
+    """``body`` with the names of the request's ``tools`` that pass
+    ``limit`` characters written in its strings (the deferred-tool list, a
+    ``ToolSearch`` result, an error naming a tool, a call's arguments) as
+    :func:`wire_tool_name` writes them, so the model reads one name for a
+    tool on such a wire, the one its function list carries. Any other
+    ``mcp__`` text (a file's content in a tool result, an edit's old string)
+    is left as written. The rewrite is a function of the name alone, the
+    same every request with that tool, so a cached prefix is unchanged; a
+    long-named deferred tool's mentions change once, when it is loaded."""
+    longs = {n: wire_tool_name(n, limit) for n in tools if len(n) > limit}
+    if not longs:
+        return body
+
+    def short(match: re.Match[str]) -> str:
+        return longs.get(match.group(0), match.group(0))
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, str):
+            return _MCP_NAME_IN_TEXT.sub(short, value) if "mcp__" in value else value
+        if isinstance(value, dict):
+            return {k: walk(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    return {k: walk(v) for k, v in body.items()}
+
+
+def restore_tool_names(response: ModelResponse, request: ModelRequest,
+                       limit: int = OPENAI_NAME_MAX) -> ModelResponse:
+    """``response`` with each tool call named as noeta named the tool
+    (:func:`wire_tool_name` undone for the request's tools)."""
+    back = {wire_tool_name(t.name, limit): t.name for t in request.tools
+            if len(t.name) > limit}
+    if not back or not any(isinstance(b, ToolUse) and b.name in back
+                           for b in response.message.content):
+        return response
+    content = [msgspec.structs.replace(b, name=back[b.name])
+               if isinstance(b, ToolUse) and b.name in back else b
+               for b in response.message.content]
+    message = msgspec.structs.replace(response.message, content=content)
+    return msgspec.structs.replace(response, message=message)
 
 
 # ---------------------------------------------------------------------------

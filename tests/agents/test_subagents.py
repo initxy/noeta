@@ -67,7 +67,9 @@ def test_extension_sets_and_sharing() -> None:
     assert common | {"instructions"} <= names["general-purpose"]
     for name in ("Explore", "Plan"):
         assert common <= names[name]
-        assert "instructions" not in names[name]  # Claude Code sends them no instruction files
+        # Claude Code's omitClaudeMd: only the machine's managed files.
+        [instructions] = [e for e in agents[name].all_extensions() if e.name == "instructions"]
+        assert getattr(instructions, "managed_only", False)
     assert "memory" not in names["main"]  # memory is off until set
     shells = {id(e) for a in agents.values() for e in a.extensions if e.name == "shell"}
     assert len(shells) == 1
@@ -85,3 +87,48 @@ def test_main_kw_and_extra_files() -> None:
     [sub] = [e for e in agents["main"].extensions if isinstance(e, Subtasks)]
     roster = sub.roster_for(TaskView(state=TaskState(agent="main"), agents=agents))
     assert roster["reviewer"].tools == "Read, Grep"
+
+
+def test_explore_runs_on_opus_under_a_fable_caller() -> None:
+    """Claude Code's Explore ``inheritCap: "opus"``: a caller on a family
+    above Opus (Fable) gets its Explore on Opus; only the built-in file."""
+    from noeta.plugins.subtasks.roster import MODEL_CAP_KEY, capped_model
+
+    agents = _agents()
+    assert agents["Explore"].extra["inheritCap"] == "opus"
+    assert "inheritCap" not in agents["Plan"].extra
+    assert capped_model("claude-fable-5-1", "opus") == "claude-opus-5-5"
+    assert capped_model("fable", "opus") == "claude-opus-5-5"
+    for model in ("claude-opus-5-5", "claude-sonnet-5-5", "anthropic.claude-fable-5-1",
+                  "gpt-5", ""):
+        assert capped_model(model, "opus") is None
+    sub = Subtasks()
+    state = TaskState(agent="main", config={"model": "claude-fable-5-1"})
+    ctx: Any = None
+    capped = sub.child_config(state, ctx, "Explore", {MODEL_CAP_KEY: "opus"}, "Explore", {},
+                              fork=False)
+    assert capped["model"] == "claude-opus-5-5" and MODEL_CAP_KEY not in capped
+    asked = sub.child_config(state, ctx, "Explore", {MODEL_CAP_KEY: "opus"}, "Explore",
+                             {"model": "haiku"}, fork=False)
+    assert asked["model"] == "claude-haiku-5-5"
+    plain = sub.child_config(TaskState(agent="main"), ctx, "Explore", {MODEL_CAP_KEY: "opus"},
+                             "Explore", {}, fork=False, parent_model="claude-fable-5-1")
+    assert plain["model"] == "claude-opus-5-5"
+    user_file = parse_agent_file("---\nname: Explore\ndescription: mine\n---\nlook")
+    explores = [a for a in default_agents("m", extra_files=[user_file]) if a.name == "Explore"]
+    assert explores and all(a.description != "mine" or "inheritCap" not in a.extra
+                            for a in explores)
+    assert any(a.description == "mine" for a in explores)
+
+
+def test_the_plan_agents_prompt_looks_for_similar_features_and_ends_read_only() -> None:
+    """Claude Code's Plan prompt: the exploring step looks for similar
+    features to use as a reference, and a closing reminder after the report
+    format repeats that it only explores and plans."""
+    prompt = str(_agents()["Plan"].system_prompt)
+    explore = next(line for line in prompt.splitlines() if line.startswith("2. Explore"))
+    assert "similar features" in explore
+    critical = prompt.index("3-5 files most critical")
+    closing = prompt.index("Remember: you only explore and plan.")
+    assert critical < closing
+    assert "must not write, edit or change any file" in prompt[closing:]

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from noeta.core.client import ClientAPI
+from noeta.core.client import CONTINUED_AS_KEY, ClientAPI
 from noeta.core.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskCreated
 
 __all__ = ["CHECKPOINTS", "RESTORE_SIGNAL", "FilePlan", "RewindPoint", "Rewound",
@@ -192,6 +192,7 @@ async def rewind(client: ClientAPI, task_id: str, point: RewindPoint, *, convers
         config = {k: v for k, v in first.config.items()
                   if config_keys is None or k in config_keys}
         queue = (await client.get(point.task_id)).queue
+        config[CONTINUED_AS_KEY] = "rewind"
         target = await client.create(first.agent, None, config=config, queue=queue,
                                      history_from=point.task_id,
                                      history_through=point.seq - 1)

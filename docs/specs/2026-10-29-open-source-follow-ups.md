@@ -39,6 +39,8 @@ its own spec before work starts.
 
 - [ ] The 14 owner questions left by the context audit closure (`docs/specs/archive/2026-11-02-context-audit-closure.md`, "Open questions (owner)"): shell rc snapshot, bundled skills, `run_skill_script`, AskUserQuestion notes and skips, MCP prompt images, WebFetch preapproved hosts, ACP interactivity, a missing permission prompt tool, auto-mode inline skill commands, bare plugin agent names, the 64 KiB MCP cap, the one-piece fallback retry, headless keys and `client_hooks` on a clean `-p` exit, fs state replay cost. Each keeps the conservative choice written in that spec until the owner decides.
 
+- [ ] The 12 owner questions left by the context re-audit closure (`docs/specs/archive/2026-11-02-context-reaudit-closure.md`, "Open questions (owner)"): older Claude models' full prompt, `outputStyle`, dropping MCP tools with schemas the API rejects, WebFetch preapproved hosts, skill frontmatter `hooks:`, `skillOverrides`, an end-of-run review for agents that do not hand back, asking before `EnterPlanMode`, `--effort ultracode` and `--settings`, the shell-first note in `bypassPermissions`, a 1M window option for Sonnet 4.6, the not-loaded hint for OpenAI short names. Each keeps the recommended choice written there until the owner decides.
+
 ### Follow-ups
 - [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
 - [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.
@@ -54,7 +56,10 @@ its own spec before work starts.
 - [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46; file tools keep the opened-file fence). Follow-up spec.
 - [ ] `EnterWorktree`'s worktree is read-only in the sandbox (`.noeta`; `parity/deviations.md`). Follow-up spec: a task's working directory would have to change mid-task.
 - [ ] Dead workers' job log directories (`w<pid>`) in an exec env that is not this machine are not swept (`plugins/shell/job_logs.py`). Follow-up spec.
-- [ ] Claude Code plugin directories: no `<plugin>:<name>` namespacing of skills and agents (agent names may not hold `:`), no `${CLAUDE_PLUGIN_ROOT}` in skill bodies, a plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
+- [x] Claude Code plugin skills and agents are named `<plugin>:<name>` (0ab0f24f).
+- [x] `${CLAUDE_PLUGIN_ROOT}` in Claude Code plugin skill bodies (spec 2026-11-02-context-reaudit-closure, S13).
+- [ ] A Claude Code plugin's MCP servers are replaced by an ACP editor's servers. Follow-up spec.
+- [ ] A task that continues a conversation (`history_from`) does not save its carried messages' pasted images again: their paths are the source task's, which stop working once the source's image directory is cleaned (spec 2026-11-02-context-reaudit-closure, review T-P3-2). Copy them on continuation, or keep the source's directory while a continuation lives. Follow-up spec.
 - [ ] `Runtime._running` is a set, not a count: a task reclaimed by another slot while its previous run is still finishing is dropped from it by that run's `finally`, and a later `CommitUnknown` claim could then adopt it again at the same epoch (two unlikely events together). Count runs per task, or compare claim objects. Follow-up spec.
 - [ ] A redelivered channel message that arrives after its task ended is handled again in the continuation task (a one-shot agent answers twice). Follow-up spec.
 - [ ] Workspace trust per task: an isolated sub-agent's worktree is not trusted, so "always" answers there are not saved to the project; `project_trusted` reads files on the event loop. Follow-up spec.
@@ -62,7 +67,7 @@ its own spec before work starts.
 - [ ] Channel continuation ids use a `.N` suffix, which can collide with a thread id that itself ends in `.<digits>`; every continuation copies its history (`history_from`). Follow-up spec.
 - [ ] Memory: voiding a recall already compacted away finds "the first memory message after the prompt", which could be a later, valid recall. Follow-up spec.
 - [ ] With memory listed before hooks, the memory recall selector still sees a blocked prompt's text (D104: the main model does not, and the recall is voided after the erase). Run the selector after the prompt hooks whatever the plugin order. Follow-up spec.
-- [ ] When Claude Code 2.1.312 joins text blocks into one user message, the text block before the joined one ends with `"\n"` (the prompt `do it` goes out as `do it\n` ahead of the empty-reply nudge, fake-endpoint run `p-opus-first` request 2, spec 2026-11-01-empty-turn); noeta sends the block unchanged. A one-byte parity gap the replay's scenarios do not hit: check when Claude Code adds it (every merge of user messages, or some kinds only) and match it in the Anthropic adapter. Follow-up spec.
+- [x] When Claude Code 2.1.312 joins text blocks into one user message, the text block before the joined one ends with `"\n"`; noeta now sends it (b3dfa6c1).
 - [ ] `tests/plugins/test_hooks_events.py` sometimes (2 of about 14 runs) warns `PytestUnraisableExceptionWarning` from a garbage-collected asyncio subprocess transport; likely the same cause as the hooks runner's asyncio subprocesses above. Follow-up spec, with that item.
 - [ ] The `delegate_parallel_review` eval scenario runs into its 240 s trial timeout in every trial (it still scores); raise the timeout or shorten the scenario. Follow-up spec.
 
@@ -72,7 +77,7 @@ its own spec before work starts.
 - [ ] The memory recall selector fails on gateways that refuse `thinking: disabled` or ignore `output_schema` (found with DeepSeek V4.1); now retried and warned, but recall stays off by default as in Claude Code.
 - [ ] `delegate_parallel_review` scores 0.33 on DeepSeek V4.1 (7 of 9 trials hit the 600 s cap; the model reads 24 modules itself rather than delegating); `hook_block_adapts` 0.52 (the model probes for the hook after a block). Model behaviour under Claude Code's own wording; watch on the next model.
 - [ ] Run the read-only `Bash` commands of one reply together, as Claude Code does (needs a per-input read-only flag on tools; the command classifier lives in the permissions plugin). About 1% of benchmark wall time. From the bench findings.
-- [ ] `-p`: Claude Code offers no `AskUserQuestion`, sends no title side request, and sends the `per-turn-control` beta only for models with per-turn effort; noeta does all three. A wasted call at most. From the bench findings.
+- [x] `-p`: no `AskUserQuestion`, no title side request, the `per-turn-control` beta only for models with per-turn effort, as in Claude Code (470ed2d9).
 
 ### Decided not to do (kept for the record)
 - [x] ACP over `--server` cannot pass the editor's MCP servers. Won't do: they hold the editor's credentials and stay in its process.

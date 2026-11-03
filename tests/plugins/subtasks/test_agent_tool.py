@@ -29,6 +29,7 @@ from noeta.host.pending import pending_tree
 from noeta.host.usage import tree_usage
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.subtasks import SubagentSpec, Subtasks, texts
+from noeta.plugins.subtasks import extension as subtasks_extension
 from noeta.plugins.subtasks.tool import (
     LIST_WINDOW,
     TRANSCRIPT_KEY,
@@ -167,16 +168,19 @@ async def test_launch_hand_back_and_notice(store: SqliteStore) -> None:
     assert notice.startswith(NOTICE_GUARD)
     for part in (f"<task-id>{cid}</task-id>", "<status>completed</status>",
                  '<summary>Agent "do it" finished</summary>',
-                 texts.RESULT_POINTER.format(id=cid),
-                 "<usage><subagent_tokens>15</subagent_tokens><tool_uses>2</tool_uses>"):
+                 f"<result>{texts.RESULT_POINTER.format(id=cid)}</result>",
+                 # The newest reply's input plus what both replies wrote.
+                 "<usage><subagent_tokens>20</subagent_tokens><tool_uses>2</tool_uses>"):
         assert part in notice
     call_id = p.requests[1].messages[-2].tool_uses[0].id
     assert f"<tool-use-id>{call_id}</tool-use-id>" in notice
 
 
-async def test_final_text_without_hand_back_is_the_report(store: SqliteStore) -> None:
-    # Offered SubagentHandback (or not known to be), it ended with a plain
-    # reply instead: that reply is its report rather than nothing.
+async def test_an_agent_that_should_hand_back_and_did_not_delivers_no_report(
+        store: SqliteStore) -> None:
+    # Offered SubagentHandback, it ended with a plain reply instead: as in
+    # Claude Code, no report was delivered, its text is not passed on, and
+    # the caller is told how to ask for the report.
     p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("hm")])
     c = ScriptedProvider([reply("my final words")])
     rt = runtime(store, {"p": p, "c": c}, parent(), worker())
@@ -185,9 +189,23 @@ async def test_final_text_without_hand_back_is_the_report(store: SqliteStore) ->
     await rt.run_until_idle()
     assert "SubagentHandback" in [t.name for t in c.requests[0].tools]
     notice = p.requests[2].messages[-1]
-    assert notice.origin == "system" and "<result>my final words\n</result>" in notice.text
-    assert texts.RESULT_NO_REPORT not in notice.text
+    no_report = texts.RESULT_NO_REPORT.format(hint=texts.RESULT_NO_REPORT_HINT)
+    assert notice.origin == "system" and f"<result>{no_report}</result>" in notice.text
+    assert "my final words" not in notice.text
     assert (await client.get(tid)).waiting_on == "input"
+
+
+async def test_explore_and_plan_get_no_hint_to_ask_for_the_report(store: SqliteStore) -> None:
+    p = ScriptedProvider([reply("", agent("x", "Explore")), reply("launched"), reply("hm")])
+    c = ScriptedProvider([reply("my final words")])
+    roster = [*ROSTER, SubagentSpec(name="Explore", description="Looks.", agent="worker")]
+    main = Agent(name="main", model="p", extensions=[Subtasks(roster)])
+    rt = runtime(store, {"p": p, "c": c}, main, worker())
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    notice = p.requests[2].messages[-1].text
+    assert f"<result>{texts.RESULT_NO_REPORT.format(hint='')}</result>" in notice
 
 
 class DefaultMode(Extension):
@@ -210,7 +228,8 @@ async def test_outside_auto_mode_the_last_reply_is_the_report(store: SqliteStore
     assert "SubagentHandback" not in [t.name for t in child.tools]
     assert not any("SubagentHandback" in t for t in texts_of(child))
     notice = p.requests[2].messages[-1].text
-    assert "<result>made the file\n</result>" in notice
+    # Claude Code's form: the reply as it is, no newline added.
+    assert "<result>made the file</result>" in notice
 
 
 async def test_a_child_without_the_handback_tool_reports_its_last_reply(
@@ -226,8 +245,8 @@ async def test_a_child_without_the_handback_tool_reports_its_last_reply(
     await rt.run_until_idle()
     assert "SubagentHandback" not in [t.name for t in c.requests[0].tools]
     notice = p.requests[2].messages[-1].text
-    assert "<result>made the file\n</result>" in notice
-    assert texts.RESULT_NO_REPORT not in notice
+    assert "<result>made the file</result>" in notice
+    assert "no report was delivered" not in notice
 
 
 async def test_a_child_whose_tools_leave_out_the_handback_reports_its_last_reply(
@@ -241,7 +260,7 @@ async def test_a_child_whose_tools_leave_out_the_handback_reports_its_last_reply
     await client.create("main", "go")
     await rt.run_until_idle()
     assert not any("SubagentHandback" in t for t in texts_of(c.requests[0]))
-    assert "<result>made the file\n</result>" in p.requests[2].messages[-1].text
+    assert "<result>made the file</result>" in p.requests[2].messages[-1].text
 
 
 async def test_failed_agent_notice_wakes_the_parent(store: SqliteStore) -> None:
@@ -351,6 +370,58 @@ async def test_list_agents_says_when_it_looked_at_the_newest_tasks_only(
     [(listed, _)] = await results(client, tid)
     assert listed.count("— session") == LIST_WINDOW - 1
     assert listed.endswith("\n" + texts.LIST_WINDOW_FULL.format(n=LIST_WINDOW))
+
+
+async def test_an_agent_mention_asks_the_model_to_start_that_agent(
+        store: SqliteStore) -> None:
+    from noeta.plugins.subtasks.mentions import AGENT_MENTION
+
+    p = ScriptedProvider([reply("on it"), reply("ok")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    client = Client(store)
+    tid = await client.create("main", 'ask @agent-scout and @agent-nobody, and @"scout (agent)"')
+    await rt.run_until_idle()
+    note = AGENT_MENTION.format(type="scout")
+    assert [m.text for m in p.requests[0].messages].count(note) == 1
+    assert not any('"nobody"' in m.text for m in p.requests[0].messages)
+    await client.send(tid, "thanks")
+    await rt.run_until_idle()
+    assert [m.text for m in p.requests[1].messages].count(note) == 1  # not again
+
+
+async def test_an_agent_mention_is_noted_once_per_prompt(store: SqliteStore) -> None:
+    """Not again when the call is made again (an empty reply asked to go
+    on), nor after a turn that ended without a reply."""
+    from noeta.plugins.subtasks.mentions import AGENT_MENTION
+
+    p = ScriptedProvider([reply(""), reply(""), reply("ok")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    client = Client(store)
+    tid = await client.create("main", "ask @agent-scout please")
+    await rt.run_until_idle()
+    await client.send(tid, "and now?")
+    await rt.run_until_idle()
+    note = AGENT_MENTION.format(type="scout")
+    assert [[m.text for m in r.messages].count(note) for r in p.requests] == [1, 1, 1]
+
+
+async def test_an_agent_mention_in_a_forks_prompt_is_noted(store: SqliteStore) -> None:
+    """A task continuing another's conversation counts its own prompts: the
+    source's count is a seq of the source's log."""
+    from noeta.plugins.subtasks.mentions import AGENT_MENTION
+
+    p = ScriptedProvider([reply("", ("ListAgents", {})), reply("", ("ListAgents", {})),
+                          reply("on it"), reply("forked")])
+    rt = runtime(store, {"p": p}, parent(), worker())
+    client = Client(store)
+    tid = await client.create("main", "ask @agent-scout please")
+    await rt.run_until_idle()
+    await client.create("main", "now @agent-scout again", history_from=tid)
+    await rt.run_until_idle()
+    note = AGENT_MENTION.format(type="scout")
+    texts_ = [m.text for m in p.requests[-1].messages]
+    at = next(i for i, t in enumerate(texts_) if "now @agent-scout again" in t)
+    assert any(note in t for t in texts_[at:])
 
 
 async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
@@ -511,7 +582,7 @@ async def test_a_notice_lost_to_a_crash_is_posted_on_the_next_run(store: SqliteS
     p.add(reply("hi"), reply("thanks for the result"))
     await client.send(tid, "hello")
     await runtime(store, {"p": p, "c": c}, parent(), worker()).run_until_idle()
-    assert "<result>no report\n</result>" in "".join(texts_of(p.requests[-1]))
+    assert "no report was delivered" in "".join(texts_of(p.requests[-1]))
 
 
 async def test_agent_approvals_surface_at_the_root(store: SqliteStore) -> None:
@@ -527,22 +598,43 @@ async def test_agent_approvals_surface_at_the_root(store: SqliteStore) -> None:
     assert (await tree_usage(client, tid)).usage == Usage(uncached=30, output=15)
 
 
-async def test_progress_label_beside_the_third_call(store: SqliteStore) -> None:
+async def test_progress_label_every_30_seconds(store: SqliteStore,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code's cadence: a label is asked for 30 seconds after the
+    agent starts and every 30 seconds after, once it has three messages and
+    only when its conversation changed, timed from recorded times."""
+    clock = iter([0.0, 31.0, 40.0, 75.0, 76.0, 200.0])
+    monkeypatch.setattr(subtasks_extension, "_now", lambda: next(clock))
     p = ScriptedProvider([reply("", agent("dig")), reply("launched"), reply("thanks")])
     c = ScriptedProvider([reply("", ("Probe", {})), reply("", ("Probe", {})),
-                          reply("Reading parser.py\nextra"), handback("dug")])
-    rt = runtime(store, {"p": p, "c": c}, parent(), worker())
+                          reply("", ("Probe", {})), handback("dug")])
+    labels = ScriptedProvider([reply("Reading parser.py\nextra"), reply("Running the tests")])
+
+    class Split:
+        """Label asks to ``labels``, the agent's own calls to ``c``."""
+
+        family = "scripted"
+        requests = c.requests
+
+        async def complete(self, request: ModelRequest, on_delta: Any = None) -> Any:
+            if request.messages[-1].text == texts.PROGRESS_INSTRUCTION:
+                return await labels.complete(request, on_delta)
+            return await c.complete(request, on_delta)
+
+    rt = runtime(store, {"p": p, "c": Split()}, parent(), worker())
     client = Client(store)
     tid = await client.create("main", "go")
     await rt.run_until_idle()
     [child] = await client.tasks(parent_id=tid)
-    label_request = c.requests[2]
-    assert label_request.messages[-1].text == texts.PROGRESS_INSTRUCTION
-    assert label_request.messages[:-1] == c.requests[3].messages[:len(label_request.messages) - 1]
+    # The agent's calls at t=0 (start), 31 (due: a label), 40 (not due yet),
+    # 75 (due: a label); each ask copies that call's request.
+    assert len(labels.requests) == 2
+    assert labels.requests[0].messages[:-1] == c.requests[1].messages
+    assert labels.requests[1].messages[:-1] == c.requests[3].messages
     notices = [e.data["text"] for e in await events(client, child.task_id)
                if getattr(e, "kind", "") == "notice"]
-    assert notices == ["Reading parser.py"]
-    assert all(texts.PROGRESS_INSTRUCTION not in t for t in texts_of(c.requests[3]))
+    assert notices == ["Reading parser.py", "Running the tests"]
+    assert all(texts.PROGRESS_INSTRUCTION not in t for r in c.requests for t in texts_of(r))
 
 
 async def test_worktree_isolation(store: SqliteStore, tmp_path: Path) -> None:
@@ -636,9 +728,8 @@ async def test_a_worktree_a_background_job_runs_in_is_kept_until_the_job_ends(
     assert Path(cwd).exists()  # not removed under the running job
     told = [e.data["text"] for e in await events(client, tid)
             if getattr(e, "kind", "") == "pending"]
-    assert told and texts.WORKTREE_IN_USE.format(path=cwd) in told[0]
-    # The removal waits in this worker's memory: a restart leaves the worktree.
-    assert "unless this worker restarts first" in told[0]
+    # Kept: the notice names it in Claude Code's ``<worktree>`` element.
+    assert told and f"<worktree><worktreePath>{cwd}</worktreePath><worktreeBranch>" in told[0]
     [job] = registry.running(tid)
     registry.retire(tid)  # the root ends: its jobs are killed
     await asyncio.wait_for(job.done.wait(), 10)

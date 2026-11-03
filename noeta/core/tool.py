@@ -154,6 +154,8 @@ class Tool(Protocol):
     * ``deferred: bool = False`` — named to the model by name only
       (``TaskView.deferred_tool_names``) and sent with ``defer_loading``; the
       ``tool_search`` plugin withholds it until the model loads it.
+    * ``search_hint: str = ""`` — a few words a ``ToolSearch`` keyword query
+      also matches (Claude Code's ``searchHint``); never sent to the model.
     * ``loaded_description: str`` — the description sent instead of
       ``description`` while the tool goes with ``defer_loading`` (the model
       loaded it through ``ToolSearch``), as Claude Code gives such a tool a
@@ -180,6 +182,17 @@ class Tool(Protocol):
       system drops a repeat of that key); ``None`` when the outcome cannot
       be told (then a ``retry_safe`` tool runs again, any other is answered
       "outcome unknown"). Asked before ``retry_safe``.
+    * ``silent_reply_after: Literal["call", "success"] | None = None`` —
+      a reply with nothing in it after a call of this tool since the
+      person's last message ends the turn instead of being asked to go on:
+      after any call (``"call"``: the answer tool, whose call is the
+      answer) or a successful one (``"success"``: a tool whose result is
+      meant to end the turn).
+    * ``async rule_inputs(input, view) -> Sequence[(input, allow_too)]`` —
+      other inputs the permission rules also judge the call as (a ``Skill``
+      call under its skill's former name): a deny or ask rule matching any
+      applies, an allow rule (or a hook ``if`` whose hook allows) only one
+      marked ``allow_too``.
     * ``max_result_chars: int | None`` — the runner saves a text result
       longer than this (at most :data:`RESULT_CEILING_CHARS`, the default) to
       a file and sends a preview (``noeta.core.large_output``); ``None``

@@ -68,6 +68,7 @@ from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta.toolkit.structured_output import ANSWER_KIND, PLUGIN, RETRIES_REASON, SCHEMA_KEY
+from noeta.toolkit.usd_budget import BUDGET_KEY
 
 __all__ = ["HeadlessOptions", "StreamJson", "drive", "find_latest_task", "noeta_version"]
 
@@ -243,6 +244,9 @@ class StreamJson(ControlRequests):
             config["max_turns"] = o.max_turns
         if o.output_schema is not None:
             config[SCHEMA_KEY] = o.output_schema
+        if o.max_budget_usd is not None:
+            # The model is told the budget before each call (enforced here).
+            config[BUDGET_KEY] = o.max_budget_usd
         config[INTERACTIVE_KEY] = False
         if o.ask_client:
             config[PROMPT_TOOL_KEY] = "stdio"
@@ -256,7 +260,8 @@ class StreamJson(ControlRequests):
             await self.client.signal(self.task_id, RESUMED_SIGNAL)
             # This run's say on the schema and on who answers, whatever the
             # task had before (``None`` takes a key away).
-            changes = {k: config.get(k) for k in (SCHEMA_KEY, INTERACTIVE_KEY, PROMPT_TOOL_KEY)}
+            changes = {k: config.get(k)
+                       for k in (SCHEMA_KEY, INTERACTIVE_KEY, PROMPT_TOOL_KEY, BUDGET_KEY)}
             if o.hook_callbacks is not None:
                 # An earlier client's hook callbacks end with it; this one's
                 # are recorded when it registers them (``initialize``).

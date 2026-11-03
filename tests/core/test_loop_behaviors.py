@@ -287,3 +287,32 @@ async def test_retries_are_recorded(store: SqliteStore) -> None:
     retries = [e for e in await events(client, tid)
                if isinstance(e, ExtensionRecorded) and e.kind == "retry"]
     assert len(retries) == 1 and retries[0].data["attempt"] == 1
+
+
+class Ender:
+    """A tool whose successful result ends the turn (Claude Code's terminal
+    MCP tools): no reply need follow it."""
+
+    name = "Ender"
+    description = "Finish."
+    input_schema = {"type": "object"}
+    read_only = True
+    clearable = False
+    silent_reply_after = "success"
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return text_output("done", is_error=bool(input.get("fail")))
+
+
+async def test_an_empty_reply_after_a_turn_ending_tool_ends_the_turn(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("", ("Ender", {})), reply("")])
+    client, tid = await run(store, provider, Agent(name="a", model="m", tools=[Ender()]))
+    assert len(provider.requests) == 2
+    last = (await events(client, tid))[-1]
+    assert isinstance(last, Waiting) and last.detail == {"answer": ""}
+
+
+async def test_a_failed_turn_ending_call_still_gets_the_nudge(store: SqliteStore) -> None:
+    provider = ScriptedProvider([reply("", ("Ender", {"fail": True})), reply(""), reply("ok")])
+    await run(store, provider, Agent(name="a", model="m", tools=[Ender()]))
+    assert _nudges(provider.requests[2]) == 1

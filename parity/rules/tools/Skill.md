@@ -43,12 +43,12 @@ position 9 of 13 in the baseline list; also present for sub-agents. noeta's coun
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.Skill.r.1` | Not observed as a tool call; in m1 the skill was started by the user's `/release-notes v0.1`. |
-| `tool.Skill.r.2` | A user-invoked skill appears in the user message as a `<command-message>`/`<command-name>`/`<command-args>` text block followed by a separate text block: `Base directory for this skill: <dir>`, a blank line, the SKILL.md body without frontmatter, then `Arguments: <args>` when args were given. That body block carried the message's cache breakpoint. See `reminders.md`. |
-| `tool.Skill.r.3` | (bundle, not recorded) The name is trimmed and a leading `/` dropped, also for `Skill(...)` rules. An unknown name is refused naming it, plus a suggestion within edit distance 2. A `disable-model-invocation` skill is refused with its own message: the user starts it with `/<name>`; do not carry out its steps another way. Calling a loaded skill again re-sends nothing when the text is unchanged (a short note to follow it again, with the arguments), and the whole text after a short note when the arguments or command output changed. noeta today: covered, in our wording. |
-| `tool.Skill.r.4` | (bundle, not recorded) A model-called skill answers with a one-line result naming the skill as starting; its text then follows in the same user turn as its own block, shaped like a typed skill's body (`tool.Skill.r.2`): the base-directory line, a blank line, the body with arguments filled in. No skill name or description is repeated. noeta today: covered (the result line in our words). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.Skill.r.1` | Not observed as a tool call; in m1 the skill was started by the user's `/release-notes v0.1`. | n/a (no model call recorded; see r.4 for noeta's result) |
+| `tool.Skill.r.2` | A user-invoked skill appears in the user message as a `<command-message>`/`<command-name>`/`<command-args>` text block followed by a separate text block: `Base directory for this skill: <dir>`, a blank line, the SKILL.md body without frontmatter, then, when args were given and the body has no argument placeholder, a line `ARGUMENTS: <args>` (bundle; the recorded skill used `$ARGUMENTS`). That body block carried the message's cache breakpoint. See `reminders.md`. | covered (`rem.command.1`, `rem.command.2`: `toolkit/commands.py` `command_message`, `skills/registry.py` `render_command_body`; the replay compares the block shapes and cache marks) |
+| `tool.Skill.r.3` | (bundle, not recorded) The name is trimmed and a leading `/` dropped, also for `Skill(...)` rules. An unknown name is refused naming it, plus a suggestion within edit distance 2. A `disable-model-invocation` skill is refused with its own message: the user starts it with `/<name>`; do not carry out its steps another way. Calling a loaded skill again re-sends nothing when the text is unchanged (a short note to follow it again, with the arguments), and the whole text after a short note when the arguments or command output changed. | covered, in our wording |
+| `tool.Skill.r.4` | (bundle, not recorded) A model-called skill answers with a one-line result naming the skill as starting; its text then follows in the same user turn as its own block, shaped like a typed skill's body (`tool.Skill.r.2`): the base-directory line, a blank line, the body with arguments filled in. No skill name or description is repeated. | covered (the result line in our words) |
 
 ## Variants
 

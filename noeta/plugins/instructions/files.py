@@ -4,13 +4,15 @@ noeta's own places.
 An instruction file is a ``NOETA.md`` (or ``.noeta/NOETA.md``,
 ``NOETA.local.md``, a rule under ``.noeta/rules``, an imported file) read
 whole. Its text is trimmed, a leading YAML frontmatter is cut (a rule's
-``paths:`` globs come from it) and HTML comments outside code are dropped.
+``paths:`` globs come from it) and HTML comments that stand as blocks of
+their own are dropped (Claude Code's markdown lexer: a comment inside a
+paragraph, inline code, a code block or a list item stays).
 ``@path`` mentions outside code import that file right after the one naming
 it, with the same kind, up to :data:`IMPORT_DEPTH_MAX` levels deep; a path is
-read at most once per discovery. Imports from repository files must stay
-inside the repository directory they were found in or the working directory
-(Claude Code asks before following one outside; noeta has no such prompt and
-skips it).
+read at most once per discovery. An import from a project or local file must
+stay, links resolved, inside the working directory or the folder of the file
+that began the import chain (Claude Code asks before following one outside
+the working directory; noeta has no such prompt and skips it).
 
 Everything is read through an ExecEnv: the task's for repository files, a
 local one for the user's and the machine's own directories.
@@ -66,8 +68,14 @@ TEXT_EXTENSIONS = frozenset((
 _LIST_OUTPUT_CAP = 4 * 1024 * 1024
 
 _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+#: A line that closes a fenced block: a run of the opening fence's
+#: character at least as long, and nothing after it (CommonMark's).
+_FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
 _INLINE_CODE = re.compile(r"`+[^`\n]*`+")
+#: A line opening a comment block: at most three spaces, then ``<!--``.
+_COMMENT_START = re.compile(r"^ {0,3}<!--")
+_LIST_ITEM = re.compile(r"^ {0,3}(?:[*+-]|\d{1,9}[.)])(?:[ \t]|$)")
 _IMPORT = re.compile(r"(?:^|\s)@((?:[^\s\\]|\\ )+)")
 _FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
 
@@ -191,8 +199,68 @@ def clean(raw: str) -> tuple[str, tuple[str, ...]]:
             globs = _globs(meta.get("paths"))
             text = text[m.end():]
     if "<!--" in text:
-        text = "\n".join(_outside_code(text.split("\n"), lambda s: _COMMENT.sub("", s)))
+        text = _drop_comment_blocks(text)
     return text.strip(), globs
+
+
+def _drop_comment_blocks(text: str) -> str:
+    """``text`` without its top-level HTML comment blocks, as Claude Code's
+    markdown lexer finds them: a line that opens with ``<!--`` (at most
+    three spaces in, outside a fenced block and a list item) starts a block
+    that runs to the line holding ``-->``. Its comments are cut; a block
+    with nothing else left goes with the empty lines after it, one with
+    text after a comment keeps that text. An unclosed comment and a comment
+    inside a paragraph stay."""
+    lines = text.split("\n")
+    out: list[str] = []
+    fence: str | None = None
+    in_list = False
+    after_blank = True
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if fence is not None:
+            out.append(line)
+            fence = None if _closes(line, fence) else fence
+            i += 1
+            continue
+        if not line.strip():
+            out.append(line)
+            after_blank = True
+            i += 1
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if _LIST_ITEM.match(line):
+            in_list = True
+        elif indent == 0 and after_blank:
+            in_list = False
+        after_blank = False
+        opened = _FENCE.match(line)
+        if opened:
+            fence = opened.group(1)
+            out.append(line)
+            i += 1
+            continue
+        if not _COMMENT_START.match(line) or (in_list and indent > 0):
+            out.append(line)
+            i += 1
+            continue
+        end, close = i, line.find("-->", line.index("<!--") + 4)
+        while close < 0 and end + 1 < len(lines):
+            end += 1
+            close = lines[end].find("-->")
+        if close < 0:
+            out += lines[i:]
+            break
+        rest = _COMMENT.sub("", "\n".join(lines[i:end + 1]))
+        i = end + 1
+        if rest.strip():
+            out += rest.split("\n")
+            continue
+        while i < len(lines) and lines[i] == "":
+            i += 1
+        after_blank = True
+    return "\n".join(out)
 
 
 def _globs(value: object) -> tuple[str, ...]:
@@ -204,6 +272,12 @@ def _globs(value: object) -> tuple[str, ...]:
     else:
         return ()
     return tuple(s for s in (str(i).strip() for i in items) if s)
+
+
+def _closes(line: str, fence: str) -> bool:
+    """Whether ``line`` closes the fenced block ``fence`` opened."""
+    m = _FENCE_CLOSE.match(line)
+    return m is not None and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence)
 
 
 def _outside_code(lines: list[str], change: Callable[[str], str]) -> list[str]:
@@ -218,11 +292,11 @@ def _outside_code(lines: list[str], change: Callable[[str], str]) -> list[str]:
             if chunk:
                 out += change("\n".join(chunk)).split("\n")
                 chunk = []
-            fence = m.group(1)[0] * 3
+            fence = m.group(1)
             out.append(line)
         elif fence is not None:
             out.append(line)
-            if line.strip().startswith(fence):
+            if _closes(line, fence):
                 fence = None
         else:
             chunk.append(line)

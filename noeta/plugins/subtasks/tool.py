@@ -29,6 +29,7 @@ from noeta.plugins.subtasks.worktree import (
     reopen_worktree,
     worktree_exists,
 )
+from noeta.toolkit.notices import HANDBACK_REVIEW_KEY
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, task_spill_dir
 
 if TYPE_CHECKING:
@@ -182,28 +183,45 @@ def _indent(text: str) -> str:
     return "\n".join("  " + line for line in text.split("\n"))
 
 
-def agent_message(sender: str, body: str, *, frame: str = texts.AGENT_MESSAGE_FRAME) -> Message:
+def agent_message(sender: str, body: str, *, frame: str = texts.AGENT_MESSAGE_FRAME,
+                  note: str = "") -> Message:
     """An agent's message as its receiver gets it: a user-role text that
     frames itself (origin ``agent``); the body indented so no line of it can
-    pass for the frame."""
-    text = (f"{texts.AGENT_MESSAGE_LEAD}\n<agent-message from=\"{sender}\">\n{frame}\n"
+    pass for the frame. A ``note`` (auto mode's warning about a report) goes
+    above the frame, indented too."""
+    above = f"{_indent(note)}\n" if note else ""
+    text = (f"{texts.AGENT_MESSAGE_LEAD}\n<agent-message from=\"{sender}\">\n{above}{frame}\n"
             f"{_indent(body)}\n</agent-message>\n\n{texts.AGENT_MESSAGE_CLOSE}")
     return user(text, origin="agent")
 
 
 def handback_sender(message: Message) -> str | None:
     """The agent id of a hand-back message this extension framed, else ``None``."""
+    parsed = _handback(message)
+    return parsed[0] if parsed is not None else None
+
+
+def handback_flagged(message: Message) -> bool:
+    """Whether a hand-back message carries a note above its frame (auto
+    mode flagged the report, or could not review it)."""
+    parsed = _handback(message)
+    return parsed is not None and parsed[1]
+
+
+def _handback(message: Message) -> tuple[str, bool] | None:
     if message.origin != "agent":
         return None
-    lines = message.text.split("\n", 3)
-    if len(lines) < 3 or lines[0] != texts.AGENT_MESSAGE_LEAD \
-            or lines[2] != texts.AGENT_MESSAGE_FRAME:
+    lines = message.text.split("\n")
+    if len(lines) < 3 or lines[0] != texts.AGENT_MESSAGE_LEAD:
+        return None
+    at = next((i for i, line in enumerate(lines[2:], 2) if not line.startswith("  ")), None)
+    if at is None or lines[at] != texts.AGENT_MESSAGE_FRAME:
         return None
     head = lines[1]
     prefix = '<agent-message from="'
     if not head.startswith(prefix) or not head.endswith('">'):
         return None
-    return head[len(prefix):-2]
+    return head[len(prefix):-2], at > 2
 
 
 class AgentTool:
@@ -218,8 +236,12 @@ class AgentTool:
 
     def __init__(self, ext: Subtasks, state: TaskState,
                  roster: Mapping[str, SubagentSpec], name: str = texts.AGENT_TOOL,
-                 *, handback: bool = True, agents: Mapping[str, Agent] | None = None) -> None:
+                 *, handback: bool = True, agents: Mapping[str, Agent] | None = None,
+                 model: str = "") -> None:
         self._handback = handback
+        #: The model this task runs on, which an agent with ``model: inherit``
+        #: takes (within its cap).
+        self._model = model
         self._agents = agents or {}
         self._ext = ext
         self._state = state
@@ -297,7 +319,8 @@ class AgentTool:
             agent, spec_config = spec.agent or spec.name, dict(spec.config)
             queue = spec.queue or ext.queue
         isolation = input.get("isolation") or spec_config.pop(ISOLATION_KEY, None)
-        config = ext.child_config(state, ctx, agent, spec_config, kind, input, fork=fork)
+        config = ext.child_config(state, ctx, agent, spec_config, kind, input, fork=fork,
+                                  parent_model=self._model)
         return agent, queue, isolation, config
 
     async def recover(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput | None:
@@ -334,15 +357,33 @@ class HandbackTool:
                                is_error=True)
         parent = self._state.parent_id
         sender = str(self._state.config.get(AGENT_ID_KEY) or self._state.task_id)
+        # Set by the permission layer when auto mode flagged the report;
+        # never the agent's own: a key the model wrote into its call is
+        # dropped unless a rewrite of the call put another value there
+        # (the layer never sets the model's exact value: it adds a
+        # newline, stripped here).
+        note = input.get(HANDBACK_REVIEW_KEY)
+        if not isinstance(note, str) or note == _model_input(self._state, ctx.call_id).get(
+                HANDBACK_REVIEW_KEY):
+            note = ""
         if parent and ctx.post is not None:
-            await ctx.post(Say(message=agent_message(sender, report), when="now"),
-                           task_id=parent, dedupe_key=f"subtasks:handback:{ctx.idempotency_key}")
+            await ctx.post(Say(message=agent_message(
+                sender, report, note=note.strip()), when="now"),
+                task_id=parent, dedupe_key=f"subtasks:handback:{ctx.idempotency_key}")
         return ToolOutput(content=text_output(texts.HANDBACK_DONE).content, end_turn=report)
 
     async def recover(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput | None:
         """A hand-back a crash cut short is made again: the caller drops the
         repeated report (its key), and the run ends as it would have."""
         return await self.run(input, ctx)
+
+
+def _model_input(state: TaskState, call_id: str) -> dict[str, Any]:
+    """The input the model wrote for call ``call_id`` (before any rewrite)."""
+    for c in state.calls:
+        if c.use.id == call_id:
+            return dict(c.use.input)
+    return {}
 
 
 class SendMessageTool:
@@ -355,9 +396,13 @@ class SendMessageTool:
     clearable = False
     #: Claude Code lists it among the tools loaded on demand.
     deferred = True
+    search_hint = "send a message to a running agent or another session"
     input_schema = _schema({
-        "to": {"description": texts.SEND_TO_PROP, "type": "string", "maxLength": 300},
-        "message": {"description": texts.SEND_MESSAGE_PROP, "type": "string"},
+        # Claude Code's: one line of at most 300 characters; the message may
+        # be left out (a notify_when_idle subscription alone).
+        "to": {"description": texts.SEND_TO_PROP, "type": "string", "maxLength": 300,
+               "pattern": "^[^\n\r]*$"},
+        "message": {"description": texts.SEND_MESSAGE_PROP, "type": "string", "default": ""},
         "summary": {"description": texts.SEND_SUMMARY_PROP, "type": "string",
                     "maxLength": 200},
         "notify_when_idle": {"description": texts.SEND_NOTIFY_PROP, "type": "boolean"},

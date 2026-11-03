@@ -5,7 +5,7 @@ Memory is a directory of markdown files, one fact per file, under
 repository's main checkout, else the working directory). The model writes
 and edits the files with the ordinary ``Write`` / ``Edit`` tools, as the
 memory section of the system prompt tells it. ``MEMORY.md``, the model's
-index, is read when the task starts (its first 200 lines and 25,000 bytes)
+index, is read when the task starts (its first 200 lines and 25,000 characters)
 and again after a compaction; when the agent runs the instructions plugin
 after this one, that plugin shows it with the instruction files (Claude
 Code's place for it), reading the directory this plugin records. With a
@@ -39,7 +39,7 @@ from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import (
     MEMORY_DIR_KEY,
     MEMORY_INDEX_FILE,
-    MEMORY_INDEX_MAX_BYTES,
+    MEMORY_INDEX_MAX_CHARS,
     MEMORY_INDEX_MAX_LINES,
     read_memory_index,
     trim_memory_index,
@@ -91,7 +91,7 @@ AGENT_SCOPES = ("user", "project", "local")
 
 INDEX_FILE = MEMORY_INDEX_FILE
 INDEX_MAX_LINES = MEMORY_INDEX_MAX_LINES
-INDEX_MAX_BYTES = MEMORY_INDEX_MAX_BYTES
+INDEX_MAX_CHARS = MEMORY_INDEX_MAX_CHARS
 #: The index as attached when the agent has no instructions plugin to show
 #: it: its path, then its text.
 INDEX_HEAD = ("Contents of {path} (your auto memory index for this project, kept across "
@@ -101,17 +101,19 @@ INDEX_HEAD = ("Contents of {path} (your auto memory index for this project, kept
 INSTRUCTIONS = "instructions"
 
 #: Recall: memories attached per message, the selector's output ceiling, and
-#: the bytes attached over a whole task.
+#: the characters attached over a whole task (Claude Code's budget counts
+#: the attached text's length).
 RECALL_MAX_FILES = 5
 RECALL_MAX_TOKENS = 512
-RECALL_TASK_BYTES = 61_440
+RECALL_TASK_CHARS = 61_440
 #: Recalls kept so a hook's erase of their prompt can take them back (a
 #: prompt is blocked before the model answers it: the newest few).
 ERASABLE_RECALLS = 8
 #: Erased prompt seqs remembered, for a recall recorded after the erase.
 ERASED_SEQS_KEEP = 64
-#: A recalled file shows at most its first lines and bytes, then
-#: :data:`RECALL_CUT_NOTE` (Claude Code's limits).
+#: A recalled file shows at most its first lines and UTF-8 bytes, then
+#: :data:`RECALL_CUT_NOTE` (Claude Code's limits: its file read counts
+#: bytes here).
 RECALL_FILE_MAX_LINES = 200
 RECALL_FILE_MAX_BYTES = 4096
 RECALL_CUT_NOTE = "> Only {what} of this memory are shown; Read {path} for the whole file."
@@ -131,7 +133,8 @@ _RECALL_SCHEMA = {
 
 
 def load_index(text: str) -> str:
-    """``MEMORY.md`` within its line and byte limits, with a note when cut."""
+    """``MEMORY.md`` within its line and character limits, with a note when
+    cut."""
     return trim_memory_index(text)
 
 
@@ -226,7 +229,15 @@ class Memory(Extension):
     # ------------------------------------------------------------ state
 
     def initial_state(self) -> Any:
-        return {"dir": None, "surfaced": [], "bytes": 0}
+        return {"dir": None, "surfaced": [], "chars": 0}
+
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed conversation) recalls for its
+        own prompts: ``through`` and the recalls' keys are seqs of the
+        source's log (the carried messages sit at 0)."""
+        if not isinstance(state, dict):
+            return state
+        return {k: v for k, v in state.items() if k not in ("recent", "voided")} | {"through": 0}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         state = state or self.initial_state()
@@ -240,10 +251,9 @@ class Memory(Extension):
                 return {**state, "through": through,
                         "voided": [*(state.get("voided") or ()), through]}
             recent = [*(state.get("recent") or ()),
-                      {"through": through, "paths": data["paths"],
-                       "bytes": int(data.get("bytes") or 0)}]
+                      {"through": through, "paths": data["paths"], "chars": _chars(data)}]
             return {**state, "surfaced": [*state["surfaced"], *data["paths"]],
-                    "bytes": state["bytes"] + int(data.get("bytes") or 0),
+                    "chars": _chars(state) + _chars(data),
                     "through": through, "recent": recent[-ERASABLE_RECALLS:]}
         if kind == "checked":
             return {**state, "through": data["through"]}
@@ -254,7 +264,7 @@ class Memory(Extension):
             for recall in [r for r in state.get("recent") or () if r["through"] in seqs]:
                 gone = set(recall["paths"])
                 state = {**state, "surfaced": [p for p in state["surfaced"] if p not in gone],
-                         "bytes": max(0, state["bytes"] - recall["bytes"]),
+                         "chars": max(0, _chars(state) - _chars(recall)),
                          "recent": [r for r in state["recent"] if r is not recall],
                          "voided": [*(state.get("voided") or ()), recall["through"]]}
             return state
@@ -348,7 +358,7 @@ class Memory(Extension):
             return ()
         text, paths, used = found
         return (Reminder(text=text, kind="recalled", origin="memory",
-                         data={"paths": paths, "bytes": used, "through": through}),)
+                         data={"paths": paths, "chars": used, "through": through}),)
 
     def _drop_voided(self, view: TaskView) -> None:
         """Erase the recalls made for prompts a hook blocked: a hook listed
@@ -430,10 +440,10 @@ class Memory(Extension):
 
     async def _recall(self, view: TaskView, directory: str,
                       query: str) -> tuple[str, list[str], int] | None:
-        """The recalled text, the files attached and their bytes; ``None``
-        when nothing is attached."""
+        """The recalled text, the files attached and their characters;
+        ``None`` when nothing is attached."""
         state = view.ext_state(self.name) or {}
-        if int(state.get("bytes") or 0) >= RECALL_TASK_BYTES:
+        if _chars(state) >= RECALL_TASK_CHARS:
             return None
         env = task_env(view.env, view.state.config)
         skip = {*(state.get("surfaced") or ()), *_read_files(view)}
@@ -469,7 +479,7 @@ class Memory(Extension):
                 _RECALL_WARNED.add(reason)
                 log.warning("memory: recall selector failed (%s); no memory recalled", reason)
             return None
-        budget = RECALL_TASK_BYTES - int(state.get("bytes") or 0)
+        budget = RECALL_TASK_CHARS - _chars(state)
         parts: list[str] = []
         paths: list[str] = []
         used = 0
@@ -479,7 +489,7 @@ class Memory(Extension):
             if body is None:
                 continue
             shown = recalled_text(str(path), body.strip())
-            size = len(shown.encode("utf-8"))
+            size = len(shown)
             if used + size > budget:
                 break
             used += size
@@ -488,3 +498,10 @@ class Memory(Extension):
         if not parts:
             return None
         return RECALL_HEAD + "\n\n" + "\n\n".join(parts), paths, used
+
+
+def _chars(entry: Mapping[str, Any]) -> int:
+    """The characters a recall record, a recall or the state counts:
+    ``chars``, or ``bytes``, its name in logs written before it counted
+    characters."""
+    return int(entry.get("chars", entry.get("bytes")) or 0)

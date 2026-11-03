@@ -258,3 +258,172 @@ async def test_prompt_stop_hook_reads_the_conversation() -> None:
     assert "Condition: The tests ran." in asked[0].messages[-1].text
     impossible = await run_prompt(hook, {}, complete, "main", transcript)
     assert impossible.data == {"systemMessage": "no tests exist"}
+
+
+def test_a_matcher_with_an_mcp_tools_old_name_still_fires(
+        caplog: pytest.LogCaptureFixture) -> None:
+    """MCP names now keep the server's case: a matcher written under the
+    old lower-cased naming, as a list or a regular expression, still
+    matches, and the log says so."""
+    assert Matcher("mcp__github__delete_repo", ()).matches("mcp__GitHub__delete_repo")
+    assert Matcher("Bash|mcp__github__delete_repo", ()).matches("mcp__GitHub__delete_repo")
+    assert Matcher("mcp__github__.*", ()).matches("mcp__GitHub__delete_repo")
+    assert not Matcher("mcp__gitlab__.*", ()).matches("mcp__GitHub__delete_repo")
+    assert "only by its old name" in caplog.text
+
+
+def test_an_mcp_tool_hook_finds_the_tool_by_its_old_name() -> None:
+    """``--permission-prompt-tool mcp__approver__ok`` and an ``mcp_tool``
+    hook written before MCP names kept their case still reach the tool."""
+    from noeta.core.extension import Extension
+    from noeta.core.tool import ToolContext, ToolOutput, text_output
+    from noeta.plugins.hooks.dispatch import _mcp_tool
+
+    class Approve:
+        name = "mcp__Approver__ok"
+        description = "d"
+        input_schema: dict[str, Any] = {"type": "object"}
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            return text_output("ok")
+
+    tool = Approve()
+
+    class Mcp(Extension):
+        name = "mcp"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            return [tool]
+
+    view = TaskView(state=TaskState(), extensions=[Mcp()])
+    hook = HookCommand(type="mcp_tool", server="approver", tool="ok")
+    assert _mcp_tool(view, hook) is tool
+    assert _mcp_tool(view, HookCommand(type="mcp_tool", server="Approver", tool="ok")) is tool
+    assert _mcp_tool(view, HookCommand(type="mcp_tool", server="other", tool="ok")) is None
+    denied = TaskView(state=TaskState(), extensions=[Mcp()],
+                      denied_tools=["mcp__approver__ok"])
+    assert _mcp_tool(denied, hook) is None
+
+
+# ------------------------------------------------- old and former names narrow
+
+
+def _answering(answer: dict[str, Any]) -> Any:
+    from noeta.plugins.hooks.runners import HookResult
+
+    async def runner(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> Any:
+        return HookResult(exit_code=0, stdout=json.dumps(answer))
+
+    return runner
+
+
+def _pre(decision: str) -> dict[str, Any]:
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                   "permissionDecision": decision}}
+
+
+async def _gate(hooks: Hooks, name: str, input: dict[str, Any], *tools: Any) -> Any:
+    from noeta.core.extension import Extension
+    from noeta.core.types import ToolUse
+
+    class Tools(Extension):
+        name = "tools"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            return list(tools)
+
+    view = TaskView(state=TaskState(), extensions=[hooks, Tools()])
+    return await hooks.before_tool(view, ToolUse(id="c", name=name, input=input))
+
+
+async def test_a_hook_reached_by_an_mcp_tools_old_name_may_block_not_allow() -> None:
+    """A PreToolUse matcher written as ``mcp__github__.*`` reaches a server
+    ``GitHub``'s tools by the old naming: its deny holds, its allow is not
+    taken (it may have been written for the user's own ``github``)."""
+    from noeta.core.extension import Allow, Deny
+
+    hook = {"matcher": "mcp__github__.*", "hooks": [{"type": "command", "command": "x"}]}
+    old = Hooks(hooks={"PreToolUse": [hook]}, runner=_answering(_pre("allow")))
+    assert await _gate(old, "mcp__GitHub__delete_repo", {}) is None
+    assert isinstance(await _gate(old, "mcp__github__delete_repo", {}), Allow)
+    blocking = Hooks(hooks={"PreToolUse": [hook]}, runner=_answering(_pre("deny")))
+    assert isinstance(await _gate(blocking, "mcp__GitHub__delete_repo", {}), Deny)
+
+
+async def test_a_hook_if_by_a_former_skill_name_allows_only_when_unambiguous() -> None:
+    """``if: Skill(dup)``: met through a skill's former name. When another
+    skill had that name too (the tool says an allow may not match), the
+    hook may still block but its allow is not taken."""
+    from noeta.core.extension import Allow, Deny
+
+    class Skill:
+        name = "Skill"
+        description = "d"
+        input_schema: dict[str, Any] = {"type": "object"}
+
+        def __init__(self, unambiguous: bool) -> None:
+            self.unambiguous = unambiguous
+
+        async def rule_inputs(self, input: Any, view: Any) -> list[Any]:
+            return [({**input, "skill": "dup"}, self.unambiguous)]
+
+        async def run(self, input: dict[str, Any], ctx: Any) -> Any:
+            raise AssertionError
+
+    hook = {"matcher": "Skill", "hooks": [{"type": "command", "command": "x",
+                                           "if": "Skill(dup)"}]}
+    allows = Hooks(hooks={"PreToolUse": [hook]}, runner=_answering(_pre("allow")))
+    call = {"skill": "one"}
+    assert isinstance(await _gate(allows, "Skill", call, Skill(True)), Allow)
+    assert await _gate(allows, "Skill", call, Skill(False)) is None
+    denies = Hooks(hooks={"PreToolUse": [hook]}, runner=_answering(_pre("deny")))
+    assert isinstance(await _gate(denies, "Skill", call, Skill(False)), Deny)
+
+
+def test_an_mcp_tool_hook_by_an_old_name_two_tools_share_finds_neither() -> None:
+    """``mcp_tool`` hooks and ``--permission-prompt-tool`` by an old name:
+    found (and marked as found so) only when one tool had it."""
+    from noeta.core.extension import Extension
+    from noeta.plugins.hooks.dispatch import _find_mcp_tool
+
+    def named(name: str) -> Any:
+        return type("T", (), {"name": name, "description": "d", "input_schema": {}})()
+
+    def view(*tools: Any) -> TaskView:
+        class Mcp(Extension):
+            name = "mcp"
+
+            def tools(self, view: TaskView) -> list[Any]:
+                return list(tools)
+
+        return TaskView(state=TaskState(), extensions=[Mcp()])
+
+    hook = HookCommand(type="mcp_tool", server="approver", tool="ok")
+    one = named("mcp__Approver__ok")
+    assert _find_mcp_tool(view(one), hook) == (one, True)
+    for tools in ((one, named("mcp__APPROVER__ok")), (named("mcp__APPROVER__ok"), one)):
+        assert _find_mcp_tool(view(*tools), hook) == (None, False)
+    exact = named("mcp__approver__ok")
+    assert _find_mcp_tool(view(one, exact), hook) == (exact, False)
+    # Such a hook fails closed: the two owners are named, and the dispatch
+    # answers it with a block (exit 2) instead of a failure that lets the
+    # event through.
+    from noeta.plugins.hooks.dispatch import shared_old_name
+    assert shared_old_name(view(one, named("mcp__APPROVER__ok")), hook) == [
+        "mcp__APPROVER__ok", "mcp__Approver__ok"]
+    assert shared_old_name(view(one), hook) == []
+    assert shared_old_name(view(one, exact), hook) == []
+
+
+def test_a_narrowed_answer_keeps_its_deny_and_drops_its_allow() -> None:
+    from noeta.plugins.hooks.dispatch import Read, narrowed
+
+    allow = Read(specific={"permissionDecision": "allow", "additionalContext": "c"})
+    assert narrowed("PreToolUse", allow).specific == {"additionalContext": "c"}
+    assert narrowed("PreToolUse", Read(data={"decision": "approve"})).data == {}
+    deny = Read(specific={"permissionDecision": "deny"})
+    assert narrowed("PreToolUse", deny) is deny
+    granted = Read(specific={"decision": {"behavior": "allow"}})
+    assert narrowed("PermissionRequest", granted).specific == {}
+    refused = Read(specific={"decision": {"behavior": "deny", "message": "no"}})
+    assert narrowed("PermissionRequest", refused) is refused

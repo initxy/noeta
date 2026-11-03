@@ -98,6 +98,8 @@ SESSION_ALLOWED_IN: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
      frozenset({"session_id", "get_session_cost", "_on_get_session_cost"})),
     (("noeta", "host", "_stream_json_control.py"),
      frozenset({"get_session_cost", "_on_get_session_cost"})),
+    # Claude Code's skill variable for the conversation's id (the root task's).
+    (("noeta", "plugins", "skills", "registry.py"), frozenset({"CLAUDE_SESSION_ID"})),
 )
 
 

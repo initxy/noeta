@@ -67,7 +67,7 @@ async def test_user_prompt_submit_adds_context_and_sees_the_prompt(tmp_path: Pat
     hooks = {"UserPromptSubmit": _hook(f"cat > {seen}; echo 'The build is green.'")}
     provider, _client, _tid = await _run(tmp_path, hooks, [reply("a"), reply("b")],
                                          prompts=("first", "second"))
-    green = "UserPromptSubmit hook additional context: The build is green."
+    green = "UserPromptSubmit hook success: The build is green."
     assert _system(provider, 0) == [green]
     assert _system(provider, 1) == [green, green]
     payload = json.loads(seen.read_text())
@@ -392,3 +392,29 @@ async def test_a_command_hook_inherits_the_environment_but_noetas_credentials(
     hook = HookCommand(command='printf "%s|%s" "$JAVA_HOME" "${NOETA_SERVER_TOKEN:-unset}"')
     result = await run_command(hook, {}, str(tmp_path))
     assert result.stdout == "/opt/jdk|unset"
+
+
+@pytest.mark.parametrize("turns", [0, 3])
+async def test_a_prompt_hook_checks_a_continued_tasks_prompts(tmp_path: Path,
+                                                              turns: int) -> None:
+    """A task that continues a conversation (``history_from``) runs its
+    blocking prompt hooks on its own prompts: the source's checked position
+    is a seq of the source's log, past the new log's first prompts."""
+    work = tmp_path / "w"
+    work.mkdir()
+    hooks = {"UserPromptSubmit": _hook("grep -q SECRET && { echo blocked >&2; exit 2; }; exit 0")}
+    store = SqliteStore(str(tmp_path / "t.db"))
+    provider = ScriptedProvider([reply(f"r{i}") for i in range(10)])
+    agent = Agent(name="a", model="m", extensions=[Hooks(hooks=hooks), FileTools()])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
+                 env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
+    client = Client(store)
+    tid = await client.create("a", "hello", config={"cwd": str(work)})
+    await rt.run_until_idle()
+    for i in range(turns):
+        await client.send(tid, f"more {i}")
+        await rt.run_until_idle()
+    n = len(provider.requests)
+    await client.create("a", "my SECRET is 42", config={"cwd": str(work)}, history_from=tid)
+    await rt.run_until_idle()
+    assert not [r for r in provider.requests[n:] if any("SECRET" in m.text for m in r.messages)]

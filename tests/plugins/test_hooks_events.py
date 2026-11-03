@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
@@ -396,7 +398,7 @@ async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
     config = {"SessionStart": hook("start", "startup|resume")}
     s = await Setup(tmp_path, config, [reply("a"), reply("b"), reply("c"), reply("d")],
                     answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
-    assert s.system_texts(0) == ["SessionStart hook additional context: source was startup"]
+    assert s.system_texts(0) == ["SessionStart hook success: source was startup"]
     await s.send("again")  # the same process: no new SessionStart
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
     # Another worker (or a restart: a fresh plugin) picking the task up is
@@ -411,7 +413,33 @@ async def test_session_start_startup_and_resume(tmp_path: Path) -> None:
     await s.send("after a resume")
     assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "resume"]
     assert s.provider.requests[3].messages[-2].text == \
-        "SessionStart hook additional context: source was resume"
+        "SessionStart hook success: source was resume"
+
+
+async def test_a_continued_conversation_fires_session_start_as_claude_code_does(
+        tmp_path: Path) -> None:
+    """A task created with ``history_from`` fires SessionStart once, with
+    Claude Code's source: ``fork`` by default (a new branch, as
+    ``--fork-session``), ``resume`` for a channel thread carried on, none
+    for a rewind. What the hook says reaches the model as at startup."""
+    from noeta.core.client import CONTINUED_AS_KEY
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply(f"r{i}") for i in range(8)],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+    sources = []
+    for continued_as in (None, "resume", "rewind"):
+        extra = {CONTINUED_AS_KEY: continued_as} if continued_as else {}
+        n = len(s.provider.requests)
+        await s.client.create("a", "go on", config={"cwd": str(s.work), **extra},
+                              history_from=s.tid)
+        await s.runtime().run_until_idle()
+        sources = [p["source"] for p in s.runner.payloads("start")]
+        texts = [m.text for m in s.provider.requests[n].messages if m.origin == "system"]
+        if continued_as == "rewind":
+            assert "source was rewind" not in "\n".join(texts)
+        else:
+            assert f"SessionStart hook success: source was {continued_as or 'fork'}" in texts
+    assert sources == ["startup", "fork", "resume"]
 
 
 async def test_compaction_events(tmp_path: Path) -> None:
@@ -793,3 +821,332 @@ async def test_post_model_switch_adds_context_for_the_new_model(tmp_path: Path) 
     [payload] = s.runner.payloads("switch")
     assert (payload["from_model"], payload["to_model"]) == ("m", "m2")
     assert any("Now on m2." in t for t in s.system_texts(1))
+
+
+# ---------------------------------------------------------------- the model told
+
+
+async def test_continue_false_is_told_to_the_model(tmp_path: Path) -> None:
+    """Claude Code's ``<hook name> hook stopped continuation: <reason>``:
+    PreToolUse only with a reason, PostToolUse with a default one."""
+    s = await Setup(tmp_path, {"PreToolUse": hook("pre")}, [reply("", READ_A), reply("next")],
+                    answers={"pre": ok({"continue": False, "stopReason": "Freeze is on."})}
+                    ).start()
+    await s.send("go on")
+    assert "PreToolUse:Read hook stopped continuation: Freeze is on." in s.system_texts(1)
+    s = await Setup(tmp_path / "post", {"PostToolUse": hook("post")},
+                    [reply("", READ_A), reply("next")],
+                    answers={"post": ok({"continue": False})}).start()
+    assert len(s.provider.requests) == 1
+    await s.send("go on")
+    assert "PostToolUse:Read hook stopped continuation: Execution stopped by PostToolUse hook" \
+        in s.system_texts(1)
+
+
+async def test_a_stop_hook_that_stops_continuation_is_told(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"Stop": hook("stop")}, [reply("done"), reply("next")],
+                    answers={"stop": ok({"continue": False})}).start()
+    await s.send("more")
+    assert "Stop hook stopped continuation: Stop hook prevented continuation" \
+        in s.system_texts(1)
+
+
+async def test_a_post_tool_batch_block_ends_the_turn_and_says_why(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"PostToolBatch": hook("batch", decision="block")},
+                    [reply("", READ_A), reply("next")],
+                    answers={"batch": ok({"decision": "block", "reason": "Lint failed."})}
+                    ).start()
+    assert len(s.provider.requests) == 1
+    await s.send("go on")
+    assert "PostToolBatch hook stopped continuation: Lint failed." in s.system_texts(1)
+
+
+async def test_plain_output_of_a_prompt_hook_is_its_success(tmp_path: Path) -> None:
+    s = await Setup(tmp_path, {"UserPromptSubmit": hook("ups")}, [reply("ok")],
+                    answers={"ups": ok("Branch is main.")}).start()
+    assert s.system_texts(0) == ["UserPromptSubmit hook success: Branch is main."]
+
+
+async def test_hook_output_over_the_cap_is_saved_with_a_preview(tmp_path: Path) -> None:
+    long = "x" * 12_000
+    s = Setup(tmp_path, {"UserPromptSubmit": hook("ups")}, [reply("ok")],
+              answers={"ups": specific("UserPromptSubmit", additionalContext=long)})
+    spill = tmp_path / "spill"
+
+    def runtime() -> Runtime:
+        return Runtime(store=s.store, agents={"a": s.agent}, provider_for=lambda _m: s.provider,
+                       env_for=lambda _s: LocalExecEnv(str(s.work)), sleep=_no_sleep,
+                       spill_root=str(spill))
+
+    s.runtime = runtime  # type: ignore[method-assign]
+    await s.start()
+    [text] = s.system_texts(0)
+    assert text.startswith("UserPromptSubmit hook additional context: <persisted-output>")
+    assert len(text) < 3_000
+    [saved] = [p for p in spill.rglob("*.txt")]
+    assert saved.read_text() == long and str(saved) in text
+
+
+async def test_an_async_hooks_answer_reaches_the_next_model_call(tmp_path: Path) -> None:
+    release = asyncio.Event()
+
+    async def later(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
+        await release.wait()
+        return specific("PostToolUse", additionalContext="Tests passed.")
+
+    config = {"PostToolUse": [{"hooks": [{"type": "command", "command": "bg",
+                                          "async": True}]}]}
+    s = Setup(tmp_path, config, [reply("", READ_A), reply("done"), reply("again")])
+    s.hooks.runner = later
+    await s.start()
+    assert not any("Tests passed." in t for r in s.provider.requests for m in r.messages
+                   for t in [m.text])
+    release.set()
+    await asyncio.sleep(0.05)
+    # Delivered through the task's inbox: whichever worker runs it next.
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=later), FileTools()])
+    await s.send("more")
+    assert "Tests passed." in s.system_texts(2)
+    await s.send("and more")
+    assert s.system_texts(3).count("Tests passed.") == 1
+
+
+async def test_an_async_rewake_hook_wakes_the_model_on_exit_2(tmp_path: Path) -> None:
+    release = asyncio.Event()
+
+    async def later(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
+        await release.wait()
+        return HookResult(2, stderr="2 tests failed")
+
+    config = {"PostToolUse": [{"matcher": "Read", "hooks": [
+        {"type": "command", "command": "bg", "asyncRewake": True}]}]}
+    s = Setup(tmp_path, config, [reply("", READ_A), reply("done"), reply("fixing")])
+    s.hooks.runner = later
+    await s.start()
+    assert len(s.provider.requests) == 2
+    release.set()
+    await asyncio.sleep(0.05)
+    await s.runtime().run_until_idle()
+    assert len(s.provider.requests) == 3
+    assert s.provider.requests[2].messages[-1].text == \
+        'Stop hook blocking error from command "PostToolUse:Read": 2 tests failed'
+
+
+async def test_a_background_session_start_answer_already_given_is_left_out(
+        tmp_path: Path) -> None:
+    # Claude Code leaves out a background SessionStart answer whose texts
+    # the newest earlier SessionStart output already holds; judged from the
+    # task's log, so a worker that did not run the first hook judges alike.
+    release = asyncio.Event()
+    notes = {"bg": "Read NOTES.md.", "bg2": "Tests are slow here."}
+
+    async def runner(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
+        if hook.command == "start":
+            return specific("SessionStart", additionalContext="Read NOTES.md.")
+        await release.wait()
+        return specific("SessionStart", additionalContext=notes[hook.command])
+
+    config = {"SessionStart": [{"hooks": [
+        {"type": "command", "command": "start"},
+        {"type": "command", "command": "bg", "async": True},
+        {"type": "command", "command": "bg2", "async": True}]}]}
+    s = Setup(tmp_path, config, [reply("a"), reply("b"), reply("c")])
+    s.hooks.runner = runner
+    await s.start()
+    assert s.system_texts(0) == ["SessionStart hook additional context: Read NOTES.md."]
+    release.set()
+    await asyncio.sleep(0.05)
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=runner), FileTools()])
+    await s.send("more")
+    told = s.system_texts(1)
+    assert told.count("Read NOTES.md.") == 0
+    assert "Tests are slow here." in told
+
+
+async def test_a_prompt_hooks_continue_false_keeps_the_prompt_and_tells_the_model(
+        tmp_path: Path) -> None:
+    # Claude Code: no model call, the prompt stays, and the model later reads
+    # that the hook stopped it.
+    stop = {"n": 0}
+
+    def answer(payload: dict[str, Any]) -> HookResult:
+        stop["n"] += 1
+        return ok({"continue": False, "stopReason": "Freeze is on."}) if stop["n"] == 1 \
+            else ok({"continue": False}) if stop["n"] == 2 else ok()
+
+    s = await Setup(tmp_path, {"UserPromptSubmit": hook("gate")}, [reply("ok")],
+                    answers={"gate": answer}).start("deploy it")
+    assert s.provider.requests == []
+    assert "Operation stopped by hook: Freeze is on." in await s.notices()
+    assert not [e for e in await s.events()
+                if isinstance(e, ExtensionRecorded) and e.kind == "turn_failed"]
+    await s.send("try again")
+    assert s.provider.requests == []
+    await s.send("now")
+    texts = [m.text for m in s.provider.requests[0].messages if m.role == "user"]
+    assert texts[:2] == ["deploy it", "Operation stopped by hook: Freeze is on."]
+    assert texts[2:4] == ["try again", "Operation stopped by hook"]
+    assert texts[-1] == "now"
+
+
+async def test_a_long_pre_compact_output_reaches_the_summary_request_whole(
+        tmp_path: Path) -> None:
+    # The summary request has no tools: a saved file and a preview would lose
+    # the instructions (Claude Code joins PreCompact output whole).
+    long = "Keep every file name. " * 600
+    s = Setup(tmp_path, {"PreCompact": hook("pre")}, [reply("first"), reply("summary")],
+              answers={"pre": ok(long)}, extensions=(Compaction(auto=False),))
+    spill = tmp_path / "spill"
+
+    def runtime() -> Runtime:
+        return Runtime(store=s.store, agents={"a": s.agent}, provider_for=lambda _m: s.provider,
+                       env_for=lambda _s: LocalExecEnv(str(s.work)), sleep=_no_sleep,
+                       spill_root=str(spill))
+
+    s.runtime = runtime  # type: ignore[method-assign]
+    await s.start()
+    await s.send(command_text(""))
+    assert long.strip() in s.provider.requests[1].messages[-1].text
+    assert not list(spill.rglob("*.txt"))
+
+
+class _BrokenEnv(LocalExecEnv):
+    async def write_bytes(self, path: str, data: bytes) -> None:
+        raise RuntimeError("the remote env is gone")
+
+
+async def test_hook_output_that_cannot_be_saved_is_cut_inline(tmp_path: Path) -> None:
+    long = "y" * 12_000
+    s = Setup(tmp_path, {"UserPromptSubmit": hook("ups")}, [reply("ok")],
+              answers={"ups": specific("UserPromptSubmit", additionalContext=long)})
+
+    def runtime() -> Runtime:
+        return Runtime(store=s.store, agents={"a": s.agent}, provider_for=lambda _m: s.provider,
+                       env_for=lambda _s: _BrokenEnv(str(s.work)), sleep=_no_sleep,
+                       spill_root=str(tmp_path / "spill"))
+
+    s.runtime = runtime  # type: ignore[method-assign]
+    await s.start()
+    [text] = s.system_texts(0)
+    assert "<truncated-output>" in text and len(text) < 11_000
+    assert [e for e in await s.events() if isinstance(e, TaskEnded)] == []
+
+
+async def test_a_failing_background_hook_is_logged(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    s = Setup(tmp_path, {}, [])
+
+    async def broken() -> None:
+        raise RuntimeError("post failed")
+
+    with caplog.at_level(logging.ERROR, logger="noeta.hooks"):
+        s.hooks._d.spawn(broken())
+        await asyncio.sleep(0.01)
+    assert "a background hook failed" in caplog.text
+    assert not s.hooks._d._background
+
+
+async def test_saved_hook_output_is_named_when_marking_its_directory_fails() -> None:
+    from types import SimpleNamespace
+
+    from noeta.plugins.hooks.dispatch import capped
+
+    written: dict[str, bytes] = {}
+
+    class Env:
+        async def write_bytes(self, path: str, data: bytes) -> None:
+            written[path] = data
+
+        async def stat(self, path: str) -> None:
+            raise RuntimeError("env lost")
+
+    view = SimpleNamespace(spill_dir="/spill", env=Env(), task_id="t1")
+    text = await capped(view, "z" * 12_000, "ups")  # type: ignore[arg-type]
+    [path] = written
+    assert path in text and len(text) < 11_000
+
+
+async def test_an_mcp_tool_hook_by_an_old_name_two_tools_share_blocks(tmp_path: Path) -> None:
+    """A guard that names, by its old name, a tool two servers now share
+    fails closed: the call it guards is blocked, not let through."""
+    class TwoServers(Extension):
+        name = "fake-mcp"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            out = []
+            for server in ("CHK", "Chk"):
+                tool = McpLike("{}").tools(view)[0]
+                tool.name = f"mcp__{server}__verify"
+                out.append(tool)
+            return out
+
+    hooks = {"PreToolUse": [{"matcher": "Read", "hooks": [{
+        "type": "mcp_tool", "server": "chk", "tool": "verify"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("", READ_A), reply("ok")],
+                    extensions=(TwoServers(),)).start()
+    [(text, is_error)] = await s.results()
+    assert is_error and "old name" in text and "hello" not in text
+
+
+async def test_a_stop_guard_by_a_shared_old_name_fails_rather_than_blocks(
+        tmp_path: Path) -> None:
+    """At a turn's end a block only sends the model round again; a Stop
+    ``mcp_tool`` hook naming an old name two tools share fails instead, so
+    the turn ends at once with the person told."""
+    class TwoServers(Extension):
+        name = "fake-mcp"
+
+        def tools(self, view: TaskView) -> list[Any]:
+            out = []
+            for server in ("CHK", "Chk"):
+                tool = McpLike("{}").tools(view)[0]
+                tool.name = f"mcp__{server}__verify"
+                out.append(tool)
+            return out
+
+    hooks = {"Stop": [{"hooks": [{"type": "mcp_tool", "server": "chk", "tool": "verify"}]}]}
+    s = await Setup(tmp_path, hooks, [reply("done"), reply("again")],
+                    extensions=(TwoServers(),)).start()
+    assert len(s.provider.requests) == 1
+    assert any("old name" in n for n in await s.notices())
+
+
+async def test_a_continuation_that_already_replied_fires_no_session_start(
+        tmp_path: Path) -> None:
+    """A continuation that ran before continued conversations fired
+    SessionStart (its log has no record of it) folds as continued; after
+    the upgrade it must not fire one mid-conversation."""
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply(f"r{i}") for i in range(6)],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+
+    class Before(Hooks):  # the plugin as it was: no start for a continuation
+        async def on_start(self, view: TaskView) -> None:
+            return None
+
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Before(hooks=config, runner=s.runner), FileTools()])
+    s.tid = await s.client.create("a", "go on", config={"cwd": str(s.work)},
+                                  history_from=s.tid)
+    await s.runtime().run_until_idle()
+    s.agent = Agent(name="a", model="m",
+                    extensions=[Hooks(hooks=config, runner=s.runner), FileTools()])
+    await s.send("after the upgrade")
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup"]
+
+
+async def test_an_unknown_continued_as_is_taken_as_fork(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.core.client import CONTINUED_AS_KEY
+    config = {"SessionStart": hook("start", "startup|resume|fork")}
+    s = await Setup(tmp_path, config, [reply("a"), reply("b")],
+                    answers={"start": lambda p: ok(f"source was {p['source']}")}).start()
+    with caplog.at_level(logging.WARNING, logger="noeta.hooks"):
+        await s.client.create("a", "go on", config={"cwd": str(s.work),
+                                                     CONTINUED_AS_KEY: "sideways"},
+                              history_from=s.tid)
+        await s.runtime().run_until_idle()
+    assert [p["source"] for p in s.runner.payloads("start")] == ["startup", "fork"]
+    assert "sideways" in caplog.text

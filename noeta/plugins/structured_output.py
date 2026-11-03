@@ -70,6 +70,9 @@ class StructuredOutputTool:
     retry_safe = True
     #: Offered with a schema whatever an agent's ``tools:`` list says.
     past_agent_lists = True
+    #: The call is the answer: an empty reply after any call of it (even a
+    #: refused one) ends the turn, and the reminder below follows.
+    silent_reply_after = "call"
 
     def __init__(self, schema: Mapping[str, Any]) -> None:
         self.schema = dict(schema)

@@ -16,7 +16,7 @@ import pytest
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.events import ExtensionRecorded, Recorded, Waiting
 from noeta.core.execenv import RunResult
-from noeta.core.extension import TaskView
+from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.plugins import environment
 from noeta.plugins.environment import Environment, render_git
@@ -177,13 +177,16 @@ async def test_a_working_directory_below_the_repository_top_is_in_the_repository
 
 async def test_the_shell_line_names_the_shell_commands_run_in(
         monkeypatch: pytest.MonkeyPatch) -> None:
+    # Claude Code's format: bare names, ``bash (login shell: zsh)``.
     bash = shutil.which("bash") or "bash"
     monkeypatch.setenv("SHELL", "/opt/zsh-test/zsh")
-    assert environment._shell() == f"{bash} (the user's login shell is /opt/zsh-test/zsh)"
+    assert environment._shell() == "bash (login shell: zsh)"
     monkeypatch.setenv("SHELL", bash)
-    assert environment._shell() == bash
+    assert environment._shell() == "bash"
+    monkeypatch.setenv("SHELL", "/opt/other/bash")
+    assert environment._shell() == "bash"
     monkeypatch.delenv("SHELL")
-    assert environment._shell() == bash
+    assert environment._shell() == "bash"
 
 
 class FakeContainer:
@@ -310,7 +313,8 @@ async def test_a_catalogued_model_gets_its_name_cutoff_and_the_attribution_note(
         tmp_path: Path) -> None:
     env = LocalExecEnv(str(tmp_path))
     text = await _block(Environment(), _view(str(tmp_path), env, model="claude-opus-5-5"))
-    assert "Model: Claude Opus 5.5, exact id `claude-opus-5-5`; knowledge cutoff June 2026." \
+    # The short display name in the model line, the full one in the trailer.
+    assert "Model: Opus 5.5, exact id `claude-opus-5-5`; knowledge cutoff June 2026." \
         in text
     assert "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" in text
     text = await _block(Environment(attribution=False),
@@ -637,3 +641,192 @@ async def test_a_compaction_gives_the_stored_snapshot_when_git_fails_or_is_slow(
     # No longer a repository: no snapshot at all.
     view = _view("/workspace", Plain("/workspace"))
     assert await ext._git_for_compaction(view, "stored") == ""
+
+
+def _git_repo(path: Path, branch: str = "main") -> list[str]:
+    git = ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", "init", "-q", "-b", branch, str(path)], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "first"], check=True)
+    return git
+
+
+async def _started(ext: Environment, view: TaskView) -> Any:
+    """The plugin's state after ``on_start`` and the first request."""
+    await ext.on_start(view)
+    st: Any = None
+    for rec in view.pending:
+        assert isinstance(rec, ExtensionRecorded)
+        st = ext.reduce(st, rec.kind, rec.data)
+    return ext.reduce(st, "sent", {})
+
+
+def _later(cwd: str, st: Any, *, extensions: Sequence[Any] = (), **config: Any) -> TaskView:
+    state = TaskState(task_id="t", config={"cwd": cwd, **config}, ext={"environment": st})
+    return TaskView(state=state, env=LocalExecEnv(cwd), extensions=extensions)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_the_main_branch_falls_back_as_claude_code_does(tmp_path: Path) -> None:
+    """``origin/HEAD``, else ``origin/main`` / ``origin/master``, else
+    ``main``; a local branch alone does not count."""
+    repo = tmp_path / "repo"
+    git = _git_repo(repo, "trunk")
+    env = LocalExecEnv(str(repo))
+    assert await environment._main_branch(env, str(repo)) == "main"
+    subprocess.run([*git, "update-ref", "refs/remotes/origin/master", "HEAD"], check=True)
+    assert await environment._main_branch(env, str(repo)) == "master"
+    subprocess.run([*git, "update-ref", "refs/remotes/origin/dev", "HEAD"], check=True)
+    subprocess.run([*git, "symbolic-ref", "refs/remotes/origin/HEAD",
+                    "refs/remotes/origin/dev"], check=True)
+    assert await environment._main_branch(env, str(repo)) == "dev"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_the_status_is_trimmed_as_claude_code_trims_it(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    git = _git_repo(repo)
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run([*git, "add", "a.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "a"], check=True)
+    (repo / "a.txt").write_text("b\n")
+    text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
+    assert "Status:\nM a.txt\n" in text
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_linked_worktree_gets_the_worktree_and_stash_lines(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    git = _git_repo(repo)
+    wt = tmp_path / "wt"
+    subprocess.run([*git, "worktree", "add", "-q", str(wt)], check=True)
+    text = await _block(Environment(), _view(str(wt), LocalExecEnv(str(wt))))
+    assert f" - {environment.WORKTREE_LINE}\n - {environment.STASH_LINE}\n" \
+        " - Is a git repository: true" in text
+    text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
+    assert environment.WORKTREE_LINE not in text and environment.STASH_LINE not in text
+
+
+class _Dirs(Extension):
+    """A plugin that keeps the working directories (as permissions does)."""
+
+    name = "permissions"
+
+    def __init__(self, *dirs: str) -> None:
+        self.dirs = list(dirs)
+
+    def working_directories(self, view: TaskView) -> tuple[str, ...]:
+        return (view.cwd or "", *self.dirs)
+
+
+async def test_additional_directories_are_listed_and_their_changes_told(
+        tmp_path: Path) -> None:
+    dirs = _Dirs("/srv/shared", "/srv/docs")
+    view = TaskView(state=TaskState(task_id="t", config={"cwd": str(tmp_path)}),
+                    env=LocalExecEnv(str(tmp_path)), extensions=[dirs])
+    ext = Environment()
+    st = await _started(ext, view)
+    assert " - Is a git repository: false\n - Additional working directories:\n" \
+        "  - /srv/shared\n  - /srv/docs\n - Platform:" in st["text"]
+    assert [r for r in await ext.reminders(_later(str(tmp_path), st, extensions=[dirs]))
+            if r.kind == "env_update"] == []
+    dirs.dirs = ["/srv/shared", "/srv/new"]
+    [update] = [r for r in await ext.reminders(_later(str(tmp_path), st, extensions=[dirs]))
+                if r.kind == "env_update"]
+    assert update.text == ("# Environment update\n"
+                           " - Additional working directories added:\n  - /srv/new\n"
+                           " - Additional working directories removed:\n  - /srv/docs")
+    assert update.role == "system"
+    st = ext.reduce(st, update.kind, update.data)
+    assert "  - /srv/new\n" in st["text"] and "/srv/docs" not in st["text"]
+    assert [r for r in await ext.reminders(_later(str(tmp_path), st, extensions=[dirs]))
+            if r.kind == "env_update"] == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_directory_that_became_a_repository_is_told(tmp_path: Path) -> None:
+    ext = Environment(git_status=False)
+    st = await _started(ext, _view(str(tmp_path), LocalExecEnv(str(tmp_path))))
+    _git_repo(tmp_path)
+    [update] = [r for r in await ext.reminders(_later(str(tmp_path), st))
+                if r.kind == "env_update"]
+    assert update.text == "# Environment update\n - Is a git repository: true (was false)"
+
+
+async def test_a_model_switch_is_told_before_the_next_call(tmp_path: Path) -> None:
+    ext = Environment()
+    st = await _started(ext, _view(str(tmp_path), LocalExecEnv(str(tmp_path)),
+                                   model="claude-opus-5-5"))
+    assert st["model"] == "claude-opus-5-5"
+    same = await ext.reminders(_later(str(tmp_path), st, model="claude-opus-5-5"))
+    assert [r for r in same if r.kind == "model"] == []
+    [note] = [r for r in await ext.reminders(_later(str(tmp_path), st, model="claude-fable-5-1"))
+              if r.kind == "model"]
+    assert note.text == ("The model changed during this conversation. Model: Fable 5.1, exact id "
+                         "`claude-fable-5-1`; knowledge cutoff June 2026.")
+    st = ext.reduce(st, note.kind, note.data)
+    assert "Model: Fable 5.1" in st["text"] and "Opus 5.5" not in st["text"]
+    assert [r for r in await ext.reminders(_later(str(tmp_path), st, model="claude-fable-5-1"))
+            if r.kind == "model"] == []
+    # After a compaction the environment goes out again naming the model now.
+    st = ext.reduce(st, "rehold", {"date": True})
+    sent = await ext.reminders(_later(str(tmp_path), st, model="claude-sonnet-5-5"))
+    [env] = [r for r in sent if r.kind == "sent"]
+    assert "Model: Sonnet 5.5, exact id `claude-sonnet-5-5`" in env.text
+    assert [r for r in sent if r.kind == "model"] == []
+
+
+async def test_the_language_setting_is_told_and_its_change(tmp_path: Path) -> None:
+    ext = Environment(language="Deutsch")
+    st = await _started(ext, _view(str(tmp_path), LocalExecEnv(str(tmp_path))))
+    st = ext.reduce(st, "sent", {})
+    held = TaskState(task_id="t", config={"cwd": str(tmp_path)},
+                     ext={"environment": {**st, "held": True}})
+    [note] = [r for r in await ext.reminders(TaskView(state=held, env=LocalExecEnv(str(
+        tmp_path)))) if r.kind == "language"]
+    assert note.text.startswith("# Language\nAnswer in Deutsch:") and note.role == "system"
+    st = ext.reduce(st, note.kind, note.data)
+    assert [r for r in await ext.reminders(_later(str(tmp_path), st))
+            if r.kind == "language"] == []
+    [cleared] = [r for r in await Environment().reminders(_later(str(tmp_path), st))
+                 if r.kind == "language"]
+    assert cleared.text == environment.LANGUAGE_CLEARED
+    assert [r for r in await Environment().reminders(_later(str(tmp_path), {**st,
+            "language": None})) if r.kind == "language"] == []
+
+
+def test_the_attribution_settings_replace_or_remove_the_lines() -> None:
+    from noeta.plugins.environment import NO_ATTRIBUTION, render_attribution
+
+    custom = render_attribution("claude-opus-5-5", commit="Assisted-by: AI", pr="")
+    assert custom is not None and "- Commit messages end with:\nAssisted-by: AI" in custom
+    assert "Pull request" not in custom.split("\n", 1)[1] and "Co-Authored-By" not in custom
+    only_pr = render_attribution("claude-opus-5-5", pr="made by a bot")
+    assert only_pr is not None and "Co-Authored-By: Claude Opus 5.5" in only_pr
+    assert only_pr.endswith("- Pull request descriptions end with:\nmade by a bot")
+    assert render_attribution("claude-opus-5-5", commit="", pr="") == NO_ATTRIBUTION
+    assert render_attribution("unknown-model", commit="", pr="") == NO_ATTRIBUTION
+    assert render_attribution("unknown-model") is None
+
+
+async def test_fable_and_haiku_get_claude_codes_paragraphs_in_the_main_prompt() -> None:
+    from noeta.core.types import ModelRequest, SystemPart
+    from noeta.plugins.environment import EARLY_STOPPING, FABLE_IDENTITY
+
+    prompt = ("Intro.\n\nCaution.\n\n# Session-specific guidance\n - Skills.\n\n# Environment\n"
+              " - Facts.\n\nAct.\n\n<total_tokens>15000000 tokens left</total_tokens>")
+    ext = Environment()
+    view = TaskView(state=TaskState(task_id="t", config={}))
+
+    async def system(model: str, text: str = prompt) -> str:
+        request = ModelRequest(model=model, system=[SystemPart(text="Id."), SystemPart(text=text)])
+        out = await ext.before_model(view, request)
+        assert out.system[0].text == "Id."
+        return out.system[1].text
+
+    assert await system("claude-opus-5-5") == prompt
+    assert await system("fable") == prompt.replace(
+        "Caution.\n\n", f"Caution.\n\n{FABLE_IDENTITY}\n\n")
+    assert await system("claude-haiku-5-5") == prompt.replace(
+        "Act.\n\n", f"Act.\n\n{EARLY_STOPPING}\n\n")
+    # A prompt that is not the main one (a sub-agent's, a replaced one) gets none.
+    assert await system("claude-fable-5-1", "You are a helper.") == "You are a helper."

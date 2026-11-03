@@ -87,6 +87,31 @@ DEFAULT_BETAS: tuple[str, ...] = (
     "effort-2025-11-24",
     "thinking-display-updates-2026-08-18",
 )
+#: The order Claude Code 2.1.312 lists the betas it sends in (the header is a
+#: set to the API; a beta a request adds goes in at its place here, one this
+#: list lacks at the end).
+BETA_ORDER: tuple[str, ...] = (
+    "claude-code-20250219", "oauth-2025-04-20", "interleaved-thinking-2025-05-14",
+    "redact-thinking-2026-02-12", "context-management-2025-06-27",
+    "per-turn-control-2026-07-01", "mid-conversation-tool-changes-2026-07-01",
+    "inline-tools-2026-09-15", "advisor-tool-2026-03-01", "thinking-token-count-2026-05-13",
+    "advanced-tool-use-2025-11-20", "effort-2025-11-24", "structured-outputs-2025-12-15",
+    "fallback-credit-2026-06-01", "dangerous-tool-use-2026-09-03",
+    "thinking-display-updates-2026-08-18", "afk-mode-2026-01-31",
+    "extended-cache-ttl-2025-04-11",
+)
+_BETA_RANK = {b: i for i, b in enumerate(BETA_ORDER)}
+
+
+def _beta_place(have: Sequence[str], beta: str) -> int:
+    """Where ``beta`` goes in ``have``: before the first beta Claude Code
+    lists after it, else at the end."""
+    rank = _BETA_RANK.get(beta)
+    if rank is not None:
+        for i, other in enumerate(have):
+            if _BETA_RANK.get(other, -1) > rank:
+                return i
+    return len(have)
 #: Claude Code sends this beta of its set only for a model whose catalog row
 #: has the ``per_turn_effort`` capability (2.1.312: the four below, matched
 #: in the id as it matches its Claude models: ``claude-opus-5-5[1m]``,
@@ -96,14 +121,15 @@ PER_TURN_MODELS = ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5",
                    "claude-fable-5-1")
 
 
+default_effort = models.default_effort
+
+
 def per_turn_model(model: str) -> bool:
     """Whether Claude Code sends :data:`PER_TURN_BETA` with ``model``."""
     real = models.resolve_alias(model).lower()
     return any(known in real for known in PER_TURN_MODELS)
 
 
-#: Effort sent with adaptive thinking when the request names none.
-_DEFAULT_EFFORT = "medium"
 #: Claude Code's ceilings for a call answered in one piece after a failed
 #: stream: its output and its client timeout (seconds).
 WHOLE_MAX_TOKENS = 64_000
@@ -197,7 +223,9 @@ class AnthropicProvider:
         if self._default_betas and "anthropic-beta" not in request.headers \
                 and not per_turn_model(request.model):
             have = [b for b in have if b != PER_TURN_BETA]
-        have += [b for b in request.betas if b not in have]
+        for beta in request.betas:
+            if beta not in have:
+                have.insert(_beta_place(have, beta), beta)
         if ",".join(have) != given:
             headers["anthropic-beta"] = ",".join(have)
         return headers
@@ -313,7 +341,8 @@ class AnthropicProvider:
         and diagnostics can see exactly what would be sent."""
         vision = model_admits_images(request.model)
         outbound, last_block, blocks_of = messages_to_wire(
-            request.messages, vision, self._system_turns)
+            request.messages, vision, self._system_turns,
+            tools=[t.name for t in request.tools])
         body: dict[str, Any] = {
             "model": request.model,
             "max_tokens": self._resolve_max_tokens(request),
@@ -358,7 +387,7 @@ class AnthropicProvider:
                 "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
         # Effort rides inside output_config, alongside any format set above;
         # every level (xhigh and max included) passes through verbatim.
-        effort = request.effort or (_DEFAULT_EFFORT if adaptive else None)
+        effort = request.effort or (default_effort(request.model) if adaptive else None)
         if effort is not None:
             body.setdefault("output_config", {})["effort"] = effort
         for key, value in request.vendor_fields.items():
@@ -366,8 +395,8 @@ class AnthropicProvider:
         return body
 
     def _resolve_max_tokens(self, request: ModelRequest) -> int:
-        """Request beats constructor default beats the catalogued output
-        ceiling; none of them → :class:`Fatal`. Anthropic requires
+        """Request beats constructor default beats the catalogued default
+        output (``ModelSpec.output_default``); none of them → :class:`Fatal`. Anthropic requires
         ``max_tokens``, and a cap this adapter invented would truncate answers
         with no signal, so it never picks one."""
         if request.max_tokens is not None:
@@ -376,7 +405,7 @@ class AnthropicProvider:
             return int(self._default_max_tokens)
         spec = models.find_spec(request.model)
         if spec is not None:
-            return spec.max_output_tokens
+            return spec.output_default
         raise Fatal(
             "Anthropic requires max_tokens; set ModelRequest.max_tokens, pass "
             "AnthropicProvider(default_max_tokens=...), or register the model "

@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpError
+from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpError, McpServerError
 
 __all__ = [
     "MAX_LIST_PAGES",
@@ -227,8 +227,12 @@ def server_instructions(result: dict[str, Any]) -> str | None:
 
 def reply_result(method: str, msg: dict[str, Any]) -> dict[str, Any]:
     """A reply's ``result``, or the ``McpError`` its ``error`` says."""
-    if msg.get("error") is not None:
-        raise McpError(f"{method} error: {msg['error']}")
+    error = msg.get("error")
+    if error is not None:
+        detail = error.get("message") if isinstance(error, dict) else None
+        raise McpServerError(f"{method} error: {error}",
+                             error.get("code") if isinstance(error, dict) else None,
+                             detail if isinstance(detail, str) else str(error))
     result = msg.get("result")
     if not isinstance(result, dict):
         raise McpError(f"{method} result is not an object")

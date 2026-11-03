@@ -52,7 +52,7 @@ Reducer = Callable[[Any, str, Any], Any]
 #: value removes the key.
 CONFIG_SIGNAL = "config"
 CHANGEABLE_CONFIG = ("model", "effort", "max_turns", "output_schema", "interactive",
-                     "permission_prompt_tool", "client_hooks")
+                     "permission_prompt_tool", "client_hooks", "ultracode", "max_budget_usd")
 
 
 @dataclass
@@ -97,6 +97,8 @@ class TaskState:
     held: list[Message] = field(default_factory=list)
     #: A turn is open from the user message until the model ends it.
     turn_open: bool = False
+    #: Log seq of the event that opened the current (or latest) turn.
+    turn_seq: int = 0
     steps_in_turn: int = 0
     last_stop: StopReason | None = None
     #: Consecutive ``ModelCalled`` without a reply (crash/retry loop guard);
@@ -354,6 +356,8 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
         if core.reason == records.EMPTY_REPLY:
             state.answer_parts = []  # the turn ended on nothing: it has no answer
         _end_turn(state, seq)
+    elif isinstance(core, records.Spent):
+        state.usage = state.usage + core.usage
     elif isinstance(core, records.Erased):
         _erase(state, set(core.seqs))
     elif isinstance(core, records.TurnFailed):
@@ -495,6 +499,7 @@ def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> 
     if not state.turn_open:
         state.steps_in_turn = 0
         state.turn_error = None
+        state.turn_seq = seq
     state.turn_open = True
     state.waiting = None
     return into_open
@@ -526,6 +531,7 @@ def _end_turn(state: TaskState, seq: int) -> None:
     if reopen and not state.turn_open:
         state.turn_open = True
         state.steps_in_turn = 0
+        state.turn_seq = seq
 
 
 def _erase(state: TaskState, seqs: set[int]) -> None:
@@ -558,6 +564,7 @@ def _close_turn(state: TaskState, seq: int) -> None:
         state.queued = []
         state.turn_open = True
         state.steps_in_turn = 0
+        state.turn_seq = seq
         state.empty_nudged = False
 
 

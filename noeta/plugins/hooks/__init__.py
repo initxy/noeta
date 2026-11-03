@@ -16,7 +16,10 @@ Hook types (``config.py`` has the fields and defaults):
   directly, no shell), in the task's working directory when it exists here,
   the event as JSON on stdin, noeta's environment (minus its own
   credentials) plus ``NOETA_PROJECT_DIR`` (and ``CLAUDE_PROJECT_DIR`` for Claude Code's
-  scripts). ``async`` ones run in the background, unread.
+  scripts). ``async`` ones run in the background: what their JSON answer
+  adds for the model (``systemMessage``, ``additionalContext``) goes with
+  its next call; an ``asyncRewake`` one's exit 2 wakes the model with its
+  output. Both reach the task through its inbox, on whichever worker.
 * ``http`` — the event POSTed as JSON; ``$VAR`` in ``headers`` is filled
   only for names in ``allowedEnvVars``; the response body is read like
   stdout.
@@ -41,6 +44,11 @@ Exit 0 is success (stdout plain text, or a JSON object: ``continue`` /
 ``stopReason``, ``decision`` / ``reason``, ``systemMessage``,
 ``hookSpecificOutput``); exit 2 blocks with stderr as the reason; anything
 else is reported and ignored (``onFailure: "block"`` makes it block).
+Text for the model is led by Claude Code's labels (``<hook name> hook
+additional context``, ``hook success`` for a SessionStart or
+UserPromptSubmit hook's plain stdout, ``hook stopped continuation`` for a
+``continue: false`` the model is told about); past 10,000 characters it is
+saved to the task's spill directory and a preview sent.
 Every event's input carries ``session_id`` (the root task's id),
 ``transcript_path`` (empty), ``cwd``, ``permission_mode``,
 ``hook_event_name``, noeta's ``task_id``, and ``agent_id`` /
@@ -68,7 +76,8 @@ Events:
 * ``PreCompact`` / ``PostCompact`` — stdout adds summary instructions / is
   shown to the person; a PreCompact block skips the compaction.
 * ``PostToolBatch`` — once every call of a reply has its result, before
-  the next model call: added context (or a block's reason) reaches the model.
+  the next model call: added context reaches the model; a block or
+  ``continue: false`` ends the turn, the model told why.
 * ``PostModelSwitch`` — after a front end switched the model; added context
   reaches the model.
 * ``Notification`` (waiting on an approval or a question), ``SessionEnd``,

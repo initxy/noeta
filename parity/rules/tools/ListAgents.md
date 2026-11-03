@@ -33,9 +33,9 @@ position 5 of 13 in the baseline list. Never called in the recordings. noeta's i
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.ListAgents.r.1` | Not observed (never called in m1–m4, s1). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.ListAgents.r.1` | Not observed (never called in m1–m4, s1). | n/a (not observed; noeta's result: `subtasks/tool.py` `ListAgentsTool`) |
 
 ## Variants
 

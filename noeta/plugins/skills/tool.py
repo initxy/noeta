@@ -9,6 +9,7 @@ from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.skills.registry import (
     SkillDescription,
     SkillRegistry,
+    former_name,
     render_command_body,
     substitute_variables,
 )
@@ -18,8 +19,9 @@ from noeta.toolkit.context import task_env
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
+    from noeta.core.extension import TaskView
     from noeta.plugins.skills.extension import Skills
 
 SKILL_TOOL = "Skill"
@@ -85,8 +87,27 @@ class SkillTool:
             return text_output("args must be a string", is_error=True)
         return text_output(
             f"Starting skill: {name}. Its instructions follow.",
-            skill_activation=activation_data(desc, "model", args, ctx.env.cwd),
+            skill_activation=activation_data(desc, "model", args, ctx.env.cwd,
+                                             ctx.root_id or ctx.task_id),
         )
+
+
+    async def rule_inputs(self, input: Mapping[str, Any],
+                          view: TaskView) -> Sequence[tuple[dict[str, Any], bool]]:
+        """The call as it reads under the skill's former name (its
+        frontmatter ``name``, :func:`former_name`): permission rules written
+        before skills were named by their directories still apply. A deny or
+        ask rule naming it applies; an allow rule only while no other skill
+        answers to that name (``True``)."""
+        name = skill_name(input.get("skill"))
+        if name is None:
+            return ()
+        registry = await self._owner.turn_registry(view)
+        desc = registry.get(name)
+        former = former_name(desc) if desc is not None else None
+        if desc is None or former is None:
+            return ()
+        return (({**input, "skill": former}, registry.formerly(former) is desc),)
 
 
 def not_found(name: str, registry: SkillRegistry, menu: Sequence[str]) -> str:
@@ -132,9 +153,10 @@ def _edit_distance(a: str, b: str) -> int:
 
 
 def activation_data(desc: SkillDescription, source: str,
-                    args: str | None = None, cwd: str | None = None) -> dict[str, Any]:
+                    args: str | None = None, cwd: str | None = None,
+                    root_id: str | None = None, effort: str | None = None) -> dict[str, Any]:
     """What activating ``desc`` records (``source``: ``model`` / ``user`` /
-    ``preload``)."""
+    ``preload``); ``root_id`` and ``effort`` fill the skill's variables."""
     raw = desc.meta("allowed-tools")
     allowed: list[str] | None = None
     if raw is not None:
@@ -149,7 +171,7 @@ def activation_data(desc: SkillDescription, source: str,
         "allowed_tools": allowed,
         "allow_rules": rules,
         "args": args,
-        "text": render_command_body(desc, args, cwd),
+        "text": render_command_body(desc, args, cwd, root_id, effort),
     }
 
 

@@ -1,5 +1,5 @@
-"""Side requests in Claude Code's shape: identity then prompt, the model's
-output ceiling, the task's effort, no thinking field on Anthropic models."""
+"""Side requests in Claude Code's shape: identity then prompt, the main
+request's default output, the task's effort, no thinking field on Anthropic models."""
 
 from __future__ import annotations
 
@@ -16,6 +16,13 @@ def test_an_anthropic_reasoning_model_gets_claude_codes_shape() -> None:
     assert (r.thinking, r.effort, r.max_tokens) == (None, "medium", 128_000)
     assert side_request(model="claude-opus-5-5", identity="", messages=[user("q")],
                         effort="high").effort == "high"
+
+
+def test_a_side_request_sends_the_models_default_output_and_effort() -> None:
+    # Claude Code's helper calls carry the main request's max_tokens and
+    # effort: the catalog defaults when the task sets neither.
+    r = side_request(model="claude-sonnet-4-6", identity="i", messages=[user("q")])
+    assert (r.max_tokens, r.effort) == (32_000, "high")
 
 
 def test_other_models_switch_reasoning_off_and_send_no_effort() -> None:

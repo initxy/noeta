@@ -102,6 +102,30 @@ async def test_no_skills_means_no_listing_but_the_tool_stays(h: Harness) -> None
     assert await h.records(tid, "skills") == []
 
 
+_GUIDED = ("Intro.\n\n# Session-specific guidance\n - When the user types `/<skill-name>`, "
+           "run it.\n\n# Environment\n - Facts.\n")
+
+
+async def test_the_prompts_skill_line_goes_only_with_skills_and_the_tool(h: Harness) -> None:
+    # Claude Code gives the line only when there are skills and Skill is
+    # offered; the heading goes with its last line.
+    from noeta.plugins.skills.guidance import drop_skill_guidance
+
+    assert drop_skill_guidance(_GUIDED) == "Intro.\n\n# Environment\n - Facts.\n"
+    kept = _GUIDED.replace(" - When", " - Other.\n - When")
+    assert drop_skill_guidance(kept) == (
+        "Intro.\n\n# Session-specific guidance\n - Other.\n\n# Environment\n - Facts.\n")
+    a = Agent(name="a", model="m", system_prompt=_GUIDED,
+              extensions=[FileTools(), Skills()])
+    h.provider.add(reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    assert "Session-specific guidance" not in "".join(
+        p.text for p in h.provider.requests[0].system)
+    write_skill(skills_dir(h), "deploy", "Ship the app.")
+    await h.say(a, tid, "more")
+    assert "`/<skill-name>`" in "".join(p.text for p in h.provider.requests[1].system)
+
+
 async def test_activation_records_the_body_after_the_result(h: Harness) -> None:
     d = write_skill(skills_dir(h), "deploy", "Ship $ARGUMENTS now.",
                     body="Step one.\n\nScope: $ARGUMENTS\nStep two.\n")
@@ -291,7 +315,9 @@ async def test_a_command_in_its_tags_puts_the_body_in_the_persons_turn(h: Harnes
     assert [b["text"] for b in wire[0]["content"]] == [text + "\n", request.messages[1].text]
 
 
-async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
+async def test_preload_and_the_users_skill_wins_a_name(h: Harness, tmp_path: Path) -> None:
+    """Claude Code keeps the first skill of a name it loads: the user's
+    before the project's."""
     user_dir = tmp_path / "user-skills"
     write_skill(user_dir, "deploy", "Global deploy.")
     write_skill(user_dir, "lint", "Lint.")
@@ -301,7 +327,7 @@ async def test_preload_and_tiers(h: Harness, tmp_path: Path) -> None:
     msgs = h.provider.requests[0].messages
     assert msgs[0].text == f"Base directory for this skill: {user_dir / 'lint'}\n\nDo the thing.\n"
     assert msgs[1].text == "go"
-    assert msgs[2].text == f"{ROSTER_HEADER}\n\n- deploy: Workspace deploy.\n- lint: Lint."
+    assert msgs[2].text == f"{ROSTER_HEADER}\n\n- deploy: Global deploy.\n- lint: Lint."
     assert (await h.records(tid, "skills", "activated"))[0].data["source"] == "preload"
 
 
@@ -814,7 +840,8 @@ def test_priority_is_no_skill_key() -> None:
     from noeta.plugins.skills.registry import parse_skill
     # Claude Code has no ``priority:``; it is kept as plain metadata and
     # orders nothing.
-    desc = parse_skill("/s/zed/SKILL.md", "---\nname: zed\ndescription: Z.\npriority: 1\n---\n")
+    desc = parse_skill("/s/zed/SKILL.md", "---\nname: zed\ndescription: Z.\npriority: 1\n---\n",
+                       name="zed")
     assert desc is not None and desc.meta("priority") == "1"
     other = SkillDescription(name="alpha", description="A.", body="")
     registry = SkillRegistry({"zed": desc, "alpha": other})
@@ -824,7 +851,7 @@ def test_priority_is_no_skill_key() -> None:
 def test_the_loaded_text_has_one_blank_line_before_the_body() -> None:
     from noeta.plugins.skills.registry import parse_skill, render_command_body
     desc = parse_skill("/s/notes/SKILL.md",
-                       "---\nname: notes\ndescription: N.\n---\n\nRun it.\n")
+                       "---\nname: notes\ndescription: N.\n---\n\nRun it.\n", name="notes")
     assert desc is not None
     assert render_command_body(desc) == "Base directory for this skill: /s/notes\n\nRun it.\n"
 
@@ -987,9 +1014,10 @@ async def test_only_scoped_skills_of_a_name_are_named_when_the_bare_name_is_call
 
 async def test_a_skill_file_cannot_name_itself_like_a_plugin_or_scoped_skill(
         tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """Only the name a plugin's directory gives may hold a ':'; a SKILL.md
-    that calls itself ``superpowers:brainstorm`` is skipped, so it neither
-    replaces the plugin's skill nor takes on ``Skill(superpowers:*)``."""
+    """A skill is named by its directory; a SKILL.md that calls itself
+    ``superpowers:brainstorm`` keeps its directory's name, so it neither
+    replaces the plugin's skill nor takes on ``Skill(superpowers:*)``, and
+    the listing does not show a name another skill answers to."""
     plugin = tmp_path / "plug" / "skills"
     write_skill(plugin, "brainstorm", "The plugin's.")
     ws = tmp_path / "w" / ".noeta" / "skills"
@@ -1000,9 +1028,12 @@ async def test_a_skill_file_cannot_name_itself_like_a_plugin_or_scoped_skill(
     env = LocalExecEnv(str(tmp_path / "w"))
     registry = await load_registry(env, [(str(plugin), 0), (str(ws), 4)],
                                    plugins={str(plugin): "superpowers"})
-    assert registry.names() == ("superpowers:brainstorm",)
+    assert sorted(registry.names()) == ["apps-web-deploy", "superpowers-brainstorm",
+                                        "superpowers:brainstorm"]
     assert registry.get("superpowers:brainstorm").description == "The plugin's."  # type: ignore[union-attr]
-    assert "invalid 'name' value 'superpowers:brainstorm'" in caplog.text
+    lines = dict(listing_lines(registry, budget_chars=10_000))
+    assert lines["superpowers-brainstorm"] == "- superpowers-brainstorm: Mine."
+    assert lines["apps-web-deploy"] == "- apps-web-deploy: Mine."
 
 
 async def test_a_nested_skill_scoped_like_a_plugin_never_replaces_its_skill(
@@ -1064,3 +1095,23 @@ def test_a_skill_given_again_after_a_compaction_says_where_it_comes_from() -> No
     assert {n: skills._source(d, registry) for n, (d, _) in found.items()} == {
         "ws": "workspace", "below": "workspace", "mine": "user", "tools:p": "plugin",
         "given": "host"}
+
+
+async def test_a_nested_command_whose_name_is_taken_is_warned_about_once(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """The same nested command in the user's and the project's commands
+    directories: the second is skipped, and said so once, not with every
+    load (a registry is loaded again with every new message)."""
+    import logging
+
+    user_dir, project_dir = tmp_path / "user", tmp_path / "project"
+    for d in (user_dir, project_dir):
+        (d / "sp").mkdir(parents=True)
+        (d / "sp" / "brain.md").write_text("---\ndescription: Think.\n---\nThink.\n")
+    env = LocalExecEnv(str(tmp_path))
+    tiers = [(str(user_dir), 1), (str(project_dir), 2)]
+    with caplog.at_level(logging.WARNING, logger="noeta.plugins.skills.registry"):
+        for _ in range(2):
+            reg = await load_registry(env, tiers, commands={d for d, _ in tiers})
+            assert reg.get("sp:brain") is not None
+    assert len([r for r in caplog.records if "is taken by" in r.getMessage()]) == 1

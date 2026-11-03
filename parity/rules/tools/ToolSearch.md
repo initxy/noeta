@@ -40,13 +40,13 @@ deferred tool.
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.ToolSearch.r.1` | The `tool_result` content is a list of `{"type": "tool_reference", "tool_name": "<name>"}` blocks, one per match, in query order (m1/0019, m1/0023, m1/0060, s1/0018). |
-| `tool.ToolSearch.r.2` | The same user message carries, after the tool_result, a separate `text` block `Tool loaded.`. |
-| `tool.ToolSearch.r.3` | From the next request on, each loaded tool appears in `tools` with its full schema and `defer_loading: true`, sorted into the list by name (MCP tools last); it stays there for the rest of the conversation, including after compaction. |
-| `tool.ToolSearch.r.4` | The model was observed passing `max_results` equal to the number of names in a `select:` query (1–3) as well as the default 5. |
-| `tool.ToolSearch.r.5` | (bundle, not recorded) `select:` reads at most 64 names; a name that is no tool's full name also matches MCP tools by their own name (without `mcp__<server>__`). A keyword query reads at most 32 words; a query equal to a tool's name (any case) loads that tool alone; an `mcp__…` prefix loads the tools whose names start with it; otherwise each word scores against the name's words and parts (MCP server and tool names weigh a little more) and, as a whole word, the description; `+word` filters on the same fields; ties keep the tool order; `max_results` is not raised to 1. No match: a plain-text result saying nothing matched. noeta today: covered (the no-match text in our words; no MCP connection notes). |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.ToolSearch.r.1` | The `tool_result` content is a list of `{"type": "tool_reference", "tool_name": "<name>"}` blocks, one per match, in query order (m1/0019, m1/0023, m1/0060, s1/0018). | covered (`ToolReference` blocks in query order) |
+| `tool.ToolSearch.r.2` | The same user message carries, after the tool_result, a separate `text` block `Tool loaded.`. | covered (`core/types.py` `TOOL_LOADED_TEXT`) |
+| `tool.ToolSearch.r.3` | From the next request on, each loaded tool appears in `tools` with its full schema and `defer_loading: true`, sorted into the list by name (MCP tools last); it stays there for the rest of the conversation, including after compaction. | covered (`tool_search` plugin; the replay compares each request's tool list in order) |
+| `tool.ToolSearch.r.4` | The model was observed passing `max_results` equal to the number of names in a `select:` query (1–3) as well as the default 5. | n/a (the model's choice) |
+| `tool.ToolSearch.r.5` | (bundle, not recorded) `select:` reads at most 64 names; a name that is no tool's full name also matches MCP tools by their own name (without `mcp__<server>__`). A keyword query reads at most 32 words; a query equal to a tool's name (any case) loads that tool alone; an `mcp__…` prefix loads the tools whose names start with it; otherwise each word scores against the name's words and parts (MCP server and tool names weigh a little more), the name's words joined (+3, only while the tool has scored nothing yet; an MCP name without `mcp__`), the tool's search hint as a whole word (+4; a built-in's own, an MCP tool's `_meta["anthropic/searchHint"]`) and, as a whole word, the description (+2); `+word` filters on the same fields; ties keep the tool order; `max_results` is not raised to 1. No match: a plain-text result saying nothing matched, followed by notes naming the MCP servers still connecting, those that failed to connect (with their error, read as diagnostics), those blocked by managed policy, and those Claude Code refuses; before answering "no match" it reconnects the servers that are down and searches again once. | covered (the texts in our words; `noeta/plugins/tool_search/search.py` `no_match_text` names the servers the `mcp` plugin's state has down, with their reasons; noeta lists every server at turn start, so none is ever still connecting, and has no managed policy or reserved addresses; the re-listing happens after the result, once a turn (`Mcp._after_search`), so a server back up offers its tools from the next step: `parity/deviations.md`) |
 
 ## Variants
 

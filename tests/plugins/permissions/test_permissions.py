@@ -393,6 +393,20 @@ def test_settings_files_can_disable_bypass_mode(tmp_path: Path) -> None:
     Permissions(**args)
 
 
+def test_settings_files_can_keep_plan_mode_off_the_classifier(tmp_path: Path) -> None:
+    """Claude Code's top-level ``useAutoModeDuringPlan``: any file that turns
+    it off turns it off."""
+    from noeta.cli.settings_files import load, permission_arguments
+
+    user, project = tmp_path / "user.json", tmp_path / "project.json"
+    user.write_text(json.dumps({"useAutoModeDuringPlan": False}))
+    project.write_text(json.dumps({"useAutoModeDuringPlan": True}))
+    args = permission_arguments(load([user, project]), {"auto_during_plan"})
+    assert args == {"auto_during_plan": False}
+    assert not Permissions(**args).auto_during_plan
+    assert permission_arguments(load([project]), {"auto_during_plan"}) == {}
+
+
 @pytest.mark.parametrize(("command", "rule"), [
     ("git -c core.pager=sh log", "Bash(git -c core.pager=sh log)"),
     ("git push origin main", "Bash(git push *)"),
@@ -554,6 +568,34 @@ async def test_budget_caps_tool_calls_and_iterations(store: SqliteStore) -> None
         ("ran Read", False)]
 
 
+async def test_the_usd_cap_counts_calls_outside_the_conversation(store: SqliteStore) -> None:
+    """``max_cost_usd`` counts what ``/cost`` counts: a compaction's
+    summarize calls (``spent`` records) too, not only the replies."""
+    from noeta.core import records as core_records
+    from noeta.core.extension import Extension
+    from noeta.core.types import Usage
+
+    class Summarize(Extension):
+        name = "summarize"
+
+        async def before_model(self, view: Any, request: Any) -> Any:
+            if not view.state.steps_in_turn:
+                spent = core_records.Spent(model="claude-opus-5-5",
+                                           usage=Usage(uncached=1_000_000), purpose="compaction")
+                view.record(core_records.CORE, spent.kind, spent.data())
+            return request
+
+    read = Fake("Read")
+    perms = Permissions(budget=Budget(max_cost_usd=0.5))
+    provider = ScriptedProvider([reply("", ("Read", {})), reply("ok")])
+    ag = agent([Summarize(), perms], [read])
+    rt = runtime(store, provider, ag)
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert results(await events(client, tid)) == [("max_cost_usd=0.5 reached", True)]
+
+
 async def test_budget_caps_spawn_depth(store: SqliteStore) -> None:
     task = Fake("Task")
     provider = ScriptedProvider([reply("", ("Task", {})), reply("ok")])
@@ -609,6 +651,51 @@ async def test_can_use_tool_answers_asks(store: SqliteStore) -> None:
 def test_disallowing_bash_removes_its_companions() -> None:
     perms = Permissions(disallowed_tools=["Bash"])
     assert perms.disallowed == {"Bash", "Monitor", "TaskStop"}
+
+
+async def test_a_disallowed_mcp_tool_by_its_old_name_is_still_refused() -> None:
+    from noeta.core.extension import Deny, TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.core.types import ToolUse
+
+    perms = Permissions(disallowed_tools=["mcp__github__delete_repo"])
+    call = ToolUse(id="c", name="mcp__GitHub__delete_repo", input={})
+    gate = await perms.before_tool(TaskView(state=TaskState()), call)
+    assert isinstance(gate, Deny)
+    assert not perms._offered("mcp__GitHub__delete_repo")
+    assert perms._offered("mcp__GitHub__list")
+
+
+async def test_an_old_mcp_name_never_lets_a_second_servers_tool_through() -> None:
+    """The user allows their server ``github``; a project adds ``GitHub``,
+    whose tools the old naming would have called ``mcp__github__...``. The
+    allow rule names ``github`` only: ``GitHub``'s tool is asked about, not
+    run. So for a wildcard, a server cut to the old 32 characters, and an
+    allowed-tools list; a deny rule by the old name still refuses both."""
+    from noeta.core.extension import Allow, Ask, Deny, TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.core.types import ToolUse
+
+    view = TaskView(state=TaskState())
+    long = "s" * 32
+
+    async def gate(perms: Permissions, name: str) -> Any:
+        return await perms.before_tool(view, ToolUse(id="c", name=name, input={}))
+
+    for rule, own, other in (
+            ("mcp__github", "mcp__github__delete_repo", "mcp__GitHub__delete_repo"),
+            ("mcp__github__*", "mcp__github__delete_repo", "mcp__GitHub__delete_repo"),
+            (f"mcp__{long}", f"mcp__{long}__drop", f"mcp__{long}s__drop")):
+        perms = Permissions(mode="default", allow=[rule])
+        assert isinstance(await gate(perms, own), Allow | type(None)), rule
+        assert isinstance(await gate(perms, other), Ask), rule
+        denied = Permissions(mode="default", deny=[rule])
+        assert isinstance(await gate(denied, own), Deny)
+        assert isinstance(await gate(denied, other), Deny), rule
+    listed = Permissions(mode="default", allowed_tools=["mcp__github__list"])
+    assert isinstance(await gate(listed, "mcp__GitHub__list"), Deny)
+    assert not listed._offered("mcp__GitHub__list")
+    assert listed._offered("mcp__github__list")
 
 
 # ------------------------------------------------------------------ sub-agents
@@ -696,3 +783,13 @@ async def test_a_quoted_bracket_names_a_file_and_is_checked_as_one(
     assert len(asked(await events(client, tid))) == 3
     assert [r["command"] for r in bash.runs] == ["cat README"]
 
+
+
+def test_the_working_directories_are_the_cwd_then_the_additional_ones() -> None:
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState
+    from noeta.plugins.permissions import Permissions
+
+    ext = Permissions(additional_directories=["../shared", "/srv/docs", "/srv/docs"])
+    view = TaskView(state=TaskState(task_id="t", config={"cwd": "/w/proj"}))
+    assert ext.working_directories(view) == ("/w/proj", "/w/shared", "/srv/docs")

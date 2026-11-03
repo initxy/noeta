@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from typing import Any, Union
 
 from noeta.core.errors import HeldElsewhere
-from noeta.core.events import Answer, Recorded, TaskEnded, Waiting
+from noeta.core.events import Answer, Recorded, TaskEnded, ToolFinished, Waiting
 from noeta.core.extension import (
     Command,
     CommandContext,
@@ -61,17 +61,20 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
+from noeta.core.mcp_names import legacy_names, old_name, remember
 from noeta.core.questions import ask
 from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
-from noeta.core.types import Message
+from noeta.core.types import Message, ToolReference
 from noeta.plugins.mcp.admin import McpAdmin
 from noeta.plugins.mcp.client import McpClient, RequestContext
 from noeta.plugins.mcp.config import (
+    NAME_MAX,
     McpAuthRequired,
     McpConfigError,
     McpError,
     McpServer,
     describe_tool,
+    make_tool_name,
     map_server_names,
     tool_timeout_s,
 )
@@ -113,8 +116,9 @@ IDEMPOTENCY_META = "noeta/idempotencyKey"
 #: resolved first, once this many newer ones are.
 TASKS_KEEP = 256
 #: The servers' instructions in the joined system turn (``Reminder.order``):
-#: after the deferred tools, before the agent list.
-INSTRUCTIONS_ORDER = 35
+#: after the deferred tools and the agent list, before the skill listing
+#: (Claude Code's order).
+INSTRUCTIONS_ORDER = 45
 
 
 def _as_list(servers: Servers) -> list[McpServer]:
@@ -199,6 +203,9 @@ class Mcp(Extension):
         self._scopes: dict[str, str | None] = {}
         self._tools: dict[str, tuple[Any, list[Tool]]] = {}
         self._marks: dict[str, int] = {}
+        #: The turn mark (``_marks``) of the last re-listing a fruitless
+        #: ``ToolSearch`` asked for: at most one per turn.
+        self._search_marks: dict[str, int] = {}
         #: (connection partition, command name) -> (server, prompt), as last
         #: listed in that partition: one partition's listing never names
         #: the connection another partition's command runs on.
@@ -238,6 +245,12 @@ class Mcp(Extension):
         st = view.ext_state(self.name)
         if not st or st.get("servers") is None:
             return ()
+        for server in st["servers"]:
+            for t in server["tools"]:
+                if t.get("old_name"):
+                    # Kept known while offered (the table drops the least
+                    # recently offered first).
+                    remember(t["name"], t["old_name"])
         cached = self._tools.get(view.task_id)
         if cached is not None and cached[0] is st:
             return cached[1]
@@ -255,7 +268,9 @@ class Mcp(Extension):
                                      description=t["description"],
                                      loaded_description=t.get("loaded_description"),
                                      input_schema=t["input_schema"], invoke=self._invoke,
-                                     deferred=deferred, resume=self._resume))
+                                     deferred=deferred and not t.get("always_load"),
+                                     resume=self._resume,
+                                     search_hint=t.get("search_hint", "")))
         if (st["servers"] or st.get("down")) and view.state.parent_id is None:
             # Offered whenever a server is configured, even while it is down:
             # an outage must not move the stable prefix. Sub-agents get the
@@ -443,7 +458,8 @@ class Mcp(Extension):
         if st.get("servers") is None:
             return ()
         now = {s["alias"]: s["instructions"] for s in st["servers"] if s.get("instructions")}
-        text = instructions_delta(st.get("told") or {}, now)
+        text = instructions_delta(st.get("told") or {}, now,
+                                  {s["alias"] for s in st["servers"]})
         if not text:
             return ()
         return (Reminder(text=text, kind="instructions", data={"servers": now},
@@ -481,9 +497,27 @@ class Mcp(Extension):
             # A turn opens on taken input, or on input queued behind the
             # turn that just ended.
             await self._refresh_once(view)
+        elif isinstance(recorded.event, ToolFinished) and view.task_id in self._known:
+            await self._after_search(view, recorded.event)
+
+    async def _after_search(self, view: TaskView, event: ToolFinished) -> None:
+        """A ``ToolSearch`` that loaded nothing while a server is down lists
+        the servers again, once a turn, as Claude Code reconnects before it
+        gives up: a server back up offers its tools from the next step."""
+        if any(isinstance(b, ToolReference) for b in event.result.content):
+            return
+        st = view.ext_state(self.name) or {}
+        mark = self._marks.get(view.task_id, -1)
+        if not st.get("down") or self._search_marks.get(view.task_id) == mark:
+            return
+        if _call_name(view, event.result.call_id) != SEARCH_TOOL:
+            return
+        self._search_marks[view.task_id] = mark
+        await self.refresh(view)
 
     def _forget(self, task_id: str) -> None:
-        for cache in (self._known, self._scopes, self._tools, self._marks, self._roots):
+        for cache in (self._known, self._scopes, self._tools, self._marks, self._roots,
+                      self._search_marks):
             cache.pop(task_id, None)
 
     def _forget_old_tasks(self) -> None:
@@ -667,6 +701,43 @@ async def _listing(c: McpClient) -> _Listing:
     return await c.list_tools(), c.instructions
 
 
+#: The ``tool_search`` plugin's tool, whose fruitless search re-lists the
+#: servers that are down (named here, not imported: plugins stay apart).
+SEARCH_TOOL = "ToolSearch"
+
+#: A server tool's ``_meta`` keys Claude Code reads: words ``ToolSearch``
+#: also matches, and "send this tool's schema from the first request".
+SEARCH_HINT_META = "anthropic/searchHint"
+ALWAYS_LOAD_META = "anthropic/alwaysLoad"
+
+
+def _call_name(view: TaskView, call_id: str) -> str | None:
+    """The tool a result answers: in the open batch, else (the batch closed
+    with this result) in the latest assistant message."""
+    for c in view.state.calls:
+        if c.use.id == call_id:
+            return c.use.name
+    for message in reversed(view.state.messages):
+        if message.role == "assistant":
+            return next((u.name for u in message.tool_uses if u.id == call_id), None)
+    return None
+
+
+def _visible_to_model(meta: dict[str, Any]) -> bool:
+    """Whether a tool's ``_meta.ui.visibility`` lets the model see it: no
+    ``ui`` or no ``visibility`` does; a list without ``"model"``, or a value
+    that cannot be read, does not."""
+    ui = meta.get("ui")
+    if ui is None:
+        return True
+    if not isinstance(ui, dict):
+        return False
+    visibility = ui.get("visibility")
+    if visibility is None:
+        return True
+    return isinstance(visibility, list) and "model" in visibility
+
+
 def _server_entry(server: McpServer, raw: list[dict[str, Any]],
                   instructions: str | None = None) -> dict[str, Any]:
     """The recorded tool set of one server: subset-filtered, named, sorted
@@ -676,21 +747,50 @@ def _server_entry(server: McpServer, raw: list[dict[str, Any]],
     kept = [r for r in raw if allow is None or r.get("name") in allow]
     names = map_server_names(server.alias, [r.get("name") for r in kept])
     tools: dict[str, dict[str, Any]] = {}
+    too_long: set[str] = set()
     for r in kept:
         remote = str(r.get("name"))
         name = names[remote]
         if name in tools:
             continue  # the same raw name advertised twice: keep the first
+        if len(name) > NAME_MAX:
+            too_long.add(name)
+            continue
+        raw_meta = r.get("_meta")
+        meta: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
+        if not _visible_to_model(meta):
+            log.info("mcp: %s: tool %r is kept from the model (its _meta.ui.visibility "
+                     "omits \"model\")", server.alias, remote)
+            continue
         schema = r.get("inputSchema")
         if not isinstance(schema, dict):
             schema = {"type": "object", "additionalProperties": True}
         listed, loaded = describe_tool(r.get("description"))
         tools[name] = {"name": name, "remote": remote, "description": listed,
                        "input_schema": schema}
+        old = old_name(server.alias, name[len(f"mcp__{server.alias}__"):], remote)
+        if name == make_tool_name(server.alias, remote) and old != name \
+                and old not in legacy_names(name):
+            # Settings written under the old naming still name it this way.
+            tools[name]["old_name"] = old
+        hint = meta.get(SEARCH_HINT_META)
+        if isinstance(hint, str) and hint.split():
+            tools[name]["search_hint"] = " ".join(hint.split())
+        if meta.get(ALWAYS_LOAD_META) is True and not server.defer_all:
+            tools[name]["always_load"] = True
         if loaded != listed:
             tools[name]["loaded_description"] = loaded
     entry: dict[str, Any] = {"alias": server.alias, "deferred": server.deferred,
                              "tools": [tools[n] for n in sorted(tools)]}
+    if too_long:
+        # Said once per listing, and to the model when a search finds
+        # nothing (``too_long``): a whole server can vanish this way when
+        # its own name is long.
+        entry["too_long"] = len(too_long)
+        log.warning("mcp: %s: %d of its tools are not offered: their names pass the "
+                    "%d-character limit (%s); a shorter server name in the settings "
+                    "shortens them", server.alias, len(too_long), NAME_MAX,
+                    ", ".join(sorted(too_long)[:3]) + (", ..." if len(too_long) > 3 else ""))
     if instructions:
         entry["instructions"] = cap_instructions(instructions)
     return entry

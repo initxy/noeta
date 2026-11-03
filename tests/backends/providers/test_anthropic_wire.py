@@ -245,9 +245,27 @@ async def test_api_key_request_settings_follow_claude_code() -> None:
     assert sent["thinking"] == {"type": "adaptive", "display": "updates"}
     assert sent["context_management"] == {
         "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
-    assert sent["output_config"] == {"effort": "medium"}
+    # Claude Code's catalog: Opus 4.8's default effort is high.
+    assert sent["output_config"] == {"effort": "high"}
     assert json.loads(sent["metadata"]["user_id"]) == {
         "device_id": "d" * 64, "account_uuid": "", "session_id": str(uuid.UUID(root))}
+
+
+@respx.mock
+@pytest.mark.parametrize(("model", "max_tokens", "effort"), [
+    ("claude-opus-5-5", 128_000, "medium"), ("claude-sonnet-5-5", 128_000, "medium"),
+    ("claude-haiku-5-5", 128_000, "medium"), ("claude-fable-5-1", 64_000, "high"),
+    ("claude-opus-5", 64_000, "high"), ("claude-sonnet-5", 64_000, "high"),
+    ("claude-opus-4-8", 64_000, "high"), ("claude-sonnet-4-6", 32_000, "high"),
+    ("claude-haiku-4-5", 32_000, None)])
+async def test_output_cap_and_effort_default_to_claude_codes_catalog(
+        model: str, max_tokens: int, effort: str | None) -> None:
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    await _provider(default_max_tokens=None).complete(
+        _req(model=model, max_tokens=None, thinking=True))
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["max_tokens"] == max_tokens
+    assert sent.get("output_config", {}).get("effort") == effort
 
 
 @respx.mock
@@ -275,6 +293,20 @@ async def test_a_beta_set_the_host_chose_is_sent_as_given() -> None:
     route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
     await _provider(betas=("one", PER_TURN_BETA)).complete(_req(model="gpt-5.4", max_tokens=9))
     assert route.calls.last.request.headers["anthropic-beta"] == f"one,{PER_TURN_BETA}"
+
+
+@respx.mock
+async def test_betas_a_request_adds_take_claude_codes_order() -> None:
+    from noeta.backends.providers.anthropic import DEFAULT_BETAS
+
+    route = respx.post(MESSAGES_ENDPOINT).mock(return_value=_stream(_resp()))
+    request = _req(model="claude-opus-5-5", max_tokens=9,
+                   betas=["dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31", "zz-own"])
+    await _provider().complete(request)
+    # As recorded from Claude Code 2.1.312 in auto mode.
+    assert route.calls.last.request.headers["anthropic-beta"] == ",".join([
+        *DEFAULT_BETAS[:-1], "dangerous-tool-use-2026-09-03",
+        "thinking-display-updates-2026-08-18", "afk-mode-2026-01-31", "zz-own"])
 
 
 # ---------------------------------------------------------------------------
@@ -689,3 +721,68 @@ async def test_the_opening_context_is_one_message_to_claude_code() -> None:
         "<system-reminder>\ninstructions\n</system-reminder>",
         "<system-reminder>\ncontext\n</system-reminder>\n", "hi\n",
         "<system-reminder>\nlater note\n</system-reminder>\n", "again"]
+
+
+def test_tool_references_are_held_to_the_tools_the_request_offers() -> None:
+    """A reference by an MCP tool's old name goes as the tool's current
+    name; one to a tool the request does not offer is left out, and a
+    result left with none says so in text (the API refuses a reference to
+    a tool the request does not define)."""
+    from noeta.backends.providers._anthropic_wire import REFERENCES_REMOVED
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.core.types import ModelRequest, ToolReference, ToolSpec
+
+    def refs(*names: str) -> ToolResult:
+        return ToolResult(call_id="c", content=[ToolReference(tool_name=n) for n in names])
+
+    def spec(name: str) -> ToolSpec:
+        return ToolSpec(name=name, description="d", input_schema={"type": "object"})
+
+    history = [user("q"),
+               Message(role="assistant", content=[ToolUse(id="c", name="ToolSearch",
+                                                          input={"query": "gh"})]),
+               Message(role="user", content=[
+                   refs("mcp__github__delete_repo", "WebFetch", "mcp__GitHub__list")])]
+    offered = [spec("ToolSearch"), spec("mcp__GitHub__delete_repo"), spec("mcp__GitHub__list")]
+    body = AnthropicProvider(api_key="k").build_body(
+        ModelRequest(model="m", messages=history, tools=offered, max_tokens=64))
+    content = body["messages"][2]["content"][0]["content"]
+    assert content == [{"type": "tool_reference", "tool_name": "mcp__GitHub__delete_repo"},
+                       {"type": "tool_reference", "tool_name": "mcp__GitHub__list"}]
+    # A request offering none of them (the compaction's fallback call keeps
+    # only Read when tool search is off).
+    bare = AnthropicProvider(api_key="k").build_body(
+        ModelRequest(model="m", messages=history, tools=[spec("Read")], max_tokens=64))
+    assert bare["messages"][2]["content"][0]["content"] == [
+        {"type": "text", "text": REFERENCES_REMOVED}]
+
+
+def test_the_compaction_fallback_call_sends_no_reference_to_a_tool_it_drops() -> None:
+    """The fallback summarize call keeps Read, ToolSearch and the MCP
+    tools; a loaded built-in deferred tool the history references
+    (WebFetch) is not among them, so its reference does not go."""
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.core.types import ModelRequest, ToolReference, ToolSpec
+    from noeta.plugins.compaction.summary import fallback_request
+
+    def spec(name: str) -> ToolSpec:
+        return ToolSpec(name=name, description="d", input_schema={"type": "object"})
+
+    history = [user("q"),
+               Message(role="assistant", content=[ToolUse(id="c", name="ToolSearch",
+                                                          input={"query": "web"})]),
+               Message(role="user", content=[ToolResult(call_id="c", content=[
+                   ToolReference(tool_name="WebFetch"),
+                   ToolReference(tool_name="mcp__db__query")])]),
+               user("summarize")]
+    main = ModelRequest(model="m", messages=history, max_tokens=64, tools=[
+        spec("Read"), spec("ToolSearch"), spec("WebFetch"), spec("mcp__db__query"),
+        ToolSpec(name="DeferredToolPlaceholder", description="d", input_schema={},
+                 defer_loading=True)])
+    body = AnthropicProvider(api_key="k").build_body(fallback_request(main))
+    offered = {t["name"] for t in body["tools"]}
+    sent = [b["tool_name"] for m in body["messages"] if isinstance(m["content"], list)
+            for blk in m["content"] if blk.get("type") == "tool_result"
+            and isinstance(blk.get("content"), list)
+            for b in blk["content"] if b.get("type") == "tool_reference"]
+    assert sent == ["mcp__db__query"] and set(sent) <= offered

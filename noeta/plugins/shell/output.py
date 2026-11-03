@@ -14,11 +14,14 @@ from noeta.core.types import Image
 from noeta.toolkit.shell_syntax import parse
 
 #: Commands whose exit status 1 is an answer, not a failure (no match, a
-#: difference, a false condition): Claude Code's table. Status 2 and up
-#: still fail.
-_EXIT_ONE_ANSWERS = frozenset({"grep", "rg", "egrep", "fgrep", "find", "diff", "test", "["})
+#: difference, a false condition), with what it means: Claude Code's table.
+#: Status 2 and up still fail.
+_EXIT_ONE_ANSWERS = {"grep": "No matches found", "rg": "No matches found",
+                     "egrep": "No matches found", "fgrep": "No matches found",
+                     "find": "Some directories were inaccessible", "diff": "Files differ",
+                     "test": "Condition is false", "[": "Condition is false"}
 #: ``git`` subcommands read the same way.
-_GIT_EXIT_ONE_ANSWERS = frozenset({"diff", "grep"})
+_GIT_EXIT_ONE_ANSWERS = {"diff": "Files differ", "grep": "No matches found"}
 #: Where a command line is split into its last command when it cannot be
 #: parsed.
 _COMMAND_SEPARATOR = re.compile(r"&&|\|\||[;|\n]")
@@ -34,20 +37,38 @@ def _last_command(command: str) -> list[str]:
     return _COMMAND_SEPARATOR.split(command)[-1].split()
 
 
-def exit_fails(command: str, exit_code: int) -> bool:
-    """Whether ``exit_code`` makes ``command`` an error result."""
-    if exit_code == 0:
-        return False
-    if exit_code != 1:
-        return True
+def _exit_one_answer(command: str) -> str | None:
+    """What exit status 1 of ``command`` means when its last command is one
+    whose status 1 is an answer; ``None`` otherwise."""
     argv = _last_command(command)
     name = argv[0] if argv else ""
     if name == "git":
         i = 1
         while i < len(argv) and argv[i].startswith("-"):
             i += 2 if argv[i] in ("-C", "-c") else 1
-        return i >= len(argv) or argv[i] not in _GIT_EXIT_ONE_ANSWERS
-    return name not in _EXIT_ONE_ANSWERS
+        return _GIT_EXIT_ONE_ANSWERS.get(argv[i]) if i < len(argv) else None
+    return _EXIT_ONE_ANSWERS.get(name)
+
+
+def exit_fails(command: str, exit_code: int) -> bool:
+    """Whether ``exit_code`` makes ``command`` an error result."""
+    if exit_code == 0:
+        return False
+    return exit_code != 1 or _exit_one_answer(command) is None
+
+
+def background_exit_note(command: str, exit_code: int | None) -> str | None:
+    """What a background command's non-zero ``exit_code`` means when it is
+    an answer rather than a failure (the job then completed); ``None`` when
+    it failed. Stricter than :func:`exit_fails`, as Claude Code is for a
+    background command: when the last command follows ``&&``, or the line
+    cannot be read, status 1 may come from an earlier command, so it fails."""
+    if exit_code != 1:
+        return None
+    parsed = parse(command)
+    if parsed.opaque or (parsed.commands and parsed.commands[-1].before == "&&"):
+        return None
+    return _exit_one_answer(command)
 
 
 _IMAGE_URI = re.compile(r"data:image/[a-z0-9.+_-]+;base64,(.+)", re.IGNORECASE | re.DOTALL)

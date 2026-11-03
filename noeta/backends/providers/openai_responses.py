@@ -24,10 +24,13 @@ from noeta.backends.providers._common import (
     image_data_url,
     is_host_injected,
     model_admits_images,
+    restore_tool_names,
+    shorten_names_in_text,
     tool_result_images,
     tool_result_text,
     translate_http_error,
     transport_error,
+    wire_tool_name,
 )
 from noeta.backends.providers._openai_responses_stream import (
     FAMILY,
@@ -169,7 +172,7 @@ class OpenAIResponsesProvider:
                     raise _StaleReasoning(error)
                 raise error
             final = await consume_stream(response, on_delta)
-        return parse_responses_payload(final, request.model)
+        return restore_tool_names(parse_responses_payload(final, request.model), request)
 
     # ------------------------------------------------------------------
     # Outbound translation
@@ -188,7 +191,7 @@ class OpenAIResponsesProvider:
             body["tools"] = [
                 {
                     "type": "function",
-                    "name": tool.name,
+                    "name": wire_tool_name(tool.name),
                     "description": tool.description,
                     "parameters": tool.input_schema,
                 }
@@ -224,7 +227,8 @@ class OpenAIResponsesProvider:
         # prompt-cache prefix at the first assistant turn.
         if self._reasoning_continuation != "off":
             body["include"] = ["reasoning.encrypted_content"]
-        return body
+        # One name per tool: the function list's, in the text as well.
+        return shorten_names_in_text(body, (t.name for t in request.tools))
 
 
 def _map_effort(request: ModelRequest) -> str | None:
@@ -353,7 +357,7 @@ def _assistant_to_items(
                 {
                     "type": "function_call",
                     "call_id": block.id,
-                    "name": block.name,
+                    "name": wire_tool_name(block.name),
                     "arguments": encode_tool_arguments(block.input),
                 }
             )

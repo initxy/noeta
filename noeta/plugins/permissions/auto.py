@@ -4,20 +4,24 @@ and what auto-mode requests tell the API (betas, the server-side check)."""
 from __future__ import annotations
 
 import logging
-import sys
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from noeta.core.errors import ContextOverflow
 from noeta.core.events import ExtensionRecorded
-from noeta.core.extension import Allow, Ask, Deny, Gate, TaskView
+from noeta.core.execenv import ExecEnv
+from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import classifier as c
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.state import NAME, PermState, state_of
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.local_env import env_home, env_platform, is_local
+from noeta.toolkit.notices import HANDBACK_REVIEW_KEY
+from noeta.toolkit.worktrees import git, repository_top
 
 log = logging.getLogger("noeta.permissions")
 
@@ -33,6 +37,9 @@ MAIN_AUTO_BETAS = ("dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31")
 INSTRUCTIONS_PLUGIN = "instructions"
 #: Root tasks whose instructions are kept for their sub-agents' classifier.
 ROOTS_KEPT = 256
+#: The sub-agent's report tool: a block flags the report instead of
+#: refusing it (Claude Code's ``onBlock: "flag"``).
+HANDBACK_TOOL = "SubagentHandback"
 
 
 class Classifier:
@@ -49,16 +56,28 @@ class Classifier:
         #: Root task id -> the instruction texts it was shown, for its
         #: sub-agents, and the last seq of its log read.
         self._roots: OrderedDict[str, tuple[list[str], int]] = OrderedDict()
+        #: Verdicts recorded but maybe not folded yet: a hand-back rewritten
+        #: with its warning is gated again before the record lands.
+        self._fresh: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     async def answer(self, view: TaskView, call: ToolUse, ask: Ask) -> Gate | None:
         st = state_of(view)
-        done = st.classified.get(call.id)
+        done = st.classified.get(call.id) or self._fresh.get(call.id)
         if done is None:
             done = await self._run(view, call, st)
             view.record(NAME, "classified", done)
+            self._fresh[call.id] = done
+            while len(self._fresh) > ROOTS_KEPT:
+                self._fresh.popitem(last=False)
         if done.get("fallback"):
             return Ask(prompt=str(done.get("fallback")), detail={**ask.detail, "classify": False},
                        firm=True)
+        if done.get("too_long"):
+            # As Claude Code: the call is asked about as if auto mode were
+            # off (no retry would ever fit).
+            return Ask(prompt=ask.prompt, detail={**ask.detail, "classify": False}, firm=True)
+        if call.name == HANDBACK_TOOL and done["decision"] in ("allow", "flag"):
+            return _handback_gate(view, call, done)
         if done["decision"] == "allow":
             return Allow()
         if done.get("counted", True):
@@ -67,19 +86,34 @@ class Classifier:
 
     async def _run(self, view: TaskView, call: ToolUse, st: PermState) -> dict[str, Any]:
         out: dict[str, Any] = {"call_id": call.id}
+        handback = call.name == HANDBACK_TOOL
         try:
             verdict, demoted = await self._verdict(view, call, st)
+        except ContextOverflow:
+            log.warning("auto-mode classifier transcript too long for %s", call.name)
+            if handback:
+                return {**out, "decision": "deny", "counted": False,
+                        "reason": w.CLASSIFIER_TOO_LONG.format(name=call.name)}
+            return {**out, "decision": "ask", "too_long": True}
         except Exception as exc:  # noqa: BLE001 — no verdict holds the call back
             log.warning("auto-mode classifier failed for %s: %s", call.name, exc)
+            if handback:
+                return {**out, "decision": "flag", "unreviewed": True}
             return {**out, "decision": "deny", "counted": False,
                     "reason": w.CLASSIFIER_UNAVAILABLE}
         if demoted:
             view.record(NAME, "demoted")
         if verdict.block is None:
+            if handback:
+                return {**out, "decision": "flag", "unreviewed": True}
             return {**out, "decision": "deny", "counted": False,
                     "reason": w.CLASSIFIER_UNPARSED}
         if not verdict.block:
             return {**out, "decision": "allow"}
+        if handback:
+            # Delivered under a warning, not refused, and no denial counted.
+            return {**out, "decision": "flag", "reason": verdict.reason,
+                    "category": verdict.category}
         out.update(decision="deny", reason=verdict.reason, category=verdict.category)
         cons, total = st.consecutive_denials + 1, st.total_denials + 1
         if cons >= MAX_CONSECUTIVE_DENIALS or total >= MAX_TOTAL_DENIALS:
@@ -108,15 +142,18 @@ class Classifier:
         model, fast = self._model(view, st)
         demoted = False
         trusted = self.trusted(view)
+        root = view.state.root_id or view.task_id or None
 
         async def stage(n: int) -> str:
             nonlocal model, fast, demoted
             assert view.complete is not None
             request = c.classifier_request(model=model, prompt=prompt, instructions=instructions,
                                            transcript=transcript, stage=n, fast=fast,
-                                           trusted=trusted)
+                                           trusted=trusted, root_id=root)
             try:
                 response = await view.complete(request)
+            except ContextOverflow:
+                raise
             except Exception:
                 main = view.model or str(view.state.config.get("model") or "")
                 if not fast or model == main or self.model:
@@ -124,13 +161,19 @@ class Classifier:
                 model, fast, demoted = main, False, True
                 response = await view.complete(c.classifier_request(
                     model=model, prompt=prompt, instructions=instructions,
-                    transcript=transcript, stage=n, fast=False, trusted=trusted))
+                    transcript=transcript, stage=n, fast=False, trusted=trusted, root_id=root))
             return response.message.text
 
         first = c.parse_stage1(await stage(1))
         if first.block is False:
             return first, demoted
-        return c.parse_stage2(await stage(2)), demoted
+        try:
+            return c.parse_stage2(await stage(2)), demoted
+        except ContextOverflow:
+            raise
+        except Exception as exc:  # noqa: BLE001 — stage 1's lean to block stands
+            log.warning("auto-mode classifier stage 2 failed for %s: %s", call.name, exc)
+            return c.Verdict(block=True, reason=w.CLASSIFIER_STAGE2_FAILED), demoted
 
     def _transcript(self, view: TaskView, call: ToolUse, st: PermState) -> list[str]:
         summary_at = len(view.state.compaction.lead) if view.state.compaction else None
@@ -143,10 +186,13 @@ class Classifier:
 
     async def _instructions(self, view: TaskView) -> str:
         """The project instructions the classifier is shown: the task's own,
-        or, for a sub-agent that runs without them (Explore, Plan), those its
-        root task was shown (Claude Code's classifier always has them)."""
+        or, for a sub-agent that runs without them or with the managed ones
+        only (Explore, Plan), those its root task was shown (Claude Code's
+        classifier always has the session's)."""
         texts = [m.text for m in await view.residents(lead=True) if m.text.strip()]
-        if texts or view.state.parent_id is None:
+        managed_only = any(getattr(e, "managed_only", False) for e in view.extensions
+                           if e.name == INSTRUCTIONS_PLUGIN)
+        if view.state.parent_id is None or (texts and not managed_only):
             return "\n\n".join(texts)
         return await self._root_instructions(view)
 
@@ -182,10 +228,29 @@ class Classifier:
         return view.prompt(f"{NAME}/auto_mode_classifier", self._template)
 
 
-def auto_request(view: TaskView, request: ModelRequest,
-                 context: Callable[[], dict[str, Any]]) -> ModelRequest:
+def _handback_gate(view: TaskView, call: ToolUse, done: Mapping[str, Any]) -> Gate:
+    """A reviewed hand-back runs; one auto mode flagged (or could not
+    review) runs with the warning its caller reads above the report, under
+    :data:`HANDBACK_REVIEW_KEY`, which only this layer sets.
+
+    The tool drops a value equal to the one the model wrote under the key
+    (its own), so the warning set here never equals that: a model that
+    wrote the warning's exact text gets it with a trailing newline (the
+    tool strips it). The rewritten call is gated again and kept as is."""
+    wanted = {k: v for k, v in call.input.items() if k != HANDBACK_REVIEW_KEY}
+    if done.get("decision") == "flag":
+        note = w.HANDBACK_UNREVIEWED if done.get("unreviewed") else \
+            w.HANDBACK_FLAGGED.format(reason=done.get("reason") or "")
+        written = next((c.use.input.get(HANDBACK_REVIEW_KEY) for c in view.state.calls
+                        if c.use.id == call.id), None)
+        wanted[HANDBACK_REVIEW_KEY] = note + "\n" if written == note else note
+    return Allow() if wanted == call.input else Rewrite(input=wanted)
+
+
+async def auto_request(view: TaskView, request: ModelRequest,
+                       context: Callable[[], Awaitable[dict[str, Any]]]) -> ModelRequest:
     """``request`` as an auto-mode one: its betas, and on the first main
-    request the server-side check with ``context()``."""
+    request the server-side check with ``await context()``."""
     import msgspec
 
     # As Claude Code per process: the first main request offers the
@@ -201,22 +266,34 @@ def auto_request(view: TaskView, request: ModelRequest,
     fields = dict(request.vendor_fields)
     if main and not st.probed:
         fields["safeguards"] = [{"type": "dangerous_tool_use",
-                                 "classifier_context": context()}]
+                                 "classifier_context": await context()}]
         view.record(NAME, "probed")
     return msgspec.structs.replace(request, betas=betas, vendor_fields=fields)
 
 
-def server_context(scope: sc.Scope, *, plans_dir: str, allow: Sequence[r.Rule],
-                   deny: Sequence[r.Rule], ask: Sequence[r.Rule],
-                   auto_mode: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+#: The settings sources whose root directory the check is told: the user
+#: settings' directory, the working directory for every other (Claude
+#: Code's list, as recorded).
+RULE_ROOT_SOURCES = ("userSettings", "projectSettings", "localSettings", "flagSettings",
+                     "policySettings", "cliArg", "command", "session", "toolsNarrowing",
+                     "mcpServerPolicy", "hostCredential")
+
+
+async def server_context(scope: sc.Scope, env: ExecEnv, *, plans_dir: str,
+                         allow: Sequence[r.Rule], deny: Sequence[r.Rule],
+                         ask: Sequence[r.Rule],
+                         auto_mode: Mapping[str, Sequence[str]]) -> dict[str, Any]:
     """What Claude Code tells the API about its permission state on the
     first auto-mode request (the server answers an API-key session that
-    it does not classify, and the classifier runs here)."""
+    it does not classify, and the classifier runs here). The platform and
+    the git state are the task's exec env's, not this worker's."""
+    platform = _platform(await env_platform(env))
+    user_root = str(Path(plans_dir).parent)
     return {
-        "v": 1, "permission_mode": "auto", "platform": _platform(), "live_cwd": scope.cwd,
-        "home_dir": scope.home,
-        "rule_roots": {"userSettings": str(Path(plans_dir).parent),
-                       "projectSettings": scope.cwd, "localSettings": scope.cwd},
+        "v": 1, "permission_mode": "auto", "platform": platform, "live_cwd": scope.cwd,
+        "home_dir": await _home(env, scope.home),
+        "rule_roots": {k: user_root if k == "userSettings" else scope.cwd
+                       for k in RULE_ROOT_SOURCES},
         "trusted_directories": {
             "primary": {"path": scope.cwd, "resolved": [scope.cwd]},
             "additional": list(scope.dirs[1:]), "network": [],
@@ -224,14 +301,38 @@ def server_context(scope: sc.Scope, *, plans_dir: str, allow: Sequence[r.Rule],
         "rules": {"allow": [x.text for x in allow], "deny": [x.text for x in deny],
                   "ask": [x.text for x in ask]},
         "auto_mode": {k: list(v) for k, v in auto_mode.items()},
-        "artifact_consent_holdback": False, "case_insensitive_paths":
-            sys.platform == "darwin",
+        # Claude Code: true on Windows only.
+        "artifact_consent_holdback": False, "case_insensitive_paths": platform == "windows",
         "restricted": False, "is_remote_mode": False, "classify_all_shell": False,
         "user_identity": c._user_name(),
-        "git_state": {"cwd": scope.cwd, "root": scope.cwd, "branch": None,
-                      "default_branch": None, "status": None, "visibility": None},
+        "git_state": await git_state(env, scope.cwd),
     }
 
 
-def _platform() -> str:
-    return {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
+async def git_state(env: ExecEnv, cwd: str) -> dict[str, Any]:
+    """Claude Code's git state for an API-key session: the checkout's root
+    and branch (its status and visibility probes are off by default, so
+    sent as ``null``); outside a repository, no root and the
+    ``not_a_repo`` error."""
+    out: dict[str, Any] = {"cwd": cwd, "root": None, "branch": None, "default_branch": None,
+                           "status": None, "visibility": None}
+    try:
+        root = await repository_top(env, cwd)
+        if root is None:
+            return {**out, "error": "not_a_repo"}
+        code, branch = await git(env, ["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    except Exception:  # noqa: BLE001 — best-effort, as Claude Code's probe
+        return {**out, "error": "error"}
+    return {**out, "root": root, "branch": branch if code == 0 and branch else None}
+
+
+async def _home(env: ExecEnv, here: str) -> str:
+    """The exec env's home directory (``here``, this worker's, for a local
+    env or when it cannot be told)."""
+    if is_local(env):
+        return here
+    return await env_home(env, here) or here
+
+
+def _platform(name: str) -> str:
+    return {"darwin": "macos", "win32": "windows"}.get(name, name)

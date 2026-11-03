@@ -57,6 +57,11 @@ def test_schema_offers_the_flag_and_makes_the_message_optional() -> None:
     schema = SendMessageTool.input_schema
     assert schema["required"] == ["to"]
     assert schema["properties"]["notify_when_idle"]["type"] == "boolean"
+    # Claude Code 2.1.312: `to` one line of at most 300 characters, `message`
+    # defaults to "".
+    to = schema["properties"]["to"]
+    assert to["maxLength"] == 300 and to["pattern"] == "^[^\n\r]*$"
+    assert schema["properties"]["message"]["default"] == ""
 
 
 async def test_a_bare_subscription_to_an_idle_session_answers_at_once(

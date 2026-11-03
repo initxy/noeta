@@ -5,7 +5,7 @@ server goes away."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 from noeta.plugins.mcp.config import cap_text, description_max_chars
 from noeta.toolkit.deltas import AMBIENT_NOTE, changed
@@ -24,10 +24,16 @@ def cap_instructions(text: str) -> str:
     return cap_text(text, description_max_chars())
 
 
-def instructions_delta(told: Mapping[str, str], now: Mapping[str, str]) -> str:
+def instructions_delta(told: Mapping[str, str], now: Mapping[str, str],
+                       connected: Collection[str] | None = None) -> str:
     """The note on servers whose instructions are new or changed since
-    ``told`` and servers that left (``""`` when nothing changed)."""
+    ``told`` (by name, as Claude Code orders them) and servers that left
+    (``""`` when nothing changed). With ``connected``, a server still
+    connected whose instructions went away is not said to have left."""
     joined, left = changed(told, now)
+    joined = sorted(joined)
+    if connected is not None:
+        left = [alias for alias in left if alias not in connected]
     parts: list[str] = []
     if joined:
         parts.append("\n".join([INSTRUCTIONS_HEAD,

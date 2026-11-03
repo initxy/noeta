@@ -16,9 +16,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from noeta.core import records as core_records
 from noeta.core.events import (
     Answer,
     Compacted,
+    ExtensionRecorded,
     External,
     InputTaken,
     ModelReplied,
@@ -37,8 +39,9 @@ from noeta.core.extension import (
     Rewrite,
     TaskView,
 )
+from noeta.core.mcp_names import allowed_in, named_in
 from noeta.core.tool import Tool, ToolContext, ToolOutput
-from noeta.core.types import ModelRequest, ToolUse
+from noeta.core.types import Message, ModelRequest, ToolUse
 from noeta.plugins.permissions import auto as a
 from noeta.plugins.permissions import guards as g
 from noeta.plugins.permissions import modes as md
@@ -49,16 +52,20 @@ from noeta.plugins.permissions.decision import Decision, choices
 from noeta.plugins.permissions.rule_check import RuleCheck
 from noeta.plugins.permissions.rule_specs import rule_spec_text
 from noeta.plugins.permissions.state import (
+    AUTO_DURING_PLAN,
     INHERITED_RULES_KEY,
     NAME,
     PLAN_NAME_KEY,
+    PLAN_ORIGIN_KEY,
     PermState,
+    auto_active,
     fold,
     inherited_rules,
     state_of,
 )
 from noeta.toolkit import permission_modes as pm
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.context import task_env
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
@@ -109,10 +116,20 @@ class Permissions(Extension):
       (absolute, ``~/...``, or relative to the working directory).
     * ``auto_mode`` — Claude Code's ``autoMode`` object for the auto-mode
       classifier: ``allow``, ``soft_deny``, ``hard_deny`` and
-      ``environment``, each a list of plain-language lines.
+      ``environment``, each a list of plain-language lines that replaces
+      the built-in text of its section (an entry ``"$defaults"`` puts the
+      built-in text at its place).
     * ``disable_bypass_mode`` — refuse ``bypassPermissions`` (Claude Code's
       ``disableBypassPermissionsMode``): as the starting mode, from a task's
       config (an agent file's ``permissionMode``) and as a switch.
+    * ``auto_during_plan`` — plan mode runs with the auto-mode classifier
+      when planning starts from auto mode (Claude Code's top-level
+      ``useAutoModeDuringPlan``, default on): an ask in plan mode goes to the
+      classifier, except a file tool's write and plan mode's refusal of a
+      tool that is neither read-only nor a shell tool, which the person
+      answers. A plan begun in any other mode leaves every ask to the
+      person, and its requests carry no auto-mode betas. Settled when plan
+      mode is entered.
 
     The rest are noeta's own:
 
@@ -157,6 +174,7 @@ class Permissions(Extension):
         additional_directories: Sequence[str] = (),
         auto_mode: Mapping[str, Sequence[str]] | None = None,
         disable_bypass_mode: bool = False,
+        auto_during_plan: bool = True,
         classifier_model: str | None = None,
         plans_dir: str | None = None,
         risk: Mapping[str, str] | None = None,
@@ -192,6 +210,12 @@ class Permissions(Extension):
         self.ask_rules = r.parse_rules(ask, "ask")
         self.additional_directories = tuple(_directory(d) for d in additional_directories)
         self.auto_mode = p.check_auto_mode(auto_mode)
+        for key in ("hard_deny", "soft_deny"):
+            if self.auto_mode[key] and "$defaults" not in self.auto_mode[key]:
+                # Only a log line: the classifier's text is as Claude Code's.
+                log.warning('auto_mode.%s has no "$defaults": it replaces the classifier\'s '
+                            "built-in %s rules", key, key)
+        self.auto_during_plan = bool(auto_during_plan)
         self.classifier_model = classifier_model
         self.plans_dir = plans_dir or str(default_plans_dir())
         self.risk = {**p.DEFAULT_RISK, **dict(risk or {})}
@@ -231,6 +255,11 @@ class Permissions(Extension):
         self._exit_plan = pl.ExitPlanModeTool()
         self._enter_plan = pl.EnterPlanModeTool(self._enter_plan_mode)
 
+    def working_directories(self, view: TaskView) -> tuple[str, ...]:
+        """The task's working directory, then the additional ones (absolute):
+        what the environment message lists."""
+        return self._check.scope(view).dirs
+
     def trusts(self, view: TaskView) -> bool:
         """Whether this task's working directory is a trusted workspace."""
         trusted = self.trusted
@@ -265,6 +294,10 @@ class Permissions(Extension):
             name = posixpath.splitext(posixpath.basename(path))[0]
         if isinstance(name, str) and name:
             out[PLAN_NAME_KEY] = name
+        plan = st.plan if isinstance(st, PermState) and mode == "plan" else None
+        if plan:
+            out[PLAN_ORIGIN_KEY] = {"pre_mode": plan.get("pre_mode"),
+                                    AUTO_DURING_PLAN: auto_active("plan", plan)}
         return out
 
     def initial_state(self) -> PermState:
@@ -318,9 +351,9 @@ class Permissions(Extension):
             # ``updatedInput``): that input runs, and is gated again.
             return Rewrite(input=updated)
         name = call.name
-        if name in self.disallowed:
+        if named_in(self.disallowed, name, "disallowed_tools"):
             return Deny(reason=p.DENIED_BY_POLICY.format(name=name))
-        if self.allowed is not None and name not in self.allowed:
+        if self.allowed is not None and not allowed_in(self.allowed, name, "allowed_tools"):
             return Deny(reason=p.NOT_IN_ALLOWLIST.format(name=name))
         st = state_of(view)
         guard = self._guards(view, st, call)
@@ -369,7 +402,14 @@ class Permissions(Extension):
     async def decide(self, view: TaskView, call: ToolUse) -> Decision:
         """Claude Code's order: deny rules, ask rules, then what the tool
         touches and the mode."""
-        return await self._check.decide(view, call, self.mode_of(view))
+        mode = self.mode_of(view)
+        return await self._check.decide(view, call, mode,
+                                        plan_classifier=self.plan_classifier(view, mode))
+
+    def plan_classifier(self, view: TaskView, mode: str) -> bool:
+        """Whether this task plans with the auto-mode classifier, as its
+        plan record says (settled on entry: :func:`state.plan_classifier_on`)."""
+        return mode == "plan" and auto_active(mode, state_of(view).plan)
 
     def _counters(self, view: TaskView, st: PermState, call: ToolUse) -> g.Counters:
         before = 0
@@ -414,8 +454,19 @@ class Permissions(Extension):
     async def on_start(self, view: TaskView) -> None:
         st = state_of(view)
         if st.mode is None and self.mode_of(view) == "plan":
-            md.plan_start(view, "plan", default_mode=self.mode, plans_dir=self.plans_dir,
-                          parent_plan=view.state.config.get(PLAN_NAME_KEY))
+            # A sub-agent of a planning task plans as its parent does (the
+            # parent's plan origin), not as the service's default would.
+            origin = view.state.config.get(PLAN_ORIGIN_KEY)
+            origin = origin if isinstance(origin, dict) else {}
+            pre = origin.get("pre_mode")
+            if pre not in p.PERMISSION_MODES or pre == "plan" or (
+                    pre == "bypassPermissions" and self.disable_bypass):
+                pre = self.mode
+            classify = origin.get(AUTO_DURING_PLAN)
+            md.plan_start(view, "plan", default_mode=pre, plans_dir=self.plans_dir,
+                          parent_plan=view.state.config.get(PLAN_NAME_KEY),
+                          auto_during_plan=self.auto_during_plan,
+                          classify=classify if isinstance(classify, bool) else None)
         elif st.mode is None:
             view.record(NAME, "mode", {"mode": self.mode_of(view)})
         offered = pm.modes_record(self._modes)
@@ -429,6 +480,18 @@ class Permissions(Extension):
 
             model = ev.response.model or str(view.state.config.get("model") or "")
             view.record(NAME, "cost", {"usd": price(model, ev.response.usage) if model else 0.0})
+        elif isinstance(ev, ExtensionRecorded) and ev.extension == core_records.CORE \
+                and self.budget.max_cost_usd is not None:
+            # What ``/cost`` counts besides replies: a reply the kernel
+            # dropped, and calls outside the conversation (a compaction's).
+            from noeta.core.models import price
+
+            core = core_records.decode(ev)
+            usage = core.usage if isinstance(core, (
+                core_records.Continue, core_records.TurnDone, core_records.Spent)) else None
+            if usage is not None:
+                model = getattr(core, "model", "") or str(view.state.config.get("model") or "")
+                view.record(NAME, "cost", {"usd": price(model, usage) if model else 0.0})
         elif isinstance(ev, InputTaken):
             for item in ev.items:
                 await self._on_input(view, item.body, recorded.seq)
@@ -457,10 +520,11 @@ class Permissions(Extension):
     def _switch(self, view: TaskView, mode: Any, seq: int, *, by_command: bool = False) -> None:
         md.switch(view, mode, seq, current=self.mode_of(view),
                   disable_bypass=self.disable_bypass, plans_dir=self.plans_dir,
-                  by_command=by_command)
+                  by_command=by_command, auto_during_plan=self.auto_during_plan)
 
     def _enter_plan_mode(self, ctx: ToolContext) -> bool:
-        return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir)
+        return md.enter_plan(ctx, default_mode=self.mode, plans_dir=self.plans_dir,
+                             auto_during_plan=self.auto_during_plan)
 
     async def _remember(self, view: TaskView, answer: Answer) -> None:
         """An "always" allow remembers the rules the card showed; a choice
@@ -501,16 +565,18 @@ class Permissions(Extension):
             if len(tools) != len(request.tools):
                 request = msgspec.structs.replace(request, tools=tools)
         mode = self.mode_of(view)
-        plan = state_of(view).plan or {}
-        if mode != "auto" and not (mode == "plan" and plan.get("pre_mode") == "auto"):
+        if mode != "auto" and not self.plan_classifier(view, mode):
+            # Claude Code's auto-mode betas ride on every request while the
+            # classifier judges the calls (plan mode with it included).
             return request
-        return a.auto_request(view, request, lambda: a.server_context(
-            self._check.scope(view), plans_dir=self.plans_dir,
-            allow=self._check.rules(view),
+        return await a.auto_request(view, request, lambda: a.server_context(
+            self._check.scope(view), task_env(view.env, view.state.config),
+            plans_dir=self.plans_dir, allow=self._check.rules(view),
             deny=self.deny_rules, ask=self.ask_rules, auto_mode=self.auto_mode))
 
     def _offered(self, name: str) -> bool:
-        return name not in self.disallowed and (self.allowed is None or name in self.allowed)
+        return not named_in(self.disallowed, name, "disallowed_tools") and (
+            self.allowed is None or allowed_in(self.allowed, name, "allowed_tools"))
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         if self.budget.max_tool_calls is not None:
@@ -518,7 +584,12 @@ class Permissions(Extension):
         return output
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
-        return await md.mode_reminders(view, self.mode_of(view))
+        return [*md.plan_file_reminders(view), *await md.mode_reminders(view, self.mode_of(view))]
+
+    async def resident(self, view: TaskView) -> Sequence[Message]:
+        """At a compaction: the plan file, given again with the next request."""
+        await md.plan_file_resident(view)
+        return ()
 
 
 # ---------------------------------------------------------------- helpers

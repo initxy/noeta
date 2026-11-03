@@ -251,6 +251,76 @@ def test_schema_and_tool_differences() -> None:
     assert any(d.startswith("tool Agent.prompt type: Claude Code string") for d in out)
 
 
+def test_each_request_tool_list_is_compared_in_order(tmp_path: Path) -> None:
+    def tool(name: str, deferred: bool = False) -> dict[str, Any]:
+        return facts.tool_facts({"name": name, "input_schema": {},
+                                 **({"defer_loading": True} if deferred else {})})
+
+    cc = [tool("Agent"), tool("P", True), tool("Write")]
+    no = [tool("Task"), tool("Write"), tool("P", True), tool("Extra")]
+    assert compare.diff_request_tools(cc, no, {"Agent": "Task"}) == [
+        "tools this request carries only in noeta: Extra",
+        "tool order in the request differs: Claude Code Task, P, Write / noeta Task, Write, P"]
+    assert compare.diff_request_tools([tool("W", True)], [tool("W")], {}) == [
+        "tool W in the request: Claude Code defers it, noeta loads it"]
+    # The second request moves P on noeta's side only; the session-wide
+    # union (first-seen order) is the same, so only the per-request
+    # comparison sees it.
+    cdir = tmp_path / "parity" / "9.9"
+    cdir.mkdir(parents=True)
+    first = [tool("A"), tool("P", True), tool("B")]
+    (cdir / "tools.json").write_text(json.dumps({
+        "a": first, "a2": [tool("A"), tool("L", True), tool("P", True), tool("B")]}))
+    (cdir / "s.json").write_text(json.dumps({"requests": [
+        contract_row("a", 1, ["user: text:prompt"], toolset="a"),
+        contract_row("a", 2, ["user: text:prompt"], toolset="a2")]}))
+    noeta = {"toolsets": {"b": first,
+                          "b2": [tool("A"), tool("L", True), tool("B"), tool("P", True)]},
+             "sessions": {"s": {"requests": [
+                 contract_row("a", 1, ["user: text:prompt"], toolset="b"),
+                 contract_row("a", 2, ["user: text:prompt"], toolset="b2")]}}}
+    report, count = compare.compare_all(cdir, noeta)
+    assert count == 1 and "tool order in the request differs" in report
+
+
+def test_a_tool_list_missing_from_tools_json_is_a_mismatch(tmp_path: Path) -> None:
+    cdir = tmp_path / "parity" / "9.9"
+    cdir.mkdir(parents=True)
+    (cdir / "tools.json").write_text(json.dumps({}))
+    (cdir / "s.json").write_text(json.dumps({"requests": [
+        contract_row("a", 1, ["user: text:prompt"], toolset="gone")]}))
+    noeta = {"toolsets": {}, "sessions": {"s": {"requests": [
+        contract_row("a", 1, ["user: text:prompt"], toolset="lost")]}}}
+    report, count = compare.compare_all(cdir, noeta)
+    assert count == 1
+    assert "tool list not in tools.json: Claude Code's gone, noeta's lost" in report
+
+
+def test_per_request_cache_marks_and_description_changes(tmp_path: Path) -> None:
+    def tool(name: str, text: str = "d", **kw: Any) -> dict[str, Any]:
+        return facts.tool_facts({"name": name, "description": text, "input_schema": {}, **kw})
+
+    mark = {"cache_control": {"type": "ephemeral"}}
+    assert compare.diff_request_tools([tool("A"), tool("B", **mark)],
+                                      [tool("A", **mark), tool("B")], {}) == [
+        "cache marks in the request's tool list: Claude Code B* / noeta A*"]
+    # The second request changes A's description on Claude Code's side only:
+    # the session-wide union (each tool as last seen) cannot tell.
+    cdir = tmp_path / "parity" / "9.9"
+    cdir.mkdir(parents=True)
+    (cdir / "tools.json").write_text(json.dumps({"a": [tool("A", "one")],
+                                                 "a2": [tool("A", "two")]}))
+    (cdir / "s.json").write_text(json.dumps({"requests": [
+        contract_row("a", 1, ["user: text:prompt"], toolset="a"),
+        contract_row("a", 2, ["user: text:prompt"], toolset="a2")]}))
+    noeta = {"toolsets": {"b": [tool("A", "uno")]}, "sessions": {"s": {"requests": [
+        contract_row("a", 1, ["user: text:prompt"], toolset="b"),
+        contract_row("a", 2, ["user: text:prompt"], toolset="b")]}}}
+    report, count = compare.compare_all(cdir, noeta)
+    assert count == 1
+    assert "tool A's description changes at this request in Claude Code only" in report
+
+
 def test_params_headers_system_and_cache() -> None:
     assert compare.diff_params({"keys": ["a", "b"], "a": 1, "b": 2},
                                {"keys": ["a", "c"], "a": 3, "c": 0}) == [

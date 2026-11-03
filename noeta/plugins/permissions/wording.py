@@ -38,6 +38,24 @@ CLASSIFIER_NO_VERDICT = (
     "code and other read-only work does not go through the classifier and still works.")
 CLASSIFIER_UNAVAILABLE = "The auto-mode classifier could not be reached"
 CLASSIFIER_UNPARSED = "The auto-mode classifier gave no readable verdict"
+#: Stage 2 failed after stage 1 leaned to blocking: a block (counted).
+CLASSIFIER_STAGE2_FAILED = ("The classifier's second stage failed, so the first stage's "
+                            "lean to block stands (usually temporary: the same action may "
+                            "pass on a later try)")
+#: The transcript does not fit the classifier's window, for a tool only the
+#: classifier may allow (a sub-agent's hand-back).
+CLASSIFIER_TOO_LONG = (
+    "{name} was not reviewed: the conversation is too long for the auto-mode classifier, "
+    "and nobody is asked about this tool instead. This is not a judgment that the action is "
+    "unsafe; the same call fails the same way until the conversation is shorter.")
+#: Above a sub-agent's report auto mode flagged (Claude Code delivers it
+#: with a warning instead of refusing it).
+HANDBACK_FLAGGED = (
+    "SECURITY WARNING: auto mode flagged this sub-agent's report. Reason: {reason}. The "
+    "report is below; check what the sub-agent did before you act on it.")
+HANDBACK_UNREVIEWED = (
+    "Note: the auto-mode classifier could not review this sub-agent's report. Check what the "
+    "sub-agent did and what it reports before you act on it.")
 
 # ---------------------------------------------------------------- person-facing
 
@@ -77,10 +95,17 @@ TITLES = {"Bash": "Bash command", "Monitor": "Monitor command", "Write": "Create
 
 # ---------------------------------------------------------------- reminders
 
-#: Auto mode's note on using the shell for small jobs (``rem.auto-mode.*``).
-AUTO_MODE_GUIDANCE = (
-    "Auto mode is on, so the shell may also do small jobs: reading (cat, head, sed -n), "
+#: The note on using the shell for small jobs, sent in auto mode and in
+#: bypass-permissions mode (``rem.auto-mode.*``); ``{mode}`` names the mode.
+SHELL_FIRST_GUIDANCE = (
+    "{mode} is on, so the shell may also do small jobs: reading (cat, head, sed -n), "
     "searching (grep, find) and small mechanical edits (sed, heredocs, short scripts) "
     "instead of Read, Edit or Write. Use whichever fits. Prefer Edit or Write when a shell "
     "edit would be brittle: exact or multi-line replacements, or flags that differ between "
     "GNU and BSD tools.")
+AUTO_MODE_GUIDANCE = SHELL_FIRST_GUIDANCE.format(mode="Auto mode")
+#: Sent once auto mode is left after its note went out (planning keeps it,
+#: unless plan mode runs without the classifier).
+AUTO_MODE_EXITED = (
+    "## Auto mode has ended\n\nAuto mode is off now. Go back to the dedicated tools for "
+    "reading, searching and editing files.")

@@ -53,7 +53,7 @@ def test_the_claude_code_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "broken": "nope",
     }})
     http, stdio, sse, stream, ws = read_servers([f])
-    assert http == McpServer(alias="git_hub", url="https://x/mcp",
+    assert http == McpServer(alias="Git_Hub", url="https://x/mcp",
                              headers={"Authorization": "Bearer t0k"})
     assert http.transport == "http"
     assert stdio == McpServer(alias="files", command=["npx", "-y", "srv", ""], env={"K": "t0k"})
@@ -67,7 +67,8 @@ def test_the_claude_code_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert read_servers([tmp_path / "missing.json"]) == []
     (tmp_path / "junk.json").write_text("{")
     assert read_servers([tmp_path / "junk.json"]) == []
-    assert alias_for("") == "_" and len(alias_for("x" * 50)) == 32
+    assert alias_for("") == "_" and alias_for("x" * 50) == "x" * 50
+    assert alias_for("My Server.v2") == "My_Server_v2"
 
 
 def test_a_server_timeout_in_milliseconds(tmp_path: Path) -> None:
@@ -186,3 +187,11 @@ async def test_a_task_gets_the_settings_servers(store: SqliteStore, tmp_path: Pa
     listed = [r.event for r in st if getattr(r.event, "kind", "") == "listed"][-1]
     names = {t["name"] for srv in listed.data["servers"] for t in srv["tools"]}
     assert {"mcp__fake__echo", "mcp__proj__echo"} <= names
+
+
+def test_always_load_false_defers_every_tool(tmp_path: Path) -> None:
+    f = write(tmp_path / "s.json", {"mcpServers": {
+        "off": {"command": "x", "alwaysLoad": False}, "unset": {"command": "x"},
+        "on": {"command": "x", "alwaysLoad": True}}})
+    by = {s.alias: (s.deferred, s.defer_all) for s in read_servers([f])}
+    assert by == {"off": (True, True), "unset": (True, False), "on": (False, False)}

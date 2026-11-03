@@ -57,15 +57,15 @@ counterpart is `Agent` (`noeta/plugins/subtasks/tool.py`, `descriptions/agent.md
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.Agent.r.1` | The call returns at once (both `Explore` in m1 and `general-purpose` in s1): one `text` block in a list, stating the agent was launched asynchronously and that the result block is internal metadata never to be quoted to the user. |
-| `tool.Agent.r.2` | The ack carries `agentId: <id>` (`a` + 16 hex chars), marked internal, plus how to continue it: `SendMessage` with `to: '<id>'` and a 5–10 word `summary`. |
-| `tool.Agent.r.3` | The ack says the agent works in the background, a notification will arrive automatically, nothing is known about its result until then (do not report, assume or predict it), and the caller should do other work or answer the user meanwhile. |
-| `tool.Agent.r.4` | The ack tells the caller not to duplicate the agent's work (avoid the same files or topics). |
-| `tool.Agent.r.5` | The ack ends with `output_file: <tmp>/claude-<uid>/<project-slug>/<session-id>/tasks/<id>.output` and a warning not to read or tail that file through the shell (it is the full JSONL transcript and would flood the context); if asked for progress, say it is still running. |
-| `tool.Agent.r.6` | Completion comes later as two user-role pieces: the agent's `SubagentHandback` report wrapped in `<agent-message from="<id>">` (see `SubagentHandback.md`, `subagent.md`), and a `<task-notification>` in a `<system-reminder>` with `task-id`, `tool-use-id`, `output-file`, `status` `completed`, `summary` `Agent "<description>" finished`, a note that the same id may notify again, a `result` that points at the hand-back message instead of repeating it, and `usage` (`subagent_tokens`, `tool_uses`, `duration_ms`). See `reminders.md`. |
-| `tool.Agent.r.7` | noeta today: r.1–r.6. The transcript file is `<spill root>/<root task id>/tasks/<agent id>.output` (the host's spill directory for large tool outputs), one JSON line (`type`, `message`) per message of the agent's conversation, rewritten from its log as it changes; a host with no spill directory has no file, and then neither the ack nor the notice names one. |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.Agent.r.1` | The call returns at once (both `Explore` in m1 and `general-purpose` in s1): one `text` block in a list, stating the agent was launched asynchronously and that the result block is internal metadata never to be quoted to the user. | covered (`subtasks` launch result, in our wording) |
+| `tool.Agent.r.2` | The ack carries `agentId: <id>` (`a` + 16 hex chars), marked internal, plus how to continue it: `SendMessage` with `to: '<id>'` and a 5–10 word `summary`. | covered (the agent id is `a` + 16 hex characters) |
+| `tool.Agent.r.3` | The ack says the agent works in the background, a notification will arrive automatically, nothing is known about its result until then (do not report, assume or predict it), and the caller should do other work or answer the user meanwhile. | covered, in our wording |
+| `tool.Agent.r.4` | The ack tells the caller not to duplicate the agent's work (avoid the same files or topics). | covered, in our wording |
+| `tool.Agent.r.5` | The ack ends with `output_file: <tmp>/claude-<uid>/<project-slug>/<session-id>/tasks/<id>.output` and a warning not to read or tail that file through the shell (it is the full JSONL transcript and would flood the context); if asked for progress, say it is still running. | covered with noeta's path (r.7); no line when the host has no spill directory |
+| `tool.Agent.r.6` | Completion comes later as two user-role pieces: the agent's `SubagentHandback` report wrapped in `<agent-message from="<id>">` (see `SubagentHandback.md`, `subagent.md`), and a `<task-notification>` in a `<system-reminder>` with `task-id`, `tool-use-id`, `output-file`, `status` `completed`, `summary` `Agent "<description>" finished`, a note that the same id may notify again, a `result` that points at the hand-back message instead of repeating it, and `usage` (`subagent_tokens`, `tool_uses`, `duration_ms`). See `reminders.md`. | covered (`subtasks` hand-back and notice: `SubagentHandback.md` r.2, `reminders.md`) |
+| `tool.Agent.r.7` | noeta today: r.1–r.6. The transcript file is `<spill root>/<root task id>/tasks/<agent id>.output` (the host's spill directory for large tool outputs), one JSON line (`type`, `message`) per message of the agent's conversation, rewritten from its log as it changes; a host with no spill directory has no file, and then neither the ack nor the notice names one. | see the shape cell |
 
 ## Variants
 

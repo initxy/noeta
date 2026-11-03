@@ -160,3 +160,88 @@ def test_anthropic_key_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> Non
         provider_for("anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
     assert isinstance(provider_for("anthropic"), AnthropicProvider)
+
+
+# ---------------------------------------------------------------------------
+# Tool names longer than OpenAI's 64 characters
+# ---------------------------------------------------------------------------
+
+
+def test_openai_wires_shorten_a_long_tool_name_and_map_it_back() -> None:
+    from noeta.backends.providers._common import restore_tool_names, wire_tool_name
+    from noeta.core.types import ModelResponse, ToolSpec
+
+    long = "mcp__server__" + "x" * 100
+    short = wire_tool_name(long)
+    assert len(short) == 64 and short == wire_tool_name(long) and short != long
+    assert wire_tool_name("Bash") == "Bash"
+    call = Message(role="assistant", content=[ToolUse(id="c1", name=long, input={})])
+    request = ModelRequest(model="m", messages=[user("q"), call], max_tokens=64,
+                           tools=[ToolSpec(name=long, description="d", input_schema={}),
+                                  ToolSpec(name="Bash", description="d", input_schema={})])
+    chat = OpenAICompatProvider("https://x.test/v1", "k").build_body(request)
+    assert [t["function"]["name"] for t in chat["tools"]] == [short, "Bash"]
+    assert chat["messages"][1]["tool_calls"][0]["function"]["name"] == short
+    responses = OpenAIResponsesProvider("https://x.test/v1/responses", "k").build_body(request)
+    assert [t["name"] for t in responses["tools"]] == [short, "Bash"]
+    assert [i["name"] for i in responses["input"] if i["type"] == "function_call"] == [short]
+    reply = ModelResponse(message=Message(role="assistant", content=[
+        Text(text="t"), ToolUse(id="c2", name=short, input={}),
+        ToolUse(id="c3", name="Bash", input={})]), stop_reason="tool_use")
+    restored = restore_tool_names(reply, request)
+    assert [b.name for b in restored.message.content if isinstance(b, ToolUse)] == [long, "Bash"]
+
+
+def test_openai_wires_write_a_long_tool_name_one_way_in_text_too() -> None:
+    """The deferred-tool list, a ToolSearch result and an error naming a
+    tool carry the name the function list carries, every request alike;
+    a ToolSearch ``select:`` by that name loads the tool."""
+    from noeta.backends.providers._common import wire_tool_name
+    from noeta.core.types import ToolReference, ToolSpec
+    from noeta.plugins.tool_search import ToolSearchTool
+
+    long = "mcp__server__" + "x" * 100
+    short = wire_tool_name(long)
+    listing = Message(role="user", origin="system",
+                      content=[Text(text=f"Deferred tools:\n{long}\nmcp__s__ok")])
+    call = Message(role="assistant", content=[ToolUse(
+        id="c1", name="ToolSearch", input={"query": f"select:{long}"})])
+    found = Message(role="user", content=[
+        ToolResult(call_id="c1", content=[ToolReference(tool_name=long)])])
+    request = ModelRequest(model="m", messages=[user(f"use {long}."), listing, call, found],
+                           max_tokens=64, system=[],
+                           tools=[ToolSpec(name=long, description=f"{long} does x",
+                                           input_schema={})])
+    for body in (OpenAICompatProvider("https://x.test/v1", "k").build_body(request),
+                 OpenAIResponsesProvider("https://x.test/v1/responses", "k").build_body(
+                     request)):
+        text = str(body)
+        assert long not in text and short in text
+        assert "mcp__s__ok" in text  # a short name is left alone
+    # The model, seeing only the short name, can load the tool by it.
+    tool = ToolSearchTool({long: ToolSpec(name=long, description="d", input_schema={})})
+    assert tool.search(f"select:{short}") == [long]
+    assert tool.search(short) == [long]
+
+
+def test_openai_wires_leave_long_mcp_text_that_is_no_offered_tool() -> None:
+    """Only the request's own long tool names are rewritten: an ``mcp__``
+    string in a file the model read, or in an edit's old string, reaches
+    the model as written (a rewrite would make the edit miss)."""
+    from noeta.backends.providers._common import wire_tool_name
+    from noeta.core.types import ToolSpec
+
+    offered = "mcp__server__" + "x" * 100
+    other = "mcp__server__" + "y" * 100
+    edit = {"file_path": "a.py", "old_string": f"NAME = '{other}'", "new_string": "NAME = 1"}
+    call = Message(role="assistant", content=[ToolUse(id="c1", name="Edit", input=edit)])
+    read = Message(role="user", content=[ToolResult(call_id="c1", content=[
+        Text(text=f"NAME = '{other}'  # calls {offered}")])])
+    request = ModelRequest(model="m", messages=[user("q"), call, read], max_tokens=64,
+                           tools=[ToolSpec(name=offered, description="d", input_schema={}),
+                                  ToolSpec(name="Edit", description="d", input_schema={})])
+    for body in (OpenAICompatProvider("https://x.test/v1", "k").build_body(request),
+                 OpenAIResponsesProvider("https://x.test/v1/responses", "k").build_body(
+                     request)):
+        text = str(body)
+        assert other in text and offered not in text and wire_tool_name(offered) in text

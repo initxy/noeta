@@ -17,7 +17,7 @@ from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks
 from noeta.plugins.memory import INDEX_FILE, Memory, load_index, memory_dir_for
 from noeta.plugins.memory.extension import (
-    INDEX_MAX_BYTES,
+    INDEX_MAX_CHARS,
     INDEX_MAX_LINES,
     RECALL_HEAD,
     RECALL_MAX_FILES,
@@ -218,8 +218,21 @@ def test_the_index_is_cut_at_its_limits() -> None:
     assert f"{INDEX_MAX_LINES + 50} lines (limit {INDEX_MAX_LINES})" in cut
     wide = "\n".join("x" * 1000 for _ in range(40))
     cut = load_index(wide)
-    assert len(cut.split("\n> Note")[0].encode()) <= INDEX_MAX_BYTES
-    assert f"(limit {INDEX_MAX_BYTES})" in cut
+    assert len(cut.split("\n> Note")[0]) <= INDEX_MAX_CHARS
+    assert f"(limit {INDEX_MAX_CHARS})" in cut
+
+
+def test_the_index_limit_counts_characters_not_bytes() -> None:
+    """Claude Code measures the index by its length in characters: a CJK
+    index of 20,000 characters (60,000 UTF-8 bytes) is loaded whole."""
+    cjk = "\n".join("记" * 99 for _ in range(200))
+    assert len(cjk) < INDEX_MAX_CHARS < len(cjk.encode())
+    assert load_index(cjk) == cjk
+    wide = "\n".join("记" * 999 for _ in range(30))
+    cut = load_index(wide)
+    kept = cut.split("\n> Note")[0]
+    assert INDEX_MAX_CHARS - 1000 <= len(kept) <= INDEX_MAX_CHARS
+    assert f"{len(wide)} characters (limit {INDEX_MAX_CHARS})" in cut
 
 
 def _memory(directory: Path, name: str, desc: str, body: str, kind: str = "feedback") -> None:
@@ -251,6 +264,21 @@ async def test_recall_attaches_what_the_selector_picks(h: Harness, tmp_path: Pat
     await h.say(a, tid, "and this one")
     assert "tabs.md" not in h.provider.requests[-2].messages[0].text
     assert RECALL_MAX_FILES == 5
+
+
+async def test_the_recall_budget_counts_characters(h: Harness, tmp_path: Path) -> None:
+    """Claude Code's 61,440 budget of a conversation counts the recalled
+    text's length in characters, not its UTF-8 bytes."""
+    home = tmp_path / "home"
+    directory = Path(memory_dir_for(str(h.work), home))
+    directory.mkdir(parents=True)
+    _memory(directory, "zh.md", "中文笔记", "用制表符缩进。")
+    a = agent(home, recall_model="small")
+    h.provider.add(reply(json.dumps({"selected_memories": ["zh.md"]})), reply("ok"))
+    tid = await h.start(a, goal="怎么缩进 this file")
+    (record,) = await h.records(tid, "memory", "recalled")
+    shown = (directory / "zh.md").read_text().strip()
+    assert record.data["chars"] == len(shown) < len(shown.encode())
 
 
 def test_a_selector_reply_that_is_not_json_still_picks_listed_files() -> None:
@@ -520,3 +548,26 @@ async def test_a_sub_agent_recalls_nothing(tmp_path: Path) -> None:
     state.message_seqs.append(1)
     view = TaskView(state=state, complete=complete)
     assert await Memory(recall_model="small").reminders(view) == ()
+
+
+def test_a_recall_logged_with_its_former_bytes_key_still_counts() -> None:
+    """Recalls logged before the count's key was ``chars`` (``bytes``) fold
+    into the same count, and an erased one takes its share back off."""
+    ext = Memory()
+    state = ext.reduce(None, "recalled", {"paths": ["a.md"], "bytes": 10, "through": 1})
+    state = ext.reduce(state, "recalled", {"paths": ["b.md"], "chars": 5, "through": 2})
+    assert state["chars"] == 15
+    assert ext.reduce({"dir": None, "surfaced": [], "bytes": 7}, "recalled",
+                      {"paths": ["c.md"], "chars": 1, "through": 3})["chars"] == 8
+    erased = ext.reduce(state, "core.erased", {"seqs": [1]})
+    assert erased["chars"] == 5 and erased["surfaced"] == ["b.md"]
+
+
+def test_a_continued_task_recalls_for_its_own_prompts(tmp_path: Path) -> None:
+    """``through`` and the recalls' keys are seqs of the source's log; a task
+    continuing the conversation starts them over."""
+    from noeta.plugins.memory import Memory
+    st = {"dir": "/m", "surfaced": ["a.md"], "chars": 10, "through": 40,
+          "recent": [{"through": 40, "paths": ["a.md"], "chars": 10}], "voided": [12]}
+    out = Memory(home=str(tmp_path)).continue_state(st)
+    assert out == {"dir": "/m", "surfaced": ["a.md"], "chars": 10, "through": 0}

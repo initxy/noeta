@@ -72,6 +72,37 @@ def is_local(env: object) -> bool:
     return bool(getattr(env, "local", False))
 
 
+async def env_platform(env: Any) -> str:
+    """The platform ``env`` runs commands on, in ``sys.platform``'s words
+    (``linux``, ``darwin``): this machine's for a local env, else from its
+    ``uname -s``; ``""`` when it cannot be told."""
+    import sys
+
+    if is_local(env):
+        return sys.platform
+    try:
+        out = await env.run(["uname", "-s"], timeout=5, output_cap=1024)
+    except Exception:  # noqa: BLE001 — best-effort
+        return ""
+    if out.exit_code != 0 or out.timed_out:
+        return ""
+    name = out.stdout.decode("utf-8", errors="replace").strip().lower()
+    return name if name in ("linux", "darwin") or name.startswith("freebsd") else ""
+
+
+async def env_home(env: Any, default: str | None = None) -> str | None:
+    """The home directory of ``env``'s user: this machine's for a local env,
+    else its ``$HOME``; ``default`` when it cannot be told."""
+    if is_local(env):
+        return os.path.expanduser("~")
+    try:
+        out = await env.run(["sh", "-c", 'printf %s "$HOME"'], timeout=5, output_cap=4096)
+    except Exception:  # noqa: BLE001 — best-effort
+        return default
+    home = out.stdout.decode("utf-8", errors="replace").strip()
+    return home if out.exit_code == 0 and home.startswith("/") else default
+
+
 def local_timezone() -> str | None:
     """This machine's IANA time zone name (``Europe/Berlin``): ``TZ`` when it
     names one, else the zone ``/etc/localtime`` links to or ``/etc/timezone``

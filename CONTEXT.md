@@ -49,8 +49,8 @@ plugins share) > `noeta/core`. `|` siblings never import each other, nor do two 
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name (`TaskView.find_tool`),
 inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
 others (memory's `dir` for instructions, permissions and fs, shell's `cwd` (permissions, hooks, fs),
-permissions' `mode` (permissions, hooks), instructions' files for hooks and its `start` for the classifier,
-structured_output's `answer` for workflow and front ends). Front ends import no plugin; they read permissions'
+permissions' `mode` (permissions, hooks, shell), instructions' files for hooks and its `start` for the classifier,
+structured_output's `answer` for workflow and front ends, subtasks' and workflow's for `TaskStop`: `toolkit/background_tasks.py`). Front ends import no plugin; they read permissions'
 `mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
 
 ## Ways in
@@ -150,8 +150,9 @@ batch names it. Every agent built from agent files runs it. MCP tools are deferr
 An agent is a markdown file (`noeta/agents/agent_files.py`): YAML frontmatter (Claude Code's
 fields, plus `plugins` as names or `name: {arguments}` and `one_shot`) and the system prompt as
 body. A sub-agent runs in the background; in auto mode it ends its run with `SubagentHandback`,
-whose report reaches its caller as an `agent`-origin message, elsewhere its last reply is the
-result in its completion notice (`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
+whose report reaches its caller as an `agent`-origin message (one that ends without it delivers
+no report), elsewhere its last reply is the result in its completion notice
+(`noeta/plugins/subtasks`). One plugin instance per name and arguments is shared
 by every agent naming it. The built-ins are `noeta/agents/files/*.md`.
 
 ## Prompt name

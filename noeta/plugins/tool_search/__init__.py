@@ -14,9 +14,9 @@ with :data:`NOT_LOADED`), and the request always lists
 vendor's deferred-loading mode on from the first request.
 
 Order (the kernel's): every sent tool sorted by name, then the tools that
-declare ``listed_last`` (server tools) sorted by name. The placeholder goes
-right before the ``listed_last`` group; while that group is empty and no
-deferred tool is loaded, it goes right before the last tool.
+declare ``listed_last`` (server tools) sorted by name. The placeholder is
+always second to last: right before the last tool of that order, whatever
+it is (Claude Code inserts it at ``length - 1``).
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from collections.abc import Sequence
 
 from noeta.core.extension import Extension, TaskView, ToolChanges, ToolEntry
 from noeta.core.loop.state import TaskState
+from noeta.core.mcp_names import legacy_index
 from noeta.core.tool import Tool, tool_flag
 from noeta.core.types import ToolReference, ToolResult, ToolSpec
 from noeta.plugins.tool_search.search import TOOL_SEARCH, ToolSearchTool
@@ -69,11 +70,14 @@ class ToolSearch(Extension):
         add: list[Tool] = [] if any(t.name == TOOL_SEARCH for t in offered) \
             else [ToolSearchTool(deferred)]
         loaded = loaded_tools(view.state)
+        # A reference written under an MCP tool's old name loads it too (one
+        # that two offered tools share loads neither).
+        index = legacy_index(t.name for t in offered)
+        loaded |= {index[o] for o in loaded if index.get(o) in deferred}
         withhold = {n: NOT_LOADED.format(name=n) for n in deferred if n not in loaded}
         sent = [t for t in [*offered, *add] if t.name not in withhold]
-        head = sorted(t.name for t in sent if not tool_flag(t, "listed_last"))
-        last_group = any(tool_flag(t, "listed_last") for t in sent)
-        any_loaded = len(withhold) < len(deferred)
-        before = "" if last_group or any_loaded or not head else head[-1]
+        order = [*sorted(t.name for t in sent if not tool_flag(t, "listed_last")),
+                 *sorted(t.name for t in sent if tool_flag(t, "listed_last"))]
+        before = order[-1] if order else ""
         return ToolChanges(add=add, withhold=withhold,
                            entries=[ToolEntry(spec=placeholder_spec(), before=before)])

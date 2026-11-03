@@ -29,7 +29,8 @@ def allowed_tools_gate(tool: str, active: Mapping[str, Any],
     if not declaring:
         return None
     granted = {t for n in declaring for t in active[n]["allowed_tools"]}
-    if "*" in granted or any(pr.match(pr.Rule(tool=t, content=None, text=t), tool, {}, _ANY)
+    if "*" in granted or any(pr.match(pr.Rule(tool=t, content=None, text=t), tool, {}, _ANY,
+                                      for_allow=True)
                              for t in granted):
         return None
     reason = f"tool {tool!r} not in the allowed-tools grant of active skills {declaring!r}"

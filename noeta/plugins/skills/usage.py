@@ -3,7 +3,8 @@
 
 Every activation is an ``ExtensionRecorded(extension="skills",
 kind="activated")`` entry; the model's ``skill`` calls and the user's
-``/<name>`` count as use, a host preload does not. The score is Claude
+``/<name>`` count as use, a host preload does not, and one skill counts at
+most once a minute across the store (Claude Code's). The score is Claude
 Code's: ``count * max(0.5 ^ (days since last use / 7), 0.1)``.
 
 The extension reads no other task, so a host wires it through
@@ -32,6 +33,8 @@ __all__ = ["SkillUsage", "UsageRank", "decayed_usage_score", "skill_usage", "usa
 _log = logging.getLogger(__name__)
 _SECONDS_PER_DAY = 86_400.0
 _COUNTED = ("model", "user")
+#: Uses of one skill closer together than this count once (Claude Code's).
+COUNT_INTERVAL_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,8 +44,10 @@ class SkillUsage:
 
 
 def skill_usage(records: Iterable[Recorded], extension: str = "skills") -> dict[str, SkillUsage]:
-    counts: dict[str, int] = {}
-    latest: dict[str, float] = {}
+    """Each skill's use count and last counted use over ``records`` (any
+    tasks' logs, in any order): a use within a minute of the last counted
+    one is not counted."""
+    uses: list[tuple[float, str]] = []
     for rec in records:
         ev = rec.event
         if not (isinstance(ev, ExtensionRecorded) and ev.extension == extension
@@ -51,8 +56,14 @@ def skill_usage(records: Iterable[Recorded], extension: str = "skills") -> dict[
         name = ev.data.get("name")
         if not isinstance(name, str) or ev.data.get("source") not in _COUNTED:
             continue
+        uses.append((rec.at, name))
+    counts: dict[str, int] = {}
+    latest: dict[str, float] = {}
+    for at, name in sorted(uses):
+        if name in latest and at - latest[name] < COUNT_INTERVAL_SECONDS:
+            continue
         counts[name] = counts.get(name, 0) + 1
-        latest[name] = max(latest.get(name, 0.0), rec.at)
+        latest[name] = at
     return {n: SkillUsage(counts[n], latest[n]) for n in sorted(counts)}
 
 

@@ -12,9 +12,9 @@ The files, lowest precedence first:
 A headless run's ``--settings`` adds a layer just below the managed one, and
 ``--setting-sources`` picks which of 1 to 3 are read (:func:`settings_layers`).
 
-A key a later file sets wins (``model``, ``agent``, ``outputStyle``, each ``env``
-variable, ``permissions.defaultMode``); permission rule lists and
-``additionalDirectories`` add up across files, without repeats; the
+A key a later file sets wins (``model``, ``agent``, ``outputStyle``, ``language``,
+each ``attribution`` line, each ``env`` variable, ``permissions.defaultMode``);
+permission rule lists and ``additionalDirectories`` add up across files, without repeats; the
 ``sandbox`` object merges as :func:`merge_sandbox` says. Hooks and
 MCP consent (``enabledMcpjsonServers``) are read from the same files by the
 hooks and MCP plugins, which take the file list.
@@ -59,9 +59,15 @@ class FileSettings:
     #: The agent front ends start with (Claude Code's ``agent``).
     agent: str | None = None
     output_style: str | None = None
+    #: ``language``: the language the model answers in.
+    language: str | None = None
+    #: ``attribution.commit`` / ``attribution.pr`` (an empty string: no
+    #: line); ``includeCoAuthoredBy: false`` without them sets both empty.
+    attribution: dict[str, str] = field(default_factory=dict)
     #: ``allow`` / ``deny`` / ``ask`` rule lists (Claude Code's
-    #: ``Tool(spec)`` strings, unparsed), ``defaultMode`` and
-    #: ``additionalDirectories``.
+    #: ``Tool(spec)`` strings, unparsed), ``defaultMode``,
+    #: ``additionalDirectories`` and the top-level ``useAutoModeDuringPlan``
+    #: (kept here only when a file turns it off).
     permissions: dict[str, Any] = field(default_factory=dict)
     #: The ``sandbox`` object, merged (:func:`merge_sandbox`).
     sandbox: dict[str, Any] = field(default_factory=dict)
@@ -69,7 +75,15 @@ class FileSettings:
     #: file, but ``allow`` rules and ``additionalDirectories`` (which widen
     #: it) not from a project's files.
     sandbox_permissions: dict[str, Any] = field(default_factory=dict)
+    #: Claude Code's skill listing settings (``skillListingBudgetFraction``,
+    #: ``skillListingMaxDescChars``), the last file's of each.
+    skill_listing: dict[str, Any] = field(default_factory=dict)
 
+
+#: Claude Code's skill listing settings, the range each takes and whether
+#: it is a whole number.
+SKILL_LISTING_KEYS = {"skillListingBudgetFraction": (0.0, 1.0, False),
+                      "skillListingMaxDescChars": (0.0, float("inf"), True)}
 
 #: Claude Code's ``--setting-sources`` names.
 SETTING_SOURCES = ("user", "project", "local")
@@ -225,6 +239,22 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
             out.agent = data["agent"]
         if isinstance(data.get("outputStyle"), str) and data["outputStyle"]:
             out.output_style = data["outputStyle"]
+        if isinstance(data.get("language"), str):
+            out.language = data["language"].strip() or None
+        attribution = data.get("attribution")
+        if isinstance(attribution, dict):
+            out.attribution.update({k: v for k, v in attribution.items()
+                                    if k in ("commit", "pr") and isinstance(v, str)})
+        elif data.get("includeCoAuthoredBy") is False:
+            out.attribution.update({"commit": "", "pr": ""})
+        for key, (low, high, whole) in SKILL_LISTING_KEYS.items():
+            value = data.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                    and low < value <= high and (not whole or float(value).is_integer()):
+                out.skill_listing[key] = value
+        if data.get("useAutoModeDuringPlan") is False:
+            # As Claude Code: any file that turns it off turns it off.
+            out.permissions["useAutoModeDuringPlan"] = False
         perms = data.get("permissions")
         if not isinstance(perms, dict):
             continue
@@ -255,8 +285,9 @@ def apply_env(settings: FileSettings) -> None:
 def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str, Any]:
     """The permissions plugin's arguments the settings give, as plain data:
     ``mode`` (``defaultMode``), ``allow`` / ``deny`` / ``ask`` (rule strings),
-    ``additional_directories`` and ``disable_bypass_mode``
-    (``disableBypassPermissionsMode: "disable"``); only those the plugin takes
+    ``additional_directories``, ``disable_bypass_mode``
+    (``disableBypassPermissionsMode: "disable"``) and ``auto_during_plan``
+    (the top-level ``useAutoModeDuringPlan``); only those the plugin takes
     (``accepted``, its argument names)."""
     perms = settings.permissions
     args: dict[str, Any] = {k: list(perms[k]) for k in RULE_LISTS if k in perms}
@@ -265,6 +296,8 @@ def permission_arguments(settings: FileSettings, accepted: set[str]) -> dict[str
                                           for d in perms["additionalDirectories"]]
     if perms.get("disableBypassPermissionsMode") == "disable":
         args["disable_bypass_mode"] = True
+    if perms.get("useAutoModeDuringPlan") is False:
+        args["auto_during_plan"] = False
     if "defaultMode" in perms:
         if perms["defaultMode"] == "bypassPermissions" and args.get("disable_bypass_mode"):
             log.warning("settings: defaultMode bypassPermissions is disabled "

@@ -22,7 +22,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | wake a task later | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | ask the person something | `ask(...)` (the call parks, the task holds no worker) | `noeta/core/questions.py` |
 | add an agent or sub-agent | an agent markdown file (Claude Code's format plus `plugins`) | `noeta/agents/agent_files.py` |
-| add skills | `SKILL.md` folders in `~/.noeta/skills` or a plugin's `skills/` | `noeta/plugins/skills` |
+| add skills | `SKILL.md` folders in `~/.noeta/skills`, a project's `.noeta/skills`, or a plugin's `skills/`; `*.md` files in `.noeta/commands` | `noeta/plugins/skills` |
 | connect MCP servers | `.noeta/mcp.json`, settings `mcpServers`, a plugin's `.mcp.json` | `noeta/plugins/mcp` |
 | let a chat app or webhook in | a `Channel` (`run(client, stop)`), posting with `deliver()` | `noeta/core/channel.py` |
 | send replies back out | `on_event` in an `Extension` inside the task | `examples/chat-bridge` |
@@ -96,7 +96,7 @@ their `!` lines through the permission checks and pre-approve their `allowed-too
 substituted. Its manifest's `userConfig` is asked for on `noeta plugin add` (or
 `--config KEY=VALUE`; `noeta plugin configure` asks again), kept in `~/.noeta/settings.json`
 `pluginConfigs` with sensitive values in the OS keyring, and substituted as Claude Code does
-(not yet in skill bodies; each hook gets every value as `CLAUDE_PLUGIN_OPTION_<KEY>`). A secret
+(each hook gets every value as `CLAUDE_PLUGIN_OPTION_<KEY>`). A secret
 a machine cannot read stops only what uses it, with a notice: hooks get no variable for it, an
 MCP server or hook naming it is left out, a `PreToolUse` / `PermissionRequest` /
 `UserPromptSubmit` hook naming it refuses. Its own files may name only its own keyring secrets. Its `settings.json` `agent` names the agent

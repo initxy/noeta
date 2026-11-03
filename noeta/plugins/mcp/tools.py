@@ -18,8 +18,15 @@ import posixpath
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from noeta.core.mcp_names import named_in
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.plugins.mcp.config import McpError, McpServer, make_tool_name
+from noeta.plugins.mcp.config import (
+    McpError,
+    McpServer,
+    McpServerError,
+    make_tool_name,
+    terminal_tools,
+)
 from noeta.toolkit.tools import format_size, load_description, save_spilled, spill_path
 
 __all__ = [
@@ -65,8 +72,10 @@ class McpTool:
 
     def __init__(self, *, name: str, alias: str, remote: str, description: str,
                  input_schema: dict[str, Any], invoke: Invoke, deferred: bool = True,
-                 resume: Resume | None = None, loaded_description: str | None = None) -> None:
+                 resume: Resume | None = None, loaded_description: str | None = None,
+                 search_hint: str = "") -> None:
         self.name = name
+        self.search_hint = search_hint
         self.alias = alias
         self.remote = remote
         self.description = description
@@ -75,6 +84,13 @@ class McpTool:
         self.deferred = deferred
         self._invoke = invoke
         self._resume = resume
+
+    @property
+    def silent_reply_after(self) -> str | None:
+        """``success`` for a tool named in ``NOETA_TERMINAL_MCP_TOOLS``: its
+        result is meant to end the turn."""
+        return "success" if named_in(terminal_tools(), self.name,
+                                     "NOETA_TERMINAL_MCP_TOOLS") else None
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         return await self._invoke(self, dict(input), ctx)
@@ -145,6 +161,7 @@ class ListMcpResourcesTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "list the resources of connected MCP servers"
     description = """
 Lists the resources that the configured MCP servers offer. Each entry has the \
 standard MCP resource fields and a `server` field naming the server it comes from.
@@ -193,6 +210,7 @@ class ReadMcpResourceTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "read one MCP resource by its URI"
     description = """
 Reads one resource from an MCP server, given the server's name and a resource's URI.
 
@@ -267,6 +285,7 @@ class ReadMcpResourceDirTool:
     retry_safe = True
     clearable = True
     deferred = True
+    search_hint = "list what an MCP directory resource contains"
     description = """
 Shows what one directory resource of an MCP server holds, one level down \
 (`resources/directory/read`); it does not descend into subdirectories.
@@ -277,8 +296,8 @@ Parameters:
 
 Each child has its own URI; a subdirectory is shown with a trailing "/" (MIME type \
 "inode/directory"): call this tool again on its URI to go deeper. Read a file resource with \
-ReadMcpResourceTool. Works only with servers that support directory listing; others answer \
-with an error.
+ReadMcpResourceTool. Works only with servers that support directory listing; others say \
+so.
 """
     input_schema: dict[str, Any] = {
         "$schema": _SCHEMA,
@@ -306,17 +325,26 @@ with an error.
                                f"{', '.join(sorted(servers)) or 'none'}.", is_error=True)
         try:
             children = await self._use(ctx, server, lambda c: c.read_directory(uri))
+        except McpServerError as exc:
+            # The server is up and said no: an answer, not a failed call
+            # (Claude Code's "not a directory" / "no directory listing").
+            return text_output(f"{alias} did not list {uri}: {exc.detail}. If it is a file "
+                               "resource, read it with ReadMcpResourceTool; a server without "
+                               "directory listing answers this way too.")
         except McpError as exc:
-            return text_output(f"{self.name}: {alias} could not list {uri} ({exc}). It may not "
-                               "support directory listing, or the resource is not a "
-                               "directory (read a file with ReadMcpResourceTool).",
-                               is_error=True)
-        lines = []
-        for child in children:
-            name = str(child.get("name") or child.get("uri") or "")
-            slash = "/" if child.get("mimeType") == DIRECTORY_MIME else ""
-            lines.append(f"{name}{slash}  {child.get('uri', '')}".rstrip())
-        if not lines:
-            return text_output(f"The directory {uri} is empty.")
-        head = f"{len(lines)} {'entry' if len(lines) == 1 else 'entries'} in {uri}:"
-        return text_output("\n".join([head, *lines]))
+            return text_output(f"{self.name}: {alias} could not be reached to list {uri} "
+                               f"({exc}).", is_error=True)
+        return text_output(directory_listing(children))
+
+
+def directory_listing(children: list[dict[str, Any]]) -> str:
+    """Claude Code's shape: a count line and one name per line (a trailing
+    ``/`` for a subdirectory), or ``Directory is empty.``; then the
+    children as compact JSON (URI, name, MIME type)."""
+    entries = [{"uri": str(c.get("uri") or ""), "name": str(c.get("name") or c.get("uri") or ""),
+                **({"mimeType": str(c["mimeType"])} if c.get("mimeType") is not None else {})}
+               for c in children]
+    names = [e["name"] + ("/" if e.get("mimeType") == DIRECTORY_MIME else "") for e in entries]
+    head = (f"Directory listing ({len(names)} {'entry' if len(names) == 1 else 'entries'}):\n"
+            + "\n".join(names)) if names else "Directory is empty."
+    return f"{head}\n{_compact({'resources': entries})}"

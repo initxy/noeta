@@ -122,11 +122,19 @@ class _Safe(Probe):
     name = "ReportFindings"
 
 
+class _Shell(Probe):
+    name = "Bash"
+
+
+class _Write(Probe):
+    name = "Write"
+
+
 async def test_the_auto_mode_note_waits_for_new_input_after_a_compaction(
         store: SqliteStore) -> None:
     from noeta.plugins.permissions import Permissions
 
-    a = Agent(name="a", model="claude-opus-5-5", tools=[_Safe()],
+    a = Agent(name="a", model="claude-opus-5-5", tools=[_Safe(), _Shell(), _Write()],
               extensions=(Permissions(), Compaction(auto_compact_window=SMALL)))
     model = Model([call("ReportFindings"), big_call("ReportFindings"),
                    big_call("ReportFindings"), answer("done"), answer("ok")])

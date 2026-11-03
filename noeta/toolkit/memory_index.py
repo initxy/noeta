@@ -17,32 +17,33 @@ MEMORY_INDEX_FILE = "MEMORY.md"
 #: Code's sub-agents get the session's ``MEMORY.md``, but no memory section).
 MEMORY_DIR_KEY = "auto_memory_dir"
 MEMORY_INDEX_MAX_LINES = 200
-MEMORY_INDEX_MAX_BYTES = 25_000
+#: Characters, not UTF-8 bytes (Claude Code counts the string's length).
+MEMORY_INDEX_MAX_CHARS = 25_000
 _INDEX_CUT = ("> Note: {name} is {size}; only part of it was loaded ({what}). Keep each index "
               "entry to one short line and move details into the memory files.")
 
 
 def trim_memory_index(text: str) -> str:
-    """``MEMORY.md`` within its line and byte limits, with a note when cut."""
+    """``MEMORY.md`` within its line and character limits, with a note when
+    cut."""
     trimmed = text.strip()
     lines = trimmed.split("\n")
-    size = len(trimmed.encode("utf-8"))
+    size = len(trimmed)
     over_lines = len(lines) > MEMORY_INDEX_MAX_LINES
-    over_bytes = size > MEMORY_INDEX_MAX_BYTES
-    if not over_lines and not over_bytes:
+    over_chars = size > MEMORY_INDEX_MAX_CHARS
+    if not over_lines and not over_chars:
         return trimmed
     kept = "\n".join(lines[:MEMORY_INDEX_MAX_LINES])
-    if len(kept.encode("utf-8")) > MEMORY_INDEX_MAX_BYTES:
-        cut = kept.encode("utf-8")[:MEMORY_INDEX_MAX_BYTES].decode("utf-8", errors="ignore")
-        newline = cut.rfind("\n")
-        kept = cut[:newline] if newline > 0 else cut
+    if len(kept) > MEMORY_INDEX_MAX_CHARS:
+        newline = kept.rfind("\n", 0, MEMORY_INDEX_MAX_CHARS + 1)
+        kept = kept[:newline] if newline > 0 else kept[:MEMORY_INDEX_MAX_CHARS]
     shown = kept.count("\n") + 1
-    if over_lines and not over_bytes:
+    if over_lines and not over_chars:
         size_text = f"{len(lines)} lines (limit {MEMORY_INDEX_MAX_LINES})"
-    elif over_bytes and not over_lines:
-        size_text = f"{size} bytes (limit {MEMORY_INDEX_MAX_BYTES})"
+    elif over_chars and not over_lines:
+        size_text = f"{size} characters (limit {MEMORY_INDEX_MAX_CHARS})"
     else:
-        size_text = f"{len(lines)} lines and {size} bytes"
+        size_text = f"{len(lines)} lines and {size} characters"
     note = _INDEX_CUT.format(name=MEMORY_INDEX_FILE, size=size_text,
                              what=f"the first {shown} of {len(lines)} lines")
     return f"{kept}\n{note}"

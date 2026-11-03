@@ -100,8 +100,11 @@ async def test_server_tools_are_offered_called_and_recorded_once(
                                  "mcp__fake__image", "mcp__fake__pid", "mcp__fake__sleep"]
     echo = next(t for t in first.tools if t.name == "mcp__fake__echo")
     assert echo.description == "Echo the text back." and not echo.defer_loading
-    # Server tools come last; the resource tools stay deferred.
-    assert [t.name for t in first.tools][:2] == ["ToolSearch", "DeferredToolPlaceholder"]
+    # Server tools come last, the placeholder second to last (before the
+    # last server tool); the resource tools stay deferred.
+    sent = [t.name for t in first.tools]
+    assert sent[0] == "ToolSearch" and sent[-2] == "DeferredToolPlaceholder"
+    assert all(n.startswith("mcp__") for n in sent[1:-2] + sent[-1:])
     evs = await events(client, tid)
     echo_r, fail_r, image_r = (f.result for f in finished(evs))
     assert texts(echo_r) == ["echo: hi"]
@@ -201,9 +204,13 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
         ("DeferredToolPlaceholder", True), ("mcp__fake__echo", True)]
     early, search, echo, read, listing, folder, not_folder = (
         f.result for f in finished(await events(client, tid)))
-    assert folder.text == ("2 entries in file:///docs:\na.md  file:///docs/a.md\n"
-                           "sub/  file:///docs/sub")
-    assert not_folder.is_error and "could not list" in not_folder.text
+    assert folder.text == (
+        "Directory listing (2 entries):\na.md\nsub/\n"
+        '{"resources":[{"uri":"file:///docs/a.md","name":"a.md"},'
+        '{"uri":"file:///docs/sub","name":"sub","mimeType":"inode/directory"}]}')
+    # The server said no: an answer, not a failed call.
+    assert not not_folder.is_error and not_folder.text.startswith(
+        "fake did not list file:///notes.md: unknown")
     assert early.is_error and early.text.startswith(
         "InputValidationError: mcp__fake__echo is a deferred tool")
     assert [b.tool_name for b in search.content] == [  # type: ignore[union-attr]
@@ -293,15 +300,46 @@ async def test_a_cross_server_name_clash_drops_the_second_server(
 # ---------------------------------------------------------------- naming
 
 
-def test_tool_names_are_provider_safe_and_stable() -> None:
+def test_tool_names_keep_case_and_length() -> None:
+    # Claude Code's: unsafe characters become "_", case kept, nothing cut.
     assert make_tool_name("gh", "list.issues") == "mcp__gh__list_issues"
-    long = make_tool_name("gh", "x" * 80)
-    assert len(long) == 64 and long.startswith("mcp__gh__x")
-    assert long == make_tool_name("gh", "x" * 80)
+    assert make_tool_name("GitHub", "List-Issues") == "mcp__GitHub__List-Issues"
+    assert make_tool_name("gh", "x" * 80) == "mcp__gh__" + "x" * 80
     names = map_server_names("gh", ["a.b", "a_b", "a-b"])
     assert names["a_b"] == "mcp__gh__a_b"  # the already-safe one keeps its name
     assert names["a.b"] != names["a_b"] and names["a.b"].startswith("mcp__gh__a_b_")
     assert len(set(names.values())) == 3
+
+
+def test_a_tool_name_over_128_characters_is_not_offered(
+        caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.plugins.mcp.config import McpServer
+    from noeta.plugins.mcp.extension import _server_entry
+    fits = "x" * (128 - len("mcp__s__"))
+    entry = _server_entry(McpServer(alias="s", command=["x"]),
+                          [{"name": fits}, {"name": fits + "y"}, {"name": "ok"}])
+    assert [t["name"] for t in entry["tools"]] == ["mcp__s__ok", "mcp__s__" + fits]
+    assert entry["too_long"] == 1
+    assert "1 of its tools are not offered" in caplog.text
+    assert "128-character limit" in caplog.text
+
+
+def test_a_long_server_name_that_drops_every_tool_is_named_to_the_model(
+        caplog: pytest.LogCaptureFixture) -> None:
+    # A server name so long that every tool name passes 128: the server's
+    # tools all go, the log says so once, and a fruitless ToolSearch names
+    # the server, so the model does not take it for a missing capability.
+    from noeta.plugins.mcp.extension import _server_entry
+    from noeta.plugins.tool_search.search import no_match_text
+    alias = "S" * 130
+    entry = _server_entry(McpServer(alias=alias, command=["x"]),
+                          [{"name": "a"}, {"name": "b"}])
+    assert entry["tools"] == [] and entry["too_long"] == 2
+    assert caplog.text.count("of its tools are not offered") == 1
+    text = no_match_text("github", {"servers": [entry], "down": {}})
+    assert f"{alias}: 2" in text and "longer than 128 characters" in text
+    assert no_match_text("github", {"servers": [], "down": {}}) == \
+        "No deferred tool matches 'github'."
 
 
 def test_descriptions_are_the_servers_own_capped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -336,6 +374,18 @@ def test_mcp_results_are_not_clearable() -> None:
     tool = McpTool(name="mcp__s__t", alias="s", remote="t", description="", input_schema={},
                    invoke=invoke)
     assert tool.clearable is False
+
+
+def test_a_tool_named_in_the_terminal_list_needs_no_reply(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    async def invoke(*_: Any) -> Any:
+        raise AssertionError
+
+    tool = McpTool(name="mcp__s__t", alias="s", remote="t", description="", input_schema={},
+                   invoke=invoke)
+    assert tool.silent_reply_after is None
+    monkeypatch.setenv("NOETA_TERMINAL_MCP_TOOLS", "mcp__x__y, mcp__s__t")
+    assert tool.silent_reply_after == "success"
 
 
 async def test_a_remote_http_server_works_end_to_end(store: SqliteStore) -> None:
@@ -495,3 +545,96 @@ def test_long_server_instructions_are_cut() -> None:
     assert cap_instructions("short") == "short"
     cut = cap_instructions("x" * 5000)
     assert cut == "x" * 4096 + "… [truncated]"
+
+
+def test_server_instructions_follow_the_agent_list_and_precede_the_skills() -> None:
+    # Claude Code's order in the joined system turn: deferred tools, agent
+    # types, MCP server instructions, skills.
+    from noeta.plugins.environment import ORDER_DEFERRED
+    from noeta.plugins.mcp.extension import INSTRUCTIONS_ORDER
+    from noeta.plugins.skills.extension import LISTING_ORDER
+    from noeta.plugins.subtasks.extension import AGENT_LIST_ORDER
+
+    assert ORDER_DEFERRED < AGENT_LIST_ORDER < INSTRUCTIONS_ORDER < LISTING_ORDER
+
+
+# ---------------------------------------------------------------- tool _meta
+
+
+def test_tool_meta_always_load_hint_and_visibility() -> None:
+    from noeta.plugins.mcp.extension import _server_entry
+    raw = [{"name": "loud", "_meta": {"anthropic/alwaysLoad": True,
+                                      "anthropic/searchHint": "  post a\nmessage "}},
+           {"name": "app_only", "_meta": {"ui": {"visibility": ["app"]}}},
+           {"name": "unreadable", "_meta": {"ui": "x"}},
+           {"name": "both", "_meta": {"ui": {"visibility": ["app", "model"]}}},
+           {"name": "plain"}]
+    entry = _server_entry(McpServer(alias="s", command=["x"]), raw)
+    by = {t["name"]: t for t in entry["tools"]}
+    assert sorted(by) == ["mcp__s__both", "mcp__s__loud", "mcp__s__plain"]
+    assert by["mcp__s__loud"]["always_load"] is True
+    assert by["mcp__s__loud"]["search_hint"] == "post a message"
+    assert "always_load" not in by["mcp__s__plain"]
+    quiet = _server_entry(McpServer(alias="s", command=["x"], defer_all=True), raw)
+    assert not any(t.get("always_load") for t in quiet["tools"])
+
+
+async def test_a_tool_marked_always_load_is_sent_from_the_first_request(
+        store: SqliteStore, pool: McpPool) -> None:
+    tools = json.dumps([
+        {"name": "loud", "inputSchema": {"type": "object"},
+         "_meta": {"anthropic/alwaysLoad": True, "anthropic/searchHint": "shout"}},
+        {"name": "quiet", "inputSchema": {"type": "object"}}])
+    provider = ScriptedProvider([reply("hi")])
+    agent = Agent(name="a", model="m", extensions=[
+        Mcp([server(deferred=True, FAKE_TOOLS=tools)], pool=pool), ToolSearch()])
+    await Client(store).create("a", "go")
+    await runtime(store, provider, agent).run_until_idle()
+    sent = {t.name: t.defer_loading for t in provider.requests[0].tools}
+    assert sent["mcp__fake__loud"] is False and "mcp__fake__quiet" not in sent
+
+
+async def test_a_fruitless_search_lists_a_down_server_again(
+        store: SqliteStore, pool: McpPool, tmp_path: Path) -> None:
+    flag = tmp_path / "up"
+    flaky = McpServer(alias="flaky", deferred=True, command=[
+        "sh", "-c", f'test -f "{flag}" || exit 1; exec "{sys.executable}" "{FAKE}"'])
+
+    class BringUp(Extension):
+        name = "bring_up"
+
+        async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+            flag.touch()
+            return request
+
+    provider = ScriptedProvider([
+        reply("", ("ToolSearch", {"query": "echo", "max_results": 5})),
+        reply("", ("ToolSearch", {"query": "echo", "max_results": 5})),
+        reply("done")])
+    agent = Agent(name="a", model="m", extensions=[Mcp([flaky], pool=pool), ToolSearch(),
+                                                   BringUp()])
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await runtime(store, provider, agent).run_until_idle()
+    evs = await events(client, tid)
+    assert [r.data["alias"] for r in records(evs, "server_down")] == ["flaky"]
+    assert [r.data["alias"] for r in records(evs, "server_up")] == ["flaky"]
+    first, second = (f.result for f in finished(evs))
+    assert "could not be reached" in texts(first)[0] and "flaky" in texts(first)[0]
+    assert [b.tool_name for b in second.content] == ["mcp__flaky__echo"]  # type: ignore[union-attr]
+
+
+def test_an_empty_directory_listing() -> None:
+    from noeta.plugins.mcp.tools import directory_listing
+    assert directory_listing([]) == 'Directory is empty.\n{"resources":[]}'
+    assert directory_listing([{"uri": "u", "name": "n"}]) == (
+        'Directory listing (1 entry):\nn\n{"resources":[{"uri":"u","name":"n"}]}')
+
+
+def test_instruction_notes_order_by_name_and_keep_connected_servers() -> None:
+    from noeta.plugins.mcp.instructions import INSTRUCTIONS_GONE, instructions_delta
+    text = instructions_delta({}, {"zeta": "z", "alpha": "a"})
+    assert text.index("## alpha") < text.index("## zeta")
+    # Still connected, its instructions gone: not said to have disconnected.
+    assert instructions_delta({"alpha": "a"}, {}, {"alpha"}) == ""
+    assert INSTRUCTIONS_GONE in instructions_delta({"alpha": "a"}, {}, set())

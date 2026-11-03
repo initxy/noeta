@@ -84,6 +84,10 @@ async def test_files_and_conversation_go_back_to_before_a_prompt(
 
     done = await rewind(client, tid, points[1])
     assert done.prompt == "add b" and done.task_id != tid
+    # A rewind fires no SessionStart (Claude Code's rewind fires none).
+    from noeta.core.client import CONTINUED_AS_KEY
+    created = (await client.events(done.task_id))[0].event
+    assert created.config[CONTINUED_AS_KEY] == "rewind"  # type: ignore[attr-defined]
     await rt.run_until_idle()
     assert a.read_text() == "three\n" and not b.exists()
     await client.send(done.task_id, "again")

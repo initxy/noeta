@@ -158,7 +158,7 @@ async def attach_mentions(view: TaskView, home: str | None = None) -> None:
             content = None
         if content is None:
             unread.append(path)
-        else:
+        elif content:
             _record(view, through, path, content)
     unread, asks = list(dict.fromkeys(unread)), list(dict.fromkeys(asks))
     if unread:
@@ -241,7 +241,9 @@ async def read_verdict(view: TaskView, call: ToolUse) -> Literal["allow", "ask",
 
 async def _attachment(view: TaskView, mention: Mention, path: str,
                       call_id: str) -> list[Block] | None:
-    """The attachment's blocks, or ``None`` when the path cannot be read."""
+    """The attachment's blocks, ``None`` when the path cannot be read, or
+    none at all when the model has read that view of the file already and
+    it has not changed since (Claude Code then attaches nothing)."""
     env = view.env
     assert env is not None
     stat = await env.stat(path)
@@ -261,6 +263,8 @@ async def _attachment(view: TaskView, mention: Mention, path: str,
         if mention.last is not None:
             asked["limit"] = max(1, mention.last - mention.first + 1)
     output, records = await _read(view, asked, call_id)
+    if output.meta.get("unchanged"):
+        return []
     note = ""
     if mention.first is None and (output.meta.get("too_large") or output.meta.get("truncated")):
         asked = {"file_path": path, "limit": FIRST_LINES}
@@ -293,9 +297,12 @@ async def _read(view: TaskView, asked: dict[str, Any],
     env = view.env
     assert env is not None
     records: list[tuple[str, str, Any]] = []
+    # As the model's own read: a view it has and that is unchanged is
+    # answered as such.
     ctx = ToolContext(task_id=view.task_id, call_id=call_id, env=env, state=view.state.ext,
                       record=lambda e, k, d: records.append((e, k, d)),
-                      count_tokens=view.count_tokens, model=view.model, prompt=view.prompt)
+                      count_tokens=view.count_tokens, model=view.model, prompt=view.prompt,
+                      by_model=True)
     return await ReadTool().run(dict(asked), ctx), records
 
 

@@ -263,6 +263,7 @@ class CronCreateTool(_Base):
     name = texts.CRON_CREATE_TOOL
     description = load_description("noeta.plugins.schedule", "cron_create")
     deferred = True
+    search_hint = "schedule a prompt to run once or on a recurring schedule"
     input_schema = _object({
         "cron": {"type": "string", "description": (
             'A standard 5-field cron expression in local time, "M H DoM Mon DoW" ("*/5 * * * *" '
@@ -309,6 +310,7 @@ class CronListTool(_Base):
     name = texts.CRON_LIST_TOOL
     description = load_description("noeta.plugins.schedule", "cron_list")
     deferred = True
+    search_hint = "list the scheduled cron jobs that are active"
     read_only = True
     retry_safe = True
     input_schema = _object({})
@@ -328,6 +330,7 @@ class CronDeleteTool(_Base):
     name = texts.CRON_DELETE_TOOL
     description = load_description("noeta.plugins.schedule", "cron_delete")
     deferred = True
+    search_hint = "cancel or delete a scheduled cron job"
     input_schema = _object({"id": {"type": "string",
                                    "description": "The job id CronCreate returned."}}, ["id"])
 

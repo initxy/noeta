@@ -39,7 +39,7 @@ events and notices in `noeta/plugins/shell/notices.py`).
 | `tool.Monitor.6` | Every pipe stage must flush per line (`grep --line-buffered`, `fflush()` in `awk`); `head -N` delivers nothing until it has N lines. | covered |
 | `tool.Monitor.7` | Polling loops tolerate one failed request (`|| true`); remote APIs are polled every 30 s or slower, local checks every 0.5–1 s. | covered |
 | `tool.Monitor.8` | `description` should be specific, since it appears in every notification. | covered |
-| `tool.Monitor.9` | Only stdout makes events; stderr goes to the output file (readable with `Read`) and triggers nothing; merge it with `2>&1` for a command run directly. | covered — noeta keeps stderr out of events too and shows its last lines in the end notice instead of pointing at the output file |
+| `tool.Monitor.9` | Only stdout makes events; stderr goes to the output file (readable with `Read`) and triggers nothing; merge it with `2>&1` for a command run directly. | covered — stderr goes to the output file with stdout (events come from stdout alone, kept beside it); the end notice names the file in `<output-file>` and carries no stderr |
 | `tool.Monitor.10` | A quiet monitor does not mean things went well: the filter must match every terminal state (crash, hang, early exit), not only the happy path; polling loops emit every terminal status; when unsure, match more. | covered |
 | `tool.Monitor.11` | Each line printed lands in the conversation, so the filter passes only the lines that would be acted on, never a raw log. A monitor that emits too much is stopped automatically and can be restarted with a narrower filter. | covered — the same rate limits (`notices.py`: 500-character lines, 3000-character batches, a token bucket of 10 refilled every 2 s, stopped after 30 s of suppression) |
 | `tool.Monitor.12` | Lines printed within 200 ms of each other are delivered as one notification. | covered |
@@ -50,8 +50,8 @@ events and notices in `noeta/plugins/shell/notices.py`).
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.Monitor.r.1` | Started (r2 `m5/0009`): one text naming the task id, when it expires unless the source ends first, that one notice comes at expiry and to re-arm if still needed, that each event will be notified, not to poll or sleep, and that an event arriving while waiting for the user is not their reply. noeta's says the same in its own words (`MonitorTool.run`). |
-| `tool.Monitor.r.2` | Each event (r2 `m5/0010`–`0012`): a user-role `<system-reminder>` with the background-notification guard (`reminders.md`, `rem.task-notification.2`), then `<task-notification>` with `<task-id>`, `<summary>` naming the monitor's description as a monitor event, and `<event>` holding the line(s). No `tool-use-id`, `output-file` or `status`. |
-| `tool.Monitor.r.3` | The end (r2 `m5/0013`): the same guard, then `<task-notification>` with `<task-id>`, `<tool-use-id>`, `<output-file>`, `<status>` `completed` and a `<summary>` saying the monitor's stream ended. noeta: `monitor_end_summary` in `notices.py`. |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.Monitor.r.1` | Started (r2 `m5/0009`): one text naming the task id, when it expires unless the source ends first, that one notice comes at expiry and to re-arm if still needed, that each event will be notified, not to poll or sleep, and that an event arriving while waiting for the user is not their reply. noeta's says the same in its own words (`MonitorTool.run`). | covered, in our wording (`MonitorTool.run`) |
+| `tool.Monitor.r.2` | Each event (r2 `m5/0010`–`0012`): a user-role `<system-reminder>` with the background-notification guard (`reminders.md`, `rem.task-notification.2`), then `<task-notification>` with `<task-id>`, `<summary>` naming the monitor's description as a monitor event, and `<event>` holding the line(s). No `tool-use-id`, `output-file` or `status`. | covered (`shell` notices) |
+| `tool.Monitor.r.3` | The end (r2 `m5/0013`): the same guard, then `<task-notification>` with `<task-id>`, `<tool-use-id>`, `<output-file>`, `<status>` `completed` and a `<summary>` saying the monitor's stream ended. noeta: `monitor_end_summary` in `notices.py`. | covered (`notices.py` `monitor_end_summary`) |

@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import posixpath
+import re
+import time
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
@@ -26,10 +28,18 @@ from noeta.core.events import (
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
 from noeta.core.loop.state import TaskState
+from noeta.core.runner.texts import STEP_LIMIT_HEAD
 from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
-from noeta.plugins.subtasks.roster import Roster, SubagentSpec, check_roster
+from noeta.plugins.subtasks.mentions import mention_reminders
+from noeta.plugins.subtasks.roster import (
+    MODEL_CAP_KEY,
+    Roster,
+    SubagentSpec,
+    capped_model,
+    check_roster,
+)
 from noeta.plugins.subtasks.roster import agent_list as listing
 from noeta.plugins.subtasks.roster import agent_list_delta as roster_delta
 from noeta.plugins.subtasks.tool import (
@@ -45,26 +55,36 @@ from noeta.plugins.subtasks.tool import (
     SendMessageTool,
     batch_refusal,
     call_refusal,
+    handback_flagged,
     handback_sender,
     transcript_file,
 )
 from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
-from noeta.toolkit.notices import NOTICE_GUARD, escape
+from noeta.toolkit.notices import NOTICE_GUARD, STATUS_ORDER, escape, one_line
 from noeta.toolkit.tools import mark_spill_dir
 
 __all__ = ["SubagentSpec", "Subtasks", "task_notification"]
 
 log = logging.getLogger("noeta.plugins.subtasks")
 
-#: The sub-agent's model call that also asks for a progress label (Claude
-#: Code's was alongside the third), and the inbox signal carrying it.
-PROGRESS_AT_CALL = 3
+#: Claude Code's progress-label cadence: a sub-agent is asked for a label
+#: every 30 seconds while it runs (timed from recorded wall-clock times, so
+#: any worker can pick the task up), once it has 3 messages and only when
+#: its conversation changed since the last ask; the inbox signal carries
+#: the answer.
+PROGRESS_EVERY = 30.0
+#: The wall clock the cadence reads (shared by workers, unlike a timer).
+_now = time.time
+PROGRESS_MIN_MESSAGES = 3
 PROGRESS_SIGNAL = "subtasks.progress"
 #: Tasks whose transcript progress a process remembers at most.
 TRANSCRIBED_KEEP = 256
 #: The permission mode in which agents hand back with ``SubagentHandback``.
 AUTO_MODE = "auto"
+#: Agent types whose missing report gets no hint to ask for it (Claude
+#: Code's Explore and Plan).
+ONE_SHOT_TYPES = frozenset({"Explore", "Plan"})
 #: The agent list's place in the first request's joined system turn
 #: (``Reminder.order``): after the environment and the deferred tools.
 AGENT_LIST_ORDER = 40
@@ -72,19 +92,46 @@ AGENT_LIST_ORDER = 40
 
 def task_notification(*, agent_id: str, call_id: str, status: str, summary: str,
                       result: str, ended: ChildEnded, duration_ms: int,
-                      output_file: str = "") -> str:
-    """A finished agent's ``<task-notification>``, behind the not-the-user guard."""
-    usage = ended.last_usage
-    tokens = usage.input + usage.output if usage is not None else 0
+                      output_file: str = "", worktree: Mapping[str, str] | None = None) -> str:
+    """A finished agent's ``<task-notification>``, behind the not-the-user
+    guard: ``<result>`` only when there is one, ``<worktree>`` when its
+    worktree was kept."""
     fields = [("task-id", agent_id), ("tool-use-id", call_id)]
     if output_file:
         fields.append(("output-file", escape(output_file)))
+    body = f"\n<note>{texts.NOTICE_NOTE}</note>"
+    if result:
+        body += f"\n<result>{escape(result)}</result>"
+    body += (f"\n<usage><subagent_tokens>{subagent_tokens(ended)}</subagent_tokens><tool_uses>"
+             f"{ended.tool_calls}</tool_uses><duration_ms>{duration_ms}</duration_ms></usage>")
+    if worktree:
+        branch = worktree.get("branch") or ""
+        body += (f"\n<worktree><worktreePath>{escape(worktree['path'])}</worktreePath>"
+                 + (f"<worktreeBranch>{escape(branch)}</worktreeBranch>" if branch else "")
+                 + "</worktree>")
     element = notices.task_notification(
-        (*fields, ("status", status), ("summary", escape(summary))),
-        body=(f"\n<note>{texts.NOTICE_NOTE}</note>\n<result>{escape(result)}\n</result>\n"
-              f"<usage><subagent_tokens>{tokens}</subagent_tokens><tool_uses>"
-              f"{ended.tool_calls}</tool_uses><duration_ms>{duration_ms}</duration_ms></usage>"))
+        (*fields, ("status", status), ("summary", escape(summary))), body=body)
     return f"{NOTICE_GUARD}\n\n{element}"
+
+
+def subagent_tokens(ended: ChildEnded) -> int:
+    """Claude Code's count: the newest reply's input (cache included) plus
+    what every reply wrote."""
+    usage = ended.last_usage
+    last_input = usage.input if usage is not None else 0
+    last_output = usage.output if usage is not None else 0
+    return last_input + max(ended.output_tokens, last_output)
+
+
+#: The answer a step-limit stop finishes with opens with this (the kernel's
+#: ``STEP_LIMIT_HEAD``), which names the limit.
+_STEP_LIMIT = re.compile(re.escape(STEP_LIMIT_HEAD).replace(re.escape("{n}"), r"(\d+)"))
+
+
+def step_limit(answer: str) -> int | None:
+    """The step limit an agent's answer says it stopped at, else ``None``."""
+    found = _STEP_LIMIT.match(answer)
+    return int(found.group(1)) if found else None
 
 
 class Subtasks(Extension):
@@ -106,9 +153,9 @@ class Subtasks(Extension):
       ``model`` and ``effort`` are copied only when neither the call nor the
       agent's definition sets them.
     - ``queue``: the queue children are created on (default: the caller's).
-    - ``progress_labels``: a sub-agent asks the model once, beside its third
-      call, for a 3-5 word label of what it is doing; front ends get it as a
-      notice, the model never sees it.
+    - ``progress_labels``: every 30 seconds a running sub-agent asks the
+      model, beside one of its calls, for a 3-5 word label of what it is
+      doing; front ends get it as a notice, the model never sees it.
     """
 
     name = "subtasks"
@@ -144,8 +191,9 @@ class Subtasks(Extension):
     # ------------------------------------------------------------ state
 
     def initial_state(self) -> Any:
-        return {"agents": {}, "tasks": {}, "handbacks": {}, "pending": {}, "noticed": [],
-                "reminded": False, "listed": False, "held_list": None, **idle.initial()}
+        return {"agents": {}, "tasks": {}, "handbacks": {}, "flagged": [], "pending": {},
+                "noticed": [], "reminded": False, "listed": False, "held_list": None,
+                "held_status": [], "progress": None, "mentions_through": 0, **idle.initial()}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         st = {**self.initial_state(), **(state or {})}
@@ -155,7 +203,14 @@ class Subtasks(Extension):
             return {**st, "agents": {**st["agents"], agent_id: data},
                     "tasks": {**st["tasks"], data["task_id"]: agent_id}, "handbacks": handbacks}
         if kind == "handback":
-            return {**st, "handbacks": {**st["handbacks"], data["agent_id"]: "taken"}}
+            agent = data["agent_id"]
+            flagged = [a for a in st["flagged"] if a != agent]
+            if data.get("flagged"):
+                flagged.append(agent)
+            return {**st, "handbacks": {**st["handbacks"], agent: "taken"},
+                    "flagged": flagged}
+        if kind == "progress":
+            return {**st, "progress": {**(st["progress"] or {}), **data}}
         if kind == "seen":
             return {**st, "handbacks": {k: "seen" for k in st["handbacks"]}}
         if kind == "pending":
@@ -175,7 +230,24 @@ class Subtasks(Extension):
             return {**st, "listed": True, "types": data["types"]}
         if kind == "agent_list_sent":
             return {**st, "held_list": None}
+        if kind == "task_status":
+            return {**st, "held_status": list(data.get("texts") or ())}
+        if kind == "task_status_sent":
+            return {**st, "held_status": []}
+        if kind == "agent_mention":
+            through = data.get("through") if isinstance(data, dict) else None
+            if isinstance(through, int):
+                return {**st, "mentions_through": max(st["mentions_through"], through)}
+            return st
         return idle.reduce(st, kind, data) or st
+
+    def continue_state(self, state: Any) -> Any:
+        """A continuing task (a fork, a resumed sub-agent) starts its own
+        mention count: ``mentions_through`` is a seq of the source's log,
+        and the new log's prompts start below it."""
+        if not isinstance(state, dict):
+            return state
+        return {**state, "mentions_through": 0}
 
     def _state(self, state: TaskState) -> dict[str, Any]:
         st = state.ext.get(self.name)
@@ -196,12 +268,17 @@ class Subtasks(Extension):
 
     def child_config(self, state: TaskState, ctx: ToolContext, agent: str,
                      spec_config: Mapping[str, Any], kind: str, args: Mapping[str, Any],
-                     *, fork: bool) -> dict[str, Any]:
+                     *, fork: bool, parent_model: str = "") -> dict[str, Any]:
         config = {k: state.config[k] for k in self.inherit_config if k in state.config}
         config.update(spec_config)
+        cap = config.pop(MODEL_CAP_KEY, None)
         if not fork:
             if isinstance(args.get("model"), str):
                 config["model"] = models.resolve_alias(args["model"])
+            elif isinstance(cap, str) and "model" not in spec_config:
+                capped = capped_model(str(config.get("model") or parent_model), cap)
+                if capped is not None:
+                    config["model"] = capped
             if isinstance(args.get("effort"), str):
                 config["effort"] = args["effort"]
         config[DEPTH_KEY] = int(state.config.get(DEPTH_KEY) or 0) + 1
@@ -221,7 +298,7 @@ class Subtasks(Extension):
         out: list[Tool] = []
         if roster:
             out.append(AgentTool(self, state, roster, handback=_auto_mode(self, view),
-                                 agents=view.agents))
+                                 agents=view.agents, model=view.model))
             if not state.parent_id:
                 out.append(ListAgentsTool(self, state))
         if roster or state.parent_id:
@@ -252,16 +329,29 @@ class Subtasks(Extension):
         return None
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        """Beside a sub-agent's third call, ask for its progress label: the
-        same request with one more user text, answered in the background."""
+        """When a sub-agent's progress label is due, ask for it beside this
+        call: the same request with one more user text, answered in the
+        background."""
         state = view.state
-        if (self.progress_labels and TYPE_KEY in state.config and view.complete is not None
-                and view.post is not None and state.steps_in_turn == PROGRESS_AT_CALL - 1):
-            ask = msgspec.structs.replace(
-                request, messages=[*request.messages, user(texts.PROGRESS_INSTRUCTION)])
-            job = asyncio.ensure_future(self._label(view, ask, state.last_seq))
-            self._labels.add(job)
-            job.add_done_callback(self._labels.discard)
+        if not (self.progress_labels and TYPE_KEY in state.config
+                and view.complete is not None and view.post is not None):
+            return request
+        now = _now()
+        progress = self._state(state)["progress"] or {}
+        since = progress.get("asked") or progress.get("from")
+        if since is None:
+            view.record(self.name, "progress", {"from": now})
+            return request
+        count = len(state.messages)
+        if now - float(since) < PROGRESS_EVERY or count < PROGRESS_MIN_MESSAGES \
+                or count == progress.get("count"):
+            return request
+        view.record(self.name, "progress", {"asked": now, "count": count})
+        ask = msgspec.structs.replace(
+            request, messages=[*request.messages, user(texts.PROGRESS_INSTRUCTION)])
+        job = asyncio.ensure_future(self._label(view, ask, state.last_seq))
+        self._labels.add(job)
+        job.add_done_callback(self._labels.discard)
         return request
 
     async def _label(self, view: TaskView, request: ModelRequest, at: int) -> None:
@@ -277,7 +367,8 @@ class Subtasks(Extension):
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         st = self._state(view.state)
-        out: list[Reminder] = []
+        out: list[Reminder] = [Reminder(text=t, kind="task_status_sent", data={}, role="system",
+                                        order=STATUS_ORDER) for t in st["held_status"]]
         if _hands_back(view.state.config) and not st["reminded"]:
             out.append(Reminder(text=texts.HANDBACK_REMINDER, kind="handback_reminder"))
         if st["held_list"] and (not view.state.parent_id or _replied(view.state.messages)):
@@ -288,6 +379,8 @@ class Subtasks(Extension):
                                 role="system", order=AGENT_LIST_ORDER))
         elif not st["held_list"]:
             out += self._agent_delta(view, st)
+        if not view.state.parent_id:
+            out += mention_reminders(view, self.roster_for(view), st["mentions_through"])
         return out
 
     def _agent_delta(self, view: TaskView, st: dict[str, Any]) -> list[Reminder]:
@@ -322,11 +415,32 @@ class Subtasks(Extension):
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction the agent list goes out again with the next
-        request, in the environment's system turn."""
+        request, in the environment's system turn, and a status line for
+        each agent still running (Claude Code's ``task_status``)."""
         text = None if view.state.parent_id else self.agent_list(view)
         if text and view.keeps_tail is not None:
             view.record(self.name, "agent_list", {"text": text, "types": self._types(view)})
+        status = self.running_status(view) if view.keeps_tail is not None else []
+        if status:
+            view.record(self.name, "task_status", {"texts": status})
         return ()
+
+    def running_status(self, view: TaskView) -> list[str]:
+        """One status line per agent this task started that is still
+        running."""
+        agents = self._state(view.state)["agents"]
+        send = bool(self.roster_for(view)) or bool(view.state.parent_id)
+        out: list[str] = []
+        for agent_id in self.running(view.state):
+            data = agents[agent_id]
+            text = texts.STILL_RUNNING.format(
+                description=one_line(str(data.get("description") or "")), id=agent_id)
+            if data.get("output_file"):
+                text += texts.STILL_RUNNING_FILE.format(path=data["output_file"])
+            if send:
+                text += texts.STILL_RUNNING_SEND
+            out.append(text)
+        return out
 
     async def on_start(self, view: TaskView) -> None:
         st = self._state(view.state)
@@ -339,7 +453,8 @@ class Subtasks(Extension):
         for task_id in st["tasks"]:
             ended = view.state.children.get(task_id)
             if ended is not None and task_id not in done:
-                await self._ended(view, ended, at=None, handbacks=dict(st["handbacks"]))
+                await self._ended(view, ended, at=None, handbacks=dict(st["handbacks"]),
+                                  flagged=set(st["flagged"]))
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
@@ -353,6 +468,7 @@ class Subtasks(Extension):
             idle.settle(self.name, view, st["holds"], at=recorded.at)
         if isinstance(ev, InputTaken):
             handbacks = dict(st["handbacks"])
+            flags = set(st["flagged"])
             for item in ev.items:
                 body = item.body
                 if isinstance(body, External) and body.name == PROGRESS_SIGNAL:
@@ -361,9 +477,14 @@ class Subtasks(Extension):
                     sender = handback_sender(body.message)
                     if sender is not None and sender in st["agents"]:
                         handbacks[sender] = "taken"
-                        view.record(self.name, "handback", {"agent_id": sender})
+                        flagged = handback_flagged(body.message)
+                        if flagged:
+                            flags.add(sender)
+                        view.record(self.name, "handback", {
+                            "agent_id": sender, **({"flagged": True} if flagged else {})})
                 elif isinstance(body, ChildEnded) and body.child_id in st["tasks"]:
-                    await self._ended(view, body, at=item.at, handbacks=handbacks)
+                    await self._ended(view, body, at=item.at, handbacks=handbacks,
+                                      flagged=flags)
         elif isinstance(ev, TaskEnded):
             await self._close_open_worktrees(view, st)
         elif isinstance(ev, ModelReplied):
@@ -451,43 +572,31 @@ class Subtasks(Extension):
                     message=user(text, origin="system"))
 
     async def _ended(self, view: TaskView, ended: ChildEnded, *, at: float | None,
-                     handbacks: Mapping[str, str]) -> None:
+                     handbacks: Mapping[str, str], flagged: Collection[str] = ()) -> None:
         """Turn an agent's end into its completion notice. After a hand-back
         the notice waits until the model has answered the report and then
         rides along with the next request; otherwise it wakes the task."""
         st = self._state(view.state)
         agent_id = st["tasks"][ended.child_id]
         agent = st["agents"][agent_id]
-        description = agent.get("description") or agent.get("type") or agent_id
+        status, summary, result = _outcome(agent, agent_id, ended, handbacks, flagged)
         handed_back = ended.status == "done" and agent_id in handbacks
-        if ended.status == "done":
-            status, summary = "completed", texts.SUMMARY_FINISHED.format(description=description)
-            if handed_back:
-                result = texts.RESULT_POINTER.format(id=agent_id)
-            else:  # no hand-back (offered or not): its last reply is the report
-                result = ended.answer or texts.RESULT_NO_REPORT
-        elif ended.status == "failed":
-            error = ended.error or texts.SUBAGENT_FAILED
-            status = "failed"
-            summary = texts.SUMMARY_FAILED.format(description=description, error=error)
-            result = error
-        else:
-            status, summary = "killed", texts.SUMMARY_STOPPED.format(description=description)
-            result = ended.error or ""
         tree = agent.get("worktree")
+        kept_tree: Mapping[str, str] | None = None
         if tree and agent["task_id"] == ended.child_id:
             try:
                 kept = await close_worktree(view, tree)
             except Exception:
                 log.exception("closing worktree %s failed", tree.get("path"))
-                kept = texts.WORKTREE_KEPT.format(path=tree["path"], branch=tree["branch"])
+                kept = "kept"
             if kept:
-                result = f"{result}\n{kept}"
+                kept_tree = tree
         launched = agent.get("at")
         duration = int(max(0.0, (at - launched) * 1000)) if at and launched else 0
         text = task_notification(agent_id=agent_id, call_id=agent.get("call_id", ""),
                                  status=status, summary=summary, result=result, ended=ended,
-                                 duration_ms=duration, output_file=agent.get("output_file") or "")
+                                 duration_ms=duration, output_file=agent.get("output_file") or "",
+                                 worktree=kept_tree)
         if handed_back:
             if handbacks.get(agent_id) == "seen":
                 self._deliver(view, ended.child_id, text)
@@ -502,6 +611,38 @@ class Subtasks(Extension):
         await view.post(Say(message=message, when="now"),
                         dedupe_key=f"subtasks:notice:{ended.child_id}")
         view.record(self.name, "noticed", data)
+
+
+def _outcome(agent: Mapping[str, Any], agent_id: str, ended: ChildEnded,
+             handbacks: Mapping[str, str], flagged: Collection[str]) -> tuple[str, str, str]:
+    """A finished agent's notice ``(status, summary, result)``; an empty
+    result is left out of the notice."""
+    description = agent.get("description") or agent.get("type") or agent_id
+    if ended.status == "failed":
+        error = ended.error or texts.SUBAGENT_FAILED
+        return "failed", texts.SUMMARY_FAILED.format(description=description,
+                                                     error=error), ended.answer
+    if ended.status != "done":
+        reason = ended.error
+        summary = (texts.SUMMARY_STOPPED_BY_CALLER if reason == notices.STOPPED_BY_CALLER
+                   else texts.SUMMARY_STOPPED_BY_USER if reason in ("", "cancelled")
+                   else texts.SUMMARY_STOPPED_WHY)
+        return "killed", summary.format(description=description, reason=reason), ended.answer
+    limit = step_limit(ended.answer)
+    summary = (texts.SUMMARY_STEP_LIMIT.format(description=description, n=limit)
+               if limit is not None else texts.SUMMARY_FINISHED.format(description=description))
+    if agent_id in handbacks:
+        pointer = texts.RESULT_POINTER_FLAGGED if agent_id in flagged else texts.RESULT_POINTER
+        return "completed", summary, pointer.format(id=agent_id)
+    if not _hands_back(agent.get("config") or {}):
+        # Offered no hand-back: its last reply is the report.
+        return "completed", summary, ended.answer
+    # Offered one and did not use it: what it wrote instead is not passed on.
+    hint = "" if agent.get("type") in ONE_SHOT_TYPES else texts.RESULT_NO_REPORT_HINT
+    result = texts.RESULT_NO_REPORT.format(hint=hint)
+    if limit is not None:
+        result = f"{texts.STEP_LIMIT_NOTE.format(n=limit)}\n{result}"
+    return "completed", summary, result
 
 
 def _replied(messages: Sequence[Message]) -> bool:

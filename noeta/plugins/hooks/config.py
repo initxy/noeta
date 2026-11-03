@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from noeta.core.mcp_names import legacy_names, warn_legacy
 from noeta.toolkit.hook_env import without_env
 from noeta.toolkit.permission_rules import Rule, parse_rule
 
@@ -87,7 +88,12 @@ class HookCommand:
     #: The permission rule a tool call must match (``if``).
     condition: Rule | None = None
     once: bool = False
+    #: ``async``: runs in the background; what its JSON answer adds for the
+    #: model (``additionalContext``, ``systemMessage``) reaches it later.
     background: bool = False
+    #: ``asyncRewake``: in the background, and an exit code 2 wakes the
+    #: model with the hook's output.
+    rewake: bool = False
     #: A failure (could not start, timed out, exit code other than 0 / 2)
     #: blocks like exit 2 (``onFailure: block``).
     block_on_failure: bool = False
@@ -128,8 +134,23 @@ class Matcher:
     lenient: bool = field(default=True, compare=False)
 
     def matches(self, subject: str | None) -> bool:
+        return self.matched_by(subject) is not None
+
+    def matched_by(self, subject: str | None) -> str | None:
+        """``"name"`` when the matcher matches ``subject`` itself,
+        ``"former"`` when only by an MCP tool's old name
+        (``noeta.core.mcp_names``: its hooks may then block, not allow),
+        ``None`` when not at all."""
         if subject is None or self.pattern in ("", "*"):
-            return True
+            return "name"
+        if self._matches(subject):
+            return "name"
+        if any(self._matches(old) for old in legacy_names(subject)):
+            warn_legacy("hook matcher", self.pattern, subject)
+            return "former"
+        return None
+
+    def _matches(self, subject: str) -> bool:
         plain = r"[A-Za-z0-9_|, -]+" if self.lenient else r"[A-Za-z0-9_|]+"
         if re.fullmatch(plain, self.pattern):
             names = {n.strip() for n in re.split(r"[|,]" if self.lenient else r"\|",
@@ -194,7 +215,8 @@ def _hook(event: str, h: Mapping[str, Any], *, callbacks: bool = False) -> HookC
                 isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
             raise ValueError(f"{where}: 'env' must map names to strings")
         return HookCommand(command=command, args=args, env=tuple(env.items()),
-                           background=bool(h.get("async") or h.get("asyncRewake")), **common)
+                           background=bool(h.get("async") or h.get("asyncRewake")),
+                           rewake=bool(h.get("asyncRewake")), **common)
     if kind == "http":
         url = h.get("url")
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):

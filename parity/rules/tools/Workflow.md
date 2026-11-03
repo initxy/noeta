@@ -44,9 +44,10 @@ child task).
 
 ## Result shape
 
-| id | shape (observed) |
-|---|---|
-| `tool.Workflow.r.1` | Not observed (never called). Documented: a task id returned at once, completion as a `<task-notification>`, the saved script path in the result. |
+| id | shape (observed) | noeta today |
+|---|---|---|
+| `tool.Workflow.r.1` | Not observed (never called). Documented: a task id returned at once, completion as a `<task-notification>`, the saved script path in the result. | covered (`workflow/tool.py` `STARTED` / `SAVED`: the run id at once, the saved script path, the end as a `<task-notification>`) |
+| `tool.Workflow.r.2` | (2.1.312 bundle) The end notice: `<task-id>` (the run id), `<tool-use-id>`, `<output-file>`, `<status>` (`completed` / `failed` / `killed`), `<summary>` naming it a dynamic workflow with its `meta.name` in quotes and completed, failed with the error, or stopped. A failed or stopped run then carries `<recovery>`: the `Workflow` call with `scriptPath` and `resumeFromRunId` (and `args`) that resumes it, and the agents' transcript directory. A completed run carries `<result>` (cut at 8,000 characters, the rest in the output file) and `<diagnostics>`: the per-agent results journal, a request to read it before diagnosing an empty result, and the resume call for re-running changed post-processing. Then `<failures>` (one line per failed agent) and `<usage>` with `<agent_count>`, per-state agent counts, `<subagent_tokens>`, `<tool_uses>`, `<duration_ms>`. | covered for the summary, `<recovery>`'s resume call, `<result>`, `<diagnostics>`' resume call, `<failures>` and `<usage>`'s `agent_count`, `subagent_tokens`, `tool_uses`, `duration_ms`; no output file, transcripts, journal or per-state counts (`deviations.md`); a run stopped with `TaskStop` sends none (bundle `Lge` marks it `notified` as it kills it), as Claude Code's |
 
 ## Variants
 

@@ -178,15 +178,33 @@ NOTICE_NOTE = (
 )
 RESULT_POINTER = (
     'The report came to you as a message from "{id}" (its SubagentHandback call); read it '
-    "there. It is not repeated here."
+    "there. It is not repeated here.\n"
 )
+#: After a hand-back auto mode flagged (or could not review).
+RESULT_POINTER_FLAGGED = (
+    'The report came to you as a message from "{id}" (its SubagentHandback call), under a '
+    "security warning from auto mode; the warning above the report says why. Read it there; "
+    "it is not repeated here.\n"
+)
+#: An agent offered SubagentHandback that ended without calling it: the
+#: text it wrote instead is not passed on (only a hand-back is reviewed).
 RESULT_NO_REPORT = (
-    "The agent ended without delivering a report through SubagentHandback, so it has no "
-    "result. Continue it with SendMessage to ask for one, or check its work yourself."
+    "The agent ended without delivering a report through SubagentHandback, so no report was "
+    "delivered; the text it wrote instead is not shown.{hint}\n"
 )
+#: The hint, except for Explore and Plan (Claude Code's one-shot types).
+RESULT_NO_REPORT_HINT = " Send it a message (SendMessage) to ask it for its report."
+#: Opens the result of an agent its step limit stopped, when the
+#: hand-back left it without a report.
+STEP_LIMIT_NOTE = ("Note: this agent stopped at its {n}-step limit before finishing; it was "
+                   "still working and had produced no report.")
 SUMMARY_FINISHED = 'Agent "{description}" finished'
 SUMMARY_FAILED = 'Agent "{description}" failed: {error}'
-SUMMARY_STOPPED = 'Agent "{description}" was stopped'
+SUMMARY_STOPPED_BY_CALLER = 'Agent "{description}" was stopped by you'
+SUMMARY_STOPPED_BY_USER = 'Agent "{description}" was stopped by the user'
+SUMMARY_STOPPED_WHY = 'Agent "{description}" was stopped: {reason}'
+SUMMARY_STEP_LIMIT = ('Agent "{description}" stopped at its {n}-step limit (partial result; '
+                      "SendMessage to its task-id to continue)")
 TOOLS_BEFORE_SUMMARY = "<tools-used-before-summary>{tool}</tools-used-before-summary>"
 
 # SendMessage / ListAgents results.
@@ -272,3 +290,11 @@ AGENT_LIST_TAIL = (
     "For independent pieces of work, start several agents in one message with several Agent "
     "calls so they run at the same time."
 )
+
+#: After a compaction, one per agent still running (Claude Code's
+#: ``task_status``): its description and id; then where its transcript is
+#: and that ``SendMessage`` reaches it, when they apply.
+STILL_RUNNING = ('Background agent "{description}" ({id}) is still running. Do not start it '
+                 "again; its completion notice will come by itself.")
+STILL_RUNNING_FILE = " Its transcript so far is at {path}."
+STILL_RUNNING_SEND = " To ask it how far it got before then, send it a message with SendMessage."

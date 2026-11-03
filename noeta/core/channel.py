@@ -23,7 +23,7 @@ import re
 from html import escape
 from typing import Any
 
-from noeta.core.client import ClientAPI, Input
+from noeta.core.client import CONTINUED_AS_KEY, ClientAPI, Input
 from noeta.core.errors import UnknownTask
 from noeta.core.store import TaskRow
 from noeta.core.types import Message, Text
@@ -68,8 +68,9 @@ async def deliver(client: ClientAPI, *, task_id: str, agent: str, message: Input
         if row.status == "ended":
             n += 1
             # Created once by any replica; ``history_from`` carries the talk on.
-            await client.create(agent, task_id=_nth(task_id, n), config=config, queue=queue,
-                                history_from=row.task_id)
+            await client.create(agent, task_id=_nth(task_id, n),
+                                config={**(config or {}), CONTINUED_AS_KEY: "resume"},
+                                queue=queue, history_from=row.task_id)
             row = await client.get(_nth(task_id, n))
             continue
         seq = await client.send(row.task_id, message, dedupe_key=dedupe_key)

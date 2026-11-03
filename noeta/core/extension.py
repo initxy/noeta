@@ -25,6 +25,7 @@ from noeta.core.events import (
     TaskCreated,
 )
 from noeta.core.execenv import ExecEnv
+from noeta.core.mcp_names import allowed_in, named_in
 from noeta.core.tool import Tool, ToolOutput, tool_flag
 from noeta.core.types import (
     Effort,
@@ -190,9 +191,13 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
     loader of deferred tools), so the deferred tools it withheld are sent
     plain instead."""
     refused = set(denied)
+    listed = set(allowed) if allowed is not None else None
 
     def offered_name(name: str) -> bool:
-        return (allowed is None or name in allowed) and name not in refused
+        # An MCP tool's old name (``noeta.core.mcp_names``) refuses it, never
+        # offers it.
+        return (listed is None or allowed_in(listed, name, "agent tools")) \
+            and not named_in(refused, name, "agent disallowedTools")
 
     tools: list[Tool] = []
     seen: set[str] = set()
@@ -292,6 +297,9 @@ class TaskView(records.CoreNotices):
     #: While a compaction asks for residents: whether the newest messages
     #: stay after its summary (``None`` outside a compaction).
     keeps_tail: bool | None = None
+    #: While a compaction asks for residents: the messages that stay after
+    #: its summary (a listing among them is still in view).
+    kept: Sequence[Message] = ()
     #: The spill root (``Runtime.spill_root``): tool outputs too long to
     #: return inline are saved below it, in the task's exec env, for the
     #: model to read (``None``: nothing is saved).
@@ -382,8 +390,9 @@ class TaskView(records.CoreNotices):
         offering it wins, as for the model), or ``None``. How one plugin uses
         another's tool without importing it: model-visible tool names are a
         stable contract."""
-        if (self.allowed_tools is not None and name not in self.allowed_tools) \
-                or name in self.denied_tools:
+        if (self.allowed_tools is not None
+                and not allowed_in(set(self.allowed_tools), name, "agent tools")) \
+                or named_in(set(self.denied_tools), name, "agent disallowedTools"):
             return None
         for ext in self.extensions:
             for tool in ext.tools(self):
@@ -403,16 +412,17 @@ class TaskView(records.CoreNotices):
         """Record a compaction (the compaction extension's one core event)."""
         self.pending.append(event)
 
-    async def residents(self, *, lead: bool = False,
-                        keeps_tail: bool | None = None) -> list[Message]:
+    async def residents(self, *, lead: bool = False, keeps_tail: bool | None = None,
+                        kept: Sequence[Message] = ()) -> list[Message]:
         """Every extension's ``resident`` messages (``lead_resident`` with
         ``lead``), in extension order: what a compaction rebuilds after the
         kept messages (ahead of its summary). A compaction passes
         ``keeps_tail`` (whether messages stay after its summary), which the
-        extensions read as ``keeps_tail``. An extension that fails is logged
-        and skipped."""
+        extensions read as ``keeps_tail``, and the messages that stay
+        (``kept``). An extension that fails is logged and skipped."""
         out: list[Message] = []
         self.keeps_tail = keeps_tail
+        self.kept = kept
         try:
             for ext in self.extensions:
                 try:
@@ -421,6 +431,7 @@ class TaskView(records.CoreNotices):
                     log.exception("extension %s resident failed", ext.name)
         finally:
             self.keeps_tail = None
+            self.kept = ()
         return out
 
 
