@@ -212,10 +212,27 @@ def thinking_param(request: ModelRequest, max_tokens: int) -> dict[str, Any] | N
         return None
     if spec.is_reasoning:
         return {"type": "adaptive", "display": "updates"}
-    if spec.real_model_id.startswith("claude-"):
-        budget = max(1024, min(max_tokens - 1, spec.max_output_tokens - 1))
+    if spec.real_model_id.startswith("claude-") and max_tokens > MIN_THINKING_BUDGET \
+            and not _open_tool_loop_without_thinking(request):
+        budget = max(MIN_THINKING_BUDGET, min(max_tokens - 1, spec.max_output_tokens - 1))
         return {"type": "enabled", "budget_tokens": budget}
     return None
+
+
+#: The smallest budget the Messages API takes; a request whose ``max_tokens``
+#: leaves no room for it goes without thinking.
+MIN_THINKING_BUDGET = 1024
+
+
+def _open_tool_loop_without_thinking(request: ModelRequest) -> bool:
+    """Whether the request continues a tool loop whose assistant turn has no
+    thinking block (begun before thinking was sent, as by an earlier
+    version): the API refuses budget thinking there, so it waits for the
+    next turn."""
+    last = next((m for m in reversed(request.messages) if m.role == "assistant"), None)
+    return last is not None and bool(last.tool_uses) \
+        and not any(isinstance(b, Thinking) for b in last.content) \
+        and any(isinstance(b, ToolResult) for b in request.messages[-1].content)
 
 
 def bare_strings(outbound: list[dict[str, Any]]) -> None:

@@ -369,8 +369,24 @@ async def test_a_claude_model_without_adaptive_thinking_gets_claude_codes_budget
     body, _ = await _send(_req(model="claude-haiku-4-5", max_tokens=32_000))
     assert body["thinking"] == {"type": "enabled", "budget_tokens": 31_999}
     assert "output_config" not in body and "context_management" not in body
-    body, _ = await _send(_req(model="claude-haiku-4-5", max_tokens=500))
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    # No room for the API's least budget: no thinking (a 400 otherwise).
+    for cap in (500, 1024):
+        body, _ = await _send(_req(model="claude-haiku-4-5", max_tokens=cap))
+        assert "thinking" not in body
+    body, _ = await _send(_req(model="claude-haiku-4-5", max_tokens=4096))
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 4095}
+
+
+@respx.mock
+async def test_budget_thinking_waits_out_a_tool_loop_begun_without_it() -> None:
+    # A turn whose assistant message has a tool call and no thinking block
+    # (begun before the upgrade) continues without thinking; the API
+    # refuses budget thinking there.
+    loop = [Message(role="user", content=[Text(text="go")]),
+            Message(role="assistant", content=[ToolUse(id="t1", name="Read", input={})]),
+            Message(role="user", content=[ToolResult(call_id="t1", content=[Text(text="x")])])]
+    body, _ = await _send(_req(model="claude-haiku-4-5", max_tokens=32_000, messages=loop))
+    assert "thinking" not in body
 
 
 # ---------------------------------------------------------------------------

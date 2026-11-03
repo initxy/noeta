@@ -51,3 +51,13 @@ def test_one_problem_says_issue() -> None:
         "InputValidationError: Read failed due to the following issue:\n"
         "The required parameter `file_path` is missing")
     assert tool_use_error("x") == "<tool_use_error>x</tool_use_error>"
+
+
+def test_the_checked_input_carries_the_coerced_values() -> None:
+    from noeta.core.tool_input import check_input
+    value, problem = check_input("T", SCHEMA, {"file_path": "a", "limit": "5", "flag": "false",
+                                               "items": '[{"q": "x"}]'})
+    assert problem is None
+    assert value == {"file_path": "a", "limit": 5, "flag": False, "items": [{"q": "x"}]}
+    raw = {"limit": "x"}
+    assert check_input("T", SCHEMA, raw)[0] is raw  # refused: left as sent

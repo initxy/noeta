@@ -17,7 +17,9 @@ All notable changes to Noeta are documented here. The format is based on
       misfit (a missing or unexpected argument, a wrong type, a value outside an enum) is refused
       as `<tool_use_error>InputValidationError: …</tool_use_error>`. MCP tools, `function_tool`
       tools and the answer tool are not checked (`Tool.unchecked_input`); a `null` for an optional
-      argument counts as leaving it out.
+      argument counts as leaving it out. A value that fits only through Claude Code's coercions
+      (`"false"`, `"5"`, JSON text for an array) reaches the permission checks and the tool
+      converted.
     - Errors that refuse a call before the tool acts come back inside `<tool_use_error>` with no
       tool-name prefix (an unknown or not-loaded tool, `Edit`'s string not found, a file not read
       first, a missing file, a task id that names nothing running); an unknown tool reads
@@ -25,7 +27,9 @@ All notable changes to Noeta are documented here. The format is based on
     - Instruction files (and the memory index) a `Read` deny rule covers are not loaded; the person
       gets a notice per file.
     - Haiku 4.5 (a catalogued Claude model without adaptive thinking) is sent
-      `thinking: {type: "enabled", budget_tokens}` when thinking is on; it was sent no `thinking`.
+      `thinking: {type: "enabled", budget_tokens}` when thinking is on and `max_tokens` is over
+      1,024 (not while a tool loop begun without thinking goes on); it was sent no `thinking`.
+      Agent hooks' requests go without thinking.
     - A saved "always" rule adds `.noeta/settings.local.json` to the repository's
       `.git/info/exclude`.
   - A fork starts with a `<fork-boilerplate>` frame around its directive, and its copy of the

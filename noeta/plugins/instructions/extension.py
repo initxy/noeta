@@ -89,6 +89,10 @@ REREAD_HEAD = (
 #: deny rule keeps out of the conversation (Claude Code's
 #: ``withheld_memory``, which it shows the person and sends the model nothing).
 WITHHELD_NOTICE = "Instruction file not loaded (a Read deny rule covers it): {path}"
+#: One line per file shown earlier that a ``Read`` deny rule now covers (or
+#: whose path now leads where one does, a swapped link): withdrawn.
+WITHDRAWN_LINE = ("This instruction file is no longer loaded and its instructions no longer "
+                  "apply: {path}")
 #: One line per file shown earlier that is gone now.
 REMOVED_LINE = "This instruction file is gone and its instructions no longer apply: {path}"
 #: One line per file shown earlier that now has nothing to show (emptied, or
@@ -263,6 +267,9 @@ class Instructions(Extension):
                     "files": [*(e for e in state["files"] if e["path"] not in gone),
                               *(data.get("files") or ())],
                     "nested": [e for e in state["nested"] if e["path"] not in gone]}
+        if kind == "unshown":  # a compaction dropped them and they were not given again
+            return {**state, **{key: [{**e, "whole": False} for e in state[key]]
+                                for key in ("files", "nested")}}
         if kind == "withheld":
             return {**state, "withheld": [*state["withheld"], *data["paths"]]}
         if kind in ("root", "file"):  # a log written before the directory walk
@@ -443,9 +450,17 @@ class Instructions(Extension):
         known = {e["path"] for e in shown} | set(state.get("names", []))
         current = {f.path: f for f in await self._start_files(reader, cwd)}
         nested = {e["path"] for e in state.get("nested", [])}
+        # A file shown before is checked again: a deny rule may cover it now,
+        # or its path may lead somewhere one does (a link swapped since).
+        denied = await self._withhold(view, [e["path"] for e in shown
+                                             if digests.get(e["path"]) is not None])
+        withdrawn: list[str] = []
         for e in shown:
             path, before = e["path"], digests.get(e["path"])
-            if before is None or path in fresh or path in removed:
+            if before is None or path in fresh or path in removed or path in withdrawn:
+                continue
+            if path in denied:
+                withdrawn.append(path)
                 continue
             text = current[path].text if path in current \
                 else await _reread(reader.env_for(e["kind"]), path, empty="")
@@ -483,17 +498,18 @@ class Instructions(Extension):
         index = str(Path(directory) / MEMORY_INDEX_FILE) if directory else None
         if memory is None and index in digests:
             removed.append(index)
-        if not changed and not removed and not emptied:
+        if not changed and not removed and not emptied and not withdrawn:
             return
         body = "\n\n".join([REREAD_HEAD, *(render_file(*f) for f in changed)]) \
             if changed else ""
         lines = "\n".join([*(REMOVED_LINE.format(path=p) for p in removed),
+                           *(WITHDRAWN_LINE.format(path=p) for p in withdrawn),
                            *(EMPTIED_LINE.format(path=p) for p in emptied)])
         data: dict[str, Any] = {"digests": fresh}
         if entries:
             data["files"] = entries
-        if removed:
-            data["removed"] = removed
+        if removed or withdrawn:
+            data["removed"] = [*removed, *withdrawn]
         view.record(self.name, "reread", data,
                     message=user("\n\n".join(t for t in (body, lines) if t),
                                  origin=self.origin))
@@ -521,12 +537,22 @@ class Instructions(Extension):
     async def lead_resident(self, view: TaskView) -> Sequence[Message]:
         """After a compaction, ahead of the summary: the files read again."""
         if not self.rehang:
+            state = view.ext_state(self.name) or {}
+            if view.keeps_tail is not None and (state.get("files") or state.get("nested")):
+                # Out of the conversation now: a ``Read`` of one is answered
+                # with the file, not "already in your context".
+                view.record(self.name, "unshown", {})
             return ()
         reader, cwd = self._reader(view)
         state = view.ext_state(self.name) or {}
         start: list[tuple[str, str, str]] = []
         sent: dict[str, str] = {}
+        # Read again after a compaction: never a file a deny rule covers now.
+        denied = await self._withhold(view, [e["path"] for e in
+                                             [*state.get("files", []), *state.get("nested", [])]])
         for e in state.get("files", []):
+            if e["path"] in denied:
+                continue
             text = await _reread(reader.env_for(e["kind"]), e["path"])
             if text is not None:
                 start.append((e["path"], e["kind"], text))
@@ -534,6 +560,8 @@ class Instructions(Extension):
         for name in state.get("names", []):
             source = self.file if "/" not in name and self.file is not None else name
             path = source if posixpath.isabs(source) else posixpath.join(cwd, source)
+            if await self._withhold(view, [path]):
+                continue
             text = await _reread(reader.env, path)
             if text is not None:
                 start.append((path, PROJECT, text))
@@ -544,6 +572,8 @@ class Instructions(Extension):
         index = {memory[0]: text_digest(memory[2])} if memory is not None else {}
         limit = nested_max_chars(self._model(view))
         for e in state.get("nested", []):
+            if e["path"] in denied:
+                continue
             text = await _reread(reader.env_for(e["kind"]), e["path"])
             if text is not None:
                 sent[e["path"]] = text_digest(text)

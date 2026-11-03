@@ -328,7 +328,8 @@ async def run_agent(hook: HookCommand, payload: dict[str, Any], complete: Comple
         for _ in range(AGENT_MAX_TURNS):
             response = await complete(ModelRequest(
                 model=hook.model or model, system=[SystemPart(text=AGENT_SYSTEM)],
-                messages=list(messages), tools=[*specs, _VERDICT_SPEC], max_tokens=4096))
+                messages=list(messages), tools=[*specs, _VERDICT_SPEC], max_tokens=4096,
+                thinking=False))  # Claude Code's agent hooks run without thinking
             messages.append(response.message)
             uses = response.message.tool_uses
             for use in uses:

@@ -24,7 +24,7 @@ from noeta.core.large_output import ReplyBudget, bound_result
 from noeta.core.runner import closing, texts
 from noeta.core.store import NewTask, Post
 from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
-from noeta.core.tool_input import NO_SUCH_TOOL, input_problems, tool_use_error
+from noeta.core.tool_input import NO_SUCH_TOOL, check_input, tool_use_error
 from noeta.core.types import Delta, Message, Text, ToolResult, ToolUse, user
 
 if TYPE_CHECKING:
@@ -147,9 +147,12 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             await run.append([run.error_result(c.use.id, tool_use_error(withheld))])
             continue
         known = tools.get(c.use.name)
-        # Claude Code checks the arguments against the schema before any gate.
-        problems = None if known is None or tool_flag(known, "unchecked_input") \
-            else input_problems(known.name, known.input_schema, c.use.input)
+        # Claude Code checks the arguments against the schema before any gate,
+        # and the gates and the tool get them coerced (from the logged call,
+        # so every worker derives the same input).
+        checked, problems = (c.use.input, None) \
+            if known is None or tool_flag(known, "unchecked_input") \
+            else check_input(known.name, known.input_schema, c.use.input)
         if problems is not None:
             await run.append([run.error_result(c.use.id, tool_use_error(problems))])
             continue
@@ -170,7 +173,9 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
                     answer.data))], is_error=True), end_turn="",
                 note=texts.REJECTED_MARKER)])
             continue
-        use, verdict = await resolve(run, view, c.use)
+        call = c.use if checked == c.use.input else ToolUse(
+            id=c.use.id, name=c.use.name, input=dict(checked))
+        use, verdict = await resolve(run, view, call)
         if isinstance(verdict, Deny):
             await run.append([run.error_result(use.id, verdict.reason or "denied")])
             continue

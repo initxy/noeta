@@ -275,7 +275,8 @@ def test_files_the_conversation_carries_anyway_are_not_restored() -> None:
         plan = {"path": "/home/p/plans/plan.md"}
 
     ext = {"instructions": {"files": [{"path": "/w/NOETA.md", "real": "/w/NOETA.md"}],
-                            "nested": [{"path": "/w/sub/AGENTS.md", "real": "/w/sub/AGENTS.md"}]},
+                            "nested": [{"path": "/w/sub/AGENTS.md", "real": "/w/sub/AGENTS.md"}],
+                            "digests": {"/home/m/MEMORY.md": "d"}},
            "memory": {"dir": "/home/m"}, "permissions": Perm()}
     skip = _carried_files(ext, {})
     history = [user("go"), *_read("a", "NOETA.md"), *_read("b", "/w/sub/AGENTS.md"),
@@ -283,6 +284,11 @@ def test_files_the_conversation_carries_anyway_are_not_restored() -> None:
                *_read("e", "/w/other/NOETA.md"), *_read("f", "/w/x.py"), user("next")]
     assert recent_files(history, len(history), cwd="/w", skip=skip) == [
         "/w/x.py", "/w/other/NOETA.md"]
+    # Not given again after a compaction (``rehang=False``), or a memory
+    # index the instructions never showed: restored like any file.
+    assert _carried_files(ext, {}, rehung=False) == {"/home/p/plans/plan.md"}
+    shown = {**ext, "instructions": {**ext["instructions"], "digests": {}}}
+    assert "/home/m/MEMORY.md" not in _carried_files(shown, {})
 
 
 def _shell(call: str, command: str, output: str = "x", *, failed: bool = False

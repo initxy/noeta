@@ -131,3 +131,17 @@ as a deviation written as what CC does / what noeta does / why it is better, wit
 
 - 2026-11-02: baseline `make check` green on the branch; F1-F12 implemented with tests; rule
   and deviation rows written.
+- 2026-11-02: paired eval main vs ddb6b76f-era head running; parity found the restore count matched
+  main only by accident (main restored the plan file, the replay's read of Claude Code's background
+  output file failed): the replay now maps that file to noeta's job output (0 mismatches).
+- 2026-11-02 review round: P1 the tool and the gates now get the coerced input (`check_input`;
+  `"false"`, `"5"`, JSON text), derived from the logged call; P2-1 already-shown instruction files
+  are checked against the deny rules on every re-read and after a compaction (withdrawn with a
+  line, never re-shown); P2-2 budget thinking only when `max_tokens` leaves room for 1,024, not
+  when a tool loop began without thinking, never for agent hooks (Claude Code's are
+  `thinking: disabled`); sub-agents keep it: the bundle's sub-agents inherit the parent's
+  thinking config (`eui`), and no recording has a Haiku request to compare; the non-streaming
+  retry drops thinking when its cap leaves no room; P2-3 `tool.common.3` names every skipped
+  tool; P3 after a compaction that does not give the instruction files again (`rehang=False`)
+  a Read gets the file and the restore may restore them; the memory index is skipped only when
+  the instructions showed it; the MCP status note compares server names, not error text.

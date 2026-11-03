@@ -476,7 +476,7 @@ class Mcp(Extension):
 
     def _status(self, view: TaskView, st: Mapping[str, Any]) -> Reminder | None:
         """Servers that could not connect or wait for a sign-in, told when
-        that set changed since last told (from the task's log, so any
+        that set of servers changed since last told (from the task's log, so any
         worker tells the same), as Claude Code tells them up front: a model
         that never searches would take the missing tools for a missing
         capability. A set that emptied is recorded, not told."""
@@ -484,7 +484,10 @@ class Mcp(Extension):
         sign_in = sorted(s["alias"] for s in st.get("servers") or ()
                          if any(t.get("stub") for t in s.get("tools") or ()))
         told = st.get("status_told") or {"down": {}, "sign_in": []}
-        if down == told.get("down") and sign_in == sorted(told.get("sign_in") or ()):
+        # Which servers, not their error text: a new wording of the same
+        # failure is no news.
+        if set(down) == set(told.get("down") or ()) \
+                and sign_in == sorted(told.get("sign_in") or ()):
             return None
         data = {"down": down, "sign_in": sign_in}
         text = status_note(down, sign_in)

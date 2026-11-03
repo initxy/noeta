@@ -440,7 +440,8 @@ class Compaction(Extension):
                 recent_files(state.history, raw_cut, since=since, carried=carried,
                              cwd=_shell_cwd(state.ext, view.cwd),
                              shown=_shown_by_commands(state.ext),
-                             skip=_carried_files(state.ext, state.config)),
+                             skip=_carried_files(state.ext, state.config,
+                                                 rehung=_rehangs_instructions(view))),
                 read_tool, self._restore_context(view, state))
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
@@ -570,23 +571,34 @@ def _shell_cwd(ext: Mapping[str, Any], task_cwd: str) -> str:
     return cwd if isinstance(cwd, str) and cwd else task_cwd
 
 
-def _carried_files(ext: Mapping[str, Any], config: Mapping[str, Any]) -> set[str]:
+def _rehangs_instructions(view: TaskView) -> bool:
+    """Whether the instructions plugin (asked by name) gives its files again
+    after a compaction."""
+    ext = next((e for e in view.extensions if e.name == "instructions"), None)
+    return ext is not None and bool(getattr(ext, "rehang", True))
+
+
+def _carried_files(ext: Mapping[str, Any], config: Mapping[str, Any], *,
+                   rehung: bool = True) -> set[str]:
     """Files the conversation carries after a compaction anyway, so they are
     not restored as files (Claude Code's exact-path filter): the instruction
-    files the instructions resident gives again, the memory index, the
-    task's plan file. Each plugin's state is read by name."""
+    files the instructions resident gives again (``rehung``), the memory
+    index when it recorded showing it, the task's plan file. Each plugin's
+    state is read by name."""
     out: set[str] = set()
     instructions = ext.get("instructions")
-    if isinstance(instructions, Mapping):
+    if isinstance(instructions, Mapping) and rehung:
         for entry in [*(instructions.get("files") or ()), *(instructions.get("nested") or ())]:
             if isinstance(entry, Mapping):
                 out.update(p for p in (entry.get("path"), entry.get("real"))
                            if isinstance(p, str))
-    memory = ext.get("memory")
-    directory = memory.get("dir") if isinstance(memory, Mapping) else None
-    directory = directory if isinstance(directory, str) else config.get(MEMORY_DIR_KEY)
-    if isinstance(directory, str) and directory:
-        out.add(posixpath.join(directory, MEMORY_INDEX_FILE))
+        memory = ext.get("memory")
+        directory = memory.get("dir") if isinstance(memory, Mapping) else None
+        directory = directory if isinstance(directory, str) else config.get(MEMORY_DIR_KEY)
+        index = posixpath.join(directory, MEMORY_INDEX_FILE) \
+            if isinstance(directory, str) and directory else None
+        if index is not None and index in (instructions.get("digests") or {}):
+            out.add(index)
     plan = getattr(ext.get("permissions"), "plan", None)
     path = plan.get("path") if isinstance(plan, Mapping) else None
     if isinstance(path, str) and path:
