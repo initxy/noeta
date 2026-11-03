@@ -39,7 +39,7 @@ __all__ = [
 DEFAULT_PLUGINS: tuple[PluginEntry, ...] = (
     ("permissions", {}), ("plan_mode", {}), ("budget", {}), ("repetition_guard", {}),
     ("hooks", {}), ("shell", {}), ("web", {}), ("mcp", {}), ("fs", {}), ("skills", {}),
-    ("instructions", {}), ("environment", {}), ("subtasks", {}),
+    ("instructions", {}), ("environment", {}), ("subtasks", {}), ("empty_reply", {}),
     # Last: the summarize call reuses the request as the others left it.
     ("compaction", {}),
 )

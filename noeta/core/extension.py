@@ -1,9 +1,9 @@
 """The one extension interface.
 
 Everything beyond the core loop (permissions, subtasks, compaction, memory,
-skills, MCP, background shells) is an ``Extension``. Every method is
-optional. An extension keeps durable state by recording
-``ExtensionRecorded`` entries (``view.record``) and folding them in
+skills, MCP, background shells, asking again after an empty reply) is an
+``Extension``. Every method is optional. An extension keeps durable state by
+recording ``ExtensionRecorded`` entries (``view.record``) and folding them in
 ``reduce``; the core never grows an event type for an extension.
 """
 
@@ -578,6 +578,17 @@ class Extension:
         is what the person asked the summary to focus on. Return text to add
         to those instructions, a ``Deny`` to skip this compaction, or
         ``None``. The compacting extension asks every extension in order."""
+        return None
+
+    async def on_empty_reply(self, view: TaskView, response: ModelResponse) -> Message | None:
+        """The model ended its reply (``end_turn``) with no text and no tool
+        call; ``response`` is that reply, which is not recorded. Return a
+        message to go on with: the core records it, with the reply's usage,
+        in a ``continue`` entry (reason ``empty_reply``) and calls the model
+        again. ``None``: no opinion. Asked in extension order; the first
+        message wins. When none comes, the turn ends without an answer
+        (``turn_done``, reason ``empty_reply``). How often to go on is the
+        extension's to keep (``TaskState.empty_nudged``)."""
         return None
 
     async def on_context_overflow(self, view: TaskView, request: ModelRequest) -> bool:

@@ -1,7 +1,7 @@
 """Closing a turn or the task: stop a turn, fail it, end the task,
-continue a reply cut at the output cap, and ask again after an empty one.
-Every way out answers the calls still open, so the conversation never keeps
-a call without a result."""
+continue a reply cut at the output cap, and end the turn after an empty
+reply (or go on, when an extension asks). Every way out answers the calls
+still open, so the conversation never keeps a call without a result."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from noeta.core.errors import InboxUnread
 from noeta.core.events import Cancel, ChildEnded, Event, TaskEnded
 from noeta.core.runner import texts
 from noeta.core.store import Post
-from noeta.core.types import ModelResponse, ToolResult, user
+from noeta.core.types import Message, ModelResponse, user
 
 if TYPE_CHECKING:
     from noeta.core.runner.task import TaskRun
@@ -129,38 +129,20 @@ async def continue_after_cap(run: TaskRun, *, dropped: ModelResponse | None = No
 
 async def after_empty_reply(run: TaskRun, response: ModelResponse) -> bool:
     """The model ended its reply with no text and no tool call (reasoning
-    alone counts as nothing). The reply is not recorded (its usage is); the
-    model is asked to go on, once per step: asked already, with no reply and
-    no new message since, the turn ends without an answer, as in Claude
-    Code, and so does one after a tool that answers for the turn
-    (``Tool.silent_reply_after``). The nudge is plain text in the user's
-    turn, as Claude Code sends it."""
+    alone counts as nothing). The reply is not recorded (its usage is). An
+    extension may go on with a message (``Extension.on_empty_reply``, the
+    first one wins); otherwise the turn ends without an answer."""
     model, usage = response.model or run.model, response.usage
-    if run.state.empty_nudged or _answered_by_tool(run):
-        await run.append([core_records.event(core_records.TurnDone(
-            reason=core_records.EMPTY_REPLY, model=model, usage=usage))])
-        return True
-    await run.append([core_records.event(
-        core_records.Continue(reason=core_records.EMPTY_REPLY, model=model, usage=usage),
-        message=user(texts.EMPTY_REPLY_NUDGE, origin="inline"))])
+    view = run.view()
+    message: Message | None = None
+    for ext in run.exts:
+        message = await ext.on_empty_reply(view, response)
+        if message is not None:
+            break
+    # In one append with what the extensions recorded meanwhile.
+    view.pending.append(core_records.event(core_records.TurnDone(
+        reason=core_records.EMPTY_REPLY, model=model, usage=usage)) if message is None
+        else core_records.event(core_records.Continue(
+            reason=core_records.EMPTY_REPLY, model=model, usage=usage), message=message))
+    await run.flush(view)
     return True
-
-
-def _answered_by_tool(run: TaskRun) -> bool:
-    """A call since the person's last message whose tool says no reply need
-    follow it (``Tool.silent_reply_after``): the turn's answer went through
-    the tool, so an empty reply ends the turn without the nudge."""
-    modes = {t.name: getattr(t, "silent_reply_after", None) for t in run.tools(run.view())}
-    if not any(modes.values()):
-        return False
-    failed: dict[str, bool] = {}
-    for m in reversed(run.state.messages):
-        results = [b for b in m.content if isinstance(b, ToolResult)]
-        if m.from_person and not results:
-            return False
-        failed.update((b.call_id, b.is_error) for b in results)
-        for use in m.tool_uses if m.role == "assistant" else ():
-            mode = modes.get(use.name)
-            if mode == "call" or (mode == "success" and failed.get(use.id) is False):
-                return True
-    return False

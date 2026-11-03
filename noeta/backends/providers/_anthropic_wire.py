@@ -16,7 +16,7 @@ from noeta.backends.providers._common import (
 )
 from noeta.core import models
 from noeta.core.mcp_names import legacy_index
-from noeta.core.runner.texts import EMPTY_REPLY_NUDGE, INTERRUPTED_MARKER, REJECTED_MARKER
+from noeta.core.runner.texts import INTERRUPTED_MARKER, REJECTED_MARKER
 from noeta.core.types import (
     Image,
     Message,
@@ -27,6 +27,7 @@ from noeta.core.types import (
     ToolResult,
     ToolUse,
 )
+from noeta.toolkit.empty_reply import EMPTY_REPLY_NUDGE
 
 #: ``Provider.family`` and ``Thinking.family`` for this adapter.
 FAMILY = "anthropic"

@@ -88,7 +88,10 @@ async def test_ultrathink_adds_a_note_and_raises_the_turns_effort(store: SqliteS
 async def test_the_ultrathink_note_is_made_once_per_prompt(store: SqliteStore) -> None:
     """Not again when the call is made again (an empty reply asked to go
     on), nor with the next prompt after a turn that ended without a reply."""
-    agent = Agent(name="a", model="m", extensions=[Environment(today=lambda: "2026-11-01")])
+    from noeta.plugins.empty_reply import EmptyReply
+
+    agent = Agent(name="a", model="m",
+                  extensions=[Environment(today=lambda: "2026-11-01"), EmptyReply()])
     client, tid, provider, runtime = await _session(
         store, agent, [reply(""), reply(""), reply("ok")])
     await client.send(tid, "ultrathink: why?")

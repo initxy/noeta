@@ -70,6 +70,14 @@ only into the extension of the same name.
   default (`repetition_threshold=0`), so no default behavior changes and parity is unaffected.
   Stateless (reads the conversation). Its ask is its own (`by: repetition_guard`), so a host's
   `can_use_tool` on the permissions plugin no longer answers it.
+- The empty-reply re-ask is `noeta/plugins/empty_reply.py` (`EmptyReply`, name `empty_reply`), on
+  by default (placed before `compaction`): Claude Code 2.1.312 re-asks (its bundle carries the
+  exact nudge text). Moving it out needs a kernel hook, `Extension.on_empty_reply(view, response)
+  -> Message | None` (first message wins; none ends the turn quietly, which is what an agent
+  without the plugin does on the first empty reply). The kernel still writes the `continue` /
+  `turn_done` records (reason `empty_reply`) with the same shape, and `empty_nudged` stays in its
+  fold, derived from them, so old logs replay the same. The nudge text moved to
+  `noeta/toolkit/empty_reply.py`, where the Anthropic adapter still finds it by its words.
 
 ## Plan
 
@@ -81,7 +89,7 @@ only into the extension of the same name.
 - [x] docs: `docs/extending.md`, parity rules, CHANGELOG
 - [x] budget caps split
 - [x] repetition guard split
-- [ ] empty-reply re-ask split
+- [x] empty-reply re-ask split (built on branch `empty-reply-plugin`, cherry-picked)
 - [ ] gates: check, parity, cluster, e2e; targeted eval
 
 ## Acceptance criteria

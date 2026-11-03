@@ -26,6 +26,7 @@ plugins:
   - title
   - workflow
   - mcp
+  - empty_reply
   - compaction
 ---
 

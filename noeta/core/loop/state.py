@@ -104,8 +104,9 @@ class TaskState:
     #: Consecutive ``ModelCalled`` without a reply (crash/retry loop guard);
     #: a deliberate ``continue`` (output cap, empty reply) starts it again.
     model_attempts: int = 0
-    #: The model was asked to go on after an empty reply and has not replied
-    #: since, nor has a new message come in: another empty reply ends the turn.
+    #: The turn went on after an empty reply (a ``continue`` with reason
+    #: ``empty_reply``) and the model has not replied since, nor has a new
+    #: message come in (``Extension.on_empty_reply`` reads it).
     empty_nudged: bool = False
     #: Texts of the replies that make up the current answer: one reply, or a
     #: reply plus its continuations after hitting the output cap.

@@ -95,8 +95,8 @@ def test_the_nudge_is_folded_from_the_log() -> None:
     from noeta.core import records
     from noeta.core.events import ModelReplied, Recorded
     from noeta.core.loop.state import apply
-    from noeta.core.runner.texts import EMPTY_REPLY_NUDGE
     from noeta.core.types import user
+    from noeta.toolkit.empty_reply import EMPTY_REPLY_NUDGE
 
     state = TaskState()
     nudge = records.event(records.Continue(reason=records.EMPTY_REPLY),

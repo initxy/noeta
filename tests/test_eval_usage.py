@@ -11,6 +11,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.runner import Runtime
 from noeta.core.types import Message, ModelResponse, Thinking, Usage
+from noeta.plugins.empty_reply import EmptyReply
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -23,7 +24,7 @@ async def test_trial_usage_counts_dropped_replies_and_nudges(tmp_path: Path) -> 
                         stop_reason="max_tokens", usage=Usage(uncached=10, output=7))
     provider = ScriptedProvider([cut, reply(""), reply("hi"), reply(""), reply("")])
     store = SqliteStore(str(tmp_path / "t.db"))
-    agent = Agent(name="a", model="m")
+    agent = Agent(name="a", model="m", extensions=[EmptyReply()])
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,
                  env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
                  sleep=_no_sleep)

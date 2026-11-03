@@ -73,7 +73,7 @@ class Retry(Struct):
 
 
 #: ``reason`` of the ``continue`` that asks the model to go on after an empty
-#: reply, and of the ``turn_done`` that ends the turn on a second one.
+#: reply, and of the ``turn_done`` that ends the turn on one.
 EMPTY_REPLY = "empty_reply"
 
 
@@ -96,8 +96,10 @@ def _dropped_usage(d: dict[str, Any]) -> Usage | None:
 
 class Continue(Struct):
     """The model hit its output limit, or (``reason`` ``empty_reply``)
-    replied with nothing; the entry's message asks it to go on. ``model``
-    and ``usage`` are those of a reply that was dropped (not recorded)."""
+    replied with nothing and an extension went on
+    (``Extension.on_empty_reply``); the entry's message asks it to go on.
+    ``model`` and ``usage`` are those of a reply that was dropped (not
+    recorded)."""
 
     kind: ClassVar[str] = "continue"
     reason: str | None = None
@@ -168,8 +170,8 @@ class TurnFailed(Struct):
 
 class TurnDone(Struct):
     """The turn ended without a reply: a ``before_model`` ended it, or
-    (``reason`` ``empty_reply``) the model replied with nothing again after
-    it was asked to go on; ``model`` and ``usage`` are that reply's."""
+    (``reason`` ``empty_reply``) the model replied with nothing and no
+    extension went on; ``model`` and ``usage`` are that reply's."""
 
     kind: ClassVar[str] = "turn_done"
     reason: str | None = None

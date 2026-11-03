@@ -520,8 +520,10 @@ async def test_session_end_and_notification(tmp_path: Path) -> None:
 async def test_stop_runs_when_a_turn_ends_on_an_empty_reply(tmp_path: Path) -> None:
     # Claude Code 2.1.312 runs Stop once the asked-again reply is empty too,
     # with no last_assistant_message.
+    from noeta.plugins.empty_reply import EmptyReply
+
     s = await Setup(tmp_path, {"Stop": hook("stop")}, [reply(""), reply("")],
-                    answers={"stop": HookResult(0)}).start()
+                    answers={"stop": HookResult(0)}, extensions=(EmptyReply(),)).start()
     assert len(s.provider.requests) == 2
     [payload] = s.runner.payloads("stop")
     assert payload["stop_hook_active"] is False

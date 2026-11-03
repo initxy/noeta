@@ -47,6 +47,15 @@ All notable changes to Noeta are documented here. The format is based on
     permissions plugin's `can_use_tool`. **Breaking**: `Permissions(repetition_threshold=...,
     repetition_action=..., repetition_window=...)` and `noeta.plugins.permissions.RepetitionPolicy`
     are gone.
+  - **The empty-reply nudge is the plugin `empty_reply`, on by default.** The kernel no longer asks
+    the model to go on after a reply with no text and no tool call: a new extension hook,
+    `Extension.on_empty_reply(view, response)`, returns the message to go on with (the core records
+    it in the same `continue` entry, reason `empty_reply`), and with no answer the turn ends quietly
+    (`turn_done`, reason `empty_reply`, the reply's usage kept). The plugin keeps Claude Code's
+    behavior unchanged: once per step, not after a `Tool.silent_reply_after` tool. Every built-in
+    agent and `DEFAULT_PLUGINS` run it; `[plugins.empty_reply] enabled = false` turns it off, and
+    then the first empty reply ends the turn. Old logs replay unchanged. `EMPTY_REPLY_NUDGE` moved
+    from `noeta.core.runner.texts` to `noeta.toolkit.empty_reply`.
   - New extension mechanism: `Extension.folds` names other record names whose records also reach
     the extension's `reduce` (how a split-out plugin keeps reading its old records).
 
