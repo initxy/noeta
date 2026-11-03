@@ -1,7 +1,6 @@
 ---
-status: active
+status: done
 created: 2026-11-02
-branch: ctx-final
 ---
 
 # Context final closure
@@ -155,3 +154,4 @@ as a deviation written as what CC does / what noeta does / why it is better, wit
   0.56, every failing trial on both sides has all 12 files done and none redone but never
   reached the compaction threshold (the model read small `offset` / `limit` windows, numbers not
   strings); pooled over both runs main 15/18, branch 14/18.
+- 2026-11-02 Merged into local main with `--no-ff` after one independent review round (one P1, three P2, five P3, all fixed in d79df3b5) and the paired evals above; spec archived, owner questions carried to `docs/specs/2026-10-29-open-source-follow-ups.md`.
