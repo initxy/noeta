@@ -111,7 +111,7 @@ as a deviation written as what CC does / what noeta does / why it is better, wit
 - [x] F11 SessionStart join; test.
 - [x] F12 unknown command note; test.
 - [x] Rule rows and deviation rows.
-- [ ] Gates: `make check`, `make parity`, `make cluster`, `make e2e`, paired eval.
+- [x] Gates: `make check`, `make parity`, `make cluster`, `make e2e`, paired eval.
 
 ## Acceptance criteria
 
@@ -145,3 +145,13 @@ as a deviation written as what CC does / what noeta does / why it is better, wit
   tool; P3 after a compaction that does not give the instruction files again (`rehang=False`)
   a Read gets the file and the restore may restore them; the memory index is skipped only when
   the instructions showed it; the MCP status note compares server names, not error text.
+- 2026-11-03: gates on d79df3b5: `make check` green (3099 passed, 89.66 %), `make parity` 0
+  mismatches, `make cluster` 14 passed, `make e2e` 7 passed. Full paired eval (DeepSeek V4.1
+  Flash, 9 trials, concurrency 2; the branch side started on ddb6b76f and the review fixes landed
+  while it ran): overall 0.951 main / 0.956 branch, no regression flagged; only drop
+  `delegate_parallel_review` 0.33 → 0.11 (known noisy: the model never calls `Agent` in the
+  failing trials on either side, so the fork frame and refusal frames play no part). Short
+  tool-heavy rerun on d79df3b5 (10 scenarios): 0.972 / 0.953; `compaction_resume_edits` 0.78 →
+  0.56, every failing trial on both sides has all 12 files done and none redone but never
+  reached the compaction threshold (the model read small `offset` / `limit` windows, numbers not
+  strings); pooled over both runs main 15/18, branch 14/18.
