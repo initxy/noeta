@@ -90,7 +90,7 @@ only into the extension of the same name.
 - [x] budget caps split
 - [x] repetition guard split
 - [x] empty-reply re-ask split (built on branch `empty-reply-plugin`, cherry-picked)
-- [ ] gates: check, parity, cluster, e2e; targeted eval
+- [x] gates: check, parity, cluster, e2e; targeted eval
 
 ## Acceptance criteria
 
@@ -109,3 +109,8 @@ only into the extension of the same name.
 - 2026-11-03: budget caps split; full test suite green.
 - 2026-11-03: repetition guard split; it was already off by default (threshold 0), contrary to
   the brief's premise.
+- 2026-11-03: all four splits on the branch: make check 3507 passed, parity 0 mismatches (11
+  accepted), cluster 14 passed, e2e 7 passed; eval (deepseek_v4_1_flash, 9 trials, concurrency
+  1) on plan_mode_read_only, plan_mode_started, plan_mode_multi_file, deny_rule_respected,
+  denied_not_circumvented 1.00 each, todo_reminder_long_run 0.40 (all equal to the baseline), no
+  timeouts, empty-reply nudges 0.
