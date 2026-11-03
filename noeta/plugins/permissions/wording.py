@@ -25,6 +25,10 @@ DONT_ASK_DENIED = ("Permission to use {name} was refused: noeta runs in don't-as
                    + STOP_AND_EXPLAIN)
 DENIED_BY_RULE = ("Permission to use {name} was refused by the permission rule {rule}. "
                   + WORK_AROUND + STOP_AND_EXPLAIN)
+#: A shell command writing a path an ``Edit`` deny rule covers.
+SHELL_WRITE_DENIED = ("Permission to use {name} was refused: the command writes {path}, which "
+                      "the permission rule {rule} keeps from being changed. " + WORK_AROUND
+                      + STOP_AND_EXPLAIN)
 OUTSIDE_WRITE = ("{name} only writes inside the working directories ({dirs}); {path} is "
                  "outside them. If it must change, ask the user to add its directory to the "
                  "additional directories.")

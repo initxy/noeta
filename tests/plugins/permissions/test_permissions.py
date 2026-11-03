@@ -528,6 +528,62 @@ async def test_an_ask_rule_is_not_dodged_by_quoting(store: SqliteStore, tmp_path
     assert "Bash(git push *)" in detail["prompt"] and not bash.runs
 
 
+_SHELL_WRITES = [
+    "cd {ws}/config && sed -i 's/^a = .*$/a = 2/' dev.toml staging.toml prod.toml",
+    "sed -i -e 's/a/b/' config/prod.toml", "sed -i '/x/{{p}}' config/prod.toml",
+    "echo x > config/prod.toml", "echo x >> {ws}/config/prod.toml",
+    "cp a.toml config/prod.toml", "cp -f a.toml config/prod.toml", "mv a.toml config/prod.toml",
+    "rm -f config/prod.toml", "touch config/prod.toml", "echo x | tee -a config/prod.toml",
+    "X=1 command rm config/prod.toml", "ls; cd config; rm prod.toml", "rm ~/proj/config/prod.toml",
+]
+
+
+@pytest.mark.parametrize("mode", ["bypassPermissions", "acceptEdits", "default", "auto"])
+@pytest.mark.parametrize("command", _SHELL_WRITES)
+async def test_an_edit_deny_rule_refuses_a_shell_write(
+        store: SqliteStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+        command: str) -> None:
+    """Claude Code checks the paths a shell command writes (file commands,
+    ``sed -i``, ``tee``, output redirections) against ``Edit`` deny rules,
+    before any mode lets the command through."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ws = tmp_path / "home" / "proj"
+    (ws / "config").mkdir(parents=True)
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command.format(ws=ws)})),
+                                 reply("ok")])
+    perms = Permissions(mode=mode, deny=["Edit(./config/prod.toml)"])
+    client, tid, _ = await start(store, provider, perms, [bash], cwd=ws)
+    [(text, err)] = results(await events(client, tid))
+    assert err and "Edit(./config/prod.toml)" in text and str(ws / "config" / "prod.toml") in text
+    assert not bash.runs
+
+
+@pytest.mark.parametrize("command", [
+    "cd config && sed -i 's/a/b/' dev.toml", "sed 's/a/b/' config/prod.toml",
+    "cat config/prod.toml > out.txt", "echo x > config/prod.toml.bak",
+    "echo $(cat config/prod.toml) > x"])
+async def test_a_shell_write_elsewhere_is_not_refused(store: SqliteStore, tmp_path: Path,
+                                                      command: str) -> None:
+    (tmp_path / "config").mkdir()
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": command})), reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Edit(./config/prod.toml)"])
+    await start(store, provider, perms, [bash], cwd=tmp_path)
+    assert [r["command"] for r in bash.runs] == [command]
+
+
+async def test_a_write_deny_rule_does_not_cover_a_shell_write(store: SqliteStore,
+                                                              tmp_path: Path) -> None:
+    """Only ``Edit`` rules judge shell writes, as in Claude Code."""
+    bash = Fake("Bash")
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "touch prod.toml"})),
+                                 reply("ok")])
+    perms = Permissions(mode="bypassPermissions", deny=["Write(./prod.toml)"])
+    await start(store, provider, perms, [bash], cwd=tmp_path)
+    assert len(bash.runs) == 1
+
+
 async def test_dont_ask_refuses_what_would_ask(store: SqliteStore, tmp_path: Path) -> None:
     write, bash = Fake("Write"), Fake("Bash")
     provider = ScriptedProvider([reply(

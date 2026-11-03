@@ -16,7 +16,12 @@ from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.decision import Decision, in_mode
-from noeta.plugins.permissions.shell_check import real_path, real_scope, shell_decision
+from noeta.plugins.permissions.shell_check import (
+    real_path,
+    real_scope,
+    shell_decision,
+    shell_scope,
+)
 from noeta.plugins.permissions.state import inherited_rules, state_of
 from noeta.toolkit import permission_rules as r
 
@@ -93,6 +98,10 @@ class RuleCheck:
                        is not None), None)
         if denied is not None:
             return Decision("deny", w.DENIED_BY_RULE.format(name=name, rule=denied.text))
+        if name in r.SHELL_TOOLS:
+            refused = await self._shell_write_denied(view, name, args, scope, ctx)
+            if refused is not None:
+                return refused
         asked = next((m for a in seen if (m := r.first_match(self.ask_rules, name, a, ctx))
                       is not None), None)
         if asked is not None:
@@ -106,6 +115,25 @@ class RuleCheck:
         found = await self._needs(view, call, mode, scope, ctx, allow_rules,
                                   [a for a, allow in aliases if allow])
         return in_mode(mode, found, name, plan_classifier=plan_classifier)
+
+    async def _shell_write_denied(self, view: TaskView, name: str, args: Mapping[str, Any],
+                                  scope: sc.Scope, ctx: r.RuleContext) -> Decision | None:
+        """A refusal when the command writes a path an ``Edit`` deny rule
+        covers (as written or where its links lead): Claude Code's shell
+        path check, which no mode gets past. Every directory the command
+        may be in by then counts."""
+        command = args.get("command")
+        if not self.deny_rules or not isinstance(command, str):
+            return None
+        found = sc.parts(command, shell_scope(view, scope))
+        for part in found or ():
+            for path in dict.fromkeys((*part.targets, *part.redirects)):
+                for seen in dict.fromkeys((path, await real_path(view, path))):
+                    rule = r.first_match(self.deny_rules, "Edit", {"file_path": seen}, ctx)
+                    if rule is not None:
+                        return Decision("deny", w.SHELL_WRITE_DENIED.format(
+                            name=name, path=path, rule=rule.text))
+        return None
 
     async def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
                      ctx: r.RuleContext, allow_rules: Sequence[r.Rule],
