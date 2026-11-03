@@ -74,3 +74,4 @@ changed the file `Edit(./config/prod.toml)` denies.
   `Edit` rule; all 52 run with no path deny rule), then the lenient parse, `deny_paths.py`, the
   batched resolve, docs. Reviewer probes (`probe.py`, `probe2.py`) rerun through the check: every
   listed bypass refused, the benign ones run.
+- 2026-11-03 Merged into local main with `--no-ff` after one independent review round (two P1 bypasses, two P2, P3 items; all fixed in 29ab9255, the reviewer's probes rerun: every bypass refused, the benign commands run).
