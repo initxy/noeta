@@ -8,6 +8,7 @@ omitClaudeMd: true
 plugins:
   - permissions
   - plan_mode
+  - budget
   - hooks
   - shell
   - web

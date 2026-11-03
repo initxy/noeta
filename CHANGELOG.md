@@ -34,6 +34,12 @@ All notable changes to Noeta are documented here. The format is based on
   - **Breaking**: `Permissions(auto_during_plan=...)` is `PlanMode(auto_during_plan=...)`
     (`useAutoModeDuringPlan` in the settings files goes there); a host building agents by hand
     adds `PlanMode(plans_dir=...)` next to `Permissions` to keep plan mode.
+  - **The budget caps are the plugin `budget`** (`BudgetCaps`, on by default in every built-in
+    agent, as Claude Code's SDK has `maxTurns` / `maxBudgetUsd`): `max_iterations` (or
+    `max_turns`), `max_tool_calls`, `max_cost_usd`, `max_spawned_subtasks`, `max_subtask_depth`
+    (default 3), `spawn_tools`, set in `[plugins.budget]`. They hold with the permissions plugin
+    off; a log from before the split keeps its counts. **Breaking**: `Permissions(budget=...,
+    max_turns=..., spawn_tools=...)` and `noeta.plugins.permissions.Budget` are gone.
   - New extension mechanism: `Extension.folds` names other record names whose records also reach
     the extension's `reduce` (how a split-out plugin keeps reading its old records).
 

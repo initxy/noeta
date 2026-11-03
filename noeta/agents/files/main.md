@@ -4,6 +4,7 @@ model: inherit
 plugins:
   - permissions
   - plan_mode
+  - budget
   - hooks
   - shell
   - fs

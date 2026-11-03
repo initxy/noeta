@@ -36,9 +36,6 @@ class PermState:
     #: ``{"path", "pre_mode", "entered_seq", "by_command",
     #: "auto_during_plan"}``, kept after it ends.
     plan: dict[str, Any] | None = None
-    steps: int = 0
-    tool_calls: int = 0
-    cost_usd: float = 0.0
     #: ``call_id -> "allow" | "deny"`` decided by ``can_use_tool``.
     auto: dict[str, str] = field(default_factory=dict)
     #: ``call_id -> {"rules": [...]}``: what an "always" answer remembers.
@@ -125,12 +122,6 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
         return replace(st, offered=dict(d))
     if kind == "resumed":
         return replace(st, probed=False, compacted=False)
-    if kind == "step":
-        return replace(st, steps=st.steps + 1)
-    if kind == "tool_call":
-        return replace(st, tool_calls=st.tool_calls + 1)
-    if kind == "cost":
-        return replace(st, cost_usd=st.cost_usd + float(d.get("usd") or 0.0))
     if kind == "auto":
         return replace(st, auto=_keep({**st.auto, str(d["call_id"]): str(d["decision"])}))
     if kind == "asked":

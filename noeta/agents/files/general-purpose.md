@@ -6,6 +6,7 @@ identity: You are an agent built on noeta, an open-source agent framework.
 plugins:
   - permissions
   - plan_mode
+  - budget
   - hooks
   - shell
   - web

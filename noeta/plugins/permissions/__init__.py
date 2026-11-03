@@ -4,8 +4,8 @@
   call: the six modes, ``allow`` / ``deny`` / ``ask`` rules, working
   directories and protected paths, the auto-mode classifier and what may
   run while planning (plan mode itself is ``noeta.plugins.plan_mode``); plus
-  budget caps, the repetition guard, declarative PreToolUse rules and
-  ``can_use_tool``.
+  the repetition guard, declarative PreToolUse rules and ``can_use_tool``
+  (the budget caps are ``noeta.plugins.budget``).
 """
 
 from noeta.plugins.permissions.extension import (
@@ -17,7 +17,6 @@ from noeta.plugins.permissions.extension import (
     UntrustedProjectShellAllowlistWarning,
 )
 from noeta.plugins.permissions.guards import (
-    Budget,
     MatchArg,
     PreToolUseRule,
     RepetitionAction,
@@ -39,7 +38,6 @@ __all__ = [
     "MODE_SIGNAL",
     "PERMISSION_MODES",
     "SHELL_COMPANION_TOOLS",
-    "Budget",
     "CanUseTool",
     "MatchArg",
     "PermState",

@@ -58,6 +58,12 @@ only into the extension of the same name.
   approval is the tool's own question; bypass does not skip a tool that needs the person).
   `EnterPlanMode` is not asked about (nothing is without the permissions plugin).
 
+- Budget caps are `noeta/plugins/budget.py` (`BudgetCaps`, name `budget`), on by default after
+  `plan_mode` in every built-in agent (Claude Code's SDK has `maxTurns` / `maxBudgetUsd`; its
+  only cap set by default, the sub-agent depth of 3, was on before too). Flat arguments, so
+  `[plugins.budget]` sets them. Its counts are its own records; it folds `permissions` too, where
+  a log from before the split has them (`step`, `tool_call`, `cost`).
+
 ## Plan
 
 - [x] `Extension.folds` in the kernel fold
@@ -66,7 +72,7 @@ only into the extension of the same name.
 - [x] agents, settings (`useAutoModeDuringPlan`), compaction's plan-file read, evals' plans_dir
 - [x] tests: plan mode alone, permissions alone, neither, an old log replayed
 - [x] docs: `docs/extending.md`, parity rules, CHANGELOG
-- [ ] budget caps split
+- [x] budget caps split
 - [ ] repetition guard split
 - [ ] empty-reply re-ask split
 - [ ] gates: check, parity, cluster, e2e; targeted eval
@@ -85,3 +91,4 @@ only into the extension of the same name.
 ## Progress log
 
 - 2026-11-03: plan mode split; parity 0 mismatches (11 accepted), full test suite green.
+- 2026-11-03: budget caps split; full test suite green.

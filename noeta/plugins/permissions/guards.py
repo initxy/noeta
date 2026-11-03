@@ -1,5 +1,5 @@
-"""Guards: lifetime budget caps, the repetition (loop) guard, and the
-host's declarative PreToolUse rules. Each check is a pure function of its
+"""Guards: the repetition (loop) guard and the host's declarative
+PreToolUse rules. Each check is a pure function of its
 configuration, the call, and numbers folded from the task's log."""
 
 from __future__ import annotations
@@ -12,52 +12,6 @@ from fnmatch import fnmatchcase
 from typing import Any, Literal
 
 from noeta.core.types import Message, ToolUse
-
-# ---------------------------------------------------------------- budget
-
-
-@dataclass(frozen=True)
-class Budget:
-    """Caps on a task's whole life (one task is a whole conversation, so
-    size them for the longest conversation you will fund). ``None`` = no
-    cap. ``max_subtask_depth``: root depth is 0, so ``1`` lets the root
-    spawn a child but denies that child a grandchild."""
-
-    max_iterations: int | None = None
-    max_tool_calls: int | None = None
-    max_cost_usd: float | None = None
-    max_spawned_subtasks: int | None = None
-    max_subtask_depth: int | None = 3
-
-
-@dataclass(frozen=True)
-class Counters:
-    """What the budget is checked against. ``iterations`` counts the model
-    call that produced the call being checked."""
-
-    iterations: int = 0
-    tool_calls: int = 0
-    cost_usd: float = 0.0
-    spawned: int = 0
-    depth: int = 0
-
-
-def budget_verdict(b: Budget, c: Counters, *, spawns: bool) -> str | None:
-    """The deny reason, or ``None``. Iterations compare with ``>`` (the
-    in-flight model call is already counted); the rest with ``>=``."""
-    if b.max_iterations is not None and c.iterations > b.max_iterations:
-        return f"max_iterations={b.max_iterations} exceeded"
-    if b.max_cost_usd is not None and c.cost_usd >= b.max_cost_usd:
-        return f"max_cost_usd={b.max_cost_usd} reached"
-    if b.max_tool_calls is not None and c.tool_calls >= b.max_tool_calls:
-        return f"max_tool_calls={b.max_tool_calls} reached"
-    if spawns:
-        if b.max_spawned_subtasks is not None and c.spawned >= b.max_spawned_subtasks:
-            return f"max_spawned_subtasks={b.max_spawned_subtasks} reached"
-        if b.max_subtask_depth is not None and c.depth >= b.max_subtask_depth:
-            return f"max_subtask_depth={b.max_subtask_depth} reached"
-    return None
-
 
 # ---------------------------------------------------------------- repetition
 

@@ -19,7 +19,6 @@ from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.host.pending import pending, pending_tree
 from noeta.plugins.permissions import (
     MODE_SIGNAL,
-    Budget,
     MatchArg,
     Permissions,
     PreToolUseRule,
@@ -757,8 +756,6 @@ async def test_the_mode_signal_switches_modes(store: SqliteStore, tmp_path: Path
 def test_bad_configuration_raises() -> None:
     with pytest.raises(ValueError, match="permission_mode"):
         Permissions(mode="planning")
-    with pytest.raises(ValueError, match="ambiguous"):
-        Permissions(budget=Budget(max_iterations=2), max_turns=3)
     with pytest.raises(ValueError, match=r"hostname|scheme"):
         Permissions(webfetch_allowed_hosts=["https://x.com"])
     with pytest.raises(ValueError, match="regex"):
@@ -782,53 +779,6 @@ async def test_webfetch_asks_per_host_and_remembers_it(store: SqliteStore) -> No
 
 
 # ------------------------------------------------------------------ guards
-
-
-async def test_budget_caps_tool_calls_and_iterations(store: SqliteStore) -> None:
-    read = Fake("Read")
-    provider = ScriptedProvider([reply("", ("Read", {}), ("Read", {"n": 2})),
-                                 reply("", ("Read", {"n": 3})), reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(
-        budget=Budget(max_tool_calls=1, max_iterations=1)), [read])
-    assert sorted(results(await events(client, tid))) == [
-        ("max_iterations=1 exceeded", True), ("max_tool_calls=1 reached", True),
-        ("ran Read", False)]
-
-
-async def test_the_usd_cap_counts_calls_outside_the_conversation(store: SqliteStore) -> None:
-    """``max_cost_usd`` counts what ``/cost`` counts: a compaction's
-    summarize calls (``spent`` records) too, not only the replies."""
-    from noeta.core import records as core_records
-    from noeta.core.extension import Extension
-    from noeta.core.types import Usage
-
-    class Summarize(Extension):
-        name = "summarize"
-
-        async def before_model(self, view: Any, request: Any) -> Any:
-            if not view.state.steps_in_turn:
-                spent = core_records.Spent(model="claude-opus-5-5",
-                                           usage=Usage(uncached=1_000_000), purpose="compaction")
-                view.record(core_records.CORE, spent.kind, spent.data())
-            return request
-
-    read = Fake("Read")
-    perms = Permissions(budget=Budget(max_cost_usd=0.5))
-    provider = ScriptedProvider([reply("", ("Read", {})), reply("ok")])
-    ag = agent([Summarize(), perms], [read])
-    rt = runtime(store, provider, ag)
-    client = Client(store)
-    tid = await client.create("a", "go")
-    await rt.run_until_idle()
-    assert results(await events(client, tid)) == [("max_cost_usd=0.5 reached", True)]
-
-
-async def test_budget_caps_spawn_depth(store: SqliteStore) -> None:
-    task = Fake("Task")
-    provider = ScriptedProvider([reply("", ("Task", {})), reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(mode="default"), [task],
-                                 config={"subtask_depth": 3})
-    assert results(await events(client, tid)) == [("max_subtask_depth=3 reached", True)]
 
 
 async def test_repetition_guard_asks_on_the_third_identical_call(store: SqliteStore) -> None:

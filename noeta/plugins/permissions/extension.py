@@ -2,8 +2,8 @@
 tool call — modes, ``allow`` / ``deny`` / ``ask`` rules, the working
 directories, protected paths, the auto-mode classifier and what plan mode
 may run (plan mode itself is the plan-mode plugin's) — plus noeta's own
-guards (budget caps, the repetition guard, host PreToolUse rules,
-``can_use_tool``)."""
+guards (the repetition guard, host PreToolUse rules, ``can_use_tool``).
+The budget caps are the budget plugin's."""
 
 from __future__ import annotations
 
@@ -17,14 +17,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from noeta.core import records as core_records
 from noeta.core.events import (
     Answer,
     Compacted,
-    ExtensionRecorded,
     External,
     InputTaken,
-    ModelReplied,
     Recorded,
 )
 from noeta.core.execenv import ExecEnv
@@ -39,7 +36,6 @@ from noeta.core.extension import (
     TaskView,
 )
 from noeta.core.mcp_names import allowed_in, named_in
-from noeta.core.tool import ToolOutput
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.permissions import auto as a
 from noeta.plugins.permissions import guards as g
@@ -149,8 +145,7 @@ class Permissions(Extension):
     * ``allowed_tools`` / ``disallowed_tools`` — filter the offered tools by
       name (removed from the request, and denied if called anyway).
       Disallowing ``Bash`` also removes Monitor and TaskStop.
-    * ``budget`` (:class:`guards.Budget`) or ``max_turns``; ``spawn_tools``;
-      ``repetition_threshold`` / ``repetition_action`` /
+    * ``repetition_threshold`` / ``repetition_action`` /
       ``repetition_window``; ``pre_tool_use`` (:class:`guards.PreToolUseRule`).
     * ``can_use_tool`` — ``(tool, input) -> bool`` (sync or async) that
       answers this extension's asks instead of a person; recorded with
@@ -183,9 +178,6 @@ class Permissions(Extension):
         trusted_workspace: bool | Callable[[str], bool] = False,
         remember_to_project: bool = True,
         webfetch_allowed_hosts: Iterable[str] = (),
-        budget: g.Budget | None = None,
-        max_turns: int | None = None,
-        spawn_tools: Iterable[str] = ("Agent", "Task"),
         repetition_threshold: int = 0,
         repetition_action: g.RepetitionAction = "require_approval",
         repetition_window: int = 8,
@@ -228,15 +220,6 @@ class Permissions(Extension):
         self.disallowed = p.expand_disallowed(disallowed_tools)
         self.trusted = trusted_workspace
         self.remember_to_project = remember_to_project
-        budget = budget or g.Budget()
-        if max_turns is not None:
-            if budget.max_iterations is not None:
-                raise ValueError(
-                    "Both `budget.max_iterations` and `max_turns` are set — they express "
-                    "the same iteration cap and cannot be supplied together (ambiguous).")
-            budget = replace(budget, max_iterations=max_turns)
-        self.budget = budget
-        self.spawn_tools = frozenset(spawn_tools)
         self.repetition = g.RepetitionPolicy(repetition_threshold, repetition_action,
                                              repetition_window)
         self.pre_rules = tuple(g.check_pre_rule(f"pre_tool_use[{i}]", rule)
@@ -349,7 +332,7 @@ class Permissions(Extension):
         if self.allowed is not None and not allowed_in(self.allowed, name, "allowed_tools"):
             return Deny(reason=p.NOT_IN_ALLOWLIST.format(name=name))
         st = state_of(view)
-        guard = self._guards(view, st, call)
+        guard = self._guards(view, call)
         if guard is not None:
             return guard
         decision = await self.decide(view, call)
@@ -366,14 +349,10 @@ class Permissions(Extension):
             "always": rules or None, "always_label": decision.always_label,
             "choices": choices(decision), "classify": decision.classify})
 
-    def _guards(self, view: TaskView, st: PermState, call: ToolUse) -> Gate | None:
-        """noeta's own guards: the budget, the risk ceiling, the repetition
-        guard and the host's PreToolUse rules."""
+    def _guards(self, view: TaskView, call: ToolUse) -> Gate | None:
+        """noeta's own guards: the risk ceiling, the repetition guard and the
+        host's PreToolUse rules."""
         name = call.name
-        reason = g.budget_verdict(self.budget, self._counters(view, st, call),
-                                  spawns=name in self.spawn_tools)
-        if reason is not None:
-            return Deny(reason=reason)
         risk = self.risk.get(name, self.default_risk)
         if self.max_risk is not None and (
                 p.KNOWN_RISK_LEVELS.index(risk) > p.KNOWN_RISK_LEVELS.index(self.max_risk)):
@@ -403,19 +382,6 @@ class Permissions(Extension):
         """Whether this task plans with the auto-mode classifier, as its
         plan record says (settled on entry: :func:`state.plan_classifier_on`)."""
         return mode == "plan" and auto_active(mode, state_of(view).plan)
-
-    def _counters(self, view: TaskView, st: PermState, call: ToolUse) -> g.Counters:
-        before = 0
-        for cl in view.state.calls:
-            if cl.use.id == call.id:
-                break
-            if cl.result is None:
-                before += 1
-        depth = view.state.config.get("subtask_depth")
-        if not isinstance(depth, int):
-            depth = 1 if view.state.parent_id else 0
-        return g.Counters(iterations=st.steps, tool_calls=st.tool_calls + before,
-                          cost_usd=st.cost_usd, spawned=len(view.state.spawned), depth=depth)
 
     # ------------------------------------------------------------ answering asks
 
@@ -456,24 +422,7 @@ class Permissions(Extension):
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
-        if isinstance(ev, ModelReplied) and self.budget.max_cost_usd is not None:
-            from noeta.core.models import price
-
-            model = ev.response.model or str(view.state.config.get("model") or "")
-            view.record(NAME, "cost", {"usd": price(model, ev.response.usage) if model else 0.0})
-        elif isinstance(ev, ExtensionRecorded) and ev.extension == core_records.CORE \
-                and self.budget.max_cost_usd is not None:
-            # What ``/cost`` counts besides replies: a reply the kernel
-            # dropped, and calls outside the conversation (a compaction's).
-            from noeta.core.models import price
-
-            core = core_records.decode(ev)
-            usage = core.usage if isinstance(core, (
-                core_records.Continue, core_records.TurnDone, core_records.Spent)) else None
-            if usage is not None:
-                model = getattr(core, "model", "") or str(view.state.config.get("model") or "")
-                view.record(NAME, "cost", {"usd": price(model, usage) if model else 0.0})
-        elif isinstance(ev, InputTaken):
+        if isinstance(ev, InputTaken):
             for item in ev.items:
                 await self._on_input(view, item.body, recorded.seq)
         elif isinstance(ev, Compacted):
@@ -524,8 +473,6 @@ class Permissions(Extension):
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         import msgspec
 
-        if self.budget.max_iterations is not None:
-            view.record(NAME, "step")
         if self.allowed is not None or self.disallowed:
             tools = [t for t in request.tools if self._offered(t.name)]
             if len(tools) != len(request.tools):
@@ -543,11 +490,6 @@ class Permissions(Extension):
     def _offered(self, name: str) -> bool:
         return not named_in(self.disallowed, name, "disallowed_tools") and (
             self.allowed is None or allowed_in(self.allowed, name, "allowed_tools"))
-
-    async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
-        if self.budget.max_tool_calls is not None:
-            view.record(NAME, "tool_call")
-        return output
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         return await md.mode_reminders(view, self.mode_of(view))
