@@ -46,6 +46,8 @@ its own spec before work starts.
 - [ ] The 4 owner questions left by the task tools (`docs/specs/archive/2026-11-02-task-tools.md`, "Owner questions"): record Claude Code once with an older model that loads the task tools to check the reconstructed blank lines, `TaskCreated`/`TaskCompleted` hooks, clearing a finished list, `all_models` versus making `enabled = true` reach plugins. Each keeps the recommended choice written there until the owner decides.
 - [ ] `quiet_nudge` finds its earlier nudges by their overridable text (as the task reminder did before 7939f2a7); find them by their record. Follow-up spec.
 
+- [ ] The owner questions left by the plugin splits (`docs/specs/archive/2026-11-03-plugin-splits.md`): with the permissions plugin off, plan mode asks about every shell command (telling read-only commands apart lives in the permissions plugin; moving it to `noeta/toolkit` is a separate change); a host's `can_use_tool` no longer answers the repetition guard's ask; a mode switch sent in the same input batch right after `/plan` is applied first. Each keeps the current behaviour until the owner decides.
+
 ### Follow-ups
 - [ ] `core/runner/task.py` is back to 730 lines (S29 took it to 614). Follow-up spec: another branch is changing the runner now, and a structural split under it would collide.
 - [ ] The memory plugin's `git rev-parse --git-common-dir` (`noeta/plugins/memory/extension.py`, `_workspace`) runs without `GIT_NO_HOOKS` (D97). Follow-up spec: another branch is changing the memory plugin.
