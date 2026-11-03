@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-02
 branch: ctx-reaudit-closure
 ---
@@ -555,3 +555,4 @@ Kept differences (each also a `parity/deviations.md` row; pi `badlogic/pi-mono`,
   result no longer depends on the order. Tests: the race itself (a keeper starting on a full
   shared file keeps its line, one note); the monitor test asserts one note. 50 of 50 runs passed
   under load (8 at a time beside a full `pytest -n auto`).
+- 2026-11-02 Paired eval at concurrency 2 (the gateway stalled under more load): previous head `6df2bb7f` 0.933, `f82fef3a` 0.932 (32 scenarios x 9, about 20 timeouts each side). `plan_mode_multi_file` low on both, all timeouts; an A/B against main on the plan-mode, deny and edit scenarios (9 trials each): main 0.913, this branch 0.972, no scenario lower. Gates on `39749c70`: `make check` 3080 passed, `make parity` 0 mismatches (11 accepted deviations), `make cluster` 14, `make e2e` 7. Done; the 12 open questions are carried to `docs/specs/2026-10-29-open-source-follow-ups.md`.
