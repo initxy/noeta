@@ -1,7 +1,6 @@
 ---
-status: active
+status: done
 created: 2026-11-02
-branch: task-tools
 ---
 
 # Task tools as a plugin
@@ -158,3 +157,4 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
 - 2026-11-03: A/B of `todo_list_multi_step`, 9 each: on 0.50, off 0.50. With the tools on,
   DeepSeek never loaded them through `ToolSearch` (0 searches, 0 tasks) and made all six
   changes in two parallel batches either way. Baseline row added (0.50, the paired branch run).
+- 2026-11-03 Merged into local main with `--no-ff` after one independent review round (P1 gating for non-Claude models, P2 canonical ids, P3 reminder found by text; all fixed in 7939f2a7) and the paired eval above; spec archived, owner questions carried to `docs/specs/2026-10-29-open-source-follow-ups.md`.
