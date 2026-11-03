@@ -27,9 +27,11 @@ Public coding-agent boards in use, and their latest versions, as of 2026-11-03:
 
 Terminal-Bench 4.0 measures the agent in a terminal, with Claude Code as its reference
 agent; SWE-rebench measures repository fixes on tasks the model cannot have seen, at a cost
-one machine can run twice for both agents. The board versions above come from public summaries of the boards (which disagree on model
-names and scores) and harbor's dataset registry; the boards' own pages (tbench.ai,
-swe-rebench.com, Scale's SWE-bench Pro page) are the source of truth.
+one machine can run twice for both agents. Checked on the boards' own pages on 2026-11-03: tbench.ai names Terminal-Bench 4.0 as its
+latest version; swe-rebench.com's current window is 2026-05-15 to 2026-07-01, "111 problems
+from 65 repositories", the 111 tasks run here (harbor's `swe-rebench-07-2026`). The status
+column (saturation, headline boards) comes from public summaries, which disagree on model
+names and scores.
 
 ## What's here
 
