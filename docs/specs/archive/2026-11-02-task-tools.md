@@ -100,6 +100,17 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
 - **D12 Permissions.** No permission needed and auto mode lets them through without the
   classifier (CC: no permission check; its auto-mode allowlist names them).
 
+- **D13 Three eval scenarios, one that discriminates.** `todo_list_multi_step` (unprompted)
+  stays as the recorded "the model does not plan unprompted" data point. `todo_list_requested`
+  gives the same six changes with "keep a task list of them as you go": it measures loading the
+  tools through `ToolSearch`, one task per change, each `completed`, and the work (the same
+  scorer). `todo_reminder_long_run` (twelve one-at-a-time edits, unprompted) measures whether the
+  model takes up the list after the `task_reminder` (0.6) and the edits (0.4). The tool texts are
+  CC's, unchanged; the person asking for a list is how CC users get one. The scorer of
+  `todo_list_multi_step` was right (all six changes and no list is 0.50); it is shared, with the
+  list fold moved into a helper. It does not score CC's "don't batch": a model that edits in one
+  parallel batch and marks every task completed in the next scores full marks.
+
 ## Plan
 
 - [x] `noeta/plugins/todos` (state, tools, descriptions, gating, reminder, prompt line); entry
@@ -158,3 +169,12 @@ task-tools part of `docs/specs/archive/2026-11-02-context-reaudit-closure.md` R1
   DeepSeek never loaded them through `ToolSearch` (0 searches, 0 tasks) and made all six
   changes in two parallel batches either way. Baseline row added (0.50, the paired branch run).
 - 2026-11-03 Merged into local main with `--no-ff` after one independent review round (P1 gating for non-Claude models, P2 canonical ids, P3 reminder found by text; all fixed in 7939f2a7) and the paired eval above; spec archived, owner questions carried to `docs/specs/2026-10-29-open-source-follow-ups.md`.
+- 2026-11-03 (branch `todo-eval`, after the merge): D13. DeepSeek V4.1, 9 trials each,
+  concurrency 2, no timeouts. `todo_list_requested`: plugin on 1.00 (9/9: one `ToolSearch`
+  `select:TaskCreate,TaskUpdate[,TaskList]`, six `TaskCreate`, six changes, every task
+  `completed`), plugin off 0.44 (changes made, no list; 3 trials searched for the tools and
+  found none; one trial asked a question and stopped, 0.00). Completions: 6 of 9 trials marked
+  all six in one batch after the edits; 2 set `in_progress` first; 1 went task by task.
+  `todo_reminder_long_run`: on 0.40, off 0.40; with the plugin on the reminder came 2-3 times
+  per trial and the model never searched for the tools or touched the list (all twelve edits
+  done every time). Baseline rows added from the plugin-on run (1.00, 0.40).
