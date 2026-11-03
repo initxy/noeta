@@ -118,6 +118,21 @@ def _given(event: str, reads: Sequence[Read]) -> list[tuple[str, str]]:
     return out
 
 
+def _start_given(reads: Sequence[Read]) -> list[tuple[str, list[str]]]:
+    """SessionStart's texts for the model, each with the hooks' own words in
+    it: every hook's plain stdout as its own success line, then the
+    ``additionalContext`` of all of them in one message (Claude Code joins
+    them with newlines)."""
+    out: list[tuple[str, list[str]]] = [
+        (f"SessionStart{SUCCESS_LABEL}: {r.text.strip()}", [r.text.strip()])
+        for r in reads if not r.context and r.text.strip()]
+    contexts = [r.context for r in reads if r.context]
+    if contexts:
+        out.append((f"SessionStart{CONTEXT_LABEL}: " + "\n".join(contexts),
+                    [c.strip() for c in contexts]))
+    return out
+
+
 class _PromptStopped(Exception):
     """A UserPromptSubmit hook answered ``continue: false``."""
 
@@ -126,10 +141,10 @@ class _PromptStopped(Exception):
         self.text = text
 
 
-def _start_data(text: str, raw: str) -> dict[str, Any]:
+def _start_data(text: str, raws: Sequence[str]) -> dict[str, Any]:
     """A SessionStart output's record: kept to tell a background answer that
     only repeats it (:func:`start_repeat`)."""
-    return {"hook": text.split(": ", 1)[0], "event": "SessionStart", "texts": [raw]}
+    return {"hook": text.split(": ", 1)[0], "event": "SessionStart", "texts": list(raws)}
 
 
 def _text(message: Message) -> str:
@@ -326,8 +341,8 @@ class Hooks(Extension):
         for r in reads:
             if r.block is not None:
                 view.notify(f"SessionStart hook: {r.block}")
-        for text, raw in _given("SessionStart", reads):
-            view.record(self.name, "context", _start_data(text, raw),
+        for text, raws in _start_given(reads):
+            view.record(self.name, "context", _start_data(text, raws),
                         message=user(text, origin="system"))
 
     # ------------------------------------------------------------ reminders
@@ -346,8 +361,8 @@ class Hooks(Extension):
             for r in reads:
                 if r.block is not None:
                     view.notify(f"SessionStart hook: {r.block}")
-            out.extend(Reminder(text=t, kind="context", data=_start_data(t, raw))
-                       for t, raw in _given("SessionStart", reads))
+            out.extend(Reminder(text=t, kind="context", data=_start_data(t, raws))
+                       for t, raws in _start_given(reads))
         try:
             out.extend(await self._prompt_submit(view))
         except (TurnFailed, _PromptStopped) as ended:

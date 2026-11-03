@@ -18,6 +18,7 @@ import msgspec
 
 from noeta.core import models, records
 from noeta.core.client import ClientAPI
+from noeta.core.commands import offered_commands
 from noeta.core.errors import TurnDone
 from noeta.core.events import Recorded
 from noeta.core.execenv import ExecEnv
@@ -197,6 +198,24 @@ SKILL_MENTION = (
     "The user's message names /{name}, a skill. If they want it run, call the Skill tool with "
     "skill \"{name}\" and any arguments they gave as args; if they only mention it, do not "
     "run it.")
+#: A message that starts with a slash command nothing here offers (Claude
+#: Code's ``unknown_command_fallback`` in a session no one types into: a
+#: front end a person types into refuses the command itself).
+UNKNOWN_COMMAND = ("The user's message starts with the slash command /{name}, but nothing "
+                   "available here goes by that name, so no command ran.")
+UNKNOWN_COMMAND_CLOSEST = ("The nearest command available is /{name}; ask the user before "
+                           "running it.")
+UNKNOWN_COMMAND_LIST = "Slash commands available here: {names}{more}."
+UNKNOWN_COMMAND_NONE = "No slash commands are available here."
+UNKNOWN_COMMAND_RULE = (
+    "Read the message as a plain request and carry it out with the tools you have. If the "
+    "task needs that command, tell the user it is not installed here; they can add it as a "
+    "skill. Do not give installation steps you are unsure of, and do not say the command "
+    "ran.")
+#: Command names the note names (Claude Code's charset), and how far off a
+#: name may be to be the nearest one.
+_COMMAND_NAME = re.compile(r"[A-Za-z0-9_:.-]{1,256}")
+_NEAREST_DISTANCE = 2
 #: A ``/word`` after the start, whitespace or a CJK sentence mark, ending at
 #: whitespace or the end (Claude Code's mention rule).
 _MENTION = re.compile(r"(^|[\s。、？！])/([a-zA-Z][a-zA-Z0-9.:_-]*)")  # noqa: RUF001
@@ -794,6 +813,7 @@ class Skills(Extension):
         registry = await self.turn_registry(view)
         for message in messages:
             self._note_mentions(view, registry, state, message.text)
+            await self._note_unknown_command(view, registry, state, message.text)
             typed = _typed_command(message.text)
             desc = registry.get(typed[0]) if typed else None
             if desc is not None and (not desc.user_invocable or (
@@ -1004,6 +1024,36 @@ class Skills(Extension):
                               max_desc_chars=self.max_desc_chars)
         if lines:
             self._record_listing(view, lines, registry)
+
+    async def _note_unknown_command(self, view: TaskView, registry: SkillRegistry, state: Any,
+                                    text: str) -> None:
+        """A message that starts with ``/<name>`` that no skill and no
+        plugin command answers to (a front end with no person at it passed
+        it on as typed) gets Claude Code's note: nothing ran, the nearest
+        command the model may run, what there is, and to treat the message
+        as a plain request."""
+        typed = _typed_command(text) if parse_command_message(text) is None else None
+        if typed is None or not _COMMAND_NAME.fullmatch(typed[0]) \
+                or registry.get(typed[0]) is not None:
+            return
+        commands = await offered_commands(view.extensions, CommandContext(
+            cwd=view.cwd, task_id=view.task_id))
+        if any(c.name == typed[0] for c in commands):
+            return
+        names = [n for n in registry.model_invocable(unlocked_skills(state))
+                 if _COMMAND_NAME.fullmatch(n)]
+        everything = {*(n for n, d in registry.items() if d.user_invocable),
+                      *(c.name for c in commands)}
+        nearest = _nearest(typed[0], names)
+        more = max(0, len(everything) - len(names))
+        listing = UNKNOWN_COMMAND_LIST.format(
+            names=", ".join(f"/{n}" for n in names), more=f", and {more} more" if more else "") \
+            if names else UNKNOWN_COMMAND_NONE
+        note = " ".join([UNKNOWN_COMMAND.format(name=typed[0]),
+                         *([UNKNOWN_COMMAND_CLOSEST.format(name=nearest)] if nearest else []),
+                         listing, UNKNOWN_COMMAND_RULE])
+        view.record(self.name, "unknown_command", {"name": typed[0]},
+                    message=user(note, origin=self.origin))
 
     def _note_mentions(self, view: TaskView, registry: SkillRegistry, state: Any,
                        text: str) -> None:
@@ -1421,3 +1471,24 @@ def _plugin_command(entry: Mapping[str, str]) -> SkillDescription | None:
     desc = parse_skill(path or str(entry["name"]), str(entry.get("text") or ""),
                        name=str(entry["name"]), own_dir=path.endswith("/SKILL.md"))
     return replace(desc, user_invocable=False) if desc is not None else None
+
+
+def _nearest(name: str, names: Sequence[str]) -> str | None:
+    """The name in ``names`` fewest edits from ``name``, if within
+    :data:`_NEAREST_DISTANCE` (the first of a tie)."""
+    best: tuple[int, str] | None = None
+    for candidate in names:
+        d = _edits(name.lower(), candidate.lower())
+        if d <= _NEAREST_DISTANCE and (best is None or d < best[0]):
+            best = (d, candidate)
+    return best[1] if best else None
+
+
+def _edits(a: str, b: str) -> int:
+    """Levenshtein distance."""
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (ca != cb))
+    return row[-1]

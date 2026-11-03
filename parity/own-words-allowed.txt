@@ -29,3 +29,8 @@ type: user | feedback | project | reference
 name: <short-kebab-case-name>
 # The JSON Schema dialect URI every tool input schema declares.
 https://json-schema.org/draft/2020-12/schema
+# The frame around a fork's directive: the tag and the lead line that mark the
+# part of a fork's first message that is the caller's prompt.
+<fork-boilerplate>
+</fork-boilerplate>
+Your directive: 

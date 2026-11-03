@@ -38,6 +38,7 @@ on any worker). See :mod:`noeta.plugins.instructions.files` for how a file is re
 from __future__ import annotations
 
 import hashlib
+import logging
 import posixpath
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -71,6 +72,8 @@ from noeta.toolkit.tools import path_within
 __all__ = ["DEFAULT_INSTRUCTIONS_FILENAMES", "Instructions", "render_file",
            "render_instructions"]
 
+log = logging.getLogger(__name__)
+
 #: Read in a directory with no ``NOETA.md`` / ``.noeta/NOETA.md``.
 DEFAULT_INSTRUCTIONS_FILENAMES = FALLBACK_FILES
 
@@ -82,6 +85,10 @@ REREAD_HEAD = (
     "These instruction files are new, or changed since they were shown earlier in this "
     "conversation, and were read again; each text below replaces the one shown before, if "
     "any. The note that opened the instructions still applies.")
+#: Told to the person (never the model) once per instruction file a ``Read``
+#: deny rule keeps out of the conversation (Claude Code's
+#: ``withheld_memory``, which it shows the person and sends the model nothing).
+WITHHELD_NOTICE = "Instruction file not loaded (a Read deny rule covers it): {path}"
 #: One line per file shown earlier that is gone now.
 REMOVED_LINE = "This instruction file is gone and its instructions no longer apply: {path}"
 #: One line per file shown earlier that now has nothing to show (emptied, or
@@ -146,11 +153,19 @@ def cut_nested(path: str, text: str, limit: int) -> str:
     return f"{kept}\n{NESTED_CUT_NOTE.format(path=path, offset=offset)}"
 
 
-def _entry(f: InstructionFile, real: str) -> dict[str, Any]:
+def _entry(f: InstructionFile, real: str, mtime: float | None = None, *,
+           whole: bool = True) -> dict[str, Any]:
     """What the log keeps of a shown file (the hooks plugin reads ``path``,
-    ``kind``, ``globs`` and ``parent`` for InstructionsLoaded)."""
+    ``kind``, ``globs`` and ``parent`` for InstructionsLoaded; the file
+    tools read ``real``, ``mtime`` and ``whole`` to answer a ``Read`` of a
+    file shown whole and unchanged since with a short note, as Claude Code
+    does)."""
     out: dict[str, Any] = {"path": f.path, "kind": f.kind, "real": real,
                            "digest": text_digest(f.text)}
+    if mtime is not None:
+        out["mtime"] = mtime
+    if not whole:
+        out["whole"] = False
     if f.globs:
         out["globs"] = list(f.globs)
     if f.parent:
@@ -228,7 +243,7 @@ class Instructions(Extension):
     # ------------------------------------------------------------ state
 
     def initial_state(self) -> Any:
-        return {"files": [], "nested": [], "root": False, "names": []}
+        return {"files": [], "nested": [], "root": False, "names": [], "withheld": []}
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         state = {**self.initial_state(), **(state or {})}
@@ -248,6 +263,8 @@ class Instructions(Extension):
                     "files": [*(e for e in state["files"] if e["path"] not in gone),
                               *(data.get("files") or ())],
                     "nested": [e for e in state["nested"] if e["path"] not in gone]}
+        if kind == "withheld":
+            return {**state, "withheld": [*state["withheld"], *data["paths"]]}
         if kind in ("root", "file"):  # a log written before the directory walk
             return {**state, "names": [*state["names"], data["name"]],
                     "root": state["root"] or kind == "root"}
@@ -318,7 +335,41 @@ class Instructions(Extension):
         directory = None if self.managed_only else self._memory_dir(view, pending=pending)
         env = task_env(view.env, view.state.config)
         found = await read_memory_index(env, directory) if directory else None
-        return (found[0], MEMORY, found[1]) if found else None
+        if found is None or await self._withhold(view, [found[0]]):
+            return None
+        return (found[0], MEMORY, found[1])
+
+    async def _withhold(self, view: TaskView, paths: Sequence[str]) -> set[str]:
+        """Those of ``paths`` a ``Read`` deny rule covers (asked of the
+        plugin that keeps the rules, ``read_deny_rule``; a check that fails
+        withholds too). Each is told to the person once, never the model."""
+        check = next((fn for e in view.extensions
+                      if callable(fn := getattr(e, "read_deny_rule", None))), None)
+        if check is None or not paths:
+            return set()
+        out: set[str] = set()
+        for path in paths:
+            try:
+                rule = await check(view, path)
+            except Exception:
+                log.warning("instructions: could not check %s against the deny rules", path,
+                            exc_info=True)
+                rule = True
+            if rule:
+                out.add(path)
+        told = set((view.ext_state(self.name) or {}).get("withheld") or ())
+        new = sorted(out - told)
+        if new:
+            view.record(self.name, "withheld", {"paths": new})
+            for path in new:
+                view.notify(WITHHELD_NOTICE.format(path=path))
+        return out
+
+    async def _allowed(self, view: TaskView,
+                       files: Sequence[InstructionFile]) -> list[InstructionFile]:
+        """``files`` without those :meth:`_withhold` keeps out."""
+        out = await self._withhold(view, [f.path for f in files])
+        return [f for f in files if f.path not in out]
 
     # ------------------------------------------------------------ hooks
 
@@ -327,14 +378,15 @@ class Instructions(Extension):
         if not self.root or state.get("root"):
             return
         reader, cwd = self._reader(view)
-        files = await self._start_files(reader, cwd)
+        files = await self._allowed(view, await self._start_files(reader, cwd))
         rendered = [(f.path, f.kind, f.text) for f in files]
         memory = await self._memory_index(view, pending=True)
         if memory is not None:
             rendered.append(memory)
         if not rendered:
             return
-        entries = [_entry(f, await _real(reader.env_for(f.kind), f.path)) for f in files]
+        entries = [_entry(f, await _real(reader.env_for(f.kind), f.path),
+                          await _mtime(reader.env_for(f.kind), f.path)) for f in files]
         data: dict[str, Any] = {"files": entries}
         if memory is not None:
             data["memory"] = {memory[0]: text_digest(memory[2])}
@@ -362,10 +414,12 @@ class Instructions(Extension):
         reader.seen.update(e["real"] for e in [*state.get("files", []), *state.get("nested", [])])
         reader.seen.update(posixpath.join(root, n) for n in state.get("names", []))
         limit = nested_max_chars(self._model(view))
-        for f in await self._nested_files(reader, root, resolved):
+        for f in await self._allowed(view, await self._nested_files(reader, root, resolved)):
             real = await _real(reader.env_for(f.kind), f.path)
             text = f.text if f.kind == MANAGED else cut_nested(f.path, f.text, limit)
-            view.record(self.name, "nested", {"files": [_entry(f, real)], "trigger": resolved},
+            entry = _entry(f, real, await _mtime(reader.env_for(f.kind), f.path),
+                           whole=text == f.text)
+            view.record(self.name, "nested", {"files": [entry], "trigger": resolved},
                         message=user(render_nested(f.path, text), origin=self.origin))
 
     async def _reread_changed(self, view: TaskView) -> None:
@@ -415,8 +469,9 @@ class Instructions(Extension):
             if path in nested and e["kind"] != MANAGED:
                 text = cut_nested(path, text, limit)
             changed.append((path, e["kind"], text))
-        added = [f for p, f in current.items() if p not in known]
-        entries = [_entry(f, await _real(reader.env_for(f.kind), f.path)) for f in added]
+        added = await self._allowed(view, [f for p, f in current.items() if p not in known])
+        entries = [_entry(f, await _real(reader.env_for(f.kind), f.path),
+                          await _mtime(reader.env_for(f.kind), f.path)) for f in added]
         for f in added:
             fresh[f.path] = text_digest(f.text)
             changed.append((f.path, f.kind, f.text))
@@ -507,6 +562,14 @@ def _digests(entries: Sequence[dict[str, Any]]) -> dict[str, str]:
     """The digests of recorded entries (an entry recorded before digests
     were kept has none, and is never shown again)."""
     return {e["path"]: e["digest"] for e in entries if e.get("digest")}
+
+
+async def _mtime(env: ExecEnv, path: str) -> float | None:
+    try:
+        st = await env.stat(path)
+    except OSError:
+        return None
+    return st.mtime if st is not None else None
 
 
 async def _real(env: ExecEnv, path: str) -> str:

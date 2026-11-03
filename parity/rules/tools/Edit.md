@@ -43,7 +43,7 @@ JSON Schema 2020-12, `additionalProperties: false`, a description on each proper
 |---|---|---|
 | `tool.Edit.8` | A file changed on disk since the read: when the write is allowed outright and `old_string` still picks one place (or `replace_all`), the edit applies and the result says the file holds unseen changes; otherwise re-read. | covered |
 | `tool.Edit.9` | An empty `old_string` creates the file (parents too) or fills an empty one; refused over content. No read needed. | covered |
-| `tool.Edit.10` | Not found: the error repeats `old_string`; a missing file gets `Read`'s answer (working directory, a guess); an `.ipynb` is sent to `NotebookEdit`; a file over 1 GB is refused. | covered |
+| `tool.Edit.10` | Not found: the error repeats `old_string`; a missing file gets `Read`'s answer (working directory, a guess); an `.ipynb` is sent to `NotebookEdit`; a file over 1 GB is refused. Each of these refuses the call before it changes anything and comes back inside `<tool_use_error>` (`tool.common.2`). | covered (`input_error`) |
 | `tool.Edit.11` | Straight quotes match curly ones and `new_string` takes the file's quote style; `\uXXXX` escapes match their characters both ways. | covered |
 | `tool.Edit.12` | Deleting (`new_string` empty) takes the following line break along. CRLF files keep CRLF. | covered |
 | `tool.Edit.13` | (bundle) A not-text file is refused with an error saying the tools never convert encodings; a UTF-16LE file is written back as UTF-16LE with its byte-order mark, a UTF-8 byte-order mark is kept. | covered |

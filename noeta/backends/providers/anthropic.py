@@ -276,6 +276,11 @@ class AnthropicProvider:
         guard_vision(request)
         body = self.build_body(request)
         body["max_tokens"] = min(int(body["max_tokens"]), WHOLE_MAX_TOKENS)
+        thinking = body.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            # The budget stays under the lower cap (Claude Code's).
+            body["thinking"] = {**thinking, "budget_tokens": min(
+                int(thinking["budget_tokens"]), body["max_tokens"] - 1)}
         body["stream"] = False
         try:
             response = await asyncio.wait_for(self._client.post(
@@ -378,7 +383,7 @@ class AnthropicProvider:
             body["output_config"] = {
                 "format": {"type": "json_schema", "schema": dict(request.output_schema)}
             }
-        thinking = thinking_param(request)
+        thinking = thinking_param(request, int(body["max_tokens"]))
         if thinking is not None:
             body["thinking"] = thinking
         adaptive = thinking is not None and thinking["type"] == "adaptive"

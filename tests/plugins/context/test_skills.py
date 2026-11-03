@@ -1115,3 +1115,22 @@ async def test_a_nested_command_whose_name_is_taken_is_warned_about_once(
             reg = await load_registry(env, tiers, commands={d for d, _ in tiers})
             assert reg.get("sp:brain") is not None
     assert len([r for r in caplog.records if "is taken by" in r.getMessage()]) == 1
+
+
+async def test_an_unknown_slash_command_gets_claude_codes_note(h: Harness) -> None:
+    # A front end with no person at it passes ``/name`` on as typed; nothing
+    # answers to it, so the model is told it did not run (Claude Code's
+    # ``unknown_command_fallback``), with the nearest command.
+    from noeta.plugins.skills.extension import UNKNOWN_COMMAND, UNKNOWN_COMMAND_RULE
+    write_skill(skills_dir(h), "deploy", "Ships it.")
+    h.provider.add(reply("ok"), reply("again"))
+    tid = await h.start(agent(), goal="/deplyo the app")
+    [rec] = await h.records(tid, "skills", "unknown_command")
+    assert rec.data == {"name": "deplyo"}
+    texts = [m.text for m in h.provider.requests[0].messages]
+    note = next(t for t in texts if t.startswith(UNKNOWN_COMMAND.format(name="deplyo")))
+    assert "/deploy; ask the user" in note and "Slash commands available here: /deploy" in note
+    assert note.endswith(UNKNOWN_COMMAND_RULE)
+    # A known skill, a path, or a plain message gets no note.
+    await h.say(agent(), tid, "/usr/bin/python crashes")
+    assert len(await h.records(tid, "skills", "unknown_command")) == 1

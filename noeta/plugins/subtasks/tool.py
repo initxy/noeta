@@ -277,7 +277,8 @@ class AgentTool:
             if isinstance(worktree, str):
                 return text_output(worktree, is_error=True)
             config["cwd"] = worktree["path"]
-        child = ctx.spawn(agent, prompt, config=config, background=True, queue=queue,
+        child = ctx.spawn(agent, texts.FORK_DIRECTIVE.format(prompt=prompt) if fork else prompt,
+                          config=config, background=True, queue=queue,
                           history_from=state.task_id if fork else None,
                           history_through=state.last_seq if fork else None)
         output_file = transcript_file(transcripts, child) if transcripts else ""

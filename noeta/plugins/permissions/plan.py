@@ -19,7 +19,7 @@ from noeta.core.questions import ask, read_answer
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Effort, ModelRequest, user
 from noeta.toolkit.side_requests import side_request
-from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, tool_error
+from noeta.toolkit.tools import SCHEMA_DIALECT, input_error, load_description, tool_error
 
 log = logging.getLogger("noeta.permissions")
 
@@ -292,7 +292,7 @@ class ExitPlanModeTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         plan = self._plan(ctx)
         if plan is None:
-            return tool_error(self.name, NOT_IN_PLAN_MODE)
+            return input_error(NOT_IN_PLAN_MODE)
         text = await read_plan(ctx, plan["path"])
         # No plan file: asked all the same (Claude Code refuses only a
         # teammate's call without a plan).
@@ -306,7 +306,7 @@ class ExitPlanModeTool:
                      outcome: Any) -> ToolOutput:
         plan = self._plan(ctx)
         if plan is None:
-            return tool_error(self.name, NOT_IN_PLAN_MODE)
+            return input_error(NOT_IN_PLAN_MODE)
         text = await read_plan(ctx, plan["path"]) or ""
         rejected = text_output(KEEP_PLANNING_PLAN.format(plan=text) if text.strip()
                                else KEEP_PLANNING, is_error=True)

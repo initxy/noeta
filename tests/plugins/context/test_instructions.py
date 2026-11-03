@@ -11,7 +11,9 @@ from noeta.core.events import Compacted
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ModelRequest, ToolResult
 from noeta.plugins.fs import FileTools
+from noeta.plugins.fs.read import SHOWN_UNCHANGED
 from noeta.plugins.instructions import Instructions
+from noeta.plugins.instructions.extension import WITHHELD_NOTICE
 from noeta.plugins.instructions.files import clean, matches
 from noeta.plugins.memory import Memory, memory_dir_for
 from noeta.plugins.permissions import Permissions
@@ -328,6 +330,53 @@ async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
     recs = await h.records(tid, "instructions", "nested")
     assert [Path(r.data["files"][0]["path"]).relative_to(h.work).as_posix() for r in recs] == [
         "open/NOETA.md"]
+
+
+async def test_instruction_files_a_read_deny_rule_covers_are_not_loaded(h: Harness) -> None:
+    # As Claude Code (``withheld_memory``): the file stays out, the person is
+    # told once, the model is told nothing.
+    (h.work / "NOETA.md").write_text("open rules\n")
+    (h.work / "NOETA.local.md").write_text("secret local rules\n")
+    sub = h.work / "vendor"
+    sub.mkdir()
+    (sub / "NOETA.md").write_text("vendored rules\n")
+    (sub / "a.py").write_text("x = 1\n")
+    h.provider.add(reply("", ("Read", {"file_path": "vendor/a.py"})),
+                   reply("", ("Read", {"file_path": "vendor/a.py", "offset": 1})),
+                   reply("done"))
+    guarded = Agent(name="a", model="m", extensions=[
+        Permissions(mode="default", trusted_workspace=True,
+                    deny=["Read(./NOETA.local.md)", "Read(./vendor/NOETA.md)"]),
+        FileTools(), Instructions(walk=False)])
+    tid = await h.start(guarded)
+    [start] = await h.records(tid, "instructions", "start")
+    assert [f["path"] for f in start.data["files"]] == [str(h.work / "NOETA.md")]
+    assert await h.records(tid, "instructions", "nested") == []
+    withheld = [p for r in await h.records(tid, "instructions", "withheld")
+                for p in r.data["paths"]]
+    assert withheld == [str(h.work / "NOETA.local.md"), str(sub / "NOETA.md")]
+    notices = [r.data["text"] for r in await h.records(tid, "core", "notice")]
+    assert notices == [WITHHELD_NOTICE.format(path=p) for p in withheld]
+    sent = "\n".join(m.text for m in h.last_messages())
+    assert "secret local" not in sent and "vendored" not in sent
+    assert "not loaded" not in sent
+
+
+async def test_a_whole_read_of_a_shown_unchanged_instruction_file_gets_a_note(
+        h: Harness) -> None:
+    # As Claude Code (``file_unchanged``, seeded): the text is already above.
+    (h.work / "NOETA.md").write_text("Use tabs.\n")
+    h.provider.add(reply("", ("Read", {"file_path": "NOETA.md"})),
+                   reply("", ("Read", {"file_path": "NOETA.md", "offset": 1, "limit": 5})),
+                   reply("", ("Edit", {"file_path": "NOETA.md", "old_string": "tabs",
+                                       "new_string": "spaces"})),
+                   reply("", ("Read", {"file_path": "NOETA.md"})),
+                   reply("done"))
+    tid = await h.start(agent())
+    first, part, _edit, after = [r.result.text for r in await h.results(tid)]
+    assert first == SHOWN_UNCHANGED
+    assert "Use tabs." in part
+    assert "Use spaces." in after
 
 
 async def test_reads_outside_the_workspace_or_failing_discover_nothing(h: Harness) -> None:

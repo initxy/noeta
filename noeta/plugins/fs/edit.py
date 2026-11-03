@@ -35,6 +35,7 @@ from noeta.toolkit.tools import (
     PathError,
     Workspace,
     format_size,
+    input_error,
     load_description,
     require_str,
     tool_error,
@@ -206,16 +207,13 @@ class EditTool:
             hint = ("\n(Edit also tried \\uXXXX escapes and the characters they stand for, "
                     "both ways; neither matched, so the difference is elsewhere in old_string. "
                     "Read the file again and copy the exact text.)" if tried_escapes else "")
-            return tool_error(
-                self.name, f"old_string does not occur in the file.\nLooked for: {asked}{hint}")
+            return input_error(f"old_string does not occur in the file.\nLooked for: {asked}{hint}")
         if count > 1 and not replace_all:
-            return tool_error(
-                self.name,
+            return input_error(
                 f"old_string occurs {count} times in the file and replace_all is "
                 f"false, so nothing was changed. Set replace_all to true to change "
                 f"all {count}, or add nearby lines to old_string until it matches "
-                "only one.",
-            )
+                "only one.")
         # Deleting whole lines without their line break would leave a blank
         # line behind; Claude Code takes the break along.
         if not new and not old.endswith("\n") and old + eol in before:
@@ -226,15 +224,15 @@ class EditTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         path = require_str(input, "file_path")
         if path is None:
-            return tool_error(self.name, "requires non-empty 'file_path'")
+            return input_error(f"{self.name} requires non-empty 'file_path'")
         old = input.get("old_string")
         if not isinstance(old, str):
-            return tool_error(self.name, "requires string 'old_string'")
+            return input_error(f"{self.name} requires string 'old_string'")
         new = input.get("new_string")
         if not isinstance(new, str):
-            return tool_error(self.name, "requires string 'new_string'")
+            return input_error(f"{self.name} requires string 'new_string'")
         if old == new:
-            return tool_error(self.name, "old_string and new_string must be different")
+            return input_error("old_string and new_string must be different")
         replace_all = bool(input.get("replace_all"))
 
         env = ctx.env
@@ -244,18 +242,18 @@ class EditTool:
                 path, await authorized_roots(ws, self.write_roots, ctx)
             )
         except PathError as exc:
-            return tool_error(self.name, str(exc))
+            return input_error(str(exc))
         st = await env.stat(resolved)
         if st is not None and st.is_dir:
-            return tool_error(self.name, f"not a file: {path!r}")
+            return input_error(f"not a file: {path!r}")
         if st is not None and st.size > EDIT_MAX_BYTES:
-            return tool_error(self.name, f"At {format_size(st.size)} the file is too large for "
-                                         f"Edit, which takes files up to "
-                                         f"{format_size(EDIT_MAX_BYTES)}.")
+            return input_error(f"At {format_size(st.size)} the file is too large for "
+                               f"Edit, which takes files up to "
+                               f"{format_size(EDIT_MAX_BYTES)}.")
         if st is None:
             # An empty old_string creates the file (Claude Code's).
             if old:
-                return tool_error(self.name, await missing_file_message(ws, resolved))
+                return input_error(await missing_file_message(ws, resolved))
             raw = b""
         else:
             try:
@@ -267,15 +265,15 @@ class EditTool:
         if not old:
             # Creating a file, or filling an empty one: nothing to have read.
             if before.strip():
-                return tool_error(
-                    self.name, "An empty old_string creates a new file, but this file already "
+                return input_error(
+                    "An empty old_string creates a new file, but this file already "
                     "has content. Give the text to replace instead.")
             in_view = st is None
             count, after = 1, new
         else:
             if resolved.endswith(".ipynb"):
-                return tool_error(self.name, "This is a Jupyter notebook: change its cells with "
-                                             "NotebookEdit.")
+                return input_error("This is a Jupyter notebook: change its cells with "
+                                   "NotebookEdit.")
             refused = read_precondition_error(
                 ctx, resolved, raw, tool_name=self.name, verb="editing",
                 unread_ok=unread_write_allowed(ctx), partial_ok=True, check_stale=False,
@@ -284,7 +282,7 @@ class EditTool:
                 return refused
             reason = not_text(raw)
             if reason is not None:
-                return tool_error(self.name, refusal(reason))
+                return input_error(refusal(reason))
             stale = changed_since_read(ctx, resolved, raw)
             in_view = seen_whole(ctx, resolved, raw)
             planned = self._replace(before, old, new, replace_all, stale,

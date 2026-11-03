@@ -389,15 +389,17 @@ def fold_on_copy(state: TaskState, events: Sequence[Event],
 
 
 def continued(state: TaskState,
-              carry: Mapping[str, Callable[[Any], Any]] | None = None) -> TaskState:
+              carry: Mapping[str, Callable[[Any], Any]] | None = None,
+              *, started_by: str = "") -> TaskState:
     """``state`` (another task's, folded) as the start of a task that
     continues its conversation: messages and extension state
     stay (each extension's through ``carry[name]``, its
     ``Extension.continue_state``); what belongs to that task's run (its log
     positions, inbox, children, timers, open turn) does not. Calls still
-    open there are answered here with :data:`CONTINUED_CALL`, right after
-    their ``tool_use`` and ahead of messages held behind them, so the
-    conversation stays well formed."""
+    open there are answered here with :data:`CONTINUED_CALL` (the call
+    ``started_by``, which started this task, with :data:`STARTED_CALL`),
+    right after their ``tool_use`` and ahead of messages held behind them,
+    so the conversation stays well formed."""
     carry = carry or {}
     ext = {name: carry[name](value) if name in carry else value
            for name, value in state.ext.items()}
@@ -408,8 +410,11 @@ def continued(state: TaskState,
         out._add(m, 0)
     out.history, out.history_seqs = list(state.history), [0] * len(state.history)
     if state.calls:
-        results = [c.result or ToolResult(call_id=c.use.id, content=[Text(text=CONTINUED_CALL)],
-                                          is_error=True) for c in state.calls]
+        results = [c.result or (
+            ToolResult(call_id=c.use.id, content=[Text(text=STARTED_CALL)])
+            if started_by and c.use.id == started_by else
+            ToolResult(call_id=c.use.id, content=[Text(text=CONTINUED_CALL)], is_error=True))
+            for c in state.calls]
         out._add(_results_message(results), 0)
     for m in state.held:
         out._add(m, 0)
@@ -420,6 +425,10 @@ def continued(state: TaskState,
 #: open: that call ran (or runs) in the source task, not here.
 CONTINUED_CALL = ("This call belongs to the conversation this one continues from; it ran "
                   "there, not here, and its result went there.")
+#: The result a continued task sees for the call that started it (a fork's
+#: ``Agent`` call): the task it started is this one.
+STARTED_CALL = ("This call started a copy of the conversation, and you are that copy. Its "
+                "result, and any other work it does, belong to the original conversation.")
 
 
 def fold(

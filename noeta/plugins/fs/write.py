@@ -29,6 +29,7 @@ from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     PathError,
     Workspace,
+    input_error,
     load_description,
     require_str,
     tool_error,
@@ -93,15 +94,13 @@ class WriteTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         path = require_str(input, "file_path")
         if path is None:
-            return tool_error(self.name, "requires non-empty 'file_path'")
+            return input_error(f"{self.name} requires non-empty 'file_path'")
         content = input.get("content")
         if not isinstance(content, str):
-            return tool_error(self.name, "requires string 'content'")
+            return input_error(f"{self.name} requires string 'content'")
         body = content.encode("utf-8")
         if len(body) > WRITE_FILE_MAX_BYTES:
-            return tool_error(
-                self.name, f"content {len(body)}B exceeds {WRITE_FILE_MAX_BYTES}B cap"
-            )
+            return input_error(f"content {len(body)}B exceeds {WRITE_FILE_MAX_BYTES}B cap")
         env = ctx.env
         ws = await Workspace.of(env)
         try:
@@ -109,24 +108,21 @@ class WriteTool:
                 path, await authorized_roots(ws, self.write_roots, ctx)
             )
         except PathError as exc:
-            return tool_error(self.name, str(exc))
+            return input_error(str(exc))
         # The allow-list is checked on the canonical form, so ``..`` and
         # symlink escapes are already collapsed.
         rel = ws.relative(resolved)
         if not self._path_allowed(rel):
             allowed = ", ".join(self.allowed_path_globs)
-            return tool_error(
-                self.name,
-                f"path {rel!r} is outside the writable allow-list "
-                f"({allowed}); this agent may only write matching paths",
-            )
+            return input_error(f"path {rel!r} is outside the writable allow-list "
+                               f"({allowed}); this agent may only write matching paths")
         st = await env.stat(resolved)
         overwrite = st is not None
         before_text = ""
         if st is not None:
             if st.is_dir:
-                return tool_error(self.name, f"{path} is a directory. To create a file in it, "
-                                             "put the file's name at the end of file_path.")
+                return input_error(f"{path} is a directory. To create a file in it, "
+                                   "put the file's name at the end of file_path.")
             try:
                 existing = await env.read_bytes(resolved)
             except OSError as exc:
@@ -139,7 +135,7 @@ class WriteTool:
                 return refused
             reason = not_text(existing)
             if reason is not None:
-                return tool_error(self.name, refusal(reason))
+                return input_error(refusal(reason))
             before_text = decode(existing)
             # Read never shows a byte-order mark, so new content lacks it;
             # the file keeps its own, and its encoding (Claude Code's).

@@ -29,7 +29,7 @@ from noeta.toolkit.background_tasks import STOP_RUN, background_agents, workflow
 from noeta.toolkit.notices import STOPPED_BY_CALLER
 from noeta.toolkit.sandbox import domain_allowed, resolve_allowed, sandbox_of
 from noeta.toolkit.shell_syntax import parse
-from noeta.toolkit.tools import Workspace, load_description, require_str, tool_error
+from noeta.toolkit.tools import Workspace, input_error, load_description, require_str, tool_error
 
 _log = logging.getLogger(__name__)
 
@@ -172,7 +172,7 @@ class BackgroundBash(BashTool):
             return await super().run(input, ctx)
         command = input.get("command")
         if not isinstance(command, str) or not command.strip():
-            return tool_error(self.name, "requires non-empty 'command'")
+            return input_error(f"{self.name} requires non-empty 'command'")
         description = input.get("description")
         started = await launch(self, ctx, command, self.name,
                                description if isinstance(description, str) else "",
@@ -475,7 +475,7 @@ class TaskStopTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         job_id = require_str(input, "task_id") or require_str(input, "shell_id")
         if job_id is None:
-            return tool_error(self.name, "requires a non-empty 'task_id'")
+            return input_error(f"{self.name} requires a non-empty 'task_id'")
         job = self.registry.find(_root(ctx), job_id)
         if job is None or job.foreground:
             other = await self._stop_other(ctx, job_id)
@@ -484,10 +484,10 @@ class TaskStopTool:
             why = _unknown(self.registry, ctx, job_id)
             if why.startswith("No task found"):
                 why += await _running_agents(ctx)
-            return tool_error(self.name, why)
+            return input_error(why)
         if job.status != "running":
-            return tool_error(self.name, f"Task {job_id} is not running (status: "
-                                         f"{Registry.status_of(job)})")
+            return input_error(f"Task {job_id} is not running (status: "
+                               f"{Registry.status_of(job)})")
         self.registry.kill(job, quiet=True)  # Claude Code tells no end after a stop
         return _stopped(job_id, "monitor_ws" if job.ws else "local_bash", job.description)
 
@@ -498,8 +498,7 @@ class TaskStopTool:
         if run is not None:
             status = str(run.get("status") or "")
             if status != "running":
-                return tool_error(self.name, f"Task {task_id} is not running (status: "
-                                             f"{status})")
+                return input_error(f"Task {task_id} is not running (status: {status})")
             if ctx.post is None:
                 return tool_error(self.name, NOT_AVAILABLE)
             await ctx.post(External(name=STOP_RUN, data={"run_id": task_id}),
@@ -510,7 +509,7 @@ class TaskStopTool:
         if agent is None:
             return None
         if not await _task_running(ctx, agent.task_id):
-            return tool_error(self.name, f"Task {task_id} is not running (status: ended)")
+            return input_error(f"Task {task_id} is not running (status: ended)")
         if ctx.post is None:
             return tool_error(self.name, NOT_AVAILABLE)
         # The caller stopped it: its end notice says so (Claude Code's "stopped
@@ -613,17 +612,17 @@ class MonitorTool:
         ws: tuple[str, list[str]] | None = None
         if input.get("ws") is not None:
             if command is not None:
-                return tool_error(self.name, "takes 'command' or 'ws', not both")
+                return input_error(f"{self.name} takes 'command' or 'ws', not both")
             parsed = parse_ws(input["ws"])
             if isinstance(parsed, str):
-                return tool_error(self.name, parsed)
+                return input_error(parsed)
             ws = parsed
             command = f"ws {ws[0]}"
         if not isinstance(command, str) or not command.strip():
-            return tool_error(self.name, "requires non-empty 'command' (or 'ws')")
+            return input_error(f"{self.name} requires non-empty 'command' (or 'ws')")
         description = input.get("description")
         if not isinstance(description, str) or not description.strip():
-            return tool_error(self.name, "requires non-empty 'description'")
+            return input_error(f"{self.name} requires non-empty 'description'")
         timeout_ms = _monitor_timeout_ms(input.get("timeout_ms"))
         started = await launch(self.shell, ctx, command, self.name, description,
                                monitor_timeout_ms=timeout_ms, ws=ws)

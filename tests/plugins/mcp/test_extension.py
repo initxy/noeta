@@ -212,7 +212,7 @@ async def test_deferred_server_tools_are_loaded_with_toolsearch_then_called_dire
     assert not not_folder.is_error and not_folder.text.startswith(
         "fake did not list file:///notes.md: unknown")
     assert early.is_error and early.text.startswith(
-        "InputValidationError: mcp__fake__echo is a deferred tool")
+        "<tool_use_error>InputValidationError: mcp__fake__echo is a deferred tool")
     assert [b.tool_name for b in search.content] == [  # type: ignore[union-attr]
         "mcp__fake__echo", "ListMcpResourcesTool", "ReadMcpResourceTool",
         "ReadMcpResourceDirTool"]
@@ -280,6 +280,12 @@ async def test_a_dead_server_is_dropped_and_reported_once(
     downs = records(await events(client, tid), "server_down")
     assert len(downs) == 1 and downs[0].data["alias"] == "dead"
     assert "spawn failed" in downs[0].data["reason"]
+    # The model is told up front, once (Claude Code's deferred-tools delta).
+    from noeta.plugins.mcp.instructions import STATUS_DOWN
+    told = [m.text for m in provider.requests[1].messages if STATUS_DOWN in m.text]
+    assert len(told) == 1 and "dead: " in told[0] and "spawn failed" in told[0]
+    [status] = records(await events(client, tid), "status")
+    assert list(status.data["down"]) == ["dead"] and status.data["sign_in"] == []
 
 
 async def test_a_cross_server_name_clash_drops_the_second_server(
@@ -619,6 +625,8 @@ async def test_a_fruitless_search_lists_a_down_server_again(
     evs = await events(client, tid)
     assert [r.data["alias"] for r in records(evs, "server_down")] == ["flaky"]
     assert [r.data["alias"] for r in records(evs, "server_up")] == ["flaky"]
+    # Told while down; once it is up the emptied set is only recorded.
+    assert [list(r.data["down"]) for r in records(evs, "status")] == [["flaky"], []]
     first, second = (f.result for f in finished(evs))
     assert "could not be reached" in texts(first)[0] and "flaky" in texts(first)[0]
     assert [b.tool_name for b in second.content] == ["mcp__flaky__echo"]  # type: ignore[union-attr]
@@ -638,3 +646,13 @@ def test_instruction_notes_order_by_name_and_keep_connected_servers() -> None:
     # Still connected, its instructions gone: not said to have disconnected.
     assert instructions_delta({"alpha": "a"}, {}, {"alpha"}) == ""
     assert INSTRUCTIONS_GONE in instructions_delta({"alpha": "a"}, {}, set())
+
+
+def test_the_status_note_names_down_and_sign_in_servers() -> None:
+    from noeta.plugins.mcp.instructions import STATUS_AUTH, STATUS_DOWN, status_note
+    assert status_note({}, []) == ""
+    text = status_note({"b": "timed out", "a": "refused"}, ["gh"])
+    assert text.index(STATUS_DOWN) < text.index("a: 'refused'") < text.index("b: 'timed out'")
+    assert text.index(STATUS_AUTH) < text.index("\ngh\n")
+    many = status_note({f"s{i:02}": "x" for i in range(25)}, [])
+    assert "s19: 'x'" in many and "s20" not in many and "...and 5 more" in many

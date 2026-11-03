@@ -400,6 +400,13 @@ class SessionReplay:
         (self.proj / ".noeta").mkdir(exist_ok=True)
         (self.proj / ".noeta" / "settings.local.json").write_text(
             json.dumps({"enabledMcpjsonServers": ["echo"]}), "utf-8")
+        # Kept out of git status, as noeta keeps the file it writes (Claude
+        # Code kept its consent outside the project): the first request's git
+        # snapshot then reads as Claude Code's.
+        exclude = self.proj / ".git" / "info" / "exclude"
+        if exclude.parent.is_dir():
+            with exclude.open("a", encoding="utf-8") as f:
+                f.write("/.noeta/settings.local.json\n")
 
     async def drive(self, endpoint: Endpoint, task_id: str | None) -> str | None:
         from noeta.cli.config import Settings, from_settings

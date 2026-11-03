@@ -192,23 +192,29 @@ def _join(turn: dict[str, Any], blocks: list[dict[str, Any]], *, newline: bool =
     turn["content"] = [*content, *blocks]
 
 
-def thinking_param(request: ModelRequest) -> dict[str, str] | None:
+def thinking_param(request: ModelRequest, max_tokens: int) -> dict[str, Any] | None:
     """``thinking`` → the Messages ``thinking`` parameter.
 
     ``False`` is an explicit ``{"type": "disabled"}``, ``None`` leaves the
-    parameter out. ``True`` asks for ``{"type": "adaptive"}`` only on a model
-    catalogued as a reasoning model: on an unknown or non-reasoning model
-    (Haiku 4.5 takes only the older budget form) the parameter is left out
-    and the vendor default applies, which is what every request carried
-    before the field became a bool.
+    parameter out. ``True`` asks for ``{"type": "adaptive"}`` on a model
+    catalogued as a reasoning model, and, as Claude Code does, for the older
+    budget form on a catalogued Claude model without adaptive thinking
+    (Haiku 4.5): the budget is the model's output ceiling less one, within
+    ``max_tokens`` less one and at least 1,024. On a model the catalog does
+    not know, the parameter is left out and the vendor default applies.
     """
     if request.thinking is None:
         return None
     if not request.thinking:
         return {"type": "disabled"}
     spec = models.find_spec(request.model)
-    if spec is not None and spec.is_reasoning:
+    if spec is None:
+        return None
+    if spec.is_reasoning:
         return {"type": "adaptive", "display": "updates"}
+    if spec.real_model_id.startswith("claude-"):
+        budget = max(1024, min(max_tokens - 1, spec.max_output_tokens - 1))
+        return {"type": "enabled", "budget_tokens": budget}
     return None
 
 

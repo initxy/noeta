@@ -84,7 +84,7 @@ async def test_a_file_that_is_not_text_is_shown_and_refused(
     for tool, args in calls:
         out = await h.call(tool, file_path="x.txt", **args)
         assert out.is_error
-        assert text_of(out) == f"{tool.name}: {refusal(reason)}"
+        assert text_of(out) == f"<tool_use_error>{refusal(reason)}</tool_use_error>"
     assert (ws / "x.txt").read_bytes() == raw
 
 
@@ -95,7 +95,7 @@ async def test_a_notebook_that_is_not_text_is_refused(h: Harness, ws: Path) -> N
                                               "digest": hashlib.sha256(raw).hexdigest()})
     out = await h.call(NotebookEditTool(), notebook_path="n.ipynb", new_source="x",
                        edit_mode="insert", cell_type="code")
-    assert text_of(out) == f"NotebookEdit: {refusal('not_utf8')}"
+    assert text_of(out) == f"<tool_use_error>{refusal('not_utf8')}</tool_use_error>"
 
 
 async def test_a_nul_past_the_probe_leaves_the_file_text(h: Harness, ws: Path) -> None:

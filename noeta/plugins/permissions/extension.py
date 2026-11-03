@@ -27,6 +27,7 @@ from noeta.core.events import (
     Recorded,
     Say,
 )
+from noeta.core.execenv import ExecEnv
 from noeta.core.extension import (
     Allow,
     Ask,
@@ -69,6 +70,7 @@ from noeta.toolkit.context import task_env
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
 from noeta.toolkit.signals import RESUMED_SIGNAL
+from noeta.toolkit.worktrees import git
 
 __all__ = ["DENIED_BY_HUMAN", "MODE_SIGNAL", "CanUseTool", "PermState", "Permissions",
            "UntrustedProjectShellAllowlistWarning", "inherited_rules"]
@@ -259,6 +261,12 @@ class Permissions(Extension):
         """The task's working directory, then the additional ones (absolute):
         what the environment message lists."""
         return self._check.scope(view).dirs
+
+    async def read_deny_rule(self, view: TaskView, path: str) -> str | None:
+        """The deny rule that keeps ``Read`` from ``path``, else ``None``:
+        what the instructions plugin asks before it loads a file (Claude
+        Code withholds instruction files a ``Read`` deny rule covers)."""
+        return await self._check.read_deny_rule(view, path)
 
     def trusts(self, view: TaskView) -> bool:
         """Whether this task's working directory is a trusted workspace."""
@@ -623,6 +631,36 @@ async def _append_project(view: TaskView, rules: Sequence[str]) -> None:
             Path(path).write_bytes(data)
 
         await asyncio.to_thread(write)
+    try:
+        await _keep_out_of_git(task_env(view.env, view.state.config), path)
+    except Exception:
+        log.warning("could not add %s to the repository's excludes", path, exc_info=True)
+
+
+async def _keep_out_of_git(env: ExecEnv, path: str) -> None:
+    """Add ``path`` to its repository's ``.git/info/exclude`` unless git
+    ignores it already, so the person's grants never show in ``git status``
+    (nor get committed with ``git add -A``). Claude Code adds the file to the
+    user's global excludes; this changes only the repository's own list."""
+    cwd = posixpath.dirname(path)
+    code, _ = await git(env, ["check-ignore", "-q", path], cwd)
+    if code != 1:  # 0: ignored already; otherwise no repository here
+        return
+    code, common = await git(env, ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             cwd)
+    top_code, top = await git(env, ["rev-parse", "--show-toplevel"], cwd)
+    if code != 0 or top_code != 0 or not common or not top:
+        return
+    exclude = posixpath.join(common, "info", "exclude")
+    line = "/" + posixpath.relpath(path, top)
+    try:
+        raw = await env.read_bytes(exclude)
+    except OSError:
+        raw = b""
+    if line in raw.decode("utf-8", "replace").splitlines():
+        return
+    sep = b"\n" if raw and not raw.endswith(b"\n") else b""
+    await env.write_bytes(exclude, raw + sep + line.encode("utf-8") + b"\n")
 
 
 async def _read(view: TaskView, path: str) -> bytes | None:

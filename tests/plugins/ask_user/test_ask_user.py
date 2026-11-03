@@ -157,7 +157,11 @@ async def test_invalid_arguments_are_an_error_result(store: SqliteStore) -> None
                                  reply("ok")])
     client, tid, _ = await start(store, provider)
     [result] = finished(await events(client, tid))
-    assert (result.text, result.is_error) == ("questions must be a list", True)
+    # Refused by the schema check before the tool runs, in Claude Code's words.
+    assert (result.text, result.is_error) == (
+        "<tool_use_error>InputValidationError: AskUserQuestion failed due to the following "
+        "issue:\nThe parameter `questions` type is expected as `array` but provided as "
+        "`string`</tool_use_error>", True)
 
 
 async def test_an_invalid_posted_answer_ends_the_question_with_an_error(

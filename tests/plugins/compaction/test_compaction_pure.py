@@ -263,6 +263,28 @@ def test_restore_candidates_follow_the_read_state_a_compaction_resets() -> None:
         "/w/new.txt", "/w/old.txt"]
 
 
+def test_files_the_conversation_carries_anyway_are_not_restored() -> None:
+    """Claude Code's exact-path filter: the instruction files the instructions
+    resident gives again (start and nested), the memory index and the plan
+    file stay out; a nested ``NOETA.md`` that was never shown is restored like
+    any file."""
+    from noeta.plugins.compaction.extension import _carried_files
+    from noeta.plugins.compaction.restore import recent_files
+
+    class Perm:
+        plan = {"path": "/home/p/plans/plan.md"}
+
+    ext = {"instructions": {"files": [{"path": "/w/NOETA.md", "real": "/w/NOETA.md"}],
+                            "nested": [{"path": "/w/sub/AGENTS.md", "real": "/w/sub/AGENTS.md"}]},
+           "memory": {"dir": "/home/m"}, "permissions": Perm()}
+    skip = _carried_files(ext, {})
+    history = [user("go"), *_read("a", "NOETA.md"), *_read("b", "/w/sub/AGENTS.md"),
+               *_read("c", "/home/m/MEMORY.md"), *_read("d", "/home/p/plans/plan.md"),
+               *_read("e", "/w/other/NOETA.md"), *_read("f", "/w/x.py"), user("next")]
+    assert recent_files(history, len(history), cwd="/w", skip=skip) == [
+        "/w/x.py", "/w/other/NOETA.md"]
+
+
 def _shell(call: str, command: str, output: str = "x", *, failed: bool = False
            ) -> list[Message]:
     return [Message(role="assistant", content=[

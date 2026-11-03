@@ -394,20 +394,24 @@ class TaskRun:
         return True
 
     async def _history(self, first: Any, initial: dict[str, Any],
-                       depth: int = 0) -> TaskState | None:
+                       depth: int = 0, task_id: str = "") -> TaskState | None:
         """The conversation a task created with ``history_from`` starts
         from: its source's log up to ``history_through``, itself folded on
         the conversation that source continued (a fork of a fork, a resumed
-        sub-agent resumed again)."""
+        sub-agent resumed again). The source's call that started the task
+        (a fork's ``Agent`` call) is answered as the one that made it."""
         if not isinstance(first, TaskCreated) or not first.history_from \
                 or depth > MAX_HISTORY_DEPTH:
             return None
+        task_id = task_id or self.task_id
         source = await self.store.read(first.history_from)
         through = first.history_through
-        base = await self._history(source[0].event if source else None, initial, depth + 1)
+        base = await self._history(source[0].event if source else None, initial, depth + 1,
+                                   first.history_from)
         return continued(fold([r for r in source if through is None or r.seq <= through],
                               self.reducers, initial, state=base),
-                         {e.name: e.continue_state for e in self.exts})
+                         {e.name: e.continue_state for e in self.exts},
+                         started_by=_spawning_call(source, task_id))
 
     async def _keep_claim(self) -> None:
         interval = max(self.rt.lease_seconds / 3, 0.05)
@@ -756,3 +760,15 @@ class TaskRun:
             await self.append([InputTaken(items=items, through=items[-1].seq)])
             if not self._enqueued:
                 return
+
+
+def _spawning_call(source: Sequence[Any], task_id: str) -> str:
+    """The id of the call in ``source`` (a task's records) that staged
+    ``task_id``, or ``""``."""
+    for r in source:
+        spawned = core_records.decode(r.event)
+        if isinstance(spawned, core_records.Spawned):
+            for child in spawned.children:
+                if child.get("id") == task_id:
+                    return str(child.get("call_id") or "")
+    return ""

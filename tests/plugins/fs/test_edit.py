@@ -118,8 +118,8 @@ async def test_edit_without_read_first_rejected(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="hello", new_string="world")
     assert out.is_error
     assert text_of(out) == (
-        "Edit: Read the file first: editing a file this conversation has not read is "
-        "refused."
+        "<tool_use_error>Read the file first: editing a file this conversation has not read is "
+        "refused.</tool_use_error>"
     )
     assert target.read_text() == "hello\n"
 
@@ -152,7 +152,7 @@ async def test_an_allowed_edit_applies_over_changes_since_the_read(h: Harness, w
     target.write_text("v2\nv2\n")
     out = await h.call(EditTool(), file_path="a.py", old_string="v2", new_string="v3")
     assert text_of(out) == (
-        "Edit: File has been modified since it was read. Read it again before editing it.")
+        "<tool_use_error>File has been modified since it was read. Read it again before editing it.</tool_use_error>")
 
 
 async def test_edit_stale_read_rejected(h: Harness, ws: Path) -> None:
@@ -164,7 +164,7 @@ async def test_edit_stale_read_rejected(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="v2", new_string="v3")
     assert out.is_error
     assert text_of(out) == (
-        "Edit: File has been modified since it was read. Read it again before editing it."
+        "<tool_use_error>File has been modified since it was read. Read it again before editing it.</tool_use_error>"
     )
     assert target.read_text() == "v2-changed-on-disk\n"
 
@@ -184,8 +184,8 @@ async def test_an_empty_old_string_creates_a_file(h: Harness, ws: Path) -> None:
     assert (ws / "empty.txt").read_text() == "x\n"
     out = await h.call(EditTool(), file_path="empty.txt", old_string="", new_string="y\n")
     assert text_of(out) == (
-        "Edit: An empty old_string creates a new file, but this file already has content. "
-        "Give the text to replace instead.")
+        "<tool_use_error>An empty old_string creates a new file, but this file already has content. "
+        "Give the text to replace instead.</tool_use_error>")
 
 
 async def test_straight_quotes_match_curly_ones_and_keep_the_files_style(
@@ -214,7 +214,7 @@ async def test_unicode_escapes_and_their_characters_match_both_ways(
         '{"name": "na\\u00EFve caf\\u00E9", "city": "M\u00fcnchen"}\n')
     out = await h.call(EditTool(), file_path="a.json", old_string="\u00e9t\u00e9",
                        new_string="x")
-    assert text_of(out).endswith("Read the file again and copy the exact text.)")
+    assert text_of(out).endswith("Read the file again and copy the exact text.)</tool_use_error>")
 
 
 async def test_deleting_a_line_takes_its_line_break(h: Harness, ws: Path) -> None:
@@ -235,14 +235,14 @@ async def test_a_file_over_1gb_is_refused_unread(h: Harness, ws: Path) -> None:
         f.truncate(1536 * 1024 * 1024)  # sparse: nothing is written
     out = await h.call(EditTool(), file_path="huge.log", old_string="a", new_string="b")
     assert text_of(out) == (
-        "Edit: At 1.5GB the file is too large for Edit, which takes files up to 1GB.")
+        "<tool_use_error>At 1.5GB the file is too large for Edit, which takes files up to 1GB.</tool_use_error>")
 
 
 async def test_a_notebook_is_left_to_notebook_edit(h: Harness, ws: Path) -> None:
     (ws / "n.ipynb").write_text('{"cells": []}')
     out = await h.call(EditTool(), file_path="n.ipynb", old_string="[]", new_string="[1]")
     assert text_of(out) == (
-        "Edit: This is a Jupyter notebook: change its cells with NotebookEdit.")
+        "<tool_use_error>This is a Jupyter notebook: change its cells with NotebookEdit.</tool_use_error>")
 
 
 async def test_edit_zero_match_fails_no_write(h: Harness, ws: Path) -> None:
@@ -252,7 +252,7 @@ async def test_edit_zero_match_fails_no_write(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="missing", new_string="x")
     assert out.is_error
     # Claude Code echoes the string it looked for.
-    assert text_of(out) == "Edit: old_string does not occur in the file.\nLooked for: missing"
+    assert text_of(out) == "<tool_use_error>old_string does not occur in the file.\nLooked for: missing</tool_use_error>"
     assert target.read_text() == "foo\n"
 
 
@@ -263,9 +263,9 @@ async def test_edit_multi_match_fails_no_write(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="a.py", old_string="foo", new_string="bar")
     assert out.is_error
     assert text_of(out) == (
-        "Edit: old_string occurs 3 times in the file and replace_all is false, so "
+        "<tool_use_error>old_string occurs 3 times in the file and replace_all is false, so "
         "nothing was changed. Set replace_all to true to change all 3, or add nearby "
-        "lines to old_string until it matches only one."
+        "lines to old_string until it matches only one.</tool_use_error>"
     )
     assert target.read_text() == "foo\nfoo\nfoo\n"
 
@@ -286,7 +286,7 @@ async def test_edit_same_old_and_new_rejected(h: Harness, ws: Path) -> None:
     await _read(h, "a.py")
     out = await h.call(EditTool(), file_path="a.py", old_string="foo", new_string="foo")
     assert out.is_error
-    assert text_of(out) == "Edit: old_string and new_string must be different"
+    assert text_of(out) == "<tool_use_error>old_string and new_string must be different</tool_use_error>"
 
 
 async def test_edit_replace_all_replaces_every_match(h: Harness, ws: Path) -> None:
@@ -340,7 +340,7 @@ async def test_edit_escape_rejected(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="/etc/passwd", old_string="x", new_string="y")
     assert out.is_error
     assert text_of(out) == (
-        f"Edit: path '/etc/passwd' resolves outside workspace {str(ws)!r}"
+        f"<tool_use_error>path '/etc/passwd' resolves outside workspace {str(ws)!r}</tool_use_error>"
     )
 
 
@@ -375,13 +375,13 @@ async def test_edit_not_a_file(h: Harness, ws: Path) -> None:
     (ws / "sub").mkdir()
     out = await h.call(EditTool(), file_path="sub", old_string="x", new_string="y")
     assert out.is_error
-    assert text_of(out) == "Edit: not a file: 'sub'"
+    assert text_of(out) == "<tool_use_error>not a file: 'sub'</tool_use_error>"
 
 
 async def test_edit_missing_file(h: Harness, ws: Path) -> None:
     out = await h.call(EditTool(), file_path="nope.txt", old_string="x", new_string="y")
     assert out.is_error
-    assert text_of(out) == f"Edit: No file at that path (the working directory is {ws})."
+    assert text_of(out) == f"<tool_use_error>No file at that path (the working directory is {ws}).</tool_use_error>"
 
 
 async def test_edit_binary_rejected(h: Harness, ws: Path) -> None:
@@ -389,7 +389,7 @@ async def test_edit_binary_rejected(h: Harness, ws: Path) -> None:
     assert not (await h.call(ReadTool(), file_path="bin")).is_error
     out = await h.call(EditTool(), file_path="bin", old_string="binary", new_string="y")
     assert out.is_error
-    assert text_of(out).startswith("Edit: Nothing was written: this file has a zero byte")
+    assert text_of(out).startswith("<tool_use_error>Nothing was written: this file has a zero byte")
     assert (ws / "bin").read_bytes() == b"\x00\xffbinary"
 
 
@@ -409,7 +409,7 @@ async def test_edit_arg_validation(
     (ws / "a.py").write_text("x\n")
     out = await EditTool().run(args, h.ctx())
     assert out.is_error
-    assert text_of(out) == f"Edit: {message}"
+    assert text_of(out) == f"<tool_use_error>Edit {message}</tool_use_error>"
 
 
 # -- CRLF ---------------------------------------------------------------------

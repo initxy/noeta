@@ -123,7 +123,8 @@ async def test_a_call_to_a_withheld_tool_gets_its_error_before_any_gate(
     tid = await _run(store, [Offers([Fake("Hidden")]), Counter(), refuses], provider)
     events = [r.event for r in await Client(store).events(tid)]
     [finished] = [e for e in events if isinstance(e, ToolFinished)]
-    assert finished.result.is_error and finished.result.text == "Hidden is not here."
+    assert finished.result.is_error \
+        and finished.result.text == "<tool_use_error>Hidden is not here.</tool_use_error>"
     assert not any(isinstance(e, ToolStarted) for e in events) and refuses.asked == []
 
 
@@ -150,7 +151,7 @@ async def test_the_agent_lists_refuse_an_added_tool_and_its_whole_change_set(
     assert [t.name for t in provider.requests[0].tools] == ["Hidden", "Read"]
     [finished] = [r.event for r in await Client(store).events(tid)
                   if isinstance(r.event, ToolFinished)]
-    assert finished.result.is_error and "No tool named 'Count'" in finished.result.text
+    assert finished.result.is_error and "No such tool available: Count" in finished.result.text
 
 
 class Deferred(Fake):
@@ -193,7 +194,7 @@ async def test_deferred_tools_are_sent_plain_when_their_loader_is_refused(
     else:
         assert sent == {"Load": False, "Read": False, "Slot": True}
         assert view.deferred_tool_names() == ["Mcp"]
-        assert finished.result.text == "not loaded"
+        assert finished.result.text == "<tool_use_error>not loaded</tool_use_error>"
 
 
 def test_a_denied_deferred_tool_is_not_announced() -> None:

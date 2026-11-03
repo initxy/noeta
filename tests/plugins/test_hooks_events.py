@@ -933,6 +933,25 @@ async def test_an_async_rewake_hook_wakes_the_model_on_exit_2(tmp_path: Path) ->
         'Stop hook blocking error from command "PostToolUse:Read": 2 tests failed'
 
 
+async def test_several_session_start_contexts_go_in_one_message(tmp_path: Path) -> None:
+    # Claude Code joins every SessionStart hook's additionalContext with
+    # newlines into one message; plain stdout stays one success line each.
+    async def runner(hook: HookCommand, payload: dict[str, Any], cwd: str | None) -> HookResult:
+        if hook.command == "plain":
+            return HookResult(exit_code=0, stdout="hello\n", stderr="")
+        return specific("SessionStart", additionalContext=f"from {hook.command}")
+
+    config = {"SessionStart": [{"hooks": [
+        {"type": "command", "command": "one"}, {"type": "command", "command": "plain"},
+        {"type": "command", "command": "two"}]}]}
+    s = Setup(tmp_path, config, [reply("a")])
+    s.hooks.runner = runner
+    await s.start()
+    assert s.system_texts(0) == [
+        "SessionStart hook success: hello",
+        "SessionStart hook additional context: from one\nfrom two"]
+
+
 async def test_a_background_session_start_answer_already_given_is_left_out(
         tmp_path: Path) -> None:
     # Claude Code leaves out a background SessionStart answer whose texts

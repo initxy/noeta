@@ -357,13 +357,20 @@ async def test_thinking_off_is_explicitly_disabled() -> None:
 
 
 @respx.mock
-@pytest.mark.parametrize("model", [_UNKNOWN_MODEL, "claude-haiku-4-5"])
-async def test_thinking_on_unknown_or_non_reasoning_model_leaves_vendor_default(
-    model: str,
-) -> None:
-    body, _ = await _send(_req(model=model))
+async def test_thinking_on_an_unknown_model_leaves_vendor_default() -> None:
+    body, _ = await _send(_req(model=_UNKNOWN_MODEL))
     assert "thinking" not in body
     assert "output_config" not in body
+
+
+@respx.mock
+async def test_a_claude_model_without_adaptive_thinking_gets_claude_codes_budget() -> None:
+    # Claude Code: the output ceiling less one, under max_tokens, at least 1,024.
+    body, _ = await _send(_req(model="claude-haiku-4-5", max_tokens=32_000))
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 31_999}
+    assert "output_config" not in body and "context_management" not in body
+    body, _ = await _send(_req(model="claude-haiku-4-5", max_tokens=500))
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
 # ---------------------------------------------------------------------------

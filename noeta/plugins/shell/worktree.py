@@ -18,7 +18,7 @@ import secrets
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, tool_error
+from noeta.toolkit.tools import SCHEMA_DIALECT, input_error, load_description, tool_error
 from noeta.toolkit.worktrees import (
     WORKTREES,
     add_worktree,
@@ -105,22 +105,22 @@ class EnterWorktreeTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         name, path = input.get("name"), input.get("path")
         if name is not None and path is not None:
-            return tool_error(self.name, "give `name` or `path`, not both")
+            return input_error("Give `name` or `path`, not both.")
         start = getattr(ctx.state.get(SHELL), "cwd", None) or ctx.env.cwd
         top = await repository_top(ctx.env, ctx.env.cwd)
         if top is None:
-            return tool_error(self.name, f"{ctx.env.cwd} is not in a git repository")
+            return input_error(f"{ctx.env.cwd} is not in a git repository")
         current = _worktree(ctx)
         if path is not None:
             return await self._enter_existing(ctx, str(path), top, current)
         if current is not None:
-            return tool_error(self.name, f"already in the worktree {current['path']}; leave it "
-                                         "with ExitWorktree first")
+            return input_error(f"already in the worktree {current['path']}; leave it "
+                               "with ExitWorktree first")
         if name is None:
             name = secrets.token_hex(4)
         problem = name_problem(name)
         if problem is not None:
-            return tool_error(self.name, problem)
+            return input_error(problem)
         assert isinstance(name, str)
         root = await ctx.env.realpath(ctx.env.cwd)
         target = posixpath.join(root, WORKTREES, name)
@@ -155,14 +155,14 @@ class EnterWorktreeTool:
         root = await ctx.env.realpath(ctx.env.cwd)
         if not (target + "/").startswith(root.rstrip("/") + "/"):
             # Bash starts only inside the working directory.
-            return tool_error(self.name, f"{target} is outside the working directory {root}")
+            return input_error(f"{target} is outside the working directory {root}")
         if target not in trees:
-            return tool_error(self.name, f"{target} is not a worktree of this repository "
-                                         "(see `git worktree list`)")
+            return input_error(f"{target} is not a worktree of this repository "
+                               "(see `git worktree list`)")
         if current is not None and not target.startswith(
                 posixpath.join(root, WORKTREES) + "/"):
-            return tool_error(self.name, "from a worktree, only another worktree under "
-                                         f"{WORKTREES}/ can be entered")
+            return input_error("from a worktree, only another worktree under "
+                               f"{WORKTREES}/ can be entered")
         back = (current or {}).get("back") or ctx.env.cwd
         tracked = None if current is None else (
             current if current.get("created") else current.get("made"))
@@ -206,19 +206,18 @@ class ExitWorktreeTool:
             return text_output(NOT_ACTIVE)
         action = input.get("action")
         if action not in ("keep", "remove"):
-            return tool_error(self.name, "action must be \"keep\" or \"remove\"")
+            return input_error("`action` must be \"keep\" or \"remove\".")
         made = tree if tree.get("created") else tree.get("made")
         back = str(tree.get("back") or ctx.env.cwd)
         if action == "remove" and isinstance(made, dict):
             if job_runs_under(ctx.env, made["path"]):
-                return tool_error(self.name, IN_USE.format(path=made["path"]))
+                return input_error(IN_USE.format(path=made["path"]))
             what, failed = await unsaved_work(ctx.env, made["path"], made["base"],
                                               made["branch"])
             if (what or failed) and input.get("discard_changes") is not True:
                 if failed:
-                    return tool_error(self.name, UNCHECKED.format(path=made["path"],
-                                                                  error=failed))
-                return tool_error(self.name, CHANGES.format(path=made["path"], what=what))
+                    return input_error(UNCHECKED.format(path=made["path"], error=failed))
+                return input_error(CHANGES.format(path=made["path"], what=what))
             err, branch_err = await remove_worktree(ctx.env, made["root"], made["path"],
                                                     made["branch"])
             if err:

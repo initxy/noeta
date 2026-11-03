@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Display
 from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
-from noeta.toolkit.tools import Workspace, tool_error
+from noeta.toolkit.tools import Workspace, input_error
 
 __all__ = [
     "WriteRoots",
@@ -103,10 +103,8 @@ def read_precondition_error(
     seen = entry is not None and not entry.partial
     if not seen:
         if not unread_ok or (entry is not None and not partial_ok):
-            return tool_error(
-                tool_name,
-                f"Read the file first: {verb} a file this conversation has not read is refused."
-            )
+            return input_error(
+                f"Read the file first: {verb} a file this conversation has not read is refused.")
         if entry is None:
             return None
     assert entry is not None
@@ -116,10 +114,8 @@ def read_precondition_error(
 
 
 def stale_error(tool_name: str, verb: str) -> ToolOutput:
-    return tool_error(
-        tool_name,
-        f"File has been modified since it was read. Read it again before {verb} it.",
-    )
+    return input_error(
+        f"File has been modified since it was read. Read it again before {verb} it.")
 
 
 def changed_since_read(ctx: ToolContext, resolved: str, raw: bytes) -> bool:

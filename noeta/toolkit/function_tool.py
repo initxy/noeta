@@ -112,6 +112,10 @@ def _is_context(param: inspect.Parameter, hint: Any) -> bool:
 
 
 class _FunctionTool:
+    #: The function checks its own arguments (Claude Code's SDK tools are
+    #: MCP tools, passed on as sent).
+    unchecked_input = True
+
     def __init__(self, fn: Callable[..., Any], *, name: str, description: str,
                  read_only: bool, clearable: bool, deferred: bool) -> None:
         self.fn = fn

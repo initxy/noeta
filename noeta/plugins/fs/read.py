@@ -18,7 +18,7 @@ import hashlib
 import math
 import posixpath
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -48,6 +48,7 @@ from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     Workspace,
     format_size,
+    input_error,
     load_description,
     require_str,
     tool_error,
@@ -57,8 +58,17 @@ __all__ = ["BINARY_EXTENSIONS", "FILE_UNCHANGED", "IMAGE_MAX_BYTES", "ReadTool"]
 
 #: The answer to a repeated read of an unchanged range.
 FILE_UNCHANGED = (
-    "File unchanged since you last read this range: the earlier Read result in this "
-    "conversation is still current, so use it rather than reading the file again.")
+    "Wasted call: this range of the file has not changed since your last Read of it. Use "
+    "that earlier result instead of reading again.")
+#: The answer to a whole-file read of an instruction file shown at the start
+#: (or brought by a touched file) and unchanged on disk since (Claude Code's
+#: ``file_unchanged`` for a seeded file).
+SHOWN_UNCHANGED = (
+    "This file's text is already in your context, in the instruction files shown above, and "
+    "the file has not changed on disk since. Use that text rather than reading the file "
+    "again.")
+#: The plugin whose state lists the instruction files shown, read by name.
+INSTRUCTIONS = "instructions"
 #: ``allow_large`` raises the token ceiling this many times (to 200K tokens).
 _LARGE_FACTOR = 8
 _JS_MAX_SAFE = 9007199254740991
@@ -381,29 +391,26 @@ class ReadTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         path = require_str(input, "file_path")
         if path is None:
-            return tool_error(self.name, "requires non-empty 'file_path'")
+            return input_error(f"{self.name} requires non-empty 'file_path'")
         env = ctx.env
         ws = await Workspace.of(env)
         given = posixpath.normpath(posixpath.join(ws.root, path))
         if is_device_file(given):
-            return tool_error(
-                self.name, f"Read does not read device or process files, and {path} is one.")
+            return input_error(f"Read does not read device or process files, and {path} is one.")
         resolved = await ws.canonical(path)
         if is_device_file(resolved):
-            return tool_error(
-                self.name, f"Read does not read device or process files, and {path} is one.")
+            return input_error(f"Read does not read device or process files, and {path} is one.")
         ext = posixpath.splitext(path)[1].lower()
         if ext in BINARY_EXTENSIONS:
-            return tool_error(
-                self.name,
+            return input_error(
                 f"Read does not open binary files, and a {ext} file is one. Open it with a "
                 "skill made for the format, or with a shell command or script that "
                 "understands it.")
         st = await env.stat(resolved)
         if st is None:
-            return tool_error(self.name, await missing_file_message(ws, resolved))
+            return input_error(await missing_file_message(ws, resolved))
         if st.is_dir:
-            return tool_error(self.name, f"not a file: {path!r}")
+            return input_error(f"not a file: {path!r}")
         display = ws.relative(resolved)
         offset = _positive_int(input.get("offset")) or 1
         explicit_limit = _positive_int(input.get("limit"))
@@ -414,6 +421,9 @@ class ReadTool:
         if ctx.by_model and seen is not None and not seen.partial and seen.range == asked \
                 and seen.mtime == st.mtime and not input.get("pages"):
             return text_output(FILE_UNCHANGED, path=display, unchanged=True)
+        if ctx.by_model and seen is None and offset == 1 and explicit_limit is None \
+                and not input.get("pages") and _shown_unchanged(ctx.state, resolved, st.mtime):
+            return text_output(SHOWN_UNCHANGED, path=display, unchanged=True)
         size = st.size
         chunks = _chunks(env, resolved)
 
@@ -441,8 +451,7 @@ class ReadTool:
         image = detect_image(head)
         ext = posixpath.splitext(resolved)[1].lower()
         if ext in _IMAGE_EXTENSIONS and image is None:
-            return tool_error(
-                self.name,
+            return input_error(
                 f"{display} has an image extension, but its bytes are not a PNG, JPEG, GIF or "
                 "WebP image (often a saved error or login page). Check it with `file`, or "
                 "look at it as text through Bash (`head -c 500`).")
@@ -652,3 +661,16 @@ def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float,
     if not whole or partial:
         data["whole"] = False
     ctx.record(FS, KIND_READ, data)
+
+
+def _shown_unchanged(states: Mapping[str, Any], resolved: str, mtime: float) -> bool:
+    """Whether the instructions plugin showed the file at ``resolved`` whole
+    (its state, read by name) and it still has the ``mtime`` it had then."""
+    state = states.get(INSTRUCTIONS)
+    if not isinstance(state, Mapping):
+        return False
+    for entry in [*(state.get("files") or ()), *(state.get("nested") or ())]:
+        if isinstance(entry, Mapping) and entry.get("real") == resolved \
+                and entry.get("mtime") == mtime and entry.get("whole", True):
+            return True
+    return False

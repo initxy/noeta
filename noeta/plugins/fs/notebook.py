@@ -26,6 +26,7 @@ from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     PathError,
     Workspace,
+    input_error,
     load_description,
     require_str,
     tool_error,
@@ -158,10 +159,10 @@ class NotebookEditTool:
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         path = require_str(input, "notebook_path")
         if path is None:
-            return tool_error(self.name, "requires non-empty 'notebook_path'")
+            return input_error(f"{self.name} requires non-empty 'notebook_path'")
         wrong = _input_error(input, path)
         if wrong is not None:
-            return tool_error(self.name, wrong)
+            return input_error(wrong)
         source: str = input["new_source"]
         mode: str = input.get("edit_mode") or "replace"
         cell_type: str | None = input.get("cell_type")
@@ -173,7 +174,7 @@ class NotebookEditTool:
             resolved = await ws.resolve_write(
                 path, await authorized_roots(ws, self.write_roots, ctx))
         except PathError as exc:
-            return tool_error(self.name, str(exc))
+            return input_error(str(exc))
         try:
             raw = await env.read_bytes(resolved)
         except OSError as exc:
@@ -184,18 +185,18 @@ class NotebookEditTool:
             return refused
         reason = not_text(raw)
         if reason is not None:
-            return tool_error(self.name, refusal(reason))
+            return input_error(refusal(reason))
         try:
             nb = json.loads(decode(raw).removeprefix("\ufeff"))
         except ValueError as exc:
-            return tool_error(self.name, f"the notebook is not valid JSON: {exc}")
+            return input_error(f"the notebook is not valid JSON: {exc}")
         cells = nb.get("cells") if isinstance(nb, dict) else None
         if not isinstance(cells, list):
-            return tool_error(self.name, "the notebook has no cells array")
+            return input_error("the notebook has no cells array")
 
         found = _find(cells, cell_id) if cell_id else None
         if isinstance(found, str):
-            return tool_error(self.name, found)
+            return input_error(found)
         index = found
         replaced = cells[index].get("source") if index is not None and mode != "insert" else None
         old_source = "".join(replaced) if isinstance(replaced, list) else replaced

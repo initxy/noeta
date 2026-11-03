@@ -21,6 +21,7 @@ from noeta.core.large_output import (
     task_spill_dir,
 )
 from noeta.core.tool import ToolOutput, text_output
+from noeta.core.tool_input import tool_use_error
 from noeta.core.types import Text
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "Workspace",
     "error_output",
     "format_size",
+    "input_error",
     "large_output_message",
     "limit_output",
     "load_description",
@@ -64,6 +66,14 @@ def load_description(package: str, name: str) -> str:
 def tool_error(tool_name: str, message: str, **meta: Any) -> ToolOutput:
     """A failed call: ``"<tool>: <message>"``."""
     return text_output(f"{tool_name}: {message}", is_error=True, **meta)
+
+
+def input_error(message: str, **meta: Any) -> ToolOutput:
+    """A call refused before the tool did anything — its arguments, the file's
+    or the task's state do not allow it (Claude Code's ``validateInput``):
+    ``message`` in Claude Code's ``<tool_use_error>`` frame. A failure while
+    the tool works is a :func:`tool_error`."""
+    return text_output(tool_use_error(message), is_error=True, **meta)
 
 
 def error_output(error: str, body: str = "", **meta: Any) -> ToolOutput:

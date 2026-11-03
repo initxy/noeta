@@ -5,8 +5,10 @@ After a summary, the files the newest successful ``Read`` / ``Edit`` /
 (``noeta.toolkit.shell.read_files``: ``cat``, ``head``, ``sed -n`` and the
 like, as Claude Code counts them), are read again through the ``Read``
 tool, newest first, at most 5, each within 5,000 tokens and 50,000 in all, skipping a
-file whose ``Read`` the kept messages already show and the instruction
-files. Each is recorded as a Read call and its result (or a too-large
+file whose ``Read`` the kept messages already show and the files the
+conversation carries anyway (Claude Code's filter, by exact path: the
+instruction files and memory index the instructions resident gives again,
+the task's plan file). Each is recorded as a Read call and its result (or a too-large
 note) and given in the next request's system turn, so a resume folds them
 back and never reads the disk again.
 """
@@ -15,7 +17,7 @@ from __future__ import annotations
 
 import json
 import posixpath
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from noeta.core.tool import Tool, ToolContext
@@ -30,8 +32,6 @@ POST_COMPACT_TOKEN_BUDGET = 50_000
 READ_TOOL = "Read"
 _FILE_TOOLS = (READ_TOOL, "Edit", "Write")
 SHELL_TOOL = "Bash"
-#: Carried by the instructions resident; restoring them would repeat it.
-_INSTRUCTION_FILE_NAMES = frozenset({"NOETA.md", "NOETA.local.md", "AGENTS.md"})
 
 
 def _touched(message: Message, succeeded: Mapping[str, str], cwd: str = "",
@@ -74,13 +74,10 @@ def _ran_in(files: Sequence[tuple[str, bool]], resolved: Sequence[str]) -> str |
     return None
 
 
-def _basename(path: str) -> str:
-    return path.replace("\\", "/").rsplit("/", 1)[-1]
-
-
 def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
                  carried: Sequence[str] = (), cwd: str = "",
-                 shown: Mapping[str, Sequence[str]] | None = None) -> list[str]:
+                 shown: Mapping[str, Sequence[str]] | None = None,
+                 skip: Collection[str] = ()) -> list[str]:
     """Paths to restore, newest first. ``history`` is the whole uncompacted
     history and ``boundary`` the number of its messages the new summary
     covers. As Claude Code's read-file state, which a compaction resets to
@@ -89,7 +86,8 @@ def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
     restored in full (``carried``); a file it could only name as too large,
     or left to its kept messages, is not restored again unless touched
     since. A path a shell command gave relative is taken from where that
-    command ran (``shown``, as :func:`_touched` takes it), else ``cwd``."""
+    command ran (``shown``, as :func:`_touched` takes it), else ``cwd``.
+    A file at a path in ``skip`` (absolute) is never restored."""
     succeeded = {
         b.call_id: b.text for m in history for b in m.content
         if isinstance(b, ToolResult) and not b.is_error
@@ -102,7 +100,8 @@ def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
                for path, _tool in reversed(_touched(message, succeeded, cwd, shown))]
     recent: list[str] = []
     for path in [*touched, *carried]:
-        if path in recent or path in kept_reads or _basename(path) in _INSTRUCTION_FILE_NAMES:
+        if path in recent or path in kept_reads \
+                or posixpath.normpath(posixpath.join(cwd, path)) in skip:
             continue
         recent.append(path)
     return recent[:POST_COMPACT_MAX_FILES_TO_RESTORE]
