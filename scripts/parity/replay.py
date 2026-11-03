@@ -69,6 +69,18 @@ PLAN_FILE = re.compile(r"\{HOME\}[^\"\s]*/plans/[a-z]+-[a-z]+-[a-z]+\.md")
 NOETA_PLAN_FILE = re.compile(r"/[^\s'\"]+/plans/[a-z]+-[a-z]+-[a-z]+\.md")
 
 
+#: A background task's output file in Claude Code's recorded turns.
+TASK_OUTPUT = re.compile(r"/private/tmp/claude-\d+/[^\s\"']*/tasks/[A-Za-z0-9]+\.output")
+
+
+def _output_files(events: list[Any]) -> list[str]:
+    """noeta's background job output files, in the order the jobs started."""
+    return [str(rec.event.data["output_file"]) for rec in events
+            if getattr(rec.event, "extension", "") == "shell"
+            and getattr(rec.event, "kind", "") == "started"
+            and isinstance(rec.event.data, dict) and rec.event.data.get("output_file")]
+
+
 def _plan_path(events: list[Any]) -> str:
     path = ""
     for rec in events:
@@ -109,6 +121,10 @@ class Replayer:
         self.stalls = threading.Event()
         #: noeta's plan file, once plan mode named it.
         self.plan_path = ""
+        #: noeta's background output files in start order, and Claude
+        #: Code's recorded ones mapped to them in order of first use.
+        self.output_files: list[str] = []
+        self.outputs: dict[str, str] = {}
         #: Steps in which Claude Code asked a sub-agent's progress label,
         #: and how far noeta's clock for that label is moved ahead: the label
         #: comes 30 s into a sub-agent's run, which a replay does not last.
@@ -123,12 +139,19 @@ class Replayer:
                 value = PLAN_FILE.sub(lambda _m: self.plan_path, value)
             for k, v in self.subs.items():
                 value = value.replace(k, v)
-            return value
+            return TASK_OUTPUT.sub(self._output_file, value)
         if isinstance(value, list):
             return [self.fill(v) for v in value]
         if isinstance(value, dict):
             return {k: self.fill(v) for k, v in value.items()}
         return value
+
+    def _output_file(self, m: re.Match[str]) -> str:
+        """Claude Code's background output file as noeta's: the n-th one
+        recorded is noeta's n-th job's."""
+        if m.group(0) not in self.outputs and len(self.outputs) < len(self.output_files):
+            self.outputs[m.group(0)] = self.output_files[len(self.outputs)]
+        return self.outputs.get(m.group(0), m.group(0))
 
     def _main_position(self, msgs: list[Mapping[str, Any]]) -> tuple[int, int]:
         best_step, at = -1, -1
@@ -492,9 +515,11 @@ class SessionReplay:
                     data = {str(q.get("id")): {"selected": [q["options"][0]["label"]]}
                             for q in qs if q.get("options")}
                     await app.client.answer(p.task_id, p.request_id, data=data)
-            plan = _plan_path(await app.client.events(task_id))
+            recorded = await app.client.events(task_id)
+            plan = _plan_path(recorded)
             if plan:
                 self.replayer.plan_path = plan
+            self.replayer.output_files = _output_files(recorded)
             row = await app.client.get(task_id)
             if row.status == "ended":
                 self.notes.append(f"step {step['name']}: task ended ({row.end_status})")
