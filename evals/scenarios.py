@@ -25,7 +25,7 @@ from evals.core import (
     mentions,
     path_arg,
 )
-from noeta.core.events import ExtensionRecorded
+from noeta.core.events import ExtensionRecorded, ModelReplied
 from noeta.plugins.fs.state import FS, KIND_CHANGED
 from noeta.plugins.todos.state import TodoState, reduce_todos
 
@@ -426,13 +426,19 @@ TODO_CHANGES = (
 )
 
 
-def score_todo_list(t: Trace, judge: Judge) -> Result:
-    """A task list of the changes (TaskCreate), each item marked completed
-    (TaskUpdate), and the changes made."""
+def _todos(t: Trace) -> TodoState:
+    """The task list at the trial's end, folded from its ``todos`` records."""
     st = TodoState()
     for e in t.items:
         if isinstance(e, ExtensionRecorded) and e.extension == "todos":
             st = reduce_todos(st, e.kind, e.data)
+    return st
+
+
+def score_todo_list(t: Trace, judge: Judge) -> Result:
+    """A task list of the changes (TaskCreate), each item marked completed
+    (TaskUpdate), and the changes made."""
+    st = _todos(t)
     created = sum(1 for c in t.named("TaskCreate") if not t.failed(c))
     completed = sum(1 for i in st.items if i.status == "completed")
     all_done = len(st.items) >= 3 and completed == len(st.items)
@@ -440,6 +446,31 @@ def score_todo_list(t: Trace, judge: Judge) -> Result:
     return 0.25 * (created >= 3) + 0.25 * all_done + 0.5 * done / len(TODO_CHANGES), {
         "created": created, "items": len(st.items), "completed": completed,
         "changes_done": done, "tool_searches": len(t.named("ToolSearch"))}
+
+
+def score_todo_reminder(t: Trace, judge: Judge) -> Result:
+    """A long unprompted run: once the task reminder comes, the model takes up
+    the task list (a TaskCreate or TaskUpdate after it); the twelve edits done.
+    A run that used the list before any reminder was due counts as taken up."""
+    reminders = 0
+    used_after = used_before = False
+    for e in t.items:
+        if isinstance(e, ExtensionRecorded) and e.extension == "todos" \
+                and e.kind == "task_reminder":
+            reminders += 1
+        elif isinstance(e, ModelReplied):
+            used = any(c.name in ("TaskCreate", "TaskUpdate")
+                       for c in e.response.message.tool_uses)
+            used_after |= used and reminders > 0
+            used_before |= used and reminders == 0
+    st = _todos(t)
+    done = sum(1 for f in fx.STEP_FILES if 'STATUS = "done"' in (t.file(f) or ""))
+    took_up = used_after or (used_before and not reminders)
+    return 0.6 * took_up + 0.4 * done / len(fx.STEP_FILES), {
+        "reminders": reminders, "used_before_reminder": used_before,
+        "used_after_reminder": used_after, "items": len(st.items),
+        "completed": sum(1 for i in st.items if i.status == "completed"),
+        "files_done": done, "tool_searches": len(t.named("ToolSearch"))}
 
 
 # --------------------------------------------------------------------------- #
@@ -935,7 +966,8 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         name="todo_list_multi_step",
-        behavior="tracks a six-part request in a task list and marks each item completed",
+        behavior=("unprompted, tracks a six-part request in a task list and marks each item "
+                  "completed"),
         goal=("Please make these changes:\n"
               "1. Raise TAX_RATE in shop/pricing.py to 0.0825.\n"
               "2. Add a clear() method to Cart in shop/cart.py that empties the cart.\n"
@@ -950,6 +982,39 @@ SCENARIOS: list[Scenario] = [
         plugins=lambda _dirs: {"todos": {"all_models": True}},
         score=score_todo_list,
         tags=("todos",),
+    ),
+    Scenario(
+        name="todo_list_requested",
+        behavior=("asked for a task list, loads the task tools, tracks the six changes and "
+                  "marks each completed"),
+        goal=("Please make these changes, and keep a task list of them as you go: one task "
+              "per change, each marked completed when it is done.\n"
+              "1. Raise TAX_RATE in shop/pricing.py to 0.0825.\n"
+              "2. Add a clear() method to Cart in shop/cart.py that empties the cart.\n"
+              "3. Change the greeting in shop/cli.py to \"Welcome to the Shop\".\n"
+              "4. Set log_level to \"error\" in config/prod.toml.\n"
+              "5. Change PORT in server.py to 9090.\n"
+              "6. Add a \"## Usage\" section to README.md saying how to run the CLI "
+              "(python -m shop.cli)."),
+        setup=fx.shop,
+        plugins=lambda _dirs: {"todos": {"all_models": True}},
+        score=score_todo_list,
+        tags=("todos",),
+    ),
+    Scenario(
+        name="todo_reminder_long_run",
+        behavior="on a long unprompted run, takes up the task list once the task reminder comes",
+        goal=(
+            "In steps/step1.py through steps/step12.py, change the line STATUS = \"todo\" to "
+            "STATUS = \"done\". Do the files one at a time, in order: Read the file, then "
+            "Edit it, then move on to the next. Do not use the shell or search tools, and "
+            "keep going until all twelve are done."
+        ),
+        setup=fx.steps,
+        plugins=lambda _dirs: {"todos": {"all_models": True}},
+        score=score_todo_reminder,
+        timeout_s=600.0,
+        tags=("todos", "reminders"),
     ),
     Scenario(
         name="plan_mode_read_only",
