@@ -911,6 +911,16 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **Deny rules now hold against shell commands** (spec `2026-11-03-shell-deny-paths`): a `Bash`
+  or `Monitor` command that writes a path an `Edit` deny rule covers (`mkdir`, `touch`, `rm`,
+  `rmdir`, `mv`, `cp`, `sed -i`, `tee`, an output redirection) or reads one a `Read` deny rule
+  covers (`cat`, `head`, `tail`, `grep`, `rg`, `awk`, `sed`, `jq`, `git diff` and Claude Code's
+  other path-checked readers, a `cp` / `mv` source, a `<` input) is refused in every mode,
+  `bypassPermissions` included, as Claude Code 2.1.312 does, and more widely than it: past
+  comments, heredocs, subshells and substitutions, through globs, links, `xargs` / `sudo` and
+  `env -C`, and a recursive `rm` / `mv` of a directory holding a denied path
+  (`parity/deviations.md`). Before, `cd config && sed -i ... prod.toml` changed a file
+  `Edit(./config/prod.toml)` denies, and `cat .env` read a file `Read(./.env)` denies.
 - **`noeta -p` no longer ends without its result.** The result's usage is read from the
   store after the turn closes; a read slower than half a second let the run end with no
   `result` line and exit 1, though the task had finished.

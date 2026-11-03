@@ -56,6 +56,7 @@ __all__ = [
     "parse_rule",
     "parse_rules",
     "path_pattern_matches",
+    "pattern_literal",
     "rule_inputs",
     "shell_rule_matches",
     "url_host",
@@ -345,6 +346,23 @@ def _anchor(pattern: str, ctx: RuleContext) -> tuple[str, str]:
     if pattern.startswith("./"):
         return ctx.root, pattern[2:]
     return ctx.root, pattern
+
+
+def pattern_literal(pattern: str, ctx: RuleContext) -> tuple[str, bool] | None:
+    """The part of a ``Read`` / ``Edit`` pattern before its first glob
+    character, and whether it is anchored: ``(absolute path, True)`` for a
+    pattern tied to a place (``./x``, ``/x``, ``//x``, ``~/x``, or one with a
+    ``/`` inside), ``(text, False)`` for one that matches at any depth
+    (``.env``). ``None`` when nothing literal is left."""
+    base, rel = _anchor(pattern, ctx)
+    literal = re.split(r"[*?\[{]", rel, maxsplit=1)[0]
+    floating = "/" not in rel.rstrip("/") and base == ctx.root and not pattern.startswith(
+        ("/", "./"))
+    if floating:
+        return (literal, False) if literal else None
+    if not literal and base == "/":
+        return None
+    return posixpath.normpath(posixpath.join(base, literal)), True
 
 
 def _glob_regex(pattern: str) -> str:

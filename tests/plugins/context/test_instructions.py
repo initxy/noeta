@@ -8,8 +8,8 @@ from pathlib import Path
 from noeta.core.agent import Agent
 from noeta.core.errors import ContextOverflow
 from noeta.core.events import Compacted
-from noeta.core.extension import Extension, TaskView
-from noeta.core.types import ModelRequest, ToolResult
+from noeta.core.extension import Deny, Extension, Gate, TaskView
+from noeta.core.types import ModelRequest, ToolResult, ToolUse
 from noeta.plugins.fs import FileTools
 from noeta.plugins.fs.read import SHOWN_UNCHANGED
 from noeta.plugins.instructions import Instructions
@@ -303,10 +303,28 @@ async def test_a_file_a_shell_command_showed_brings_what_applies_to_it(h: Harnes
     assert msgs[3].text == f"{rules / 'py.md'}:\n\npython rule"
 
 
+class DenyReadsUnder(Extension):
+    """A check that refuses only ``Read`` calls below one directory (so a
+    shell read of a file there runs, as one Claude Code's shell path check
+    does not catch would)."""
+
+    name = "deny_reads_under"
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = str(directory)
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        path = str(call.input.get("file_path", ""))
+        if call.name == "Read" and path.startswith(self.directory + "/"):
+            return Deny("no")
+        return None
+
+
 async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
         h: Harness) -> None:
-    # As Claude Code: the file still counts as read, but its directory's
-    # instruction files and ``paths:`` rules are not brought in.
+    # As Claude Code: a shell read that runs of a file ``Read`` is refused
+    # still counts as read, but its directory's instruction files and
+    # ``paths:`` rules are not brought in.
     secrets = h.work / "secrets"
     secrets.mkdir()
     (secrets / "NOETA.md").write_text("secret rules\n")
@@ -321,7 +339,7 @@ async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
         reply("done"),
     )
     guarded = Agent(name="a", model="m", extensions=[
-        Permissions(mode="default", trusted_workspace=True, deny=["Read(./secrets/**)"]),
+        Permissions(mode="default", trusted_workspace=True), DenyReadsUnder(secrets),
         FileTools(), Shell(), Instructions(walk=False)])
     tid = await h.start(guarded)
     reads = [r.data for r in await h.records(tid, "fs", "read")]
@@ -330,6 +348,22 @@ async def test_a_shell_read_of_a_file_a_read_deny_rule_covers_brings_nothing(
     recs = await h.records(tid, "instructions", "nested")
     assert [Path(r.data["files"][0]["path"]).relative_to(h.work).as_posix() for r in recs] == [
         "open/NOETA.md"]
+
+
+async def test_a_shell_read_a_read_deny_rule_covers_is_refused(h: Harness) -> None:
+    # Claude Code's shell path check: the ``cat`` never runs.
+    secrets = h.work / "secrets"
+    secrets.mkdir()
+    (secrets / "NOETA.md").write_text("secret rules\n")
+    (secrets / "x.txt").write_text("token\n")
+    h.provider.add(reply("", ("Bash", {"command": "cat secrets/x.txt"})), reply("done"))
+    guarded = Agent(name="a", model="m", extensions=[
+        Permissions(mode="bypassPermissions", trusted_workspace=True,
+                    deny=["Read(./secrets/**)"]),
+        FileTools(), Shell(), Instructions(walk=False)])
+    tid = await h.start(guarded)
+    assert not await h.records(tid, "fs", "read")
+    assert not await h.records(tid, "instructions", "nested")
 
 
 async def test_instruction_files_a_read_deny_rule_covers_are_not_loaded(h: Harness) -> None:

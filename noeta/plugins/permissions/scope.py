@@ -415,8 +415,9 @@ def _next_cwds(cmd: Command, cwds: list[str] | None, scope: Scope) -> list[str] 
     return list(dict.fromkeys([*cwds, *(scope.at(c).absolute(target) for c in cwds)]))
 
 
-#: Redirection operators that write their target.
-_OUTPUT_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>"})
+#: Redirection operators that write their target (``>&`` when it names a
+#: file, not a descriptor).
+_OUTPUT_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>", ">&"})
 
 
 def parts(command: str, scope: Scope) -> list[Part] | None:

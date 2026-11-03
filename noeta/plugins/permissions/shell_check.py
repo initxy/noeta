@@ -184,6 +184,45 @@ async def expand_glob(view: TaskView, pattern: str) -> list[str] | None:
     return [x for x in out.split("\0") if x]
 
 
+#: Expands each ``g:`` argument (a glob) and lists it with every match,
+#: then every listed path's resolved form: ``paths \0... \1 resolved \0...``.
+_RESOLVE_SCRIPT = (
+    'shopt -s nullglob; IFS=; out=(); '
+    'for a in "$@"; do p=${a:2}; '
+    'if [ "${a:0:1}" = g ]; then for f in $p; do out+=("$f"); done; fi; out+=("$p"); done; '
+    'printf "%s\\0" "${out[@]}"; printf "\\1"; realpath -m -z -- "${out[@]}"')
+
+
+async def resolve_paths(view: TaskView, paths: Sequence[tuple[str, bool]]
+                        ) -> list[tuple[str, str]]:
+    """Each ``(path, glob)`` as ``(path as named, where its links lead)``, a
+    glob's matches added: one call in the task's env for them all. Where
+    that call fails, each path is resolved on its own and globs are not
+    expanded."""
+    if not paths:
+        return []
+    argv = ["bash", "-c", _RESOLVE_SCRIPT, "_", *(("g:" if g else "p:") + x for x, g in paths)]
+    out: str | None = None
+    try:
+        if view.env is not None:
+            result = await view.env.run(argv, timeout=20)
+            if result.exit_code == 0 and not result.timed_out and not result.stdout_truncated:
+                out = result.stdout.decode("utf-8", "surrogateescape")
+        else:
+            done = await asyncio.to_thread(subprocess.run, argv, capture_output=True,
+                                           text=True, timeout=20)
+            out = done.stdout if done.returncode == 0 else None
+    except Exception:  # noqa: BLE001 — fall back to one path at a time
+        out = None
+    if out is not None and "\1" in out:
+        named, _sep, real = out.partition("\1")
+        a, b = named.split("\0")[:-1], real.split("\0")[:-1]
+        if len(a) == len(b):
+            return [(x, posixpath.normpath(y)) for x, y in zip(a, b, strict=True)]
+    reals = await asyncio.gather(*(real_path(view, x) for x, _g in paths))
+    return [(x, y) for (x, _g), y in zip(paths, reals, strict=True)]
+
+
 async def real_scope(view: TaskView, scope: sc.Scope) -> sc.Scope:
     """``scope`` with its directories' links resolved."""
     dirs = [await real_path(view, d) for d in scope.dirs]

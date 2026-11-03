@@ -4,6 +4,7 @@ classifier."""
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import posixpath
 from collections.abc import Mapping, Sequence
@@ -11,12 +12,19 @@ from typing import Any
 
 from noeta.core.extension import TaskView
 from noeta.core.types import ToolUse
+from noeta.plugins.permissions import deny_paths as dp
 from noeta.plugins.permissions import plan as pl
 from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.decision import Decision, in_mode
-from noeta.plugins.permissions.shell_check import real_path, real_scope, shell_decision
+from noeta.plugins.permissions.shell_check import (
+    real_path,
+    real_scope,
+    resolve_paths,
+    shell_decision,
+    shell_scope,
+)
 from noeta.plugins.permissions.state import inherited_rules, state_of
 from noeta.toolkit import permission_rules as r
 
@@ -93,6 +101,10 @@ class RuleCheck:
                        is not None), None)
         if denied is not None:
             return Decision("deny", w.DENIED_BY_RULE.format(name=name, rule=denied.text))
+        if name in r.SHELL_TOOLS:
+            refused = await self._shell_path_denied(view, name, args, scope, ctx)
+            if refused is not None:
+                return refused
         asked = next((m for a in seen if (m := r.first_match(self.ask_rules, name, a, ctx))
                       is not None), None)
         if asked is not None:
@@ -106,6 +118,67 @@ class RuleCheck:
         found = await self._needs(view, call, mode, scope, ctx, allow_rules,
                                   [a for a, allow in aliases if allow])
         return in_mode(mode, found, name, plan_classifier=plan_classifier)
+
+    async def _shell_path_denied(self, view: TaskView, name: str, args: Mapping[str, Any],
+                                 scope: sc.Scope, ctx: r.RuleContext) -> Decision | None:
+        """A refusal when the command writes a path an ``Edit`` deny rule
+        covers, reads one a ``Read`` deny rule covers, or removes or moves
+        a directory holding a path an ``Edit`` deny rule names: Claude
+        Code's shell path check, which no mode gets past (see
+        :mod:`deny_paths`). Each path is judged as named, then (in one call
+        to the task's env) with its globs expanded and its links resolved.
+        A command that cannot be read even leniently is refused when its
+        text names a path a deny rule covers."""
+        command = args.get("command")
+        rules = {kind: [x for x in self.deny_rules if x.tool == kind] for kind in ("Edit", "Read")}
+        if not isinstance(command, str) or not (rules["Edit"] or rules["Read"]):
+            return None
+        here = shell_scope(view, scope)
+        found = dp.deny_paths(command, here)
+        if found is None:
+            return _opaque_refusal(name, command, [*rules["Edit"], *rules["Read"]], here, ctx)
+        checks: list[tuple[str, dp.Target, bool]] = []
+        if rules["Edit"]:
+            checks += [("Edit", t, False) for t in found.writes]
+            checks += [("Edit", t, True) for t in found.trees]
+        if rules["Read"]:
+            checks += [("Read", t, False) for t in found.reads]
+        if not checks:
+            return None
+
+        def judge(kind: str, path: str, tree: bool) -> Decision | None:
+            if tree:
+                for each in rules["Edit"]:
+                    lit = r.pattern_literal(each.content, ctx) if each.content else None
+                    if lit is not None and lit[1] and (
+                            lit[0] == path or lit[0].startswith(path.rstrip("/") + "/")):
+                        return Decision("deny", w.SHELL_TREE_DENIED.format(
+                            name=name, path=path, inner=lit[0], rule=each.text))
+                return None
+            rule = r.first_match(rules[kind], kind, {"file_path": path}, ctx)
+            if rule is None:
+                return None
+            text = w.SHELL_WRITE_DENIED if kind == "Edit" else w.SHELL_READ_DENIED
+            return Decision("deny", text.format(name=name, path=path, rule=rule.text))
+
+        # As named first: most refusals need no call to the env.
+        for kind, t, tree in checks:
+            if (hit := judge(kind, t.path, tree)) is not None:
+                return hit
+        resolved = await resolve_paths(view, list(dict.fromkeys((t.path, t.glob)
+                                                                for _k, t, _tr in checks)))
+        by_path: dict[str, list[tuple[str, str]]] = {}
+        for named, real in resolved:
+            by_path.setdefault(named, []).append((named, real))
+        for kind, t, tree in checks:
+            pairs = by_path.get(t.path, [])
+            if t.glob:
+                pairs = [x for x in resolved if _fnmatch_path(x[0], t.path)]
+            for named, real in pairs:
+                for each in dict.fromkeys((named, real)):
+                    if (hit := judge(kind, each, tree)) is not None:
+                        return hit
+        return None
 
     async def _needs(self, view: TaskView, call: ToolUse, mode: str, scope: sc.Scope,
                      ctx: r.RuleContext, allow_rules: Sequence[r.Rule],
@@ -270,3 +343,29 @@ async def spilled_file(view: TaskView, path: str, real: str) -> bool:
     root = posixpath.normpath(root)
     return _under(path, root) and _under(real, await real_path(view, root))
 
+
+def _fnmatch_path(path: str, pattern: str) -> bool:
+    """``path`` is one of the names bash expands ``pattern`` to."""
+    return path == pattern or (path.count("/") == pattern.count("/")
+                               and fnmatch.fnmatchcase(path, pattern))
+
+
+def _opaque_refusal(name: str, command: str, rules: Sequence[r.Rule], scope: sc.Scope,
+                    ctx: r.RuleContext) -> Decision | None:
+    """A command whose parts cannot be told apart: refused when its text
+    names what a deny rule covers (the path absolute, or relative to the
+    working directory or the project root)."""
+    for rule in rules:
+        lit = r.pattern_literal(rule.content, ctx) if rule.content else None
+        if lit is None:
+            continue
+        text, anchored = lit
+        forms = {text}
+        if anchored:
+            for base in (scope.cwd, ctx.root):
+                if text.startswith(base.rstrip("/") + "/"):
+                    forms.add(posixpath.relpath(text, base))
+        if any(f and f not in (".", "/") and f in command for f in forms):
+            return Decision("deny", w.SHELL_OPAQUE_DENIED.format(
+                name=name, path=text, rule=rule.text))
+    return None

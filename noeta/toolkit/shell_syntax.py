@@ -8,6 +8,13 @@ heredocs, subshells, brace groups, comments, named file descriptors and
 unbalanced quotes make the whole command *opaque*; a word that expands
 (a ``$`` outside single quotes, an unquoted glob, brace or tilde) is marked
 so a caller can refuse it. Nothing here runs anything.
+
+``parse(command, lenient=True)`` reads past most of that for a caller that
+only looks for what a command may touch (the deny rules): a comment is
+skipped, a heredoc body is data, a subshell's and a brace group's commands
+and those inside a command or process substitution are listed with the
+rest (a substitution's word is marked as expanding), and a named descriptor
+counts as one. Only unbalanced quotes or parentheses leave it opaque.
 """
 
 from __future__ import annotations
@@ -108,8 +115,14 @@ def hides_effects(command: str) -> bool:
 
 
 class _Lexer:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, *, lenient: bool = False) -> None:
         self.s = text
+        self.lenient = lenient
+        #: Heredoc delimiters whose bodies start after the next newline:
+        #: ``(word, strip leading tabs, body expands)``.
+        self.heredocs: list[tuple[str, bool, bool]] = []
+        #: Commands found inside substitutions (lenient).
+        self.inner: list[Command] = []
         self.i = 0
         self.commands: list[Command] = []
         self.cur = Command()
@@ -184,11 +197,17 @@ class _Lexer:
                 self._double()
                 continue
             if ch == "`":
-                raise _Opaque
+                if not self.lenient:
+                    raise _Opaque
+                self._backticks()
+                continue
             if ch == "$":
                 nxt = s[self.i + 1] if self.i + 1 < n else ""
                 if nxt == "(":
-                    raise _Opaque  # command substitution or arithmetic
+                    if not self.lenient:
+                        raise _Opaque  # command substitution or arithmetic
+                    self._substitution()
+                    continue
                 self.expands = True
                 self._char(ch, quoted=False)
                 self.i += 1
@@ -202,17 +221,34 @@ class _Lexer:
                 self._end_command(op, self.i)
                 self.i += len(op)
                 self.start = self.i
+                if op == "\n" and self.heredocs:
+                    self._heredoc_bodies()
                 continue
             if ch in "<>" or s.startswith("&>", self.i):
                 self._redirect()
                 continue
             if ch in "()":
-                raise _Opaque  # a subshell, a function or process substitution
+                if not self.lenient:
+                    raise _Opaque  # a subshell, a function or process substitution
+                # A subshell's commands are listed with the rest.
+                self._end_command(ch, self.i)
+                self.i += 1
+                self.start = self.i
+                continue
             if ch == "#" and not self.in_word:
-                raise _Opaque  # a comment
+                if not self.lenient:
+                    raise _Opaque  # a comment
+                end = s.find("\n", self.i)
+                self.i = n if end < 0 else end
+                continue
             if ch in "{}":
                 if not self.in_word and (self.i + 1 >= n or s[self.i + 1] in " \t\n;&|"):
-                    raise _Opaque  # a brace group
+                    if not self.lenient:
+                        raise _Opaque  # a brace group
+                    self._end_command(ch, self.i)
+                    self.i += 1
+                    self.start = self.i
+                    continue
                 self.brace = True
             elif ch in _GLOB:
                 self.glob = True
@@ -224,6 +260,102 @@ class _Lexer:
             self.i += 1
         self._end_command("", n)
         return self.commands
+
+    def _inner(self, text: str) -> None:
+        lexer = _Lexer(text, lenient=True)
+        self.inner += [*lexer.run(), *lexer.inner]
+
+    def _substitution(self, at: int | None = None) -> None:
+        """``$(...)`` / ``$((...))`` (``at``: the ``(`` of a process
+        substitution): its commands are listed, its word expands."""
+        s = self.s
+        start = self.i + 1 if at is None else at
+        end = _closing(s, start)
+        body = s[start + 1:end]
+        if not (body.startswith("(") and body.endswith(")")):
+            self._inner(body)  # not arithmetic
+        self.in_word = True
+        self.expands = True
+        self.buf.append(s[self.i:end + 1])
+        self.i = end + 1
+
+    def _backticks(self) -> None:
+        s = self.s
+        j = self.i + 1
+        while j < len(s) and s[j] != "`":
+            j += 2 if s[j] == "\\" else 1
+        if j >= len(s):
+            raise _Opaque
+        self._inner(s[self.i + 1:j].replace("\\`", "`"))
+        self.in_word = True
+        self.expands = True
+        self.buf.append(s[self.i:j + 1])
+        self.i = j + 1
+
+    def _here_word(self, strip: bool) -> None:
+        """A heredoc's delimiter: noted, its body skipped at the next newline."""
+        s, n = self.s, len(self.s)
+        while self.i < n and s[self.i] in _BLANK:
+            self.i += 1
+        word: list[str] = []
+        quoted = False
+        while self.i < n and s[self.i] not in " \t\n;&|<>()":
+            ch = s[self.i]
+            if ch in "'\"\\":
+                quoted = True
+            if ch in "'\"":
+                end = s.find(ch, self.i + 1)
+                if end < 0:
+                    raise _Opaque
+                word.append(s[self.i + 1:end])
+                self.i = end + 1
+            elif ch == "\\" and self.i + 1 < n:
+                word.append(s[self.i + 1])
+                self.i += 2
+            else:
+                word.append(ch)
+                self.i += 1
+        if not word:
+            raise _Opaque
+        self.cur.redirects.append(Redirect("", "<<", Word("".join(word))))
+        self.heredocs.append(("".join(word), strip, not quoted))
+
+    def _substitutions_in(self, text: str) -> None:
+        """The commands of the substitutions in an unquoted heredoc's body."""
+        i = 0
+        while i < len(text):
+            if text.startswith("\\", i):
+                i += 2
+            elif text.startswith("$(", i):
+                end = _closing(text, i + 1)
+                body = text[i + 2:end]
+                if not (body.startswith("(") and body.endswith(")")):
+                    self._inner(body)
+                i = end + 1
+            elif text[i] == "`":
+                end = text.find("`", i + 1)
+                if end < 0:
+                    raise _Opaque
+                self._inner(text[i + 1:end])
+                i = end + 1
+            else:
+                i += 1
+
+    def _heredoc_bodies(self) -> None:
+        s = self.s
+        for word, strip, expands in self.heredocs:
+            body: list[str] = []
+            while self.i < len(s):
+                end = s.find("\n", self.i)
+                line = s[self.i:] if end < 0 else s[self.i:end]
+                self.i = len(s) if end < 0 else end + 1
+                if (line.lstrip("\t") if strip else line) == word:
+                    break
+                body.append(line)
+            if expands:
+                self._substitutions_in("\n".join(body))
+        self.heredocs = []
+        self.start = self.i
 
     def _double(self) -> None:
         s, n = self.s, len(self.s)
@@ -241,7 +373,13 @@ class _Lexer:
                 self.i += 2
                 continue
             if ch == "`" or s.startswith("$(", self.i):
-                raise _Opaque
+                if not self.lenient:
+                    raise _Opaque
+                if ch == "`":
+                    self._backticks()
+                else:
+                    self._substitution()
+                continue
             if ch == "$":
                 self.expands = True
             self.buf.append(ch)
@@ -255,8 +393,12 @@ class _Lexer:
             text = "".join(self.buf)
             if not text.isdigit() or self.quoted or self.expands:
                 if text.startswith("{") and text.endswith("}"):
-                    raise _Opaque  # a named descriptor
-                self._end_word()
+                    if not self.lenient:
+                        raise _Opaque  # a named descriptor
+                    fd = text
+                    self._reset_word()
+                else:
+                    self._end_word()
             else:
                 fd = text
                 self._reset_word()
@@ -267,7 +409,20 @@ class _Lexer:
             if s.startswith(op, self.i):
                 break
         if op in ("<<<", "<<", "<(", ">("):
-            raise _Opaque  # a heredoc, a here-string or process substitution
+            if not self.lenient:
+                raise _Opaque  # a heredoc, a here-string or process substitution
+            if op in ("<(", ">("):
+                # A word naming a pipe; its commands are listed.
+                self._substitution(at=self.i + 1)
+                return
+            self.i += len(op)
+            if op == "<<":
+                strip = s.startswith("-", self.i)
+                self.i += strip
+                self._here_word(strip)
+                return
+            self.redirect = (fd, op)  # a here-string's word is data
+            return
         if op.startswith("&"):
             if fd:
                 raise _Opaque
@@ -276,10 +431,45 @@ class _Lexer:
         self.redirect = (fd, op)
 
 
-def parse(command: str) -> Parsed:
+def _closing(s: str, i: int) -> int:
+    """The index of the ``)`` that closes the ``(`` at ``i`` (quotes and
+    nesting respected); raises when there is none."""
+    depth, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "'":
+            end = s.find("'", i + 1)
+            if end < 0:
+                raise _Opaque
+            i = end + 1
+            continue
+        if ch == '"':
+            i += 1
+            while i < n and s[i] != '"':
+                i += 2 if s[i] == "\\" else 1
+            if i >= n:
+                raise _Opaque
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise _Opaque
+
+
+def parse(command: str, *, lenient: bool = False) -> Parsed:
     """``command``'s simple commands, in order; ``opaque`` (with no
-    commands) when what runs cannot be read off the text."""
+    commands) when what runs cannot be read off the text. ``lenient``: see
+    the module docstring (the commands of substitutions follow the rest)."""
     try:
-        return Parsed(_Lexer(command).run())
+        lexer = _Lexer(command, lenient=lenient)
+        return Parsed([*lexer.run(), *lexer.inner])
     except _Opaque:
         return Parsed([], opaque=True)
