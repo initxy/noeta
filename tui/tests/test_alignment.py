@@ -133,6 +133,26 @@ async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
     assert "then stop" in after  # the yes's words come after the call's result
 
 
+async def test_esc_in_the_amend_line_closes_it_and_keeps_the_turn(tmp_path: Path) -> None:
+    from noeta_tui.widgets import ApprovalCard, Choices
+
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build", "n": 1})),
+                                 reply("ok")])
+    app = make_app(tmp_path, provider, AskBash(), tools=[Lines()])
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(pilot, lambda: ready(app))
+        await type_line(pilot, "clean")
+        await settle(pilot, lambda: len(app.query(ApprovalCard)) == 1)
+        card = app.query_one(ApprovalCard)
+        await pilot.press("tab", *"half a thought", "escape")
+        await pilot.pause()
+        assert not card.query("Input") and not card.amending and not card.done
+        assert app.busy and isinstance(app.focused, Choices)
+        await pilot.press("escape")  # Esc on the choices still says no
+        await settle(pilot, lambda: card.done and not app.busy)
+        assert "No" in plain(card.query_one(".approval-result"))
+
+
 async def test_tab_completes_the_command_word_with_the_cursor_anywhere_in_it(
         tmp_path: Path) -> None:
     from noeta_tui.widgets import Completions, PromptInput

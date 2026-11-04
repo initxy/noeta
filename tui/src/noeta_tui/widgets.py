@@ -247,12 +247,25 @@ AMEND_PLACEHOLDERS = {"allow": "and tell noeta what to do next",
                       "deny": "and tell noeta what to do differently"}
 
 
+class AmendLine(Input):
+    """The approval card's amend line: Esc closes it (the choices take the
+    keys again) instead of reaching the app's stop."""
+
+    BINDINGS = [Binding("escape", "close", show=False)]
+
+    async def action_close(self) -> None:
+        card = next((a for a in self.ancestors if isinstance(a, ApprovalCard)), None)
+        if card is not None:
+            await card.close_amend()
+
+
 class ApprovalCard(Vertical):
     """Asks before a tool runs, as Claude Code's dialog: what would run,
     ``Do you want to proceed?`` and its numbered choices
     (:func:`noeta.host.pending.choices`), also y / a / n; Esc says no. Tab
     on Yes or No opens a line to add what noeta should do next (or
-    differently) to the answer; Enter sends both, an empty line closes it."""
+    differently) to the answer; Enter sends both, an empty line or Esc
+    closes it."""
 
     DEFAULT_CLASSES = "approval"
     BINDINGS = [Binding("y", "choose('allow')", show=False),
@@ -307,18 +320,21 @@ class ApprovalCard(Vertical):
         if picked not in AMEND_PLACEHOLDERS:
             return
         self.amending = picked
-        line = Input(placeholder=AMEND_PLACEHOLDERS[picked], classes="amend")
+        line = AmendLine(placeholder=AMEND_PLACEHOLDERS[picked], classes="amend")
         await self.mount(line, after=choices)
         line.focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
         picked, message = self.amending, event.value.strip()
-        self.amending = ""
-        await event.input.remove()
+        await self.close_amend()
         if message:
             await self.choose(picked, message)
-        elif self.query(Choices):
+
+    async def close_amend(self) -> None:
+        self.amending = ""
+        await self.query(AmendLine).remove()
+        if not self.done and self.query(Choices):
             self.query_one(Choices).focus()
 
     async def action_pick(self, n: int) -> None:
