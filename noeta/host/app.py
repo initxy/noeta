@@ -117,8 +117,8 @@ async def change_config(client: ClientAPI, task_id: str, changes: Mapping[str, A
 
 async def archive_task(client: ClientAPI, task_id: str, archived: bool = True) -> None:
     """Post the ``archive`` signal: an ended task takes it too, since the
-    session list reads it from the inbox."""
-    await client.signal(task_id, ARCHIVE_SIGNAL, {"archived": archived})
+    session list reads it from the inbox (so it wakes no idle task)."""
+    await client.signal(task_id, ARCHIVE_SIGNAL, {"archived": archived}, wake=False)
 
 
 async def agent_commands(agents: Mapping[str, Agent], agent: str,

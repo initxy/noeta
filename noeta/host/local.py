@@ -80,14 +80,14 @@ class LocalClient(Client):
         return await asyncio.to_thread(self.route_model, model)
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
-                     dedupe_key: str | None = None) -> int:
+                     dedupe_key: str | None = None, wake: bool = True) -> int:
         """A model switch records where the model goes with it."""
         if name == CONFIG_SIGNAL and isinstance(data, dict) and "model" in data \
                 and MODEL_ROUTE not in data and self.route_model is not None:
             route = await self._route(data["model"])
             if route is not None:
                 data = {**data, MODEL_ROUTE: route}
-        return await super().signal(task_id, name, data, dedupe_key=dedupe_key)
+        return await super().signal(task_id, name, data, dedupe_key=dedupe_key, wake=wake)
 
     async def create(self, agent: str, input: Input | None = None, *,
                      task_id: str | None = None, config: dict[str, Any] | None = None,

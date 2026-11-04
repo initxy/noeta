@@ -145,7 +145,7 @@ class GuardedClient:
                                          data=data)
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
-                     dedupe_key: str | None = None) -> int:
+                     dedupe_key: str | None = None, wake: bool = True) -> int:
         if name not in REQUEST_SIGNALS:
             raise Refused(f"a request may not post the signal {name!r} "
                           f"(only {', '.join(REQUEST_SIGNALS)})")
@@ -158,7 +158,7 @@ class GuardedClient:
                 # the task): the record keeps other workers from running
                 # what a headless client's hook callbacks would judge.
                 raise Refused(f"a request may only remove {CLIENT_HOOKS_KEY!r}")
-        return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key)
+        return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key, wake=wake)
 
     async def cancel(self, task_id: str, reason: str = "", *,
                      turn_only: bool = False) -> None:

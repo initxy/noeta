@@ -94,7 +94,8 @@ export class Api {
 
   /** Archive a session (lists leave it out), or bring it back. */
   archive(taskId: string, archived = true): Promise<unknown> {
-    return this.signal(taskId, "archive", { archived });
+    // The list reads it from the inbox: an idle session is not woken.
+    return this.signal(taskId, "archive", { archived }, false);
   }
 
   /** A new task; `historyFrom` continues that task's conversation. */
@@ -119,8 +120,8 @@ export class Api {
     });
   }
 
-  signal(taskId: string, name: string, data?: unknown): Promise<unknown> {
-    return this.call("POST", `/tasks/${enc(taskId)}/signals`, { name, data: data ?? null });
+  signal(taskId: string, name: string, data?: unknown, wake = true): Promise<unknown> {
+    return this.call("POST", `/tasks/${enc(taskId)}/signals`, { name, data: data ?? null, ...(wake ? {} : { wake }) });
   }
 
   cancel(taskId: string, turnOnly: boolean): Promise<unknown> {
