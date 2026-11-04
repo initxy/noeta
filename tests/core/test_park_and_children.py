@@ -132,7 +132,7 @@ async def test_delegation_parks_until_the_child_ends(store: SqliteStore) -> None
 async def test_a_child_is_created_on_its_parents_queue_unless_one_is_named(
         store: SqliteStore, asked: dict[str, str], lands: str) -> None:
     """A child the worker serving its parent's queue can run: on another
-    queue, a held tree would wait for a worker that may never come."""
+    queue, it would wait for a worker that may never come."""
     provider = ScriptedProvider([reply("", ("Delegate", {"prompt": "go", **asked}))])
     rt = runtime(store, provider, Agent(name="a", model="m", tools=[Delegate()]))
     rt.queues = ("gpu",)

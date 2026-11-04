@@ -22,9 +22,9 @@ WORKTREES = ".noeta/worktrees"
 GIT_NO_HOOKS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=")
 
 #: The working directories of this process's running shell jobs, counted by
-#: (filesystem, path) (the shell plugin keeps it). A job holds its task tree
-#: with this worker, so the task that would remove a worktree one runs in
-#: runs here and sees it.
+#: (filesystem, path) (the shell plugin keeps it). A job keeps its task's
+#: claim on this worker (a sub-agent's jobs end when it hands back), so the
+#: task that would remove a worktree one runs in runs here and sees it.
 _JOB_DIRS: Counter[tuple[object, str]] = Counter()
 #: (filesystem, worktree path) -> what runs once no job works under it
 #: (:func:`after_jobs`).
