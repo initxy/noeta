@@ -1,6 +1,6 @@
 # ADR-011: A task tree has at most one holding worker
 
-- Status: accepted
+- Status: superseded by ADR-029
 - Refined by: ADR-015
 - Date: 2026-10-28
 - Refines: ADR-005

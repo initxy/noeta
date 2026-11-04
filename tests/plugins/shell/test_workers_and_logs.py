@@ -1,6 +1,6 @@
 """A job is settled once, from the inbox in order: its end makes it ended,
-the loss of the hold it ran under makes it lost, and whatever comes after
-is dropped. Job logs live in a private per-user directory."""
+a pickup's ``JOBS_LOST`` makes it lost, and whatever comes after is
+dropped. Job logs live in a private per-user directory."""
 
 from __future__ import annotations
 
@@ -23,18 +23,16 @@ from noeta.core.events import (
     InputTaken,
     Recorded,
     Say,
-    TaskEnded,
 )
 from noeta.core.extension import TaskView
-from noeta.core.holds import TreeHold
 from noeta.core.loop.state import TaskState
-from noeta.core.store import HOLD_LOST
-from noeta.core.tool import ToolContext
+from noeta.core.tool import KeptClaim, ToolContext
 from noeta.core.types import Text, user
-from noeta.plugins.shell import Registry, Shell
+from noeta.plugins.shell import JOBS_LOST, Registry, Shell
 from noeta.plugins.shell.job_logs import DEAD_WORKER_LOGS_KEEP_S
 from noeta.plugins.shell.jobs import _KEEP_HEAD, _KEEP_TAIL, JOB_ENDED, Job
 from noeta.plugins.shell.state import ShellState
+from noeta.plugins.shell.tools import STOP_JOB
 from noeta.toolkit.notices import NOTICE_GUARD
 
 OTHER = "some-other-host:4242"
@@ -44,8 +42,8 @@ def _view(jobs: dict[str, Any]) -> TaskView:
     return TaskView(state=TaskState(task_id="t", ext={"shell": ShellState(jobs=jobs)}))
 
 
-def _job(worker: str, **kw: Any) -> dict[str, Any]:
-    return {"job_id": "bg-1", "status": "running", "worker": worker, **kw}
+def _job(**kw: Any) -> dict[str, Any]:
+    return {"job_id": "bg-1", "status": "running", **kw}
 
 
 def _taken(*bodies: Any) -> Recorded:
@@ -54,8 +52,8 @@ def _taken(*bodies: Any) -> Recorded:
         through=len(bodies)))
 
 
-def _lost(epoch: int = 7, worker: str = OTHER) -> External:
-    return External(name=HOLD_LOST, data={"worker": worker, "epoch": epoch})
+def _lost(*jobs: str) -> External:
+    return External(name=JOBS_LOST, data={"jobs": list(jobs or ["bg-1"])})
 
 
 def _ended(notice: str | None = "<task-notification>done</task-notification>") -> External:
@@ -73,12 +71,11 @@ def _told(view: TaskView) -> list[str]:
     return out
 
 
-async def test_a_job_whose_hold_is_lost_is_lost_once_and_its_end_is_dropped() -> None:
+async def test_a_lost_job_is_lost_once_and_its_end_is_dropped() -> None:
     ext = Shell(registry=Registry())
-    job = _job(OTHER, hold=7, tool_use_id="toolu_1", description="make it",
-               output_file="/logs/bg-1.output")
+    job = _job(tool_use_id="toolu_1", description="make it", output_file="/logs/bg-1.output")
     view = _view({"bg-1": job})
-    await ext.on_event(view, _taken(_lost(epoch=6), _lost(), _ended(), _lost()))
+    await ext.on_event(view, _taken(_lost("other"), _lost(), _ended(), _lost()))
     [rec] = view.pending
     assert isinstance(rec, ExtensionRecorded) and (rec.kind, rec.data) == ("lost",
                                                                           {"job_id": "bg-1"})
@@ -97,7 +94,7 @@ async def test_a_job_whose_hold_is_lost_is_lost_once_and_its_end_is_dropped() ->
 
 async def test_a_job_that_ended_is_not_lost_after() -> None:
     ext = Shell(registry=Registry())
-    view = _view({"bg-1": _job(OTHER, hold=7)})
+    view = _view({"bg-1": _job()})
     await ext.on_event(view, _taken(_ended(), _lost()))
     [rec] = view.pending
     assert isinstance(rec, ExtensionRecorded) and rec.kind == "ended"
@@ -107,54 +104,27 @@ async def test_a_job_that_ended_is_not_lost_after() -> None:
 
 async def test_a_quiet_end_is_recorded_without_a_notice() -> None:
     ext = Shell(registry=Registry())
-    view = _view({"bg-1": _job(OTHER, hold=7)})
+    view = _view({"bg-1": _job()})
     await ext.on_event(view, _taken(_ended(notice=None)))
     [rec] = view.pending
     assert isinstance(rec, ExtensionRecorded) and rec.kind == "ended"
     assert view.enqueued == []
 
 
-def _sub_agent_log(*, ended: bool, epoch: int = 7) -> list[Recorded]:
-    started = ExtensionRecorded(extension="shell", kind="started", data=_job(
-        OTHER, hold=epoch, tool_use_id="toolu_9", description="crunch"))
-    out = [Recorded(seq=2, at=0.0, event=started)]
-    if ended:
-        out.append(Recorded(seq=3, at=0.0, event=TaskEnded(status="done")))
-    return out
-
-
-def _root_of(children: dict[str, list[Recorded]]) -> TaskView:
-    view = _view({})
-
-    async def child_tasks(task_id: str) -> list[str]:
-        return [c for c in children if c.rsplit(".", 1)[0] == task_id]
-
-    async def read_log(task_id: str, after: int = 0) -> list[Recorded]:
-        return children[task_id]
-
-    view.child_tasks, view.read_log = child_tasks, read_log
-    return view
-
-
-async def test_the_root_tells_the_loss_of_a_job_whose_sub_agent_ended() -> None:
-    ext = Shell(registry=Registry())
-    view = _root_of({"t.a": _sub_agent_log(ended=True), "t.a.b": [],
-                     "t.c": _sub_agent_log(ended=False)})
-    await ext.on_event(view, _taken(_lost()))
-    [text] = _told(view)
-    assert "<tool-use-id>toolu_9</tool-use-id>" in text and "<status>failed</status>" in text
-    assert view.pending == []  # nothing of the root's own changes
-
-
-async def test_only_the_lost_hold_and_only_the_root() -> None:
-    ext = Shell(registry=Registry())
-    other_hold = _root_of({"t.a": _sub_agent_log(ended=True, epoch=8)})
-    await ext.on_event(other_hold, _taken(_lost()))
-    assert other_hold.enqueued == []
-    child = _root_of({"t.a": _sub_agent_log(ended=True)})
-    child.state.parent_id = "p"
-    await ext.on_event(child, _taken(_lost()))
-    assert child.enqueued == []
+async def test_a_pickup_posts_the_loss_of_jobs_this_worker_does_not_have(
+        tmp_path: Path) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    here = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command="sleep 30",
+                                cwd=str(tmp_path), env_vars={}, task_id="t",
+                                tool_use_id="c", description="", post=_posted)
+    assert isinstance(here, Job)
+    ext = Shell(registry=registry)
+    view = _view({"bg-1": _job(), here.job_id: _job(job_id=here.job_id),
+                  "done": _job(job_id="done", status="ended")})
+    await ext.on_start(view)
+    assert view.enqueued == [(_lost("bg-1"), None, None)]
+    registry.kill_all("t")
+    await asyncio.wait_for(here.done.wait(), 10)
 
 
 async def test_a_pickup_decides_what_a_crash_left_undecided() -> None:
@@ -164,7 +134,7 @@ async def test_a_pickup_decides_what_a_crash_left_undecided() -> None:
     async def read_log(_task_id: str, after: int = 0) -> list[Recorded]:
         return [taken]
 
-    view = _view({"bg-1": _job(OTHER, hold=7)})
+    view = _view({"bg-1": _job()})
     view.read_log = read_log
     await ext.on_start(view)
     [rec] = view.pending
@@ -172,11 +142,47 @@ async def test_a_pickup_decides_what_a_crash_left_undecided() -> None:
     assert len(_told(view)) == 1
 
 
+async def test_a_wake_with_every_running_job_here_reads_no_log(tmp_path: Path) -> None:
+    """A kept claim's wake (a Monitor event a second) re-runs the pickup's
+    start: with every running job live in this worker nothing crashed, so
+    the log is not read."""
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    here = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command="sleep 30",
+                                cwd=str(tmp_path), env_vars={}, task_id="t",
+                                tool_use_id="c", description="", post=_posted)
+    assert isinstance(here, Job)
+    reads: list[str] = []
+
+    async def read_log(task_id: str, after: int = 0) -> list[Recorded]:
+        reads.append(task_id)
+        return []
+
+    view = _view({here.job_id: _job(job_id=here.job_id)})
+    view.read_log = read_log
+    await Shell(registry=registry).on_start(view)
+    assert reads == [] and view.enqueued == [] and view.pending == []
+    registry.kill_all("t")
+    await asyncio.wait_for(here.done.wait(), 10)
+
+
+async def test_a_parents_stop_kills_the_job_here(tmp_path: Path) -> None:
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command="sleep 30",
+                               cwd=str(tmp_path), env_vars={}, task_id="t",
+                               tool_use_id="c", description="", post=_posted)
+    assert isinstance(job, Job)
+    view = _view({job.job_id: _job(job_id=job.job_id)})
+    await Shell(registry=registry).on_event(
+        view, _taken(External(name=STOP_JOB, data={"job_id": job.job_id})))
+    await asyncio.wait_for(job.done.wait(), 10)
+    assert job.status == "killed" and job.quiet
+
+
 async def test_the_tools_say_a_job_was_lost(tmp_path: Path) -> None:
     ext = Shell(registry=Registry())
     for status in ("running", "lost"):
         ctx = ToolContext(task_id="t", call_id="c", env=LocalExecEnv(str(tmp_path)),
-                          state={"shell": ShellState(jobs={"bg-1": _job(OTHER, status=status)})},
+                          state={"shell": ShellState(jobs={"bg-1": _job(status=status)})},
                           record=lambda *_: None, root_id="t")
         for tool in ext.tools(_view({})):
             if tool.name == "TaskStop":
@@ -192,7 +198,7 @@ async def _posted(_body: Any, task_id: str | None = None, **_kw: Any) -> None:
 async def _spawn(registry: Registry, tmp_path: Path) -> Job | str:
     env = LocalExecEnv(str(tmp_path))
     return await registry.spawn(env=env, command="echo secret", cwd=str(tmp_path), env_vars={},
-                                root_id="r", spawner_id="r", tool_use_id="c",
+                                task_id="r", tool_use_id="c",
                                 description="", post=_posted)
 
 
@@ -256,7 +262,7 @@ async def test_a_log_stops_growing_at_its_cap_and_says_so(tmp_path: Path, monito
     registry = Registry(log_dir=str(tmp_path / "logs"), log_max_bytes=1000)
     command = "head -c 300000 /dev/zero | tr '\\0' x; echo; echo late >&2; echo end"
     job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command=command,
-                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               cwd=str(tmp_path), env_vars={}, task_id="r",
                                tool_use_id="c", description="", post=_posted,
                                monitor_timeout_ms=60_000 if monitor else None)
     assert isinstance(job, Job)
@@ -285,7 +291,7 @@ async def test_a_monitors_output_file_stays_within_the_cap(tmp_path: Path) -> No
     command = ("head -c 300000 /dev/zero | tr '\\0' e >&2; "
                "head -c 300000 /dev/zero | tr '\\0' o; echo end")
     job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command=command,
-                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               cwd=str(tmp_path), env_vars={}, task_id="r",
                                tool_use_id="c", description="", post=_posted,
                                monitor_timeout_ms=60_000)
     assert isinstance(job, Job)
@@ -317,7 +323,7 @@ async def test_a_foreground_log_keeps_its_start_and_its_true_end(tmp_path: Path)
     registry = Registry(log_dir=str(tmp_path / "logs"), log_max_bytes=1000)
     command = "head -c 300000 /dev/zero | tr '\\0' x; echo; echo end"
     job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command=command,
-                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               cwd=str(tmp_path), env_vars={}, task_id="r",
                                tool_use_id="c", description="", post=_posted,
                                foreground=True)
     assert isinstance(job, Job)
@@ -362,7 +368,7 @@ async def test_a_job_counts_as_running_until_its_end_is_posted(tmp_path: Path) -
 
     registry = Registry(log_dir=str(tmp_path / "logs"))
     job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command="true",
-                               cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r",
+                               cwd=str(tmp_path), env_vars={}, task_id="r",
                                tool_use_id="c", description="", post=slow_post)
     assert isinstance(job, Job)
     await asyncio.wait_for(entered.wait(), 10)
@@ -393,7 +399,7 @@ async def main(work, marker):
         return None
     job = await Registry(log_dir=work + "/logs").spawn(
         env=LocalExecEnv(work), command=f"sleep 1.5; touch {marker}", cwd=work, env_vars={},
-        root_id="r", spawner_id="r", tool_use_id="c", description="", post=post)
+        task_id="r", tool_use_id="c", description="", post=post)
     print("started", flush=True)
     await asyncio.sleep(60)
 
@@ -414,31 +420,34 @@ async def test_a_job_dies_with_its_worker_process(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
-async def test_a_job_dies_once_its_hold_goes_stale(tmp_path: Path) -> None:
+async def test_a_job_dies_before_its_lease_runs_out_after_its_worker_froze(tmp_path: Path) -> None:
     marker = tmp_path / "late"
-    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=1.0)
-    job = await Registry(log_dir=str(tmp_path / "logs")).spawn(
-        env=LocalExecEnv(str(tmp_path)), command=f"sleep 4; touch {marker}",
-        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
-        description="", post=_posted, tree=tree)
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    job = await registry.spawn(
+        env=_ContainerEnv(str(tmp_path)), command=f"sleep 4; touch {marker}",
+        cwd=str(tmp_path), env_vars={}, task_id="r", tool_use_id="c",
+        description="", post=_posted, kept=KeptClaim(lease_seconds=1.0))
     assert isinstance(job, Job)
-    tree.renewed -= 60  # the worker froze: nothing renewed its hold
+    assert registry._keeper is not None
+    # Dead before the lease (renewed every third of it) can run out: two
+    # guard periods after the file was last re-created; no sooner than it
+    # must (a third of the lease), so a stalled worker keeps its job longest.
+    assert job.guard_period == pytest.approx(1.0 / 3)
+    assert 2 * job.guard_period <= 2 / 3 * 1.0 + 1e-9
+    registry._keeper.cancel()  # the worker froze: nothing re-creates its file
     await asyncio.wait_for(job.done.wait(), 3.5)
     assert job.exit_code != 0
     await asyncio.sleep(1.0)
     assert not marker.exists()
 
 
-async def test_a_job_lives_while_its_hold_is_fresh(tmp_path: Path) -> None:
-    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=1.0)
+async def test_a_job_lives_while_its_claim_is_kept(tmp_path: Path) -> None:
     job = await Registry(log_dir=str(tmp_path / "logs")).spawn(
-        env=LocalExecEnv(str(tmp_path)), command="sleep 2; wait; echo done",
-        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
-        description="", post=_posted, tree=tree)
-    assert isinstance(job, Job)
-    while not job.done.is_set():
-        tree.renewed = time.monotonic()
-        await asyncio.sleep(0.1)
+        env=_ContainerEnv(str(tmp_path)), command="sleep 2; wait; echo done",
+        cwd=str(tmp_path), env_vars={}, task_id="r", tool_use_id="c",
+        description="", post=_posted, kept=KeptClaim(lease_seconds=1.0))
+    assert isinstance(job, Job) and job.alive_path
+    await asyncio.wait_for(job.done.wait(), 10)
     assert job.exit_code == 0
     assert Path(job.out_path).read_text() == "done\n\n[exited with code 0]\n"
 
@@ -453,10 +462,10 @@ class _ContainerEnv(LocalExecEnv):
 async def test_a_foreground_job_in_a_container_dies_once_its_worker_stops(
         tmp_path: Path) -> None:
     marker = tmp_path / "late"
-    registry = Registry(log_dir=str(tmp_path / "logs"), foreground_alive_s=1.0)
+    registry = Registry(log_dir=str(tmp_path / "logs"), alive_s=1.0)
     job = await registry.spawn(
         env=_ContainerEnv(str(tmp_path)), command=f"sleep 4; touch {marker}",
-        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
+        cwd=str(tmp_path), env_vars={}, task_id="r", tool_use_id="c",
         description="", post=_posted, foreground=True)
     assert isinstance(job, Job) and job.alive_path
     await asyncio.sleep(0.6)
@@ -471,36 +480,32 @@ async def test_a_foreground_job_in_a_container_dies_once_its_worker_stops(
 
 async def test_a_foreground_job_moved_to_the_background_outlives_its_guard_period(
         tmp_path: Path) -> None:
-    # The guard keeps the foreground period; a long hold must not slow the
-    # re-creation of the file past it.
-    registry = Registry(log_dir=str(tmp_path / "logs"), foreground_alive_s=1.0)
+    # Moved to the background, it keeps its guard's period.
+    registry = Registry(log_dir=str(tmp_path / "logs"), alive_s=1.0)
     job = await registry.spawn(
         env=_ContainerEnv(str(tmp_path)), command="sleep 4; echo done",
-        cwd=str(tmp_path), env_vars={}, root_id="r", spawner_id="r", tool_use_id="c",
+        cwd=str(tmp_path), env_vars={}, task_id="r", tool_use_id="c",
         description="", post=_posted, foreground=True)
     assert isinstance(job, Job)
-    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=60.0)
     assert registry.to_background(job, None)
-    registry.hold_with(job, tree)
-    while not job.done.is_set():
-        tree.renewed = time.monotonic()
-        await asyncio.sleep(0.1)
+    registry.keep_with(job, KeptClaim())
+    await asyncio.wait_for(job.done.wait(), 10)
     assert job.exit_code == 0
 
 
-async def test_an_ended_job_no_longer_listens_for_its_hold_being_lost(
+async def test_an_ended_job_no_longer_listens_for_its_claim_being_lost(
         tmp_path: Path) -> None:
     registry = Registry(log_dir=str(tmp_path / "logs"))
     job = await registry.spawn(
         env=LocalExecEnv(str(tmp_path)), command="sleep 0.2", cwd=str(tmp_path),
-        env_vars={}, root_id="r", spawner_id="r", tool_use_id="c", description="",
+        env_vars={}, task_id="r", tool_use_id="c", description="",
         post=_posted)
     assert isinstance(job, Job)
-    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=60.0)
-    registry.hold_with(job, tree)
-    assert len(tree._on_lost) == 1
+    kept = KeptClaim()
+    registry.keep_with(job, kept)
+    assert len(kept._on_lost) == 1
     await asyncio.wait_for(job.done.wait(), 5)
-    assert tree._on_lost == []
+    assert kept._on_lost == []
 
 
 async def test_ended_jobs_are_kept_only_up_to_a_bound(tmp_path: Path) -> None:
@@ -514,7 +519,7 @@ async def test_ended_jobs_are_kept_only_up_to_a_bound(tmp_path: Path) -> None:
     jobs = []
     for n in range(5):
         job = await reg.spawn(env=env, command="true", cwd=str(tmp_path), env_vars={},
-                              root_id="r", spawner_id="r", tool_use_id=f"toolu_{n}",
+                              task_id="r", tool_use_id=f"toolu_{n}",
                               description="d", post=post)
         assert isinstance(job, Job)
         await job.done.wait()
@@ -539,7 +544,7 @@ async def test_a_job_let_go_of_keeps_its_log_until_its_root_ends(tmp_path: Path)
     jobs = []
     for n in range(8):
         job = await reg.spawn(env=env, command="echo out", cwd=str(tmp_path), env_vars={},
-                              root_id="r", spawner_id="r", tool_use_id=f"toolu_{n}",
+                              task_id="r", tool_use_id=f"toolu_{n}",
                               description="d", post=post)
         assert isinstance(job, Job)
         await job.done.wait()
@@ -554,24 +559,15 @@ async def test_a_job_let_go_of_keeps_its_log_until_its_root_ends(tmp_path: Path)
     assert [p for p in (tmp_path / "logs").rglob("*") if p.is_file()] == []
 
 
-def test_the_oldest_ended_task_is_forgotten_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("noeta.plugins.shell.jobs.ENDED_KEEP", 3)
-    reg = Registry()
-    reg.jobs["r"] = {"x": object()}  # type: ignore[dict-item]
-    for task in ("a", "b", "c", "d"):
-        reg.mark_ended(task, "r")
-    assert list(reg.ended) == ["b", "c", "d"]
-
-
 async def test_a_long_server_keeps_a_bounded_number_of_roots(tmp_path: Path) -> None:
     # Roots that never end here (idle, or taken by another worker) are let
     # go of, least recently used first, with their logs.
-    reg = Registry(log_dir=str(tmp_path / "logs"), roots_keep=3)
+    reg = Registry(log_dir=str(tmp_path / "logs"), tasks_keep=3)
     env = LocalExecEnv(str(tmp_path))
     jobs = []
     for n in range(6):
         job = await reg.spawn(env=env, command="echo out", cwd=str(tmp_path), env_vars={},
-                              root_id=f"r{n}", spawner_id=f"r{n}", tool_use_id="c",
+                              task_id=f"r{n}", tool_use_id="c",
                               description="d", post=_posted)
         assert isinstance(job, Job)
         await job.done.wait()
@@ -583,14 +579,14 @@ async def test_a_long_server_keeps_a_bounded_number_of_roots(tmp_path: Path) -> 
 
 
 async def test_a_root_with_a_running_job_is_not_let_go_of(tmp_path: Path) -> None:
-    reg = Registry(log_dir=str(tmp_path / "logs"), roots_keep=1)
+    reg = Registry(log_dir=str(tmp_path / "logs"), tasks_keep=1)
     env = LocalExecEnv(str(tmp_path))
     long = await reg.spawn(env=env, command="sleep 30", cwd=str(tmp_path), env_vars={},
-                           root_id="a", spawner_id="a", tool_use_id="c", description="d",
+                           task_id="a", tool_use_id="c", description="d",
                            post=_posted)
     assert isinstance(long, Job)
     short = await reg.spawn(env=env, command="true", cwd=str(tmp_path), env_vars={},
-                            root_id="b", spawner_id="b", tool_use_id="c", description="d",
+                            task_id="b", tool_use_id="c", description="d",
                             post=_posted)
     assert isinstance(short, Job)
     await short.done.wait()
@@ -599,24 +595,24 @@ async def test_a_root_with_a_running_job_is_not_let_go_of(tmp_path: Path) -> Non
     await asyncio.gather(*reg._retiring)
 
 
-async def test_a_tree_whose_hold_is_lost_leaves_with_its_logs(tmp_path: Path) -> None:
+async def test_a_job_whose_claim_is_lost_leaves_with_its_logs(tmp_path: Path) -> None:
     reg = Registry(log_dir=str(tmp_path / "logs"))
-    tree = TreeHold(root_id="r", worker="w", epoch=1, seconds=60.0)
+    kept = KeptClaim()
     env = LocalExecEnv(str(tmp_path))
     ended = await reg.spawn(env=env, command="true", cwd=str(tmp_path), env_vars={},
-                            root_id="r", spawner_id="r", tool_use_id="c", description="d",
+                            task_id="r", tool_use_id="c", description="d",
                             post=_posted)
     assert isinstance(ended, Job)
     await ended.done.wait()
     job = await reg.spawn(env=env, command="sleep 30", cwd=str(tmp_path), env_vars={},
-                          root_id="r", spawner_id="r", tool_use_id="c", description="d",
-                          post=_posted, tree=tree)
+                          task_id="r", tool_use_id="c", description="d",
+                          post=_posted, kept=kept)
     assert isinstance(job, Job)
-    tree.mark_lost()  # the tree left this worker
+    kept.mark_lost()  # the task left this worker
     await asyncio.wait_for(job.done.wait(), 5)
     await asyncio.gather(*reg._retiring)
-    assert "r" not in reg.jobs
-    assert not Path(job.out_path).exists() and not Path(ended.out_path).exists()
+    assert list(reg.jobs["r"]) == [ended.job_id]
+    assert not Path(job.out_path).exists() and Path(ended.out_path).exists()
 
 
 async def test_the_stall_watch_survives_an_env_that_fails_to_read(

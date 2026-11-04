@@ -19,13 +19,16 @@ from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.state import NAME, PermState, state_of
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.interactive import can_ask
 from noeta.toolkit.local_env import env_home, env_platform, is_local
 from noeta.toolkit.notices import HANDBACK_REVIEW_KEY
+from noeta.toolkit.plugin_records import INSTRUCTIONS, instructions_managed_only
 from noeta.toolkit.worktrees import git, repository_top
 
 log = logging.getLogger("noeta.permissions")
 
-#: Claude Code's denial limits before auto mode falls back to asking.
+#: Claude Code's denial limits before auto mode falls back to asking (a
+#: task nobody can answer is refused instead: the ask would park it for good).
 MAX_CONSECUTIVE_DENIALS = 3
 MAX_TOTAL_DENIALS = 20
 #: Betas Claude Code's auto-mode requests carry: every main-loop and
@@ -33,8 +36,6 @@ MAX_TOTAL_DENIALS = 20
 #: classifier one, until its first compaction (as recorded).
 AUTO_BETAS = ("afk-mode-2026-01-31",)
 MAIN_AUTO_BETAS = ("dangerous-tool-use-2026-09-03", "afk-mode-2026-01-31")
-#: The plugin whose ``start`` record holds the instructions a task was shown.
-INSTRUCTIONS_PLUGIN = "instructions"
 #: Root tasks whose instructions are kept for their sub-agents' classifier.
 ROOTS_KEPT = 256
 #: The sub-agent's report tool: a block flags the report instead of
@@ -70,6 +71,8 @@ class Classifier:
             while len(self._fresh) > ROOTS_KEPT:
                 self._fresh.popitem(last=False)
         if done.get("fallback"):
+            if not can_ask(view.state.config):
+                return Deny(reason=str(done.get("fallback")))
             return Ask(prompt=str(done.get("fallback")), detail={**ask.detail, "classify": False},
                        firm=True)
         if done.get("too_long"):
@@ -190,8 +193,7 @@ class Classifier:
         only (Explore, Plan), those its root task was shown (Claude Code's
         classifier always has the session's)."""
         texts = [m.text for m in await view.residents(lead=True) if m.text.strip()]
-        managed_only = any(getattr(e, "managed_only", False) for e in view.extensions
-                           if e.name == INSTRUCTIONS_PLUGIN)
+        managed_only = instructions_managed_only(view)
         if view.state.parent_id is None or (texts and not managed_only):
             return "\n\n".join(texts)
         return await self._root_instructions(view)
@@ -210,7 +212,7 @@ class Classifier:
         for rec in records:
             seen = max(seen, rec.seq)
             ev = rec.event
-            if (isinstance(ev, ExtensionRecorded) and ev.extension == INSTRUCTIONS_PLUGIN
+            if (isinstance(ev, ExtensionRecorded) and ev.extension == INSTRUCTIONS
                     and ev.kind in ("start", "reread") and ev.message is not None):
                 texts.append(ev.message.text)
         self._roots[root] = (texts, seen)

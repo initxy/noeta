@@ -167,6 +167,27 @@ async def test_three_blocks_in_a_row_fall_back_to_asking(store: SqliteStore,
     assert "3 actions in a row were blocked" in detail["prompt"]
 
 
+async def test_past_the_denial_limit_a_task_nobody_answers_is_refused(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """A headless task (``interactive: false``, no prompt tool) on a worker
+    no client follows: the fallback ask would park it for good."""
+    bash = Fake("Bash")
+    block = reply("<block>yes</block><category>Local Data Loss</category>"
+                  "<reason>[Local Data Loss] x</reason>")
+    provider = ScriptedProvider([
+        reply("", ("Bash", {"command": "rm -rf a"})), reply("<block>yes"), block,
+        reply("", ("Bash", {"command": "rm -rf b"})), reply("<block>yes"), block,
+        reply("", ("Bash", {"command": "rm -rf c"})), reply("<block>yes"), block,
+        reply("gave up")])
+    client, tid = await start(store, provider, [bash], tmp_path,
+                              config={"interactive": False})
+    evs = await events(client, tid)
+    assert not any(isinstance(e, Waiting) and e.on == "approval" for e in evs)
+    *_, last = errors(evs)
+    assert "3 actions in a row were blocked" in last
+    assert not bash.runs and (await client.get(tid)).waiting_on == "input"
+
+
 async def test_no_verdict_holds_the_call_back(store: SqliteStore, tmp_path: Path) -> None:
     bash = Fake("Bash")
     provider = ScriptedProvider([
@@ -680,8 +701,7 @@ async def test_plan_mode_from_default_asks_the_person_on_an_auto_mode_host(
 
 
 def test_only_a_plan_begun_in_auto_mode_keeps_the_classifier() -> None:
-    """Settled on entry; a plan record from an older log (no
-    ``auto_during_plan``) keeps it only after auto mode."""
+    """Settled on entry, from the plan record's ``auto_during_plan``."""
     from noeta.plugins.permissions import state as ps
     from noeta.plugins.plan_mode.state import plan_classifier_on as on
 
@@ -689,8 +709,6 @@ def test_only_a_plan_begun_in_auto_mode_keeps_the_classifier() -> None:
     assert not on("auto", auto_during_plan=False)
     for pre in ("default", "acceptEdits", "dontAsk", "bypassPermissions"):
         assert not on(pre, auto_during_plan=True)
-    assert ps.auto_active("plan", {"pre_mode": "auto"})
-    assert not ps.auto_active("plan", {"pre_mode": "default"})
     assert ps.auto_active("plan", {"pre_mode": "auto", "auto_during_plan": True})
     assert not ps.auto_active("plan", {"pre_mode": "auto", "auto_during_plan": False})
 

@@ -202,6 +202,20 @@ class RemoteApp:
             "text": text, "agent": agent, "task_id": ctx.task_id, "cwd": ctx.cwd})
         return None if got is None else Typed(str(got["text"]), bool(got.get("local")))
 
+    async def summaries(self, limit: int = 50) -> list[dict[str, Any]]:
+        """The server's root tasks (``noeta.host.summaries.root_summaries``)."""
+        got: list[dict[str, Any]] = await self.client._call("GET", "/summaries",
+                                                            params={"limit": limit})
+        return got
+
+    async def files(self, query: str, ctx: CommandContext, limit: int = 30) -> list[str]:
+        """Paths under the task's (or ``ctx.cwd``'s) directory on the server
+        holding ``query`` (``noeta.host.files.file_matches``)."""
+        params = {k: v for k, v in {"q": query, "task_id": ctx.task_id, "cwd": ctx.cwd,
+                                    "limit": limit}.items() if v}
+        got: list[str] = await self.client._call("GET", "/files", params=params)
+        return got
+
     async def context(self, task_id: str) -> dict[str, Any] | None:
         try:
             return await self.client.context(task_id)

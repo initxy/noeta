@@ -273,3 +273,36 @@ async def test_a_worker_clock_behind_the_store_fires_the_due_timer(
     assert fired == [TimerFired(name="later")]
     assert sum(isinstance(e, Waiting) for e in events) == 2
     assert provider.requests[-1].messages[-1].text == "wake"
+
+
+class _Relays(Extension):
+    """Records each wait it relays, as the chat bridge does: the record
+    lands after the ``Waiting``."""
+
+    name = "relays"
+
+    async def on_event(self, view: TaskView, recorded: Recorded) -> None:
+        if isinstance(recorded.event, Waiting):
+            view.record(self.name, "relayed", {"seq": recorded.seq})
+
+
+async def test_a_worker_clock_behind_fires_the_due_timer_past_a_plugins_record(
+        store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.core.runner import timers
+
+    monkeypatch.setattr(timers, "time", _Lagging(3600.0))
+    provider = ScriptedProvider([reply("", ("Later", {"in": 0.05, "text": "wake"})),
+                                 reply("waiting"), reply("woke")])
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Later()],
+                                        extensions=(_Relays(),)))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    await asyncio.sleep(0.1)
+    for _ in range(5):
+        await rt.run_once()
+    events = [r.event for r in await client.events(tid)]
+    fired = [i.body for e in events if isinstance(e, InputTaken) for i in e.items
+             if isinstance(i.body, TimerFired)]
+    assert fired == [TimerFired(name="later")]
+    assert provider.requests[-1].messages[-1].text == "wake"

@@ -12,7 +12,7 @@ from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.events import ToolFinished
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import ToolResult
 from noeta.host.local import LocalApp
 from noeta.testing import ScriptedProvider, reply
@@ -31,12 +31,12 @@ class Big:
 
 class Bounded(Big):
     name = "Bounded"
-    max_result_chars = None
+    flags = ToolFlags(max_result_chars=None)
 
 
 class Small(Big):
     name = "Small"
-    max_result_chars = 1_000
+    flags = ToolFlags(max_result_chars=1_000)
 
 
 async def _results(tmp_path: Path, *calls: tuple[str, dict[str, Any]]) -> list[ToolResult]:

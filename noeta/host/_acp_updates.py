@@ -19,6 +19,7 @@ from acp import schema
 from noeta.core.events import ExtensionRecorded, ModelReplied, Recorded, ToolFinished, Waiting
 from noeta.core.types import Delta, Image, Message, Text, ToolUse
 from noeta.host.feed import tool_title
+from noeta.toolkit.plugin_records import PERMISSIONS
 
 #: Tool name → ACP tool kind (what an editor shows next to the call).
 TOOL_KINDS: dict[str, str] = {
@@ -232,7 +233,7 @@ class SessionLog:
             if call is not None and not ev.result.is_error:
                 self._wrote(call)
             return call
-        elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+        elif isinstance(ev, ExtensionRecorded) and ev.extension == PERMISSIONS \
                 and isinstance(ev.data, dict) and isinstance(ev.data.get("plan"), dict):
             path = ev.data["plan"].get("path")
             if isinstance(path, str) and path and self._full(path) != self.plan_path:

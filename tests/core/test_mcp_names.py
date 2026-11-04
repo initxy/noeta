@@ -137,7 +137,7 @@ def test_a_terminal_mcp_tool_named_the_old_way(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("NOETA_TERMINAL_MCP_TOOLS", "mcp__github__done")
     tool = McpTool(name="mcp__GitHub__done", alias="GitHub", remote="done", description="d",
                    input_schema={}, invoke=invoke)
-    assert tool.silent_reply_after == "success"
+    assert tool.flags.silent_reply_after == "success"
 
 
 def test_a_skills_allowed_tools_grant_takes_the_current_name_only() -> None:

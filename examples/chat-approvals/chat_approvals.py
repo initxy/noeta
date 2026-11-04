@@ -76,14 +76,18 @@ class ApprovalPrompt(Extension):
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         return data["seq"] if kind == "relayed" else state
 
+    def delivered_through(self, view: TaskView) -> int:
+        return int(view.ext_state(self.name) or 0)
+
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         target, event = view.state.config.get("chat_reply"), recorded.event
         if not target or not isinstance(event, Waiting) or event.on != "approval" \
-                or recorded.seq <= (view.ext_state(self.name) or 0):
+                or recorded.seq <= self.delivered_through(view):
             return
         asks = [{"call_id": c.use.id, "tool": c.use.name, "input": c.use.input}
                 for c in view.state.open_calls if c.use.id in event.ids]
         async with httpx.AsyncClient(timeout=10) as http:
-            await http.post(self.url, json={"thread": target["thread"], "approvals": asks},
-                            headers={"Idempotency-Key": f"{view.task_id}:{recorded.seq}"})
+            sent = await http.post(self.url, json={"thread": target["thread"], "approvals": asks},
+                                   headers={"Idempotency-Key": f"{view.task_id}:{recorded.seq}"})
+            sent.raise_for_status()
         view.record(self.name, "relayed", {"seq": recorded.seq})

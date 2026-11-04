@@ -34,7 +34,6 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["psycopg[binary,pool]>=3.2"]
 server = ["starlette>=0.40", "uvicorn>=0.30", "websockets>=12"]
-tui = ["textual>=8.0"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
 images = ["pillow>=10.4"]
 keyring = ["keyring>=24"]
@@ -106,7 +105,15 @@ dev = [
     "import-linter>=2.0",
     "types-pyyaml>=6.0",
     "pytest-timeout>=2.3",
+    # The terminal UI (tui/), so `make check` runs its tests and lints it.
+    "noeta-tui",
 ]
+
+[tool.uv.workspace]
+members = ["tui"]
+
+[tool.uv.sources]
+noeta-tui = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -121,7 +128,7 @@ exclude = ["/.claude"]
 
 [tool.mypy]
 strict = true
-files = ["noeta", "evals"]
+files = ["noeta", "evals", "tui/src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -151,16 +158,23 @@ select = ["E", "F", "W", "I", "B", "UP", "RUF", "BLE"]
 # UP007: module-level union aliases read better as Union[...] when long.
 ignore = ["RUF012", "UP007"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["noeta", "noeta_tui"]
+# tui/tests' shared helpers, on its pytest pythonpath.
+known-local-folder = ["support"]
+
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["noeta.core.store.Patch", "Patch"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B008", "E501"]
+"{tests,tui/tests}/**" = ["B008", "E501"]
+# The terminal UI draws Claude Code's glyphs (❯ ⎿ ⏺ ✻).
+"tui/**" = ["RUF001", "RUF002", "RUF003"]
 # Dev tooling, not shipped: long table lines and prose are fine.
 "{evals,bench,scripts}/**" = ["E501", "RUF002", "RUF003", "B905"]
 
 [tool.importlinter]
-root_package = "noeta"
+root_packages = ["noeta", "noeta_tui"]
 
 # The layers, top to bottom; a module may import only from layers below it.
 [[tool.importlinter.contracts]]
@@ -187,6 +201,14 @@ name = "front ends do not import plugins"
 type = "forbidden"
 source_modules = ["noeta.cli", "noeta.host"]
 forbidden_modules = ["noeta.plugins"]
+
+# The terminal UI (tui/) is a front end on noeta's host API: no plugin, no
+# backend, nothing of the noeta command (which hands it what it needs).
+[[tool.importlinter.contracts]]
+name = "the terminal UI imports no plugin, backend, agent or the noeta command"
+type = "forbidden"
+source_modules = ["noeta_tui"]
+forbidden_modules = ["noeta.plugins", "noeta.backends", "noeta.agents", "noeta.cli"]
 
 [[tool.importlinter.contracts]]
 name = "backends do not import each other"

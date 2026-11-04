@@ -10,7 +10,7 @@ from typing import Any
 
 from noeta.core.extension import ContextPart, ToolEntry
 from noeta.core.loop.state import TaskState
-from noeta.core.tool import Tool, tool_flag
+from noeta.core.tool import Tool, tool_flags
 from noeta.core.types import ModelRequest, SystemPart, ToolSpec, dumps
 
 
@@ -66,15 +66,15 @@ def request_tools(tools: Sequence[Tool], withheld: Mapping[str, str],
     sent = [t for t in tools if t.name not in withheld]
 
     def spec(t: Tool) -> ToolSpec:
-        loaded = tool_flag(t, "deferred") and t.name not in plain
-        own = getattr(t, "loaded_description", None) if loaded else None
-        text = own if isinstance(own, str) else t.description
+        loaded = tool_flags(t).deferred and t.name not in plain
+        own = tool_flags(t).loaded_description if loaded else None
+        text = own if own is not None else t.description
         return ToolSpec(name=t.name, description=describe(t, text), input_schema=t.input_schema,
                         defer_loading=loaded)
 
-    head = [spec(t) for t in sorted((t for t in sent if not tool_flag(t, "listed_last")),
+    head = [spec(t) for t in sorted((t for t in sent if not tool_flags(t).listed_last),
                                     key=lambda t: t.name)]
-    tail = [spec(t) for t in sorted((t for t in sent if tool_flag(t, "listed_last")),
+    tail = [spec(t) for t in sorted((t for t in sent if tool_flags(t).listed_last),
                                     key=lambda t: t.name)]
     for entry in entries:
         group = next((g for g in (head, tail) if any(s.name == entry.before for s in g)), None)

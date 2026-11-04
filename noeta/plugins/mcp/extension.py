@@ -29,13 +29,13 @@ How a task's MCP tool set is made and kept:
   (:mod:`noeta.plugins.mcp.oauth`); the sign-in runs in the worker that
   started it, and the server's tools replace them once it succeeds.
 * **A server's question (elicitation) parks the call**: the call is kept
-  running in this worker (the task tree held here) while the person
-  answers the question it was turned into; the answer goes back to the
-  server and the call finishes. A second question in the same call, or a
-  question that cannot be put to anyone, is declined. A call whose worker
-  died (or lost its hold on the tree) while it waited ends "outcome
-  unknown" as soon as another worker picks the task up: the reaped hold
-  wakes it, and the call is answered in the person's place.
+  running in this worker (the task's claim kept here, ``ToolContext.keep``)
+  while the person answers the question it was turned into; the answer goes
+  back to the server and the call finishes. A second question in the same
+  call, or a question that cannot be put to anyone, is declined. A call
+  whose worker died (or lost the task's claim) while it waited ends
+  "outcome unknown" as soon as another worker picks the task up: the call
+  is answered in the person's place.
 * **Every call carries its idempotency key** in the request's ``_meta``
   (``noeta/idempotencyKey``: the same for every run of the call), for a
   server that can drop a repeat. A call a crash left unfinished is still
@@ -52,7 +52,6 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Union
 
-from noeta.core.errors import HeldElsewhere
 from noeta.core.events import Answer, Recorded, TaskEnded, ToolFinished, Waiting
 from noeta.core.extension import (
     Command,
@@ -63,7 +62,7 @@ from noeta.core.extension import (
 )
 from noeta.core.mcp_names import legacy_names, old_name, remember
 from noeta.core.questions import ask
-from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import KeptClaim, Park, Tool, ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, ToolReference
 from noeta.plugins.mcp.admin import McpAdmin
 from noeta.plugins.mcp.client import McpClient, RequestContext
@@ -94,6 +93,7 @@ from noeta.plugins.mcp.tools import (
     ReadMcpResourceTool,
     auth_stub_entries,
 )
+from noeta.toolkit.plugin_records import MCP
 
 __all__ = ["Mcp", "ServersFn"]
 
@@ -150,7 +150,7 @@ class _Parked:
     params: dict[str, Any]
     answer: asyncio.Future[dict[str, Any]]
     asked: Park
-    release: Callable[[], Awaitable[None]] | None
+    kept: KeptClaim | None
 
 
 class Mcp(Extension):
@@ -186,7 +186,7 @@ class Mcp(Extension):
     source on an alias.
     """
 
-    name = "mcp"
+    name = MCP
     #: What ``noeta mcp`` asks of the plugin (checks, sign-ins).
     admin = McpAdmin
 
@@ -343,21 +343,15 @@ class Mcp(Extension):
                     ctx.notify(f"The MCP server {tool.alias!r} asked a further question "
                                "during one call; it was declined.")
                     continue
-                try:
-                    release = await ctx.hold() if ctx.hold is not None else None
-                except HeldElsewhere:
-                    # The open call lives in this process, and the tree's
-                    # next turn would run on the worker that holds it.
-                    answer.set_result({"action": "decline"})
-                    ctx.notify(f"The MCP server {tool.alias!r} asked a question that could "
-                               "not wait for an answer on this worker; it was declined.")
-                    continue
+                # The open call lives in this process: the task's claim
+                # stays here until the answer resumes it.
+                kept = ctx.keep() if ctx.keep is not None else None
                 park = ask(*elicitation_questions(tool.alias, params))
                 key = (ctx.task_id, ctx.call_id)
-                self._parked[key] = _Parked(call, params, answer, park, release)
-                if release is not None:
-                    # The hold is gone: so is the call, wherever the task goes.
-                    release.tree.on_lost(functools.partial(self._drop_parked, key))
+                self._parked[key] = _Parked(call, params, answer, park, kept)
+                if kept is not None:
+                    # The claim is gone: so is the call, wherever the task goes.
+                    kept.on_lost(functools.partial(self._drop_parked, key))
                 return ToolOutput(park=park)
         except asyncio.CancelledError:
             job.cancel()
@@ -411,8 +405,8 @@ class Mcp(Extension):
             server = self._known.get(ctx.task_id, {}).get(tool.alias)
             return await self._finish_call(tool, server, parked.call, ctx, may_park=False)
         finally:
-            if parked.release is not None:
-                await parked.release()
+            if parked.kept is not None:
+                parked.kept.release()
 
     def _record_server(self, ctx: ToolContext, entry: dict[str, Any]) -> None:
         """Record ``entry`` in place of its server's in the task's tool set
@@ -521,8 +515,8 @@ class Mcp(Extension):
                 parked = self._parked.pop(key)
                 if parked.call.job is not None:
                     parked.call.job.cancel()
-                if parked.release is not None:
-                    await parked.release()
+                if parked.kept is not None:
+                    parked.kept.release()
         if isinstance(recorded.event, (Waiting, TaskEnded)):
             # The runner lets go of the task; the next pick-up resolves again.
             self._forget(view.task_id)

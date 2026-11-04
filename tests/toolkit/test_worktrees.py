@@ -43,6 +43,21 @@ async def test_commits_left_on_the_worktree_branch_after_switching_away_count(
     assert lost == "2 commit(s) the starting branch lacks"
 
 
+async def test_untracked_files_count_though_git_is_told_to_hide_them(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "init")
+    _git(repo, "config", "status.showUntrackedFiles", "no")
+    base = _git(repo, "rev-parse", "HEAD")
+    env = LocalExecEnv(str(repo))
+    tree = repo / ".noeta" / "worktrees" / "w"
+    assert await add_worktree(env, str(repo), str(tree), "worktree-w", "HEAD") == ""
+    (tree / "new.txt").write_text("work\n")
+    assert await unsaved_work(env, str(tree), base, "worktree-w") == (
+        "1 uncommitted file(s)", "")
+
+
 async def test_noetas_own_git_runs_no_hook_and_no_fsmonitor(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

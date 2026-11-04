@@ -48,6 +48,7 @@
 - parity: `make parity` — noeta replayed offline through Claude Code's recorded scenarios, every request difference in `parity/report.md` (`scripts/parity/README.md`); never part of `check`
 - cluster: `make cluster` — worker processes on one Postgres (a throwaway `postgres:16` container, or `NOETA_TEST_POSTGRES_DSN`) under random SIGKILL / SIGSTOP with a scripted provider (`tests/cluster`); a known gap is an `xfail(strict=True)` there; `NOETA_CLUSTER_SEED` replays a run; never part of `check`
 - check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `scripts/lint-layout.py` (placement), `lint-imports` (layering), pytest with coverage ≥ 85, `make example` (the example plugins), `scripts/check-docs.sh`
+- frontends: `make frontends` — each front end's own checks (`web/`: npm typecheck, vitest, Playwright against a real `noeta serve` on a scripted provider); needs node and a browser, never part of `check`
 - release: tag push per `docs/releasing.md` — approval gate
 
 ## Gates

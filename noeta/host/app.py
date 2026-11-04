@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from noeta.core import models
@@ -16,6 +17,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import ClientAPI
 from noeta.core.commands import Typed, list_commands, run_typed
 from noeta.core.extension import Command, CommandContext
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta
 
 DeltaSink = Callable[[str, Delta], None]
@@ -57,6 +59,47 @@ class AppAPI(Protocol):
         (``noeta.host.usage.context_breakdown``); ``None`` when this side
         does not run the task's agent."""
         ...
+
+
+@dataclass
+class FrontEndStart:
+    """What the ``noeta`` command hands a front end it opens: one found by
+    name in the entry-point group ``noeta.frontends`` (``tui``), called
+    ``run(app, start)`` with the :class:`AppAPI` it built, returning when
+    the person quits."""
+
+    #: The agent new tasks run.
+    agent: str
+    #: The directory the person started in (on this machine).
+    cwd: str
+    #: The model new tasks run, as the person reads it.
+    model: str
+    #: What each new task's config starts with (a server's own choices
+    #: when empty).
+    task_config: dict[str, Any] = field(default_factory=dict)
+    #: A task to open; ``""``: let the person pick one; ``None``: a new one.
+    resume: str | None = None
+    #: Without ``resume``: open the newest task started in ``cwd`` (``-c``).
+    continue_last: bool = False
+    #: The permission mode new tasks start in (``None``: the plugin's default).
+    permission_mode: str | None = None
+    #: ``app`` is a server's: tasks run in its directories, not ``cwd``.
+    on_server: bool = False
+    #: The noeta home directory (``~/.noeta``: its settings and ``NOETA.md``).
+    home: str = ""
+    #: ``(name, value)`` rows of the settings in effect, for showing.
+    settings: Callable[[], list[tuple[str, str]]] = lambda: []
+    #: The installed noeta's version.
+    version: str = ""
+    #: Set when the project at ``cwd`` is not trusted: trusts it and loads
+    #: what only a trusted project loads (the front end asks first).
+    trust: Callable[[], None] | None = None
+
+
+async def change_config(client: ClientAPI, task_id: str, changes: Mapping[str, Any]) -> None:
+    """Change a task's config from its next model call on: ``model``,
+    ``effort`` and the kernel's other changeable keys; ``None`` removes one."""
+    await client.signal(task_id, CONFIG_SIGNAL, dict(changes))
 
 
 async def agent_commands(agents: Mapping[str, Agent], agent: str,

@@ -12,18 +12,16 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlsplit
 
-from noeta.core.errors import HeldElsewhere
-from noeta.core.events import Cancel, External
+from noeta.core.events import Cancel, ExtensionRecorded, External
 from noeta.core.execenv import RunResult
-from noeta.core.holds import Release
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import KeptClaim, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.shell.bash import SCHEMA_DIALECT, BashTool
 from noeta.plugins.shell.cwd import CWD_MARK, start_cwd
 from noeta.plugins.shell.hardening import command_script
 from noeta.plugins.shell.jobs import Job, Registry
 from noeta.plugins.shell.notices import format_duration
 from noeta.plugins.shell.sandbox import confine, sandbox_required
-from noeta.plugins.shell.state import SHELL, shell_state
+from noeta.plugins.shell.state import SHELL, reduce_shell, shell_state
 from noeta.plugins.shell.websocket import parse_ws
 from noeta.toolkit.background_tasks import STOP_RUN, background_agents, workflow_run
 from noeta.toolkit.notices import STOPPED_BY_CALLER
@@ -48,14 +46,12 @@ PROGRESS_AFTER, PROGRESS_EVERY, PROGRESS_BYTES = 2.0, 1.0, 4096
 _CD_WORD = re.compile(r"(?:^|[\s;&|(])cd(?:\s|$)")
 
 NOT_AVAILABLE = "background execution is not available on this host"
-#: Why a job cannot start: a tree's jobs all run on one worker, and another
-#: worker holds the tree (for a job of its own) or runs one of its tasks.
-HELD_ELSEWHERE = ("cannot start a background command now: another worker process is running "
-                  "part of this task tree (a background command or another task), and a "
-                  "background command needs the whole tree on one worker; run the command "
-                  "in the foreground, or try again later")
-#: Why a job is gone: its worker held the task tree while the job ran, so a
-#: worker that does not have it is not the one that started it.
+#: The ``External`` that asks a task to stop one of its jobs (``data =
+#: {"job_id"}``): how ``TaskStop`` reaches a child's job, which lives on the
+#: child's worker.
+STOP_JOB = "shell_stop_job"
+#: Why a job is gone: its task's claim stayed with its worker while the job
+#: ran, so a worker that does not have it is not the one that started it.
 LOST_REASON = ("the worker process running it stopped, so its further output and exit "
                "status are unknown")
 
@@ -91,8 +87,14 @@ def _monitor_timeout_ms(raw: Any) -> float:
     return min(bounded, MONITOR_TIMEOUT_CAP_MS)
 
 
-def _root(ctx: ToolContext) -> str:
-    return ctx.root_id or ctx.task_id
+async def _release_all(confined: Any, kept: KeptClaim | None) -> None:
+    """What a job used, given back: its sandbox and its task's kept claim."""
+    try:
+        if confined is not None:
+            await confined.close()
+    finally:
+        if kept is not None:
+            kept.release()
 
 
 def _first_word(command: str) -> str:
@@ -205,7 +207,7 @@ class BackgroundBash(BashTool):
         job = await self.registry.spawn(
             env=ctx.env, command=script if hardened is None else shlex.join(hardened),
             cwd=cwd, env_vars={**self._command_env(ctx), **(confined.env if confined else {})},
-            root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
+            task_id=ctx.task_id, tool_use_id=ctx.call_id,
             description=description or command, post=ctx.post,
             argv=confined.argv if confined else argv, foreground=True, shell_command=command)
         if isinstance(job, str):  # no job slot: run it the plain way
@@ -215,42 +217,24 @@ class BackgroundBash(BashTool):
                 ctx, command=command, script=script, hardened=hardened, cwd=cwd,
                 timeout_s=timeout_s, disable=disable, description=description)
         assert job.proc is not None
-        held: Release | None = None
-        refused = False
         try:
             await self._wait_showing(ctx, job, float(timeout_s))
-            if ctx.hold is not None and not job.proc.done():
-                try:
-                    held = await ctx.hold()
-                except HeldElsewhere:
-                    refused = True
-                except Exception:  # noqa: BLE001 — no hold means no background job
-                    # A hold that could not be taken (a store fault) keeps
-                    # nothing in the background: it times out as refused.
-                    _log.warning("Bash: no hold for a timed-out command", exc_info=True)
-                    refused = True
         except asyncio.CancelledError:
             self.registry.kill(job, quiet=True)
             self.registry.discard_later(job)
             if confined is not None:
                 await asyncio.shield(confined.close())
             raise
+        kept = ctx.keep() if ctx.keep is not None and not job.proc.done() else None
 
         async def release() -> None:
-            if confined is not None:
-                await confined.close()
-            if held is not None:
-                await held()
+            await _release_all(confined, kept)
 
-        if not refused and self.registry.to_background(job, release):
-            return await self._moved(ctx, job, command, cwd, timeout_s, held,
+        if self.registry.to_background(job, release):
+            return await self._moved(ctx, job, command, cwd, timeout_s, kept,
                                      tracked=hardened is None)
-        if held is not None:
-            await held()  # it ended meanwhile: nothing to keep
-        if refused:
-            # Another worker holds the tree: a job here could not be read or
-            # stopped later, so it times out as a plain command does.
-            self.registry.kill(job, quiet=True)
+        if kept is not None:
+            kept.release()  # it ended meanwhile: nothing to keep
         try:
             return await self._foreground_result(job), (
                 confined.violations() if confined else [])
@@ -304,14 +288,13 @@ class BackgroundBash(BashTool):
                          stdout=data, stdout_truncated=size > take, timed_out=killed)
 
     async def _moved(self, ctx: ToolContext, job: Job, command: str, cwd: str,
-                     timeout_s: int, held: Release | None, *,
+                     timeout_s: int, kept: KeptClaim | None, *,
                      tracked: bool) -> ToolOutput:
-        if held is not None:
-            self.registry.hold_with(job, held.tree)
+        if kept is not None:
+            self.registry.keep_with(job, kept)
         ctx.record(SHELL, "started", {
             "job_id": job.job_id, "command": command, "description": job.description,
-            "tool_use_id": ctx.call_id, "monitor": False, "output_file": job.out_path,
-            **_holder(job)})
+            "tool_use_id": ctx.call_id, "monitor": False, "output_file": job.out_path})
         try:
             st = await job.env.stat(job.out_path)
             size = st.size if st is not None else 0
@@ -370,20 +353,21 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
         resolve = _ws_policy(ctx.env, ws[0])
         if isinstance(resolve, str):
             return tool_error(tool, resolve)
-        try:
-            release = await ctx.hold() if ctx.hold is not None else None
-        except HeldElsewhere:
-            return tool_error(tool, HELD_ELSEWHERE)
+        kept = ctx.keep() if ctx.keep is not None else None
+
+        async def release_kept() -> None:
+            await _release_all(None, kept)
+
         job = await shell.registry.spawn(
-            env=ctx.env, command=command, cwd="", env_vars={}, root_id=_root(ctx),
-            spawner_id=ctx.task_id, tool_use_id=ctx.call_id, description=description,
-            post=ctx.post, monitor_timeout_ms=monitor_timeout_ms, release=release,
-            tree=release.tree if release is not None else None, ws=ws, ws_resolve=resolve)
+            env=ctx.env, command=command, cwd="", env_vars={}, task_id=ctx.task_id,
+            tool_use_id=ctx.call_id, description=description,
+            post=ctx.post, monitor_timeout_ms=monitor_timeout_ms, release=release_kept,
+            kept=kept, ws=ws, ws_resolve=resolve)
         if isinstance(job, str):
             return tool_error(tool, job)
         ctx.record(SHELL, "started", {
             "job_id": job.job_id, "command": command, "description": job.description,
-            "tool_use_id": ctx.call_id, "monitor": True, **_holder(job)})
+            "tool_use_id": ctx.call_id, "monitor": True})
         return job, "", False
     workspace = await Workspace.of(ctx.env)
     cwd, _moved_back = await start_cwd(workspace, ctx)
@@ -394,31 +378,19 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
     confined = await confine(ctx.env, command, disable, ["bash", "-c", run_command], cwd)
     if isinstance(confined, str):
         return tool_error(tool, confined)
-    # The job lives in this process only: keep the task tree with this
+    # The job lives in this process only: keep the task's claim with this
     # worker while it runs, so the next turn can read and stop it.
-    try:
-        held = await ctx.hold() if ctx.hold is not None else None
-    except HeldElsewhere:
-        if confined is not None:
-            await confined.close()
-        return tool_error(tool, HELD_ELSEWHERE)
-    release_job: Callable[[], Awaitable[None]] | None = held
-    if confined is not None:
-        sandbox_done = confined
+    kept = ctx.keep() if ctx.keep is not None else None
 
-        async def release_all() -> None:
-            await sandbox_done.close()
-            if held is not None:
-                await held()
+    async def release_job() -> None:
+        await _release_all(confined, kept)
 
-        release_job = release_all
     job = await shell.registry.spawn(
         env=ctx.env, command=run_command, cwd=cwd,
         env_vars={**shell._command_env(ctx), **(confined.env if confined else {})},
-        root_id=_root(ctx), spawner_id=ctx.task_id, tool_use_id=ctx.call_id,
+        task_id=ctx.task_id, tool_use_id=ctx.call_id,
         description=description or command, post=ctx.post,
-        monitor_timeout_ms=monitor_timeout_ms, release=release_job,
-        tree=held.tree if held is not None else None,
+        monitor_timeout_ms=monitor_timeout_ms, release=release_job, kept=kept,
         argv=confined.argv if confined else None,
         shell_command=command if monitor_timeout_ms is None else "")
     if isinstance(job, str):
@@ -426,31 +398,25 @@ async def launch(shell: BackgroundBash, ctx: ToolContext, command: str, tool: st
     ctx.record(SHELL, "started", {
         "job_id": job.job_id, "command": command, "description": job.description,
         "tool_use_id": ctx.call_id, "monitor": monitor_timeout_ms is not None,
-        "output_file": job.out_path, **_holder(job)})
+        "output_file": job.out_path})
     return job, cwd, tracked
-
-
-def _holder(job: Job) -> dict[str, Any]:
-    """Who runs the job: its worker and the epoch of the hold it lives by
-    (what ``hold_lost`` names when that worker is gone)."""
-    out: dict[str, Any] = {"worker": job.worker}
-    if job.tree is not None:
-        out["hold"] = job.tree.epoch
-    return out
 
 
 class TaskStopTool:
     """``TaskStop``: stop a background job (its end comes as the usual
-    notice, unless stopped here: then none), a background agent this task
+    notice, unless stopped here: then none) of this task or of a child still
+    running (asked through the child's inbox), a background agent this task
     started (its task is cancelled) or one of its Workflow runs (the
     workflow plugin ends it). Deferred."""
 
     name = "TaskStop"
     read_only = False
-    safe_while_planning = True
+    flags = ToolFlags(
+        safe_while_planning=True,
+        deferred=True,
+        search_hint="stop or kill a running background task",
+    )
     clearable = False
-    deferred = True
-    search_hint = "stop or kill a running background task"
     description = (
         "Stops a background task by its ID: a Bash command started with "
         "`run_in_background`, a Monitor, an agent you started, or a Workflow run.\n\n"
@@ -477,9 +443,11 @@ class TaskStopTool:
         job_id = require_str(input, "task_id") or require_str(input, "shell_id")
         if job_id is None:
             return input_error(f"{self.name} requires a non-empty 'task_id'")
-        job = self.registry.find(_root(ctx), job_id)
+        job = self.registry.find(ctx.task_id, job_id)
         if job is None or job.foreground:
             other = await self._stop_other(ctx, job_id)
+            if other is None:
+                other = await _stop_childs_job(ctx, job_id)
             if other is not None:
                 return other
             why = _unknown(self.registry, ctx, job_id)
@@ -519,6 +487,28 @@ class TaskStopTool:
         return _stopped(task_id, "local_agent", agent.description)
 
 
+async def _stop_childs_job(ctx: ToolContext, job_id: str) -> ToolOutput | None:
+    """Stop ``job_id`` when a child of this task that still runs started it
+    and it still runs: the child's runner, on the child's worker, stops it
+    (``STOP_JOB``). ``None`` when no such child job is known."""
+    if ctx.tasks is None or ctx.read_log is None or ctx.post is None:
+        return None
+    for row in await ctx.tasks(parent_id=ctx.task_id, limit=10_000):
+        if row.status == "ended":
+            continue
+        st = None
+        for r in await ctx.read_log(row.task_id):
+            ev = r.event
+            if isinstance(ev, ExtensionRecorded) and ev.extension == SHELL:
+                st = reduce_shell(st, ev.kind, ev.data)
+        job = (st.jobs if st is not None else {}).get(job_id)
+        if job is not None and job.get("status") == "running":
+            await ctx.post(External(name=STOP_JOB, data={"job_id": job_id}),
+                           task_id=row.task_id, dedupe_key=f"{STOP_JOB}:{job_id}")
+            return _stopped(job_id, "local_bash", str(job.get("description") or ""))
+    return None
+
+
 def _stopped(task_id: str, task_type: str, command: str) -> ToolOutput:
     """Claude Code's result: the stop as a JSON object."""
     return text_output(json.dumps({
@@ -555,11 +545,13 @@ class MonitorTool:
     name = "Monitor"
     read_only = False
     clearable = False
-    deferred = True
-    search_hint = ("watch or monitor a process, log or command and get each "
-                   "output line as a notification")
     #: Claude Code's Monitor result limit.
-    max_result_chars = 10_000
+    flags = ToolFlags(
+        deferred=True,
+        search_hint=("watch or monitor a process, log or command and get each "
+                     "output line as a notification"),
+        max_result_chars=10_000,
+    )
 
     def __init__(self, shell: BackgroundBash) -> None:
         self.shell = shell

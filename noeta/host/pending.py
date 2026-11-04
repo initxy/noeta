@@ -178,14 +178,37 @@ def pending(events: Sequence[Recorded], task_id: str = "") -> list[Pending]:
     return out
 
 
-async def pending_tree(client: ClientAPI, task_id: str) -> list[Pending]:
+#: Tasks a :func:`pending_tree` cache keeps, at most (the oldest go first).
+PENDING_CACHE_TASKS = 1024
+
+
+async def pending_tree(client: ClientAPI, task_id: str,
+                       cache: dict[str, tuple[int, list[Pending]]] | None = None
+                       ) -> list[Pending]:
     """:func:`pending` for the task and every waiting descendant: a
     sub-agent's approval or question surfaces at the root, carrying the
-    sub-agent's ``task_id`` to answer it on."""
-    out = pending(await client.events(task_id), task_id)
+    sub-agent's ``task_id`` to answer it on. ``cache`` (task id ->
+    ``(last_seq, pending)``) spares reading the log of a task that has not
+    moved, so a front end can poll cheaply."""
+    last_seq = (await client.get(task_id)).last_seq if cache is not None else 0
+    return await _pending_tree(client, task_id, last_seq, cache)
+
+
+async def _pending_tree(client: ClientAPI, task_id: str, last_seq: int,
+                        cache: dict[str, tuple[int, list[Pending]]] | None) -> list[Pending]:
+    hit = cache.get(task_id) if cache is not None else None
+    if hit is not None and hit[0] == last_seq:
+        out = list(hit[1])
+    else:
+        out = pending(await client.events(task_id), task_id)
+        if cache is not None:
+            cache.pop(task_id, None)
+            cache[task_id] = (last_seq, list(out))
+            while len(cache) > PENDING_CACHE_TASKS:
+                del cache[next(iter(cache))]
     for child in await client.tasks(parent_id=task_id, limit=10_000):
         if child.status != "ended":
-            out.extend(await pending_tree(client, child.task_id))
+            out.extend(await _pending_tree(client, child.task_id, child.last_seq, cache))
     return out
 
 

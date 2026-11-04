@@ -16,7 +16,7 @@ from typing import Any
 
 from noeta.core.events import External
 from noeta.core.questions import ask, read_answer
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Effort, ModelRequest, user
 from noeta.plugins.plan_mode.state import MODE_RECORDS, NAME, PlanState
 from noeta.toolkit.side_requests import side_request
@@ -239,8 +239,10 @@ class EnterPlanModeTool:
     }
     read_only = True
     clearable = False
-    deferred = True
-    search_hint = "switch to plan mode to design an approach before writing code"
+    flags = ToolFlags(
+        deferred=True,
+        search_hint="switch to plan mode to design an approach before writing code",
+    )
 
     def __init__(self, enter: Callable[[ToolContext], bool]) -> None:
         self._enter = enter
@@ -280,8 +282,10 @@ class ExitPlanModeTool:
     }
     read_only = False
     clearable = False
-    deferred = True
-    search_hint = "present the plan for approval and start coding (plan mode only)"
+    flags = ToolFlags(
+        deferred=True,
+        search_hint="present the plan for approval and start coding (plan mode only)",
+    )
 
     def _plan(self, ctx: ToolContext) -> dict[str, Any] | None:
         st = ctx.state.get(NAME)

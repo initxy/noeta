@@ -25,7 +25,10 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   with the token in `NOETA_SERVER_TOKEN`. They need no model of their own: a new task runs
   on the server's model, in the server's directory, unless
   `--model` names one or `--cwd PATH` names a directory on the server (a relative one is
-  taken from the server's). `noeta -p` always runs here and refuses `--server`.
+  taken from the server's). `noeta -p` always runs here and refuses `--server`. The web
+  app (`web/`, built with `npm run build`) is served at the server's own address with
+  `noeta serve --web web/dist`; it asks for the token once, or takes it from the
+  address's `#token=…` (never sent to the server, kept in the browser).
 - **Same settings everywhere.** Each process reads its own `~/.noeta` (`NOETA_HOME`): agents,
   plugins, `config.toml`. Ship the same copy to every machine; a worker
   missing a plugin a task was started with never runs that task without it
@@ -35,12 +38,9 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
 - **Upgrades:** stop every worker (and `noeta serve`) before upgrading; workers of different
   versions must not share a store. The first process of the new version moves the store's
   schema forward in place; a process older than the store's schema refuses to open it
-  (`StoreUnavailable`). On sqlite, a binary from before schema version 2 does not refuse:
-  left running, it fails once the upgrade has dropped the old `holds` table, and started again
-  it writes a new one, so stop every old worker before the upgrade. Each open that finds a
-  `holds` table tells each tree held there that its hold is gone (once per tree), then drops
-  the table; on
-  Postgres it waits for an old worker's open transaction on that table.
+  (`StoreUnavailable`); a 0.6 binary does not, so stop every old worker first. A 0.6 store
+  (schema version 1) is moved to version 5 in place: its `holds` table goes, and a
+  background job it named, gone with its worker, is told lost at its task's next turn.
 
 ## Where commands run (the workspace)
 
@@ -70,8 +70,8 @@ the task's log the first time they are used.
   `tool-results`, `plans`, `projects` and `agent-memory` linked to it); otherwise a task
   that moves finds its saved outputs, plan and memories missing.
 
-Still local to a worker either way: a background `Bash` job and its log (the tree is held by
-that worker while it runs, and its tasks are told `hold_lost` if the worker dies), and the
+Still local to a worker either way: a background `Bash` job and its log (its task keeps its
+claim on that worker while the job runs, and is told the job is lost if the worker dies), and the
 files of images people paste (`~/.noeta/image-cache` with the local exec env, a per-user
 temp directory in any other): a worker that takes a task over writes them again from the
 conversation at the next turn and names the new place.

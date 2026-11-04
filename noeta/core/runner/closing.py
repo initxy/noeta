@@ -63,8 +63,8 @@ async def close_calls(run: TaskRun, call_ids: Sequence[str], error: str, closing
 async def end(run: TaskRun, status: str, answer: str = "", error: str = "",
               *, decide_again: bool = False) -> bool:
     """End the task, unless its inbox got something it has not taken:
-    the end never lands over an unread message (a ``hold_lost`` there
-    would otherwise be heard by no one). The input is taken first; with
+    the end never lands over an unread message (it would otherwise be
+    heard by no one). The input is taken first; with
     ``decide_again`` that returns ``False`` so the caller decides anew,
     otherwise (an end that stands whatever arrived) it ends after it."""
     while True:

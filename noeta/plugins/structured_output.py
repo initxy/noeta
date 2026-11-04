@@ -26,7 +26,7 @@ from noeta.core import records
 from noeta.core.errors import TurnFailed
 from noeta.core.events import ExtensionRecorded, ModelReplied, Recorded, Say
 from noeta.core.extension import Extension, TaskView
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ToolResult, user
 from noeta.toolkit.json_schema import schema_errors
 from noeta.toolkit.structured_output import (
@@ -67,14 +67,16 @@ class StructuredOutputTool:
     read_only = True
     clearable = False
     #: Pure: a call a crash cut short runs again.
-    retry_safe = True
     #: Offered with a schema whatever an agent's ``tools:`` list says.
-    past_agent_lists = True
     #: The answer is checked against its schema by the tool, in its words.
-    unchecked_input = True
     #: The call is the answer: an empty reply after any call of it (even a
     #: refused one) ends the turn, and the reminder below follows.
-    silent_reply_after = "call"
+    flags = ToolFlags(
+        retry_safe=True,
+        past_agent_lists=True,
+        unchecked_input=True,
+        silent_reply_after="call",
+    )
 
     def __init__(self, schema: Mapping[str, Any]) -> None:
         self.schema = dict(schema)

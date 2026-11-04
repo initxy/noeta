@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.skills.registry import (
     SkillDescription,
     SkillRegistry,
@@ -53,7 +53,7 @@ class SkillTool:
 
     name = SKILL_TOOL
     read_only = False
-    safe_while_planning = True
+    flags = ToolFlags(safe_while_planning=True)
     clearable = False
 
     def __init__(self, owner: Skills) -> None:

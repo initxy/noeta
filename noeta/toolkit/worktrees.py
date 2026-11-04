@@ -22,9 +22,9 @@ WORKTREES = ".noeta/worktrees"
 GIT_NO_HOOKS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=")
 
 #: The working directories of this process's running shell jobs, counted by
-#: (filesystem, path) (the shell plugin keeps it). A job holds its task tree
-#: with this worker, so the task that would remove a worktree one runs in
-#: runs here and sees it.
+#: (filesystem, path) (the shell plugin keeps it). A job keeps its task's
+#: claim on this worker (a sub-agent's jobs end when it hands back), so the
+#: task that would remove a worktree one runs in runs here and sees it.
 _JOB_DIRS: Counter[tuple[object, str]] = Counter()
 #: (filesystem, worktree path) -> what runs once no job works under it
 #: (:func:`after_jobs`).
@@ -135,7 +135,8 @@ async def unsaved_work(env: ExecEnv, path: str, base: str, branch: str) -> tuple
     (empty when it could): uncommitted files, and commits since ``base`` on
     ``HEAD`` or on ``branch`` (the worktree may have switched away from it)."""
     lost = []
-    code, status = await git(env, ["status", "--porcelain"], path)
+    # Untracked files count whatever status.showUntrackedFiles says.
+    code, status = await git(env, ["status", "--porcelain", "--untracked-files=normal"], path)
     if code != 0:
         return "", f"git status: {status or 'failed'}"
     if status:

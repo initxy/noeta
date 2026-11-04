@@ -3,21 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 import socket
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from noeta.core import snapshots
 from noeta.core.agent import Agent
-from noeta.core.errors import CommitUnknown, HeldElsewhere
+from noeta.core.errors import CommitUnknown
 from noeta.core.execenv import ExecEnv
-from noeta.core.holds import Release, TreeHold
 from noeta.core.provider import Provider
 from noeta.core.store import Claim, Store
 from noeta.core.types import Delta, ModelRequest
@@ -28,9 +26,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("noeta.core.runner")
 
-#: Times a hold is asked for while its commit's outcome stays unknown
-#: (``CommitUnknown``) before that error is raised.
-HOLD_ATTEMPTS = 3
+#: The change kinds after which a task may be claimable (``Store.on_change``).
+_CLAIMABLE_CHANGES = frozenset({"created", "posted", "released"})
 
 ProviderFor = Callable[[str], Provider]
 TaskProviderFor = Callable[["TaskState", str], Provider]
@@ -40,8 +37,7 @@ OnDelta = Callable[[str, Delta], None]
 
 
 def _worker_id() -> str:
-    """``host:pid:random``: one name for this worker process in claims,
-    holds and the records of what it runs (a background job)."""
+    """``host:pid:random``: one name for this worker process in claims."""
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:6]}"
 
 
@@ -59,13 +55,6 @@ def catalog_output_ceiling(model: str) -> int:
 
     spec = models.find_spec(model)
     return spec.output_default if spec is not None else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
-
-
-@dataclass
-class _TreeLock:
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    #: Callers inside or waiting: the entry is dropped when none are left.
-    users: int = 0
 
 
 @dataclass
@@ -120,16 +109,6 @@ class Runtime:
     #: adds each task it creates or resumes); ``None`` serves every task.
     roots: set[str] | None = None
     _wake: asyncio.Event | None = field(default=None, init=False, repr=False)
-    #: This worker's holds, by tree root (:meth:`hold`).
-    _holds: dict[str, TreeHold] = field(default_factory=dict, init=False, repr=False)
-    _renewer: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
-    #: Per tree root: holds are taken one at a time, so one ``TreeHold``
-    #: stands for the store's hold.
-    _hold_locks: dict[str, _TreeLock] = field(default_factory=dict, init=False, repr=False)
-    #: Per tree root: the store's hold being given back (the last share
-    #: released); a new hold of the tree waits for it.
-    _unholding: dict[str, asyncio.Future[None]] = field(default_factory=dict, init=False,
-                                                        repr=False)
     #: Per task: claims in a row whose log could not be read or folded here
     #: (``TaskRun._unreadable``).
     _unreadable: dict[str, int] = field(default_factory=dict, init=False, repr=False)
@@ -139,6 +118,14 @@ class Runtime:
                                                         repr=False)
     #: The tasks this runtime runs now (:meth:`run_claim`).
     _running: set[str] = field(default_factory=set, init=False, repr=False)
+    #: Runs carried on in the background once their task waits with its
+    #: claim kept (``ToolContext.keep``): they take a slot of
+    #: :attr:`concurrency` only while a wake has them stepping, and
+    #: :meth:`run_claim` has returned for them.
+    _kept_runs: set[asyncio.Task[None]] = field(default_factory=set, init=False, repr=False)
+    #: The :attr:`concurrency` slots: one per claim :meth:`serve` runs, and
+    #: one per kept run while a wake has it stepping.
+    _slots: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
 
     def provider_of(self, state: TaskState, model: str) -> Provider:
         """The provider ``state``'s task sends a ``model`` call to."""
@@ -155,6 +142,21 @@ class Runtime:
             except ValueError:  # a misconfigured agent fails when its task loads
                 continue
 
+    def _slot_pool(self) -> asyncio.Semaphore:
+        if self._slots is None:
+            self._slots = asyncio.Semaphore(self.concurrency)
+        return self._slots
+
+    async def take_slot(self) -> None:
+        """Wait for a slot of :attr:`concurrency` (a kept run woken to step)."""
+        await self._slot_pool().acquire()
+
+    def give_slot(self) -> None:
+        """Give a slot back, and look for claimable work with it."""
+        self._slot_pool().release()
+        if self._wake is not None:
+            self._wake.set()
+
     def agent(self, name: str) -> Agent | None:
         """The agent a task's log names: by its name, else by a former one
         (:attr:`agent_aliases`)."""
@@ -163,154 +165,9 @@ class Runtime:
             found = self.agents.get(self.agent_aliases[name])
         return found
 
-    @property
-    def hold_seconds(self) -> float:
-        """How long a hold outlives its last renewal: a dead worker's trees
-        go back to the others after this."""
-        return 2 * self.lease_seconds
-
-    async def hold(self, root_id: str) -> Release:
-        """Keep the tree of ``root_id`` with this worker (no other worker
-        claims its tasks) until the returned release is awaited; holds are
-        counted and renewed while this runtime lives. For what lives only in
-        this process, e.g. a background job: it registers
-        ``release.tree.on_lost`` to stop when the hold is gone (reaped after
-        this worker was silent too long, or this runtime stopping).
-        Raises ``HeldElsewhere`` while another worker holds the tree (one
-        whose hold ran out is reaped first) or runs one of its tasks, or
-        while one of its unended tasks is on a queue this runtime does not
-        serve (no other worker would run it while the tree is held)."""
-        async with self._tree_lock(root_id):
-            tree = self._holds.get(root_id)
-            if tree is None or tree.lost:
-                unholding = self._unholding.get(root_id)
-                if unholding is not None:
-                    await asyncio.shield(unholding)  # the last share's give-back
-                sent, epoch = await self._take_hold(root_id)
-                if epoch is None:
-                    await self._reap()
-                    sent, epoch = await self._take_hold(root_id)
-                if epoch is None:
-                    raise HeldElsewhere(f"task tree {root_id} is held by another worker, "
-                                       "another worker runs one of its tasks, or one of its "
-                                       "tasks is on a queue this worker does not serve")
-                tree = TreeHold(root_id=root_id, worker=self.worker, epoch=epoch,
-                                seconds=self.hold_seconds, renewed=sent)
-                self._holds[root_id] = tree
-            tree.count += 1
-        if self._renewer is None or self._renewer.done():
-            self._renewer = asyncio.create_task(self._renew_holds())
-        released = False
-
-        async def release() -> None:
-            nonlocal released
-            if released:
-                return
-            released = True
-            tree.count -= 1
-            if tree.count > 0 or self._holds.get(root_id) is not tree:
-                return
-            self._holds.pop(root_id, None)
-            if not tree.lost:
-                # A hold taken for the tree meanwhile waits for this, so it
-                # never gets the epoch being deleted; given back even when
-                # the caller is cancelled while it waits.
-                unholding = asyncio.ensure_future(self._unhold(tree))
-                self._unholding[root_id] = unholding
-                await asyncio.shield(unholding)
-
-        return Release(tree, release)
-
-    def holds(self, root_id: str) -> bool:
-        """Whether this worker holds the tree of ``root_id`` (not lost)."""
-        tree = self._holds.get(root_id)
-        return tree is not None and not tree.lost
-
-    async def _take_hold(self, root_id: str) -> tuple[float, int | None]:
-        """``Store.hold`` without an epoch, and this process's monotonic
-        time just before it was asked for. A commit whose outcome is unknown
-        is asked again: taking a hold extends the one this worker already
-        has, so a hold that landed comes back with its epoch, registered and
-        renewed rather than left to be reaped as lost."""
-        for attempt in range(HOLD_ATTEMPTS):
-            sent = time.monotonic()
-            try:
-                return sent, await self.store.hold(root_id, self.worker, self.hold_seconds,
-                                                   queues=self.queues)
-            except CommitUnknown as exc:
-                if attempt + 1 == HOLD_ATTEMPTS:
-                    raise
-                log.warning("tree %s: hold commit unknown, asking again: %s", root_id, exc)
-        raise AssertionError("unreachable")
-
-    async def _unhold(self, tree: TreeHold) -> None:
-        # Asked twice: a hold left behind runs out and is reaped, telling the
-        # tree (``hold_lost``) that what ended normally was lost.
-        try:
-            for attempt in range(2):
-                try:
-                    await self.store.unhold(tree.root_id, self.worker, tree.epoch)
-                    return
-                except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
-                    log.warning("tree %s: unhold failed%s: %s", tree.root_id,
-                                ", asking again" if not attempt else "", exc)
-        finally:
-            if self._unholding.get(tree.root_id) is asyncio.current_task():
-                self._unholding.pop(tree.root_id, None)
-
-    @contextlib.asynccontextmanager
-    async def _tree_lock(self, root_id: str) -> AsyncIterator[None]:
-        """Taking a hold of one tree, one at a time: two holds taken at
-        once would make two ``TreeHold`` objects, one never renewed."""
-        entry = self._hold_locks.get(root_id)
-        if entry is None:
-            entry = self._hold_locks[root_id] = _TreeLock()
-        entry.users += 1
-        try:
-            async with entry.lock:
-                yield
-        finally:
-            entry.users -= 1
-            if not entry.users:
-                self._hold_locks.pop(root_id, None)
-
-    async def _renew_holds(self) -> None:
-        while self._holds:
-            # Real time, never ``self.sleep`` (tests replace that with no
-            # wait): a hold must outlive the worker by wall-clock seconds.
-            await asyncio.sleep(self.lease_seconds / 3)
-            for tree in list(self._holds.values()):
-                sent = time.monotonic()
-                try:
-                    kept = await self.store.hold(tree.root_id, self.worker, self.hold_seconds,
-                                                 epoch=tree.epoch)
-                except Exception as exc:  # noqa: BLE001 — retried on the next round
-                    log.warning("tree %s: renewing the hold failed: %s", tree.root_id, exc)
-                    continue
-                if kept is None:
-                    log.warning("tree %s: hold %s was reaped; stopping what it held",
-                                tree.root_id, tree.epoch)
-                    if self._holds.get(tree.root_id) is tree:
-                        self._holds.pop(tree.root_id)
-                    tree.mark_lost()
-                else:
-                    tree.renewed = sent
-
-    async def _reap(self) -> None:
-        """Reap the holds of silent workers (``Store.reap_holds``): every
-        claim looks first, so no tree stays held by a dead worker."""
-        try:
-            reaped = await self.store.reap_holds()
-        except Exception as exc:  # noqa: BLE001 — the next round tries again
-            log.warning("reaping holds failed: %s", exc)
-            return
-        if reaped:
-            log.info("reaped %d hold(s) of silent workers", reaped)
-
     async def _claim_once(self) -> tuple[Claim, float] | None:
         """A claim and this process's monotonic time just before it was
         asked for (when its lease surely started)."""
-        await self._reap()
         roots = sorted(self.roots) if self.roots is not None else None
         sent = time.monotonic()
         try:
@@ -332,21 +189,49 @@ class Runtime:
         return None
 
     async def run_claim(self, claim: Claim, *, sent: float | None = None) -> None:
-        """Run one claim until the task waits or ends. Cancelled (a
-        shutdown), it hands the task back at once instead of leaving it
-        ``running`` until the lease runs out. ``sent`` is this process's
-        monotonic time just before the claim was asked for (default now)."""
+        """Run one claim until the task waits or ends; a task that waits
+        with its claim kept (``ToolContext.keep``) goes on in the background,
+        taking its own inbox, until nothing keeps it (:meth:`let_go` ends
+        those). Cancelled (a shutdown), it hands the task back at once
+        instead of leaving it ``running`` until the lease runs out. ``sent``
+        is this process's monotonic time just before the claim was asked for
+        (default now)."""
         from noeta.core.runner.task import TaskRun
 
         run = TaskRun(self, claim, sent=sent)
         self._running.add(claim.task_id)
+        whole = asyncio.ensure_future(self._run(run))
+        kept = asyncio.ensure_future(run.waiting_kept.wait())
+        try:
+            await asyncio.wait({whole, kept}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            whole.cancel()
+            await asyncio.gather(whole, return_exceptions=True)
+            raise
+        finally:
+            kept.cancel()
+        if whole.done():
+            whole.result()
+            return
+        self._kept_runs.add(whole)
+        whole.add_done_callback(self._kept_runs.discard)
+
+    async def _run(self, run: Any) -> None:
         try:
             await run.run()
         except asyncio.CancelledError:
             await self._release(run.claim)
             raise
         finally:
-            self._running.discard(claim.task_id)
+            self._running.discard(run.task_id)
+
+    async def let_go(self) -> None:
+        """Give up the claims kept over waits (what kept them, a background
+        job, dies with them): a host's way out. The tasks stay waiting."""
+        runs = list(self._kept_runs)
+        for t in runs:
+            t.cancel()
+        await asyncio.gather(*runs, return_exceptions=True)
 
     async def _release(self, claim: Claim) -> None:
         try:
@@ -404,22 +289,29 @@ class Runtime:
         loop = asyncio.get_running_loop()
         wake = asyncio.Event()
 
-        def nudge(_task: str, _kind: str) -> None:
-            loop.call_soon_threadsafe(wake.set)
+        def nudge(_task: str, kind: str) -> None:
+            # Only a change that can make a task claimable: an append alone
+            # (the bulk of the traffic) never does unless it is reported
+            # ``released`` too.
+            if kind in _CLAIMABLE_CHANGES:
+                loop.call_soon_threadsafe(wake.set)
 
         self._wake = wake
         unsubscribe = self.store.on_change(nudge)
         running: set[asyncio.Task[None]] = set()
+        slots = self._slot_pool()
         try:
             while not stop.is_set():
-                while len(running) < self.concurrency:
+                while not slots.locked():
+                    await slots.acquire()
                     claimed = await self._claim()
                     if claimed is None:
+                        slots.release()
                         break
                     t = asyncio.create_task(self.run_claim(claimed[0], sent=claimed[1]))
                     running.add(t)
                     t.add_done_callback(running.discard)
-                    t.add_done_callback(lambda _d: wake.set())
+                    t.add_done_callback(lambda _d: self.give_slot())
                 wake.clear()
                 waiters = [asyncio.create_task(wake.wait()), asyncio.create_task(stop.wait())]
                 await asyncio.wait(waiters, timeout=self.poll_interval,
@@ -432,19 +324,4 @@ class Runtime:
             for t in running:
                 t.cancel()
             await asyncio.gather(*running, return_exceptions=True)
-            await self._drop_holds()
-
-    async def _drop_holds(self) -> None:
-        """On the way out: what this process held dies with it, and the
-        trees are told so (``hold_lost``) and go back to the other workers
-        at once."""
-        if self._renewer is not None:
-            self._renewer.cancel()
-            self._renewer = None
-        for tree in list(self._holds.values()):
-            self._holds.pop(tree.root_id, None)
-            tree.mark_lost()
-            try:
-                await self.store.unhold(tree.root_id, self.worker, tree.epoch, lost=True)
-            except Exception as exc:  # noqa: BLE001 — the hold runs out and is reaped
-                log.warning("tree %s: unhold failed: %s", tree.root_id, exc)
+            await self.let_go()

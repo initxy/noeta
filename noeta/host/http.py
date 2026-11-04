@@ -7,6 +7,10 @@ events; when this process also runs workers, live model output streams too.
                                       config takes only the keys in _http_guard's
                                       REQUEST_CONFIG (any other: 403)
     GET  /tasks?parent_id=&status=&limit=
+    GET  /summaries?limit=            the root tasks, each with its title, cwd and first
+                                      prompt (``noeta.host.summaries``)
+    GET  /files?q=&task_id=&cwd=&limit=  paths under a task's (or a cwd's) directory
+                                      holding ``q``, for a prompt's ``@`` mentions
     GET  /tasks/{id}
     GET  /tasks/{id}/events?after=N
     GET  /tasks/{id}/pending          approvals and questions waiting on a person, sub-agents'
@@ -22,8 +26,8 @@ events; when this process also runs workers, live model output streams too.
     POST /tasks/{id}/signals          {name, data?, dedupe_key?} — a signal: ``permission_mode``
                                       {mode} switches the permission mode, ``config``
                                       {model?, effort?, max_turns?} changes the task's config;
-                                      ``resumed`` and ``restore_files`` as front ends send
-                                      them; any other name: 403
+                                      ``resumed``, ``restore_files`` and ``rename`` {title} as
+                                      front ends send them; any other name: 403
     POST /tasks/{id}/cancel           {reason?, turn_only?}
     GET  /tasks/{id}/usage            the task tree's tokens, model calls and cost by model
     GET  /tasks/{id}/context          what fills the next request (workers in this process)
@@ -41,6 +45,11 @@ events; when this process also runs workers, live model output streams too.
                                       include_partial_messages, replay_user_messages
     POST /stream-json                 the same, one-way: the request body's JSON lines in,
                                       the reply's JSON lines out; permission prompts refused
+
+With ``web_dir`` (``noeta serve --web DIR``) the other paths serve that directory's
+files, the built web app (``web/``), without a token: it holds none. They go with
+:data:`WEB_HEADERS`: a content security policy (the page's scripts, styles and requests
+are its own server's; images also ``data:`` and ``blob:``) and no framing.
 
 A bearer token is required (``NOETA_SERVER_TOKEN``; ``?token=`` for a
 WebSocket from a browser) unless the host turns auth off. A request from a web page of
@@ -60,7 +69,8 @@ from typing import Any
 from urllib.parse import unquote_plus
 
 from starlette.applications import Starlette
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
+from starlette.staticfiles import StaticFiles
 
 from noeta.core.agent import Agent
 from noeta.core.client import Client
@@ -72,8 +82,8 @@ from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command
 
-__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "Refused", "create_app", "redact_token_logs",
-           "token_digest"]
+__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "Refused", "create_app",
+           "redact_token_logs", "token_digest"]
 
 
 @dataclasses.dataclass
@@ -128,6 +138,26 @@ def _redact(text: str) -> str:
 #: The loggers uvicorn names a request's path in.
 _UVICORN_LOGGERS = ("uvicorn.access", "uvicorn.error")
 
+#: The headers every file of ``web_dir`` is served with.
+WEB_HEADERS = (
+    (b"content-security-policy",
+     b"default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
+     b"frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
+    (b"x-frame-options", b"DENY"),
+    (b"x-content-type-options", b"nosniff"),
+)
+
+
+class _WebFiles(StaticFiles):
+    """The web app's files, each with :data:`WEB_HEADERS`."""
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        async def with_headers(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", ()), *WEB_HEADERS]
+            await send(message)
+        await super().__call__(scope, receive, with_headers)
+
 
 class _RedactQueryToken(logging.Filter):
     """Replaces a ``token=`` query value in a record's message and string
@@ -157,7 +187,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
                auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
-               cwd: str | None = None, roots: Sequence[str] = ()) -> Starlette:
+               cwd: str | None = None, roots: Sequence[str] = (),
+               web_dir: str | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -173,7 +204,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
-    below it, or below one of ``roots`` (anywhere when ``None``)."""
+    below it, or below one of ``roots`` (anywhere when ``None``); ``web_dir``:
+    a directory of static files served at every other path (a web app)."""
     if auth and not token and not token_sha256:
         raise ValueError("create_app needs a bearer token (token= or token_sha256=); pass "
                          "auth=False to serve every request without one")
@@ -188,9 +220,11 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
                   cwd=cwd, roots=roots)
     r = Routes(serving, app, agents)
     s = StreamRoutes(guard, deltas)
-    return Starlette(routes=[
+    routes: list[BaseRoute] = [
         Route("/tasks", guard(r.create), methods=["POST"]),
         Route("/tasks", guard(r.list_tasks), methods=["GET"]),
+        Route("/summaries", guard(r.summaries), methods=["GET"]),
+        Route("/files", guard(r.files), methods=["GET"]),
         Route("/tasks/{task_id}", guard(r.get_task), methods=["GET"]),
         Route("/tasks/{task_id}/events", guard(r.events), methods=["GET"]),
         Route("/tasks/{task_id}/pending", guard(r.pending), methods=["GET"]),
@@ -210,4 +244,7 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         Route("/openapi.json", guard(r.openapi), methods=["GET"]),
         Route("/stream-json", guard(s.stream_post), methods=["POST"]),
         WebSocketRoute("/stream-json", s.stream_socket),
-    ])
+    ]
+    if web_dir is not None:
+        routes.append(Mount("/", _WebFiles(directory=web_dir, html=True)))
+    return Starlette(routes=routes)

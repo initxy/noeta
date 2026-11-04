@@ -58,10 +58,10 @@ its own spec before work starts.
 - [ ] A background command's planted `.git/commondir` lives until the command ends (D96). Follow-up spec.
 - [ ] The macOS Seatbelt profile still allows `mach-lookup` and Apple Events. Follow-up spec: needs a macOS machine to test.
 - [ ] MCP (`plugins/mcp/stdio.py`, `plugins/mcp/pool.py`) and the hooks runner (`plugins/hooks/runners.py`) still start processes with asyncio subprocesses: before CPython 3.14 a loop shut down mid-start waits forever (`LocalExecEnv` moved to `subprocess.Popen` for this). Follow-up spec.
-- [ ] Holds under unknown commits: a hold whose last of three attempts commits and still raises `CommitUnknown` is reaped as lost; lease renewal does not retry on it; a second failed unhold ends in a false `hold_lost`. Follow-up spec.
-- [ ] A parked MCP elicitation learns of a lost hold only when answered ("outcome unknown"). Follow-up spec.
-- [ ] A crash between taking `hold_lost` and enqueuing an ended sub-agent's loss notice loses that notice. Follow-up spec.
-- [ ] A sub-agent that takes its input, gets `hold_lost` and ends, while the root took its own copy when the sub-agent was live, is told by neither (one inbox read to the end append). Follow-up spec.
+- [x] Holds under unknown commits: a hold whose last of three attempts commits and still raises `CommitUnknown` is reaped as lost; lease renewal does not retry on it; a second failed unhold ends in a false `hold_lost`. Moot: holds are gone (`2026-11-04-v1-finish.md` D1).
+- [x] A parked MCP elicitation learns of a lost hold only when answered ("outcome unknown"). Fixed: a lapsed kept claim makes the task claimable at once, and its pickup answers the call (`2026-11-04-v1-finish.md` D1).
+- [x] A crash between taking `hold_lost` and enqueuing an ended sub-agent's loss notice loses that notice. Moot: holds are gone (`2026-11-04-v1-finish.md` D1).
+- [x] A sub-agent that takes its input, gets `hold_lost` and ends, while the root took its own copy when the sub-agent was live, is told by neither (one inbox read to the end append). Moot: holds are gone (`2026-11-04-v1-finish.md` D1).
 - [ ] Snapshots hold the whole conversation (a 20k-event log's is 12 MiB), so Postgres claims are bound by transfer. Follow-up spec.
 - [ ] Deltas published before a front end's `LISTEN` is up are not replayed (the recorded reply still arrives). Follow-up spec.
 - [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46 of the release spec). Follow-up spec.

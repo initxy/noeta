@@ -1,12 +1,14 @@
 """Background shells under the runner: an end notice wakes an idle task into
 a turn and is recorded; cancelling and turn ends kill jobs silently, a
-stopped turn leaves them running; a tree with a running job stays with its worker, and a job whose
-worker is gone is marked lost."""
+stopped turn leaves them running; a task with a running job keeps its claim
+on its worker over its waits, and a job whose worker is gone is marked lost
+by the next worker to pick the task up."""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +17,13 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.events import ToolFinished
+from noeta.core.errors import StoreUnavailable
+from noeta.core.events import ExtensionRecorded, External, TaskCreated, ToolFinished
 from noeta.core.loop.state import fold
 from noeta.core.runner import Runtime
+from noeta.core.store import NewTask, Post
 from noeta.plugins.fs import FileTools
-from noeta.plugins.shell import Registry, Shell
+from noeta.plugins.shell import JOB_ENDED, Registry, Shell
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.notices import NOTICE_GUARD
 
@@ -63,6 +67,41 @@ def _bg(command: str) -> tuple[str, dict[str, Any]]:
     return ("Bash", {"command": command, "run_in_background": True})
 
 
+@contextlib.asynccontextmanager
+async def _serving(rt: Runtime) -> AsyncIterator[None]:
+    stop = asyncio.Event()
+    serving = asyncio.create_task(rt.serve(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        await serving
+
+
+async def _until(check: Callable[[], Awaitable[bool]], timeout: float = 10.0) -> None:
+    async def loop() -> None:
+        while not await check():
+            await asyncio.sleep(0.02)
+
+    await asyncio.wait_for(loop(), timeout)
+
+
+def _released(client: Client, tid: str) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        row = await client.get(tid)
+        return row is not None and row.status == "waiting" and row.owner is None
+
+    return check
+
+
+def _kept_waiting(client: Client, tid: str, rt: Runtime) -> Callable[[], Awaitable[bool]]:
+    async def check() -> bool:
+        row = await client.get(tid)
+        return row is not None and row.status == "waiting" and row.owner == rt.worker
+
+    return check
+
+
 async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: Path) -> None:
     # The job outlives the turn, so its notice wakes an idle task (an instant
     # job could finish mid-turn and ride in the same turn instead).
@@ -71,10 +110,9 @@ async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: P
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
-    await rt.run_until_idle()
-    assert (await client.get(tid)).waiting_on == "input"
+    await rt.run_until_idle()  # the task goes on waiting with its claim kept
     await _settle(ext)
-    await rt.run_until_idle()
+    await _until(_released(client, tid))
     notice = provider.requests[2].messages[-1]
     assert notice.origin == "system"
     assert notice.text.startswith(f"{NOTICE_GUARD}\n\n<task-notification>\n<task-id>")
@@ -82,26 +120,28 @@ async def test_an_end_notice_wakes_the_idle_task(store: SqliteStore, tmp_path: P
     assert notice.text.endswith("completed (exit code 0)</summary>\n</task-notification>")
     [job] = (await _jobs(client, tid, ext)).values()
     assert job["status"] == "completed" and job["command"] == "sleep 0.3; echo done-here"
-    assert (await client.get(tid)).waiting_on == "input"
+    row = await client.get(tid)
+    assert row.waiting_on == "input" and row.owner is None
 
 
-async def test_cancelling_the_root_kills_its_jobs_silently(store: SqliteStore,
+async def test_cancelling_the_task_kills_its_jobs_silently(store: SqliteStore,
                                                            tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("ok")])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
-    await rt.run_until_idle()
-    [job] = ext.registry.jobs[tid].values()
-    await client.cancel(tid)
-    await rt.run_until_idle()
-    await asyncio.wait_for(job.done.wait(), 10)
-    assert job.sender is not None
-    await asyncio.wait_for(job.sender, 10)
+    async with _serving(rt):
+        await _until(_kept_waiting(client, tid, rt))
+        [job] = ext.registry.jobs[tid].values()
+        await client.cancel(tid)
+        await asyncio.wait_for(job.done.wait(), 10)
+        assert job.sender is not None
+        await asyncio.wait_for(job.sender, 10)
     assert job.status == "killed" and job.quiet
+    assert (await client.get(tid)).status == "ended"
     inbox = await store.inbox(tid)
     assert not any("task-notification" in str(i.body) for i in inbox)
-    # The ended root's jobs and logs are dropped once they are gone.
+    # The ended task's jobs and logs are dropped once they are gone.
     for _ in range(100):
         if tid not in ext.registry.jobs:
             break
@@ -110,25 +150,25 @@ async def test_cancelling_the_root_kills_its_jobs_silently(store: SqliteStore,
     assert not Path(job.out_path).exists()
 
 
-async def test_stopping_the_roots_turn_leaves_its_jobs_running(store: SqliteStore,
-                                                                tmp_path: Path) -> None:
+async def test_stopping_the_turn_leaves_its_jobs_running(store: SqliteStore,
+                                                         tmp_path: Path) -> None:
     # Claude Code's background tasks outlive an interrupt.
     provider = ScriptedProvider([reply("", _bg("sleep 30"), ("Bash", {"command": "sleep 1"}))])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
-    run = asyncio.create_task(rt.run_until_idle())
-    while not ext.registry.jobs.get(tid):
-        await asyncio.sleep(0.02)
-    await client.cancel(tid, turn_only=True)
-    await run
-    await rt.run_until_idle()
-    [job] = ext.registry.jobs[tid].values()
-    await asyncio.sleep(0.1)
-    assert job.status == "running" and not job.done.is_set()
-    await client.cancel(tid)
-    await rt.run_until_idle()
-    await asyncio.wait_for(job.done.wait(), 10)
+    async with _serving(rt):
+        async def started() -> bool:
+            return any(not j.foreground for j in ext.registry.jobs.get(tid, {}).values())
+
+        await _until(started)
+        await client.cancel(tid, turn_only=True)
+        await _until(_kept_waiting(client, tid, rt))
+        [job] = [j for j in ext.registry.jobs[tid].values() if not j.foreground]
+        await asyncio.sleep(0.1)
+        assert job.status == "running" and not job.done.is_set()
+        await client.cancel(tid)
+        await asyncio.wait_for(job.done.wait(), 10)
     assert job.status == "killed"
 
 
@@ -147,65 +187,78 @@ async def test_jobs_end_with_the_turn_when_configured(store: SqliteStore,
     assert job.status == "killed" and job.quiet
 
 
-async def test_a_tree_with_a_job_stays_with_its_worker_until_that_worker_is_gone(
-        store: SqliteStore, tmp_path: Path) -> None:
+async def test_a_task_with_a_job_stays_with_its_worker_until_that_worker_is_gone(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = str(tmp_path / "t.db")
+    here, there = SqliteStore(path), SqliteStore(path)  # two worker processes
     provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("ok"), reply("told")])
-    rt, ext = _setup(store, provider, tmp_path)
-    rt.lease_seconds = 0.15
-    client = Client(store)
+    rt, ext = _setup(here, provider, tmp_path)
+    rt.lease_seconds = 0.3
+    rt2, ext2 = _setup(there, provider, tmp_path / "2")
+    client = Client(there)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
-    await rt.run_until_idle()
-    # Another worker process: same agent, empty job table.
-    rt2, ext2 = _setup(store, provider, tmp_path)
-    await client.send(tid, "status?")
-    await asyncio.sleep(0.4)  # longer than a hold: the first worker keeps renewing it
-    assert not await rt2.run_once()
-    # The first worker dies: nothing renews its hold, which runs out; the
-    # next claim reaps it and the tree hears the job is lost.
-    assert rt._renewer is not None
-    rt._renewer.cancel()
-    await asyncio.sleep(rt.hold_seconds + 0.1)
+    async with _serving(rt):
+        await _until(_kept_waiting(client, tid, rt))
+        await client.send(tid, "status?")  # heard by polling: another process's post
+        await asyncio.sleep(0.5)  # longer than a lease: the first worker renews it
+        assert not await rt2.run_once()
+
+        async def answered() -> bool:
+            return len(provider.requests) == 3  # by the first worker
+
+        await _until(answered)
+
+        # The first worker loses the store: its lease runs out, and the job
+        # dies with the claim (nothing posts its end).
+        async def unreachable(*_a: Any, **_k: Any) -> Any:
+            raise StoreUnavailable("gone")
+
+        monkeypatch.setattr(here, "renew", unreachable)
+        [job] = ext.registry.jobs[tid].values()
+        await asyncio.wait_for(job.done.wait(), 10)
+    assert job.status == "killed" and job.fenced
+    provider.add(reply("lost it"))
+    await client.send(tid, "and now?")
+    await asyncio.sleep(rt.lease_seconds)
     await rt2.run_until_idle()
-    [job] = (await _jobs(client, tid, ext2)).values()
-    assert job["status"] == "lost"
-    told = provider.requests[2].messages[-1]
+    [state] = (await _jobs(client, tid, ext2)).values()
+    assert state["status"] == "lost"
+    *_, said, told = provider.requests[-1].messages
+    assert said.text == "and now?"
     assert told.origin == "system" and told.text.startswith(f"{NOTICE_GUARD}\n\n")
     assert "<status>failed</status>" in told.text
     assert 'Background command "sleep 30" was lost: the worker process' in told.text
-    ext.registry.kill_where(tid)
-    await _settle(ext)
-    await rt2.run_until_idle()  # the dead worker's job ending later changes nothing
-    assert len(provider.requests) == 3
-    [job] = (await _jobs(client, tid, ext2)).values()
-    assert job["status"] == "lost"
+    await here.close()
+    await there.close()
 
 
-async def test_the_hold_is_released_when_the_job_ends(store: SqliteStore,
-                                                      tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", _bg("true")), reply("ok"), reply("again")])
+async def test_the_claim_is_given_back_when_the_job_ends(store: SqliteStore,
+                                                         tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("", _bg("sleep 0.2")), reply("ok"), reply("noted"),
+                                 reply("again")])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
     await _settle(ext)
-    await asyncio.sleep(0)
-    assert rt._holds == {}
+    await _until(_released(client, tid))  # the end came in while the claim was kept
+    row = await client.get(tid)
+    assert row is not None and row.status == "waiting" and row.owner is None
+    assert [j["status"] for j in (await _jobs(client, tid, ext)).values()] == ["completed"]
     rt2, _ext2 = _setup(store, provider, tmp_path)
     await client.send(tid, "next")
     assert await rt2.run_once()
 
 
-async def test_a_killed_job_is_recorded_when_the_task_runs_again(store: SqliteStore,
-                                                                 tmp_path: Path) -> None:
+async def test_a_killed_job_is_recorded(store: SqliteStore, tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("", _bg("sleep 30")), reply("ok"), reply("again")])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
-    await rt.run_until_idle()
-    ext.registry.kill_where(tid)
-    await _settle(ext)
-    await client.send(tid, "status?")
-    await rt.run_until_idle()
+    async with _serving(rt):
+        await _until(_kept_waiting(client, tid, rt))
+        ext.registry.kill_all(tid)
+        await _until(_released(client, tid))
     [job] = (await _jobs(client, tid, ext)).values()
     assert job["status"] == "killed"
 
@@ -230,14 +283,12 @@ class Delegate:
         return text_output(ended.answer)
 
 
-async def test_a_sub_agents_job_notifies_the_root_after_it_ended(store: SqliteStore,
-                                                                 tmp_path: Path) -> None:
+async def test_a_sub_agents_job_dies_with_it(store: SqliteStore, tmp_path: Path) -> None:
     provider = ScriptedProvider([
         reply("", ("Delegate", {"prompt": "start it", "cwd": str(tmp_path)})),  # root
-        reply("", _bg("sleep 0.3; echo late")),                                 # child
+        reply("", _bg("sleep 30")),                                             # child
         reply("child started it"),                                              # child ends
         reply("ok"),                                                            # root
-        reply("seen"),                                                          # root, notice
     ])
     registry = Registry(log_dir=str(tmp_path / "logs"))
     shells = Shell(registry=registry)
@@ -249,22 +300,14 @@ async def test_a_sub_agents_job_notifies_the_root_after_it_ended(store: SqliteSt
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
     await rt.run_until_idle()
     [child] = await client.tasks(parent_id=tid)
-    assert child.status == "ended" and child.task_id in registry.ended
-    await _settle(shells)
-    await rt.run_until_idle()
-    notice = provider.requests[-1].messages[-1]
-    assert notice.text.startswith(f"{NOTICE_GUARD}\n\n<task-notification>")
-    assert 'Background command "sleep 0.3; echo late" completed' in notice.text
-
-
-async def test_a_release_after_shutdown_does_not_touch_the_store(
-        store: SqliteStore, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    rt, _ext = _setup(store, ScriptedProvider([]), tmp_path)
-    release = await rt.hold("root")
-    await rt._drop_holds()  # the serve loop's way out
-    await store.close()
-    await release()  # a job ending after the store closed
-    assert "unhold failed" not in caplog.text
+    assert child.status == "ended"
+    for _ in range(100):
+        if child.task_id not in registry.jobs:
+            break
+        await asyncio.sleep(0.02)
+    assert child.task_id not in registry.jobs
+    assert len(provider.requests) == 4
+    assert not any("task-notification" in str(i.body) for i in await store.inbox(tid))
 
 
 def test_a_continuation_drops_the_running_jobs_of_its_source() -> None:
@@ -277,24 +320,28 @@ def test_a_continuation_drops_the_running_jobs_of_its_source() -> None:
     assert out.cwd == "/w/sub" and list(out.jobs) == ["b"]
 
 
-async def test_a_job_that_ended_is_never_lost_on_another_worker(store: SqliteStore,
-                                                                tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", _bg("sleep 0.2")), reply("started"),
-                                 reply("it finished")])
+async def test_a_job_whose_end_was_posted_is_never_lost_on_another_worker(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Its end is in the inbox before the claim is given back, so the next
+    worker settles the job as ended: the loss it posts for jobs it does not
+    have comes after."""
+    provider = ScriptedProvider([reply("it finished")])
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
-    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
+    claim = await store.claim("w-old", ["default"], 30)
+    assert claim is not None
+    await store.append(claim, [ExtensionRecorded(extension="shell", kind="started", data={
+        "job_id": "j1", "command": "make", "description": "make", "tool_use_id": "toolu_1",
+        "output_file": "/logs/j1.output"})], expected_seq=1)
+    await store.post(Post(task_id="t", body=External(name=JOB_ENDED, data={
+        "job_id": "j1", "status": "completed", "exit_code": 0,
+        "notice": f"{NOTICE_GUARD}\n\n<task-notification>done</task-notification>"})))
+    await store.release(claim)
     await rt.run_until_idle()
-    await _settle(ext)
-    # Its end is in the inbox before the hold is given back, so whichever
-    # worker takes it next settles the job as ended.
-    assert rt._holds == {}
-    rt2, ext2 = _setup(store, provider, tmp_path)
-    await rt2.run_until_idle()
-    [job] = (await _jobs(client, tid, ext2)).values()
+    [job] = (await _jobs(client, "t", ext)).values()
     assert job["status"] == "completed"
-    told = provider.requests[2].messages[-1]
-    assert told.origin == "system" and "completed (exit code 0)</summary>" in told.text
+    assert "<task-notification>done" in provider.requests[0].messages[-1].text
 
 
 async def test_a_worker_stopping_tells_the_job_loss_with_the_next_message(
@@ -307,13 +354,16 @@ async def test_a_worker_stopping_tells_the_job_loss_with_the_next_message(
     rt, ext = _setup(store, provider, tmp_path)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
-    await rt.run_until_idle()
-    await rt._drop_holds()  # the serve loop's way out
+    async with _serving(rt):
+        await _until(_kept_waiting(client, tid, rt))
+        [job] = ext.registry.jobs[tid].values()
+    await asyncio.wait_for(job.done.wait(), 10)
     after_close = Runtime(store=store, agents=rt.agents, provider_for=rt.provider_for,
                           sleep=_no_sleep)
     await after_close.run_until_idle()
     row = await client.get(tid)
-    assert row is not None and row.status == "waiting" and len(provider.requests) == 2
+    assert row is not None and row.status == "waiting" and row.owner is None
+    assert len(provider.requests) == 2
     await client.send(tid, "what happened?")
     await after_close.run_until_idle()
     assert len(provider.requests) == 3

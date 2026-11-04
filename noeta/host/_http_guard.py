@@ -24,7 +24,7 @@ from noeta.host._errors import error_text
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 from noeta.toolkit.permission_modes import MODE_SIGNAL
-from noeta.toolkit.signals import RESUMED_SIGNAL
+from noeta.toolkit.signals import RENAME_SIGNAL, RESUMED_SIGNAL
 from noeta.toolkit.structured_output import SCHEMA_KEY, answer_schema_problem
 
 
@@ -50,7 +50,8 @@ REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "out
 #: The signals a request may post: the ones front ends send. The others
 #: (a background job's end, a sub-agent's idle subscription …) are posted
 #: by plugins inside the server, which trust what they say.
-REQUEST_SIGNALS = (MODE_SIGNAL, CONFIG_SIGNAL, RESUMED_SIGNAL, RESTORE_SIGNAL)
+REQUEST_SIGNALS = (MODE_SIGNAL, CONFIG_SIGNAL, RESUMED_SIGNAL, RESTORE_SIGNAL,
+                   RENAME_SIGNAL)
 
 #: The config keys a request's config signal may change: a model's route
 #: (its provider, its limits) is the server's to record, never a client's.

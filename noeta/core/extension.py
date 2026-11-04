@@ -26,7 +26,7 @@ from noeta.core.events import (
 )
 from noeta.core.execenv import ExecEnv
 from noeta.core.mcp_names import allowed_in, named_in
-from noeta.core.tool import Tool, ToolOutput, tool_flag
+from noeta.core.tool import Tool, ToolOutput, tool_flags
 from noeta.core.types import (
     Effort,
     Message,
@@ -180,6 +180,23 @@ class ToolOffer:
     plain: frozenset[str] = frozenset()
 
 
+#: Tool-name clashes already warned of, as ``(name, first, other)``.
+_CLASHES_WARNED: set[tuple[str, str, str]] = set()
+
+
+def _offer(tool: Tool, by: str, tools: list[Tool], seen: dict[str, str]) -> None:
+    """``tool`` added to ``tools`` unless an earlier extension offers its
+    name, which keeps it: that clash is logged once per process."""
+    first = seen.get(tool.name)
+    if first is None:
+        seen[tool.name] = by
+        tools.append(tool)
+    elif first != by and (tool.name, first, by) not in _CLASHES_WARNED:
+        _CLASHES_WARNED.add((tool.name, first, by))
+        log.warning("plugins %r and %r both offer a tool named %r; %r's is used",
+                    first, by, tool.name, first)
+
+
 def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str] | None,
                 denied: Sequence[str]) -> ToolOffer:
     """A task's tools for one step: every extension's (the first of a name
@@ -200,15 +217,13 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
             and not named_in(refused, name, "agent disallowedTools")
 
     tools: list[Tool] = []
-    seen: set[str] = set()
+    seen: dict[str, str] = {}  # tool name -> the extension offering it
     for ext in exts:
         for t in ext.tools(view):
-            if (offered_name(t.name) or tool_flag(t, "past_agent_lists")) \
-                    and t.name not in seen:
-                seen.add(t.name)
-                tools.append(t)
+            if offered_name(t.name) or tool_flags(t).past_agent_lists:
+                _offer(t, ext.name, tools, seen)
     offered = tuple(tools)
-    deferred = {t.name for t in offered if tool_flag(t, "deferred")}
+    deferred = {t.name for t in offered if tool_flags(t).deferred}
     withheld: dict[str, str] = {}
     entries: list[ToolEntry] = []
     plain: set[str] = set()
@@ -220,9 +235,7 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
             plain.update(n for n in changes.withhold if n in deferred)
             continue
         for t in changes.add:
-            if t.name not in seen:
-                seen.add(t.name)
-                tools.append(t)
+            _offer(t, ext.name, tools, seen)
         for name, error in changes.withhold.items():
             withheld.setdefault(name, error)
         entries.extend(changes.entries)
@@ -290,10 +303,6 @@ class TaskView(records.CoreNotices):
     allowed_tools: Sequence[str] | None = None
     #: Tool names the agent never offers.
     denied_tools: Sequence[str] = ()
-    #: ``serves_queue(queue)``: whether a child staged on ``queue`` could
-    #: run now (not on a queue this worker does not serve while it holds the
-    #: task tree); ``None`` takes every queue.
-    serves_queue: Callable[[str], bool] | None = None
     #: While a compaction asks for residents: whether the newest messages
     #: stay after its summary (``None`` outside a compaction).
     keeps_tail: bool | None = None
@@ -368,13 +377,7 @@ class TaskView(records.CoreNotices):
         tracked like any child (its ``ChildEnded`` arrives in the inbox).
         ``key`` names the child; the same key gives the same child id.
         Without one the id is new for every spawn of this task (the log
-        position it is staged at, and its place among this hook's).
-        Raises ``ValueError`` for a ``queue`` the child could not run on
-        now (this worker holds the task tree and does not serve it)."""
-        if queue is not None and self.serves_queue is not None \
-                and not self.serves_queue(queue):
-            raise ValueError(f"cannot start a child on queue {queue!r} now: this worker "
-                             "holds the task tree and does not serve that queue")
+        position it is staged at, and its place among this hook's)."""
         child_id = f"{self.task_id}.{key}" if key \
             else f"{self.task_id}.s{self.state.last_seq}.{len(self.creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt
@@ -407,7 +410,7 @@ class TaskView(records.CoreNotices):
         A deferred tool sent plain (``ToolOffer.plain``) is not one."""
         offer = offer_tools(self.extensions, self, self.allowed_tools, self.denied_tools)
         return sorted({t.name for t in offer.tools
-                       if tool_flag(t, "deferred") and t.name not in offer.plain})
+                       if tool_flags(t).deferred and t.name not in offer.plain})
 
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""
@@ -465,9 +468,8 @@ class Extension:
     #: ``enabled = false`` in the host's setting still turns it off.
     add_to: ClassVar[tuple[str, ...]] = ()
     #: Record names besides its own whose records ``reduce`` also folds,
-    #: into this extension's state: a plugin split out of another keeps
-    #: reading the records it wrote under the old name (old logs replay the
-    #: same), and records front ends read by name stay where they are.
+    #: into this extension's state: records front ends read by name stay
+    #: where they are (plan mode's switches under ``permissions``).
     folds: ClassVar[tuple[str, ...]] = ()
 
     def initial_state(self) -> Any:
@@ -569,8 +571,20 @@ class Extension:
         return output
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
-        """Observe each appended event (metrics, audit, UI bridges). Records
-        made here are appended right after."""
+        """Observe each appended event (metrics, audit, UI bridges), with
+        the task's state as of the append. Records made here are appended
+        right after (a ``Waiting`` hands the task back only once they have
+        landed); for the ``TaskEnded`` that ends the task they are dropped.
+        Each event once, and lost on a crash, unless the extension keeps a
+        cursor (:meth:`delivered_through`)."""
+
+    def delivered_through(self, view: TaskView) -> int | None:
+        """The log seq through which this extension has handled its events,
+        read from its own recorded state: whenever the task is claimed, the
+        events after it are passed to ``on_event`` again (with the task's
+        current state), so an event it records having handled is handled at
+        least once. ``None`` (the default): no redelivery."""
+        return None
 
     async def before_compact(self, view: TaskView, trigger: Literal["manual", "auto"],
                              instructions: str) -> str | Deny | None:

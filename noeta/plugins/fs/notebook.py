@@ -14,7 +14,7 @@ import re
 import secrets
 from typing import Any
 
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.fs._encoding import decode, encode, not_text, refusal
 from noeta.plugins.fs._mutate import (
     WriteRoots,
@@ -149,8 +149,7 @@ class NotebookEditTool:
     description = load_description("noeta.plugins.fs", "notebook_edit")
     read_only = False
     clearable = False
-    deferred = True
-    search_hint = "edit the cells of a Jupyter notebook (.ipynb)"
+    flags = ToolFlags(deferred=True, search_hint="edit the cells of a Jupyter notebook (.ipynb)")
     input_schema: dict[str, Any]
 
     def __init__(self, *, write_roots: WriteRoots | None = None) -> None:

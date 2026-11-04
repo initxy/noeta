@@ -85,6 +85,17 @@ GIT_COMMON_WRITABLE = ("objects", "refs", "logs")
 #: In a linked worktree's own git directory, what git reads to find the
 #: shared one and its settings: redirected, they would run code later.
 GIT_WORKTREE_PROTECTED = ("commondir", "gitdir", "config.worktree")
+#: How many levels below a working directory (a workspace holding several
+#: repositories) the protected names are looked for, as Claude Code's
+#: ``mandatoryDenySearchDepth``. There they are read-only when present and
+#: only a repository's own git entries are placeheld; at most
+#: :data:`NESTED_SCAN_LIMIT` directories are listed per working directory,
+#: and dependency and cache trees are not entered.
+NESTED_DEPTH = 3
+NESTED_SCAN_LIMIT = 2000
+_NOT_ENTERED = frozenset({"node_modules", ".venv", "venv", "__pycache__", ".tox", ".nox",
+                          ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages",
+                          "target", "bower_components"})
 
 
 def _expand(settings: SandboxSettings, paths: Sequence[str], base: str) -> list[str]:
@@ -172,6 +183,40 @@ def _git_protected(project: str) -> list[str]:
     if hooks is not None:
         out.append(hooks)
     return out
+
+
+def _nested(project: str) -> tuple[list[str], list[str]]:
+    """``(protected, repositories)`` 1 to :data:`NESTED_DEPTH` levels below
+    ``project``: the protected paths present there (a repository's ``.git``
+    file among them), and the directories holding a ``.git`` directory."""
+    heads = {n.split("/")[0].lower() for n in PROTECTED} | {".git"}
+    protected: list[str] = []
+    repos: list[str] = []
+    level, listed = [project], 0
+    for depth in range(NESTED_DEPTH + 1):
+        below: list[str] = []
+        for directory in level:
+            if listed >= NESTED_SCAN_LIMIT:
+                break
+            listed += 1
+            try:
+                with os.scandir(directory) as it:
+                    entries = list(it)
+            except OSError:
+                continue
+            if depth and {e.name.lower() for e in entries} & heads:
+                protected += [path for n in PROTECTED
+                              if os.path.lexists(path := os.path.join(directory, n))]
+                dotgit = os.path.join(directory, ".git")
+                if os.path.isdir(dotgit) and not os.path.islink(dotgit):
+                    repos.append(directory)
+                elif os.path.lexists(dotgit):
+                    protected.append(dotgit)
+            if depth < NESTED_DEPTH:
+                below += [e.path for e in entries if e.is_dir(follow_symlinks=False)
+                          and e.name.lower() not in heads and e.name not in _NOT_ENTERED]
+        level = below
+    return protected, repos
 
 
 def _read_line(path: str) -> str | None:
@@ -273,7 +318,16 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
                      if any(_within(path, w) for w in writes)]
     git_protected += [path for _, ps in linked for path in ps
                       if any(_within(path, w) for w in writes)]
-    protected = [*(os.path.join(p, n) for p in projects for n in PROTECTED), *git_protected]
+    # Repositories below a working directory: their present protected
+    # paths, what git runs from there, and their missing git entries.
+    nested = [_nested(p) for p in projects]
+    repos = [r for _, rs in nested for r in rs if any(_within(r, w) for w in writes)]
+    git_protected += [path for r in repos for path in _git_protected(r)
+                      if any(_within(path, w) for w in writes)]
+    repo_git = {os.path.join(r, n): n not in _PLACEHELD_DIRS for r in repos
+                for n in PLACEHOLDERS if n.startswith(".git/")}
+    protected = [*(os.path.join(p, n) for p in projects for n in PROTECTED), *git_protected,
+                 *(path for ps, _ in nested for path in ps), *repo_git]
     deny_write = [*user_deny, *protected]
     pinned: list[str] = []
     for w in writes:
@@ -312,6 +366,7 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
              for p in projects for n in (*PLACEHOLDERS, *_hook_runner_configs(p))}
     # A linked worktree's missing files are files git reads.
     names.update({path: True for _, ps in linked for path in ps})
+    names.update(repo_git)
     guarded = [*names, *git_protected]
     for path in [*user_deny, *guarded]:
         missing = _first_missing(path)
@@ -320,7 +375,7 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
             placeholders.setdefault(missing, missing == path and (
                 names.get(path, False) or ("/.git/" in path
                                            and os.path.basename(path) in _GIT_CONFIGS)))
-    remove_after = [path for p in projects for n in REMOVED_AFTER
+    remove_after = [path for p in (*projects, *repos) for n in REMOVED_AFTER
                     if os.path.isdir(os.path.dirname(path := os.path.join(p, n)))
                     and not os.path.lexists(path) and any(_within(path, w) for w in writes)]
     return Plan(writable=writes, deny_write=deny_write, deny_read=deny_read,

@@ -123,6 +123,11 @@ def connect(server: McpServer, scope: str | None = None, *,
                       auth=auth, headers_fn=headers_fn, bare_elicitation=server.bare_elicitation)
 
 
+class _StarterCancelled(Exception):
+    """The connect a waiter shared was cancelled with its starter: the
+    waiter connects itself."""
+
+
 @dataclass
 class _Entry:
     client: McpClient
@@ -188,9 +193,9 @@ class McpPool:
             self._drop(key, entry)
             if entry.holders == 0:
                 await entry.client.close()
-        pending = self._starting.get(key)
-        if pending is not None:
-            return await asyncio.shield(pending)
+        while (pending := self._starting.get(key)) is not None:
+            with contextlib.suppress(_StarterCancelled):
+                return await asyncio.shield(pending)
         fut: asyncio.Future[_Entry] = asyncio.get_running_loop().create_future()
         self._starting[key] = fut
         if self._connect is None:
@@ -202,7 +207,8 @@ class McpPool:
             await client.start()
         except BaseException as exc:
             await client.close()
-            fut.set_exception(exc)
+            fut.set_exception(_StarterCancelled() if isinstance(exc, asyncio.CancelledError)
+                              else exc)
             fut.exception()  # retrieved: concurrent waiters see it, nobody warns
             raise
         finally:

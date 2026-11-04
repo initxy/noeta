@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.web.render import (
     FetchedPage,
     check_text_media,
@@ -428,10 +428,12 @@ class WebFetchTool:
 
     name = "WebFetch"
     read_only = True
-    retry_safe = True
+    flags = ToolFlags(
+        retry_safe=True,
+        deferred=True,
+        search_hint="fetch a URL and pull out its content",
+    )
     clearable = True
-    deferred = True
-    search_hint = "fetch a URL and pull out its content"
 
     def __init__(self, transport: FetchTransport, *,
                  digest_for: Callable[[ToolContext], Digest | None] = lambda _c: None,

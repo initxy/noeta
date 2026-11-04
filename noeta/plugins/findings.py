@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from noeta.core.extension import Extension, TaskView
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
 __all__ = ["DESCRIPTION", "MAX_FINDINGS", "Findings", "ReportFindingsTool"]
@@ -113,7 +113,7 @@ class ReportFindingsTool:
     read_only = True
     clearable = False
     #: Claude Code's ReportFindings result limit.
-    max_result_chars = 256
+    flags = ToolFlags(max_result_chars=256)
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         findings = input.get("findings")

@@ -34,8 +34,6 @@ from typing import Any
 import pytest
 
 from noeta.core.events import ToolFinished, ToolStarted
-from noeta.core.store import HOLD_LOST
-from noeta.plugins.shell.tools import HELD_ELSEWHERE
 from tests.cluster.harness import (
     SPILL_AGENT,
     Cluster,
@@ -45,7 +43,7 @@ from tests.cluster.harness import (
     chaos,
     collect,
     kill_all,
-    kill_holder,
+    kill_job_worker,
     root_finished,
     seed_from_env,
     send_pings,
@@ -57,7 +55,6 @@ from tests.cluster.invariants import (
     jobs_of,
     last_reply,
     lost_jobs_ended_late,
-    taken_texts,
 )
 
 pytestmark = pytest.mark.cluster
@@ -227,9 +224,8 @@ async def test_background_jobs_one_worker(tmp_path: Path, pg_url: str) -> None:
 
 
 async def test_background_job_end_taken_by_another_worker(tmp_path: Path, pg_url: str) -> None:
-    """No faults, several workers: a job that finished is never called lost,
-    whichever worker takes its end (it is posted before the hold is given
-    back)."""
+    """No faults, several workers: a job that finished is never called lost
+    (its end is posted before its task's kept claim is given back)."""
     seed = seed_from_env()
     specs = {f"r{i:02d}": Spec(id=f"r{i:02d}", effects=1, bg=1.0) for i in range(16)}
     outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=0, workers=5)
@@ -240,8 +236,9 @@ async def test_background_job_end_taken_by_another_worker(tmp_path: Path, pg_url
 
 async def test_chaos_with_background_jobs(tmp_path: Path, pg_url: str) -> None:
     """The chaos run with background jobs, some faults aimed at the worker
-    holding a waiting root's job: such a root still hears of its job (the
-    hold is reaped and ``hold_lost`` wakes it)."""
+    keeping a waiting root's claim for its job: such a root still hears of
+    its job (its lease runs out, and the next claimer tells it the job is
+    lost)."""
     seed = seed_from_env()
     specs = make_specs(random.Random(seed), TASKS, bg=True)
     targets = {s for s, spec in specs.items() if spec.bg and not spec.pings
@@ -251,7 +248,7 @@ async def test_chaos_with_background_jobs(tmp_path: Path, pg_url: str) -> None:
     outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=SECONDS,
                                 targets=targets, drain=30)
     assert_invariants(outcome)
-    assert outcome.faults.targeted > 0, fail(outcome, ["no holder was killed; rerun"])
+    assert outcome.faults.targeted > 0, fail(outcome, ["no job worker was killed; rerun"])
     assert_all_done(outcome)
 
 
@@ -293,49 +290,27 @@ async def test_retry_safe_call_runs_again_after_its_worker_dies(tmp_path: Path,
 # ------------------------------------------------------------------ one gap each
 
 
-@pytest.mark.parametrize("crash_after_take", [False, True], ids=["", "crash-after-take"])
-async def test_lost_job_of_an_ended_sub_agent_reaches_the_root(tmp_path: Path, pg_url: str,
-                                                               crash_after_take: bool) -> None:
-    """A sub-agent starts a background job and ends; SIGKILL the worker
-    running the job while the root waits on it: the root is told the job
-    is lost (the sub-agent's log is closed) and finishes; the job is gone.
-    With ``crash_after_take`` the worker that takes ``hold_lost`` for the
-    root dies right after the take, before the root decides the notice:
-    the next pickup still tells it, once."""
+async def test_a_sub_agents_job_dies_with_it(tmp_path: Path, pg_url: str) -> None:
+    """A sub-agent starts a background job and ends at once: the job dies
+    with it (its side effect never lands), nothing tells the root of it,
+    and the root finishes."""
     cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
     await cluster.start()
-    spec = Spec(id="r00", effects=1, agent=True, child_bg=8.0)
+    spec = Spec(id="r00", effects=1, agent=True, child_bg=3.0)
     faults = Faults()
     try:
         tid = await cluster.create(spec)
-
-        async def child_gone_job_running() -> bool:
-            tree = await cluster.tree(tid)
-            root = next(r for r in tree if r.task_id == tid)
-            return root.status == "waiting" and any(
-                r.parent_id == tid and r.status == "ended" for r in tree) \
-                and bool(await cluster.running_job_pids())
-
-        assert await wait_until(child_gone_job_running, 30), "the sub-agent's job never ran"
-        if crash_after_take:
-            Path(cluster.arm).write_text(HOLD_LOST)
-        assert await kill_holder(cluster, {tid}, faults)
-        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 6.0)
-        await asyncio.sleep(2.0)
+        await wait_until(lambda: root_finished(cluster, tid, spec), 30)
+        await asyncio.sleep(5.0)  # past the job's end, had it lived
         outcome = await _outcome(cluster, tid, spec, faults)
     finally:
         await cluster.close()
     assert_invariants(outcome)
     assert_all_done(outcome)
-    told = [t for t in taken_texts(outcome.logs[tid])
-            if "<tool-use-id>cbg-r00</tool-use-id>" in t]
-    assert len(told) == 1 and "<status>failed</status>" in told[0], fail(outcome, told)
+    [child] = [r.task_id for r in outcome.rows if r.parent_id == tid]
+    assert list(jobs_of(outcome.logs[child])), fail(outcome, ["the sub-agent started no job"])
     assert not any(line.startswith("r00-cbg ") for line in outcome.journal), fail(
-        outcome, ["the job of a dead worker wrote after the root was told it was lost"])
-    if crash_after_take:
-        done = Path(cluster.arm + ".done")
-        assert done.exists() and tid in done.read_text(), fail(
-            outcome, ["no worker died after taking hold_lost"])
+        outcome, ["the job of an ended sub-agent wrote"])
 
 
 async def _one_job(tmp_path: Path, url: str, bg: float) -> tuple[Cluster, str, Spec, int]:
@@ -361,13 +336,13 @@ async def _outcome(cluster: Cluster, tid: str, spec: Spec, faults: Faults) -> Ou
                          pings={spec.id: spec.pings}, watch=EpochWatch(), faults=faults)
 
 
-async def test_holder_killed_while_root_waits(tmp_path: Path, pg_url: str) -> None:
-    """SIGKILL the worker holding a waiting root's job, send nothing else:
-    the root must still learn the job is lost and finish."""
+async def test_job_worker_killed_while_root_waits(tmp_path: Path, pg_url: str) -> None:
+    """SIGKILL the worker keeping a waiting root's claim for its job, send
+    nothing else: the root must still learn the job is lost and finish."""
     cluster, tid, spec, _pid = await _one_job(tmp_path, pg_url, bg=6.0)
     faults = Faults()
     try:
-        assert await kill_holder(cluster, {tid}, faults)
+        assert await kill_job_worker(cluster, {tid}, faults)
         await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 6.0)
         outcome = await _outcome(cluster, tid, spec, faults)
     finally:
@@ -377,15 +352,15 @@ async def test_holder_killed_while_root_waits(tmp_path: Path, pg_url: str) -> No
     assert outcome.lost_jobs() == 1, fail(outcome, ["the job was not recorded lost"])
 
 
-async def test_killed_holder_job_stops_writing(tmp_path: Path, pg_url: str) -> None:
-    """SIGKILL the holder, then a message wakes the root on another worker,
-    which records the job lost. The job's process must be gone too: its
+async def test_killed_worker_job_stops_writing(tmp_path: Path, pg_url: str) -> None:
+    """SIGKILL the job's worker, then a message reaches the root on another
+    worker, which records the job lost. The job's process must be gone too: its
     side effect may not land after the log says lost."""
     cluster, tid, spec, _pid = await _one_job(tmp_path, pg_url, bg=4.0)
     spec.pings = 1
     faults = Faults()
     try:
-        assert await kill_holder(cluster, {tid}, faults)
+        assert await kill_job_worker(cluster, {tid}, faults)
         await cluster.client.send(tid, "CLUSTER-PING r00 0", dedupe_key="ping-r00-0")
         await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE)
         await asyncio.sleep(5.0)  # longer than the job had left to run
@@ -399,10 +374,10 @@ async def test_killed_holder_job_stops_writing(tmp_path: Path, pg_url: str) -> N
         outcome, ["the job of a dead worker wrote after the log said lost"])
 
 
-async def test_frozen_holder_job_not_reported_twice(tmp_path: Path, pg_url: str) -> None:
-    """SIGSTOP the holder past its hold, wake the root with a message (the
-    job is recorded lost elsewhere), then SIGCONT: the job's end must not
-    reach the task after the log called it lost."""
+async def test_frozen_worker_job_not_reported_twice(tmp_path: Path, pg_url: str) -> None:
+    """SIGSTOP the job's worker past its lease, wake the root with a message
+    (the job is recorded lost elsewhere), then SIGCONT: the job's end must
+    not reach the task after the log called it lost."""
     cluster, tid, spec, pid = await _one_job(tmp_path, pg_url, bg=4.0)
     spec.pings = 1
     faults = Faults()
@@ -411,7 +386,7 @@ async def test_frozen_holder_job_not_reported_twice(tmp_path: Path, pg_url: str)
         assert i is not None
         cluster.pause(i)
         faults.stops += 1
-        await asyncio.sleep(2 * LEASE + 1.0)  # the hold runs out
+        await asyncio.sleep(2 * LEASE + 1.0)  # the lease runs out
         await cluster.client.send(tid, "CLUSTER-PING r00 0", dedupe_key="ping-r00-0")
 
         async def lost() -> bool:
@@ -431,74 +406,6 @@ async def test_frozen_holder_job_not_reported_twice(tmp_path: Path, pg_url: str)
     assert not late, fail(outcome, late)
     assert not any(line.startswith("r00-bg ") for line in outcome.journal), fail(
         outcome, ["the job of a frozen worker wrote after the log said lost"])
-
-
-#: How long the jobs of the two-workers scenario run: past the checks.
-LONG_JOB = 20.0
-
-
-def _finished(records: list[Any], call_id: str) -> str | None:
-    """The text of call ``call_id``'s result in ``records``, if it has one."""
-    return next((r.event.result.text for r in records if isinstance(r.event, ToolFinished)
-                 and r.event.result.call_id == call_id), None)
-
-
-async def test_long_jobs_of_one_tree_on_two_workers(tmp_path: Path, pg_url: str) -> None:
-    """A root starts a sub-agent, which another worker may claim, then both
-    start a long background job. A tree has one holding worker, so the
-    second job is refused (the model is told) and the root still takes a
-    message while the first job runs: its tree never has two holders that
-    each keep it from the other."""
-    cluster = Cluster(tmp_path, pg_url, workers=2, lease=LEASE)
-    await cluster.start()
-    specs = {f"r{i:02d}": Spec(id=f"r{i:02d}", effects=1, agent=True, agent_first=True,
-                               lookup=1.0, bg=LONG_JOB, child_bg=LONG_JOB, pings=1)
-             for i in range(8)}
-    faults = Faults()
-    try:
-        roots = {sid: await cluster.create(spec) for sid, spec in specs.items()}
-
-        async def both_jobs_asked() -> bool:
-            for sid, tid in roots.items():
-                tree = await cluster.tree(tid)
-                children = [r.task_id for r in tree if r.parent_id == tid]
-                if _finished(await cluster.client.events(tid), f"bg-{sid}") is None \
-                        or not children or _finished(await cluster.client.events(children[0]),
-                                                     f"cbg-{sid}") is None:
-                    return False
-            return True
-
-        assert await wait_until(both_jobs_asked, 30), "the jobs were never started"
-        for sid, tid in roots.items():
-            await cluster.client.send(tid, f"CLUSTER-PING {sid} 0", dedupe_key=f"ping-{sid}-0")
-
-        async def pings_taken() -> bool:
-            for sid, tid in roots.items():
-                if f"CLUSTER-PING {sid} 0" not in taken_texts(await cluster.client.events(tid)):
-                    return False
-            return True
-
-        taken = await wait_until(pings_taken, LONG_JOB / 2)
-        await wait_until(lambda: _all_finished(cluster, roots, specs), LONG_JOB + 30)
-        cluster.stop_workers()
-        outcome = await collect(cluster, seed=0, specs=specs, roots=roots,
-                                pings={s: 1 for s in specs}, watch=EpochWatch(), faults=faults)
-    finally:
-        await cluster.close()
-    refused = [f"{tid}: {r.event.result.call_id}" for tid, records in outcome.logs.items()
-               for r in records if isinstance(r.event, ToolFinished)
-               and HELD_ELSEWHERE in r.event.result.text]
-    assert taken, fail(outcome, ["a root held by two workers took no message while its "
-                                 "jobs ran"])
-    assert refused, fail(outcome, ["no sub-agent ran on another worker than its root; rerun"])
-    assert_invariants(outcome)
-    assert_all_done(outcome)
-
-
-async def _all_finished(cluster: Cluster, roots: dict[str, str], specs: dict[str, Spec]) -> bool:
-    done = await asyncio.gather(*(root_finished(cluster, roots[s], spec)
-                                  for s, spec in specs.items()))
-    return all(done)
 
 
 async def test_a_saved_output_is_read_back_on_another_worker(tmp_path: Path,

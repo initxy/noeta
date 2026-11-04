@@ -1,4 +1,5 @@
-"""The tool step: gate each call, run what may run, park what must ask."""
+"""The tool step: gate the calls in order, run what may run, stop at the
+first that must ask."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core import records as core_records
-from noeta.core.errors import UnknownTask, UnservedQueue
+from noeta.core.errors import UnknownTask
 from noeta.core.events import (
     Event,
     ExtensionRecorded,
@@ -23,7 +24,7 @@ from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, chil
 from noeta.core.large_output import ReplyBudget, bound_result
 from noeta.core.runner import closing, texts
 from noeta.core.store import NewTask, Post
-from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
+from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flags
 from noeta.core.tool_input import NO_SUCH_TOOL, check_input, tool_use_error
 from noeta.core.types import Delta, Message, Text, ToolResult, ToolUse, user
 
@@ -138,9 +139,21 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     offer = run.tool_offer(view)
     tools = {t.name: t for t in offer.tools}
     runnable: list[tuple[ToolUse, Tool]] = []
-    asks: dict[str, Ask] = {}
+    #: The first call that must ask: gating stops there, as Claude Code asks
+    #: one call at a time in the reply's order. The calls after it are
+    #: neither started nor refused; they are gated once it is answered.
+    asked: tuple[str, Ask] | None = None
     outright: set[str] = set()
+    #: A call was declined at its prompt: the turn stops, and, as Claude Code
+    #: aborts the rest of the reply, every later call is refused ungated.
+    #: Read from the batch's logged results (the decline's marker), so the
+    #: claimer after a crash between the two refuses them too.
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
+        if texts.REJECTED_MARKER in run.state.notes:
+            await run.append([ToolFinished(result=ToolResult(
+                call_id=c.use.id, content=[Text(text=rejected_text(None))], is_error=True),
+                end_turn="")])
+            continue
         withheld = offer.withheld.get(c.use.name)
         if withheld is not None:
             # Not in the request the model saw: refused before any gate.
@@ -151,7 +164,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         # and the gates and the tool get them coerced (from the logged call,
         # so every worker derives the same input).
         checked, problems = (c.use.input, None) \
-            if known is None or tool_flag(known, "unchecked_input") \
+            if known is None or tool_flags(known).unchecked_input \
             else check_input(known.name, known.input_schema, c.use.input)
         if problems is not None:
             await run.append([run.error_result(c.use.id, tool_use_error(problems))])
@@ -180,8 +193,8 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             await run.append([run.error_result(use.id, verdict.reason or "denied")])
             continue
         if isinstance(verdict, Ask):
-            asks[use.id] = verdict
-            continue
+            asked = (use.id, verdict)
+            break
         tool = tools.get(use.name)
         if tool is None:
             await run.append([run.error_result(
@@ -193,23 +206,24 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     await run.flush(view)
     # A call whose tool declares ``run_last`` (delegation) runs after the
     # reply's ordinary calls, as 0.6 spawned only once they had finished.
-    runnable.sort(key=lambda item: tool_flag(item[1], "run_last"))
+    runnable.sort(key=lambda item: tool_flags(item[1]).run_last)
     budget = _reply_budget(run)
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
         await _together([_run_one(run, u, t, budget, outright=u.id in outright)
                          for u, t in group])
-    if asks and run.state.config.get("unattended"):
+    if asked is None:
+        return True
+    if run.state.config.get("unattended"):
         # One-shot: the task ends. Otherwise the turn closes and the loop
         # goes on to wait for input (and gives the task back).
         return await closing.fail_turn(run, texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
-    if asks:
-        await run.append(
-            [Waiting(on="approval", ids=list(asks),
-                     detail={k: {"prompt": a.prompt, **a.detail} for k, a in asks.items()})],
-        )
-        return False
-    return True
+    # Recorded, so a wake before the answer does not gate it again
+    # (``TaskState.asking``).
+    call_id, ask = asked
+    await run.append([Waiting(on="approval", ids=[call_id],
+                              detail={call_id: {"prompt": ask.prompt, **ask.detail}})])
+    return False
 
 
 def _context(run: TaskRun, use: ToolUse, records: list[Event],
@@ -235,13 +249,12 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         return child_id
 
     async def post(body: InboxKind, task_id: str | None = None,
-                   dedupe_key: str | None = None, forward_if_ended: bool = False) -> None:
+                   dedupe_key: str | None = None) -> None:
         target = task_id or run.task_id
         if target != run.task_id:
             if await run.store.get(target) is None:
                 raise UnknownTask(target)
-        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key,
-                                  forward_if_ended=forward_if_ended))
+        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key))
 
     async def tasks(**kw: Any) -> list[Any]:
         return list(await run.store.tasks(**kw))
@@ -261,13 +274,13 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
-                       tasks=tasks, task=task, count_tokens=run.counter(run.model),
+                       tasks=tasks, task=task, read_log=run._read_log,
+                       count_tokens=run.counter(run.model),
                        complete=run.complete, progress=progress if sink else None,
-                       hold=lambda: run.rt.hold(root), by_model=True,
+                       keep=run.keep, by_model=True,
                        approved=answer is not None and answer.decision == "allow",
                        allowed_outright=outright, model=run.model,
-                       identity=run.identity, effort=run.effort,
-                       serves_queue=run.serves_queue)
+                       identity=run.identity, effort=run.effort)
 
 
 async def _unknown_history(run: TaskRun, creates: list[NewTask]) -> str | None:
@@ -280,33 +293,19 @@ async def _unknown_history(run: TaskRun, creates: list[NewTask]) -> str | None:
     return None
 
 
-def _unserved_queue(run: TaskRun, creates: list[NewTask]) -> str | None:
-    """A staged child's queue the child could not run on now
-    (:meth:`TaskRun.serves_queue`)."""
-    return next((c.queue for c in creates if not run.serves_queue(c.queue)), None)
-
-
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
                   creates: list[NewTask]) -> None:
     unknown = await _unknown_history(run, creates)
     if unknown is not None:
         output = ToolOutput(content=[Text(text=f"UnknownTask: {unknown}")], is_error=True)
         _drop_staged(records, creates)
-    unserved = _unserved_queue(run, creates)
-    if unserved is not None:
-        output = _unserved_output(unserved)
-        _drop_staged(records, creates)
     view = run.view()
     if output.park is not None:
         park = output.park
         keys = park.keys or [use.id]
-        try:
-            await run.append([*records, core_records.event(core_records.Parked(
-                call_id=use.id, on=park.on, keys=keys, detail=park.detail))], creates=creates)
-            return
-        except UnservedQueue as exc:  # held since the check above
-            output = _unserved_output(exc.queue)
-            _drop_staged(records, creates)
+        await run.append([*records, core_records.event(core_records.Parked(
+            call_id=use.id, on=park.on, keys=keys, detail=park.detail))], creates=creates)
+        return
     for ext in run.exts:
         try:
             output = await ext.after_tool(view, use, output)
@@ -319,19 +318,8 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
                                               is_error=output.is_error,
                                               block_list=output.block_list), meta=meta,
                             end_turn=output.end_turn)
-    try:
-        await run.append([*records, *view.pending, finished],
-                         creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
-    except UnservedQueue as exc:
-        # The tree was held since the check above (a hook may take seconds):
-        # the call fails and stages nothing, its hooks' records included.
-        await run.append([run.error_result(
-            use.id, texts.UNSERVED_QUEUE_ERROR.format(queue=exc.queue))])
-
-
-def _unserved_output(queue: str) -> ToolOutput:
-    return ToolOutput(content=[Text(text=texts.UNSERVED_QUEUE_ERROR.format(queue=queue))],
-                      is_error=True)
+    await run.append([*records, *view.pending, finished],
+                     creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
 
 
 def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:
@@ -391,7 +379,7 @@ async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             if output is not None and output.park is None:
                 await _finish(run, use, output, records, creates)
                 continue
-        if tool is not None and tool_flag(tool, "retry_safe") and c.attempts < MAX_ATTEMPTS:
+        if tool is not None and tool_flags(tool).retry_safe and c.attempts < MAX_ATTEMPTS:
             again.append((use, tool))
             continue
         await run.append([run.error_result(use.id, texts.INTERRUPTED_CALL_ERROR)])
