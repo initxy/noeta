@@ -32,7 +32,6 @@ from noeta.core.errors import (
     Conflict,
     InboxUnread,
     StoreUnavailable,
-    UnservedQueue,
 )
 from noeta.core.events import (
     Cancel,
@@ -54,7 +53,7 @@ from noeta.core.runner import closing, texts, timers
 from noeta.core.runner.runtime import Runtime
 from noeta.core.runner.snapshotting import SnapshotWriter
 from noeta.core.store import Claim, NewTask, Patch, Post, Snapshot, patch_for, pin_history
-from noeta.core.tool import Tool
+from noeta.core.tool import KeptClaim, Tool
 from noeta.core.types import Effort, Text, Thinking, ToolResult
 
 log = logging.getLogger("noeta.core.runner")
@@ -131,10 +130,21 @@ class TaskRun:
         #: (``_woken_by_timer``).
         self._timer_forced = False
         self.snapshots = SnapshotWriter(self)
+        #: What keeps the claim over the task's waits (``ToolContext.keep``).
+        self.kept: set[KeptClaim] = set()
+        #: The patch of the wait the task is in with its claim kept
+        #: (``Patch.keep``), else ``None``.
+        self._kept_wait: Patch | None = None
+        #: Set by a post to the task, a kept claim given back or the claim
+        #: lost: a kept wait looks again (:meth:`_wait_kept`).
+        self._nudged = asyncio.Event()
+        self._kept_due: float | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------ lifecycle
 
     async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         keeper = asyncio.create_task(self._keep_claim())
         unsubscribe = self.store.on_change(self._on_change)
         try:
@@ -185,6 +195,10 @@ class TaskRun:
             keeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keeper
+            # The claim leaves this worker: so does what it was kept for.
+            for kept in list(self.kept):
+                kept.mark_lost()
+            self.kept.clear()
             await self.snapshots.finish()
 
     async def _unreadable_inbox(self, exc: Exception, tries: int) -> None:
@@ -259,7 +273,10 @@ class TaskRun:
                     await self.flush(view)
                     started = True
                 if not await self._step_once():
-                    return
+                    if not await self._wait_kept():
+                        return
+                    # Woken as by a new claim: the pickup's start runs again.
+                    started = False
                 failures = 0
             except (Conflict, LostClaim, StoreUnavailable, UnreadableInbox,
                     asyncio.CancelledError):
@@ -431,6 +448,7 @@ class TaskRun:
                 renewed = None
             if renewed is None:
                 self._lost = True
+                self._nudged.set()
                 if self._step is not None:
                     self._step.cancel()
                 return
@@ -438,6 +456,9 @@ class TaskRun:
             self._lease_deadline = sent + self.rt.lease_seconds
 
     def _on_change(self, task_id: str, kind: str) -> None:
+        if task_id == self.task_id and kind == "posted" and self._loop is not None:
+            with contextlib.suppress(RuntimeError):  # the loop has closed
+                self._loop.call_soon_threadsafe(self._nudged.set)
         if task_id == self.task_id and kind == "posted" and self._step is not None:
             try:
                 asyncio.get_running_loop().create_task(self._check_stop())
@@ -454,7 +475,8 @@ class TaskRun:
             self._step.cancel()
 
     async def _watch_inbox(self) -> None:
-        """Polling fallback for posts made by other processes."""
+        """Polling fallback for posts made by other processes (none when the
+        store's change feed hears them, ``shared_changes``)."""
         while True:
             await asyncio.sleep(self.rt.poll_interval)
             with contextlib.suppress(Exception):
@@ -477,7 +499,10 @@ class TaskRun:
                    for c in creates]
         async with self._write_lock:
             base = self.state.last_seq
-            patch = patch_for(events, self.state.inbox_read)
+            patch = patch_for(events, self.state.inbox_read, keep=bool(self.kept))
+            if patch.status == "running" and self._kept_wait is not None \
+                    and not any(isinstance(e, InputTaken) for e in events):
+                patch = self._kept_wait  # a hook's record: the task still waits
             write = asyncio.ensure_future(self.store.append(
                 self.claim, events, expected_seq=base, patch=patch, posts=posts, creates=creates))
             cancelled = False
@@ -489,6 +514,7 @@ class TaskRun:
                 except asyncio.CancelledError:
                     cancelled = True
             at = write.result().at
+            self._kept_wait = patch if patch.keep else None
             recs = [Recorded(seq=base + i, at=at, event=e) for i, e in enumerate(events, 1)]
             for rec in recs:
                 apply(self.state, rec, self.reducers, self.also)
@@ -530,12 +556,58 @@ class TaskRun:
         effort = self.state.config.get("effort") or (self.agent.effort if self.agent else None)
         return cast("Effort | None", effort)
 
-    def serves_queue(self, queue: str) -> bool:
-        """Whether a child staged on ``queue`` could run now: not while this
-        worker holds the tree and does not serve ``queue`` (a held tree's
-        tasks run only on its holder, so nobody would claim the child until
-        the hold ends)."""
-        return queue in self.rt.queues or not self.rt.holds(self.state.root_id or self.task_id)
+    def keep(self) -> KeptClaim:
+        """``ToolContext.keep``: keep this claim over the task's waits until
+        the returned claim is released."""
+        kept = KeptClaim(_release=self._unkeep)
+        self.kept.add(kept)
+        return kept
+
+    def _unkeep(self, kept: KeptClaim) -> None:
+        if kept in self.kept:
+            self.kept.discard(kept)
+            self._nudged.set()
+
+    async def _wait_kept(self) -> bool:
+        """The task waits with its claim kept (the last append, ``Patch.keep``):
+        the claim's keeper renews the lease meanwhile, so no other worker
+        claims it. ``True`` once there is input to take or a timer is due;
+        ``False`` (the claim given back, the task left waiting) once nothing
+        keeps it, or when the wait did not keep the claim."""
+        if self._kept_wait is None:
+            return False
+        rt = self.rt
+        rt.kept_waiting += 1
+        if rt._wake is not None:
+            rt._wake.set()  # a slot is free
+        shared = getattr(self.store, "shared_changes", False)
+        poll = max(rt.lease_seconds / 3, rt.poll_interval) if shared else rt.poll_interval
+        try:
+            while True:
+                if self._lost:
+                    raise LostClaim()
+                self._nudged.clear()
+                row = await self.store.get(self.task_id)
+                if row is None or row.owner_epoch != self.claim.epoch or row.status == "ended":
+                    raise LostClaim()
+                now = time.time()
+                # A timer is woken for once: one whose firing brought no
+                # input is not looked at again.
+                due = row.ready_at if row.ready_at != self._kept_due else None
+                if due is not None and due <= now:
+                    self._kept_due = due
+                    return True
+                if row.inbox_seq > self.state.inbox_read:
+                    return True
+                if not self.kept:
+                    await self.store.release(self.claim)
+                    self._kept_wait = None
+                    return False
+                timeout = poll if due is None else min(poll, due - now)
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._nudged.wait(), max(timeout, 0.01))
+        finally:
+            rt.kept_waiting -= 1
 
     def view(self) -> TaskView:
         model = self.model
@@ -547,7 +619,7 @@ class TaskRun:
                         # Asks the host for the provider on every view:
                         # build_model_request relies on it coming first.
                         count_tokens=self.counter(model), read_log=self._read_log,
-                        child_tasks=self._child_ids, serves_queue=self.serves_queue,
+                        child_tasks=self._child_ids,
                         spill_dir=self.rt.spill_root, identity=self.identity,
                         effort=self.effort)
 
@@ -606,14 +678,8 @@ class TaskRun:
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates or view.enqueued:
             events, view.pending = list(view.pending), []
-            try:
-                await self.append(events, creates=self.staged(view),
-                                  posts=await self.enqueued(view))
-            except UnservedQueue as exc:
-                # The tree was held since the spawn was checked: nothing of
-                # this flush is written, as if the hook had not run.
-                log.warning("task %s: records dropped, a child on queue %r could not run"
-                            " while this worker holds the tree", self.task_id, exc.queue)
+            await self.append(events, creates=self.staged(view),
+                              posts=await self.enqueued(view))
 
     async def enqueued(self, view: TaskView) -> list[Post]:
         """The posts ``view.enqueue`` staged, taken out of the view; one to a
@@ -735,7 +801,8 @@ class TaskRun:
         """Run a step so a cancel posted mid-step (or a lost claim) can
         interrupt it."""
         self._step = asyncio.create_task(coro)
-        watcher = asyncio.create_task(self._watch_inbox())
+        watcher = None if getattr(self.store, "shared_changes", False) \
+            else asyncio.create_task(self._watch_inbox())
         try:
             result: bool = await self._step
             return result
@@ -747,7 +814,8 @@ class TaskRun:
                 raise LostClaim() from None
             return True  # a cancel landed; the next boundary takes it
         finally:
-            watcher.cancel()
+            if watcher is not None:
+                watcher.cancel()
             self._step = None
 
     async def take_input(self) -> None:

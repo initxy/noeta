@@ -290,10 +290,6 @@ class TaskView(records.CoreNotices):
     allowed_tools: Sequence[str] | None = None
     #: Tool names the agent never offers.
     denied_tools: Sequence[str] = ()
-    #: ``serves_queue(queue)``: whether a child staged on ``queue`` could
-    #: run now (not on a queue this worker does not serve while it holds the
-    #: task tree); ``None`` takes every queue.
-    serves_queue: Callable[[str], bool] | None = None
     #: While a compaction asks for residents: whether the newest messages
     #: stay after its summary (``None`` outside a compaction).
     keeps_tail: bool | None = None
@@ -368,13 +364,7 @@ class TaskView(records.CoreNotices):
         tracked like any child (its ``ChildEnded`` arrives in the inbox).
         ``key`` names the child; the same key gives the same child id.
         Without one the id is new for every spawn of this task (the log
-        position it is staged at, and its place among this hook's).
-        Raises ``ValueError`` for a ``queue`` the child could not run on
-        now (this worker holds the task tree and does not serve it)."""
-        if queue is not None and self.serves_queue is not None \
-                and not self.serves_queue(queue):
-            raise ValueError(f"cannot start a child on queue {queue!r} now: this worker "
-                             "holds the task tree and does not serve that queue")
+        position it is staged at, and its place among this hook's)."""
         child_id = f"{self.task_id}.{key}" if key \
             else f"{self.task_id}.s{self.state.last_seq}.{len(self.creates) + 1}"
         message = user(prompt) if isinstance(prompt, str) else prompt

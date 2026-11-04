@@ -21,7 +21,9 @@ Why each check is race-free (every write is one READ COMMITTED transaction):
 * ``claim`` picks a row with ``FOR UPDATE SKIP LOCKED``, so two workers
   never take the same task, and Postgres re-checks the claimable condition
   on the newest row version before the lock is granted. The epoch bump is
-  the fence; leases only decide when a silent owner may be replaced.
+  the fence; leases only decide when a silent owner may be replaced. The
+  claim index holds only rows a claim can take (:data:`_CLAIMABLE`), so the
+  scan never walks idle waiting tasks.
 * Deadlocks (an append posting to a task that is posting back) abort one
   transaction whole; it is re-run, and its checks run again.
 
@@ -43,13 +45,11 @@ The connection pool, opening the store and the transaction retry rules
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
-import msgspec
 import psycopg
 
 from noeta.backends.stores import postgres_snapshots as snapshots
@@ -64,7 +64,7 @@ from noeta.backends.stores._rows import (
 )
 from noeta.backends.stores.postgres_conn import Connections
 from noeta.backends.stores.postgres_feed import ChangeFeed
-from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask, UnservedQueue
+from noeta.core.errors import Conflict, StoreUnavailable, UnknownTask
 from noeta.core.events import Event, InboxItem, Recorded, event_type
 from noeta.core.store import (
     Appended,
@@ -77,7 +77,6 @@ from noeta.core.store import (
     Snapshot,
     Status,
     TaskRow,
-    hold_lost,
     next_row_state,
 )
 from noeta.core.types import Delta
@@ -88,9 +87,12 @@ Conn = psycopg.AsyncConnection[Any]
 log = logging.getLogger("noeta.backends.stores.postgres")
 
 _LOCK_CLASS = 0x6E6F6574  # "noet": the advisory-lock namespace for schema setup
-_HOLD_LOCK_CLASS = 0x6E6F7468  # "noth": one hold taken at a time per tree; claims share it
 _NAME = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
 _NOW = "EXTRACT(EPOCH FROM transaction_timestamp())::float8"
+#: The rows a claim can take, given a lease run out: the claim index's
+#: predicate, repeated word for word in the claim so the planner uses it.
+_CLAIMABLE = ("(status = 'ready' OR status = 'running'"
+              " OR (status = 'waiting' AND ready_at IS NOT NULL))")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS {s}.noeta_schema (version INTEGER NOT NULL);
@@ -114,8 +116,8 @@ CREATE TABLE IF NOT EXISTS {s}.tasks (
     created_at     DOUBLE PRECISION NOT NULL,
     updated_at     DOUBLE PRECISION NOT NULL
 );
-CREATE INDEX IF NOT EXISTS tasks_claimable ON {s}.tasks (queue, updated_at)
-    WHERE status <> 'ended';
+CREATE INDEX IF NOT EXISTS tasks_claim ON {s}.tasks (queue, updated_at)
+    WHERE """ + _CLAIMABLE + """;
 CREATE INDEX IF NOT EXISTS tasks_parent ON {s}.tasks (parent_id);
 CREATE INDEX IF NOT EXISTS tasks_root ON {s}.tasks (root_id);
 CREATE TABLE IF NOT EXISTS {s}.events (
@@ -137,14 +139,6 @@ CREATE TABLE IF NOT EXISTS {s}.inbox (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS inbox_dedupe ON {s}.inbox (task_id, dedupe_key)
     WHERE dedupe_key IS NOT NULL;
-CREATE TABLE IF NOT EXISTS {s}.tree_holds (
-    epoch   BIGSERIAL PRIMARY KEY,
-    root_id TEXT NOT NULL,
-    worker  TEXT NOT NULL,
-    until   DOUBLE PRECISION NOT NULL,
-    UNIQUE (root_id, worker)
-);
-CREATE INDEX IF NOT EXISTS tree_holds_until ON {s}.tree_holds (until);
 CREATE TABLE IF NOT EXISTS {s}.snapshots (
     task_id TEXT NOT NULL,
     seq     BIGINT NOT NULL,
@@ -154,26 +148,12 @@ CREATE TABLE IF NOT EXISTS {s}.snapshots (
 );
 """
 
-#: The holding worker's queues; NULL from a hold that named none, or an
-#: older version's: not checked.
-_ADDED_HOLD_QUEUES = "ALTER TABLE {s}.tree_holds ADD COLUMN IF NOT EXISTS queues TEXT[]"
-
-
-class _HeldNow(Exception):
-    """A claim's tree was held by another worker after all."""
-
-
-class _ClaimInFlight(Exception):
-    """A hold found a lapsed claim of its tree locked by a claim or renewal
-    in flight: rolled back so that one can finish (and hold's lock not
-    wait on a row a claim waiting on hold's lock has)."""
-
-
 class PostgresStore:
     """``Store`` on Postgres (psycopg 3, async).
 
     ``schema`` holds the tables (created on first use); the change channel
-    is ``<schema>_changes``. ``pool_size`` caps this process's connections
+    is ``<schema>_changes``, which every process hears (``shared_changes``).
+    ``pool_size`` caps this process's connections
     besides the one ``LISTEN`` connection: a worker runs many tasks at once
     and a lease renewal must not queue behind another task's write.
     """
@@ -187,6 +167,7 @@ class PostgresStore:
         connect_timeout: float = 10.0,
         listen_check_interval: float = 15.0,
     ) -> None:
+        self.shared_changes = True
         if not _NAME.match(schema):
             raise ValueError(f"schema must match {_NAME.pattern}: {schema!r}")
         # libpq logs in with these too: noeta's store credentials from now on.
@@ -222,53 +203,19 @@ class PostgresStore:
                     f"schema {self.schema!r} is at version {version}; this noeta knows "
                     f"{SCHEMA_VERSION} (stop every worker and upgrade)")
             await conn.execute(self._q(_SCHEMA))
-            cur = await conn.execute(
-                "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
-                " AND table_name = 'tree_holds' AND column_name = 'queues'", (self.schema,))
-            if await cur.fetchone() is None:
-                await conn.execute(self._q(_ADDED_HOLD_QUEUES))
             if version is None:
                 await conn.execute(self._q("INSERT INTO {s}.noeta_schema VALUES (%s)"),
                                    (SCHEMA_VERSION,))
             elif version < SCHEMA_VERSION:
-                if version >= 2:  # version 2 kept one snapshot per task
-                    await conn.execute(self._q(
-                        "ALTER TABLE {s}.snapshots DROP CONSTRAINT snapshots_pkey,"
-                        " ADD PRIMARY KEY (task_id, version)"))
+                # Older holds tables (0.6's ``holds``, a development build's
+                # ``tree_holds``) and the claim index over every unended
+                # task go: a job they kept died with its worker, as the next
+                # pickup of its task tells.
+                await conn.execute(self._q(
+                    "DROP TABLE IF EXISTS {s}.holds; DROP TABLE IF EXISTS {s}.tree_holds;"
+                    " DROP INDEX IF EXISTS {s}.tasks_claimable"))
                 await conn.execute(self._q("UPDATE {s}.noeta_schema SET version = %s"),
                                    (SCHEMA_VERSION,))
-            await self._drop_version_1_holds(conn)
-            await self._drop_tenants(conn)
-
-    async def _drop_version_1_holds(self, conn: Conn) -> None:
-        """Version 1 kept holds in ``holds``, which this version does not
-        read: each tree held there is told the hold is gone (``hold_lost``
-        with epoch 0, which no hold of ``tree_holds`` has), then the table
-        is dropped. An old worker still inside a transaction on it makes
-        the drop, and so this open, wait for that transaction."""
-        cur = await conn.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
-            " AND table_name = 'holds'", (self.schema,))
-        if await cur.fetchone() is None:
-            return
-        cur = await conn.execute(self._q("SELECT root_id, worker FROM {s}.holds ORDER BY root_id"))
-        changes: list[tuple[str, ChangeKind]] = []
-        for root_id, worker in await cur.fetchall():
-            await self._lost_posts(conn, str(root_id), str(worker), 0, changes)
-        await self._notify(conn, changes)
-        await conn.execute(self._q("DROP TABLE {s}.holds"))
-
-    async def _drop_tenants(self, conn: Conn) -> None:
-        """Version 3 kept a tenant per task and each tenant's usage; this
-        version has no tenants. The column is dropped only when present
-        (the ALTER locks the table)."""
-        await conn.execute(self._q("DROP TABLE IF EXISTS {s}.tenant_usage"))
-        cur = await conn.execute(
-            "SELECT 1 FROM information_schema.columns WHERE table_schema = %s"
-            " AND table_name = 'tasks' AND column_name = 'tenant'", (self.schema,))
-        if await cur.fetchone() is not None:
-            await conn.execute(self._q("DROP INDEX IF EXISTS {s}.tasks_tenant"))
-            await conn.execute(self._q("ALTER TABLE {s}.tasks DROP COLUMN tenant"))
 
     async def _notify(self, conn: Conn, changes: Sequence[tuple[str, ChangeKind]]) -> None:
         """Queue the notifications in the current transaction."""
@@ -329,43 +276,10 @@ class PostgresStore:
                  [inbox_kind(b) for b in task.inbox], [encode(b) for b in task.inbox]))
         return task.task_id, True
 
-    async def _check_served(self, conn: Conn, creates: Sequence[NewTask]) -> None:
-        """Raise ``UnservedQueue`` for a child on a queue its tree's holding
-        worker does not serve (it could never be claimed while held). Takes
-        the tree's hold lock shared, as a claim does: a hold being taken now
-        is waited for and seen, and one taken later sees the child."""
-        roots = sorted({t.created.root_id for t in creates
-                        if t.created.root_id is not None and t.created.root_id != t.task_id})
-        for root in roots:
-            await conn.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
-                               (_HOLD_LOCK_CLASS, f"{self.schema}:{root}"))
-            cur = await conn.execute(self._q(
-                "SELECT queues FROM {s}.tree_holds WHERE root_id = %s AND queues IS NOT NULL"),
-                (root,))
-            held = [list(r[0]) for r in await cur.fetchall()]
-            for task in creates:
-                if task.created.root_id == root and any(task.queue not in q for q in held):
-                    raise UnservedQueue(task.queue)
-
     async def _exists(self, conn: Conn, task_id: str) -> bool:
         cur = await conn.execute(self._q("SELECT 1 FROM {s}.tasks WHERE task_id = %s"),
                                  (task_id,))
         return await cur.fetchone() is not None
-
-    async def _forwarded(self, conn: Conn, post: Post) -> Post:
-        """``post``, or the same post to its task's root when it asks to be
-        forwarded and the task has ended (see ``Post.forward_if_ended``).
-        The task's row stays locked to the end of the transaction, so its
-        end cannot land between this check and the post."""
-        if not post.forward_if_ended:
-            return post
-        cur = await conn.execute(self._q(
-            "SELECT status, root_id FROM {s}.tasks WHERE task_id = %s FOR UPDATE"),
-            (post.task_id,))
-        row = await cur.fetchone()
-        if row is None or row[0] != "ended" or row[1] == post.task_id:
-            return post
-        return msgspec.structs.replace(post, task_id=str(row[1]), forward_if_ended=False)
 
     async def _insert_post(self, conn: Conn, post: Post) -> tuple[int, bool]:
         cur = await conn.execute(
@@ -422,18 +336,18 @@ class PostgresStore:
         async def tx(conn: Conn) -> Appended:
             changes.clear()  # a re-run starts over
             cur = await conn.execute(self._q(
-                "SELECT status, owner_epoch, last_seq, inbox_seq, inbox_read_seq"
+                "SELECT lease_until, owner_epoch, last_seq, inbox_seq, inbox_read_seq"
                 " FROM {s}.tasks WHERE task_id = %s FOR UPDATE"), (claim.task_id,))
             row = await cur.fetchone()
             if row is None:
                 raise UnknownTask(claim.task_id)
-            status, epoch, last_seq, inbox_seq, read_seq = row
-            if status != "running" or epoch != claim.epoch:
+            lease, epoch, last_seq, inbox_seq, read_seq = row
+            # Only a held claim has a lease: running, or kept over a wait.
+            if lease is None or epoch != claim.epoch:
                 raise Conflict(f"{claim.task_id}: claim epoch {claim.epoch} no longer holds")
             if last_seq != expected_seq:
                 raise Conflict(
                     f"{claim.task_id}: expected seq {expected_seq}, log is at {last_seq}")
-            await self._check_served(conn, creates)
             new_status, waiting_on, ready_at, read_seq = next_row_state(patch, inbox_seq,
                                                                         read_seq)
             seq = int(last_seq) + len(events)
@@ -444,7 +358,7 @@ class PostgresStore:
                     " FROM unnest(%s::bigint[], %s::text[], %s::bytea[]) AS u(s, t, d)"),
                     (claim.task_id, list(range(int(last_seq) + 1, seq + 1)),
                      [event_type(e) for e in events], [encode(e) for e in events]))
-            releasing = new_status != "running"
+            releasing = new_status != "running" and not (patch.keep and new_status != "ended")
             if new_status == "ended":
                 await snapshots.delete(conn, self._q, claim.task_id)
             cur = await conn.execute(self._q(
@@ -458,6 +372,8 @@ class PostgresStore:
             stamped = await cur.fetchone()
             assert stamped is not None  # the row was locked above
             changes.append((claim.task_id, "appended"))
+            if releasing and new_status == "ready":
+                changes.append((claim.task_id, "released"))
             for task in creates:
                 task_id, created = await self._insert_task(conn, task)
                 if created:
@@ -465,7 +381,6 @@ class PostgresStore:
             for post in posts:
                 if not await self._exists(conn, post.task_id):
                     continue  # a notice for a task that does not exist is dropped
-                post = await self._forwarded(conn, post)
                 _, created = await self._insert_post(conn, post)
                 if created:
                     changes.append((post.task_id, "posted"))
@@ -487,16 +402,15 @@ class PostgresStore:
         return await self._conns.tx(q, write=False)
 
     async def post(self, post: Post) -> tuple[int, bool]:
-        async def tx(conn: Conn) -> tuple[Post, tuple[int, bool]]:
-            to = await self._forwarded(conn, post)
-            result = await self._insert_post(conn, to)
+        async def tx(conn: Conn) -> tuple[int, bool]:
+            result = await self._insert_post(conn, post)
             if result[1]:
-                await self._notify(conn, [(to.task_id, "posted")])
-            return to, result
+                await self._notify(conn, [(post.task_id, "posted")])
+            return result
 
-        to, result = await self._conns.tx(tx)
+        result = await self._conns.tx(tx)
         if result[1]:
-            self._deliver([(to.task_id, "posted")])
+            self._deliver([(post.task_id, "posted")])
         return result
 
     async def inbox(self, task_id: str, after: int = 0) -> list[InboxItem]:
@@ -560,48 +474,32 @@ class PostgresStore:
         async def tx(conn: Conn) -> Claim | None:
             cur = await conn.execute(self._q(
                 "WITH c AS (SELECT task_id FROM {s}.tasks k"
-                " WHERE queue = ANY(%(q)s)" + in_roots
+                f" WHERE queue = ANY(%(q)s) AND {_CLAIMABLE}" + in_roots
                 + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
-                f" OR (status = 'waiting' AND ready_at IS NOT NULL AND ready_at <= {_NOW})"
-                f" OR (status = 'running' AND lease_until < {_NOW}))"
-                " AND NOT EXISTS (SELECT 1 FROM {s}.tree_holds h WHERE h.root_id = k.root_id"
-                " AND h.worker <> %(w)s)"
+                f" OR (status = 'waiting' AND ready_at <= {_NOW}) OR status = 'running')"
+                f" AND (lease_until IS NULL OR lease_until < {_NOW})"
                 " ORDER BY updated_at LIMIT 1 FOR UPDATE OF k SKIP LOCKED)"
                 " UPDATE {s}.tasks t SET status = 'running', owner = %(w)s,"
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.root_id, t.queue"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.queue"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
                  "r": list(roots or [])})
             row = await cur.fetchone()
             if row is None:
                 return None
-            task_id = str(row[0])
-            # A hold of this tree being taken now: wait for it, then look
-            # again (a fresh statement sees what it committed).
-            await conn.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
-                               (_HOLD_LOCK_CLASS, f"{self.schema}:{row[3]}"))
-            cur = await conn.execute(self._q(
-                "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
-                (row[3], worker))
-            if await cur.fetchone() is not None:
-                raise _HeldNow
-            return Claim(task_id=task_id, worker=worker, epoch=int(row[1]),
-                         lease_until=float(row[2]), queue=str(row[4]))
+            return Claim(task_id=str(row[0]), worker=worker, epoch=int(row[1]),
+                         lease_until=float(row[2]), queue=str(row[3]))
 
-        while True:
-            try:
-                return await self._conns.tx(tx)
-            except _HeldNow:
-                continue  # rolled back; the committed hold now keeps the tree out
+        return await self._conns.tx(tx)
 
     async def renew(self, claim: Claim, lease_seconds: float) -> Claim | None:
         async def tx(conn: Conn) -> Claim | None:
             cur = await conn.execute(self._q(
                 f"UPDATE {{s}}.tasks SET lease_until = {_NOW} + %s WHERE task_id = %s"
-                " AND owner_epoch = %s AND status = 'running' RETURNING lease_until"),
+                " AND owner_epoch = %s AND lease_until IS NOT NULL RETURNING lease_until"),
                 (lease_seconds, claim.task_id, claim.epoch))
             row = await cur.fetchone()
             if row is None:
@@ -610,142 +508,6 @@ class PostgresStore:
                          lease_until=float(row[0]), queue=claim.queue)
 
         return await self._conns.tx(tx)
-
-    async def hold(self, root_id: str, worker: str, seconds: float,
-                   *, epoch: int | None = None,
-                   queues: Sequence[str] | None = None) -> int | None:
-        changes: list[tuple[str, ChangeKind]] = []
-
-        async def tx(conn: Conn) -> int | None:
-            changes.clear()  # a re-run starts over
-            if epoch is not None:
-                cur = await conn.execute(self._q(
-                    f"UPDATE {{s}}.tree_holds SET until = {_NOW} + %s WHERE epoch = %s"
-                    " AND root_id = %s AND worker = %s RETURNING epoch"),
-                    (seconds, epoch, root_id, worker))
-            else:
-                # Two workers taking a hold at once would each find no other
-                # holder; one at a time per tree, so a tree has one holder.
-                await conn.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
-                                   (_HOLD_LOCK_CLASS, f"{self.schema}:{root_id}"))
-                cur = await conn.execute(self._q(
-                    "SELECT 1 FROM {s}.tree_holds WHERE root_id = %s AND worker <> %s"),
-                    (root_id, worker))
-                if await cur.fetchone() is not None:
-                    return None
-                if queues is not None:
-                    cur = await conn.execute(self._q(
-                        "SELECT 1 FROM {s}.tasks WHERE root_id = %s AND status <> 'ended'"
-                        " AND queue <> ALL(%s) LIMIT 1"), (root_id, list(queues)))
-                    if await cur.fetchone() is not None:
-                        return None  # a task of the tree this worker could not claim
-                await self._revoke_lapsed(conn, root_id, worker, changes)
-                # A claim of the tree takes the same lock (shared), so one
-                # that committed before this lock is seen here, and one
-                # after sees this hold.
-                cur = await conn.execute(self._q(
-                    "SELECT 1 FROM {s}.tasks WHERE root_id = %s AND status = 'running'"
-                    f" AND owner <> %s AND lease_until >= {_NOW} LIMIT 1"), (root_id, worker))
-                if await cur.fetchone() is not None:
-                    return None
-                cur = await conn.execute(self._q(
-                    "INSERT INTO {s}.tree_holds (root_id, worker, until, queues)"
-                    f" VALUES (%s, %s, {_NOW} + %s, %s) ON CONFLICT (root_id, worker)"
-                    " DO UPDATE SET until = excluded.until, queues = excluded.queues"
-                    " RETURNING epoch"),
-                    (root_id, worker, seconds, list(queues) if queues is not None else None))
-            row = await cur.fetchone()
-            await self._notify(conn, changes)
-            return int(row[0]) if row else None
-
-        while True:
-            try:
-                held = await self._conns.tx(tx)
-            except _ClaimInFlight:
-                await asyncio.sleep(0.005)
-                continue
-            self._deliver(changes)
-            return held
-
-    async def _revoke_lapsed(self, conn: Conn, root_id: str, worker: str,
-                             changes: list[tuple[str, ChangeKind]]) -> None:
-        """Take back other workers' lapsed claims of the tree (a new epoch,
-        back to ``ready``), so a worker that stalled past its lease cannot
-        renew or write once this one holds the tree."""
-        try:
-            cur = await conn.execute(self._q(
-                "SELECT task_id FROM {s}.tasks WHERE root_id = %s AND status = 'running'"
-                f" AND owner <> %s AND lease_until < {_NOW} FOR UPDATE NOWAIT"),
-                (root_id, worker))
-        except psycopg.errors.LockNotAvailable as e:
-            raise _ClaimInFlight from e
-        lapsed = [str(r[0]) for r in await cur.fetchall()]
-        if not lapsed:
-            return
-        await conn.execute(self._q(
-            "UPDATE {s}.tasks SET status = 'ready', owner = NULL, lease_until = NULL,"
-            f" owner_epoch = owner_epoch + 1, updated_at = {_NOW}"
-            " WHERE task_id = ANY(%s)"), (lapsed,))
-        changes.extend((t, "released") for t in lapsed)
-
-    async def _lost_posts(self, conn: Conn, root_id: str, worker: str, epoch: int,
-                          changes: list[tuple[str, ChangeKind]], *, wake: bool = True) -> None:
-        """Post ``hold_lost`` to every unended task of the tree."""
-        cur = await conn.execute(self._q(
-            "SELECT task_id FROM {s}.tasks WHERE root_id = %s AND status <> 'ended'"
-            " ORDER BY task_id"), (root_id,))
-        for (task_id,) in await cur.fetchall():
-            _, created = await self._insert_post(conn, hold_lost(str(task_id), worker, epoch,
-                                                                     wake=wake))
-            if created:
-                changes.append((str(task_id), "posted"))
-
-    async def unhold(self, root_id: str, worker: str, epoch: int,
-                     *, lost: bool = False) -> None:
-        changes: list[tuple[str, ChangeKind]] = []
-
-        async def tx(conn: Conn) -> None:
-            changes.clear()  # a re-run starts over
-            cur = await conn.execute(self._q(
-                "DELETE FROM {s}.tree_holds WHERE epoch = %s AND root_id = %s AND worker = %s"),
-                (epoch, root_id, worker))
-            if not cur.rowcount:
-                return
-            changes.append((root_id, "released"))
-            if lost:
-                await self._lost_posts(conn, root_id, worker, epoch, changes, wake=False)
-            await self._notify(conn, changes)
-
-        await self._conns.tx(tx)
-        self._deliver(changes)
-
-    async def reap_holds(self) -> int:
-        changes: list[tuple[str, ChangeKind]] = []
-
-        async def expired(conn: Conn) -> bool:
-            cur = await conn.execute(self._q(
-                f"SELECT 1 FROM {{s}}.tree_holds WHERE until < {_NOW} LIMIT 1"))
-            return await cur.fetchone() is not None
-
-        async def tx(conn: Conn) -> int:
-            changes.clear()  # a re-run starts over
-            cur = await conn.execute(self._q(
-                "DELETE FROM {s}.tree_holds WHERE epoch IN (SELECT epoch FROM {s}.tree_holds"
-                f" WHERE until < {_NOW} ORDER BY epoch FOR UPDATE SKIP LOCKED)"
-                " RETURNING epoch, root_id, worker"))
-            gone = sorted(await cur.fetchall())
-            for epoch, root_id, worker in gone:
-                changes.append((str(root_id), "released"))
-                await self._lost_posts(conn, str(root_id), str(worker), int(epoch), changes)
-            await self._notify(conn, changes)
-            return len(gone)
-
-        # Most rounds find nothing to reap: a read, then no write at all.
-        if not await self._conns.tx(expired, write=False):
-            return 0
-        reaped = await self._conns.tx(tx)
-        self._deliver(changes)
-        return reaped
 
     async def snapshot(self, task_id: str, version: str | None = None) -> Snapshot | None:
         return await self._conns.tx(
@@ -757,9 +519,10 @@ class PostgresStore:
     async def release(self, claim: Claim) -> None:
         async def tx(conn: Conn) -> bool:
             cur = await conn.execute(self._q(
-                "UPDATE {s}.tasks SET status = 'ready', owner = NULL, lease_until = NULL,"
+                "UPDATE {s}.tasks SET status = CASE status WHEN 'running' THEN 'ready'"
+                " ELSE status END, owner = NULL, lease_until = NULL,"
                 f" updated_at = {_NOW} WHERE task_id = %s AND owner_epoch = %s"
-                " AND status = 'running'"), (claim.task_id, claim.epoch))
+                " AND lease_until IS NOT NULL"), (claim.task_id, claim.epoch))
             if cur.rowcount:
                 await self._notify(conn, [(claim.task_id, "released")])
             return cur.rowcount > 0

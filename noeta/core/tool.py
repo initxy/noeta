@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 import msgspec
 
 from noeta.core.execenv import ExecEnv
-from noeta.core.holds import Release
 from noeta.core.records import CoreNotices
 from noeta.core.types import (
     Display,
@@ -21,6 +21,8 @@ from noeta.core.types import (
     Text,
     ToolReference,
 )
+
+_log = logging.getLogger("noeta.core.tool")
 
 
 class Park(Struct):
@@ -56,6 +58,49 @@ def text_output(text: str, *, is_error: bool = False, **meta: Any) -> ToolOutput
     return ToolOutput(content=[Text(text=text)], is_error=is_error, meta=meta)
 
 
+@dataclass(eq=False)
+class KeptClaim:
+    """A task's claim kept by its worker (``ToolContext.keep``): while one
+    is held, the task's runner keeps its claim when the task waits, renewing
+    the lease and taking the task's inbox itself. :meth:`release` gives it
+    back (once). Once the claim is gone (lost, the task ended, the worker
+    stopping) it is :attr:`lost`, and so is what it kept: :meth:`on_lost`
+    registers the stop."""
+
+    lost: bool = False
+    _on_lost: list[Callable[[], None]] = field(default_factory=list, repr=False)
+    _release: Callable[[KeptClaim], None] = field(default=lambda _kept: None, repr=False)
+
+    def on_lost(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Call ``callback`` once the claim is lost (at once if it is). The
+        returned call takes it back."""
+        if self.lost:
+            callback()
+        else:
+            self._on_lost.append(callback)
+
+        def forget() -> None:
+            if callback in self._on_lost:
+                self._on_lost.remove(callback)
+
+        return forget
+
+    def release(self) -> None:
+        self._on_lost.clear()
+        self._release(self)
+
+    def mark_lost(self) -> None:
+        if self.lost:
+            return
+        self.lost = True
+        callbacks, self._on_lost = self._on_lost, []
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:  # noqa: BLE001 — one failing stop leaves the others to run
+                _log.exception("a lost-claim callback failed")
+
+
 @dataclass
 class ToolContext(CoreNotices):
     task_id: str
@@ -76,22 +121,19 @@ class ToolContext(CoreNotices):
     #: never makes a second child.
     spawn: Callable[..., str] | None = None
     #: Post to this task's own inbox from outside a step (a background job
-    #: finishing), or with ``task_id=`` to any other task (the root once the
-    #: spawner has ended; another conversation ``SendMessage`` writes to, as
-    #: Claude Code messages its other open sessions); an unknown task raises
-    #: ``UnknownTask``. Wakes the task if it is waiting;
-    #: idempotent with a ``dedupe_key=``; ``forward_if_ended=True`` sends it
-    #: to the root instead when the task has ended (``Post.forward_if_ended``).
+    #: finishing), or with ``task_id=`` to any other task (a child whose job
+    #: is stopped; another conversation ``SendMessage`` writes to, as Claude
+    #: Code messages its other open sessions); an unknown task raises
+    #: ``UnknownTask``. Wakes the task if it is waiting; idempotent with a
+    #: ``dedupe_key=``.
     post: Callable[..., Awaitable[None]] | None = None
-    #: The root task's id (background jobs notify the spawner, then the root).
+    #: The root task's id.
     root_id: str = ""
-    #: ``await hold()`` keeps this task tree with this worker until the
-    #: returned release is awaited (``Runtime.hold``): for what lives only in
-    #: this process, e.g. a background job. The release's ``tree`` is the
-    #: hold: its worker and epoch, and ``on_lost`` to stop with it. Raises
-    #: ``HeldElsewhere`` while another worker holds the tree or runs one of
-    #: its tasks.
-    hold: Callable[[], Awaitable[Release]] | None = None
+    #: ``keep()`` keeps this task's claim with this worker, over the task's
+    #: waits too, until the returned :class:`KeptClaim` is released: for what
+    #: lives only in this process (a background job), so no other worker
+    #: runs the task meanwhile and its next turn finds the job here.
+    keep: Callable[[], KeptClaim] | None = None
     #: ``await tasks(parent_id=..., status=..., limit=...)``: rows of the
     #: store's task table (``Store.tasks``), e.g. to
     #: list other tasks a message could go to.
@@ -99,6 +141,9 @@ class ToolContext(CoreNotices):
     #: ``await task(task_id)``: the store's row of one task, ``None`` when
     #: there is none.
     task: Callable[[str], Awaitable[Any]] | None = None
+    #: ``await read_log(task_id, after=0)``: another task's records
+    #: (``TaskView.read_log``); an unknown task reads as empty.
+    read_log: Callable[..., Awaitable[Sequence[Any]]] | None = None
     #: The model made this call (the runner's calls), so what earlier calls
     #: returned is in its conversation; ``False`` when an extension runs a
     #: tool itself.
@@ -131,10 +176,6 @@ class ToolContext(CoreNotices):
     #: doing (its latest output, replacing the one before). Never recorded
     #: nor sent to the model; best effort. ``None`` where nobody watches.
     progress: Callable[[str], None] | None = None
-    #: ``serves_queue(queue)``: whether a child staged on ``queue`` could run
-    #: now (``TaskView.serves_queue``); one that could not is dropped with
-    #: the call's result. ``None`` takes every queue.
-    serves_queue: Callable[[str], bool] | None = None
 
     @property
     def idempotency_key(self) -> str:
