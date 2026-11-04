@@ -128,7 +128,7 @@ its own settings, so a cloned repository never starts a process by itself.
 The one capability-plugin interface (`noeta/core/extension.py`): tools, `tool_changes` (tools
 computed from the others'), context parts, commands, reminders, `on_start`, `before_model`, `before_tool` (gates: Deny > Rewrite > Ask > Allow;
 an approving Allow satisfies asks that are not firm), `resolve_ask` (answers asks before the
-call parks), `after_tool`, `on_event`, `reduce`, `continue_state`, `inherit`, `on_context_overflow`,
+call parks), `after_tool`, `on_event` (at least once past `delivered_through`), `reduce`, `continue_state`, `inherit`, `on_context_overflow`,
 `on_empty_reply`, `before_compact` (asked by the compacting plugin), `resident`, `lead_resident`. Every method is
 optional. Commands (`commands(ctx)` / `run_command`) are slash commands front ends list and
 expand through `noeta/core/commands.py`. A `before_model` that raises `TurnDone` ends the turn
