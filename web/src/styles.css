@@ -1089,3 +1089,7 @@ code {
     visibility: hidden;
   }
 }
+
+.context-low {
+  color: var(--error);
+}

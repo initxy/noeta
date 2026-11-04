@@ -375,7 +375,7 @@ function Workspace({
             </button>
             {state.cwd && <span className="cwd muted">{state.cwd}</span>}
           </div>
-          <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} />
+          <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} compaction={state.compaction} />
           {taskId && (
             <button className="icon-button" title="Rewind" aria-label="Rewind" onClick={() => setRewinding(true)}>
               ↶

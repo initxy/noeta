@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Api } from "../api/client";
 import type { Event, Recorded } from "../api/types";
-import { emptyTask, reduce, sessionStatus, type Action, type TaskState } from "./transcript";
+import { contextLeft, emptyTask, reduce, sessionStatus, type Action, type TaskState } from "./transcript";
 import { earlierLogs } from "./useTask";
 
 let seq = 0;
@@ -184,5 +184,26 @@ describe("earlierLogs", () => {
       ["t1", null],
       ["t2", logs.t2],
     ]);
+  });
+});
+
+describe("the auto-compact warning", () => {
+  it("reads the compaction plugin's threshold record, the last valid one", () => {
+    expect(run(record("compaction", "threshold", { threshold: 100_000, window: 120_000, auto: true })).compaction).toEqual({ threshold: 100_000, window: 120_000, auto: true });
+    const off = run(record("compaction", "threshold", { threshold: 100_000, window: 120_000, auto: false }), record("compaction", "threshold", { threshold: 0, window: 1 }));
+    expect(off.compaction).toEqual({ threshold: 100_000, window: 120_000, auto: false });
+    expect(run(record("compaction", "threshold", { threshold: 100_000, window: 120_000 })).compaction?.auto).toBe(true);
+  });
+
+  it("counts down only within 20K tokens of the point, as the TUI does", () => {
+    const at = { threshold: 100_000, window: 120_000, auto: true };
+    expect(contextLeft(10_000, at)).toBeNull();
+    expect(contextLeft(79_999, at)).toBeNull();
+    expect(contextLeft(90_000, at)).toEqual({ text: "10% until auto-compact", low: false });
+    expect(contextLeft(130_000, at)?.text).toBe("0% until auto-compact");
+    const off = contextLeft(108_000, { ...at, auto: false });
+    expect(off?.low).toBe(true);
+    expect(off?.text).toBe("Context low (10% remaining) · Run /compact to compact & continue");
+    expect(contextLeft(90_000, null)).toBeNull();
   });
 });

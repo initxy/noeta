@@ -36,7 +36,7 @@ on the offline scripted provider, so they are rewritten on every run.
 | `@` file mentions completed from the session's directory | done |
 | Image paste, drop and upload | done |
 | Permission-mode picker (bypass only when the server allows it), model picker | done |
-| Usage: tokens, cost, context fill | done |
+| Usage: tokens, cost, context fill; within 20K tokens of the auto-compact threshold "N% until auto-compact" ("Context low … Run /compact" when auto is off), as the TUI | done |
 | Rewind to a checkpoint (the prompt back in the composer, the rewound session replaced) | done |
 | Continue an ended session (send to it: a new session carries its conversation on) | done |
 | Links in a new tab; remote images in replies shown as links, not loaded; served with a CSP | done |

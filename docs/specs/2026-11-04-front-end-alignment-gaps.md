@@ -53,7 +53,7 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
 - [x] A TUI + host: D1, D2, D3, Tab-to-amend, Tab completion inside a command word, `-c` exits
       when nothing to continue.
 - [x] B Web: session search, archive (delete cut, D5), host routes as needed.
-- [ ] B2 Web: auto-compact indicator once A's reader lands.
+- [x] B2 Web: auto-compact indicator once A's reader lands.
 - [x] C Eval: why `compaction_resume_edits` stalls at the eighth file; fix the cause.
 - [ ] Integrate, full gates, review.
 
@@ -101,3 +101,9 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   block); Claude Code's mid-prompt slash completion and its "% context used" variant are
   not built. make check 3552 passed, 90.34%; make tui 71 passed, 88.14%; make parity 0
   mismatches, own-words none; screenshots rewritten.
+- 2026-11-04 B2 on `v1-align-b2`: the web folds the compaction plugin's `threshold` record
+  (`compaction/threshold`, the last valid one) and the header's usage shows the TUI's rule
+  in place of "N% context": within 20K tokens of the threshold "N% until auto-compact", with
+  auto off "Context low (N% remaining) Â· Run /compact to compact & continue" (red). The e2e
+  provider's `crowded` keyword reports a 90,000-token context. Desktop gets it through
+  `web/`. check 3557 passed, 90%; make tui 71; make web 56 + e2e 16; make desktop 33 + e2e 3; parity 0.

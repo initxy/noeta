@@ -7,6 +7,7 @@ import { emptyTask, type Item } from "../state/transcript";
 import { ApiContext } from "../state/useTask";
 import { ApiError } from "../api/client";
 import { Composer, menuQuery } from "./Composer";
+import { UsageBadge } from "./Controls";
 import { Markdown } from "./Markdown";
 import { PendingCards } from "./PendingCard";
 import { Sidebar } from "./Sidebar";
@@ -414,5 +415,19 @@ describe("Markdown", () => {
   it("drops a javascript: link", () => {
     render(<Markdown text={"[x](javascript:alert(1))"} />);
     expect(screen.getByText("x").closest("a")?.getAttribute("href") ?? "").not.toMatch(/javascript/);
+  });
+});
+
+describe("UsageBadge", () => {
+  const usage = { tasks: 1, cost_usd: 0.5, usage: { uncached: 90_000 }, by_model: {} };
+  it("shows the context share, and near the threshold how far auto-compact is", () => {
+    const at = { threshold: 100_000, window: 120_000, auto: true };
+    const { rerender, container } = render(<UsageBadge usage={usage} contextTokens={50_000} window={200_000} compaction={at} />);
+    expect(container).toHaveTextContent("· 25% context");
+    rerender(<UsageBadge usage={usage} contextTokens={90_000} window={200_000} compaction={at} />);
+    expect(container).toHaveTextContent("· 10% until auto-compact");
+    expect(container).not.toHaveTextContent("% context");
+    rerender(<UsageBadge usage={null} contextTokens={108_000} window={200_000} compaction={{ ...at, auto: false }} />);
+    expect(screen.getByText(/Context low \(10% remaining\)/)).toHaveClass("context-low");
   });
 });

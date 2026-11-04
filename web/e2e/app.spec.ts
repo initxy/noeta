@@ -261,3 +261,12 @@ test("sessions are searched, archived and brought back", async ({ page }) => {
   await search.press("Escape");
   await expect(nav.locator(".session-row").nth(1)).toBeVisible();
 });
+
+test("near the auto-compact threshold the header counts down to it", async ({ page }) => {
+  await newSession(page, "acceptEdits");
+  await say(page, "hello, a crowded context");
+  await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
+  // The compaction plugin's threshold record against the reply's 90,000 tokens.
+  await expect(page.locator(".usage")).toContainText(/· \d+% until auto-compact/);
+  await expect(page.locator(".usage")).not.toContainText("% context");
+});

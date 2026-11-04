@@ -10,6 +10,8 @@ script, and how many replies came since that prompt picks the step.
 * ``agent`` — an ``Agent`` call to ``Explore``, whose task answers ``explored``.
 * ``plan`` — ``ExitPlanMode`` loaded and called with a plan.
 * ``slow`` — a long reply streamed slowly (for interrupting).
+* ``crowded`` — a short reply whose usage says the context is 90,000 tokens
+  (near the auto-compact threshold).
 * ``links`` — a reply with a link and a remote image.
 * a slash command the server expanded (Claude Code's ``<command-name>`` tags) — a
   reply naming it.
@@ -149,9 +151,11 @@ class WebE2EProvider:
         content: list[Any] = [Thinking(text=thought)] if thought else []
         content += [Text(text=text)] if text else []
         content += [ToolUse(id=f"call_{next(_ids)}", name=n, input=i) for n, i in calls]
+        usage = Usage(uncached=89_000, output=1_000) if "crowded" in prompt.lower() \
+            else Usage(uncached=120, output=30)
         return ModelResponse(message=Message(role="assistant", content=content),
                              stop_reason="tool_use" if calls else "end_turn",
-                             usage=Usage(uncached=120, output=30), model=request.model)
+                             usage=usage, model=request.model)
 
 
 def provider(**_kw: Any) -> WebE2EProvider:
