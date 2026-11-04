@@ -111,3 +111,7 @@ Web — no session search, archive or delete; no auto-compact indicator. Eval �
   auto off "Context low (N% remaining) · Run /compact to compact & continue" (red). The e2e
   provider's `crowded` keyword reports a 90,000-token context. Desktop gets it through
   `web/`. check 3557 passed, 90%; make tui 71; make web 56 + e2e 16; make desktop 33 + e2e 3; parity 0.
+- 2026-11-04 C follow-up 2: the auto-mode classifier, prompt/agent hooks and the recall selector
+  take their thinking field from `side_requests.thinking_off` (left out on an uncatalogued model);
+  the selector's retry-without-it on a 400 is gone. Live: a fast classifier stage on DeepSeek is
+  200 (with `disabled` it was 400).

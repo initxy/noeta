@@ -353,6 +353,19 @@ def test_transcript_rendering_and_chunks() -> None:
     assert "`ann`" in request.system[1].text
 
 
+def test_the_fast_classifier_switches_thinking_off_only_on_a_known_model() -> None:
+    """Claude Code sends ``disabled`` to its fast classifier; a model the
+    catalog does not know gets no field (a gateway serving DeepSeek refuses
+    ``disabled`` with a 400), and the main model never gets one."""
+    def thinking(model: str, fast: bool) -> bool | None:
+        return c.classifier_request(model=model, prompt="P", instructions="", transcript=["x"],
+                                    stage=1, fast=fast).thinking
+
+    assert thinking(c.FAST_MODEL, True) is False
+    assert thinking("opensource/deepseek_v4_1_flash", True) is None
+    assert thinking(c.FAST_MODEL, False) is None
+
+
 def test_ask_user_question_shows_every_option_field() -> None:
     # Claude Code's rendering: quoted question, header, multi-select flag,
     # numbered options with description and preview, on one line each.
