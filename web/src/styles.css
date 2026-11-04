@@ -331,6 +331,23 @@ code {
   font-weight: 400;
 }
 
+/* the desktop app's project folder */
+.project-pick {
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+  color: var(--text);
+  background: var(--user);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.project-pick:hover {
+  border-color: var(--accent);
+}
+
 /* transcript */
 .msg {
   margin: 14px 0;

@@ -1,0 +1,5 @@
+#!/bin/sh
+# The repository's noeta with the offline scripted provider (web/e2e/provider):
+# the `noeta` the end-to-end test points the app at.
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+exec uv run -q --project "$repo" --all-extras --with-editable "$repo/web/e2e/provider" noeta "$@"

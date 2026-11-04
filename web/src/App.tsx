@@ -7,6 +7,7 @@ import { PendingCards } from "./components/PendingCard";
 import { Sidebar } from "./components/Sidebar";
 import { TodoPanel } from "./components/TodoPanel";
 import { Transcript } from "./components/Transcript";
+import { attentionChanges, desktop } from "./desktop";
 import { ApiContext, useTask } from "./state/useTask";
 
 /** Commands the page runs itself, as Claude Code's app does. */
@@ -125,6 +126,9 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
   const [navOpen, setNavOpen] = useState(false);
   const [error, setError] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
+  const desk = desktop();
+  const [project, setProject] = useState("");
+  const listed = useRef<TaskSummary[] | null>(null);
   const pinned = useRef(true); // the view follows new output while it is at the bottom
 
   useLayoutEffect(() => {
@@ -149,7 +153,25 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
     history.replaceState(null, "", id ? `#session=${id}` : window.location.pathname);
   }, []);
 
-  const refreshSessions = useCallback(() => api.summaries().then(setSessions, fail), [api, fail]);
+  const refreshSessions = useCallback(
+    () =>
+      api.summaries().then((list) => {
+        if (desk && listed.current) for (const a of attentionChanges(listed.current, list)) desk.notify(a);
+        listed.current = list;
+        setSessions(list);
+      }, fail),
+    [api, fail, desk],
+  );
+
+  useEffect(() => {
+    if (!desk) return;
+    void desk.project().then(setProject);
+    return desk.onCommand((c) => {
+      if (c.name === "new-session") open(null);
+      else if (c.name === "open-session") open(c.taskId);
+      else setProject(c.path);
+    });
+  }, [desk, open]);
   useEffect(() => {
     void refreshSessions();
     const timer = setInterval(refreshSessions, 3000);
@@ -198,6 +220,7 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
       if (!taskId) {
         const config: Record<string, unknown> = { permission_mode: newMode, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
         if (newModel) config.model = newModel;
+        if (desk && project) config.cwd = project;
         const id = await api.create(input, config);
         open(id);
         void refreshSessions();
@@ -264,7 +287,21 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
             {!taskId && (
               <div className="welcome">
                 <h1>What should we work on?</h1>
-                <p className="muted">A new session runs in the server's directory with the mode and model below.</p>
+                {desk ? (
+                  <p className="muted">
+                    A new session runs in{" "}
+                    <button
+                      className="project-pick"
+                      title="Choose the project folder"
+                      onClick={() => void desk.chooseProject().then((dir) => dir && setProject(dir))}
+                    >
+                      {project || "a project folder"}
+                    </button>{" "}
+                    with the mode and model below.
+                  </p>
+                ) : (
+                  <p className="muted">A new session runs in the server's directory with the mode and model below.</p>
+                )}
               </div>
             )}
             <Transcript state={state} />

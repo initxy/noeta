@@ -1,0 +1,26 @@
+{
+  "name": "noeta-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The noeta desktop app: the web app in a window, over a local noeta serve it starts.",
+  "author": "The Noeta Authors <initxy0@gmail.com>",
+  "license": "Apache-2.0",
+  "main": "build/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "web": "npm --prefix ../web run build",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "e2e": "npm run build && xvfb-run -a playwright test",
+    "dist": "npm run web && npm run build && electron-builder"
+  },
+  "devDependencies": {
+    "@playwright/test": "~1.58.1",
+    "@types/node": "^22.0.0",
+    "electron": "44.9.0",
+    "electron-builder": "26.17.0",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
