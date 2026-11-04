@@ -1,6 +1,6 @@
 # ADR-027: The store refuses a child off its held tree's queues, and a reclaim counts toward the limit
 
-- Status: accepted
+- Status: superseded by ADR-029
 - Date: 2026-10-29
 - Refined by: [ADR-028](028-no-tenants-in-noeta.md) (no running limit)
 - Refines: [ADR-024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md)

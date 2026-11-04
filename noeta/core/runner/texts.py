@@ -9,12 +9,6 @@ INTERRUPTED_CALL_ERROR = (
 STOPPED_CALL_ERROR = "interrupted: a human stop landed during this batch"
 #: Answers a call left open when its turn failed (followed by the reason).
 TURN_FAILED_CALL_ERROR = "not run: the turn failed: "
-#: A child named onto a queue this worker does not serve while it holds the
-#: tree (for a background job): no worker could run the child until then.
-UNSERVED_QUEUE_ERROR = (
-    "cannot start an agent on queue '{queue}' now: this worker holds the task tree for a "
-    "background command and does not serve that queue. Start it after the background "
-    "command ends, or on this worker's queue.")
 DENIED_BY_HUMAN = "denied by human"
 #: A call the person declined at its approval prompt; the turn then stops.
 REJECTED_BY_USER = (

@@ -10,7 +10,7 @@ from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any
 
 from noeta.core import records as core_records
-from noeta.core.errors import UnknownTask, UnservedQueue
+from noeta.core.errors import UnknownTask
 from noeta.core.events import (
     Event,
     ExtensionRecorded,
@@ -240,13 +240,12 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
         return child_id
 
     async def post(body: InboxKind, task_id: str | None = None,
-                   dedupe_key: str | None = None, forward_if_ended: bool = False) -> None:
+                   dedupe_key: str | None = None) -> None:
         target = task_id or run.task_id
         if target != run.task_id:
             if await run.store.get(target) is None:
                 raise UnknownTask(target)
-        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key,
-                                  forward_if_ended=forward_if_ended))
+        await run.store.post(Post(task_id=target, body=body, dedupe_key=dedupe_key))
 
     async def tasks(**kw: Any) -> list[Any]:
         return list(await run.store.tasks(**kw))
@@ -266,13 +265,13 @@ def _context(run: TaskRun, use: ToolUse, records: list[Event],
     return ToolContext(task_id=run.task_id, call_id=use.id, env=run.env(),
                        state=dict(run.state.ext), record=record, spill_dir=run.rt.spill_root,
                        spawn=spawn, post=post, root_id=root, prompt=run.state.prompt,
-                       tasks=tasks, task=task, count_tokens=run.counter(run.model),
+                       tasks=tasks, task=task, read_log=run._read_log,
+                       count_tokens=run.counter(run.model),
                        complete=run.complete, progress=progress if sink else None,
-                       hold=lambda: run.rt.hold(root), by_model=True,
+                       keep=run.keep, by_model=True,
                        approved=answer is not None and answer.decision == "allow",
                        allowed_outright=outright, model=run.model,
-                       identity=run.identity, effort=run.effort,
-                       serves_queue=run.serves_queue)
+                       identity=run.identity, effort=run.effort)
 
 
 async def _unknown_history(run: TaskRun, creates: list[NewTask]) -> str | None:
@@ -285,33 +284,19 @@ async def _unknown_history(run: TaskRun, creates: list[NewTask]) -> str | None:
     return None
 
 
-def _unserved_queue(run: TaskRun, creates: list[NewTask]) -> str | None:
-    """A staged child's queue the child could not run on now
-    (:meth:`TaskRun.serves_queue`)."""
-    return next((c.queue for c in creates if not run.serves_queue(c.queue)), None)
-
-
 async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[Event],
                   creates: list[NewTask]) -> None:
     unknown = await _unknown_history(run, creates)
     if unknown is not None:
         output = ToolOutput(content=[Text(text=f"UnknownTask: {unknown}")], is_error=True)
         _drop_staged(records, creates)
-    unserved = _unserved_queue(run, creates)
-    if unserved is not None:
-        output = _unserved_output(unserved)
-        _drop_staged(records, creates)
     view = run.view()
     if output.park is not None:
         park = output.park
         keys = park.keys or [use.id]
-        try:
-            await run.append([*records, core_records.event(core_records.Parked(
-                call_id=use.id, on=park.on, keys=keys, detail=park.detail))], creates=creates)
-            return
-        except UnservedQueue as exc:  # held since the check above
-            output = _unserved_output(exc.queue)
-            _drop_staged(records, creates)
+        await run.append([*records, core_records.event(core_records.Parked(
+            call_id=use.id, on=park.on, keys=keys, detail=park.detail))], creates=creates)
+        return
     for ext in run.exts:
         try:
             output = await ext.after_tool(view, use, output)
@@ -324,19 +309,8 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
                                               is_error=output.is_error,
                                               block_list=output.block_list), meta=meta,
                             end_turn=output.end_turn)
-    try:
-        await run.append([*records, *view.pending, finished],
-                         creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
-    except UnservedQueue as exc:
-        # The tree was held since the check above (a hook may take seconds):
-        # the call fails and stages nothing, its hooks' records included.
-        await run.append([run.error_result(
-            use.id, texts.UNSERVED_QUEUE_ERROR.format(queue=exc.queue))])
-
-
-def _unserved_output(queue: str) -> ToolOutput:
-    return ToolOutput(content=[Text(text=texts.UNSERVED_QUEUE_ERROR.format(queue=queue))],
-                      is_error=True)
+    await run.append([*records, *view.pending, finished],
+                     creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
 
 
 def _drop_staged(records: list[Event], creates: list[NewTask]) -> None:

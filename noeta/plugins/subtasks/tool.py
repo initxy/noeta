@@ -268,11 +268,7 @@ class AgentTool:
         if transcripts:
             config[TRANSCRIPT_KEY] = transcripts
         worktree = None
-        # A child on a queue it could not run on now is dropped with this
-        # call's result (the runner says why): make no worktree for it.
-        refused = queue is not None and ctx.serves_queue is not None \
-            and not ctx.serves_queue(queue)
-        if isolation == "worktree" and not refused:
+        if isolation == "worktree":
             worktree = await make_agent_worktree(ctx, config)
             if isinstance(worktree, str):
                 return text_output(worktree, is_error=True)

@@ -1,6 +1,6 @@
 # ADR-015: A held tree's tasks run only on its holder
 
-- Status: accepted
+- Status: superseded by ADR-029
 - Refined by: ADR-024 (a hold takes back lapsed claims; queues of a held tree)
 - Date: 2026-10-28
 - Refines: ADR-011

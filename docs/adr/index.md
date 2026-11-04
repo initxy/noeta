@@ -14,18 +14,9 @@ and describe a different codebase.
 
 - [001](001-task-is-an-event-log-with-one-writer.md) A task is an append-only event log with one writer and an inbox
   (refined by 026)
-- [005](005-holds-with-epochs-and-hold-lost.md) Process-bound work holds its task tree, with epochs and a hold_lost notice
-  (refined by 011)
+- [029](029-a-task-keeps-its-own-claim-while-it-owns-process-bound-work.md) A task keeps its own claim while it owns process-bound work
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
   (refined by 012, 023)
-- [011](011-one-holding-worker-per-tree.md) A task tree has at most one holding worker
-  (refined by 015)
-- [015](015-a-held-tree-runs-only-on-its-holder.md) A held tree's tasks run only on its holder
-  (refined by 024)
-- [024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md) A hold takes back lapsed claims, and a held tree stays on its holder's queues
-  (refined by 027, 028)
-- [027](027-the-store-refuses-a-child-off-its-held-trees-queues-and-a-reclaim-counts-toward-the-limit.md) The store refuses a child off its held tree's queues, and a reclaim counts toward the limit
-  (refined by 028)
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
   (refined by 023)
 - [023](023-snapshots-per-fold-version-and-newer-logs-left-to-newer-workers.md) Snapshots are kept per fold version; a newer version's log is left to a newer worker
@@ -55,6 +46,12 @@ and describe a different codebase.
 - [010](010-nothing-uploaded-by-default.md) noeta sends nothing anywhere but to the configured model provider
 
 ## Superseded
+
+- [005](005-holds-with-epochs-and-hold-lost.md), [011](011-one-holding-worker-per-tree.md),
+  [015](015-a-held-tree-runs-only-on-its-holder.md),
+  [024](024-a-hold-takes-back-lapsed-claims-and-a-held-tree-stays-on-its-holders-queues.md),
+  [027](027-the-store-refuses-a-child-off-its-held-trees-queues-and-a-reclaim-counts-toward-the-limit.md)
+  Holds of task trees on one worker (superseded by 029)
 
 - [007](007-tenants.md), [014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md),
   [018](018-each-tenant-has-its-own-places-on-disk.md),

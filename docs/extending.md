@@ -38,7 +38,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | use another plugin's tool | `view.find_tool(name)` | `noeta/core/extension.py` |
 | call the model from a hook or a tool | `view.complete`, `ctx.complete` (retried, not a step) | `noeta/core/extension.py`, `noeta/core/tool.py` |
 | show a running call's progress | `ctx.progress(text)`: live only, never recorded | `noeta/core/tool.py` |
-| survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `flags = ToolFlags(retry_safe=True)`; `ctx.hold()` for work that lives in one process | `noeta/core/tool.py` |
+| survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `flags = ToolFlags(retry_safe=True)`; `ctx.keep()` for work that lives in one process | `noeta/core/tool.py` |
 | offer a tool only when the model asks for it | `flags = ToolFlags(deferred=True)` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
 | keep text across a compaction, or take part in one | `resident` / `lead_resident`; `before_compact`; `on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/types.py` |
@@ -241,7 +241,7 @@ worker resumes any task; pi and dsh run in one process, Claude Code in one local
 | A tool calls another tool | `ctx.executeTool` | — | — | `view.find_tool(name).run(…)` | have | Not gated again (`by_model` is false). |
 | Wait for a person or children | blocking `ui.confirm` | approval, questions | AskUserQuestion | `ask()`, `ToolOutput.park` | have | The task holds no worker while it waits. |
 | Crash recovery of one call | — | — | — | `Tool.recover`, `ToolFlags.retry_safe`, `ctx.idempotency_key` | have | noeta only: a call never runs twice unknowingly. |
-| Background work | — | `jobs.start` | background Bash | `ctx.hold()` | have | A hold keeps the tree on the worker the job lives on. |
+| Background work | — | `jobs.start` | background Bash | `ctx.keep()` | have | The task keeps its claim on the worker the job lives on. |
 | Structured output for the model | `outputSchema` | `output.schema` | MCP `structuredContent` | `ToolOutput.meta`, `display` for front ends | won't | The model reads content; structure rides along for front ends. |
 | Rendering code for calls and results | `renderCall`, `renderResult` | UI slots | — | `ToolOutput.display` as data | won't | Front ends import no plugin and may be remote or in another language. |
 | Shell environment | `spawnHook` | `shellEnv.register` | settings `env` | settings `env`; a `Rewrite` per call | have | Claude Code's settings key. |

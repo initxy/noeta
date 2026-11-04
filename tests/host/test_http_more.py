@@ -275,7 +275,7 @@ async def test_requests_post_only_the_signals_front_ends_send(
         task_id = (await http.post("/tasks", json={"agent": "main"})).json()["task_id"]
         for name, data in (("subtasks.idle_subscribe", {"from": "other", "id": "s1"}),
                            ("shell_job_ended", {"job_id": "j", "notice": "all done"}),
-                           ("hold_lost", {"worker": "w", "epoch": 1})):
+                           ("shell_stop_job", {"job_id": "j"})):
             got = await http.post(f"/tasks/{task_id}/signals", json={"name": name,
                                                                      "data": data})
             assert got.status_code == 403, name

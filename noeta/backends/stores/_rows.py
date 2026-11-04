@@ -11,12 +11,10 @@ import msgspec
 from noeta.core.events import Event, InboxKind
 from noeta.core.store import TaskRow
 
-#: The schema version both SQL stores write. 2: holds moved to
-#: ``tree_holds`` (one holding worker per tree), and ``tasks.tenant``,
-#: ``tenant_usage`` and ``snapshots`` were added. 3: ``snapshots`` keyed by
-#: task and fold version. 4: ``tasks.tenant`` and ``tenant_usage`` dropped. A
-#: store at a later version than this code knows is refused.
-SCHEMA_VERSION = 4
+#: The schema version both SQL stores write. 1 is 0.6's, which an open
+#: upgrades in place; 2 to 4 were development builds'. 5: no holds table.
+#: A store at a later version than this code knows is refused.
+SCHEMA_VERSION = 5
 
 TASK_COLUMNS = (
     "task_id, root_id, agent, queue, status, last_seq, created_at, updated_at, parent_id, "

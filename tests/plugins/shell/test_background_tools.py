@@ -16,15 +16,13 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.core.errors import HeldElsewhere
-from noeta.core.events import Cancel, External, Say
-from noeta.core.holds import Release, TreeHold
-from noeta.core.tool import Tool, ToolContext, ToolOutput, tool_flags
+from noeta.core.events import Cancel, ExtensionRecorded, External, Say
+from noeta.core.tool import KeptClaim, Tool, ToolContext, ToolOutput, tool_flags
 from noeta.core.types import Text
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.jobs import JOB_ENDED, Job
 from noeta.plugins.shell.notices import format_duration, looks_like_prompt, monitor_expired_note
-from noeta.plugins.shell.tools import HELD_ELSEWHERE
+from noeta.plugins.shell.tools import STOP_JOB
 from noeta.toolkit.background_tasks import STOP_RUN
 from noeta.toolkit.notices import NOTICE_GUARD
 
@@ -42,8 +40,7 @@ class Harness:
         return next(t for t in self.ext._tools if t.name == name)
 
     async def post(self, body: Any, task_id: str | None = None,
-                   dedupe_key: str | None = None, forward_if_ended: bool = False) -> None:
-        assert forward_if_ended  # a spawner may end before its notice lands
+                   dedupe_key: str | None = None) -> None:
         if isinstance(body, External):  # a job's end, posted once
             assert body.name == JOB_ENDED
             assert dedupe_key == f"{JOB_ENDED}:{body.data['job_id']}"
@@ -177,7 +174,7 @@ async def test_the_job_cap_refuses_a_ninth_job(tmp_path: Path) -> None:
     second = await h.call("Bash", command="true", run_in_background=True)
     assert text(second) == ("Bash: too many background jobs (1/1); stop one with "
                             "TaskStop first")
-    # Another root has its own allowance.
+    # Another task has its own allowance.
     other = await h.call("Bash", task_id="r2", root_id="r2", command="true",
                          run_in_background=True)
     assert not other.is_error
@@ -253,17 +250,16 @@ async def test_monitor_needs_command_and_description(h: Harness) -> None:
         "<tool_use_error>Monitor requires non-empty 'description'</tool_use_error>")
 
 
-async def test_a_finished_spawners_notices_go_to_the_root(h: Harness) -> None:
+async def test_a_jobs_notices_go_to_the_task_that_started_it(h: Harness) -> None:
     out = await h.call("Bash", task_id="child", root_id="root", command="sleep 0.2",
                        run_in_background=True)
-    h.registry.ended["child"] = None
     await h.settle(out.meta["job_id"])
-    assert [t for t, _ in h.posts] == ["root"]
+    assert [t for t, _ in h.posts] == ["child"]
 
 
-async def test_kill_where_is_quiet(h: Harness) -> None:
+async def test_kill_all_is_quiet(h: Harness) -> None:
     out = await h.call("Bash", command="sleep 30", run_in_background=True)
-    h.registry.kill_where("task")
+    h.registry.kill_all("task")
     await h.settle(out.meta["job_id"])
     assert h.posts == []
     assert h.job(out.meta["job_id"]).status == "killed"
@@ -381,73 +377,80 @@ async def test_a_command_starting_with_sleep_is_killed_at_its_timeout(h: Harness
     assert h.records == [] and h.registry.jobs == {}
 
 
-# -- a task tree another worker holds ------------------------------------------
+# -- the task's claim, kept while a job runs ------------------------------------
 
 
-async def _held_elsewhere() -> Release:
-    raise HeldElsewhere("held by another worker")
+def _ctx_keeping(h: Harness, kept: list[KeptClaim]) -> ToolContext:
+    def keep() -> KeptClaim:
+        claim = KeptClaim(_release=lambda k: kept.remove(k))
+        kept.append(claim)
+        return claim
 
-
-def _ctx_holding(h: Harness, hold: Any) -> ToolContext:
     ctx = h.ctx()
-    ctx.hold = hold
+    ctx.keep = keep
     return ctx
 
 
-async def test_no_background_job_starts_while_another_worker_holds_the_tree(h: Harness) -> None:
-    ctx = _ctx_holding(h, _held_elsewhere)
-    out = await h.tool("Bash").run({"command": "sleep 5", "run_in_background": True}, ctx)
-    assert out.is_error and HELD_ELSEWHERE in text(out)
-    assert h.records == [] and h.registry.jobs == {}
+async def test_a_background_job_keeps_the_claim_until_its_end_is_posted(h: Harness) -> None:
+    kept: list[KeptClaim] = []
+    out = await h.tool("Bash").run({"command": "sleep 0.2", "run_in_background": True},
+                                   _ctx_keeping(h, kept))
+    assert len(kept) == 1
+    await h.settle(out.meta["job_id"])
+    assert kept == [] and len(h.posts) == 1
 
 
-def test_the_refusal_names_both_reasons_a_tree_is_held_elsewhere() -> None:
-    # A hold is refused for another worker's background job and, as well, for
-    # another task of the tree running on another worker (the root, say).
-    assert "background command or another task" in HELD_ELSEWHERE
-    assert "in the foreground" in HELD_ELSEWHERE and "later" in HELD_ELSEWHERE
+async def test_a_job_dies_quietly_when_the_kept_claim_is_lost(h: Harness) -> None:
+    kept: list[KeptClaim] = []
+    out = await h.tool("Bash").run({"command": "sleep 30", "run_in_background": True},
+                                   _ctx_keeping(h, kept))
+    [claim] = kept
+    claim.mark_lost()
+    job = h.job(out.meta["job_id"])
+    await asyncio.wait_for(job.done.wait(), 10)
+    assert job.status == "killed" and job.fenced and h.posts == []
 
 
-async def test_a_timeout_kills_the_command_while_another_worker_holds_the_tree(
-        h: Harness) -> None:
-    ctx = _ctx_holding(h, _held_elsewhere)
-    out = await h.tool("Bash").run({"command": "echo started; sleep 3; echo late",
-                                    "timeout": 1000}, ctx)
-    assert out.is_error and text(out).startswith("Command timed out after 1s")
-    assert "late" not in text(out)
-    await asyncio.sleep(0.05)
-    assert h.records == [] and h.registry.jobs == {}
+async def test_a_command_moved_to_the_background_keeps_the_claim(h: Harness) -> None:
+    kept: list[KeptClaim] = []
+    out = await h.tool("Bash").run({"command": "echo hi; sleep 2.5", "timeout": 1000},
+                                   _ctx_keeping(h, kept))
+    assert not out.is_error and "moved to the background" in text(out)
+    assert len(kept) == 1
+    await h.settle(out.meta["job_id"])
+    assert kept == []
 
 
-async def test_a_timeout_kills_the_command_when_taking_the_hold_fails(h: Harness) -> None:
-    async def broken_store() -> Release:
-        raise OSError("the store is unreachable")
-
-    ctx = _ctx_holding(h, broken_store)
-    out = await h.tool("Bash").run({"command": "echo started; sleep 3; echo late",
-                                    "timeout": 1000}, ctx)
-    assert out.is_error and text(out).startswith("Command timed out after 1s")
-    assert "late" not in text(out)
-    await asyncio.sleep(0.05)
-    assert h.records == [] and h.registry.jobs == {}
+async def test_a_command_that_ends_in_time_keeps_nothing(h: Harness) -> None:
+    kept: list[KeptClaim] = []
+    out = await h.tool("Bash").run({"command": "echo hi", "timeout": 1000},
+                                   _ctx_keeping(h, kept))
+    assert text(out) == "hi" and kept == [] and h.records == []
 
 
-async def test_a_hold_taken_for_a_command_that_ended_meanwhile_is_given_back(
-        h: Harness) -> None:
-    released: list[str] = []
+async def test_task_stop_asks_a_running_child_to_stop_its_job(h: Harness) -> None:
+    posted: list[tuple[Any, str | None, str | None]] = []
 
-    async def slow_hold() -> Release:
-        await asyncio.sleep(0.6)  # the command ends while the hold is taken
+    async def post(body: Any, task_id: str | None = None,
+                   dedupe_key: str | None = None) -> None:
+        posted.append((body, task_id, dedupe_key))
 
-        async def give_back() -> None:
-            released.append("hold")
+    async def tasks(**_kw: Any) -> list[Any]:
+        row = type("Row", (), {"task_id": "kid", "status": "running"})
+        return [row()]
 
-        return Release(TreeHold(root_id="task", worker="w", epoch=1, seconds=60), give_back)
+    async def read_log(task_id: str, after: int = 0) -> list[Any]:
+        started = ExtensionRecorded(extension="shell", kind="started", data={
+            "job_id": "kidjob", "command": "make", "description": "build it"})
+        return [type("Rec", (), {"event": started})()] if task_id == "kid" else []
 
-    ctx = _ctx_holding(h, slow_hold)
-    out = await h.tool("Bash").run({"command": "echo hi; sleep 1.2", "timeout": 1000}, ctx)
-    assert not out.is_error and text(out) == "hi"
-    assert released == ["hold"] and h.records == []
+    ctx = ToolContext(task_id="task", call_id="c", env=LocalExecEnv(str(h.tmp)), state={},
+                      record=lambda *_: None, post=post, tasks=tasks, read_log=read_log)
+    out = await h.tool("TaskStop").run({"task_id": "kidjob"}, ctx)
+    assert json.loads(text(out))["message"] == "Successfully stopped task: kidjob (build it)"
+    assert posted == [(External(name=STOP_JOB, data={"job_id": "kidjob"}), "kid",
+                       f"{STOP_JOB}:kidjob")]
+    assert (await h.tool("TaskStop").run({"task_id": "other"}, ctx)).is_error
 
 
 async def test_progress_that_fails_never_fails_the_command(h: Harness) -> None:

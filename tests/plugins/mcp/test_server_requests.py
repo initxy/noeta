@@ -3,6 +3,8 @@ kernel's question and parked), and the tool-list change notice."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import sys
 from collections.abc import AsyncIterator
@@ -14,7 +16,6 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.errors import HeldElsewhere
 from noeta.core.events import Answer, ToolFinished, Waiting
 from noeta.core.questions import ask
 from noeta.core.runner import Runtime
@@ -54,6 +55,13 @@ def runtime(store: SqliteStore, provider: ScriptedProvider, agent: Agent) -> Run
     return Runtime(store=store, agents={agent.name: agent},
                    provider_for=lambda _m: provider, env_for=lambda _s: None,  # type: ignore[arg-type,return-value]
                    sleep=_no_sleep)
+
+
+async def settled(rt: Runtime) -> None:
+    """Run until idle, a run that kept its claim over the wait to its end."""
+    await rt.run_until_idle()
+    for run in list(rt._kept_runs):
+        await asyncio.wait_for(run, 10)
 
 
 def server(**env: str) -> McpServer:
@@ -180,9 +188,9 @@ async def test_an_elicitation_parks_the_call_until_the_person_answers(
     waiting = (await client.events(tid))[-1].event
     assert isinstance(waiting, Waiting) and waiting.on == "question"
     row = await client.get(tid)
-    assert row.waiting_on == "question"
+    assert row.waiting_on == "question" and row.owner == rt.worker  # the call lives here
     await client.answer(tid, waiting.ids[0], data={"0": {"other": "Ada"}})
-    await rt.run_until_idle()
+    await settled(rt)  # the run that kept the claim takes the answer
     assert results(await client.events(tid)) == [
         json.dumps({"action": "accept", "content": {"name": "Ada"}}, sort_keys=True)]
 
@@ -196,7 +204,7 @@ async def test_a_stopped_turn_cancels_the_question(
     tid = await client.create("a", "go")
     await rt.run_until_idle()
     await client.cancel(tid, turn_only=True)
-    await rt.run_until_idle()
+    await settled(rt)
     assert any("stopped while the MCP server waited" in r for r in results(
         await client.events(tid)))
 
@@ -211,32 +219,38 @@ async def test_an_ended_task_lets_go_of_its_parked_call(
     await rt.run_until_idle()
     parked = next(iter(ext._parked.values()))
     await client.cancel(tid)
-    await rt.run_until_idle()
+    await settled(rt)
     assert ext._parked == {}
     assert parked.call.job is not None and parked.call.job.cancelled()
 
 
 async def test_a_dead_workers_parked_call_ends_without_an_answer(
         store: SqliteStore, pool: McpPool) -> None:
-    """The worker holding a call parked on a server's question dies: the
-    reaped hold wakes the task on another worker, which ends the call
-    "outcome unknown" at once instead of waiting for an answer that has no
-    call to go to."""
+    """The worker keeping the claim of a call parked on a server's question
+    dies: the next worker to pick the task up (the person's answer wakes it)
+    ends the call "outcome unknown" at once."""
     provider = ScriptedProvider([reply("", ("mcp__fake__ask", {"message": "ok?"})),
                                  reply("carried on")])
     first = Mcp([server()], pool=pool)
     dead = runtime(store, provider, Agent(name="a", model="m", extensions=[first]))
+    dead.lease_seconds = 0.2
     client = Client(store)
     tid = await client.create("a", "go")
     await dead.run_until_idle()
-    assert (await client.get(tid)).waiting_on == "question"  # type: ignore[union-attr]
-    assert dead._renewer is not None
-    dead._renewer.cancel()  # the worker dies: its hold is never renewed again
+    row = await client.get(tid)
+    assert row is not None and row.waiting_on == "question" and row.owner == dead.worker
+    for run in list(dead._kept_runs):  # the worker dies: nothing renews its lease
+        run.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await run
 
-    def expire(conn: Any) -> None:
-        conn.execute("UPDATE tree_holds SET until = 0")
+    def unreleased(conn: Any) -> None:  # a death, not a shutdown: the lease stays
+        conn.execute("UPDATE tasks SET owner = ?, lease_until = 0", (dead.worker,))
 
-    await store._run(expire)
+    await store._run(unreleased)
+    waiting = (await client.events(tid))[-1].event
+    assert isinstance(waiting, Waiting)
+    await client.answer(tid, waiting.ids[0], data={"0": {"other": "x"}})
     other = runtime(store, provider, Agent(name="a", model="m",
                                            extensions=[Mcp([server()], pool=pool)]))
     await other.run_until_idle()
@@ -304,24 +318,3 @@ async def test_a_list_changed_notice_refreshes_the_tools_for_the_next_step(
 
     assert names(0) == ["mcp__fake__changed"]
     assert names(1) == ["mcp__fake__changed", "mcp__fake__fresh"]
-
-
-async def test_a_question_is_declined_while_another_worker_holds_the_tree(
-        store: SqliteStore, pool: McpPool) -> None:
-    """The parked call would live in this process, but the tree's next turn
-    runs on the worker that holds it: the question is declined at once."""
-    provider = ScriptedProvider([reply("", ("mcp__fake__ask", {"message": "ok?"})),
-                                 reply("carried on")])
-    ext = Mcp([server()], pool=pool)
-    rt = runtime(store, provider, Agent(name="a", model="m", extensions=[ext]))
-
-    async def held_elsewhere(_root: str) -> Any:
-        raise HeldElsewhere("held by another worker")
-
-    rt.hold = held_elsewhere  # type: ignore[method-assign]
-    client = Client(store)
-    tid = await client.create("a", "go")
-    await rt.run_until_idle()
-    assert ext._parked == {}
-    assert [json.loads(t) for t in results(await client.events(tid))] == [{"action": "decline"}]
-    assert (await client.get(tid)).waiting_on == "input"  # type: ignore[union-attr]

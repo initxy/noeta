@@ -14,7 +14,7 @@ import pytest
 
 from noeta.core.errors import CommitUnknown, StoreUnavailable
 from noeta.core.events import Cancel, TaskCreated, Waiting
-from noeta.core.store import NewTask, Post, Snapshot
+from noeta.core.store import NewTask, Patch, Post
 
 pytestmark = pytest.mark.usefixtures("pg")
 
@@ -193,231 +193,65 @@ async def test_a_schema_from_a_newer_noeta_is_refused(pg: Any) -> None:
 
 
 async def test_a_version_1_schema_is_upgraded_in_place(pg: Any) -> None:
+    """0.6's schema (version 1) kept its workers' holds in ``holds`` and a
+    claim index over every unended task: both go, the tasks stay."""
     import psycopg
 
     from noeta.backends.stores._rows import SCHEMA_VERSION
 
-    with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        conn.execute(f'CREATE SCHEMA "{pg.schema}"')
-        conn.execute(f'CREATE TABLE "{pg.schema}".noeta_schema (version INTEGER NOT NULL)')
-        conn.execute(f'INSERT INTO "{pg.schema}".noeta_schema VALUES (1)')
     store = pg.store()
     await store.create(new())
     await store.close()
+    s = f'"{pg.schema}"'
     with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        rows = conn.execute(f'SELECT version FROM "{pg.schema}".noeta_schema').fetchall()
-    assert rows == [(SCHEMA_VERSION,)] and SCHEMA_VERSION == 4
-
-
-async def test_a_version_2_schema_keeps_its_snapshots_keyed_by_version(pg: Any) -> None:
-    """Version 2 kept one snapshot per task; version 3 keys them by task and
-    fold version, the rows kept."""
-    import psycopg
-
-    store = pg.store()
-    await store.create(new())
-    await store.close()
-    with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        conn.execute(f'DROP TABLE "{pg.schema}".snapshots')
-        conn.execute(f'CREATE TABLE "{pg.schema}".snapshots (task_id TEXT PRIMARY KEY,'
-                     " seq BIGINT NOT NULL, version TEXT NOT NULL, data BYTEA NOT NULL)")
-        conn.execute(f"INSERT INTO \"{pg.schema}\".snapshots VALUES ('t1', 4, 'v1', '\\x00')")
-        conn.execute(f'UPDATE "{pg.schema}".noeta_schema SET version = 2')
-    for _ in range(2):
-        store = pg.store()
-        assert await store.snapshot("t1", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
-        await store.put_snapshot("t1", Snapshot(seq=6, version="v2", data=b"two"))
-        assert await store.snapshot("t1", "v1") == Snapshot(seq=4, version="v1", data=b"\x00")
-        await store.close()
-
-
-async def test_a_version_3_schema_drops_its_tenant_column_and_usage(pg: Any) -> None:
-    """Version 3 kept a tenant per task and each tenant's usage; version 4
-    drops both and keeps the tasks."""
-    import psycopg
-
-    store = pg.store()
-    await store.create(new())
-    await store.close()
-    with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        s = f'"{pg.schema}"'
-        conn.execute(f"ALTER TABLE {s}.tasks ADD COLUMN tenant TEXT NOT NULL DEFAULT 'default'")
-        conn.execute(f"CREATE INDEX tasks_tenant ON {s}.tasks (tenant, status)")
-        conn.execute(f"CREATE TABLE {s}.tenant_usage (tenant TEXT NOT NULL, period TEXT NOT NULL,"
-                     " tokens BIGINT NOT NULL DEFAULT 0, cost_usd DOUBLE PRECISION NOT NULL"
-                     " DEFAULT 0, PRIMARY KEY (tenant, period))")
-        conn.execute(f"UPDATE {s}.noeta_schema SET version = 3")
-    store = pg.store()
-    assert (await store.get("t1")) is not None
-    await store.create(NewTask(task_id="t2", created=TaskCreated(agent="a")))
-    await store.close()
-    with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        cols = conn.execute("SELECT column_name FROM information_schema.columns WHERE"
-                            " table_schema = %s AND table_name = 'tasks'", (pg.schema,)).fetchall()
-        tables = conn.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
-                              " AND table_name = 'tenant_usage'", (pg.schema,)).fetchall()
-    assert ("tenant",) not in cols and tables == []
-
-
-async def test_a_claim_waits_for_a_hold_of_its_tree_being_taken(pg: Any) -> None:
-    """A hold being taken (its transaction not committed yet) and a claim of
-    the same tree serialize: the claim does not take a task of a tree that
-    another worker's hold, once committed, keeps."""
-    import psycopg
-
-    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
-
-    store = pg.store()
-    await store.create(new("R"))
-    async with await psycopg.AsyncConnection.connect(pg.dsn) as holder:
-        # What PostgresStore.hold does, held open before its commit.
-        await holder.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
-                             (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
-        await holder.execute(
-            f'INSERT INTO "{pg.schema}".tree_holds (root_id, worker, until)'
-            " VALUES ('R', 'A', extract(epoch from now()) + 60)")
-        claim = asyncio.create_task(store.claim("B", ["default"], 30))
-        await asyncio.sleep(0.3)
-        await holder.commit()
-        assert await asyncio.wait_for(claim, 10) is None
-    row = await store.get("R")
-    assert row is not None and row.owner is None
-    await store.close()
-
-
-async def test_a_hold_waits_for_a_claim_of_its_tree_being_taken(pg: Any) -> None:
-    import psycopg
-
-    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
-
-    store = pg.store()
-    await store.create(new("R"))
-    async with await psycopg.AsyncConnection.connect(pg.dsn) as claimer:
-        # What PostgresStore.claim does, held open before its commit.
-        await claimer.execute(
-            f'UPDATE "{pg.schema}".tasks SET status = \'running\', owner = \'B\','
-            " owner_epoch = owner_epoch + 1, lease_until = extract(epoch from now()) + 60"
-            " WHERE task_id = 'R'")
-        await claimer.execute("SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
-                              (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
-        hold = asyncio.create_task(store.hold("R", "A", 30))
-        await asyncio.sleep(0.3)
-        assert not hold.done()
-        await claimer.commit()
-        assert await asyncio.wait_for(hold, 10) is None
-    await store.close()
-
-
-async def test_a_hold_lets_a_claim_of_a_lapsed_task_in_flight_finish(pg: Any) -> None:
-    """A claim that locked a lapsed task of the tree, before it takes the
-    tree's lock, is not deadlocked by a hold taking the lapsed claim back:
-    the hold steps aside, the claim commits, and the hold sees its lease."""
-    import psycopg
-
-    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
-
-    store = pg.store()
-    await store.create(new("R"))
-    assert await store.claim("B", ["default"], -1) is not None  # lapsed at once
-    async with await psycopg.AsyncConnection.connect(pg.dsn) as claimer:
-        # What PostgresStore.claim does with C's claim before the tree's lock.
-        await claimer.execute(
-            f'UPDATE "{pg.schema}".tasks SET owner = \'C\', owner_epoch = owner_epoch + 1,'
-            " lease_until = extract(epoch from now()) + 60 WHERE task_id = 'R'")
-        hold = asyncio.create_task(store.hold("R", "A", 30))
-        await asyncio.sleep(0.3)
-        assert not hold.done()
-        # Well inside deadlock_timeout (1 s): no deadlock for Postgres to break.
-        await asyncio.wait_for(claimer.execute(
-            "SELECT pg_advisory_xact_lock_shared(%s, hashtext(%s))",
-            (_HOLD_LOCK_CLASS, f"{pg.schema}:R")), 0.5)
-        await claimer.commit()
-        assert await asyncio.wait_for(hold, 10) is None
-    row = await store.get("R")
-    assert row is not None and row.owner == "C" and row.status == "running"
-    await store.close()
-
-
-async def test_upgrading_a_version_1_schema_tells_its_held_trees(pg: Any) -> None:
-    import psycopg
-
-    from noeta.core.events import External
-    from noeta.core.store import HOLD_LOST
-
-    store = pg.store()
-    await store.create(new("R"))
-    await store.create(NewTask(task_id="S", created=TaskCreated(agent="a", parent_id="R",
-                                                                root_id="R")))
-    await store.create(new("free"))
-    await store.close()
-    schema = f'"{pg.schema}"'
-    with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        conn.execute(f"CREATE TABLE {schema}.holds (root_id TEXT PRIMARY KEY,"
+        conn.execute(f"DROP TABLE {s}.snapshots; DROP INDEX {s}.tasks_claim")
+        conn.execute(f"CREATE INDEX tasks_claimable ON {s}.tasks (queue, updated_at)"
+                     " WHERE status <> 'ended'")
+        conn.execute(f"CREATE TABLE {s}.holds (root_id TEXT PRIMARY KEY,"
                      " worker TEXT NOT NULL, until DOUBLE PRECISION NOT NULL)")
-        conn.execute(f"INSERT INTO {schema}.holds VALUES ('R', 'w-old', 1e12)")
-        conn.execute(f"UPDATE {schema}.noeta_schema SET version = 1")
-    lost = External(name=HOLD_LOST, data={"worker": "w-old", "epoch": 0})
-    for _ in range(2):  # told once
-        store = pg.store()
-        assert [i.body for i in await store.inbox("R")] == [lost]
-        assert [i.body for i in await store.inbox("S")] == [lost]
-        assert await store.inbox("free") == []
-        await store.close()
-    with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        assert conn.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = %s"
-                            " AND table_name = 'holds'", (pg.schema,)).fetchone() is None
-
-
-async def test_a_schema_without_hold_queues_gains_the_column(pg: Any) -> None:
-    """``tree_holds.queues`` came later: an older schema gets the column, and
-    a hold written without it (NULL) refuses no child."""
-    import psycopg
-
+        conn.execute(f"INSERT INTO {s}.holds VALUES ('t1', 'w-old', 1e12)")
+        conn.execute(f"UPDATE {s}.noeta_schema SET version = 1")
     store = pg.store()
-    await store.create(new("R"))
+    assert await store.get("t1") is not None
+    assert await store.claim("w", ["default"], 30) is not None
     await store.close()
     with psycopg.connect(pg.dsn, autocommit=True) as conn:
-        conn.execute(f'ALTER TABLE "{pg.schema}".tree_holds DROP COLUMN queues')
-        conn.execute(f'INSERT INTO "{pg.schema}".tree_holds (root_id, worker, until)'
-                     " VALUES ('R', 'w', extract(epoch from now()) + 60)")
-    store = pg.store()
-    claim = await store.claim("w", ["default"], 30)
-    assert claim is not None
-    await store.append(claim, [], expected_seq=1, creates=[NewTask(
-        task_id="R.gpu", queue="gpu",
-        created=TaskCreated(agent="a", parent_id="R", root_id="R"))])
-    assert await store.get("R.gpu") is not None
-    await store.close()
+        rows = conn.execute(f"SELECT version FROM {s}.noeta_schema").fetchall()
+        names = {r[0] for r in conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = %s"
+            " UNION SELECT indexname FROM pg_indexes WHERE schemaname = %s",
+            (pg.schema, pg.schema)).fetchall()}
+    assert rows == [(SCHEMA_VERSION,)]
+    assert "holds" not in names and "tasks_claimable" not in names and "tasks_claim" in names
 
 
-async def test_an_append_creating_a_child_waits_for_a_hold_of_its_tree_being_taken(
+async def test_the_claim_index_holds_only_claimable_rows_and_the_claim_uses_it(
         pg: Any) -> None:
-    """An append's child and a hold being taken of the same tree serialize:
-    the hold, once committed, is seen, and its holder not serving the
-    child's queue refuses the child."""
+    """Idle waiting tasks (no timer) are not in the claim index, and the
+    claim's scan goes through it."""
     import psycopg
 
-    from noeta.backends.stores.postgres import _HOLD_LOCK_CLASS
-    from noeta.core.errors import UnservedQueue
+    from noeta.backends.stores.postgres import _CLAIMABLE
 
     store = pg.store()
-    await store.create(new("R"))
-    claim = await store.claim("A", ["default"], 30)
-    assert claim is not None
-    async with await psycopg.AsyncConnection.connect(pg.dsn) as holder:
-        # What PostgresStore.hold does, held open before its commit.
-        await holder.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
-                             (_HOLD_LOCK_CLASS, f"{pg.schema}:R"))
-        await holder.execute(
-            f'INSERT INTO "{pg.schema}".tree_holds (root_id, worker, until, queues)'
-            " VALUES ('R', 'A', extract(epoch from now()) + 60, ARRAY['default'])")
-        append = asyncio.create_task(store.append(claim, [], expected_seq=1, creates=[
-            NewTask(task_id="R.gpu", queue="gpu",
-                    created=TaskCreated(agent="a", parent_id="R", root_id="R"))]))
-        await asyncio.sleep(0.3)
-        assert not append.done()
-        await holder.commit()
-        with pytest.raises(UnservedQueue):
-            await asyncio.wait_for(append, 10)
-    assert await store.get("R.gpu") is None
+    for i in range(3):
+        await store.create(new(f"t{i}"))
+        claim = await store.claim("w", ["default"], 30)
+        assert claim is not None
+        await store.append(claim, [Waiting(on="input")], expected_seq=1,
+                           patch=Patch(status="waiting", waiting_on="input"))
+    await store.create(new("ready"))
+    s = f'"{pg.schema}"'
+    with psycopg.connect(pg.dsn, autocommit=True) as conn:
+        conn.execute(f"ANALYZE {s}.tasks")
+        conn.execute("SET enable_seqscan = off")
+        plan = "\n".join(r[0] for r in conn.execute(
+            f"EXPLAIN SELECT task_id FROM {s}.tasks WHERE queue = ANY(ARRAY['default'])"
+            f" AND {_CLAIMABLE} ORDER BY updated_at LIMIT 1").fetchall())
+        indexed = conn.execute(
+            f"SELECT count(*) FROM {s}.tasks WHERE {_CLAIMABLE}").fetchone()
+    assert "tasks_claim" in plan
+    assert indexed == (1,)
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None and claim.task_id == "ready"
     await store.close()

@@ -1,11 +1,11 @@
 """The process-local table of background jobs (``Bash`` with
 ``run_in_background`` and ``Monitor``), and of foreground ``Bash`` commands,
 which run as jobs the call waits for so that one whose timeout runs out can
-be moved to the background (it then takes its hold on the tree).
+be moved to the background (it then keeps its task's claim).
 
-A job belongs to the worker process that started it and to the task tree's
-root: the table is keyed by root task, the cap counts a root's running jobs,
-and a stop of the root kills them all. A job runs through the task's
+A job belongs to the worker process that started it and to the task that
+started it: the table is keyed by task, the cap counts a task's running
+jobs, and the task's end kills them all. A job runs through the task's
 ``ExecEnv`` with its output redirected to a log file inside that env, so the
 same code serves the local machine and a container: the model reads the
 file (its path is in the launch result and the end notice), a monitor tails
@@ -14,24 +14,23 @@ the job (``TaskStop``) is cancelling the env's run (which kills its process
 group). A finished command's file ends with a blank line
 and ``[exited with code N]``.
 
-A monitor's events go to the task that started the job while that task is
-live, else to the root, as system-origin messages behind the not-the-user
-guard, posted with ``when="now"``: they land after the running batch's tool
-results, and wake an idle task into a turn. A job's end goes the same way as
-``External(JOB_ENDED)`` (its status and notice, posted once, before the job
-gives its hold back): the task's runner records it ended and tells the model,
-unless the log already says the job was lost (``noeta.plugins.shell``).
+A monitor's events go to the task that started the job, as system-origin
+messages behind the not-the-user guard, posted with ``when="now"``: they
+land after the running batch's tool results, and wake an idle task into a
+turn. A job's end goes the same way as ``External(JOB_ENDED)`` (its status
+and notice, posted once, before the job gives its kept claim back): the
+task's runner records it ended and tells the model, unless the log already
+says the job was lost (``noeta.plugins.shell``).
 
-A job lives as long as its worker's hold on the task tree
-(``ToolContext.hold``): when the hold is lost (reaped after the worker was
-silent too long, or the worker stopping) the job is killed and its end never
-posted; the tree is told by ``hold_lost`` instead, and the root's jobs
-leave the table with their logs. A job also dies when its
+A job lives as long as its task's claim, which it keeps
+(``ToolContext.keep``) so the task stays on this worker over its waits:
+when the claim is lost (the worker silent past its lease, or stopping) the
+job is killed and its end never posted; the next worker to pick the task
+up tells the model the job is lost. A job also dies when its
 worker cannot kill it (killed itself, or frozen): a guard runs beside the
 command, in its process group, and kills the group once the worker stops
-re-creating the job's ``.alive`` file (it does while its hold is fresh, and
-for a foreground command, which has no hold, while the worker runs) or, on
-this machine, once the worker's process is gone. The guard needs only
+re-creating the job's ``.alive`` file (it does while the claim is kept) or,
+on this machine, once the worker's process is gone. The guard needs only
 ``sh`` tools, so it works the same in a container or a sandbox.
 
 The log directory is ``job_logs.py``'s. A job's output reaches its log
@@ -52,7 +51,6 @@ import os
 import posixpath
 import secrets
 import shlex
-import socket
 import string
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
@@ -61,7 +59,7 @@ from typing import Any
 
 from noeta.core.events import External, Say
 from noeta.core.execenv import ExecEnv
-from noeta.core.holds import TreeHold
+from noeta.core.tool import KeptClaim
 from noeta.core.types import user
 from noeta.plugins.shell.job_logs import DEFAULT_LOG_DIR, prepare_log_dir
 from noeta.plugins.shell.notices import (
@@ -84,31 +82,30 @@ from noeta.toolkit.worktrees import job_runs_in
 
 log = logging.getLogger("noeta.plugins.shell")
 
-#: Per-root ceiling on RUNNING jobs; a launch over it is refused, not queued.
+#: Per-task ceiling on RUNNING jobs; a launch over it is refused, not queued.
 DEFAULT_MAX_JOBS = 8
 #: Job ids: nine lower-case letters and digits, as Claude Code's.
 _ID_CHARS = string.ascii_lowercase + string.digits
 #: How often a monitor's log is read for new lines.
 MONITOR_POLL_S = 0.1
-#: Tasks remembered as ended (their notices go to the root) at most.
-ENDED_KEEP = 4096
-#: Background jobs of a root kept in memory once their end is posted (for
+#: Background jobs of a task kept in memory once their end is posted (for
 #: ``TaskStop`` / ``TaskOutput`` on them) at most; older ones are let go.
 ENDED_JOBS_KEEP = 64
-#: Bytes of output logs a root keeps of the jobs it let go of (their end
+#: Bytes of output logs a task keeps of the jobs it let go of (their end
 #: notices name the file): past it the oldest are removed; the rest go
-#: with the root.
+#: with the task.
 LET_GO_LOGS_MAX_BYTES = 256 * 1024 * 1024
-#: Roots kept in the table at most: past it, the least recently used root
-#: with no running job is let go of with its logs (a server's roots rarely
-#: end here: an idle one waits for days, a tree another worker took never
+#: Tasks kept in the table at most: past it, the least recently used task
+#: with no running job is let go of with its logs (a server's tasks rarely
+#: end here: an idle one waits for days, one another worker took never
 #: comes back).
-ROOTS_KEEP = 256
+TASKS_KEEP = 256
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
-#: How long a foreground command outlives a worker that stopped re-creating
-#: its ``.alive`` file (it has no hold to time it by).
-FOREGROUND_ALIVE_S = 30.0
+#: How long a foreground command (which keeps no claim) outlives a worker
+#: that stopped re-creating its ``.alive`` file; a job that keeps its task's
+#: claim gets the claim's lease, after which another worker may take the task.
+ALIVE_S = 30.0
 #: Ticks of 20 ms a foreground command's keeper is given to write what came
 #: once the command's shell exited.
 FOREGROUND_DRAIN_TICKS = 50
@@ -206,9 +203,6 @@ while sleep "$5"; do
 done
 """
 
-#: This worker process, recorded with a job that has no hold (no runner:
-#: a test, a host running tools itself); a held job records its hold's worker.
-WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 #: The ``External`` a job's end is posted as: ``data = {"job_id", "status",
 #: "exit_code", "notice"}`` (``notice`` is ``None`` for a job stopped quietly).
 JOB_ENDED = "shell_job_ended"
@@ -217,15 +211,15 @@ JOB_ENDED = "shell_job_ended"
 
 #: ``(body, task_id)`` posts an inbox message to a task.
 Post = Callable[..., Awaitable[None]]
-#: Gives back the job's hold on its task tree (``ToolContext.hold``).
+#: Gives back what the job used (its sandbox, the claim it kept).
 Release = Callable[[], Awaitable[None]]
 
 
 @dataclass(eq=False)
 class Job:
     job_id: str
-    root_id: str
-    spawner_id: str
+    #: The task that started it, which it reports to.
+    task_id: str
     command: str
     description: str
     tool_use_id: str
@@ -236,17 +230,14 @@ class Job:
     events_path: str | None
     post: Post
     release: Release | None = None
-    #: The worker's hold on the tree, while the job runs.
-    tree: TreeHold | None = None
-    #: The worker recorded with the job (its hold's).
-    worker: str = WORKER_ID
-    #: Its hold was lost: it was killed and its end is never posted.
+    #: The task's claim, kept while the job runs.
+    kept: KeptClaim | None = None
+    #: Its claim was lost: it was killed and its end is never posted.
     fenced: bool = False
     #: The file the worker re-creates while the job may live (its guard
     #: kills the job once it stays gone).
     alive_path: str = ""
-    #: How often its guard checks that file, fixed when the guard started
-    #: (a later hold does not change it).
+    #: How often its guard checks that file, fixed when the guard started.
     guard_period: float = 0.0
     status: str = "running"  # running | exited | killed
     exit_code: int | None = None
@@ -279,8 +270,8 @@ class Job:
     #: Says the job no longer works in its directory (a worktree is not
     #: removed under a running job).
     left_dir: Callable[[], None] = lambda: None
-    #: Stops listening for its hold being lost (:meth:`Registry.hold_with`).
-    forget_hold: Callable[[], None] = lambda: None
+    #: Stops listening for its claim being lost (:meth:`Registry.keep_with`).
+    forget_kept: Callable[[], None] = lambda: None
     outbox: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
 
@@ -306,14 +297,14 @@ def _files(job: Job) -> list[str]:
 
 
 class Registry:
-    """Background jobs of this process, by root task."""
+    """Background jobs of this process, by task."""
 
     def __init__(self, *, max_jobs: int = DEFAULT_MAX_JOBS,
                  log_dir: str = DEFAULT_LOG_DIR,
                  log_max_bytes: int = DEFAULT_LOG_MAX_BYTES,
-                 foreground_alive_s: float = FOREGROUND_ALIVE_S,
+                 alive_s: float = ALIVE_S,
                  ended_jobs_keep: int = ENDED_JOBS_KEEP,
-                 roots_keep: int = ROOTS_KEEP,
+                 tasks_keep: int = TASKS_KEEP,
                  let_go_logs_max_bytes: int = LET_GO_LOGS_MAX_BYTES,
                  stall_check_s: float = STALL_CHECK_S,
                  stall_after_s: float = STALL_AFTER_S) -> None:
@@ -322,32 +313,17 @@ class Registry:
         self.stall_after_s = stall_after_s
         self.ended_jobs_keep = ended_jobs_keep
         self.let_go_logs_max_bytes = let_go_logs_max_bytes
-        #: Output logs of the jobs each root let go of, oldest first, with
+        #: Output logs of the jobs each task let go of, oldest first, with
         #: their sizes: ``(env, path, bytes)``.
         self.let_go_logs: dict[str, list[tuple[ExecEnv, str, int]]] = {}
-        self.roots_keep = roots_keep
-        self.foreground_alive_s = foreground_alive_s
+        self.tasks_keep = tasks_keep
+        self.alive_s = alive_s
         self.log_dir = log_dir
         self.log_max_bytes = log_max_bytes
-        self.worker = WORKER_ID
         self.jobs: dict[str, dict[str, Job]] = {}
-        #: Tasks known (in this process) to have ended with jobs of their
-        #: tree still here: their notices go to the root instead. Ordered,
-        #: oldest first.
-        self.ended: dict[str, None] = {}
         self._retiring: set[asyncio.Task[None]] = set()
         self._dirs: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
         self._keeper: asyncio.Task[None] | None = None
-
-    def mark_ended(self, task_id: str, root_id: str) -> None:
-        """``task_id`` ended: remembered only while its tree has jobs here
-        (and at most :data:`ENDED_KEEP` tasks)."""
-        if not self.jobs.get(root_id):
-            return
-        self.ended.pop(task_id, None)
-        while len(self.ended) >= ENDED_KEEP:
-            del self.ended[next(iter(self.ended))]
-        self.ended[task_id] = None
 
     async def _log_dir(self, env: ExecEnv) -> str:
         """The env's private log directory, made or checked once per env."""
@@ -364,21 +340,27 @@ class Registry:
 
     # ------------------------------------------------------------ lookup
 
-    def find(self, root_id: str, job_id: str) -> Job | None:
-        return self.jobs.get(root_id, {}).get(job_id)
+    def find(self, task_id: str, job_id: str) -> Job | None:
+        return self.jobs.get(task_id, {}).get(job_id)
 
-    def running(self, root_id: str) -> list[Job]:
-        """The root's jobs whose end is not yet told: a job whose command
+    def running(self, task_id: str) -> list[Job]:
+        """The task's jobs whose end is not yet told: a job whose command
         has exited counts until its end is posted, so whoever waits for the
-        tree's jobs to finish sees that end in the inbox once they have."""
-        return [j for j in self.jobs.get(root_id, {}).values() if not j.done.is_set()]
+        task's jobs to finish sees that end in the inbox once they have."""
+        return [j for j in self.jobs.get(task_id, {}).values() if not j.done.is_set()]
+
+    def live(self, task_id: str, job_id: str) -> bool:
+        """Whether the job runs here, or its end is on the way to its
+        task's inbox: not lost with a claim this worker no longer has."""
+        job = self.find(task_id, job_id)
+        return job is not None and not job.fenced
 
     # ------------------------------------------------------------ launch
 
     async def spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
-                    root_id: str, spawner_id: str, tool_use_id: str, description: str,
+                    task_id: str, tool_use_id: str, description: str,
                     post: Post, monitor_timeout_ms: float | None = None,
-                    release: Release | None = None, tree: TreeHold | None = None,
+                    release: Release | None = None, kept: KeptClaim | None = None,
                     argv: Sequence[str] | None = None,
                     ws: tuple[str, list[str]] | None = None,
                     ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
@@ -386,26 +368,26 @@ class Registry:
         """Start a job, or return the refusal text. A ``foreground`` job
         (:attr:`Job.foreground`) also gets a file its fd 3 writes to. ``release`` is awaited
         once the job has ended and its end is posted (or it was refused);
-        ``tree`` is the hold it gives back, whose loss kills the job.
+        ``kept`` is the task's claim it keeps, whose loss kills the job.
         ``argv``: what runs instead
         of ``bash -c command`` (the command wrapped in a sandbox); the log
         redirection stays outside it. A monitor with ``ws`` streams that
         WebSocket's messages instead of running ``command``, connecting where
         ``ws_resolve`` says (``run_ws``'s ``resolve``)."""
         job = await self._spawn(env=env, command=command, cwd=cwd, env_vars=env_vars,
-                                root_id=root_id, spawner_id=spawner_id,
+                                task_id=task_id,
                                 tool_use_id=tool_use_id, description=description, post=post,
                                 monitor_timeout_ms=monitor_timeout_ms, release=release,
-                                tree=tree, argv=argv, ws=ws, ws_resolve=ws_resolve,
+                                kept=kept, argv=argv, ws=ws, ws_resolve=ws_resolve,
                                 foreground=foreground, shell_command=shell_command)
         if isinstance(job, str) and release is not None:
             await release()
         return job
 
     async def _spawn(self, *, env: ExecEnv, command: str, cwd: str, env_vars: Mapping[str, str],
-                     root_id: str, spawner_id: str, tool_use_id: str, description: str,
+                     task_id: str, tool_use_id: str, description: str,
                      post: Post, monitor_timeout_ms: float | None,
-                     release: Release | None, tree: TreeHold | None,
+                     release: Release | None, kept: KeptClaim | None,
                      argv: Sequence[str] | None,
                      ws: tuple[str, list[str]] | None = None,
                      ws_resolve: Callable[[str, int], Awaitable[str]] | None = None,
@@ -413,7 +395,7 @@ class Registry:
         # The cap counts background jobs only (what TaskStop can stop); a
         # foreground command is not held to it either: past its timeout it
         # moves to the background rather than being killed.
-        running = sum(not j.foreground for j in self.running(root_id))
+        running = sum(not j.foreground for j in self.running(task_id))
         if running >= self.max_jobs and not foreground:
             return (f"too many background jobs ({running}/{self.max_jobs}); stop one with "
                     f"TaskStop first")
@@ -426,26 +408,25 @@ class Registry:
         events = posixpath.join(log_dir, f"{job_id}.events") \
             if monitor_timeout_ms and ws is None else None
         alive = (posixpath.join(log_dir, f"{job_id}.alive")
-                 if tree is not None or foreground else "")
+                 if kept is not None or foreground else "")
         cwd_file = posixpath.join(log_dir, f"{job_id}.cwd") if foreground else ""
         made = await env.run(
             ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
              *[p for p in (out, events, alive, cwd_file) if p]], timeout=10)
         if made.exit_code != 0:
             return "background jobs are unavailable: could not create the job's log file"
-        job = Job(job_id=job_id, root_id=root_id, spawner_id=spawner_id, command=command,
+        job = Job(job_id=job_id, task_id=task_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
                   env=env, out_path=out, events_path=events, post=post, release=release, ws=ws,
-                  tree=tree, worker=tree.worker if tree is not None else self.worker,
-                  alive_path=alive, foreground=foreground, cwd_path=cwd_file,
+                  kept=kept, alive_path=alive, foreground=foreground, cwd_path=cwd_file,
                   shell_command=shell_command)
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
                                         stop=lambda: self._stop_quietly(job))
         job.left_dir = job_runs_in(env, cwd)
-        self.jobs[root_id] = self.jobs.pop(root_id, {})  # most recently used last
-        self.jobs[root_id][job_id] = job
-        self._let_go_of_roots()
+        self.jobs[task_id] = self.jobs.pop(task_id, {})  # most recently used last
+        self.jobs[task_id][job_id] = job
+        self._let_go_of_tasks()
         if ws is not None and job.monitor is not None:
             stream = job.monitor
             job.proc = asyncio.ensure_future(run_ws(*ws, lambda text: stream.feed(text + "\n"),
@@ -495,42 +476,41 @@ class Registry:
         job.sender = asyncio.create_task(self._send(job))
         if not foreground:
             self._watch_stall(job)
-        if tree is not None:
-            self.hold_with(job, tree)
+        if kept is not None:
+            self.keep_with(job, kept)
         if alive and (self._keeper is None or self._keeper.done()):
             self._keeper = asyncio.create_task(self._keep_alive())
         return job
 
+
     def _alive_period(self, job: Job) -> float:
-        """How long ``job``'s guard waits for its ``.alive`` file: half its
-        hold's time, or for a foreground command :attr:`foreground_alive_s`."""
-        return job.tree.seconds / 2 if job.tree is not None else self.foreground_alive_s
+        """How long ``job``'s guard waits for its ``.alive`` file: its kept
+        claim's lease, else :attr:`alive_s`."""
+        return job.kept.lease_seconds if job.kept is not None else self.alive_s
 
     def _guard(self, job: Job) -> str:
         """The guard's command line for ``job`` (see :data:`_GUARD`)."""
         worker_pid = str(os.getpid()) if is_local(job.env) else ""
         ticks = 0
         if job.alive_path:
-            # The worker re-creates the file three times per period; the
-            # period is half the hold's time, so a frozen worker's jobs are
-            # dead about when its hold may be reaped.
+            # The worker re-creates the file three times per period.
             ticks = max(2, round(self._alive_period(job) / GUARD_TICK_S))
         job.guard_period = ticks * GUARD_TICK_S
         return shlex.join(["sh", "-c", _GUARD, "sh", "$$", worker_pid, job.alive_path,
                            str(ticks), str(GUARD_TICK_S)]).replace("'$$'", "$$")
 
     async def _keep_alive(self) -> None:
-        """Re-create the ``.alive`` file of every running job whose hold is
-        fresh (or that has none: a foreground command), three times per
+        """Re-create the ``.alive`` file of every running job whose claim is
+        kept (or that keeps none: a foreground command), three times per
         guard period, until no such job is left."""
         while True:
-            jobs = [j for root in self.jobs.values() for j in root.values()
+            jobs = [j for task in self.jobs.values() for j in task.values()
                     if j.status == "running" and j.alive_path]
             if not jobs:
                 return
             by_env: dict[int, list[Job]] = {}
             for job in jobs:
-                if (job.tree is None or job.tree.fresh()) and not job.fenced:
+                if (job.kept is None or not job.kept.lost) and not job.fenced:
                     by_env.setdefault(id(job.env), []).append(job)
             for group in by_env.values():
                 paths = [j.alive_path for j in group]
@@ -574,7 +554,7 @@ class Registry:
                 if job.foreground:
                     # The call waiting for it reports the end itself.
                     job.outbox.put_nowait(None)
-                    job.forget_hold()
+                    job.forget_kept()
                     job.done.set()
                 else:
                     await self._end(job)
@@ -591,23 +571,23 @@ class Registry:
                 with contextlib.suppress(Exception):
                     await job.sender  # the monitor's events come first
             try:
-                # Posted before the hold is given back: a worker that
-                # claims the tree next finds the end in the inbox.
+                # Posted before the claim is given back: the task's next
+                # step finds the end in the inbox.
                 await self._post_end(job, notice)
             finally:
-                job.forget_hold()
+                job.forget_kept()
                 job.done.set()
                 if job.release is not None:
                     with contextlib.suppress(Exception):
                         await job.release()
-                self._let_go_of_ended(job.root_id)
+                self._let_go_of_ended(job.task_id)
 
-    def _let_go_of_ended(self, root_id: str) -> None:
-        """Keep at most :attr:`ended_jobs_keep` of the root's background jobs
+    def _let_go_of_ended(self, task_id: str) -> None:
+        """Keep at most :attr:`ended_jobs_keep` of the task's background jobs
         whose end is posted, dropping the oldest. A dropped job's output log
-        stays until its root goes (its end notice named it), within
+        stays until its task goes (its end notice named it), within
         :attr:`let_go_logs_max_bytes`; its other files go now."""
-        jobs = self.jobs.get(root_id)
+        jobs = self.jobs.get(task_id)
         if not jobs:
             return
         ended = [j for j in jobs.values() if j.done.is_set() and not j.foreground]
@@ -621,28 +601,25 @@ class Registry:
             st = await job.env.stat(job.out_path)
         except OSError:
             st = None
-        kept = self.let_go_logs.setdefault(job.root_id, [])
+        kept = self.let_go_logs.setdefault(job.task_id, [])
         kept.append((job.env, job.out_path, st.size if st is not None else 0))
         while kept and sum(size for _, _, size in kept) > self.let_go_logs_max_bytes:
             env, path, _ = kept.pop(0)
             await self._remove_files(env, [path])
 
-    async def _remove_let_go_logs(self, root_id: str) -> None:
-        for env, path, _ in self.let_go_logs.pop(root_id, []):
+    async def _remove_let_go_logs(self, task_id: str) -> None:
+        for env, path, _ in self.let_go_logs.pop(task_id, []):
             await self._remove_files(env, [path])
 
-    def _let_go_of_roots(self) -> None:
-        """Keep at most :attr:`roots_keep` roots, letting go of the least
+    def _let_go_of_tasks(self) -> None:
+        """Keep at most :attr:`tasks_keep` tasks, letting go of the least
         recently used ones with no running job, with their logs."""
-        idle = [r for r, jobs in self.jobs.items()
+        idle = [t for t, jobs in self.jobs.items()
                 if all(j.done.is_set() for j in jobs.values())]
-        for root_id in idle[:max(0, len(self.jobs) - self.roots_keep)]:
-            jobs = self.jobs.pop(root_id)
-            for job in jobs.values():
-                self.ended.pop(job.spawner_id, None)
-            self.ended.pop(root_id, None)
+        for task_id in idle[:max(0, len(self.jobs) - self.tasks_keep)]:
+            jobs = self.jobs.pop(task_id)
             self._in_background(self._remove_files_of(list(jobs.values())))
-            self._in_background(self._remove_let_go_logs(root_id))
+            self._in_background(self._remove_let_go_logs(task_id))
 
     async def _remove_files_of(self, jobs: list[Job]) -> None:
         for job in jobs:
@@ -660,15 +637,13 @@ class Registry:
 
     async def _post_end(self, job: Job, notice: str | None) -> None:
         if job.fenced:
-            return  # its hold is gone: the tree was told it is lost
+            return  # its claim is gone: the next pickup calls it lost
         data = {"job_id": job.job_id, "status": self.status_of(job), "exit_code": job.exit_code,
                 "notice": f"{NOTICE_GUARD}\n\n{notice}" if notice is not None else None}
         try:
-            # Forwarded to the root by the store when the spawner ended
-            # after ``_target`` looked (this process marks ends late).
-            await job.post(External(name=JOB_ENDED, data=data), task_id=self._target(job),
-                           dedupe_key=f"{JOB_ENDED}:{job.job_id}", forward_if_ended=True)
-        except Exception as exc:  # noqa: BLE001 - its hold runs out and the tree is told
+            await job.post(External(name=JOB_ENDED, data=data), task_id=job.task_id,
+                           dedupe_key=f"{JOB_ENDED}:{job.job_id}")
+        except Exception as exc:  # noqa: BLE001 - the next pickup calls it lost
             log.warning("background job %s: its end was not posted: %s", job.job_id, exc)
 
     async def _finish(self, job: Job) -> str | None:
@@ -748,27 +723,26 @@ class Registry:
                     output_file=job.out_path, description=job.description, tail=tail))
             return
 
-    def hold_with(self, job: Job, tree: TreeHold) -> None:
-        """``job`` lives by ``tree`` from now on. Losing it (the tree
-        left this worker) kills the job, and the root's jobs and logs are let
-        go of once they are gone: the worker that takes the tree next has
-        its own table."""
-        job.tree, job.worker = tree, tree.worker
+    def keep_with(self, job: Job, kept: KeptClaim) -> None:
+        """``job`` lives by ``kept`` (its task's claim) from now on. Losing
+        it (the task left this worker) kills the job, and the job and its
+        logs are let go of once it is gone: the worker that takes the task
+        next has its own table."""
+        job.kept = kept
 
         def lost() -> None:
             self._fence(job)
-            self._in_background(self._drop(job.root_id,
-                                           list(self.jobs.get(job.root_id, {}).values())))
+            self._in_background(self._drop(job.task_id, [job]))
 
-        job.forget_hold = tree.on_lost(lost)
+        job.forget_kept = kept.on_lost(lost)
 
     async def discard(self, job: Job) -> None:
         """Forget a foreground job once it is done, with its files."""
         await job.done.wait()
-        if self.jobs.get(job.root_id, {}).get(job.job_id) is job:
-            del self.jobs[job.root_id][job.job_id]
-            if not self.jobs[job.root_id]:
-                self.jobs.pop(job.root_id, None)
+        if self.jobs.get(job.task_id, {}).get(job.job_id) is job:
+            del self.jobs[job.task_id][job.job_id]
+            if not self.jobs[job.task_id]:
+                self.jobs.pop(job.task_id, None)
         await self._remove_files(job.env, _files(job))
 
     def discard_later(self, job: Job) -> None:
@@ -779,49 +753,42 @@ class Registry:
         self.kill(job, quiet=True)
 
     def _fence(self, job: Job) -> None:
-        """The job's hold is lost: the log will call it lost, so it stops
+        """The job's claim is lost: the log will call it lost, so it stops
         and tells nothing more."""
         job.fenced = True
         self.kill(job, quiet=True)
 
-    def kill_where(self, root_id: str, *, spawner_id: str | None = None) -> None:
-        """Quietly kill the running jobs of a root (or of one spawner)."""
-        for job in self.running(root_id):
-            if spawner_id is None or job.spawner_id == spawner_id:
-                self.kill(job, quiet=True)
+    def kill_all(self, task_id: str) -> None:
+        """Quietly kill the task's running jobs."""
+        for job in self.running(task_id):
+            self.kill(job, quiet=True)
 
-    def retire(self, root_id: str) -> None:
-        """The root ended: kill its jobs quietly, then drop them and their
+    def retire(self, task_id: str) -> None:
+        """The task ended: kill its jobs quietly, then drop them and their
         logs once they are gone."""
-        self.kill_where(root_id)
-        jobs = list(self.jobs.get(root_id, {}).values())
+        self.kill_all(task_id)
+        jobs = list(self.jobs.get(task_id, {}).values())
         if not jobs:
-            self.jobs.pop(root_id, None)
-            self.ended.pop(root_id, None)
-            self._in_background(self._remove_let_go_logs(root_id))
+            self.jobs.pop(task_id, None)
+            self._in_background(self._remove_let_go_logs(task_id))
             return
-        self._in_background(self._drop(root_id, jobs))
+        self._in_background(self._drop(task_id, jobs))
 
-    async def _drop(self, root_id: str, jobs: list[Job]) -> None:
-        """Once ``jobs`` (of ``root_id``) are gone, forget them and remove
+    async def _drop(self, task_id: str, jobs: list[Job]) -> None:
+        """Once ``jobs`` (of ``task_id``) are gone, forget them and remove
         their logs; a job started since stays."""
         for job in jobs:
             await job.done.wait()
         await self._remove_files_of(jobs)
-        await self._remove_let_go_logs(root_id)
-        table = self.jobs.get(root_id, {})
+        table = self.jobs.get(task_id, {})
         for job in jobs:
             if table.get(job.job_id) is job:
                 del table[job.job_id]
-            self.ended.pop(job.spawner_id, None)
-        self.ended.pop(root_id, None)
-        if root_id in self.jobs and not table:
-            self.jobs.pop(root_id, None)
+        if task_id in self.jobs and not table:
+            self.jobs.pop(task_id, None)
+            await self._remove_let_go_logs(task_id)
 
     # ------------------------------------------------------------ notices
-
-    def _target(self, job: Job) -> str:
-        return job.root_id if job.spawner_id in self.ended else job.spawner_id
 
     async def _send(self, job: Job) -> None:
         """Deliver a job's notices in order."""
@@ -834,7 +801,7 @@ class Registry:
             try:
                 await job.post(Say(message=user(f"{NOTICE_GUARD}\n\n{text}", origin="system"),
                                    when="now"),
-                               task_id=self._target(job), forward_if_ended=True)
+                               task_id=job.task_id)
             except Exception as exc:  # noqa: BLE001 - a lost notice must not kill the sender
                 log.warning("background notice for %s not delivered: %s", job.job_id, exc)
 

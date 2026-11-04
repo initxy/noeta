@@ -33,12 +33,12 @@ A runner claims a task from the store (`claim` / `renew` / `release`; Postgres u
 `SKIP LOCKED`). Every append is conditional on `expected_seq` and the claim's `owner_epoch`, so a
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
 unfinished call is answered "outcome unknown", never re-run, unless its tool looks the outcome
-up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe` (`ToolFlags`). What lives only in one worker
-process (a background job) holds the task tree there (`Store.hold`; a tree has one holding worker,
-so a hold is refused while another worker holds the tree or runs one of its tasks, `HeldElsewhere`, and takes back another worker's lapsed claim of the tree): other workers skip it until
-the hold is released, or reaped once it ran out (every worker reaps), which posts `hold_lost` to
-the tree's tasks, waking them (a worker stopping on purpose posts it without waking: the task
-hears with its next message); a hold's epoch fences its old holder.
+up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe` (`ToolFlags`). A task that owns what lives only in
+its worker process (a background job, a parked MCP call) keeps its own claim while it waits
+(`ToolContext.keep`, `Patch.keep`): the row says waiting, the runner renews the lease and takes
+the task's inbox in the background (`Runtime.run_claim`), so no other worker runs it. A lapsed
+kept lease makes the task claimable, and the next claimer tells the model the job is lost;
+a worker stopping (`Runtime.let_go`) leaves its tasks waiting, told with their next message.
 
 ## Layers
 
