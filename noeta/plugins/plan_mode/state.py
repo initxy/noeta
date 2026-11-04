@@ -17,8 +17,7 @@ NAME = PLAN_MODE
 #: permissions plugin folds it from there.
 MODE_RECORDS = PERMISSIONS
 #: In a plan record: whether this plan runs with the auto-mode classifier,
-#: settled when plan mode is entered (absent, in a log written before
-#: noeta recorded it: when planning began in auto mode).
+#: settled when plan mode is entered.
 AUTO_DURING_PLAN = "auto_during_plan"
 #: Task config key a child of a planning task reads the parent's plan name
 #: from: its own plan file is ``<name>-agent-<child task id>.md`` (Claude
@@ -126,6 +125,5 @@ def plan_classifier_on(pre_mode: str, *, auto_during_plan: bool) -> bool:
 
 def plans_with_classifier(plan: dict[str, Any]) -> bool:
     """Whether ``plan`` runs with the auto-mode classifier (its record's
-    flag; a log from before the flag: when planning began in auto mode)."""
-    on = plan.get(AUTO_DURING_PLAN)
-    return on if isinstance(on, bool) else plan.get("pre_mode") == "auto"
+    flag)."""
+    return plan.get(AUTO_DURING_PLAN) is True

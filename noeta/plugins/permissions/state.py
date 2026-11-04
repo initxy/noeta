@@ -12,8 +12,7 @@ from noeta.toolkit.plugin_records import PERMISSIONS
 
 NAME = PERMISSIONS
 #: In a plan record: whether this plan runs with the auto-mode classifier,
-#: settled when plan mode is entered (absent, in a log written before
-#: noeta recorded it: when planning began in auto mode).
+#: settled when plan mode is entered.
 AUTO_DURING_PLAN = "auto_during_plan"
 #: Decisions kept in the folded state (per call id).
 _KEEP = 256
@@ -142,9 +141,7 @@ def auto_active(mode: str | None, plan: dict[str, Any] | None) -> bool:
         return True
     if mode != "plan":
         return False
-    plan = plan or {}
-    on = plan.get(AUTO_DURING_PLAN)
-    return on if isinstance(on, bool) else plan.get("pre_mode") == "auto"
+    return (plan or {}).get(AUTO_DURING_PLAN) is True
 
 
 def _auto_exit(st: PermState, due: tuple[str, ...], mode: str,

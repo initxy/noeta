@@ -701,8 +701,7 @@ async def test_plan_mode_from_default_asks_the_person_on_an_auto_mode_host(
 
 
 def test_only_a_plan_begun_in_auto_mode_keeps_the_classifier() -> None:
-    """Settled on entry; a plan record from an older log (no
-    ``auto_during_plan``) keeps it only after auto mode."""
+    """Settled on entry, from the plan record's ``auto_during_plan``."""
     from noeta.plugins.permissions import state as ps
     from noeta.plugins.plan_mode.state import plan_classifier_on as on
 
@@ -710,8 +709,6 @@ def test_only_a_plan_begun_in_auto_mode_keeps_the_classifier() -> None:
     assert not on("auto", auto_during_plan=False)
     for pre in ("default", "acceptEdits", "dontAsk", "bypassPermissions"):
         assert not on(pre, auto_during_plan=True)
-    assert ps.auto_active("plan", {"pre_mode": "auto"})
-    assert not ps.auto_active("plan", {"pre_mode": "default"})
     assert ps.auto_active("plan", {"pre_mode": "auto", "auto_during_plan": True})
     assert not ps.auto_active("plan", {"pre_mode": "auto", "auto_during_plan": False})
 
