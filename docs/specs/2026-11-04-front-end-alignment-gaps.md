@@ -82,3 +82,7 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   sends headers only once the answer is complete, so a summary taking over 60 s timed out and
   was retried ~20 min. Headers now wait up to Claude Code's request timeout (10 min); silence
   after the stream began is still 60 s. 6 trials: 1.00 each, no timeouts (was 3 of 6).
+- 2026-11-04 C follow-ups: `openai_compat` / `openai_responses` take the same headers-wait split
+  (shared `stream_timeout` / `bounded_silence` in `_common`). The 400 on each trial's first
+  call was the session-title side request sending `thinking: disabled` for an uncatalogued
+  model, which the DeepSeek gateway refuses; an uncatalogued model now gets no thinking field.
