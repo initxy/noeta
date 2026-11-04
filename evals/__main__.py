@@ -12,6 +12,7 @@ more than the tolerance recorded in the baseline file.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import shutil
 import statistics
@@ -66,6 +67,8 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="replace main's system prompt with this file (for checking that the eval catches a degraded prompt)",
     )
+    ap.add_argument("--timeout-scale", type=float, default=1.0,
+                    help="multiply every scenario's trial timeout (a slow gateway; scores are unchanged)")
     ap.add_argument("--out", type=Path, default=None, help="results JSON path (default: evals/results/<utc>.json)")
     return ap.parse_args(argv)
 
@@ -168,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
     prompt = args.system_prompt_file.read_text(encoding="utf-8") if args.system_prompt_file else None
     cfg = EvalConfig(model=model, provider=args.provider, system_prompt=prompt)
     chosen = [s for s in SCENARIOS if args.only is None or s.name in args.only]
+    if args.timeout_scale != 1.0:
+        chosen = [dataclasses.replace(s, timeout_s=s.timeout_s * args.timeout_scale) for s in chosen]
     unknown = set(args.only or ()) - {s.name for s in SCENARIOS}
     if unknown:
         print(f"evals: unknown scenario(s): {', '.join(sorted(unknown))}")
@@ -204,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         "provider": args.provider,
         "trials": args.trials,
         "system_prompt_override": str(args.system_prompt_file) if args.system_prompt_file else None,
+        "timeout_scale": args.timeout_scale,
         "wall_seconds": wall,
         "usage": usage,
         "overall": overall,

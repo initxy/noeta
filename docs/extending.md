@@ -245,6 +245,7 @@ worker resumes any task; pi and dsh run in one process, Claude Code in one local
 | Storage backend | — | `SessionPersistence` | — | `noeta.stores`, `store_contract` | have | Checked by the shared contract tests. |
 | **Models** | | | | | | |
 | A provider (wire) | `registerProvider` | `llm.registerAdapter` | — | a `noeta.providers` package | have | Found by name through entry points, like the built-ins. |
+| Several providers, a model switched across them | `models.json` providers; `/model` across them | agent presets | one provider at a time; `/model` among its models | `[providers.<name>]` tables; `/model`, stream-json `set_model` and ACP switch across them; the chosen provider and the model's limits are recorded in the task's config | added | The owner asked for any model, switched mid-task; recording the route keeps a resumed task on the same provider on every worker. |
 | A provider from a plugin file | yes | yes | — | — | won't | The plugin pin does not cover providers; one on a single worker breaks "any worker resumes any task". |
 | Models and their family | `models.json` | `registerModelDiscovery` | — | `register_models`, a models file; any family | added | A third-party provider declares its own family; only anthropic and openai carry conventions. |
 | Login providers | `oauth` | DeepSeek account | `/login` | keys, `{env:}` / `{keyring:}` | won't | A server holds operator keys; subscription login is a desktop concern. |

@@ -473,6 +473,16 @@ def score_todo_reminder(t: Trace, judge: Judge) -> Result:
         "files_done": done, "tool_searches": len(t.named("ToolSearch"))}
 
 
+def approve_all(req: Request) -> Reply | None:
+    """The person approves every call asked about (the tool-choice scenarios
+    run in ``default`` mode, where the main prompt's dedicated-tools rule
+    stands; ``bypassPermissions`` and ``auto`` add Claude Code's note that the
+    shell may do small jobs instead)."""
+    if req.kind == "question":
+        return Reply(data="Your call; go with what fits the code.")
+    return Reply(decision="allow")
+
+
 # --------------------------------------------------------------------------- #
 # Plan mode
 # --------------------------------------------------------------------------- #
@@ -756,6 +766,8 @@ SCENARIOS: list[Scenario] = [
         behavior="reads a file with Read, not cat/head through Bash",
         goal="What request timeout is configured in config/settings.toml?",
         setup=fx.shop,
+        permission_mode="default",
+        answer=approve_all,
         score=score_read_over_cat,
         tags=("tool_choice",),
     ),
@@ -764,6 +776,8 @@ SCENARIOS: list[Scenario] = [
         behavior="makes a small change with Edit after reading, not a whole-file Write",
         goal="In shop/pricing.py, rename the constant MAX_DISCOUNT to MAX_DISCOUNT_PCT (every use in that file).",
         setup=fx.shop,
+        permission_mode="default",
+        answer=approve_all,
         score=score_edit_not_write,
         tags=("tool_choice", "read_before_edit"),
     ),
