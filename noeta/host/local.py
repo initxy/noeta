@@ -37,7 +37,8 @@ from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
 from noeta.core.store import Store
 from noeta.core.types import Delta, Text
-from noeta.host.app import AppAPI, DeltaSink, agent_commands, agent_run_command
+from noeta.host.app import AppAPI, DeltaSink, agent_commands, agent_run_command, archive_task
+from noeta.host.summaries import Cache, root_summaries
 
 log = logging.getLogger("noeta.host.local")
 
@@ -188,6 +189,7 @@ class LocalApp:
         #: returning what the person should know (an unknown model) or
         #: ``None``; ``None`` when only the catalog is known. Off the loop.
         self.prepare_model: Callable[[str], str | None] | None = None
+        self._summaries: Cache = {}
 
     def replace_agents(self, agents: list[Agent]) -> None:
         """Run ``agents`` from now on: every task picked up after this (the
@@ -244,6 +246,14 @@ class LocalApp:
         from noeta.host.usage import task_context
 
         return await task_context(self.runtime, task_id)
+
+    async def summaries(self, limit: int = 50, *,
+                        archived: bool | None = None) -> list[dict[str, Any]]:
+        return await root_summaries(self.client, limit, self._summaries,
+                                    inbox=self.store.inbox, archived=archived)
+
+    async def archive(self, task_id: str, archived: bool = True) -> None:
+        await archive_task(self.client, task_id, archived)
 
     async def adopt(self, task_id: str) -> None:
         """Serve the tree of an existing task (one being resumed). Raises

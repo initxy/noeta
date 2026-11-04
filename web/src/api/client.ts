@@ -28,7 +28,7 @@ export class ApiError extends Error {
 
 const enc = encodeURIComponent;
 
-function query(params: Record<string, string | number | undefined | null>): string {
+function query(params: Record<string, string | number | boolean | undefined | null>): string {
   const kept = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "");
   return kept.length ? "?" + kept.map(([k, v]) => `${k}=${enc(String(v))}`).join("&") : "";
 }
@@ -87,8 +87,14 @@ export class Api {
     return (await resp.json()) as T;
   }
 
-  summaries(limit = 50): Promise<TaskSummary[]> {
-    return this.call("GET", `/summaries${query({ limit })}`);
+  /** The root tasks; `archived`: only the archived ones, or only the others. */
+  summaries(limit = 50, archived?: boolean): Promise<TaskSummary[]> {
+    return this.call("GET", `/summaries${query({ limit, archived })}`);
+  }
+
+  /** Archive a session (lists leave it out), or bring it back. */
+  archive(taskId: string, archived = true): Promise<unknown> {
+    return this.signal(taskId, "archive", { archived });
   }
 
   /** A new task; `historyFrom` continues that task's conversation. */

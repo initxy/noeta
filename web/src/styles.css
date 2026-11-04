@@ -1033,3 +1033,59 @@ code {
   margin-top: 6px;
   font-size: 12px;
 }
+
+/* session search and archive */
+.session-search {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font: inherit;
+  font-size: 0.9em;
+}
+
+.list-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 8px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.session-row {
+  position: relative;
+}
+
+.session-row .row-action {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px 6px;
+  line-height: 1;
+  opacity: 0;
+  background: var(--user);
+}
+
+.session-row:hover .row-action,
+.session-row .row-action:focus-visible {
+  opacity: 1;
+}
+
+.session-row:hover .ago {
+  visibility: hidden;
+}
+
+@media (hover: none) {
+  .session-row .row-action {
+    opacity: 1;
+  }
+
+  .session-row .ago {
+    visibility: hidden;
+  }
+}

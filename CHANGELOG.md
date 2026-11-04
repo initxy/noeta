@@ -9,6 +9,13 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Added
 
+- **Session search and archive in the web and desktop apps.** The sidebar's search box narrows
+  the sessions by title, first prompt or folder; a row's button archives a session, and the
+  "Archived" list brings one back. Archiving is the `archive` signal (`{"archived": bool}`,
+  allowed over HTTP), read from the task's inbox so an ended task can be archived too;
+  `GET /summaries` gives each root's `archived` and takes `archived=true|false`;
+  `AppAPI.summaries` / `archive` (`LocalApp`, `RemoteApp`). Sessions are not deleted: the
+  store keeps every task's log.
 - **The terminal UI is its own package, `noeta-tui` (`tui/`)**, found by `noeta` through the
   entry-point group `noeta.frontends`; the `tui` extra is gone (install line in the README).
   It now looks and works like Claude Code 2.1's: welcome box, `❯` prompt between rules, mode

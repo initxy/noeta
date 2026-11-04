@@ -32,6 +32,20 @@ describe("Api", () => {
     await expect(api.summaries()).rejects.toEqual(new ApiError(401, "unauthorized"));
   });
 
+  it("lists archived sessions apart and archives with a signal", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("[]")));
+    vi.stubGlobal("fetch", fetch);
+    const api = new Api({ server: "", token: "" });
+    await api.summaries(50, true);
+    await api.summaries(50, false);
+    await api.summaries();
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual(["/summaries?limit=50&archived=true", "/summaries?limit=50&archived=false", "/summaries?limit=50"]);
+    await api.archive("t 1", false);
+    const [url, init] = fetch.mock.calls[3];
+    expect(url).toBe("/tasks/t%201/signals");
+    expect(JSON.parse(init.body)).toEqual({ name: "archive", data: { archived: false } });
+  });
+
   it("watches events and deltas until the server ends the stream", async () => {
     const body = 'event: event\ndata: {"seq":3,"at":0,"event":{"type":"Waiting","on":"input"}}\n\n' + 'event: delta\ndata: {"kind":"text","text":"hi"}\n\nevent: end\ndata: {}\n\n';
     const fetch = vi.fn().mockResolvedValue(new Response(body));
