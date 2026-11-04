@@ -61,6 +61,10 @@ DOUBLE_PRESS = 0.8
 MODE_WAIT = 2.0
 
 
+#: What ``-c`` says, before it exits, when nothing was started here.
+NOTHING_TO_CONTINUE = "No conversation found to continue"
+
+
 class NoetaApp(TranscriptView):
     CSS_PATH = "style.tcss"
     TITLE = "noeta"
@@ -206,7 +210,8 @@ class NoetaApp(TranscriptView):
 
     async def _open_first(self) -> None:
         """The task the app starts on: ``--resume``'s, the picked one, the
-        newest one started here (``-c``), or a new one."""
+        newest one started here (``-c``; with none, Claude Code's message and
+        exit code 1), or a new one."""
         if self.resume:
             await self.open_task(self.resume)
         elif self.resume == "":
@@ -214,10 +219,11 @@ class NoetaApp(TranscriptView):
         elif self.start.continue_last and (latest := await find_latest_task(
                 self.local.client, str(self.task_config.get("cwd") or self.cwd), self.agent)):
             await self.open_task(latest)
+        elif self.start.continue_last:
+            self.exit(return_code=1, message=NOTHING_TO_CONTINUE)
+            return
         else:
             await self.new_task()
-            if self.start.continue_last:
-                await self.say_notice("No conversation found to continue")
         self.query_one(PromptInput).focus()
 
     async def on_unmount(self) -> None:

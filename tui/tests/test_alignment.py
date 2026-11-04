@@ -5,6 +5,7 @@ prompt commands from the host, ``/mcp`` and
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from noeta.core.types import Usage
 from noeta.plugins.compaction import Compaction
@@ -153,3 +154,20 @@ async def test_tab_completes_the_command_word_with_the_cursor_anywhere_in_it(
         box.text = ""
         await pilot.press(*"say /mo")
         assert not menu.display  # a command is only the first word
+
+
+def test_the_front_end_exits_with_the_apps_code(monkeypatch: Any) -> None:
+    import pytest
+
+    import noeta_tui
+    from noeta.host.app import FrontEndStart
+    from noeta_tui.app import NoetaApp
+
+    def ran(self: NoetaApp, **_: Any) -> None:
+        self._return_code = 1
+
+    monkeypatch.setattr(NoetaApp, "run", ran)
+    with pytest.raises(SystemExit) as exited:
+        noeta_tui.run(object(), FrontEndStart(agent="main", cwd="/w", model=MODEL,
+                                              continue_last=True))
+    assert exited.value.code == 1
