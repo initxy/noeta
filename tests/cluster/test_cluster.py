@@ -43,7 +43,7 @@ from tests.cluster.harness import (
     chaos,
     collect,
     kill_all,
-    kill_holder,
+    kill_job_worker,
     root_finished,
     seed_from_env,
     send_pings,
@@ -248,7 +248,7 @@ async def test_chaos_with_background_jobs(tmp_path: Path, pg_url: str) -> None:
     outcome = await run_cluster(tmp_path, pg_url, seed, specs, seconds=SECONDS,
                                 targets=targets, drain=30)
     assert_invariants(outcome)
-    assert outcome.faults.targeted > 0, fail(outcome, ["no holder was killed; rerun"])
+    assert outcome.faults.targeted > 0, fail(outcome, ["no job worker was killed; rerun"])
     assert_all_done(outcome)
 
 
@@ -336,13 +336,13 @@ async def _outcome(cluster: Cluster, tid: str, spec: Spec, faults: Faults) -> Ou
                          pings={spec.id: spec.pings}, watch=EpochWatch(), faults=faults)
 
 
-async def test_holder_killed_while_root_waits(tmp_path: Path, pg_url: str) -> None:
+async def test_job_worker_killed_while_root_waits(tmp_path: Path, pg_url: str) -> None:
     """SIGKILL the worker keeping a waiting root's claim for its job, send
     nothing else: the root must still learn the job is lost and finish."""
     cluster, tid, spec, _pid = await _one_job(tmp_path, pg_url, bg=6.0)
     faults = Faults()
     try:
-        assert await kill_holder(cluster, {tid}, faults)
+        assert await kill_job_worker(cluster, {tid}, faults)
         await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 6.0)
         outcome = await _outcome(cluster, tid, spec, faults)
     finally:
@@ -352,7 +352,7 @@ async def test_holder_killed_while_root_waits(tmp_path: Path, pg_url: str) -> No
     assert outcome.lost_jobs() == 1, fail(outcome, ["the job was not recorded lost"])
 
 
-async def test_killed_holder_job_stops_writing(tmp_path: Path, pg_url: str) -> None:
+async def test_killed_worker_job_stops_writing(tmp_path: Path, pg_url: str) -> None:
     """SIGKILL the job's worker, then a message reaches the root on another
     worker, which records the job lost. The job's process must be gone too: its
     side effect may not land after the log says lost."""
@@ -360,7 +360,7 @@ async def test_killed_holder_job_stops_writing(tmp_path: Path, pg_url: str) -> N
     spec.pings = 1
     faults = Faults()
     try:
-        assert await kill_holder(cluster, {tid}, faults)
+        assert await kill_job_worker(cluster, {tid}, faults)
         await cluster.client.send(tid, "CLUSTER-PING r00 0", dedupe_key="ping-r00-0")
         await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE)
         await asyncio.sleep(5.0)  # longer than the job had left to run
@@ -374,7 +374,7 @@ async def test_killed_holder_job_stops_writing(tmp_path: Path, pg_url: str) -> N
         outcome, ["the job of a dead worker wrote after the log said lost"])
 
 
-async def test_frozen_holder_job_not_reported_twice(tmp_path: Path, pg_url: str) -> None:
+async def test_frozen_worker_job_not_reported_twice(tmp_path: Path, pg_url: str) -> None:
     """SIGSTOP the job's worker past its lease, wake the root with a message
     (the job is recorded lost elsewhere), then SIGCONT: the job's end must
     not reach the task after the log called it lost."""

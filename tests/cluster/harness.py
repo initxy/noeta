@@ -496,9 +496,9 @@ async def wait_until(predicate: Any, timeout: float, interval: float = 0.25) -> 
 async def chaos(cluster: Cluster, rng: random.Random, seconds: float, faults: Faults, *,
                 targets: set[str] | None = None) -> None:
     """For ``seconds``: SIGKILL a random worker (respawned at once), or
-    SIGSTOP one for 1.5-3 leases (the zombie whose claims and holds run out
+    SIGSTOP one for 1.5-3 leases (the zombie whose claims run out
     while it still thinks it owns them), at random moments. With
-    ``targets`` (root ids) some faults are aimed: kill the worker holding a
+    ``targets`` (root ids) some faults are aimed: kill the worker running a
     background job of a target root that is waiting (the first such fault as
     soon as there is one)."""
     end = time.monotonic() + seconds
@@ -512,7 +512,7 @@ async def chaos(cluster: Cluster, rng: random.Random, seconds: float, faults: Fa
                 paused.pop(pid)
         roll = rng.random()
         if targets and (roll < 0.3 or not faults.targeted):
-            if await kill_holder(cluster, targets, faults):
+            if await kill_job_worker(cluster, targets, faults):
                 continue
             roll = rng.random()
         if roll < 0.6:
@@ -544,7 +544,7 @@ async def kill_all(cluster: Cluster, rng: random.Random, seconds: float, faults:
         faults.log.append(f"{time.monotonic():.1f} kill every worker")
 
 
-async def kill_holder(cluster: Cluster, targets: set[str], faults: Faults) -> bool:
+async def kill_job_worker(cluster: Cluster, targets: set[str], faults: Faults) -> bool:
     """Kill the worker running a background job of a waiting target root."""
     for root, pid in await cluster.running_job_pids():
         if root not in targets:
@@ -553,7 +553,7 @@ async def kill_holder(cluster: Cluster, targets: set[str], faults: Faults) -> bo
         if row.status == "waiting" and cluster.kill_pid(pid):
             faults.targeted += 1
             faults.kills += 1
-            faults.log.append(f"{time.monotonic():.1f} kill holder {pid} of {root}")
+            faults.log.append(f"{time.monotonic():.1f} kill job worker {pid} of {root}")
             return True
     return False
 
