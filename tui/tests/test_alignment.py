@@ -56,3 +56,44 @@ async def test_mcp_and_hooks_are_panels_of_what_the_plugins_say(tmp_path: Path) 
         await settle(pilot, lambda: "Bash · command · ./check.sh" in shown(app))
         await type_line(pilot, "/mcp")
         await settle(pilot, lambda: "No MCP servers configured." in shown(app))
+
+
+async def test_prompt_history_is_kept_per_project_across_sessions(tmp_path: Path) -> None:
+    from noeta_tui import history
+    from noeta_tui.widgets import Completions, PromptInput
+
+    provider = ScriptedProvider([reply("a"), reply("b")])
+    first = make_app(tmp_path, provider)
+    async with first.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: ready(first))
+        for n, prompt in enumerate(["fix the add test", "write docs"], 1):
+            await type_line(pilot, prompt)
+            await settle(pilot, lambda n=n: not first.busy and len(provider.requests) == n)
+    again = make_app(tmp_path, ScriptedProvider([]))
+    async with again.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: ready(again))
+        box = again.query_one(PromptInput)
+        await pilot.press("up")
+        assert box.text == "write docs"
+        box.text = ""
+        await pilot.press("ctrl+r", *"add")
+        assert [v for v, _, _ in again.query_one(Completions).items] == ["fix the add test"]
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    assert history.load(history.history_file(str(tmp_path / "home"), str(other))) == []
+
+
+def test_the_history_file_is_bounded(tmp_path: Path) -> None:
+    from noeta_tui import history
+
+    path = history.history_file(str(tmp_path), "/w")
+    assert path is not None
+    for n in range(2 * history.HISTORY_MAX + 1):
+        history.append(path, f"prompt {n}")
+    kept = history.load(path)
+    assert len(kept) == history.HISTORY_MAX and kept[-1] == f"prompt {2 * history.HISTORY_MAX}"
+    assert len(path.read_text().splitlines()) == history.HISTORY_MAX
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    path.write_text(path.read_text() + '{"text": "cut sh')
+    assert history.load(path)[-1] == f"prompt {2 * history.HISTORY_MAX}"
+    assert history.load(None) == [] and history.history_file("", "/w") is None

@@ -33,7 +33,7 @@ from noeta.toolkit.permission_modes import (
     published_modes,
 )
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from noeta_tui import bash_mode, files, mentions, slash
+from noeta_tui import bash_mode, files, history, mentions, slash
 from noeta_tui.transcript import SERVER_DIRECTORY, TranscriptView, _short_path
 from noeta_tui.widgets import (
     Completions,
@@ -154,9 +154,11 @@ class NoetaApp(TranscriptView):
         self.turn_output = 0
         self.turn_verb = ""
         self.flash = ""
-        #: Prompts sent, oldest first; ``history_at`` steps through them.
-        self.history: list[str] = []
-        self.history_at = 0
+        #: Prompts sent in this project, oldest first (earlier sessions'
+        #: too); ``history_at`` steps through them.
+        self._history_file = history.history_file(self.start.home, self.start.cwd)
+        self.history: list[str] = history.load(self._history_file)
+        self.history_at = len(self.history)
         #: The commands the slash menu offers: plugins' for this task.
         self.plugin_commands: list[Command] = []
         self._deltas: asyncio.Queue[Delta] = asyncio.Queue()
@@ -339,6 +341,7 @@ class NoetaApp(TranscriptView):
         self.query_one("#shortcuts").display = False
         if not self.history or self.history[-1] != text:
             self.history.append(text)
+            history.append(self._history_file, text)
         self.history_at = len(self.history)
         self._set_marker("")
         if text.startswith("/"):
