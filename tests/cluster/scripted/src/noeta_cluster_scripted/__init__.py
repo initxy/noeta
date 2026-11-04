@@ -61,7 +61,7 @@ from typing import Any
 
 from noeta.core.events import External, InputTaken, Recorded
 from noeta.core.extension import Extension, TaskView
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
 
 ROOT = "CLUSTER-ROOT "
@@ -117,7 +117,7 @@ class LookupTool:
     }
     read_only = True
     clearable = False
-    retry_safe = True
+    flags = ToolFlags(retry_safe=True)
 
     def __init__(self, journal: str) -> None:
         self.journal = journal + ".lookups"
