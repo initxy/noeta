@@ -225,10 +225,14 @@ class Shell(Extension):
         took from its inbox while a job still shows running: the runner
         died between taking it and recording the decision; deciding twice
         changes nothing), then post ``JOBS_LOST`` for the jobs still
-        running in the log that this worker does not have."""
+        running in the log that this worker does not have. With every one
+        of them live here (a kept claim's wake) nothing died: the log is
+        not read."""
         st = view.ext_state(self.name)
-        if not isinstance(st, ShellState) or not any(
-                j.get("status") == "running" for j in st.jobs.values()):
+        if not isinstance(st, ShellState):
+            return
+        running = [k for k, j in st.jobs.items() if j.get("status") == "running"]
+        if all(self.registry.live(view.task_id, k) for k in running):
             return
         jobs = st.jobs
         if view.read_log is not None:

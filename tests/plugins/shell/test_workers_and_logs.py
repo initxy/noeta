@@ -142,6 +142,29 @@ async def test_a_pickup_decides_what_a_crash_left_undecided() -> None:
     assert len(_told(view)) == 1
 
 
+async def test_a_wake_with_every_running_job_here_reads_no_log(tmp_path: Path) -> None:
+    """A kept claim's wake (a Monitor event a second) re-runs the pickup's
+    start: with every running job live in this worker nothing crashed, so
+    the log is not read."""
+    registry = Registry(log_dir=str(tmp_path / "logs"))
+    here = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command="sleep 30",
+                                cwd=str(tmp_path), env_vars={}, task_id="t",
+                                tool_use_id="c", description="", post=_posted)
+    assert isinstance(here, Job)
+    reads: list[str] = []
+
+    async def read_log(task_id: str, after: int = 0) -> list[Recorded]:
+        reads.append(task_id)
+        return []
+
+    view = _view({here.job_id: _job(job_id=here.job_id)})
+    view.read_log = read_log
+    await Shell(registry=registry).on_start(view)
+    assert reads == [] and view.enqueued == [] and view.pending == []
+    registry.kill_all("t")
+    await asyncio.wait_for(here.done.wait(), 10)
+
+
 async def test_a_parents_stop_kills_the_job_here(tmp_path: Path) -> None:
     registry = Registry(log_dir=str(tmp_path / "logs"))
     job = await registry.spawn(env=LocalExecEnv(str(tmp_path)), command="sleep 30",
