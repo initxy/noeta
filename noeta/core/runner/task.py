@@ -580,9 +580,11 @@ class TaskRun:
 
     async def keep_waiting(self) -> None:
         """Hand the task back still waiting on its log's last ``Waiting`` (a
-        wake that brought nothing it waits for), without writing it again."""
-        assert self.state.waiting is not None
-        await self.append([], patch=patch_for([self.state.waiting], self.state.inbox_read))
+        wake that brought nothing it waits for), without writing it again. A
+        message taken since clears ``waiting``; an asked approval still stands."""
+        waiting = self.state.waiting or self.state.asked
+        assert waiting is not None
+        await self.append([], patch=patch_for([waiting], self.state.inbox_read))
 
     @property
     def one_shot(self) -> bool:
