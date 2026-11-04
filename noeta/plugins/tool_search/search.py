@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from noeta.core.mcp_names import legacy_index, short_name
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output, tool_flags
 from noeta.core.types import ToolReference
 from noeta.toolkit.plugin_records import mcp_down, mcp_names_too_long
 from noeta.toolkit.tools import SCHEMA_DIALECT
@@ -70,8 +70,7 @@ def _name_parts(name: str) -> tuple[list[str], list[str], bool]:
 def search_hint(tool: Tool) -> str:
     """A tool's ``search_hint`` (words a keyword search also matches, as
     Claude Code's ``searchHint``), lower-cased and capped."""
-    hint = getattr(tool, "search_hint", "") or ""
-    return hint[:MAX_HINT_CHARS].lower() if isinstance(hint, str) else ""
+    return tool_flags(tool).search_hint[:MAX_HINT_CHARS].lower()
 
 
 class ToolSearchTool:
@@ -79,7 +78,7 @@ class ToolSearchTool:
 
     name = TOOL_SEARCH
     read_only = True
-    retry_safe = True
+    flags = ToolFlags(retry_safe=True)
     clearable = False
     description = _SEARCH_DESCRIPTION
     input_schema: dict[str, Any] = {

@@ -18,7 +18,7 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
-from noeta.core.tool import Tool, ToolContext, tool_flag
+from noeta.core.tool import Tool, ToolContext, tool_flags
 from noeta.core.types import Message, ToolUse
 from noeta.plugins.plan_mode import notes as nt
 from noeta.plugins.plan_mode import plan as pl
@@ -135,7 +135,7 @@ class PlanMode(Extension):
         # A tool no plugin offers as its own (one a plugin builds from the
         # others', such as ToolSearch, or none at all) changes nothing.
         if tool is None or getattr(tool, "read_only", False) is True \
-                or tool_flag(tool, "safe_while_planning"):
+                or tool_flags(tool).safe_while_planning:
             return None
         if call.name in EDIT_TOOLS and self._plan_file(view, st, call):
             return None

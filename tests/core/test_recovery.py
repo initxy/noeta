@@ -12,7 +12,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished, ToolStarted
 from noeta.core.runner import INTERRUPTED_CALL_ERROR, Runtime
-from noeta.core.tool import MAX_ATTEMPTS, ToolContext, ToolOutput, text_output
+from noeta.core.tool import MAX_ATTEMPTS, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -32,7 +32,7 @@ class Probe:
     def __init__(self, crashes: int, *, retry_safe: bool = False,
                  found: ToolOutput | None = None) -> None:
         self.crashes = crashes
-        self.retry_safe = retry_safe
+        self.flags = ToolFlags(retry_safe=retry_safe)
         self.found = found
         self.keys: list[str] = []
         self.recovered: list[str] = []

@@ -21,6 +21,17 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **A tool's optional flags are one typed `ToolFlags`** (`noeta.core.tool`): `deferred`,
+  `search_hint`, `loaded_description`, `listed_last`, `run_last`, `past_agent_lists`,
+  `retry_safe`, `silent_reply_after`, `unchecked_input`, `safe_while_planning` and
+  `max_result_chars` are set as `flags = ToolFlags(...)` and read with `tool_flags(tool)`
+  (which replaces `tool_flag`); a misspelt flag is now a type error instead of a silent default.
+  A third-party tool that set one as its own attribute sets it in `flags` instead.
+- **Cross-plugin reads go through `noeta.toolkit.plugin_records`**: one typed reader per record
+  a plugin publishes (`permission_mode`, `shell_cwd`, `memory_dir`, ...), the methods one plugin
+  calls on another (`mode_of`, `working_directories`, `read_deny_rule`, ...) and the plugins'
+  names. `PLAN_MODE_PLUGIN` left `toolkit.permission_modes` (`plugin_records.PLAN_MODE`).
+
 - **A write outside the working directories is a permission question, as in Claude Code**: a
   `Write`, `Edit` or `NotebookEdit` outside the working and additional directories was refused
   in every mode; now `default`, `acceptEdits` and plan mode ask (with an "always" rule for its

@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from noeta.core.execenv import RunResult
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Text
 from noeta.plugins.shell.cwd import split_cwd, start_cwd, track_cwd
 from noeta.plugins.shell.hardening import DEFAULT_SHELL_RULES, HardeningRule, command_script
@@ -147,7 +147,7 @@ class BashTool:
     read_only = False
     clearable = True
     #: Claude Code's Bash result limit (its default ``bashOutputMaxChars``).
-    max_result_chars = SHELL_OUTPUT_LIMIT
+    flags = ToolFlags(max_result_chars=SHELL_OUTPUT_LIMIT)
     input_schema: dict[str, Any]
     #: Refuse a long leading ``sleep`` (its refusal points at ``Monitor`` and
     #: ``run_in_background``, so only where background jobs are offered).

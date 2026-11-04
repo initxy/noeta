@@ -24,7 +24,7 @@ from typing import Any
 
 from noeta.core.execenv import ExecEnv
 from noeta.core.images import ImageTooLarge, fit_image
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Image
 from noeta.plugins.fs._encoding import (
     NUL_PROBE_BYTES,
@@ -378,10 +378,9 @@ class ReadTool:
     name = "Read"
     description = load_description("noeta.plugins.fs", "read")
     read_only = True
-    retry_safe = True
-    clearable = True
     #: Bounded by its own size and token ceilings, as Claude Code's Read.
-    max_result_chars = None
+    flags = ToolFlags(retry_safe=True, max_result_chars=None)
+    clearable = True
     input_schema: dict[str, Any]
 
     def __init__(self) -> None:

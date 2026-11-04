@@ -38,8 +38,8 @@ log upload, no update check. A plugin you install can of course make its own req
 | use another plugin's tool | `view.find_tool(name)` | `noeta/core/extension.py` |
 | call the model from a hook or a tool | `view.complete`, `ctx.complete` (retried, not a step) | `noeta/core/extension.py`, `noeta/core/tool.py` |
 | show a running call's progress | `ctx.progress(text)`: live only, never recorded | `noeta/core/tool.py` |
-| survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `retry_safe`; `ctx.hold()` for work that lives in one process | `noeta/core/tool.py` |
-| offer a tool only when the model asks for it | `deferred = True` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
+| survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `flags = ToolFlags(retry_safe=True)`; `ctx.hold()` for work that lives in one process | `noeta/core/tool.py` |
+| offer a tool only when the model asks for it | `flags = ToolFlags(deferred=True)` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
 | keep text across a compaction, or take part in one | `resident` / `lead_resident`; `before_compact`; `on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/types.py` |
 | go on after a reply with no text and no tool call (the turn ends otherwise) | `on_empty_reply(view, response)` → the message to go on with, or `None` (as `noeta/plugins/empty_reply.py` does) | `noeta/core/extension.py` |
@@ -205,13 +205,13 @@ worker resumes any task; pi and dsh run in one process, Claude Code in one local
 | Answer an ask in code | — | `approval/request` | PermissionRequest, `canUseTool` | `resolve_ask` | have | Answered before the call parks. |
 | Change a result | `tool_result` | `tools/post-execute` | PostToolUse | `after_tool` | have | Before the result is recorded. |
 | Wrap the whole dispatch | — | `tools/execute` | — | `before_tool` + `after_tool` | won't | Retries belong to the tool (`recover`, `retry_safe`), timing to `ToolStarted` / `ToolFinished`. |
-| Deferred tools | `exposure` | `when` | `defer_loading` + ToolSearch | `Tool.deferred`; `tool_changes` | have | Sent only once `ToolSearch` loads them. |
-| Parallel or last | `executionMode` | `isConcurrencySafe` | read-only tools together | `Tool.read_only`, `run_last` | have | Read-only calls of one reply run together. |
+| Deferred tools | `exposure` | `when` | `defer_loading` + ToolSearch | `ToolFlags.deferred`; `tool_changes` | have | Sent only once `ToolSearch` loads them. |
+| Parallel or last | `executionMode` | `isConcurrencySafe` | read-only tools together | `Tool.read_only`, `ToolFlags.run_last` | have | Read-only calls of one reply run together. |
 | Progress while a tool runs | `onUpdate` | — | live Bash output, `tool_progress` | `ToolContext.progress` | added | Claude Code has it; it streams with live output and is never recorded. |
 | A tool calls the model | `modelRegistry.complete` | `ctx.llm` | WebFetch's small model | `ToolContext.complete` | added | `WebFetch` kept a per-process copy of each task's model call, lost when another worker ran the call. |
 | A tool calls another tool | `ctx.executeTool` | — | — | `view.find_tool(name).run(…)` | have | Not gated again (`by_model` is false). |
 | Wait for a person or children | blocking `ui.confirm` | approval, questions | AskUserQuestion | `ask()`, `ToolOutput.park` | have | The task holds no worker while it waits. |
-| Crash recovery of one call | — | — | — | `Tool.recover`, `retry_safe`, `ctx.idempotency_key` | have | noeta only: a call never runs twice unknowingly. |
+| Crash recovery of one call | — | — | — | `Tool.recover`, `ToolFlags.retry_safe`, `ctx.idempotency_key` | have | noeta only: a call never runs twice unknowingly. |
 | Background work | — | `jobs.start` | background Bash | `ctx.hold()` | have | A hold keeps the tree on the worker the job lives on. |
 | Structured output for the model | `outputSchema` | `output.schema` | MCP `structuredContent` | `ToolOutput.meta`, `display` for front ends | won't | The model reads content; structure rides along for front ends. |
 | Rendering code for calls and results | `renderCall`, `renderResult` | UI slots | — | `ToolOutput.display` as data | won't | Front ends import no plugin and may be remote or in another language. |

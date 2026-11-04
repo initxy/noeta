@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from noeta.core.extension import TaskView
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Message
 from noeta.plugins.workflow.engine import EngineMissing
 from noeta.toolkit.paths import noeta_home
@@ -40,7 +40,7 @@ class WorkflowTool:
     name = TOOL
     description = load_description("noeta.plugins.workflow", "workflow")
     read_only = False
-    safe_while_planning = True
+    flags = ToolFlags(safe_while_planning=True)
     clearable = False
     input_schema: dict[str, Any] = {
         "$schema": SCHEMA_DIALECT,

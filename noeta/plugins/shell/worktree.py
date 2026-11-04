@@ -17,7 +17,7 @@ import re
 import secrets
 from typing import Any
 
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.toolkit.plugin_records import SHELL
 from noeta.toolkit.tools import SCHEMA_DIALECT, input_error, load_description, tool_error
 from noeta.toolkit.worktrees import (
@@ -100,8 +100,10 @@ class EnterWorktreeTool:
     }
     read_only = False
     clearable = False
-    deferred = True
-    search_hint = "create an isolated git worktree and work inside it"
+    flags = ToolFlags(
+        deferred=True,
+        search_hint="create an isolated git worktree and work inside it",
+    )
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         name, path = input.get("name"), input.get("path")
@@ -198,8 +200,10 @@ class ExitWorktreeTool:
     }
     read_only = False
     clearable = False
-    deferred = True
-    search_hint = "leave the worktree and go back to the original directory"
+    flags = ToolFlags(
+        deferred=True,
+        search_hint="leave the worktree and go back to the original directory",
+    )
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         tree = _worktree(ctx)

@@ -26,7 +26,7 @@ from noeta.core.events import (
 )
 from noeta.core.execenv import ExecEnv
 from noeta.core.mcp_names import allowed_in, named_in
-from noeta.core.tool import Tool, ToolOutput, tool_flag
+from noeta.core.tool import Tool, ToolOutput, tool_flags
 from noeta.core.types import (
     Effort,
     Message,
@@ -203,12 +203,12 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
     seen: set[str] = set()
     for ext in exts:
         for t in ext.tools(view):
-            if (offered_name(t.name) or tool_flag(t, "past_agent_lists")) \
+            if (offered_name(t.name) or tool_flags(t).past_agent_lists) \
                     and t.name not in seen:
                 seen.add(t.name)
                 tools.append(t)
     offered = tuple(tools)
-    deferred = {t.name for t in offered if tool_flag(t, "deferred")}
+    deferred = {t.name for t in offered if tool_flags(t).deferred}
     withheld: dict[str, str] = {}
     entries: list[ToolEntry] = []
     plain: set[str] = set()
@@ -407,7 +407,7 @@ class TaskView(records.CoreNotices):
         A deferred tool sent plain (``ToolOffer.plain``) is not one."""
         offer = offer_tools(self.extensions, self, self.allowed_tools, self.denied_tools)
         return sorted({t.name for t in offer.tools
-                       if tool_flag(t, "deferred") and t.name not in offer.plain})
+                       if tool_flags(t).deferred and t.name not in offer.plain})
 
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""

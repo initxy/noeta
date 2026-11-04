@@ -34,7 +34,7 @@ import typing
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output
 
 __all__ = ["function_tool"]
 
@@ -112,10 +112,6 @@ def _is_context(param: inspect.Parameter, hint: Any) -> bool:
 
 
 class _FunctionTool:
-    #: The function checks its own arguments (Claude Code's SDK tools are
-    #: MCP tools, passed on as sent).
-    unchecked_input = True
-
     def __init__(self, fn: Callable[..., Any], *, name: str, description: str,
                  read_only: bool, clearable: bool, deferred: bool) -> None:
         self.fn = fn
@@ -123,7 +119,9 @@ class _FunctionTool:
         self.description = description
         self.read_only = read_only
         self.clearable = clearable
-        self.deferred = deferred
+        # The function checks its own arguments (Claude Code's SDK tools are
+        # MCP tools, passed on as sent).
+        self.flags = ToolFlags(unchecked_input=True, deferred=deferred)
         hints = get_type_hints(fn, include_extras=True)
         self._context: str | None = None
         properties: dict[str, Any] = {}

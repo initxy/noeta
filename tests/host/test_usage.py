@@ -10,7 +10,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.extension import ToolSet
 from noeta.core.runner import Runtime
-from noeta.core.tool import ToolContext, ToolOutput
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput
 from noeta.core.types import Usage
 from noeta.host.usage import context_breakdown, context_text, cost_text, task_context, tree_usage
 from noeta.plugins.tool_search import ToolSearch
@@ -54,7 +54,7 @@ class _Fake:
 
     def __init__(self, name: str, *, deferred: bool = False) -> None:
         self.name = name
-        self.deferred = deferred
+        self.flags = ToolFlags(deferred=deferred)
         self.description = f"The {name} tool."
 
     async def run(self, input: dict[str, object], ctx: ToolContext) -> ToolOutput:

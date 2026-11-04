@@ -21,7 +21,7 @@ from typing import Any
 from noeta.core.commands import expand_with
 from noeta.core.events import InputTaken, ModelReplied, Recorded, TimerFired
 from noeta.core.extension import Command, CommandContext, Extension, TaskView
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.schedule import cron, texts
 from noeta.toolkit.tools import SCHEMA_DIALECT, load_description
 
@@ -188,9 +188,8 @@ def _object(properties: dict[str, Any], required: Sequence[str] = ()) -> dict[st
 
 class WakeupTool(_Base):
     name = texts.WAKEUP_TOOL
-    safe_while_planning = True
     #: Claude Code's ScheduleWakeup result limit.
-    max_result_chars = 1_000
+    flags = ToolFlags(safe_while_planning=True, max_result_chars=1_000)
     description = load_description("noeta.plugins.schedule", "schedule_wakeup")
     input_schema = _object({
         "delaySeconds": {"type": "number", "description": (
@@ -263,8 +262,10 @@ class WakeupTool(_Base):
 class CronCreateTool(_Base):
     name = texts.CRON_CREATE_TOOL
     description = load_description("noeta.plugins.schedule", "cron_create")
-    deferred = True
-    search_hint = "schedule a prompt to run once or on a recurring schedule"
+    flags = ToolFlags(
+        deferred=True,
+        search_hint="schedule a prompt to run once or on a recurring schedule",
+    )
     input_schema = _object({
         "cron": {"type": "string", "description": (
             'A standard 5-field cron expression in local time, "M H DoM Mon DoW" ("*/5 * * * *" '
@@ -310,10 +311,12 @@ class CronCreateTool(_Base):
 class CronListTool(_Base):
     name = texts.CRON_LIST_TOOL
     description = load_description("noeta.plugins.schedule", "cron_list")
-    deferred = True
-    search_hint = "list the scheduled cron jobs that are active"
+    flags = ToolFlags(
+        deferred=True,
+        search_hint="list the scheduled cron jobs that are active",
+        retry_safe=True,
+    )
     read_only = True
-    retry_safe = True
     input_schema = _object({})
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
@@ -330,8 +333,7 @@ class CronListTool(_Base):
 class CronDeleteTool(_Base):
     name = texts.CRON_DELETE_TOOL
     description = load_description("noeta.plugins.schedule", "cron_delete")
-    deferred = True
-    search_hint = "cancel or delete a scheduled cron job"
+    flags = ToolFlags(deferred=True, search_hint="cancel or delete a scheduled cron job")
     input_schema = _object({"id": {"type": "string",
                                    "description": "The job id CronCreate returned."}}, ["id"])
 

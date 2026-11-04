@@ -33,7 +33,7 @@ A runner claims a task from the store (`claim` / `renew` / `release`; Postgres u
 `SKIP LOCKED`). Every append is conditional on `expected_seq` and the claim's `owner_epoch`, so a
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
 unfinished call is answered "outcome unknown", never re-run, unless its tool looks the outcome
-up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe`. What lives only in one worker
+up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe` (`ToolFlags`). What lives only in one worker
 process (a background job) holds the task tree there (`Store.hold`; a tree has one holding worker,
 so a hold is refused while another worker holds the tree or runs one of its tasks, `HeldElsewhere`, and takes back another worker's lapsed claim of the tree): other workers skip it until
 the hold is released, or reaped once it ran out (every worker reaps), which posts `hold_lost` to
@@ -138,7 +138,7 @@ something with `notify`; neither reaches the model as the user.
 
 ## Deferred tool
 
-A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
+A tool whose `flags` say `deferred=True` is named to the model (`TaskView.deferred_tool_names`) and
 sent only once the model loads it with `ToolSearch`. The `tool_search` plugin
 (`noeta/plugins/tool_search`) adds `ToolSearch` and withholds the tools not loaded through
 `Extension.tool_changes`; a tool is loaded once a `ToolReference` in the task's history or open

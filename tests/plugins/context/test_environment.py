@@ -18,6 +18,7 @@ from noeta.core.events import ExtensionRecorded, Recorded, Waiting
 from noeta.core.execenv import RunResult
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState
+from noeta.core.tool import ToolFlags
 from noeta.plugins import environment
 from noeta.plugins.environment import Environment, render_git
 
@@ -381,7 +382,7 @@ async def test_first_request_layout_and_budget_notes(tmp_path: Path) -> None:
 
     class Later(Probe):
         name = "Later"
-        deferred = True
+        flags = ToolFlags(deferred=True)
 
     agent = Agent(name="a", model="claude-opus-5-5", tools=[Probe(), Later()],
                   extensions=[Environment(today=lambda: "2026-10-28")])
@@ -446,7 +447,7 @@ async def test_deferred_tools_that_come_and_go_mid_task_are_told(tmp_path: Path)
         input_schema: dict[str, Any] = {"type": "object"}
         read_only = True
         clearable = False
-        deferred = True
+        flags = ToolFlags(deferred=True)
 
         def __init__(self, name: str) -> None:
             self.name = name

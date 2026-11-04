@@ -16,10 +16,11 @@ import json
 import mimetypes
 import posixpath
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from noeta.core.mcp_names import named_in
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.mcp.config import (
     McpError,
     McpServer,
@@ -68,31 +69,29 @@ class McpTool:
 
     read_only = False
     clearable = False
-    #: The server checks its own input (Claude Code passes it on as sent).
-    unchecked_input = True
-    listed_last = True
-
     def __init__(self, *, name: str, alias: str, remote: str, description: str,
                  input_schema: dict[str, Any], invoke: Invoke, deferred: bool = True,
                  resume: Resume | None = None, loaded_description: str | None = None,
                  search_hint: str = "") -> None:
         self.name = name
-        self.search_hint = search_hint
         self.alias = alias
         self.remote = remote
         self.description = description
-        self.loaded_description = loaded_description or description
         self.input_schema = input_schema
-        self.deferred = deferred
+        # The server checks its own input (Claude Code passes it on as sent).
+        self._flags = ToolFlags(unchecked_input=True, listed_last=True, deferred=deferred,
+                                search_hint=search_hint,
+                                loaded_description=loaded_description or description)
         self._invoke = invoke
         self._resume = resume
 
     @property
-    def silent_reply_after(self) -> str | None:
-        """``success`` for a tool named in ``NOETA_TERMINAL_MCP_TOOLS``: its
-        result is meant to end the turn."""
-        return "success" if named_in(terminal_tools(), self.name,
-                                     "NOETA_TERMINAL_MCP_TOOLS") else None
+    def flags(self) -> ToolFlags:
+        """Its flags; ``silent_reply_after="success"`` for a tool named in
+        ``NOETA_TERMINAL_MCP_TOOLS``: its result is meant to end the turn."""
+        if named_in(terminal_tools(), self.name, "NOETA_TERMINAL_MCP_TOOLS"):
+            return replace(self._flags, silent_reply_after="success")
+        return self._flags
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         return await self._invoke(self, dict(input), ctx)
@@ -137,7 +136,6 @@ class McpAuthTool:
 
     read_only = False
     clearable = False
-    listed_last = True
 
     def __init__(self, *, name: str, alias: str, stub: str, description: str,
                  input_schema: dict[str, Any], sign_in: SignInFn, deferred: bool = True) -> None:
@@ -146,7 +144,7 @@ class McpAuthTool:
         self.stub = stub
         self.description = description
         self.input_schema = input_schema
-        self.deferred = deferred
+        self.flags = ToolFlags(listed_last=True, deferred=deferred)
         self._sign_in = sign_in
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
@@ -160,10 +158,12 @@ def _compact(value: Any) -> str:
 class ListMcpResourcesTool:
     name = LIST_RESOURCES_TOOL
     read_only = True
-    retry_safe = True
+    flags = ToolFlags(
+        retry_safe=True,
+        deferred=True,
+        search_hint="list the resources of connected MCP servers",
+    )
     clearable = True
-    deferred = True
-    search_hint = "list the resources of connected MCP servers"
     description = """
 Lists the resources that the configured MCP servers offer. Each entry has the \
 standard MCP resource fields and a `server` field naming the server it comes from.
@@ -209,10 +209,12 @@ Parameters:
 class ReadMcpResourceTool:
     name = READ_RESOURCE_TOOL
     read_only = True
-    retry_safe = True
+    flags = ToolFlags(
+        retry_safe=True,
+        deferred=True,
+        search_hint="read one MCP resource by its URI",
+    )
     clearable = True
-    deferred = True
-    search_hint = "read one MCP resource by its URI"
     description = """
 Reads one resource from an MCP server, given the server's name and a resource's URI.
 
@@ -284,10 +286,12 @@ async def _save_blob(ctx: ToolContext, alias: str, entry: dict[str, Any],
 class ReadMcpResourceDirTool:
     name = READ_RESOURCE_DIR_TOOL
     read_only = True
-    retry_safe = True
+    flags = ToolFlags(
+        retry_safe=True,
+        deferred=True,
+        search_hint="list what an MCP directory resource contains",
+    )
     clearable = True
-    deferred = True
-    search_hint = "list what an MCP directory resource contains"
     description = """
 Shows what one directory resource of an MCP server holds, one level down \
 (`resources/directory/read`); it does not descend into subdirectories.

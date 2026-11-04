@@ -209,7 +209,7 @@ def test_a_log_from_before_the_split_replays_the_same(tmp_path: Path) -> None:
 def test_coordination_tools_may_run_while_planning() -> None:
     """The tools the permissions plugin rates low risk that are not
     read-only say so themselves, so plan mode alone lets them run."""
-    from noeta.core.tool import tool_flag
+    from noeta.core.tool import tool_flags
     from noeta.plugins.ask_user import AskUserQuestionTool
     from noeta.plugins.schedule import WakeupTool
     from noeta.plugins.shell.tools import TaskStopTool
@@ -220,7 +220,7 @@ def test_coordination_tools_may_run_while_planning() -> None:
 
     for cls in (AskUserQuestionTool, WakeupTool, TaskStopTool, SkillTool, AgentTool,
                 HandbackTool, SendMessageTool, TaskCreateTool, TaskUpdateTool, WorkflowTool):
-        assert tool_flag(cls, "safe_while_planning"), cls  # type: ignore[arg-type]
+        assert tool_flags(cls).safe_while_planning, cls  # type: ignore[arg-type]
 
 
 async def test_plan_mode_alone_lets_the_person_be_asked_and_tasks_be_listed(
