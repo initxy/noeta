@@ -1,11 +1,13 @@
 // The built app against a real `noeta serve` it starts itself, on the offline
-// scripted provider (web/e2e/provider). Screenshots go to screenshots/.
+// scripted provider (web/e2e/provider). Screenshots go to screenshots/ only
+// with NOETA_SCREENSHOTS=1.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const here = resolve(__dirname, "..");
+const SHOTS = process.env.NOETA_SCREENSHOTS ? "screenshots" : "test-results/screenshots";
 
 function profile(settings: Record<string, unknown>): { dir: string; work: string } {
   const dir = mkdtempSync(join(tmpdir(), "noeta-desktop-e2e-"));
@@ -48,14 +50,14 @@ test("the app starts its own server, injects the token, and a session replies", 
     expect(await page.evaluate(() => typeof (window as { noetaDesktop?: unknown }).noetaDesktop)).toBe("object");
     await expect(page.getByRole("button", { name: work })).toBeVisible();
     await page.getByLabel("Permission mode").selectOption("default");
-    await page.screenshot({ path: "screenshots/01-new-session.png" });
+    await page.screenshot({ path: `${SHOTS}/01-new-session.png` });
 
     const box = page.getByLabel("Message");
     await box.fill("hello there, noeta");
     await box.press("Enter");
     await expect(page.locator(".msg.assistant").last()).toContainText("I am the scripted model", { timeout: 30_000 });
     await expect(page.locator(".cwd")).toHaveText(work);
-    await page.screenshot({ path: "screenshots/02-reply.png" });
+    await page.screenshot({ path: `${SHOTS}/02-reply.png` });
 
     // The menu's New Session (Cmd/Ctrl+N) goes back to the welcome screen.
     await app.evaluate(({ Menu }) => {
@@ -74,7 +76,7 @@ test("a missing noeta shows the install line", async () => {
   try {
     await expect(page.getByRole("heading", { name: "noeta is not installed" })).toBeVisible();
     await expect(page.locator("pre.command")).toContainText("noeta[server]");
-    await page.screenshot({ path: "screenshots/03-missing-noeta.png" });
+    await page.screenshot({ path: `${SHOTS}/03-missing-noeta.png` });
   } finally {
     await app.close();
   }

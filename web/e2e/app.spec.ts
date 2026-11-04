@@ -1,10 +1,11 @@
 // The web app against a real `noeta serve` on the scripted provider
 // (e2e/provider: the prompt's keyword picks the script). Screenshots go to
-// screenshots/ for the README there.
+// screenshots/ (the README there) only with NOETA_SCREENSHOTS=1.
 import { expect, test, type Page } from "@playwright/test";
 import { TOKEN } from "../playwright.config";
 
-const shot = (page: Page, name: string) => page.screenshot({ path: `screenshots/${name}.png` });
+const SHOTS = process.env.NOETA_SCREENSHOTS ? "screenshots" : "test-results/screenshots";
+const shot = (page: Page, name: string) => page.screenshot({ path: `${SHOTS}/${name}.png` });
 
 async function newSession(page: Page, mode = "default") {
   await page.getByRole("button", { name: "+ New session" }).click();

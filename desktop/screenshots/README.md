@@ -25,3 +25,5 @@ starting its own `noeta serve` on the offline scripted provider, so they are rew
 | Auto-update, tray icon, global quick-entry shortcut | not yet |
 | Windows | not yet (untested) |
 | Diff review across a session, file tree, terminal pane | not yet (as in `web/`) |
+
+Regenerate with `NOETA_SCREENSHOTS=1 make desktop`.

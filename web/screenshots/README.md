@@ -42,3 +42,5 @@ on the offline scripted provider, so they are rewritten on every run.
 | Cloud environments, repository picker, branches and pull requests (claude.ai/code) | not here: noeta runs in the server's directories |
 | Diff review across a whole session, file tree, terminal pane (desktop) | not yet |
 | Search across sessions, archive and delete | not yet: the API has no delete |
+
+Regenerate with `NOETA_SCREENSHOTS=1 make web`.
