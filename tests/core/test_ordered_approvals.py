@@ -5,7 +5,7 @@ answer does not gate the asked call again."""
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +13,10 @@ import pytest
 
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
-from noeta.core.events import ToolFinished, Waiting
+from noeta.core.events import Event, ToolFinished, Waiting
 from noeta.core.extension import Ask, Extension, Gate, TaskView
 from noeta.core.runner import texts
+from noeta.core.store import Appended, Claim, NewTask, Patch, Post
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse, user
 from noeta.testing import ScriptedProvider, reply
@@ -158,3 +159,52 @@ async def test_a_declined_ask_refuses_the_rest_of_the_reply(store: SqliteStore) 
     assert len(finished) == 3 and all(f.result.is_error for f in finished)
     assert all(texts.REJECTED_BY_USER in str(f.result.content) for f in finished)
     assert (await client.get(tid)).waiting_on == "input"
+
+
+class Crash(BaseException):
+    """Stands in for the process dying."""
+
+
+class DiesAfterTheDecline(SqliteStore):
+    """Dies right after the declined call's result commits."""
+
+    async def append(self, claim: Claim, events: Sequence[Event], *, expected_seq: int,
+                     patch: Patch = Patch(), posts: Sequence[Post] = (),
+                     creates: Sequence[NewTask] = ()) -> Appended:
+        done = await super().append(claim, events, expected_seq=expected_seq, patch=patch,
+                                   posts=posts, creates=creates)
+        if any(isinstance(e, ToolFinished) and e.note == texts.REJECTED_MARKER
+               for e in events):
+            raise Crash()
+        return done
+
+
+async def test_a_crash_after_the_decline_still_refuses_the_rest(tmp_path: Path) -> None:
+    """The claimer after a crash between the decline's result and the later
+    calls' refusals refuses them too (from the log), ungated and unrun."""
+    path = str(tmp_path / "t.db")
+    shell, gate = Fake("Bash"), AsksForCommits()
+    provider = ScriptedProvider([reply("", bash("git commit -m x"), bash("ls"))])
+    dying = DiesAfterTheDecline(path)
+    client = Client(dying)
+    tid = await client.create("a", "go")
+    await runtime(dying, provider, agent([gate], [shell])).run_until_idle()
+    [waiting] = [e for e in await events(client, tid) if isinstance(e, Waiting)]
+    await client.answer(tid, waiting.ids[0], "deny")
+    with pytest.raises(Crash):
+        await runtime(dying, provider, agent([gate], [shell])).run_until_idle()
+    await dying.close()
+
+    store = SqliteStore(path)
+    try:
+        def expire(conn: Any) -> None:
+            conn.execute("UPDATE tasks SET lease_until = 0 WHERE task_id = ?", (tid,))
+
+        await store._run(expire)
+        await runtime(store, provider, agent([gate], [shell])).run_until_idle()
+        finished = [e for e in await events(Client(store), tid) if isinstance(e, ToolFinished)]
+        assert shell.runs == [] and gate.gated == ["git commit -m x"]
+        assert len(finished) == 2 and all(
+            texts.REJECTED_BY_USER in str(f.result.content) for f in finished)
+    finally:
+        await store.close()

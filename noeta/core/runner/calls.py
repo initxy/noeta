@@ -146,9 +146,10 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     outright: set[str] = set()
     #: A call was declined at its prompt: the turn stops, and, as Claude Code
     #: aborts the rest of the reply, every later call is refused ungated.
-    declined = False
+    #: Read from the batch's logged results (the decline's marker), so the
+    #: claimer after a crash between the two refuses them too.
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
-        if declined:
+        if texts.REJECTED_MARKER in run.state.notes:
             await run.append([ToolFinished(result=ToolResult(
                 call_id=c.use.id, content=[Text(text=rejected_text(None))], is_error=True),
                 end_turn="")])
@@ -184,7 +185,6 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
                 result=ToolResult(call_id=c.use.id, content=[Text(text=rejected_text(
                     answer.data))], is_error=True), end_turn="",
                 note=texts.REJECTED_MARKER)])
-            declined = True
             continue
         call = c.use if checked == c.use.input else ToolUse(
             id=c.use.id, name=c.use.name, input=dict(checked))

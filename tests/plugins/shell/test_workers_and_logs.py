@@ -430,8 +430,10 @@ async def test_a_job_dies_before_its_lease_runs_out_after_its_worker_froze(tmp_p
     assert isinstance(job, Job)
     assert registry._keeper is not None
     # Dead before the lease (renewed every third of it) can run out: two
-    # guard periods after the file was last re-created.
-    assert 2 * job.guard_period <= 2 / 3 * 1.0
+    # guard periods after the file was last re-created; no sooner than it
+    # must (a third of the lease), so a stalled worker keeps its job longest.
+    assert job.guard_period == pytest.approx(1.0 / 3)
+    assert 2 * job.guard_period <= 2 / 3 * 1.0 + 1e-9
     registry._keeper.cancel()  # the worker froze: nothing re-creates its file
     await asyncio.wait_for(job.done.wait(), 3.5)
     assert job.exit_code != 0

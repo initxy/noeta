@@ -106,7 +106,7 @@ GUARD_TICK_S = 0.5
 GUARD_TICK_MIN_S = 0.05
 #: How often a foreground command's guard (which keeps no claim) looks for
 #: its ``.alive`` file; a job that keeps its task's claim is looked at every
-#: quarter of the claim's lease, so it is dead before another worker may
+#: third of the claim's lease, so it is dead before another worker may
 #: take the task.
 ALIVE_S = 30.0
 #: Ticks of 20 ms a foreground command's keeper is given to write what came
@@ -489,11 +489,11 @@ class Registry:
     def _alive_period(self, job: Job) -> float:
         """How often ``job``'s guard removes its ``.alive`` file, killing the
         job when it is already gone: the job dies one to two periods after
-        the worker last re-created it. A quarter of its kept claim's lease: the
+        the worker last re-created it. A third of its kept claim's lease: the
         lease, renewed every third of it, runs out at least two thirds of it
         after a worker froze, so its job is dead by then; else
         :attr:`alive_s`."""
-        return job.kept.lease_seconds / 4 if job.kept is not None else self.alive_s
+        return job.kept.lease_seconds / 3 if job.kept is not None else self.alive_s
 
     def _guard(self, job: Job) -> str:
         """The guard's command line for ``job`` (see :data:`_GUARD`)."""

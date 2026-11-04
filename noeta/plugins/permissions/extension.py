@@ -449,8 +449,9 @@ class Permissions(Extension):
         if answer.decision != "allow":
             return
         st = state_of(view)
-        waiting = view.state.waiting
-        detail = waiting.detail.get(answer.request_id) if waiting is not None else None
+        # The batch's approval wait, kept when a message cleared ``waiting``.
+        asked = view.state.asked
+        detail = asked.detail.get(answer.request_id) if asked is not None else None
         if isinstance(detail, dict) and detail.get("by") not in (None, NAME):
             return
         data = answer.data if isinstance(answer.data, dict) else {}
