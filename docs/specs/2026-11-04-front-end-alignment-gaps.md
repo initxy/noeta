@@ -115,3 +115,8 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   take their thinking field from `side_requests.thinking_off` (left out on an uncatalogued model);
   the selector's retry-without-it on a 400 is gone. Live: a fast classifier stage on DeepSeek is
   200 (with `disabled` it was 400).
+- 2026-11-04 review fixes on `v1-align-fix`: a continued task (rewind, continue) writes its own
+  compaction `threshold` record (`continue_state` clears `published`); Esc in the approval card's
+  amend line closes it instead of stopping the turn; the history trim's temp file is per process;
+  archiving posts the signal with `wake=False` (`Client.signal` and the HTTP route take `wake`),
+  so an idle session is not woken. check 3564 passed, 90.36%; make tui 73, 88.23%; make web 56 + e2e 16.
