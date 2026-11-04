@@ -100,6 +100,9 @@ def _parser() -> argparse.ArgumentParser:
                     help="let requests start or switch tasks into bypassPermissions")
     sv.add_argument("--allow-root", action="append", default=[], metavar="PATH",
                     help="a directory besides the server's own tasks may run in")
+    sv.add_argument("--web", metavar="DIR",
+                    help="also serve this directory's files (the built web app, web/dist) "
+                         "at the server's other paths")
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
@@ -220,7 +223,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allowed_hosts=_allowed_hosts(args),
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
-                     roots=[os.path.abspath(r) for r in args.allow_root])
+                     roots=[os.path.abspath(r) for r in args.allow_root],
+                     web_dir=os.path.abspath(args.web) if args.web else None)
+    if args.web:
+        print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)
     redact_token_logs()
     try:

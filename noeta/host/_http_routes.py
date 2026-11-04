@@ -5,7 +5,9 @@ sets the request's scope."""
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -21,8 +23,10 @@ from noeta.core.types import Image, Message, Text
 from noeta.host._http_guard import REQUEST_CONFIG, scope
 from noeta.host._http_openapi import OPENAPI
 from noeta.host.app import AppAPI
+from noeta.host.files import file_matches
 from noeta.host.pending import card_title, choices, pending_tree
 from noeta.host.rewind import rewind, rewind_points
+from noeta.host.summaries import root_summaries
 from noeta.host.usage import tree_usage
 
 _enc = msgspec.json.Encoder()
@@ -72,6 +76,7 @@ class Routes:
         self._serving = serving
         self._app = app
         self._agents = agents
+        self._summaries: dict[str, tuple[int, dict[str, Any]]] = {}
 
     async def create(self, request: Request) -> Response:
         body = await request.json()
@@ -86,6 +91,18 @@ class Routes:
         rows = await scope(request).client.tasks(
             parent_id=q.get("parent_id"), status=q.get("status"), limit=int(q.get("limit", "100")))
         return _json(rows)
+
+    async def summaries(self, request: Request) -> Response:
+        limit = int(request.query_params.get("limit", "50"))
+        return _json(await root_summaries(scope(request).client, limit, self._summaries))
+
+    async def files(self, request: Request) -> Response:
+        q = request.query_params
+        # Without a task or a cwd: the server's own directory.
+        _, ctx = await _command_place(request, None, q.get("task_id"), q.get("cwd") or ".")
+        found = await asyncio.to_thread(file_matches, ctx.cwd or os.getcwd(), q.get("q", ""),
+                                        int(q.get("limit", "30")))
+        return _json(found)
 
     async def get_task(self, request: Request) -> Response:
         return _json(await scope(request).client.get(request.path_params["task_id"]))
