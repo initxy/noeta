@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MenuItemConstructorOptions } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import { addRoot, DEFAULT_WINDOW, loadSettings, MAX_ROOTS, parseSettings, saveSettings, visibleBounds } from "../src/settings";
+import { addRoot, DEFAULT_WINDOW, loadSettings, parseSettings, saveSettings, visibleBounds } from "../src/settings";
 import { errorPage, GRANTED_PERMISSIONS, linkTarget, liveSessions, menuTemplate } from "../src/shell";
 
 function items(menu: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
@@ -115,11 +115,11 @@ describe("settings", () => {
     expect(readFileSync(path, "utf-8")).toContain("roots");
   });
 
-  it("adds a root once, newest last, and keeps a bounded list", () => {
+  it("adds a root once, newest last, and keeps the old ones (their sessions go on)", () => {
     expect(addRoot(["/a", "/b"], "/a")).toEqual(["/b", "/a"]);
     const many = Array.from({ length: 20 }, (_, i) => `/r${i}`).reduce(addRoot, []);
-    expect(many).toHaveLength(MAX_ROOTS);
-    expect(many[MAX_ROOTS - 1]).toBe("/r19");
+    expect(many).toHaveLength(20);
+    expect(many[0]).toBe("/r0");
   });
 
   it("forgets a position no display shows", () => {

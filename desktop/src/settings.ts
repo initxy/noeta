@@ -52,12 +52,10 @@ export function parseSettings(text: string): Settings {
   };
 }
 
-/** Roots a settings file keeps, at most (the newest). */
-export const MAX_ROOTS = 8;
-
-/** `roots` with `dir` added last, once, the oldest dropped past {@link MAX_ROOTS}. */
+/** `roots` with `dir` added last, once. None is dropped: a session made in
+ * one goes on only while the server may run there. */
 export function addRoot(roots: string[], dir: string): string[] {
-  return [...roots.filter((r) => r !== dir), dir].slice(-MAX_ROOTS);
+  return [...roots.filter((r) => r !== dir), dir];
 }
 
 export function loadSettings(path: string): Settings {
