@@ -44,13 +44,10 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
                                 order=ORDER_AUTO))
             sent.append("auto_exited")
         auto_noted = False
-    # Claude Code sends the same note in bypassPermissions mode; noeta does
-    # not: there it would only relax the main prompt's dedicated-tools rule,
-    # sparing no approval (parity/deviations.md).
-    if mode == "auto" and not auto_noted and _shell_first(view) \
+    if mode in ("auto", "bypassPermissions") and not auto_noted and _shell_first(view) \
             and _guidance_due(view, st.guidance_after):
-        out.append(Reminder(text=w.AUTO_MODE_GUIDANCE, kind="auto_guidance", role="system",
-                            order=ORDER_AUTO))
+        text = w.AUTO_MODE_GUIDANCE if mode == "auto" else w.BYPASS_MODE_GUIDANCE
+        out.append(Reminder(text=text, kind="auto_guidance", role="system", order=ORDER_AUTO))
         sent.append("auto_guidance")
         auto_noted = True
     # Owed notes a later switch made moot: the exit from auto mode when it

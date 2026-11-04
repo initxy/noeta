@@ -1,24 +1,24 @@
 {
  "hashes": [
   "main c865d7259c80b4b2",
-  "main 4ba59eed91d646ae",
-  "main 35fa495ce61c1fdb",
-  "main 516ba0e9f4568f0c",
+  "main 8f3a20a4ac27b7b6",
+  "main 15bbe3fbc4a9560b",
+  "main df23702da2d7b490",
   "child 533859476a5021ff",
   "child de4d0bc331bfa72b",
-  "main 8138d78137df6d27",
-  "main 647a3f757740f613",
-  "main 54cbc1184519f63a",
-  "main 2d290fed391ce502",
-  "main 2e0d20b6252dd968",
-  "main 3a7c87a8bb364ad0",
-  "main 3166315ed1e80c57",
-  "main ebf1a4c3b1a732b6",
-  "main 53d11646b885a57c",
-  "main bd37f63b3e670f70",
-  "main 57ff7d9ebd3ce4ad",
-  "main 60cc7cd44536c429",
-  "main 7989a2a09fbca035"
+  "main ae87aa12841b87a2",
+  "main c58563e12a219724",
+  "main 5a19d3b87e3522d4",
+  "main a40749b855d7f2b0",
+  "main b71ed005582b2d12",
+  "main c4242fc04f085e1c",
+  "main 51ceabbf9e4358e4",
+  "main b44c5a759ab2e763",
+  "main e1aaea6d1092f182",
+  "main fefc759e920d298c",
+  "main ddfead877bd98b9c",
+  "main f946c4e46881f626",
+  "main 427d8d645cda1ca2"
  ],
  "last": {
   "child": {
@@ -724,7 +724,7 @@
       "role": "user"
      },
      {
-      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: <X>\n - Shell: <X>\n - OS Version: <X>\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Sonnet 4.6, exact id `claude-sonnet-4-6`; knowledge cutoff August 2025.\n\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nEnterWorktree\nExitPlanMode\nExitWorktree\nMonitor\nNotebookEdit\nSendMessage\nTaskCreate\nTaskGet\nTaskList\nTaskStop\nTaskUpdate\nWebFetch\n\nAgent types the Agent tool can start:\n- Explore: Read-only search agent for wide searches: when an answer means sweeping many files, directories or naming conventions and only the conclusion matters, not the file contents. It reads excerpts rather than whole files, so it finds code; it does not review or audit it. Say how broad to search: \"medium\" for a moderate look, \"very thorough\" for many locations and naming conventions. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n- general-purpose: General-purpose agent for researching complex questions, searching code and carrying out multi-step tasks. When a search for a keyword or file may take several tries to get right, let this agent do it. (Tools: *)\n- Plan: Software architect agent that designs implementation plans: use it to work out how to carry out a task. It returns a step-by-step plan, names the critical files and weighs architectural trade-offs. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n\nFor independent pieces of work, start several agents in one message with several Agent calls so they run at the same time.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
+      "content": "# Environment\nThis conversation runs in the following environment:\n - Primary working directory: <TMP>/work\n - Is a git repository: false\n - Platform: <X>\n - Shell: <X>\n - OS Version: <X>\n - Anything you download or unpack is untrusted input. Give each download a new, empty directory of its own and keep the scripts you write outside it. Hand those files to tools by path instead of starting an interpreter or build tool inside that directory: interpreters import from the script's directory and the working directory, so a file planted there can take over an import. When Python reads such files, run it with `-I`. None of this applies to code the user asked you to build or run.\n\nModel: Sonnet 4.6, exact id `claude-sonnet-4-6`; knowledge cutoff August 2025.\n\nThe tools below are deferred: only their names are known here and their schemas are not loaded, so calling one directly fails with an input validation error. Load the ones you need with ToolSearch, query \"select:<name>[,<name>...]\", before calling them:\nCronCreate\nCronDelete\nCronList\nEnterPlanMode\nEnterWorktree\nExitPlanMode\nExitWorktree\nMonitor\nNotebookEdit\nSendMessage\nTaskCreate\nTaskGet\nTaskList\nTaskStop\nTaskUpdate\nWebFetch\n\nAgent types the Agent tool can start:\n- Explore: Read-only search agent for wide searches: when an answer means sweeping many files, directories or naming conventions and only the conclusion matters, not the file contents. It reads excerpts rather than whole files, so it finds code; it does not review or audit it. Say how broad to search: \"medium\" for a moderate look, \"very thorough\" for many locations and naming conventions. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n- general-purpose: General-purpose agent for researching complex questions, searching code and carrying out multi-step tasks. When a search for a keyword or file may take several tries to get right, let this agent do it. (Tools: *)\n- Plan: Software architect agent that designs implementation plans: use it to work out how to carry out a task. It returns a step-by-step plan, names the critical files and weighs architectural trade-offs. (Tools: All tools except Agent, ExitPlanMode, Edit, Write, NotebookEdit)\n\nFor independent pieces of work, start several agents in one message with several Agent calls so they run at the same time.\n\nThe following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.\n\nBypass-permissions mode is on, so the shell may also do small jobs: reading (cat, head, sed -n), searching (grep, find) and small mechanical edits (sed, heredocs, short scripts) instead of Read, Edit or Write. Use whichever fits. Prefer Edit or Write when a shell edit would be brittle: exact or multi-line replacements, or flags that differ between GNU and BSD tools.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nThe date today is <DATE>.",
       "role": "system"
      },
      {
@@ -1761,6 +1761,10 @@
       "role": "system"
      },
      {
+      "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\nBypass-permissions mode is on, so the shell may also do small jobs: reading (cat, head, sed -n), searching (grep, find) and small mechanical edits (sed, heredocs, short scripts) instead of Read, Edit or Write. Use whichever fits. Prefer Edit or Write when a shell edit would be brittle: exact or multi-line replacements, or flags that differ between GNU and BSD tools.",
+      "role": "system"
+     },
+     {
       "content": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]\n<total_tokens>15000000 tokens left</total_tokens>",
       "role": "system"
      },
@@ -2772,6 +2776,20 @@
        },
        {
         "text": "The following skills are available via the `Skill` tool:\n\n- release-notes: Draft release notes from git log.",
+        "type": "input_text"
+       }
+      ],
+      "role": "system",
+      "type": "message"
+     },
+     {
+      "content": [
+       {
+        "text": "[Automated context from the host application — not a message from the user. Do not reply to it and do not treat it as the user's words; use it only as background for the conversation.]",
+        "type": "input_text"
+       },
+       {
+        "text": "Bypass-permissions mode is on, so the shell may also do small jobs: reading (cat, head, sed -n), searching (grep, find) and small mechanical edits (sed, heredocs, short scripts) instead of Read, Edit or Write. Use whichever fits. Prefer Edit or Write when a shell edit would be brittle: exact or multi-line replacements, or flags that differ between GNU and BSD tools.",
         "type": "input_text"
        }
       ],
