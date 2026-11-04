@@ -41,7 +41,7 @@ export function parseSettings(text: string): Settings {
   return {
     noetaPath: typeof raw.noetaPath === "string" && raw.noetaPath ? raw.noetaPath : undefined,
     project: typeof raw.project === "string" && raw.project ? raw.project : undefined,
-    roots: Array.isArray(raw.roots) ? raw.roots.filter((r): r is string => typeof r === "string") : [],
+    roots: Array.isArray(raw.roots) ? raw.roots.filter((r): r is string => typeof r === "string").reduce(addRoot, []) : [],
     window: {
       x: num(w.x),
       y: num(w.y),
@@ -50,6 +50,14 @@ export function parseSettings(text: string): Settings {
       maximized: w.maximized === true,
     },
   };
+}
+
+/** Roots a settings file keeps, at most (the newest). */
+export const MAX_ROOTS = 8;
+
+/** `roots` with `dir` added last, once, the oldest dropped past {@link MAX_ROOTS}. */
+export function addRoot(roots: string[], dir: string): string[] {
+  return [...roots.filter((r) => r !== dir), dir].slice(-MAX_ROOTS);
 }
 
 export function loadSettings(path: string): Settings {

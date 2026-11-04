@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MenuItemConstructorOptions } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_WINDOW, loadSettings, parseSettings, saveSettings, visibleBounds } from "../src/settings";
-import { errorPage, linkTarget, menuTemplate } from "../src/shell";
+import { addRoot, DEFAULT_WINDOW, loadSettings, MAX_ROOTS, parseSettings, saveSettings, visibleBounds } from "../src/settings";
+import { errorPage, GRANTED_PERMISSIONS, linkTarget, liveSessions, menuTemplate } from "../src/shell";
 
 function items(menu: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
   return menu.flatMap((m) => [m, ...(Array.isArray(m.submenu) ? items(m.submenu) : [])]);
 }
 
-const actions = () => ({ newSession: vi.fn(), chooseProject: vi.fn(), openSettings: vi.fn(), openDocs: vi.fn() });
+const actions = () => ({ newSession: vi.fn(), reload: vi.fn(), chooseProject: vi.fn(), openSettings: vi.fn(), openDocs: vi.fn() });
 
 describe("menu", () => {
   it("has New Session on Cmd/Ctrl+N and Settings on Cmd/Ctrl+,", () => {
@@ -28,7 +28,15 @@ describe("menu", () => {
     const roles = (dev: boolean) => items(menuTemplate("linux", dev, actions())).map((m) => m.role);
     expect(roles(true)).toContain("toggleDevTools");
     expect(roles(false)).not.toContain("toggleDevTools");
-    expect(roles(false)).toContain("reload");
+    const reload = items(menuTemplate("linux", false, actions())).find((m) => m.label === "Reload")!;
+    expect(reload.accelerator).toBe("CmdOrCtrl+R");
+  });
+
+  it("reloads through the app (which restarts a stopped server)", () => {
+    const a = actions();
+    const reload = items(menuTemplate("linux", false, a)).find((m) => m.label === "Reload")!;
+    (reload.click as () => void)();
+    expect(a.reload).toHaveBeenCalled();
   });
 
   it("puts Settings in the app menu on macOS", () => {
@@ -41,8 +49,11 @@ describe("menu", () => {
 
 describe("links", () => {
   const app = "http://127.0.0.1:5000";
-  it("keeps the app's own pages in the window", () => {
+  it("keeps only the app's page in the window", () => {
     expect(linkTarget("http://127.0.0.1:5000/#session=x", app)).toBe("app");
+    expect(linkTarget("http://127.0.0.1:5000/?a=1", app)).toBe("app");
+    expect(linkTarget("http://127.0.0.1:5000/tasks", app)).toBe("refuse");
+    expect(linkTarget("http://127.0.0.1:5000/assets/x.js", app)).toBe("refuse");
   });
   it("opens other web links in the browser", () => {
     expect(linkTarget("https://github.com/initxy/noeta", app)).toBe("browser");
@@ -52,6 +63,24 @@ describe("links", () => {
     expect(linkTarget("file:///etc/passwd", app)).toBe("refuse");
     expect(linkTarget("javascript:alert(1)", app)).toBe("refuse");
     expect(linkTarget("not a url", app)).toBe("refuse");
+  });
+});
+
+describe("permissions and restarts", () => {
+  it("grants notifications and clipboard writes only", () => {
+    expect([...GRANTED_PERMISSIONS].sort()).toEqual(["clipboard-sanitized-write", "notifications"]);
+    expect(GRANTED_PERMISSIONS.has("media")).toBe(false);
+  });
+
+  it("counts the sessions a restart would interrupt", () => {
+    expect(
+      liveSessions([
+        { status: "running", waiting_on: null },
+        { status: "waiting", waiting_on: "approval" },
+        { status: "waiting", waiting_on: "input" },
+        { status: "ended", waiting_on: null },
+      ]),
+    ).toBe(2);
   });
 });
 
@@ -80,8 +109,17 @@ describe("settings", () => {
     writeFileSync(path, JSON.stringify({ roots: ["/a", 3], window: { width: 10, height: "x" } }));
     const got = loadSettings(path);
     expect(got.roots).toEqual(["/a"]);
+    writeFileSync(path, JSON.stringify({ roots: ["/a", "/b", "/a"] }));
+    expect(loadSettings(path).roots).toEqual(["/b", "/a"]);
     expect(got.window).toMatchObject({ width: DEFAULT_WINDOW.width, height: DEFAULT_WINDOW.height });
     expect(readFileSync(path, "utf-8")).toContain("roots");
+  });
+
+  it("adds a root once, newest last, and keeps a bounded list", () => {
+    expect(addRoot(["/a", "/b"], "/a")).toEqual(["/b", "/a"]);
+    const many = Array.from({ length: 20 }, (_, i) => `/r${i}`).reduce(addRoot, []);
+    expect(many).toHaveLength(MAX_ROOTS);
+    expect(many[MAX_ROOTS - 1]).toBe("/r19");
   });
 
   it("forgets a position no display shows", () => {

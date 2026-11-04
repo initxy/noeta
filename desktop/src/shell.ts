@@ -17,6 +17,8 @@ export type PageCommand = { name: "new-session" } | { name: "open-session"; task
 
 export interface MenuActions {
   newSession(): void;
+  /** View > Reload: the page, or the server when it has stopped. */
+  reload(): void;
   chooseProject(): void;
   openSettings(): void;
   openDocs(): void;
@@ -35,7 +37,7 @@ export function menuTemplate(platform: string, dev: boolean, a: MenuActions): Me
     mac ? { role: "close" } : { role: "quit" },
   ];
   const view: MenuItemConstructorOptions[] = [
-    { role: "reload" },
+    { label: "Reload", accelerator: "CmdOrCtrl+R", click: a.reload },
     ...(dev ? [{ role: "forceReload" } as const, { role: "toggleDevTools" } as const] : []),
     { type: "separator" },
     { role: "resetZoom" },
@@ -71,8 +73,9 @@ export function menuTemplate(platform: string, dev: boolean, a: MenuActions): Me
   ];
 }
 
-/** Whether a link stays in the window (the app's own server) or opens in the
- * browser (http/https elsewhere); anything else is refused. */
+/** Whether a link stays in the window (the app's page: its server's `/`,
+ * any query or fragment), opens in the browser (http/https/mailto elsewhere),
+ * or is refused (the server's other paths, other schemes). */
 export function linkTarget(url: string, appUrl: string): "app" | "browser" | "refuse" {
   let u: URL;
   try {
@@ -80,15 +83,26 @@ export function linkTarget(url: string, appUrl: string): "app" | "browser" | "re
   } catch {
     return "refuse";
   }
-  if (u.origin === new URL(appUrl).origin) return "app";
+  if (u.origin === new URL(appUrl).origin) return u.pathname === "/" ? "app" : "refuse";
   return u.protocol === "https:" || u.protocol === "http:" || u.protocol === "mailto:" ? "browser" : "refuse";
+}
+
+/** The page permissions the window grants: notifications and writing the
+ * clipboard (copying a code block); camera, location and the rest are refused. */
+export const GRANTED_PERMISSIONS: ReadonlySet<string> = new Set(["notifications", "clipboard-sanitized-write"]);
+
+/** How many sessions in a `/summaries` listing are mid-turn or wait on a
+ * person: what a server restart would interrupt. */
+export function liveSessions(list: { status: string; waiting_on: string | null }[]): number {
+  return list.filter((s) => s.status === "running" || (s.status === "waiting" && s.waiting_on !== "input")).length;
 }
 
 function escape(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
-/** The page shown when the server cannot start: what happened, what to run. */
+/** The page shown when the server cannot start or has stopped: what
+ * happened, what to run, and that View > Reload starts it again. */
 export function errorPage(title: string, message: string, command?: string, output?: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>noeta</title>
 <style>
@@ -99,6 +113,7 @@ main{max-width:640px;padding:32px}h1{font:400 28px ui-serif,Georgia,serif;margin
 p{color:var(--muted)}pre{background:var(--box);padding:12px 14px;border-radius:8px;white-space:pre-wrap;word-break:break-all;user-select:all}
 </style></head><body><main><h1>${escape(title)}</h1><p>${escape(message)}</p>
 ${command ? `<pre class="command">${escape(command)}</pre>` : ""}
+<p class="retry">View &gt; Reload (Ctrl+R, ⌘R on macOS) starts it again.</p>
 ${output ? `<p>The server said:</p><pre class="output">${escape(output)}</pre>` : ""}
 </main></body></html>`;
 }

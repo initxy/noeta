@@ -2,6 +2,7 @@
 // scripted provider (web/e2e/provider). Screenshots go to screenshots/ only
 // with NOETA_SCREENSHOTS=1.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -60,11 +61,60 @@ test("the app starts its own server, injects the token, and a session replies", 
     await page.screenshot({ path: `${SHOTS}/02-reply.png` });
 
     // The menu's New Session (Cmd/Ctrl+N) goes back to the welcome screen.
-    await app.evaluate(({ Menu }) => {
-      const item = Menu.getApplicationMenu()?.items.flatMap((m) => m.submenu?.items ?? []).find((i) => i.label === "New Session");
-      item?.click();
-    });
+    await clickMenu(app, "New Session");
     await expect(page.getByText("What should we work on?")).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+async function clickMenu(app: ElectronApplication, label: string): Promise<void> {
+  await app.evaluate(({ Menu }, name) => {
+    const item = Menu.getApplicationMenu()?.items.flatMap((m) => m.submenu?.items ?? []).find((i) => i.label === name);
+    item?.click();
+  }, label);
+}
+
+test("the window keeps to the app's page, grants only notifications, and notices a server that dies", async () => {
+  const { dir, work } = profile({});
+  const { app, page } = await launch(dir, work, join(here, "e2e", "noeta"));
+  try {
+    await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible({ timeout: 180_000 });
+    const root = page.url();
+    await app.evaluate(({ shell }) => {
+      const opened: string[] = [];
+      (globalThis as { opened?: string[] }).opened = opened;
+      shell.openExternal = async (url: string) => {
+        opened.push(url);
+      };
+    });
+    expect(await page.evaluate(() => Notification.requestPermission())).toBe("granted");
+    const geo = await page.evaluate(
+      () => new Promise<string>((resolve) => navigator.geolocation.getCurrentPosition(() => resolve("allowed"), (e) => resolve(`refused ${e.code}`))),
+    );
+    expect(geo).toBe("refused 1");
+
+    // Another path of the same server is refused; the window stays on the app.
+    await page.evaluate(() => window.open("/openapi.json"));
+    await page.evaluate(() => window.open("https://example.com/docs"));
+    await page.evaluate(() => {
+      window.location.href = "/tasks";
+    });
+    await expect.poll(() => app.evaluate(() => (globalThis as { opened?: string[] }).opened)).toEqual(["https://example.com/docs"]);
+    const shown = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getURL());
+    expect(await shown()).toBe(root);
+    expect(app.windows()).toHaveLength(1);
+
+    // The server dies (not stopped by the app): the window says so, with its output.
+    const port = new URL(root).port;
+    execFileSync("pkill", ["-KILL", "-f", `serve --host 127.0.0.1 --port ${port}`]);
+    await expect(page.getByRole("heading", { name: "noeta stopped" })).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("pre.output")).toContainText("Uvicorn");
+    await page.screenshot({ path: `${SHOTS}/04-server-stopped.png` });
+    // View > Reload starts it again.
+    await clickMenu(app, "Reload");
+    await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible({ timeout: 180_000 });
+    expect(page.url()).not.toBe(root);
   } finally {
     await app.close();
   }

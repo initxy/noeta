@@ -4,8 +4,8 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { findNoeta, freePort, freshToken, INSTALL_LINE, isUnder, ServerError, startServer, type PageConfig, type Running } from "./server";
-import { loadSettings, saveSettings, visibleBounds, type Settings } from "./settings";
-import { CHANNELS, errorPage, linkTarget, menuTemplate, type PageCommand } from "./shell";
+import { addRoot, loadSettings, saveSettings, visibleBounds, type Settings } from "./settings";
+import { CHANNELS, errorPage, GRANTED_PERMISSIONS, linkTarget, liveSessions, menuTemplate, type PageCommand } from "./shell";
 
 const DOCS_URL = "https://github.com/initxy/noeta#readme";
 const dev = !app.isPackaged;
@@ -56,11 +56,11 @@ function send(c: PageCommand): void {
   window?.webContents.send(CHANNELS.command, c);
 }
 
-function showError(e: unknown): void {
+function showError(e: unknown, title = "noeta could not start"): void {
   const err = e instanceof ServerError ? e : new ServerError(String(e));
   const missing = err.message.includes("not found");
   const html = errorPage(
-    missing ? "noeta is not installed" : "noeta could not start",
+    missing ? "noeta is not installed" : title,
     err.message,
     missing ? INSTALL_LINE : undefined,
     err.output.trim() || undefined,
@@ -68,15 +68,56 @@ function showError(e: unknown): void {
   void window?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 
+/** A server that ends without being stopped (stop() clears `server` first):
+ * the window says so, with its last output. */
+function watchExit(s: Running): void {
+  void s.exited.then((how) => {
+    if (server !== s) return;
+    server = null;
+    showError(new ServerError(`noeta serve stopped (${how}). Sessions are kept; they go on once it runs again.`, s.output()), "noeta stopped");
+  });
+}
+
 async function openPage(): Promise<void> {
   if (!window) return;
   try {
-    server ??= await launch();
+    if (!server) {
+      server = await launch();
+      watchExit(server);
+    }
     await window.loadURL(`${server.url}/`);
   } catch (e) {
     server = null;
     showError(e);
   }
+}
+
+/** View > Reload: the page, or a new server when there is none running. */
+function reload(): void {
+  if (server) window?.webContents.reload();
+  else void openPage();
+}
+
+/** Whether to go on with a restart that would interrupt sessions mid-turn. */
+async function confirmRestart(): Promise<boolean> {
+  if (!window || !server) return true;
+  let live = 0;
+  try {
+    const resp = await fetch(`${server.url}/summaries`, { headers: { authorization: `Bearer ${server.token}` } });
+    if (resp.ok) live = liveSessions((await resp.json()) as { status: string; waiting_on: string | null }[]);
+  } catch {
+    // unreachable: nothing to interrupt
+  }
+  if (!live) return true;
+  const got = await dialog.showMessageBox(window, {
+    type: "warning",
+    message: "Restart the local server?",
+    detail: `A folder outside your home directory needs the server restarted. ${live} session(s) are working or waiting for you; they stop now and go on after the restart.`,
+    buttons: ["Restart", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  return got.response === 0;
 }
 
 async function restartServer(): Promise<void> {
@@ -95,11 +136,11 @@ async function chooseProject(): Promise<string | null> {
   });
   const dir = got.canceled ? undefined : got.filePaths[0];
   if (!dir) return null;
-  settings = { ...settings, project: dir };
   // The server runs sessions below its own directory (the home directory) and
   // the roots it was started with: a folder elsewhere needs a restart.
   const outside = !isUnder(dir, homedir()) && !settings.roots.some((r) => isUnder(dir, r));
-  if (outside) settings = { ...settings, roots: [...settings.roots, dir] };
+  if (outside && !(await confirmRestart())) return null;
+  settings = { ...settings, project: dir, roots: outside ? addRoot(settings.roots, dir) : settings.roots };
   saveSettings(settingsPath, settings);
   if (outside) await restartServer();
   else send({ name: "project", path: dir });
@@ -144,6 +185,8 @@ function createWindow(): void {
   window.on("closed", () => (window = null));
 
   const contents = window.webContents;
+  contents.session.setPermissionRequestHandler((_wc, permission, done) => done(GRANTED_PERMISSIONS.has(permission)));
+  contents.session.setPermissionCheckHandler((_wc, permission) => GRANTED_PERMISSIONS.has(permission));
   const route = (url: string): boolean => {
     const target = server ? linkTarget(url, server.url) : "refuse";
     if (target === "browser") void shell.openExternal(url);
@@ -179,6 +222,7 @@ function wire(): void {
     Menu.buildFromTemplate(
       menuTemplate(process.platform, dev, {
         newSession: () => send({ name: "new-session" }),
+        reload,
         chooseProject: () => void chooseProject(),
         openSettings,
         openDocs: () => void shell.openExternal(DOCS_URL),

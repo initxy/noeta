@@ -30,7 +30,14 @@ export interface InboxItem {
 }
 
 export type Event =
-  | { type: "TaskCreated"; agent: string; config: Record<string, unknown>; parent_id?: string | null }
+  | {
+      type: "TaskCreated";
+      agent: string;
+      config: Record<string, unknown>;
+      parent_id?: string | null;
+      history_from?: string | null;
+      history_through?: number | null;
+    }
   | { type: "InputTaken"; items: InboxItem[]; through: number }
   | { type: "ModelCalled"; model: string; attempt?: number }
   | {

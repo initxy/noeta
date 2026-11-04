@@ -26,7 +26,8 @@ on the offline scripted provider, so they are rewritten on every run.
 | Transcript: markdown, code highlighting, streamed text, collapsible thinking | done |
 | Tool cards: Bash command and output (long output folded), Read/Grep/Glob compact, Edit/Write/MultiEdit as diffs, WebFetch, MCP tools, sub-agents nested | done |
 | Compaction markers, retries, failures, interrupts | done |
-| Approval cards: yes / always allow (the rule) / switch mode / no with feedback; sub-agents' too | done |
+| Approval cards: yes / always allow (the rule) / switch mode / no with feedback; sub-agents' too; Edit/Write cards show the diff | done |
+| Keyboard: digits / arrows / Enter / Esc on approval cards, Shift+Tab cycles the mode, Enter runs the highlighted slash command | done |
 | AskUserQuestion form (single, multi, other text) | done |
 | Plan review (ExitPlanMode's plan with its choices) | done |
 | Composer: multiline, Enter to send, stop (button or Esc), queued messages | done |
@@ -35,10 +36,12 @@ on the offline scripted provider, so they are rewritten on every run.
 | Image paste, drop and upload | done |
 | Permission-mode picker (bypass only when the server allows it), model picker | done |
 | Usage: tokens, cost, context fill | done |
-| Rewind to a checkpoint | done |
+| Rewind to a checkpoint (the prompt back in the composer, the rewound session replaced) | done |
+| Continue an ended session (send to it: a new session carries its conversation on) | done |
+| Links in a new tab; remote images in replies shown as links, not loaded; served with a CSP | done |
+| Disconnect (forget the saved token) | done |
 | Todo list panel | done |
 | Light and dark themes, phone-sized layout | done |
-| Keyboard shortcuts on approval cards (1/2/3), shift+tab mode cycling | not yet |
 | Cloud environments, repository picker, branches and pull requests (claude.ai/code) | not here: noeta runs in the server's directories |
 | Diff review across a whole session, file tree, terminal pane (desktop) | not yet |
 | Search across sessions, archive and delete | not yet: the API has no delete |

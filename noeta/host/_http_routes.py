@@ -24,7 +24,7 @@ from noeta.host._http_guard import REQUEST_CONFIG, scope
 from noeta.host._http_openapi import OPENAPI
 from noeta.host.app import AppAPI
 from noeta.host.files import file_matches
-from noeta.host.pending import card_title, choices, pending_tree
+from noeta.host.pending import Pending, card_title, choices, pending_tree
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.summaries import root_summaries
 from noeta.host.usage import tree_usage
@@ -77,6 +77,7 @@ class Routes:
         self._app = app
         self._agents = agents
         self._summaries: dict[str, tuple[int, dict[str, Any]]] = {}
+        self._pending: dict[str, tuple[int, list[Pending]]] = {}
 
     async def create(self, request: Request) -> Response:
         body = await request.json()
@@ -117,7 +118,7 @@ class Routes:
         task_id = request.path_params["task_id"]
         await scope(request).client.get(task_id)
         out = []
-        for item in await pending_tree(scope(request).client, task_id):
+        for item in await pending_tree(scope(request).client, task_id, self._pending):
             row = dataclasses.asdict(item)
             row["title"] = card_title(item, task_id)
             if item.kind == "approval":

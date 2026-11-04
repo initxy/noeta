@@ -146,6 +146,18 @@ describe("startServer", () => {
     expect(child.killed).toEqual(["SIGTERM"]);
   });
 
+  it("tells how a running server ended, when it dies on its own", async () => {
+    const child = fakeChild();
+    const spawn = vi.fn(() => child) as unknown as Spawn;
+    const running = await startServer(options, { spawn, fetch: async () => ({ status: 200 }) });
+    child.stderr.emit("data", Buffer.from("Traceback: boom\n"));
+    child.emit("exit", null, "SIGKILL");
+    expect(await running.exited).toBe("signal SIGKILL");
+    expect(running.output()).toContain("boom");
+    await running.stop(); // already gone: nothing to kill
+    expect(child.killed).toEqual([]);
+  });
+
   it("rejects with the server's output when it exits first", async () => {
     const spawn = vi.fn(() => fakeChild(2)) as unknown as Spawn;
     const fetch = vi.fn(async () => {

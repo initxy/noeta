@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -20,6 +21,7 @@ from noeta.core.extension import CommandContext
 from noeta.host.files import file_matches
 from noeta.host.http import create_app
 from noeta.host.local import LocalApp
+from noeta.host.pending import Pending, pending_tree
 from noeta.host.remote import RemoteApp
 from noeta.plugins.title import Title
 from noeta.testing import ScriptedProvider, reply
@@ -119,7 +121,38 @@ async def test_the_web_bundle_is_served_without_a_token_beside_the_api(
     api = create_app(app.client, token="secret", app=app, web_dir=str(tmp_path / "dist"))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api),
                                  base_url="http://127.0.0.1") as http:
-        assert (await http.get("/")).text == "<html>noeta</html>"
+        page = await http.get("/")
+        assert page.text == "<html>noeta</html>"
+        csp = page.headers["content-security-policy"]
+        assert "default-src 'self'" in csp and "connect-src 'self'" in csp
+        assert "img-src 'self' data: blob:" in csp and "frame-ancestors 'none'" in csp
+        assert page.headers["x-frame-options"] == "DENY"
+        assert (await http.get("/assets/app.js")).headers["x-frame-options"] == "DENY"
         assert (await http.get("/assets/app.js")).text == "console.log(1)"
         assert (await http.get("/tasks")).status_code == 401
         assert (await http.get("/nothing-here")).status_code == 404
+
+
+async def test_pending_rereads_only_the_logs_that_moved(
+        local: tuple[LocalApp, ScriptedProvider]) -> None:
+    app, _ = local
+    task_id = await app.client.create("main", None, config={"interactive": False})
+    reads: list[str] = []
+    events = app.client.events
+
+    async def counted(tid: str, after: int = 0) -> list[Any]:
+        reads.append(tid)
+        return await events(tid, after)
+
+    app.client.events = counted  # type: ignore[method-assign]
+    cache: dict[str, tuple[int, list[Pending]]] = {}
+    assert await pending_tree(app.client, task_id, cache) == []
+    assert await pending_tree(app.client, task_id, cache) == []
+    assert reads == [task_id]
+    await app.client.signal(task_id, "rename", {"title": "x"})
+
+    async def moved() -> bool:
+        await pending_tree(app.client, task_id, cache)
+        return len(reads) > 1
+
+    await _until(moved)

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Api, ApiError, initialConnection, saveConnection, type Connection } from "./api/client";
+import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, TaskSummary, TreeUsage } from "./api/types";
 import { Composer, type Attachment } from "./components/Composer";
-import { ModePicker, ModelPicker, RewindDialog, UsageBadge } from "./components/Controls";
+import { DEFAULT_MODES, ModePicker, ModelPicker, RewindDialog, UsageBadge } from "./components/Controls";
 import { PendingCards } from "./components/PendingCard";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type SessionStatus } from "./components/Sidebar";
 import { TodoPanel } from "./components/TodoPanel";
 import { Transcript } from "./components/Transcript";
 import { attentionChanges, desktop } from "./desktop";
+import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask } from "./state/useTask";
 
 /** Commands the page runs itself, as Claude Code's app does. */
@@ -74,6 +75,34 @@ function Connect({ initial, error, onConnect }: { initial: Connection | null; er
   );
 }
 
+const REPLACED_KEY = "noeta.replaced";
+
+/** Sessions this browser rewound or continued into a new one: the sidebar
+ * shows the new one only. */
+function loadReplaced(): Set<string> {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(REPLACED_KEY) ?? "[]");
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveReplaced(ids: Set<string>): void {
+  try {
+    localStorage.setItem(REPLACED_KEY, JSON.stringify([...ids].slice(-500)));
+  } catch {
+    // per-page only
+  }
+}
+
+/** The open session's status from its event stream (fresher than a listing). */
+function liveStatus(state: TaskState): SessionStatus {
+  if (state.ended !== null) return "ended";
+  if (state.waitingOn === "approval" || state.waitingOn === "question") return "needs-you";
+  return state.busy ? "running" : "idle";
+}
+
 function sessionFromHash(): string | null {
   const m = /^#session=([\w.-]+)$/.exec(window.location.hash);
   return m ? m[1] : null;
@@ -107,12 +136,33 @@ export function App() {
           setConnError(msg);
           setConn(null);
         }}
+        onDisconnect={
+          window.NOETA_CONFIG?.token !== undefined
+            ? undefined
+            : () => {
+                forgetConnection();
+                setConnError("");
+                setConn(null);
+              }
+        }
       />
     </ApiContext.Provider>
   );
 }
 
-function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; theme: string; toggleTheme: () => void; onUnauthorized: (m: string) => void }) {
+function Workspace({
+  api,
+  theme,
+  toggleTheme,
+  onUnauthorized,
+  onDisconnect,
+}: {
+  api: Api;
+  theme: string;
+  toggleTheme: () => void;
+  onUnauthorized: (m: string) => void;
+  onDisconnect?: () => void;
+}) {
   const [sessions, setSessions] = useState<TaskSummary[]>([]);
   const [taskId, setTaskId] = useState<string | null>(sessionFromHash);
   const [state, dispatch] = useTask(api, taskId);
@@ -123,6 +173,8 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
   const [newMode, setNewMode] = useState("default");
   const [newModel, setNewModel] = useState("");
   const [rewinding, setRewinding] = useState(false);
+  const [draft, setDraft] = useState<{ text: string; n: number } | undefined>();
+  const [replaced, setReplaced] = useState(loadReplaced);
   const [navOpen, setNavOpen] = useState(false);
   const [error, setError] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
@@ -186,15 +238,25 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
     api.commands(taskId).then((c) => setCommands([...PAGE_COMMANDS, ...c]), () => setCommands(PAGE_COMMANDS));
   }, [api, taskId]);
 
+  // The sidebar's row of the open session follows its stream; the listing
+  // is read again when the stream shows it changed.
+  useEffect(() => {
+    if (taskId) void refreshSessions();
+  }, [taskId, state.title, state.busy, state.ended, refreshSessions]);
+
+  // Cards are asked for only while the session waits on a person, or a
+  // sub-agent (whose own approvals surface here) runs.
   const refreshPending = useCallback(() => {
     if (taskId) api.pending(taskId).then(setPending, fail);
   }, [api, taskId, fail]);
+  const childRunning = state.items.some((i) => i.kind === "tool" && !!i.child && !i.childStatus);
+  const asking = state.waitingOn === "approval" || state.waitingOn === "question" || childRunning;
   useEffect(() => {
+    if (!asking) return setPending([]);
     refreshPending();
-    if (state.waitingOn !== "children" && !state.busy) return;
     const timer = setInterval(refreshPending, 1500);
     return () => clearInterval(timer);
-  }, [refreshPending, state.waitingOn, state.busy, state.lastSeq]);
+  }, [refreshPending, asking]);
 
   useEffect(() => {
     if (taskId && state.replied) api.usage(taskId).then(setUsage, () => undefined);
@@ -202,31 +264,55 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
 
   const findFiles = useCallback((q: string) => api.files(q, taskId), [api, taskId]);
 
+  const replace = (id: string) => {
+    const next = new Set(replaced).add(id);
+    saveReplaced(next);
+    setReplaced(next);
+  };
+
+  const ended = state.ended !== null;
+
+  /** The session a message goes to: the open one, a new one, or (the open
+   * one has ended) a new one continuing its conversation. */
+  const target = async (): Promise<string> => {
+    if (taskId && !ended) return taskId;
+    const config: Record<string, unknown> = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+    if (taskId) {
+      Object.assign(config, { permission_mode: state.mode || "default", continued_as: "resume" });
+      if (state.model) config.model = state.model;
+      if (state.cwd) config.cwd = state.cwd;
+    } else {
+      config.permission_mode = newMode;
+      if (newModel) config.model = newModel;
+      if (desk && project) config.cwd = project;
+    }
+    const id = await api.create(null, config, "main", taskId ?? undefined);
+    if (taskId) replace(taskId);
+    open(id);
+    return id;
+  };
+
   const send = async (text: string, images: Attachment[]) => {
     setError("");
     const [name, ...rest] = text.startsWith("/") ? text.slice(1).split(" ") : [""];
     const arg = rest.join(" ").trim();
     try {
       if (name === "clear" || name === "new") return open(null);
-      if (name === "rewind" && taskId) return setRewinding(true);
-      if (name === "rename" && taskId) {
-        await api.signal(taskId, "rename", { title: arg });
+      if (name === "model" && arg) return changeModel(arg);
+      if (name === "rewind") return taskId ? setRewinding(true) : setError("Nothing to rewind to yet.");
+      if (name === "rename" && !arg) return rename();
+      // A first message takes the same path as every later one: the task
+      // is made empty, then the message is sent (slash commands expand).
+      const id = await target();
+      if (name === "rename") {
+        await api.signal(id, "rename", { title: arg });
         return void refreshSessions();
       }
-      if (name === "model" && arg) return changeModel(arg);
       const input: Input = images.length
         ? { role: "user", content: [{ type: "text", text }, ...images.map((i) => ({ type: "image" as const, media_type: i.mediaType, data: i.data }))] }
         : text;
-      if (!taskId) {
-        const config: Record<string, unknown> = { permission_mode: newMode, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-        if (newModel) config.model = newModel;
-        if (desk && project) config.cwd = project;
-        const id = await api.create(input, config);
-        open(id);
-        void refreshSessions();
-        return;
-      }
-      const got = await api.send(taskId, input);
+      const got = await api.send(id, input);
+      if (id !== taskId) void refreshSessions();
       if (got.output !== undefined) dispatch({ type: "notice", text: got.output, tone: "info" });
       else if (got.inbox_seq !== undefined) dispatch({ type: "queued", seq: got.inbox_seq, text });
     } catch (e) {
@@ -242,6 +328,11 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
     if (!taskId) return setNewModel(model);
     api.signal(taskId, "config", { model }).catch(fail);
   };
+  const cycleMode = () => {
+    const cycle = (taskId ? state.modes : null)?.cycle ?? DEFAULT_MODES.cycle;
+    const now = taskId ? state.mode : newMode;
+    changeMode(cycle[(cycle.indexOf(now) + 1) % cycle.length]);
+  };
   const rename = () => {
     if (!taskId) return;
     const title = window.prompt("Rename the session", state.title);
@@ -249,10 +340,16 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
   };
 
   const window_ = models.find((m) => m.id === state.model)?.context_window ?? 0;
-  const ended = state.ended !== null;
   return (
     <div className={navOpen ? "layout nav-open" : "layout"}>
-      <Sidebar sessions={sessions} current={taskId} onOpen={open} onNew={() => open(null)} />
+      <Sidebar
+        sessions={sessions.filter((s) => !replaced.has(s.task_id))}
+        current={taskId}
+        live={taskId && state.lastSeq ? { title: state.title, status: liveStatus(state) } : undefined}
+        onOpen={open}
+        onNew={() => open(null)}
+        onDisconnect={onDisconnect}
+      />
       <div className="scrim" onClick={() => setNavOpen(false)} />
       <main className="main">
         <header className="header">
@@ -317,12 +414,13 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
         <footer className="footer">
           <Composer
             busy={state.busy}
-            disabled={ended}
             commands={commands}
             findFiles={findFiles}
             onSend={send}
             onStop={() => taskId && api.cancel(taskId, true).catch(fail)}
-            placeholder={ended ? "This session has ended" : undefined}
+            onCycleMode={cycleMode}
+            placeholder={ended ? "This session has ended. Send a message to continue it." : undefined}
+            draft={draft}
           />
           <div className="pickers">
             <ModePicker mode={taskId ? state.mode : newMode} modes={taskId ? state.modes : null} onChange={changeMode} />
@@ -335,9 +433,14 @@ function Workspace({ api, theme, toggleTheme, onUnauthorized }: { api: Api; them
           api={api}
           taskId={taskId}
           onClose={() => setRewinding(false)}
-          onRewound={(id) => {
+          onRewound={(id, prompt) => {
             setRewinding(false);
-            open(id);
+            if (id !== taskId) {
+              // The conversation went back: its prompt is the person's to edit and send again.
+              setDraft({ text: prompt, n: Date.now() });
+              replace(taskId);
+              open(id);
+            }
             void refreshSessions();
           }}
         />
