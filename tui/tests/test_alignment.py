@@ -130,3 +130,26 @@ async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
     i = next(i for i, m in enumerate(last) if any(isinstance(b, ToolResult) for b in m.content))
     after = [b.text for m in last[i:] for b in m.content if isinstance(b, Text)]
     assert "then stop" in after  # the yes's words come after the call's result
+
+
+async def test_tab_completes_the_command_word_with_the_cursor_anywhere_in_it(
+        tmp_path: Path) -> None:
+    from noeta_tui.widgets import Completions, PromptInput
+
+    app = make_app(tmp_path, ScriptedProvider([]))
+    async with app.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: ready(app))
+        box, menu = app.query_one(PromptInput), app.query_one(Completions)
+        await pilot.press(*"/mo", "tab")
+        assert box.text == "/model " and not menu.display
+        box.text = ""
+        await pilot.press(*"/mod", "left", "tab")
+        assert box.text == "/model " and box.cursor_location == (0, 7)
+        box.text = ""
+        await pilot.press(*"/sta x", "left", "left", "t")
+        assert menu.display  # the cursor is back in the command word
+        await pilot.press("tab")
+        assert box.text == "/status x" and box.cursor_location == (0, 8)
+        box.text = ""
+        await pilot.press(*"say /mo")
+        assert not menu.display  # a command is only the first word

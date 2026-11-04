@@ -533,13 +533,26 @@ class NoetaApp(TranscriptView):
         box.text = text
         box.move_cursor(box.document.end)
 
-    def _complete(self, value: str) -> None:
-        """Replace the word being typed with ``value``."""
+    def _word(self) -> tuple[int, int]:
+        """Where the word the cursor is in starts and ends in the box's text."""
         box = self._box()
         text = box.text
-        start = text.rfind(" ") + 1 if not value.startswith("/") else 0
-        box.text = text[:start] + value + " "
-        box.move_cursor(box.document.end)
+        row, column = box.cursor_location
+        at = sum(len(line) + 1 for line in text.split("\n")[:row]) + column
+        start = max(text.rfind(" ", 0, at), text.rfind("\n", 0, at)) + 1
+        ends = [i for i in (text.find(" ", at), text.find("\n", at)) if i != -1]
+        return start, min(ends, default=len(text))
+
+    def _complete(self, value: str) -> None:
+        """Replace the word the cursor is in with ``value`` (what follows it
+        stays), the cursor after it."""
+        box = self._box()
+        text = box.text
+        start, end = self._word()
+        rest = text[end:]
+        box.text = text[:start] + value + ("" if rest.startswith(" ") else " ") + rest
+        at = start + len(value) + 1
+        box.move_cursor((box.text.count("\n", 0, at), at - box.text.rfind("\n", 0, at) - 1))
 
     @on(TextArea.Changed, "#prompt")
     def _typed(self, event: TextArea.Changed) -> None:
@@ -550,10 +563,11 @@ class NoetaApp(TranscriptView):
             return
         self._set_marker("!" if text.startswith("!") else "")
         menu = self.query_one(Completions)
-        word = text.rsplit(" ", 1)[-1] if text else ""
-        if text.startswith("/") and " " not in text:
-            menu.show(slash.matches(self, text[1:]))
-        elif word.startswith("@") and "\n" not in word and not self.on_server:
+        start, end = self._word()
+        word = text[start:end]
+        if start == 0 and word.startswith("/"):  # the command word, cursor anywhere in it
+            menu.show(slash.matches(self, word[1:]))
+        elif word.startswith("@") and not self.on_server:
             menu.show([(f"@{p}", f"+ {p}", "") for p in
                        files.matches(self.task_cwd or self.cwd, word[1:])])
         else:
