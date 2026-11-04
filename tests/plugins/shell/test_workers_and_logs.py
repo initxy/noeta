@@ -420,7 +420,7 @@ async def test_a_job_dies_with_its_worker_process(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
-async def test_a_job_dies_about_a_lease_after_its_worker_froze(tmp_path: Path) -> None:
+async def test_a_job_dies_before_its_lease_runs_out_after_its_worker_froze(tmp_path: Path) -> None:
     marker = tmp_path / "late"
     registry = Registry(log_dir=str(tmp_path / "logs"))
     job = await registry.spawn(
@@ -429,6 +429,9 @@ async def test_a_job_dies_about_a_lease_after_its_worker_froze(tmp_path: Path) -
         description="", post=_posted, kept=KeptClaim(lease_seconds=1.0))
     assert isinstance(job, Job)
     assert registry._keeper is not None
+    # Dead before the lease (renewed every third of it) can run out: two
+    # guard periods after the file was last re-created.
+    assert 2 * job.guard_period <= 2 / 3 * 1.0
     registry._keeper.cancel()  # the worker froze: nothing re-creates its file
     await asyncio.wait_for(job.done.wait(), 3.5)
     assert job.exit_code != 0

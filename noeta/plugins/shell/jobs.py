@@ -102,9 +102,12 @@ LET_GO_LOGS_MAX_BYTES = 256 * 1024 * 1024
 TASKS_KEEP = 256
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
-#: How long a foreground command (which keeps no claim) outlives a worker
-#: that stopped re-creating its ``.alive`` file; a job that keeps its task's
-#: claim gets the claim's lease, after which another worker may take the task.
+#: The shortest tick, for a short lease's guard.
+GUARD_TICK_MIN_S = 0.05
+#: How often a foreground command's guard (which keeps no claim) looks for
+#: its ``.alive`` file; a job that keeps its task's claim is looked at every
+#: quarter of the claim's lease, so it is dead before another worker may
+#: take the task.
 ALIVE_S = 30.0
 #: Ticks of 20 ms a foreground command's keeper is given to write what came
 #: once the command's shell exited.
@@ -484,20 +487,27 @@ class Registry:
 
 
     def _alive_period(self, job: Job) -> float:
-        """How long ``job``'s guard waits for its ``.alive`` file: its kept
-        claim's lease, else :attr:`alive_s`."""
-        return job.kept.lease_seconds if job.kept is not None else self.alive_s
+        """How often ``job``'s guard removes its ``.alive`` file, killing the
+        job when it is already gone: the job dies one to two periods after
+        the worker last re-created it. A quarter of its kept claim's lease: the
+        lease, renewed every third of it, runs out at least two thirds of it
+        after a worker froze, so its job is dead by then; else
+        :attr:`alive_s`."""
+        return job.kept.lease_seconds / 4 if job.kept is not None else self.alive_s
 
     def _guard(self, job: Job) -> str:
         """The guard's command line for ``job`` (see :data:`_GUARD`)."""
         worker_pid = str(os.getpid()) if is_local(job.env) else ""
-        ticks = 0
+        ticks, tick = 0, GUARD_TICK_S
         if job.alive_path:
-            # The worker re-creates the file three times per period.
-            ticks = max(2, round(self._alive_period(job) / GUARD_TICK_S))
-        job.guard_period = ticks * GUARD_TICK_S
+            # The worker re-creates the file three times per period; the
+            # period is never longer than asked.
+            period = self._alive_period(job)
+            tick = max(min(GUARD_TICK_S, period / 2), GUARD_TICK_MIN_S)
+            ticks = max(2, int(period / tick))
+        job.guard_period = ticks * tick
         return shlex.join(["sh", "-c", _GUARD, "sh", "$$", worker_pid, job.alive_path,
-                           str(ticks), str(GUARD_TICK_S)]).replace("'$$'", "$$")
+                           str(ticks), f"{tick:g}"]).replace("'$$'", "$$")
 
     async def _keep_alive(self) -> None:
         """Re-create the ``.alive`` file of every running job whose claim is
@@ -521,7 +531,7 @@ class Registry:
                         await group[0].env.run(
                             ["sh", "-c", 'for f; do : > "$f"; done', "sh", *paths], timeout=10)
             period = min(j.guard_period or self._alive_period(j) for j in jobs)
-            await asyncio.sleep(max(period / 3, GUARD_TICK_S / 2))
+            await asyncio.sleep(period / 3)
 
     async def _run(self, job: Job, monitor_timeout_ms: float | None) -> None:
         tail: asyncio.Task[None] | None = None
