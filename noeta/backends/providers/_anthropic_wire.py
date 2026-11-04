@@ -4,7 +4,9 @@ the ``thinking`` parameter, and the prompt-cache breakpoints."""
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
+import re
 from collections.abc import Collection, Sequence
 from typing import Any
 
@@ -33,6 +35,19 @@ from noeta.toolkit.empty_reply import EMPTY_REPLY_NUDGE
 FAMILY = "anthropic"
 
 log = logging.getLogger("noeta.providers.anthropic")
+
+#: The tool-use ids the Messages API takes.
+_CALL_ID = re.compile(r"[a-zA-Z0-9_-]+")
+
+
+def wire_call_id(call_id: str) -> str:
+    """``call_id`` as the Messages API takes it: unchanged when it is one,
+    else the same id every time with each other character an underscore and
+    a hash of the original after it (a call another provider named)."""
+    if _CALL_ID.fullmatch(call_id):
+        return call_id
+    digest = hashlib.sha256(call_id.encode()).hexdigest()[:10]
+    return f"{re.sub(r'[^a-zA-Z0-9_-]', '_', call_id)}_{digest}"
 
 #: A tool result whose every ``tool_reference`` named a tool the request
 #: does not offer (Claude Code sends such a result as a note, too).
@@ -362,7 +377,7 @@ def _user_to_wire(message: Message, vision: bool,
             results.append(
                 {
                     "type": "tool_result",
-                    "tool_use_id": block.call_id,
+                    "tool_use_id": wire_call_id(block.call_id),
                     "content": _tool_result_content(block, vision, refs),
                     "is_error": block.is_error,
                 }
@@ -437,7 +452,7 @@ def _assistant_to_wire(message: Message) -> dict[str, Any]:
             calls.append(
                 {
                     "type": "tool_use",
-                    "id": block.id,
+                    "id": wire_call_id(block.id),
                     "name": block.name,
                     "input": block.input,
                 }

@@ -16,7 +16,8 @@ catalog does not know, when its provider's `/models` listing publishes one.
 
 ## Non-goals
 
-- No kernel change: `Runtime.provider_for(model)` already routes per request by model id.
+- No kernel capability: the kernel only keeps a task's recorded route and hands the host the
+  task's state when it asks for a provider (see Decisions).
 - No `provider/model` selector in the logged model id (see Decisions).
 - No pricing from listings; an uncatalogued model still bills as unknown.
 - A third-party provider family gets no listing (its models file / table rows give windows).
@@ -40,11 +41,32 @@ endpoint. The kernel calls `rt.provider_for(request.model)` for every model call
 - Routing scheme (one): the logged model id stays the bare id the provider and every plugin
   knows. A model routes to the provider that names it (a table's `models`, or a models-file
   row's `provider`), else the first provider whose `/models` listing has it (the default
-  provider first, then tables in file order), else the default provider. A switch logs only the
-  model id (`CONFIG_SIGNAL`), so a resumed task routes the same on any machine with the same
-  config. Why not `provider/model` in the log: plugins read the task model as a bare id
-  (catalog lookups, `startswith("claude")`, family caps), and the kernel's `provider_for` is
-  keyed by model id alone; a prefixed id would drift in a dozen places or need a kernel change.
+  provider first, then tables in file order), else the default provider. Why not
+  `provider/model` in the log: plugins read the task model as a bare id (catalog lookups,
+  `startswith("claude")`, family caps); a prefixed id would drift in a dozen places.
+- (review, superseding "a switch logs only the model id") Resolution is made once, when a model
+  is chosen, and recorded: config key `model_route` = `{model, provider, context_window?,
+  max_output_tokens?, supports_vision?}` (`MODEL_ROUTE`), written by `LocalClient` on create and
+  on any `CONFIG_SIGNAL` carrying `model` (so the TUI, ACP, stream-json, `-p --resume` and the
+  HTTP server all record it). A worker sends that model to the recorded provider and fails the
+  call (`Fatal`) when it is not configured there; other models resolve on the worker. Limits in
+  the record are registered when the task is loaded (`env_for`, the first host hook that sees
+  the folded state, before the first request is sized). A sub-agent on its parent's model
+  inherits the record (`subtasks.child_config`). One provider: nothing is recorded unless a
+  listing gave the limits, and `task_provider` is not set.
+- (review) Kernel change, minimal: `MODEL_ROUTE` joins `CHANGEABLE_CONFIG` (a switch must record
+  the route atomically with the model), and `Runtime.task_provider(state, model)` /
+  `Runtime.provider_of` (3 call sites) let the host pick with the task's state. Needed because
+  `provider_for(model)` sees only the model id, and plugin side calls (`TaskView.complete`) and
+  token counts bypass every extension hook, so no plugin could carry the route to them.
+- (review) Listings: 404 / 405 = no listing (kept empty a day); any other failure keeps the older
+  copy untouched (its age too) and retries after 60 s, doubling to the max age. Start reads a
+  listing only for an uncatalogued start model; routing listings are read when a task is given
+  a model.
+- (review) With several endpoints, `Thinking.family` is tagged `<family>@<endpoint>` on the way
+  in and restored only for that endpoint, so signed reasoning goes back only to its signer.
+  The Anthropic wire rewrites tool-call ids outside `^[a-zA-Z0-9_-]+$` (stable: sanitized + hash).
+- (review) One model named for two providers (tables, models file) is a config error naming both.
 - Routing lives in `noeta/backends/providers/routing.py` (`ProviderRouter`): `provider_for`
   returns the endpoint's adapter itself when the route is known without network, else a proxy
   that resolves the route off the event loop on its first call. One endpoint: no listing is read
@@ -71,6 +93,8 @@ endpoint. The kernel calls `rt.provider_for(request.model)` for every model call
 - [x] Tests: config parsing, routing, switching across providers, window lookup
 - [x] Docs: README config, `docs/extending.md` provider row
 - [x] Gates: `make check`, `make parity`, `make cluster`, `make e2e`
+- [x] Review fixes: recorded routes, listing failure handling, limits on load, replay across
+      providers, lazy start, model conflicts, tests through `from_settings`
 
 ## Acceptance criteria
 
@@ -83,9 +107,13 @@ endpoint. The kernel calls `rt.provider_for(request.model)` for every model call
 
 ## Risks
 
-- Same model id on two providers: the first by the routing order wins; no way to pick the other.
-- A listing fetch blocks its caller up to its timeout once a day per endpoint (off the loop in
-  async callers; synchronous at CLI start for an uncatalogued start model).
+- Same model id on two providers: a config error when both name it; when only listings have
+  it, the first by the routing order wins.
+- A listing read blocks its caller up to its timeout (off the loop in async callers;
+  synchronous at start only for an uncatalogued start model, so an offline endpoint costs that
+  start up to 5 s).
+- Models a task uses without a front-end choice (an agent file's own model, a side call) still
+  resolve per worker; deterministic only when configuration names them.
 
 ## Progress log
 
@@ -97,3 +125,8 @@ endpoint. The kernel calls `rt.provider_for(request.model)` for every model call
   Consequence: the gateway's uncatalogued live model now runs at its listed 1,000,000 window
   (was the 128k default), output cap still 16,384 (the listing names none).
 - 2026-11-03: `make cluster` 14 passed, `make e2e` 7 passed (ACP live run now reads the gateway listing).
+- 2026-11-03: independent review: listing-based routing was per worker, failures cached as
+  empty, limits registered after the first request was sized, signed reasoning crossed
+  same-family endpoints, start read every listing, duplicate model names overwrote. Fixed per
+  the (review) Decisions; the route record needed a minimal kernel change (reason there).
+- 2026-11-03: review fixes green: `make check` 3556 passed (89.83%), parity 0 mismatches, cluster 14 passed, e2e 7 passed.

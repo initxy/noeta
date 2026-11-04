@@ -367,7 +367,13 @@ def test_provider_tables_route_models(home: Path, monkeypatch: pytest.MonkeyPatc
     assert s.model_providers == {"gw-chat": "gw", "deepseek-chat": "deepseek", big: "deepseek"}
     assert models.model_limits(big) == (131072, 65536)
     app = from_settings(s, cwd=str(home))
-    route = app.runtime.provider_for
+    assert app.prepare_model is not None
+    app.prepare_model("claude-opus-5-5")  # reads the (empty) listings
+
+    def route(model: str) -> Any:
+        provider = app.runtime.provider_for(model)
+        return getattr(provider, "_inner", provider)
+
     assert isinstance(route("claude-opus-5-5"), AnthropicProvider)
     deepseek = route("deepseek-chat")
     assert isinstance(deepseek, OpenAICompatProvider) and deepseek is route(big)
@@ -432,4 +438,17 @@ def test_a_models_file_row_names_a_configured_provider(home: Path) -> None:
     (home / "models.json").write_text(json.dumps([{"id": "q", "provider": "nobody"}]))
     (home / "config.toml").write_text(f'models_file = "{home / "models.json"}"\n')
     with pytest.raises(ValueError, match="nobody"):
+        load_settings()
+
+
+def test_a_model_named_for_two_providers_is_an_error(home: Path) -> None:
+    (home / "models.json").write_text(json.dumps([{"id": "m1", "provider": "b"}]))
+    tables = ('[providers.a]\nfamily = "openai_compat"\nmodels = ["m1"]\n'
+              '[providers.b]\nfamily = "openai_compat"\nmodels = ["m2"]\n')
+    (home / "config.toml").write_text(tables.replace('"m2"', '"m1"'))
+    with pytest.raises(ValueError, match=r"'m1' is named for two providers: 'a' "
+                                         r"\(\[providers.a\]\) and 'b' \(\[providers.b\]\)"):
+        load_settings()
+    (home / "config.toml").write_text(f'models_file = "{home / "models.json"}"\n' + tables)
+    with pytest.raises(ValueError, match=r"models\.json"):
         load_settings()

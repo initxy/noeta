@@ -74,6 +74,7 @@ from noeta.cli.trust import (
 from noeta.cli.trust import trust_project as trust_project
 from noeta.core import models, registry
 from noeta.core.execenv import ExecEnv
+from noeta.core.loop.state import MODEL_ROUTE
 from noeta.core.provider import Provider
 from noeta.toolkit.local_env import withhold_env_refs
 from noeta.toolkit.sandbox import SandboxSettings
@@ -272,12 +273,24 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     data.pop("model_providers", None)
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
+    named: dict[str, str] = {}  # model id -> where its provider is named
+
+    def name_provider(model: str, provider: str, where: str) -> None:
+        if model in settings.model_providers and settings.model_providers[model] != provider:
+            raise ValueError(f"model {model!r} is named for two providers: "
+                             f"{settings.model_providers[model]!r} ({named[model]}) and "
+                             f"{provider!r} ({where})")
+        settings.model_providers[model] = provider
+        named[model] = where
+
     if settings.models_file:
-        settings.model_providers.update(register_models_file(settings.models_file))
+        for model, provider in register_models_file(settings.models_file).items():
+            name_provider(model, provider, settings.models_file)
     for name, table in settings.providers.items():
         rows = [r if isinstance(r, dict) else {"id": r} for r in table.get("models", ())]
         _register_rows(rows)
-        settings.model_providers.update({row["id"]: name for row in rows})
+        for row in rows:
+            name_provider(row["id"], name, f"[providers.{name}]")
     names = {*settings.providers} | (
         set() if settings.provider in settings.providers else {DEFAULT_PROVIDER})
     stray = sorted({p for p in settings.model_providers.values() if p not in names})
@@ -577,7 +590,10 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
                 if (n := untrusted_notice(cwd, sub)) is not None]
     router = settings.make_router()
-    if settings.model:
+    # Only a start model the catalog does not know needs a listing now (its
+    # limits, and whether to say so); its route is settled when a task is
+    # given it.
+    if settings.model and models.find_spec(settings.model) is None:
         router.prepare(settings.model)
     if (unknown := models.unknown_model_notice(settings.model)) is not None:
         notices.append(unknown)
@@ -656,6 +672,18 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     runtime_kw.setdefault("workspace_trusted", project_trusted)
     # The default provider is built now, so a missing key stops the start.
     router.adopt(router.default.name, settings.make_provider())
+    env_for = runtime_kw["env_for"]
+
+    def env_for_task(state: TaskState) -> ExecEnv:
+        # The first look the host gets at a task loaded here: its recorded
+        # model's limits are made known before its first request is sized.
+        router.adopt_route(state.config.get(MODEL_ROUTE))
+        result: ExecEnv = env_for(state)
+        return result
+
+    runtime_kw["env_for"] = env_for_task
+    if router.several:  # with one provider every route is that one
+        runtime_kw.setdefault("task_provider", router.task_provider)
     app = LocalApp(store, agents,
                    router.provider_for, own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
@@ -669,6 +697,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
 
     app.list_models = router.available
     app.prepare_model = prepare_model
+    app.client.route_model = router.route_record
 
     def pick_main_agent() -> None:
         """The agent front ends start with: the settings' ``agent``, else

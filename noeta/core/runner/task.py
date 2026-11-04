@@ -563,7 +563,7 @@ class TaskRun:
         if not model:
             return None
         try:
-            provider = self.rt.provider_for(model)
+            provider = self.rt.provider_of(self.state, model)
         except Exception:  # noqa: BLE001 — no provider, no exact count
             return None
         count = getattr(provider, "count_tokens", None)
@@ -597,7 +597,7 @@ class TaskRun:
         from noeta.core.retry import complete_with_retries
 
         return await complete_with_retries(
-            self.rt.provider_for(request.model), request, sleep=self.rt.sleep)
+            self.rt.provider_of(self.state, request.model), request, sleep=self.rt.sleep)
 
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates or view.enqueued:

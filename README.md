@@ -56,16 +56,25 @@ models = ["claude-opus-5-5"]         # optional; rows {id, context_window, max_o
 # base_url, headers = {…}, list_models = false (skip reading its /models)
 ```
 
-A task's model is a plain model id; each request goes to the provider whose table names that
-model (or whose models-file row says `"provider"`), else the first provider whose `/models`
-listing has it (the default first), else the default. So `/model` (and the SDK's `set_model`, an
-editor's model pick) switches across providers mid-task, a task resumed on another machine with
-the same config routes the same way, and `/model` alone lists every provider's models. A model
-id two providers serve goes to the first of them.
+A model id resolves to the provider whose table names it (or whose models-file row says
+`"provider"`; one model named for two providers is a config error), else the first provider
+whose `/models` listing has it (the default first), else the default. A model's context window
+comes from noeta's catalog, then a models file (`NOETA_MODELS_FILE`) or table rows, then its
+provider's `/models` listing when that publishes one (read from your endpoint only, kept a day in
+`~/.noeta/cache/models`), else default limits with a warning.
 
-A model's context window comes from noeta's catalog, then a models file (`NOETA_MODELS_FILE`) or table rows, then
-its provider's `/models` listing when that publishes one (read from your endpoint only, kept a
-day in `~/.noeta/cache/models`); else it runs with a warning at default limits. Tasks are kept in `~/.noeta/tasks.db`; `noeta -c` continues
+What is deterministic: when a task is started with a model or switched to one (`/model`, the
+SDK's `set_model`, an editor's pick), that resolution is made once and recorded in the task's
+config (`model_route`: the provider, and limits a listing gave) beside the bare model id; every
+worker sends that model to the recorded provider at those limits, whatever its own listings say,
+and fails the call if that provider is not configured there. A sub-agent on its parent's model
+takes the record too. Any other model a task uses (an agent file's own model, a plugin's side
+call) resolves on the worker that runs it: the same everywhere only when a table or models file
+names it. Reasoning a provider signed is replayed only to that provider, and tool-call ids
+another provider wrote are rewritten to the form Anthropic takes. `/model` alone lists every
+provider's models.
+
+Tasks are kept in `~/.noeta/tasks.db`; `noeta -c` continues
 the newest conversation in this directory, `noeta -r` lists them. A project's own
 `.noeta/` settings, agents, skills and plugins load only after `noeta trust`.
 

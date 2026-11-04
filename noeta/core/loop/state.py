@@ -54,8 +54,13 @@ AlsoFolds = Mapping[str, Sequence[str]]
 #: :data:`CHANGEABLE_CONFIG` keys, from the next model call on; a ``None``
 #: value removes the key.
 CONFIG_SIGNAL = "config"
+#: Config key: where the host sends the task's ``model`` (its provider, and
+#: limits the catalog may not know), recorded with the model so every worker
+#: that runs the task reads the same; the kernel only keeps it.
+MODEL_ROUTE = "model_route"
 CHANGEABLE_CONFIG = ("model", "effort", "max_turns", "output_schema", "interactive",
-                     "permission_prompt_tool", "client_hooks", "ultracode", "max_budget_usd")
+                     "permission_prompt_tool", "client_hooks", "ultracode", "max_budget_usd",
+                     MODEL_ROUTE)
 
 
 @dataclass

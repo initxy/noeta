@@ -195,7 +195,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
             attempt=attempt, delay=delay, error=str(error)[: texts.ERROR_DETAIL_CHARS]))])))
 
     try:
-        provider = run.rt.provider_for(request.model)
+        provider = run.rt.provider_of(run.state, request.model)
         response = await complete_with_retries(provider, request, on_delta, sleep=run.rt.sleep,
                                                on_retry=on_retry)
     except ContextOverflow as exc:
