@@ -39,10 +39,11 @@ refused background work by where tasks happened to run.
   waiting task claimable at once; the next claimer has no such job, so the shell posts
   `JOBS_LOST` behind whatever the inbox holds (an end posted before the death still tells
   its own story) and the model is told the job is lost. A job's guard removes its `.alive`
-  file every quarter lease and kills the job when it is already gone, so the job dies at
-  most half a lease after its worker last re-created the file; the lease, renewed every
-  third of it, lasts at least two thirds of it after a worker froze, so a frozen worker's
-  job dies before another worker can call it lost.
+  file every third of a lease (the longest period that is safe, so a briefly stalled
+  worker keeps its job) and kills the job when it is already gone, so the job dies at
+  most two thirds of a lease after its worker last re-created the file; the lease,
+  renewed every third of it, lasts at least two thirds of it after a worker froze, so a
+  frozen worker's job dies no later than another worker can call it lost.
 - No holds table, epochs, reaper, advisory lock or queue check. A 0.6 store's `holds`
   table is dropped when it is upgraded (schema version 5).
 
