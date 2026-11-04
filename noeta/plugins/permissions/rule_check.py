@@ -197,7 +197,7 @@ class RuleCheck:
         if name in r.READ_TOOLS:
             return await self._read(view, name, args, scope, ctx, allow_rules, allowed)
         if name in r.EDIT_TOOLS:
-            return await self._edit(view, name, args, mode, scope, allowed)
+            return await self._edit(view, name, args, mode, scope, ctx, allow_rules, allowed)
         if name in r.SHELL_TOOLS:
             return await shell_decision(view, args, mode, scope, ctx, allow_rules)
         if name == p.WEBFETCH_TOOL:
@@ -232,10 +232,12 @@ class RuleCheck:
             # too: "always" offers one on the target's directory).
             resolved = await real_scope(view, scope)
             inside = scope.contains(literal) and resolved.contains(target)
-            allowed = r.first_match(allow_rules, name, _with_path(args, target), ctx,
-                                    for_allow=True) is not None
+            allowed = _allowed_through_link(allow_rules, name, args, target, ctx,
+                                            allowed, resolved)
         else:
-            inside = scope.contains(literal)
+            # A path through no link may still name a working directory by
+            # its resolved spelling (one reached through a link itself).
+            inside = scope.contains(literal) or (await real_scope(view, scope)).contains(literal)
         plan = state_of(view).plan
         if inside or allowed or self.in_plans(literal) \
                 or (plan is not None and literal == plan.get("path")) \
@@ -250,7 +252,8 @@ class RuleCheck:
                             rules=f"Read(//{_dir_of(target)}/**)"))
 
     async def _edit(self, view: TaskView, name: str, args: Mapping[str, Any], mode: str,
-                    scope: sc.Scope, allowed: bool) -> Decision:
+                    scope: sc.Scope, ctx: r.RuleContext, allow_rules: Sequence[r.Rule],
+                    allowed: bool) -> Decision:
         written = _path(args)
         target = scope.absolute(written) if written else scope.cwd
         plan = state_of(view).plan
@@ -261,24 +264,56 @@ class RuleCheck:
             # Claude Code's auto-memory carve-out: its markdown files are
             # written without asking, in every mode.
             return Decision("allow")
-        if not scope.contains(target) and not self.in_plans(target):
-            return Decision("deny", w.OUTSIDE_WRITE.format(
-                name=name, dirs=", ".join(scope.dirs), path=target))
         if sc.is_protected(target) or sc.is_protected(real):
             # The tools write where a symlink points: judge that too.
             return Decision("ask", w.ASK_PROTECTED.format(name=name, path=target),
                             why="protected")
         if mode == "plan":
             return Decision("ask", w.ASK_PLAN.format(name=name), why="plan")
-        if allowed or mode in ("acceptEdits", "auto", "bypassPermissions"):
+        if real != target:
+            # Written through a link: judged where it points, as both
+            # paths (an allow rule too, so a rule naming only the link's
+            # side lets nothing out).
+            resolved = await real_scope(view, scope)
+            inside = scope.contains(target) and resolved.contains(real)
+            plans = self.in_plans(target) and _under(
+                real, await real_path(view, posixpath.normpath(self.plans_dir)))
+            allowed = _allowed_through_link(allow_rules, name, args, real, ctx,
+                                            allowed, resolved)
+        else:
+            inside = scope.contains(target) or (await real_scope(view, scope)).contains(target)
+            plans = self.in_plans(target)
+        if allowed:
             return Decision("allow")
         verb = w.ASK_EDIT if name != "Write" or os.path.exists(target) else w.ASK_CREATE
+        if not inside and not plans:
+            # Outside the working directories no mode but bypass lets the
+            # write through (``in_mode``); auto mode's classifier judges it.
+            rule = r.format_rule("Edit", f"//{_dir_of(real)}/**")
+            return Decision("ask", w.ASK_OUTSIDE.format(ask=verb.format(name=name, path=real)),
+                            why="edit", always=(rule,),
+                            always_label=w.CHOICE_ALWAYS_RULE.format(rules=rule))
+        if mode in ("acceptEdits", "auto", "bypassPermissions"):
+            return Decision("allow")
         return Decision("ask", verb.format(name=name, path=target), why="edit",
                         mode_choice="acceptEdits")
 
     def in_plans(self, path: str) -> bool:
         base = posixpath.normpath(self.plans_dir)
         return path.startswith(base.rstrip("/") + "/")
+
+
+def _allowed_through_link(allow_rules: Sequence[r.Rule], name: str, args: Mapping[str, Any],
+                          real: str, ctx: r.RuleContext, named: bool,
+                          resolved: sc.Scope) -> bool:
+    """Whether an allow rule covers a call whose path leads through a link
+    to ``real``: a rule matching ``real``, or one matching the path as
+    named (``named``) when ``real`` still lies in the working directories
+    as resolved (a working directory reached through a link)."""
+    if named and resolved.contains(real):
+        return True
+    return r.first_match(allow_rules, name, _with_path(args, real), ctx,
+                         for_allow=True) is not None
 
 
 def _path(args: Mapping[str, Any]) -> str | None:

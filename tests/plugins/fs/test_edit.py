@@ -336,29 +336,44 @@ async def test_edit_deletes_with_empty_new_string(h: Harness, ws: Path) -> None:
     assert (ws / "a.txt").read_text() == "keep\nkeep2\n"
 
 
+def _fenced() -> EditTool:
+    """An ``Edit`` fenced to the workspace (``block_writes_outside``)."""
+    return EditTool(write_roots=lambda ctx: [])
+
+
 async def test_edit_escape_rejected(h: Harness, ws: Path) -> None:
-    out = await h.call(EditTool(), file_path="/etc/passwd", old_string="x", new_string="y")
+    out = await h.call(_fenced(), file_path="/etc/passwd", old_string="x", new_string="y")
     assert out.is_error
     assert text_of(out) == (
-        f"<tool_use_error>path '/etc/passwd' resolves outside workspace {str(ws)!r}</tool_use_error>"
-    )
+        f"<tool_use_error>/etc/passwd is outside the directories the file tools may write on "
+        f"this host ({ws}). If it must change, ask the user to add its directory to the "
+        "additional directories.</tool_use_error>")
 
 
 async def test_edit_dotdot_escape_rejected(h: Harness, ws: Path) -> None:
     (ws.parent / "outside.txt").write_text("x\n")
-    out = await h.call(EditTool(), file_path="../outside.txt", old_string="x", new_string="y")
+    out = await h.call(_fenced(), file_path="../outside.txt", old_string="x", new_string="y")
     assert out.is_error
-    assert "outside workspace" in text_of(out)
     assert (ws.parent / "outside.txt").read_text() == "x\n"
+
+
+async def test_edit_outside_the_workspace_is_not_fenced_by_default(h: Harness, ws: Path) -> None:
+    # Where a write may land is the permission layer's question.
+    target = ws.parent / "outside.txt"
+    target.write_text("x\n")
+    await _read(h, str(target))
+    out = await h.call(EditTool(), file_path=str(target), old_string="x", new_string="y")
+    assert not out.is_error, text_of(out)
+    assert target.read_text() == "y\n"
 
 
 async def test_edit_symlink_out_of_the_workspace_rejected(h: Harness, ws: Path) -> None:
     other = ws.parent / "other.txt"
     other.write_text("x\n")
     os.symlink(other, ws / "link.txt")
-    out = await h.call(EditTool(), file_path="link.txt", old_string="x", new_string="y")
+    out = await h.call(_fenced(), file_path="link.txt", old_string="x", new_string="y")
     assert out.is_error
-    assert "outside workspace" in text_of(out)
+    assert "is outside the directories" in text_of(out)
 
 
 async def test_edit_through_a_symlink_inside_edits_the_target(h: Harness, ws: Path) -> None:
@@ -454,7 +469,7 @@ async def test_edit_keeps_file_permissions(h: Harness, ws: Path) -> None:
     assert target.stat().st_mode & 0o777 == 0o755
 
 
-# -- out-of-workspace writes (write_roots) ------------------------------------
+# -- the opt-in fence (write_roots) ------------------------------------
 
 
 def _neighbour(ws: Path) -> Path:
@@ -471,10 +486,10 @@ async def test_edit_outside_the_workspace_respects_authorization(
     target.write_text("hello world", encoding="utf-8")
     await _read(h, str(target))
     refused = await h.call(
-        EditTool(), file_path=str(target), old_string="world", new_string="there"
+        _fenced(), file_path=str(target), old_string="world", new_string="there"
     )
     assert refused.is_error
-    assert "outside workspace" in text_of(refused)
+    assert "is outside the directories" in text_of(refused)
     assert target.read_text() == "hello world"
 
     tool = EditTool(write_roots=lambda ctx: [str(other)])

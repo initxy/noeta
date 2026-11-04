@@ -29,6 +29,7 @@ from noeta.plugins.fs._mutate import (
     seen_whole,
     stale_error,
     unread_write_allowed,
+    write_target,
 )
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -157,8 +158,9 @@ def _input_schema() -> dict[str, Any]:
 
 
 class EditTool:
-    """``Edit``. ``write_roots`` authorizes directories outside the
-    workspace per call; ``None`` keeps writes inside it."""
+    """``Edit``. ``write_roots`` fences it to the workspace and the
+    directories it names per call (``None``: no fence, the permission layer
+    decides)."""
 
     name = "Edit"
     description = load_description("noeta.plugins.fs", "edit")
@@ -238,9 +240,8 @@ class EditTool:
         env = ctx.env
         ws = await Workspace.of(env)
         try:
-            resolved = await ws.resolve_write(
-                path, await authorized_roots(ws, self.write_roots, ctx)
-            )
+            resolved = await write_target(
+                ws, path, await authorized_roots(ws, self.write_roots, ctx))
         except PathError as exc:
             return input_error(str(exc))
         st = await env.stat(resolved)

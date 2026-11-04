@@ -24,6 +24,7 @@ from noeta.plugins.fs._mutate import (
     read_precondition_error,
     record_written,
     unread_write_allowed,
+    write_target,
 )
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -60,7 +61,8 @@ def _input_schema() -> dict[str, Any]:
 class WriteTool:
     """``Write``. ``allowed_path_globs`` confines it to workspace-relative
     paths matching one of the globs (empty = unrestricted); ``write_roots``
-    authorizes directories outside the workspace per call."""
+    fences it to the workspace and the directories it names per call
+    (``None``: no fence, the permission layer decides)."""
 
     name = "Write"
     description = load_description("noeta.plugins.fs", "write")
@@ -104,9 +106,8 @@ class WriteTool:
         env = ctx.env
         ws = await Workspace.of(env)
         try:
-            resolved = await ws.resolve_write(
-                path, await authorized_roots(ws, self.write_roots, ctx)
-            )
+            resolved = await write_target(
+                ws, path, await authorized_roots(ws, self.write_roots, ctx))
         except PathError as exc:
             return input_error(str(exc))
         # The allow-list is checked on the canonical form, so ``..`` and

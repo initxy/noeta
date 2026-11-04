@@ -43,9 +43,6 @@ SHELL_OPAQUE_DENIED = ("Permission to use {name} was refused: the command cannot
                        "into its commands, and it names {path}, which the permission rule "
                        "{rule} covers. Split it into plain commands that leave that path alone. "
                        + WORK_AROUND + STOP_AND_EXPLAIN)
-OUTSIDE_WRITE = ("{name} only writes inside the working directories ({dirs}); {path} is "
-                 "outside them. If it must change, ask the user to add its directory to the "
-                 "additional directories.")
 CLASSIFIER_BLOCKED = (
     "The auto-mode classifier refused this action. Reason: {reason}. If other parts of the "
     "task do not depend on it, carry on with those. " + WORK_AROUND + TRY_SAFER_FIRST)
@@ -81,6 +78,7 @@ ASK_EDIT = "{name} wants to change {path}"
 ASK_CREATE = "{name} wants to create {path}"
 ASK_COMMAND = "This command needs your approval"
 ASK_READ_OUTSIDE = "{name} wants to read {path}, outside the working directories"
+ASK_OUTSIDE = "{ask}, outside the working directories"
 ASK_PROTECTED = "{name} would change {path}, which configures tools or the agent itself"
 ASK_PLAN = "{name} would change things while in plan mode"
 ASK_ENTER_PLAN = "Enter plan mode?"
