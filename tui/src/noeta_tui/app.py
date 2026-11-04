@@ -617,9 +617,18 @@ class NoetaApp(TranscriptView):
         self.show_tasks = not self.show_tasks
         self._show_todos()
 
-    async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None:
+    async def decide(self, call_id: str, choice: str, message: str = "", *,
+                     task_id: str = "") -> None:
+        """Answer an approval. ``message``: what the person added to it — with
+        a no, the reason the model reads in the refused call's result; with a
+        yes, a message to the task, taken in once the call's result lands
+        (Claude Code puts it beside that result)."""
         self.waiting_for = ""
-        await answer_choice(self.local.client, task_id or self.task_id, call_id, choice)
+        task = task_id or self.task_id
+        await answer_choice(self.local.client, task, call_id, choice,
+                            message if choice == "deny" else "")
+        if message and choice != "deny":
+            await self.local.client.send(task, message, when="now")
         self.update_status()
         self._box().focus()
 

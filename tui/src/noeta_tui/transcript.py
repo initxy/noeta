@@ -136,7 +136,8 @@ class TranscriptView(App[None]):
     effort: str | None
 
     if TYPE_CHECKING:
-        async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None: ...
+        async def decide(self, call_id: str, choice: str, message: str = "", *,
+                         task_id: str = "") -> None: ...
 
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
         self.waiting_question = call_id
@@ -159,9 +160,9 @@ class TranscriptView(App[None]):
             if p.kind == "approval":
                 self.waiting_for = f"{who} waits for your approval"
 
-                async def decide(call_id: str, choice: str,
+                async def decide(call_id: str, choice: str, message: str = "",
                                  task_id: str = p.task_id) -> None:
-                    await self.decide(call_id, choice, task_id=task_id)
+                    await self.decide(call_id, choice, message, task_id=task_id)
 
                 await transcript.mount(ApprovalCard(
                     p.request_id, card_title(p, self.task_id), card_prompt(p), decide,

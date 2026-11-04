@@ -13,7 +13,7 @@ from noeta.plugins.hooks import Hooks
 from noeta.plugins.markdown_commands import REVIEW_PROMPT, MarkdownCommands
 from noeta.testing import ScriptedProvider, reply
 
-from support import MODEL, make_app, plain, ready, settle, shown, type_line
+from support import MODEL, AskBash, Lines, make_app, plain, ready, settle, shown, type_line
 
 
 async def test_the_footer_counts_down_to_auto_compact(tmp_path: Path) -> None:
@@ -97,3 +97,36 @@ def test_the_history_file_is_bounded(tmp_path: Path) -> None:
     path.write_text(path.read_text() + '{"text": "cut sh')
     assert history.load(path)[-1] == f"prompt {2 * history.HISTORY_MAX}"
     assert history.load(None) == [] and history.history_file("", "/w") is None
+
+
+async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
+    from noeta.core.types import Text, ToolResult
+    from noeta_tui.widgets import ApprovalCard
+
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build", "n": 1})),
+                                 reply("", ("Bash", {"command": "ls", "n": 1})),
+                                 reply("ok")])
+    app = make_app(tmp_path, provider, AskBash(), tools=[Lines()])
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(pilot, lambda: ready(app))
+        await type_line(pilot, "clean")
+        await settle(pilot, lambda: len(app.query(ApprovalCard)) == 1)
+        card = app.query_one(ApprovalCard)
+        assert "Tab to amend" in shown(app)
+        await pilot.press("down", "down", "tab", *"use make clean", "enter")  # No, amended
+        await settle(pilot, lambda: card.done and not app.busy)
+        assert "No: use make clean" in plain(card.query_one(".approval-result"))
+        await type_line(pilot, "list it then")
+        await settle(pilot, lambda: len(app.query(ApprovalCard)) == 2)
+        second = list(app.query(ApprovalCard))[1]
+        await pilot.press("tab", "enter")  # an empty line closes the amend
+        assert not second.done and not second.query("Input")
+        await pilot.press("tab", *"then stop", "enter")  # Yes, amended
+        await settle(pilot, lambda: second.done and provider.steps == [] and not app.busy)
+    asked = provider.requests[1].messages
+    results = [b for m in asked for b in m.content if isinstance(b, ToolResult)]
+    assert "use make clean" in results[0].text
+    last = provider.requests[2].messages
+    i = next(i for i, m in enumerate(last) if any(isinstance(b, ToolResult) for b in m.content))
+    after = [b.text for m in last[i:] for b in m.content if isinstance(b, Text)]
+    assert "then stop" in after  # the yes's words come after the call's result

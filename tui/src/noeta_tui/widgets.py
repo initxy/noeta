@@ -14,7 +14,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Markdown, Static, TextArea
+from textual.widgets import Input, Markdown, Static, TextArea
 
 from noeta.core.types import ToolUse
 from noeta.toolkit.commands import parse_command_message
@@ -239,19 +239,26 @@ class Option:
     detail: str = ""
 
 
-#: ``decide(call_id, choice_id)``.
-Decide = Callable[[str, str], Awaitable[None]]
+#: ``decide(call_id, choice_id, message)``: ``message`` is what the person
+#: added to their yes or no (``""``: nothing).
+Decide = Callable[[str, str, str], Awaitable[None]]
+#: What the amend line asks for, by the option it amends (Claude Code's).
+AMEND_PLACEHOLDERS = {"allow": "and tell noeta what to do next",
+                      "deny": "and tell noeta what to do differently"}
 
 
 class ApprovalCard(Vertical):
     """Asks before a tool runs, as Claude Code's dialog: what would run,
     ``Do you want to proceed?`` and its numbered choices
-    (:func:`noeta.host.pending.choices`), also y / a / n; Esc says no."""
+    (:func:`noeta.host.pending.choices`), also y / a / n; Esc says no. Tab
+    on Yes or No opens a line to add what noeta should do next (or
+    differently) to the answer; Enter sends both, an empty line closes it."""
 
     DEFAULT_CLASSES = "approval"
     BINDINGS = [Binding("y", "choose('allow')", show=False),
                 Binding("a", "choose('always')", show=False),
-                Binding("n", "choose('deny')", show=False)]
+                Binding("n", "choose('deny')", show=False),
+                Binding("tab", "amend", show=False)]
 
     def __init__(self, call_id: str, title: str, prompt: str, decide: Decide,
                  options: list[dict[str, str]], *, preview: Text | None = None) -> None:
@@ -264,6 +271,8 @@ class ApprovalCard(Vertical):
         self.prompt = prompt
         self.decide = decide
         self.done = False
+        #: The option the open amend line adds to (``""``: none open).
+        self.amending = ""
 
     def compose(self) -> ComposeResult:
         yield Static(Text(self.title_text, style="bold"), classes="approval-title")
@@ -277,7 +286,8 @@ class ApprovalCard(Vertical):
         deny = next((o["id"] for o in self.options if o["id"] == "deny"), "")
         yield Choices([Option(o["id"], o["label"] + (" (esc)" if o["id"] == deny else ""))
                        for o in self.options], self.choose, cancel=deny)
-        yield Static("Esc to cancel", classes="hint")
+        amendable = any(o["id"] in AMEND_PLACEHOLDERS for o in self.options)
+        yield Static("Esc to cancel" + (" · Tab to amend" if amendable else ""), classes="hint")
 
     def on_mount(self) -> None:
         # A card can be decided before it finishes mounting (a slow event
@@ -286,20 +296,44 @@ class ApprovalCard(Vertical):
             self.query_one(Choices).focus()
 
     async def action_choose(self, choice: str) -> None:
-        await self.choose(choice)
+        if not self.amending:
+            await self.choose(choice)
+
+    async def action_amend(self) -> None:
+        if self.done or self.amending or not self.query(Choices):
+            return
+        choices = self.query_one(Choices)
+        picked = choices.options[choices.index].id
+        if picked not in AMEND_PLACEHOLDERS:
+            return
+        self.amending = picked
+        line = Input(placeholder=AMEND_PLACEHOLDERS[picked], classes="amend")
+        await self.mount(line, after=choices)
+        line.focus()
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        picked, message = self.amending, event.value.strip()
+        self.amending = ""
+        await event.input.remove()
+        if message:
+            await self.choose(picked, message)
+        elif self.query(Choices):
+            self.query_one(Choices).focus()
 
     async def action_pick(self, n: int) -> None:
         if 1 <= n <= len(self.options):
             await self.choose(self.options[n - 1]["id"])
 
-    async def choose(self, choice: str) -> None:
+    async def choose(self, choice: str, message: str = "") -> None:
         picked = next((o for o in self.options if o["id"] == choice), None)
         if self.done or picked is None:
             return
         self.done = True
-        await self.decide(self.call_id, choice)
-        await self.query(".hint, Choices").remove()
-        await self.mount(Static(Text(f"  ⎿  {picked['label']}", style="dim"),
+        await self.decide(self.call_id, choice, message)
+        await self.query(".hint, Choices, Input").remove()
+        said = f": {message}" if message else ""
+        await self.mount(Static(Text(f"  ⎿  {picked['label']}{said}", style="dim"),
                                 classes="approval-result"))
 
 
