@@ -92,3 +92,13 @@ def test_context_grid() -> None:
     assert grid.count("⛁") - 4 == 15 and grid.count("⛶") - 1 == 85  # 15 cells used
     assert "⛁ System tools: 16k tokens (8.0%)" in grid and "Free space: 170k (85.0%)" in grid
     assert "2 deferred tools load on demand" in grid
+
+
+def test_context_left_warns_only_near_the_point_it_counts_to() -> None:
+    assert render.context_left(10_000, 100_000, 120_000, True) is None
+    shown = render.context_left(90_000, 100_000, 120_000, True)
+    assert shown is not None and shown.plain == "10% until auto-compact"
+    off = render.context_left(108_000, 100_000, 120_000, False)
+    assert off is not None and off.plain.startswith("Context low (10% remaining)")
+    full = render.context_left(130_000, 100_000, 120_000, True)
+    assert full is not None and full.plain == "0% until auto-compact"

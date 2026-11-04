@@ -141,13 +141,32 @@ async def test_mcp_prompts_are_commands(tmp_path: Path) -> None:
     mcp = Mcp([McpServer(alias="fake", command=[sys.executable, FAKE_MCP])], pool=pool)
     agent = Agent(name="a", model="m", extensions=[mcp])
     try:
-        [c] = await list_commands(agent, CTX)
+        [status, c] = await list_commands(agent, CTX)
+        assert (status.name, status.local) == ("mcp", True)
         assert (c.name, c.argument_hint) == ("mcp__fake__review", "<path>")
         assert await expand_command(agent, CTX, "/mcp__fake__review a.py") == "Review a.py"
         fresh = Mcp([McpServer(alias="fake", command=[sys.executable, FAKE_MCP])], pool=pool)
         assert await fresh.run_command(CTX, "mcp__fake__review", "b.py") == "Review b.py"
         dead = Mcp([McpServer(alias="dead", command=["/nonexistent/server"])], pool=pool)
-        assert await dead.commands(CTX) == []
+        assert [c.name for c in await dead.commands(CTX)] == ["mcp"]
+    finally:
+        await pool.close()
+
+
+async def test_slash_mcp_shows_each_servers_state(tmp_path: Path) -> None:
+    from noeta.core.commands import Typed, run_typed
+
+    pool = McpPool()
+    mcp = Mcp([McpServer(alias="fake", command=[sys.executable, FAKE_MCP]),
+               McpServer(alias="dead", command=["/nonexistent/server"])], pool=pool)
+    try:
+        shown = await run_typed([mcp], CTX, "/mcp")
+        assert isinstance(shown, Typed) and shown.local
+        title, dead, fake = shown.text.splitlines()
+        assert title == "MCP servers (2 servers)"
+        assert dead.startswith("✘ dead · failed: ")
+        assert fake.startswith("✔ fake · connected · ") and fake.endswith(" tools")
+        assert await Mcp(pool=pool).run_command(CTX, "mcp", "") == "No MCP servers configured."
     finally:
         await pool.close()
 

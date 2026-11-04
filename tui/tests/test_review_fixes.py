@@ -6,6 +6,7 @@ its approval dialog, and reads one after another as one line."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from noeta.plugins.permissions import Permissions
 from noeta.testing import ScriptedProvider, reply
@@ -190,8 +191,17 @@ async def test_continue_opens_the_newest_task_here_with_the_effort_it_runs_with(
         assert plain(again.query_one("#effort")) == "◐ medium · /effort"  # the model's default
 
 
-async def test_continue_with_nothing_here_starts_a_new_task(tmp_path: Path) -> None:
+async def test_continue_with_nothing_here_says_so_and_exits(tmp_path: Path) -> None:
     app = make_app(tmp_path, ScriptedProvider([]), continue_last=True)
+    said: list[str] = []
+    real_exit = app.exit
+
+    def exit(*args: Any, **kwargs: Any) -> None:
+        said.append(str(kwargs.get("message")))
+        real_exit(*args, **kwargs)
+
+    app.exit = exit  # type: ignore[method-assign]
     async with app.run_test(size=(120, 36)) as pilot:
-        await settle(pilot, lambda: "No conversation found to continue" in shown(app))
-        assert app.task_id == ""
+        await settle(pilot, lambda: app.return_code is not None)
+    assert app.return_code == 1 and app.task_id == ""
+    assert said == ["No conversation found to continue"]
