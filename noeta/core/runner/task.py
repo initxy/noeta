@@ -37,6 +37,7 @@ from noeta.core.events import (
     Cancel,
     ChildEnded,
     Event,
+    ExtensionRecorded,
     InputTaken,
     Recorded,
     TaskCreated,
@@ -142,6 +143,8 @@ class TaskRun:
         #: then lets the run go on in the background).
         self.waiting_kept = asyncio.Event()
         self._kept_due: float | None = None
+        #: A kept run woken to step holds a slot of ``Runtime.concurrency``.
+        self._slot = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------ lifecycle
@@ -202,6 +205,7 @@ class TaskRun:
             for kept in list(self.kept):
                 kept.mark_lost()
             self.kept.clear()
+            self._give_slot()
             await self.snapshots.finish()
 
     async def _unreadable_inbox(self, exc: Exception, tries: int) -> None:
@@ -480,10 +484,15 @@ class TaskRun:
             self._step.cancel()
 
     async def _watch_inbox(self) -> None:
-        """Polling fallback for posts made by other processes (none when the
-        store's change feed hears them, ``shared_changes``)."""
+        """Polling fallback for posts made by other processes: every
+        ``poll_interval``, or every third of the lease where the store's
+        change feed hears them (``shared_changes``) but may drop some while
+        it reconnects."""
+        rt = self.rt
+        interval = max(rt.lease_seconds / 3, rt.poll_interval) \
+            if getattr(self.store, "shared_changes", False) else rt.poll_interval
         while True:
-            await asyncio.sleep(self.rt.poll_interval)
+            await asyncio.sleep(interval)
             with contextlib.suppress(Exception):
                 await self._check_stop()
 
@@ -580,9 +589,11 @@ class TaskRun:
 
     async def keep_waiting(self) -> None:
         """Hand the task back still waiting on its log's last ``Waiting`` (a
-        wake that brought nothing it waits for), without writing it again."""
-        assert self.state.waiting is not None
-        await self.append([], patch=patch_for([self.state.waiting], self.state.inbox_read))
+        wake that brought nothing it waits for), without writing it again. A
+        message taken since clears ``waiting``; an asked approval still stands."""
+        waiting = self.state.waiting or self.state.asked
+        assert waiting is not None
+        await self.append([], patch=patch_for([waiting], self.state.inbox_read))
 
     @property
     def one_shot(self) -> bool:
@@ -630,6 +641,7 @@ class TaskRun:
         if self._kept_wait is None:
             return False
         rt = self.rt
+        self._give_slot()
         self.waiting_kept.set()
         shared = getattr(self.store, "shared_changes", False)
         poll = max(rt.lease_seconds / 3, rt.poll_interval) if shared else rt.poll_interval
@@ -647,8 +659,10 @@ class TaskRun:
                 due = row.ready_at if row.ready_at != self._kept_due else None
                 if due is not None and due <= now:
                     self._kept_due = due
+                    await self._take_slot()
                     return True
-                if row.inbox_seq > self.state.inbox_read:
+                if row.status == "ready":  # woken: a post that does not wake leaves it
+                    await self._take_slot()
                     return True
                 if not self.kept:
                     await self.store.release(self.claim)
@@ -659,6 +673,15 @@ class TaskRun:
                     await asyncio.wait_for(self._nudged.wait(), max(timeout, 0.01))
         finally:
             self.waiting_kept.clear()
+
+    async def _take_slot(self) -> None:
+        await self.rt.take_slot()
+        self._slot = True
+
+    def _give_slot(self) -> None:
+        if self._slot:
+            self._slot = False
+            self.rt.give_slot()
 
     def view(self) -> TaskView:
         model = self.model
@@ -838,15 +861,19 @@ class TaskRun:
 
     async def _woken_by_timer(self, waiting: Waiting) -> bool:
         """Whether the log ends with this very ``waiting`` (nothing happened
-        since), so the store woke the task for its ``until`` by the store's
-        clock, which this worker's may lag. Writing it again would leave
-        the task claimable at once, again and again; once per claim the
-        timers due by then fire instead."""
-        if (waiting.until is None or self._timer_forced or self.state.waiting != waiting
-                or self.state.last_seq < 1):
+        since but plugins' records of it, such as a relay's), so the store
+        woke the task for its ``until`` by the store's clock, which this
+        worker's may lag. Writing it again would leave the task claimable at
+        once, again and again; once per claim the timers due by then fire
+        instead."""
+        at = self.state.waiting_seq
+        if waiting.until is None or self._timer_forced or self.state.waiting != waiting \
+                or at < 1:
             return False
-        last = await self.store.read(self.task_id, after=self.state.last_seq - 1)
-        if not last or last[-1].seq != self.state.last_seq or last[-1].event != waiting:
+        tail = await self.store.read(self.task_id, after=at - 1)
+        if not tail or tail[0].event != waiting or tail[-1].seq != self.state.last_seq \
+                or any(not isinstance(r.event, ExtensionRecorded)
+                       or r.event.extension == CORE for r in tail[1:]):
             return False
         self._timer_forced = True
         return True
@@ -855,8 +882,7 @@ class TaskRun:
         """Run a step so a cancel posted mid-step (or a lost claim) can
         interrupt it."""
         self._step = asyncio.create_task(coro)
-        watcher = None if getattr(self.store, "shared_changes", False) \
-            else asyncio.create_task(self._watch_inbox())
+        watcher = asyncio.create_task(self._watch_inbox())
         try:
             result: bool = await self._step
             return result
@@ -868,8 +894,7 @@ class TaskRun:
                 raise LostClaim() from None
             return True  # a cancel landed; the next boundary takes it
         finally:
-            if watcher is not None:
-                watcher.cancel()
+            watcher.cancel()
             self._step = None
 
     async def take_input(self) -> None:

@@ -31,14 +31,17 @@ refused background work by where tasks happened to run.
   a parent stops a child's job by posting `STOP_JOB` to the child; a task's end kills its
   jobs (a sub-agent's when it hands back).
 - `Runtime.run_claim` returns once its task waits with a kept claim; the run goes on in the
-  background without a slot of `concurrency`. `Runtime.let_go` (on the way out of `serve`)
+  background, taking a slot of `concurrency` only while a wake has it stepping (it waits
+  for one when they are all taken). `Runtime.let_go` (on the way out of `serve`)
   gives those claims up: the work dies, the tasks stay waiting, and hear of it with whatever
   wakes them next.
 - A worker that dies loses its work with it. Its kept lease runs out, which makes the
   waiting task claimable at once; the next claimer has no such job, so the shell posts
   `JOBS_LOST` behind whatever the inbox holds (an end posted before the death still tells
-  its own story) and the model is told the job is lost. A job's guard kills it about one
-  lease after its worker stops re-creating the job's `.alive` file, so a frozen worker's
+  its own story) and the model is told the job is lost. A job's guard removes its `.alive`
+  file every quarter lease and kills the job when it is already gone, so the job dies at
+  most half a lease after its worker last re-created the file; the lease, renewed every
+  third of it, lasts at least two thirds of it after a worker froze, so a frozen worker's
   job dies before another worker can call it lost.
 - No holds table, epochs, reaper, advisory lock or queue check. A 0.6 store's `holds`
   table is dropped when it is upgraded (schema version 5).

@@ -144,7 +144,15 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     #: neither started nor refused; they are gated once it is answered.
     asked: tuple[str, Ask] | None = None
     outright: set[str] = set()
+    #: A call was declined at its prompt: the turn stops, and, as Claude Code
+    #: aborts the rest of the reply, every later call is refused ungated.
+    declined = False
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
+        if declined:
+            await run.append([ToolFinished(result=ToolResult(
+                call_id=c.use.id, content=[Text(text=rejected_text(None))], is_error=True),
+                end_turn="")])
+            continue
         withheld = offer.withheld.get(c.use.name)
         if withheld is not None:
             # Not in the request the model saw: refused before any gate.
@@ -176,6 +184,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
                 result=ToolResult(call_id=c.use.id, content=[Text(text=rejected_text(
                     answer.data))], is_error=True), end_turn="",
                 note=texts.REJECTED_MARKER)])
+            declined = True
             continue
         call = c.use if checked == c.use.input else ToolUse(
             id=c.use.id, name=c.use.name, input=dict(checked))

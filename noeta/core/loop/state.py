@@ -158,6 +158,11 @@ class TaskState:
     #: message, as if sent for the next turn.
     timers: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiting: Waiting | None = None
+    #: The log seq of the last ``Waiting``.
+    waiting_seq: int = 0
+    #: The open batch's approval wait (its ``Waiting(approval)``): kept when
+    #: a message clears ``waiting``, so the asked call is not gated again.
+    asked: Waiting | None = None
     ended: TaskEnded | None = None
     compaction: Compacted | None = None
     #: Prompt override files found when the task first started (name ->
@@ -192,8 +197,8 @@ class TaskState:
     def asking(self) -> bool:
         """The approval the task waits on is unanswered: its call, and every
         call of the reply after it, waits ungated."""
-        w = self.waiting
-        return w is not None and w.on == "approval" and any(
+        w = self.asked
+        return w is not None and any(
             c.use.id in w.ids and not c.started and c.result is None
             and c.use.id not in self.answers for c in self.calls)
 
@@ -270,6 +275,9 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer],
         _compact(state, ev)
     elif isinstance(ev, Waiting):
         state.waiting = ev
+        state.waiting_seq = rec.seq
+        if ev.on == "approval":
+            state.asked = ev
     elif isinstance(ev, TaskEnded):
         state.ended = ev
         state.waiting = None
@@ -317,6 +325,7 @@ def _on_model_replied(state: TaskState, ev: ModelReplied, seq: int) -> None:
     state.call_ids.update(u.id for u in uses)
     # An answer is for a call of the batch it was asked in, never a later one.
     state.answers = {}
+    state.asked = None
     if not state.calls and resp.stop_reason != "max_tokens":
         _close_turn(state, seq)
 

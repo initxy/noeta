@@ -6,7 +6,8 @@ notification exists exactly when the change committed. A dedicated
 ``LISTEN`` connection (reopened when it drops) feeds ``on_change`` in every
 process. This process's own changes are reported synchronously after commit
 and their echoes are dropped by backend pid. Notifications sent while the
-listener was reconnecting are lost; polling covers that gap.
+listener was reconnecting are lost: a runner looks at a running or
+kept-waiting task's inbox every third of its lease to cover that gap.
 
 Live model output rides a second channel, ``<schema>_deltas``, outside any
 task transaction, heard only by processes that subscribe: best effort,

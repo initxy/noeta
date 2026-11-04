@@ -16,7 +16,7 @@ and a parameter with a default is optional. A parameter annotated
 the schema. The function may be sync (it runs in a worker thread) or async
 and returns ``str``, a ``ToolOutput``, or anything JSON can show. A sync
 function must not call the context's methods (``record``, ``post``,
-``hold``): they belong to the event loop; make it async to use them.
+``keep``): they belong to the event loop; make it async to use them.
 
 A scalar argument (``str``, ``int``, ``float``, ``bool``, or one of them
 ``| None``) is checked against its annotation before the call: a number or

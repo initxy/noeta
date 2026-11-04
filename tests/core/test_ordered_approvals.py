@@ -15,8 +15,9 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished, Waiting
 from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.runner import texts
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import ToolUse
+from noeta.core.types import ToolUse, user
 from noeta.testing import ScriptedProvider, reply
 from tests.plugins.permissions.helpers import Fake, agent, events, runtime
 
@@ -114,3 +115,46 @@ async def test_a_wake_before_the_answer_does_not_gate_again(store: SqliteStore) 
     await client.answer(tid, waiting.ids[0], "allow")
     await rt.run_until_idle()
     assert [r["command"] for r in shell.runs] == ["git commit -m x"]
+
+
+async def test_a_message_now_before_the_answer_does_not_gate_again(store: SqliteStore) -> None:
+    """A ``Say(now)`` (a job's end, a Monitor event) clears the standing wait;
+    the asked call still waits ungated and no second approval is written."""
+    shell, gate = Fake("Bash"), AsksForCommits()
+    provider = ScriptedProvider([reply("", bash("git commit -m x")), reply("done")])
+    rt = runtime(store, provider, agent([gate], [shell]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    await client.send(tid, user("job 1 ended", origin="system"), when="now")
+    await rt.run_until_idle()
+    evs = await events(client, tid)
+    assert gate.gated == ["git commit -m x"]
+    [waiting] = [e for e in evs if isinstance(e, Waiting)]
+    row = await client.get(tid)
+    assert (row.status, row.waiting_on) == ("waiting", "approval")
+    await client.answer(tid, waiting.ids[0], "allow")
+    await rt.run_until_idle()
+    assert [r["command"] for r in shell.runs] == ["git commit -m x"]
+
+
+async def test_a_declined_ask_refuses_the_rest_of_the_reply(store: SqliteStore) -> None:
+    """Declining one call stops the turn: the reply's later calls get the
+    refusal without being gated or run (Claude Code aborts the rest)."""
+    shell, gate = Fake("Bash"), AsksForCommits()
+    provider = ScriptedProvider([reply(
+        "", bash("git commit -m x"), bash("ls"), bash("git commit -m y"))])
+    rt = runtime(store, provider, agent([gate], [shell]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    [waiting] = [e for e in await events(client, tid) if isinstance(e, Waiting)]
+    await client.answer(tid, waiting.ids[0], "deny")
+    await rt.run_until_idle()
+    evs = await events(client, tid)
+    assert shell.runs == [] and gate.gated == ["git commit -m x"]
+    assert len([e for e in evs if isinstance(e, Waiting) and e.on == "approval"]) == 1
+    finished = [e for e in evs if isinstance(e, ToolFinished)]
+    assert len(finished) == 3 and all(f.result.is_error for f in finished)
+    assert all(texts.REJECTED_BY_USER in str(f.result.content) for f in finished)
+    assert (await client.get(tid)).waiting_on == "input"
