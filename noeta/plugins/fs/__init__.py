@@ -38,10 +38,11 @@ import msgspec
 
 from noeta.core.events import Compacted, Recorded
 from noeta.core.execenv import stat_many
-from noeta.core.extension import Extension, Reminder, TaskView
+from noeta.core.extension import Deny, Extension, Gate, Reminder, TaskView
 from noeta.core.tool import Tool, ToolOutput
 from noeta.core.types import ModelRequest, ToolUse
 from noeta.plugins.fs._encoding import decode, not_text
+from noeta.plugins.fs._mutate import canonical_roots, write_target
 from noeta.plugins.fs.changes import changed_lines, seen_text
 from noeta.plugins.fs.edit import EditTool
 from noeta.plugins.fs.mentions import attach_mentions, hoist_attachments
@@ -62,6 +63,7 @@ from noeta.plugins.fs.state import (
 )
 from noeta.plugins.fs.write import WriteTool
 from noeta.toolkit.paths import plans_dir
+from noeta.toolkit.tools import PathError, Workspace
 
 __all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
 
@@ -85,6 +87,9 @@ CHANGED_FILE_MAX_BYTES = _READ_MAX_FILE_BYTES
 #: names the file without its lines (Claude Code's 16,384).
 CHANGED_LINES_BUDGET = 16_384
 
+#: The writing tools and the input field naming their file.
+_WRITE_FIELDS = {"Write": "file_path", "Edit": "file_path", "NotebookEdit": "notebook_path"}
+
 _BY_NAME: dict[str, type[Tool]] = {
     "Read": ReadTool, "Write": WriteTool, "Edit": EditTool, "NotebookEdit": NotebookEditTool,
 }
@@ -93,19 +98,23 @@ _BY_NAME: dict[str, type[Tool]] = {
 class FileTools(Extension):
     """``tools``: which file tools to offer, by name or as tool objects
     (default: all four, in the order Read, Write, Edit, NotebookEdit).
-    ``write_roots``: directories outside the working directory the named
-    tools may write (Claude Code's ``additionalDirectories``); plan mode's
-    plan directory and the task's memory directory are always among them.
-    ``mentions``: attach the files the person names with ``@path`` (default
-    on). ``home``: the person's home directory, which ``@~/…`` names (a
+    Where a write may land is the permission layer's question, as in Claude
+    Code; ``block_writes_outside`` (default off) refuses, in every mode and
+    before anyone is asked, a ``Write``, ``Edit`` or ``NotebookEdit`` of a
+    path outside the working directory and ``write_roots`` (Claude Code's
+    ``additionalDirectories``; plan mode's plan directory and the task's
+    memory directory are always among them), for a host that wants the file
+    tools fenced whatever the permissions say (``Bash`` is not fenced: a
+    sandbox does that). ``mentions``: attach the files the person names
+    with ``@path`` (default on). ``home``: the person's home directory, which ``@~/…`` names (a
     front end on the person's machine sets it; unset, as on a server, ``~``
     is not expanded)."""
 
     name = FS
 
     def __init__(self, tools: Sequence[str | Tool] | None = None, *,
-                 write_roots: Sequence[str] = (), mentions: bool = True,
-                 home: str | None = None) -> None:
+                 write_roots: Sequence[str] = (), block_writes_outside: bool = False,
+                 mentions: bool = True, home: str | None = None) -> None:
         if tools is None:
             tools = list(_BY_NAME)
         unknown = [t for t in tools if isinstance(t, str) and t not in _BY_NAME]
@@ -115,11 +124,15 @@ class FileTools(Extension):
         self.mentions = mentions
         self.home = home
 
-        def roots(ctx: Any) -> list[str]:
-            return [*extra, str(plans_dir()), *memory_dir(ctx.state)]
+        self.block_writes_outside = block_writes_outside
 
+        def roots(state: Any) -> list[str]:
+            return [*extra, str(plans_dir()), *memory_dir(state)]
+
+        self._roots = roots
+        fence = (lambda ctx: roots(ctx.state)) if block_writes_outside else None
         self._tools: list[Tool] = [
-            (_BY_NAME[t](write_roots=roots) if t != "Read" else _BY_NAME[t]())  # type: ignore[call-arg]
+            (_BY_NAME[t](write_roots=fence) if t != "Read" else _BY_NAME[t]())  # type: ignore[call-arg]
             if isinstance(t, str) else t for t in tools]
 
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
@@ -139,6 +152,22 @@ class FileTools(Extension):
 
     def tools(self, view: TaskView) -> Sequence[Tool]:
         return self._tools
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        """With ``block_writes_outside``, a write outside the fence is
+        refused here, so nobody is asked about a call the tool would refuse."""
+        field = _WRITE_FIELDS.get(call.name)
+        if not self.block_writes_outside or field is None or view.env is None:
+            return None
+        path = call.input.get(field)
+        if not isinstance(path, str) or not path:
+            return None
+        ws = await Workspace.of(view.env)
+        try:
+            await write_target(ws, path, await canonical_roots(ws, self._roots(view.state.ext)))
+        except PathError as exc:
+            return Deny(reason=str(exc))
+        return None
 
     async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
         output = await note_modified_reads(view, call, output)

@@ -121,9 +121,9 @@ class Workspace:
     """The workspace root (the env's ``cwd``, canonicalised) and the path
     rules the tools share.
 
-    Reads are not fenced: a relative path is anchored on the root, an
-    absolute one is read where it points. Writes must land under the root or
-    an authorized extra root."""
+    A relative path is anchored on the root, an absolute one is taken where
+    it points; :meth:`resolve_write` also holds a write to the root and the
+    extra roots given (the file tools' opt-in fence)."""
 
     def __init__(self, env: ExecEnv, root: str, display: str) -> None:
         self.env = env

@@ -85,6 +85,22 @@ async def test_stage_one_allows_and_read_only_work_skips_it(store: SqliteStore,
     assert [d["decision"] for d in recorded] == ["allow"]
 
 
+async def test_a_write_outside_the_working_directories_goes_to_the_classifier(
+        store: SqliteStore, tmp_path: Path) -> None:
+    write = Fake("Write")
+    outside = str(tmp_path.parent / "elsewhere" / "x.txt")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "in.txt", "content": "a"}),
+              ("Write", {"file_path": outside, "content": "b"})),
+        reply("<block>no"),          # stage 1 for the write outside
+        reply("done")])
+    await start(store, provider, [write], tmp_path)
+    assert [r["file_path"] for r in write.runs] == ["in.txt", outside]
+    [request] = classifier_calls(provider)
+    texts = [b.text for b in request.messages[-1].content if isinstance(b, Text)]
+    assert texts[-3] == f'{{"Write":"{outside}: b"}}\n'
+
+
 async def test_a_block_at_both_stages_refuses_the_call(store: SqliteStore,
                                                        tmp_path: Path) -> None:
     bash = Fake("Bash")

@@ -1,4 +1,4 @@
-"""What ``Edit`` and ``Write`` share: the write fence, the read-first check,
+"""What ``Edit`` and ``Write`` share: the opt-in write fence, the read-first check,
 the unified diff and the record of what the model has now seen."""
 
 from __future__ import annotations
@@ -13,11 +13,13 @@ from collections.abc import Callable, Sequence
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Display
 from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
-from noeta.toolkit.tools import Workspace, input_error
+from noeta.toolkit.tools import PathError, Workspace, input_error
 
 __all__ = [
+    "OUTSIDE_FENCE",
     "WriteRoots",
     "authorized_roots",
+    "canonical_roots",
     "changed_since_read",
     "compute_diff",
     "diff_display",
@@ -29,31 +31,57 @@ __all__ = [
     "seen_whole",
     "stale_error",
     "unread_write_allowed",
+    "write_target",
 ]
 
 #: ``ctx -> directories this call may write outside the workspace``. Asked
 #: per call, so an authorization granted while the task waits takes effect on
-#: the resumed call.
+#: the resumed call. A tool given one fences its writes (the host's
+#: ``block_writes_outside``); without one, where a write may land is the
+#: permission layer's question.
 WriteRoots = Callable[[ToolContext], Sequence[str]]
+
+#: A write the fence refuses: ``{path}`` as the model named it, ``{dirs}``
+#: where writes may land.
+OUTSIDE_FENCE = (
+    "{path} is outside the directories the file tools may write on this host ({dirs}). "
+    "If it must change, ask the user to add its directory to the additional directories.")
+
+
+async def canonical_roots(ws: Workspace, entries: Sequence[str] | None) -> tuple[str, ...]:
+    """``entries`` canonicalised, skipping any that is not an absolute path."""
+    roots: list[str] = []
+    for entry in entries or ():
+        if isinstance(entry, str) and entry and posixpath.isabs(entry):
+            roots.append(await ws.env.realpath(entry))
+    return tuple(roots)
 
 
 async def authorized_roots(
     ws: Workspace, resolver: WriteRoots | None, ctx: ToolContext
-) -> tuple[str, ...]:
-    """The extra write roots for this call, canonicalised. Fails closed: no
-    resolver, a resolver that raises, or a non-absolute entry grants
-    nothing."""
+) -> tuple[str, ...] | None:
+    """The extra write roots for this call, canonicalised; ``None`` when the
+    tool has no fence. Fails closed: a resolver that raises, or a
+    non-absolute entry, grants nothing."""
     if resolver is None:
-        return ()
+        return None
     try:
         raw = resolver(ctx)
     except Exception:  # noqa: BLE001 - an authorization fault denies, never grants
         return ()
-    roots: list[str] = []
-    for entry in raw or ():
-        if isinstance(entry, str) and entry and posixpath.isabs(entry):
-            roots.append(await ws.env.realpath(entry))
-    return tuple(roots)
+    return await canonical_roots(ws, raw)
+
+
+async def write_target(ws: Workspace, path: str, roots: tuple[str, ...] | None) -> str:
+    """``path`` canonicalised. With ``roots`` (a fence) it must land in the
+    workspace or one of them, else :class:`PathError` (:data:`OUTSIDE_FENCE`)."""
+    if roots is None:
+        return await ws.canonical(path)
+    try:
+        return await ws.resolve_write(path, roots)
+    except PathError:
+        raise PathError(OUTSIDE_FENCE.format(
+            path=path, dirs=", ".join(dict.fromkeys((ws.display, *roots))))) from None
 
 
 #: Claude models that keep the read-first check whatever the permissions

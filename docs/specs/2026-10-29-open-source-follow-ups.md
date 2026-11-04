@@ -24,6 +24,8 @@ its own spec before work starts.
 
 ## Decisions
 
+- D1 (2026-11-03, owner) A `Write`, `Edit` or `NotebookEdit` outside the working and additional directories is a permission question, as in Claude Code 2.1.312, not a refusal: `default`, `acceptEdits` and plan mode ask (offering `Edit(//<dir>/**)` as the "always" rule), `bypassPermissions` lets it through, `auto` sends it to the classifier, `dontAsk` refuses; deny rules, ask rules and protected paths apply as before, and an allow rule lets it through. The fs plugin's own fence is opt-in, `[plugins.fs] block_writes_outside = true` (off by default): such a write is refused in every mode before anyone is asked, the additional, plan and memory directories still open (Claude Code 2.1.314 added the same switch as `permissions.blockWritesOutsideWorkingDirectories`; it stays in the fs plugin so a host without the permissions plugin can fence too). A checkpoint restore puts back a snapshotted file outside the workspace.
+
 ## Plan
 
 ### Owner sign-offs (before any push or release)
@@ -60,7 +62,7 @@ its own spec before work starts.
 - [ ] A sub-agent that takes its input, gets `hold_lost` and ends, while the root took its own copy when the sub-agent was live, is told by neither (one inbox read to the end append). Follow-up spec.
 - [ ] Snapshots hold the whole conversation (a 20k-event log's is 12 MiB), so Postgres claims are bound by transfer. Follow-up spec.
 - [ ] Deltas published before a front end's `LISTEN` is up are not replayed (the recorded reply still arrives). Follow-up spec.
-- [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46; file tools keep the opened-file fence). Follow-up spec.
+- [ ] A link swapped in between the sandbox plan's resolution and bwrap's mounts is not caught (D46 of the release spec). Follow-up spec.
 - [ ] `EnterWorktree`'s worktree is read-only in the sandbox (`.noeta`; `parity/deviations.md`). Follow-up spec: a task's working directory would have to change mid-task.
 - [ ] Dead workers' job log directories (`w<pid>`) in an exec env that is not this machine are not swept (`plugins/shell/job_logs.py`). Follow-up spec.
 - [x] Claude Code plugin skills and agents are named `<plugin>:<name>` (0ab0f24f).
@@ -109,3 +111,4 @@ Each item above is done, moved to its own spec, or dropped with the owner's agre
 - 2026-11-03 Gates on local main `a9daa2cf`: `make check` 3515 passed (90% coverage), `make parity` 0 mismatches (11 accepted deviations), `make cluster` 14 passed, `make e2e` 7 passed. `make eval --trials 9` (35 scenarios, DeepSeek V4.1): 0.905 against the 0.953 baseline, "no regression"; every drop is a trial timeout (18), and every trial that finished scored as the baseline. A rerun of the ten affected scenarios matched; a paired run of the plan-mode scenarios at `49712232` (before the plan-mode split) and `a9daa2cf`, side by side, timed out alike (12 each; 0.596 vs 0.607): gateway load, not the split.
 - 2026-11-03 R5 (no shell-first note in `bypassPermissions`) measured again now that deny rules hold against the shell: with the note 0.831, without it 0.930 over the five tool-choice and deny-rule scenarios (9 trials each, side by side; finished trials only: `read_over_shell_cat` 0.67 / 0.94, `edit_not_write` 0.86 / 0.97, `deny_rule_respected` 0.88 / 1.00). The deny-rule gap is down to one trial; the tool-choice scenarios score the dedicated tools, so the numbers confirm rather than prove. `parity/deviations.md` rests the row on the main prompt's own rule; the owner question stays open.
 - 2026-11-03 Eval weak spots found by an independent overfitting check (no fixture or scenario text in `noeta/`, no model-specific code): `todo_list_multi_step` and `todo_reminder_long_run` never move (DeepSeek does not load the task tools); a scenario may drop 0.34 before the gate flags it; every trial runs in bypass mode; the injection scorer's half credit cites a main-prompt rule 13 that no longer exists. Follow-ups, not fixed.
+- 2026-11-03 D1 on branch `fs-write-fence`: the fs plugin no longer refuses writes outside the working directories unless `block_writes_outside` is set (then in `before_tool`, before any ask); the permissions plugin asks instead of refusing (`rule_check.py` `_edit`); the `parity/deviations.md` Permissions row is gone; checkpoint restores reach outside paths. The refusal text the model sees changed (only with the fence on), so `make eval` is the owner's to run.

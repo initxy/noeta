@@ -261,18 +261,24 @@ class RuleCheck:
             # Claude Code's auto-memory carve-out: its markdown files are
             # written without asking, in every mode.
             return Decision("allow")
-        if not scope.contains(target) and not self.in_plans(target):
-            return Decision("deny", w.OUTSIDE_WRITE.format(
-                name=name, dirs=", ".join(scope.dirs), path=target))
         if sc.is_protected(target) or sc.is_protected(real):
             # The tools write where a symlink points: judge that too.
             return Decision("ask", w.ASK_PROTECTED.format(name=name, path=target),
                             why="protected")
         if mode == "plan":
             return Decision("ask", w.ASK_PLAN.format(name=name), why="plan")
-        if allowed or mode in ("acceptEdits", "auto", "bypassPermissions"):
+        if allowed:
             return Decision("allow")
         verb = w.ASK_EDIT if name != "Write" or os.path.exists(target) else w.ASK_CREATE
+        if not scope.contains(target) and not self.in_plans(target):
+            # Outside the working directories no mode but bypass lets the
+            # write through (``in_mode``); auto mode's classifier judges it.
+            rule = r.format_rule("Edit", f"//{_dir_of(target)}/**")
+            return Decision("ask", w.ASK_OUTSIDE.format(ask=verb.format(name=name, path=target)),
+                            why="edit", always=(rule,),
+                            always_label=w.CHOICE_ALWAYS_RULE.format(rules=rule))
+        if mode in ("acceptEdits", "auto", "bypassPermissions"):
+            return Decision("allow")
         return Decision("ask", verb.format(name=name, path=target), why="edit",
                         mode_choice="acceptEdits")
 

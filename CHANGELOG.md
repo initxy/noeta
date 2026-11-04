@@ -21,6 +21,13 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **A write outside the working directories is a permission question, as in Claude Code**: a
+  `Write`, `Edit` or `NotebookEdit` outside the working and additional directories was refused
+  in every mode; now `default`, `acceptEdits` and plan mode ask (with an "always" rule for its
+  directory), `bypassPermissions` lets it through, `auto` asks the classifier and `dontAsk`
+  refuses. Deny rules, ask rules, allow rules and protected paths apply as before. A host that
+  wants the old fence sets `[plugins.fs] block_writes_outside = true`: such a write is then
+  refused in every mode before anyone is asked. A rewind restores such a file too.
 - **Plugin splits** (spec `2026-11-03-plugin-splits`): parts of the permissions plugin and the
   kernel became built-in plugins of their own, each switchable with `[plugins.<name>] enabled`.
   - **Plan mode is the plugin `plan_mode`** (on by default in every built-in agent): `/plan`,

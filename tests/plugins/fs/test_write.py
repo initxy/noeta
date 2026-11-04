@@ -183,16 +183,32 @@ async def test_write_over_old_64k_limit_accepted(h: Harness, ws: Path) -> None:
     assert (ws / "big.txt").read_text() == body
 
 
+def _fenced() -> WriteTool:
+    """A ``Write`` fenced to the workspace (``block_writes_outside``)."""
+    return WriteTool(write_roots=lambda ctx: [])
+
+
+async def test_write_outside_the_workspace_is_not_fenced_by_default(h: Harness, ws: Path) -> None:
+    # Where a write may land is the permission layer's question.
+    target = ws.parent / "elsewhere" / "x.txt"
+    out = await h.call(WriteTool(), file_path=str(target), content="x")
+    assert not out.is_error, text_of(out)
+    assert target.read_text() == "x"
+
+
 async def test_write_escape_rejected(h: Harness, ws: Path) -> None:
-    out = await h.call(WriteTool(), file_path="/tmp/x.txt", content="x")
+    out = await h.call(_fenced(), file_path="/tmp/x.txt", content="x")
     assert out.is_error
-    assert text_of(out) == f"<tool_use_error>path '/tmp/x.txt' resolves outside workspace {str(ws)!r}</tool_use_error>"
+    assert text_of(out) == (
+        f"<tool_use_error>/tmp/x.txt is outside the directories the file tools may write on "
+        f"this host ({ws}). If it must change, ask the user to add its directory to the "
+        "additional directories.</tool_use_error>")
 
 
 async def test_write_dotdot_escape_rejected(h: Harness, ws: Path) -> None:
-    out = await h.call(WriteTool(), file_path="../x.txt", content="x")
+    out = await h.call(_fenced(), file_path="../x.txt", content="x")
     assert out.is_error
-    assert "outside workspace" in text_of(out)
+    assert "is outside the directories" in text_of(out)
     assert not (ws.parent / "x.txt").exists()
 
 
@@ -200,16 +216,16 @@ async def test_write_through_symlink_out_of_workspace_rejected(h: Harness, ws: P
     outside = ws.parent / "outside"
     outside.mkdir()
     os.symlink(outside, ws / "link")
-    out = await h.call(WriteTool(), file_path="link/x.txt", content="x")
+    out = await h.call(_fenced(), file_path="link/x.txt", content="x")
     assert out.is_error
-    assert "outside workspace" in text_of(out)
+    assert "is outside the directories" in text_of(out)
     assert not (outside / "x.txt").exists()
 
 
 async def test_write_string_prefix_sibling_is_outside(h: Harness, ws: Path) -> None:
     sibling = Path(str(ws) + "-old")
     sibling.mkdir()
-    out = await h.call(WriteTool(), file_path=str(sibling / "a.txt"), content="x")
+    out = await h.call(_fenced(), file_path=str(sibling / "a.txt"), content="x")
     assert out.is_error
     assert not (sibling / "a.txt").exists()
 
@@ -321,7 +337,7 @@ async def test_write_globs_star_does_not_cross_slash(
     assert out.is_error is (not allowed), text_of(out)
 
 
-# -- out-of-workspace writes (write_roots) ------------------------------------
+# -- the opt-in fence (write_roots) ------------------------------------
 
 
 def _neighbour(ws: Path) -> Path:
@@ -332,9 +348,9 @@ def _neighbour(ws: Path) -> Path:
 
 async def test_write_outside_refused_without_authorization(h: Harness, ws: Path) -> None:
     other = _neighbour(ws)
-    out = await h.call(WriteTool(), file_path=str(other / "a.txt"), content="x")
+    out = await h.call(_fenced(), file_path=str(other / "a.txt"), content="x")
     assert out.is_error
-    assert "outside workspace" in text_of(out)
+    assert "is outside the directories" in text_of(out)
     assert not (other / "a.txt").exists()
 
 
@@ -398,7 +414,7 @@ async def test_symlink_into_an_authorized_root_is_admitted(h: Harness, ws: Path)
     (other / "a.txt").write_text("x")
     os.symlink(other / "a.txt", ws / "link.txt")
     await _read(h, "link.txt")
-    refused = await h.call(WriteTool(), file_path="link.txt", content="y")
+    refused = await h.call(_fenced(), file_path="link.txt", content="y")
     assert refused.is_error
     tool = WriteTool(write_roots=lambda ctx: [str(other)])
     out = await h.call(tool, file_path="link.txt", content="y")

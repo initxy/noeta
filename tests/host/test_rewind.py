@@ -142,6 +142,29 @@ async def test_a_restore_puts_back_only_what_this_task_snapshotted(
     assert a.read_text() == "one\n"
 
 
+async def test_a_restore_puts_back_a_file_written_outside_the_workspace(
+        store: SqliteStore, tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("one\n")
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(outside)})),
+        reply("", ("Edit", {"file_path": str(outside), "old_string": "one",
+                            "new_string": "two"})),
+        reply("done"),
+    ])
+    rt = _runtime(store, provider, work)
+    client = Client(store)
+    tid = await client.create("a", "change it", config={"model": "m"})
+    await rt.run_until_idle()
+    assert outside.read_text() == "two\n"
+    data = base64.b64encode(b"one\n").decode()
+    await client.signal(tid, RESTORE_SIGNAL, {"files": [{"path": str(outside), "data": data}]})
+    await rt.run_until_idle()
+    assert outside.read_text() == "one\n"
+
+
 async def test_a_rewind_restores_what_a_sub_agent_changed(
         store: SqliteStore, tmp_path: Path) -> None:
     work = tmp_path / "w"

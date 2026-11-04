@@ -21,6 +21,7 @@ from noeta.plugins.fs._mutate import (
     authorized_roots,
     read_precondition_error,
     record_written,
+    write_target,
 )
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
@@ -171,8 +172,8 @@ class NotebookEditTool:
         env = ctx.env
         ws = await Workspace.of(env)
         try:
-            resolved = await ws.resolve_write(
-                path, await authorized_roots(ws, self.write_roots, ctx))
+            resolved = await write_target(
+                ws, path, await authorized_roots(ws, self.write_roots, ctx))
         except PathError as exc:
             return input_error(str(exc))
         try:

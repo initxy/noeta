@@ -11,12 +11,14 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.host.pending import pending, pending_tree
+from noeta.plugins.fs import FileTools
 from noeta.plugins.permissions import (
     MODE_SIGNAL,
     MatchArg,
@@ -161,8 +163,8 @@ async def test_always_answers_reach_the_project_only_when_the_tasks_cwd_is_trust
     assert (project / ".noeta" / "settings.local.json").exists() is trusted
 
 
-async def test_reads_outside_ask_and_outside_writes_are_refused(store: SqliteStore,
-                                                                tmp_path: Path) -> None:
+async def test_reads_and_writes_outside_the_working_directories_ask(store: SqliteStore,
+                                                                     tmp_path: Path) -> None:
     read, write = Fake("Read"), Fake("Write")
     other = tmp_path.parent / "elsewhere"
     provider = ScriptedProvider([
@@ -173,10 +175,95 @@ async def test_reads_outside_ask_and_outside_writes_are_refused(store: SqliteSto
         mode="acceptEdits", additional_directories=["../lib"]), [read, write], cwd=tmp_path)
     evs = await events(client, tid)
     assert [r["file_path"] for r in read.runs] == [str(tmp_path.parent / "lib" / "b")]
+    assert not write.runs
+    reading, writing = asked(evs).values()
+    assert reading["always"] == [f"Read(/{other}/**)"]
+    # acceptEdits covers the working directories only, as in Claude Code.
+    assert "outside the working directories" in writing["prompt"]
+    assert writing["always"] == ["Edit(//etc/**)"]
+    assert [c["id"] for c in writing["choices"]] == ["allow", "always", "deny"]
+
+
+@pytest.mark.parametrize("mode", ["default", "acceptEdits", "bypassPermissions", "dontAsk"])
+async def test_a_write_outside_the_working_directories_by_mode(
+        store: SqliteStore, tmp_path: Path, mode: str) -> None:
+    """Claude Code's rule: a permission question, which bypass mode lets
+    through and don't-ask mode refuses."""
+    write = Fake("Write")
+    target = str(tmp_path.parent / "elsewhere" / "x.txt")
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": target})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode=mode), [write],
+                                 cwd=tmp_path)
+    evs = await events(client, tid)
+    if mode == "bypassPermissions":
+        assert write.runs == [{"file_path": target}] and write.allowed == [(False, True)]
+    elif mode == "dontAsk":
+        assert not write.runs and "don't-ask mode" in results(evs)[0][0]
+    else:
+        assert not write.runs
+        [detail] = asked(evs).values()
+        assert detail["prompt"] == f"Write wants to create {target}, outside the working " \
+            "directories"
+
+
+@pytest.mark.parametrize("rule", ["Edit(//etc/**)", "Write"])
+async def test_an_allow_rule_lets_a_write_outside_through(
+        store: SqliteStore, tmp_path: Path, rule: str) -> None:
+    write = Fake("Write")
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": "/etc/x"})), reply("ok")])
+    await start(store, provider, Permissions(mode="default", allow=[rule]), [write],
+                cwd=tmp_path)
+    assert write.runs == [{"file_path": "/etc/x"}]
+
+
+async def test_a_deny_rule_refuses_a_write_outside_even_in_bypass_mode(
+        store: SqliteStore, tmp_path: Path) -> None:
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "/etc/x"}), ("Write", {"file_path": "/opt/y"})),
+        reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(
+        mode="bypassPermissions", deny=["Edit(//etc/**)"]), [write], cwd=tmp_path)
+    assert write.runs == [{"file_path": "/opt/y"}]
+    [(text, err)] = [x for x in results(await events(client, tid)) if x[1]]
+    assert err and "Edit(//etc/**)" in text
+
+
+async def test_a_protected_path_outside_still_asks_in_bypass_mode(
+        store: SqliteStore, tmp_path: Path) -> None:
+    write = Fake("Write")
+    target = str(tmp_path.parent / "home" / ".bashrc")
+    provider = ScriptedProvider([reply("", ("Write", {"file_path": target})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode="bypassPermissions"),
+                                 [write], cwd=tmp_path)
+    [detail] = asked(await events(client, tid)).values()
+    assert "configures tools or the agent itself" in detail["prompt"] and not write.runs
+
+
+async def test_the_opt_in_fence_refuses_before_anyone_is_asked(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """``[plugins.fs] block_writes_outside``: refused in every mode, bypass
+    included, with the additional directories still open."""
+    lib = tmp_path.parent / "lib"
+    lib.mkdir()
+    (tmp_path / "w").mkdir()
+    outside, inside = tmp_path / "elsewhere.txt", lib / "ok.txt"
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": str(outside), "content": "x"}),
+              ("Write", {"file_path": str(inside), "content": "y"})),
+        reply("ok")])
+    ag = agent([Permissions(mode="bypassPermissions", additional_directories=[str(lib)]),
+                FileTools(["Write"], write_roots=[str(lib)], block_writes_outside=True)])
+    rt = runtime(store, provider, ag)
+    rt.env_for = lambda _s: LocalExecEnv(cwd=str(tmp_path / "w"))
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path / "w")})
+    await rt.run_until_idle()
+    evs = await events(client, tid)
+    assert not any(isinstance(e, Waiting) and e.on == "approval" for e in evs)
     [(text, err)] = [x for x in results(evs) if x[1]]
-    assert err and "only writes inside the working directories" in text
-    [detail] = asked(evs).values()
-    assert detail["always"] == [f"Read(/{other}/**)"]
+    assert err and f"{outside} is outside the directories the file tools may write" in text
+    assert not outside.exists() and inside.read_text() == "y"
 
 
 @pytest.mark.parametrize("mode", ["acceptEdits", "bypassPermissions"])

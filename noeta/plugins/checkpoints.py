@@ -19,8 +19,9 @@ None}]}``) writes files back through the task's environment, wherever the
 task runs; ``None`` removes the file. It only puts back what was
 snapshotted in this task's log, the conversations it continues (whole: a
 rewound conversation's fork restores what came after its fork point) and
-the sub-agents under any of them: a path inside the workspace with a
-snapshot of it, and content hashing to one of that path's snapshots
+the sub-agents under any of them: a path with a snapshot of it (outside the
+workspace too, wherever the file tools were let write), and content hashing
+to one of that path's snapshots
 (``None`` only when a snapshot found it absent); anything else is reported
 as not restored. Changes made through ``Bash`` are not tracked, as in
 Claude Code.
@@ -180,7 +181,7 @@ class Checkpoints(Extension):
                 continue
             try:
                 ws = ws or await Workspace.of(env)
-                resolved = await ws.resolve_write(path)
+                resolved = await ws.canonical(path)
                 known = snaps.get(resolved)
                 if known is None:
                     raise PermissionError("no snapshot of the file was taken")
