@@ -587,6 +587,9 @@ def _serve_pages_offline() -> None:
 
     async def fetch(self: HttpFetchTransport, url: str) -> FetchedPage:
         if url.rstrip("/") != "https://example.com":
+            # Loud: the comparison would show only a missing digest request.
+            print(f"parity replay: no page for {url}; add it to _serve_pages_offline",
+                  file=sys.stderr)
             raise OSError(f"parity replay serves only https://example.com, not {url}")
         return FetchedPage(EXAMPLE_PAGE, "text/html")
 
