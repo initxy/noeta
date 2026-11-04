@@ -8,8 +8,9 @@ from typing import Any
 from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import TaskView
 from noeta.toolkit import permission_modes as pm
+from noeta.toolkit.plugin_records import PERMISSIONS
 
-NAME = "permissions"
+NAME = PERMISSIONS
 #: In a plan record: whether this plan runs with the auto-mode classifier,
 #: settled when plan mode is entered (absent, in a log written before
 #: noeta recorded it: when planning began in auto mode).

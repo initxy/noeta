@@ -51,6 +51,7 @@ from noeta.plugins.hooks.dispatch import (
 from noeta.plugins.hooks.gates import HANDBACK_TOOL, ToolGates
 from noeta.plugins.hooks.runners import Runner, run_command
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
+from noeta.toolkit.plugin_records import INSTRUCTIONS, PERMISSIONS, SHELL, shown_instruction_files
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
 __all__ = ["HANDBACK_TOOL", "MAX_STOP_CONTINUATIONS", "RETRY_NOTE", "Hooks"]
@@ -63,11 +64,6 @@ MAX_STOP_CONTINUATIONS = 8
 #: What the model is told when a PermissionDenied hook allows a retry.
 RETRY_NOTE = ("A PermissionDenied hook says the denied {tool} call may be retried, "
               "if it is still needed.")
-#: The plugin whose ``cwd`` record says the shell changed directory.
-SHELL_PLUGIN = "shell"
-#: The plugin whose records (``start``, ``nested``, ``reread``) and state
-#: name the instruction files it showed.
-INSTRUCTIONS_PLUGIN = "instructions"
 #: Its file kinds as Claude Code's ``memory_type``.
 MEMORY_TYPES = {"user": "User", "project": "Project", "local": "Local", "managed": "Managed"}
 
@@ -546,11 +542,11 @@ class Hooks(Extension):
                     if r.text:
                         view.notify(r.text)
         elif isinstance(event, ExtensionRecorded):
-            if event.extension == "permissions" and event.kind == "classified":
+            if event.extension == PERMISSIONS and event.kind == "classified":
                 await self._denied(view, event.data)
-            elif event.extension == SHELL_PLUGIN and event.kind == "cwd":
+            elif event.extension == SHELL and event.kind == "cwd":
                 await self._cwd_changed(view, event.data)
-            elif event.extension == INSTRUCTIONS_PLUGIN:
+            elif event.extension == INSTRUCTIONS:
                 await self._instructions_record(view, event.kind, event.data)
             elif event.extension == "core" and event.kind in ("turn_stopped", "turn_failed"):
                 self._d.stop_told(view)
@@ -604,11 +600,7 @@ class Hooks(Extension):
     @staticmethod
     def _shown_files(view: TaskView) -> list[dict[str, Any]]:
         """The instruction files the instructions plugin showed so far."""
-        state = view.state.ext.get(INSTRUCTIONS_PLUGIN)
-        if not isinstance(state, dict):
-            return []
-        return [e for e in [*state.get("files", []), *state.get("nested", [])]
-                if isinstance(e, dict)]
+        return [dict(e) for e in shown_instruction_files(view.state.ext)]
 
     async def _instructions_record(self, view: TaskView, kind: str, data: Any) -> None:
         """InstructionsLoaded for the files an instructions record shows:

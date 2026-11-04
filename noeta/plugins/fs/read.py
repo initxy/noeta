@@ -24,7 +24,7 @@ from typing import Any
 
 from noeta.core.execenv import ExecEnv
 from noeta.core.images import ImageTooLarge, fit_image
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Image
 from noeta.plugins.fs._encoding import (
     NUL_PROBE_BYTES,
@@ -44,6 +44,7 @@ from noeta.plugins.fs._read_formats import (
     too_many_tokens,
 )
 from noeta.plugins.fs.state import FS, KIND_NOTICE, KIND_READ, current_fs_state
+from noeta.toolkit.plugin_records import shown_instruction_files
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     Workspace,
@@ -67,8 +68,6 @@ SHOWN_UNCHANGED = (
     "This file's text is already in your context, in the instruction files shown above, and "
     "the file has not changed on disk since. Use that text rather than reading the file "
     "again.")
-#: The plugin whose state lists the instruction files shown, read by name.
-INSTRUCTIONS = "instructions"
 #: ``allow_large`` raises the token ceiling this many times (to 200K tokens).
 _LARGE_FACTOR = 8
 _JS_MAX_SAFE = 9007199254740991
@@ -379,10 +378,9 @@ class ReadTool:
     name = "Read"
     description = load_description("noeta.plugins.fs", "read")
     read_only = True
-    retry_safe = True
-    clearable = True
     #: Bounded by its own size and token ceilings, as Claude Code's Read.
-    max_result_chars = None
+    flags = ToolFlags(retry_safe=True, max_result_chars=None)
+    clearable = True
     input_schema: dict[str, Any]
 
     def __init__(self) -> None:
@@ -666,11 +664,8 @@ def _record_read(ctx: ToolContext, path: str, digest: str, mtime: float,
 def _shown_unchanged(states: Mapping[str, Any], resolved: str, mtime: float) -> bool:
     """Whether the instructions plugin showed the file at ``resolved`` whole
     (its state, read by name) and it still has the ``mtime`` it had then."""
-    state = states.get(INSTRUCTIONS)
-    if not isinstance(state, Mapping):
-        return False
-    for entry in [*(state.get("files") or ()), *(state.get("nested") or ())]:
-        if isinstance(entry, Mapping) and entry.get("real") == resolved \
+    for entry in shown_instruction_files(states):
+        if entry.get("real") == resolved \
                 and entry.get("mtime") == mtime and entry.get("whole", True):
             return True
     return False

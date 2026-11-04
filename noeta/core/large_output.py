@@ -22,6 +22,7 @@ from noeta.core.tool import (
     Tool,
     ToolContext,
     ToolOutput,
+    tool_flags,
 )
 from noeta.core.types import Text
 
@@ -238,7 +239,7 @@ async def bound_result(output: ToolOutput, tool: Tool, ctx: ToolContext,
             or not all(isinstance(b, Text) for b in output.content):
         return output
     text = "".join(b.text for b in output.content if isinstance(b, Text))
-    declared = getattr(tool, "max_result_chars", RESULT_CEILING_CHARS)
+    declared = tool_flags(tool).max_result_chars
     limit = len(text) if declared is None else min(declared, RESULT_CEILING_CHARS)
     if len(text) <= limit and budget.used + len(text) > REPLY_RESULTS_BUDGET_CHARS \
             and len(text) > PERSISTED_PREVIEW_CHARS and ctx.spill_dir and declared is not None \

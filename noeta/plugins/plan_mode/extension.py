@@ -18,7 +18,7 @@ from noeta.core.extension import (
     Reminder,
     TaskView,
 )
-from noeta.core.tool import Tool, ToolContext, tool_flag
+from noeta.core.tool import Tool, ToolContext, tool_flags
 from noeta.core.types import Message, ToolUse
 from noeta.plugins.plan_mode import notes as nt
 from noeta.plugins.plan_mode import plan as pl
@@ -34,6 +34,7 @@ from noeta.plugins.plan_mode.state import (
     plans_with_classifier,
     state_of,
 )
+from noeta.toolkit import plugin_records as pr
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL, PERMISSION_MODES
 from noeta.toolkit.permission_rules import EDIT_TOOLS
@@ -134,7 +135,7 @@ class PlanMode(Extension):
         # A tool no plugin offers as its own (one a plugin builds from the
         # others', such as ToolSearch, or none at all) changes nothing.
         if tool is None or getattr(tool, "read_only", False) is True \
-                or tool_flag(tool, "safe_while_planning"):
+                or tool_flags(tool).safe_while_planning:
             return None
         if call.name in EDIT_TOOLS and self._plan_file(view, st, call):
             return None
@@ -160,17 +161,14 @@ class PlanMode(Extension):
         if st.mode is not None:
             return
         config = view.state.config
-        perms = _permissions(view)
-        mode_of = getattr(perms, "mode_of", None)
-        if (mode_of(view) if callable(mode_of) else config.get("permission_mode")) != "plan":
+        if (pr.mode_of(view) or config.get("permission_mode")) != "plan":
             return
         # A sub-agent of a planning task plans as its parent does (the
         # parent's plan origin); the permissions plugin knows which modes
         # this host allows to start from.
         origin = config.get(PLAN_ORIGIN_KEY)
         origin = origin if isinstance(origin, dict) else {}
-        start = getattr(perms, "plan_start_mode", None)
-        pre = start(view) if callable(start) else next(
+        pre = pr.plan_start_mode(view) or next(
             (m for m in (origin.get("pre_mode"),) if m in PERMISSION_MODES and m != "plan"),
             "default")
         classify = origin.get(AUTO_DURING_PLAN)
@@ -238,12 +236,7 @@ class PlanMode(Extension):
         return ()
 
 
-def _permissions(view: TaskView) -> Extension | None:
-    """The task's permissions plugin (asked by name and duck type)."""
-    return next((ext for ext in view.extensions if ext.name == MODE_RECORDS), None)
-
-
 def _permissions_on(view: TaskView) -> bool:
     """Whether the task runs the permissions plugin, which then judges
     every call and owns the switches between the other modes."""
-    return _permissions(view) is not None
+    return pr.plugin(view, pr.PERMISSIONS) is not None

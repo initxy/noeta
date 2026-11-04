@@ -33,7 +33,7 @@ A runner claims a task from the store (`claim` / `renew` / `release`; Postgres u
 `SKIP LOCKED`). Every append is conditional on `expected_seq` and the claim's `owner_epoch`, so a
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
 unfinished call is answered "outcome unknown", never re-run, unless its tool looks the outcome
-up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe`. What lives only in one worker
+up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe` (`ToolFlags`). What lives only in one worker
 process (a background job) holds the task tree there (`Store.hold`; a tree has one holding worker,
 so a hold is refused while another worker holds the tree or runs one of its tasks, `HeldElsewhere`, and takes back another worker's lapsed claim of the tree): other workers skip it until
 the hold is released, or reaped once it ran out (every worker reaps), which posts `hold_lost` to
@@ -47,11 +47,11 @@ files, built-in agents) > `noeta/plugins/<name>` (capabilities) | `noeta/backend
 stores) | `noeta/host` (`LocalApp`, and the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code
 plugins share) > `noeta/core`. `|` siblings never import each other, nor do two plugins or two backends
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name (`TaskView.find_tool`),
-inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
-others (memory's `dir` for instructions, permissions and fs, shell's `cwd` (permissions, hooks, fs),
-permissions' `mode` (permissions, hooks, shell), instructions' files for hooks and its `start` for the classifier,
-structured_output's `answer` for workflow and front ends, subtasks' and workflow's for `TaskStop`: `toolkit/background_tasks.py`). Front ends import no plugin; they read permissions'
-`mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
+inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or what a plugin publishes, read
+only through a typed reader in `toolkit`: `plugin_records.py` (plugin names, each record and who reads it, the
+methods a plugin keeps for others; `tests/toolkit/test_plugin_records.py` holds writers to readers),
+`background_tasks.py`, `structured_output.py`, `permission_modes.py`. Front ends import no plugin; they read
+permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title` (kept by a replacement). SDK = all but `noeta/cli`.
 
 ## Ways in
 
@@ -138,7 +138,7 @@ something with `notify`; neither reaches the model as the user.
 
 ## Deferred tool
 
-A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
+A tool whose `flags` say `deferred=True` is named to the model (`TaskView.deferred_tool_names`) and
 sent only once the model loads it with `ToolSearch`. The `tool_search` plugin
 (`noeta/plugins/tool_search`) adds `ToolSearch` and withholds the tools not loaded through
 `Extension.tool_changes`; a tool is loaded once a `ToolReference` in the task's history or open

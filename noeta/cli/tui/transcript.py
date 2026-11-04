@@ -52,6 +52,7 @@ from noeta.host.pending import (
 )
 from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
+from noeta.toolkit.plugin_records import TITLE
 
 log = logging.getLogger("noeta.cli.tui")
 
@@ -295,7 +296,7 @@ class TranscriptView(App[None]):
         # The core's own records by type: a plugin may record the same
         # kind names (the hooks plugin's "retry") for something else.
         core = records.decode(ev)
-        if ev.extension == "title" and ev.kind == "title":
+        if ev.extension == TITLE and ev.kind == "title":
             self.sub_title = str(data.get("title") or "")
         elif isinstance(core, records.Retry):
             await self._retried(int(core.attempt or 1))

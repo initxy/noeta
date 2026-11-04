@@ -44,6 +44,7 @@ from noeta.core.types import Block, Image, Message, Text, ToolUse
 from noeta.plugins.fs._read_formats import PDF_MAX_PAGES_PER_READ, PDF_MAX_PAGES_WHOLE, page_count
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.fs.state import FS, KIND_MENTIONS, KIND_NOTICE, current_fs_state
+from noeta.toolkit.plugin_records import HOOKS
 from noeta.toolkit.tools import format_size, output_text
 
 __all__ = ["FIRST_LINES", "MENTION", "attach_mentions", "attachment_digest",
@@ -54,10 +55,6 @@ MENTION = re.compile(r'(?<![\w@])@("([^"]+)"|[^\s"]+)')
 _LINES = re.compile(r"^(.+?)#L(\d+)(?:-(\d+))?$")
 #: A file over the read limit is attached by this many first lines.
 FIRST_LINES = 2000
-#: The plugin whose gates run commands of the person's (``PreToolUse``
-#: hooks): not run for an attachment's ``Read``, as Claude Code checks only
-#: its rules for one.
-HOOKS = "hooks"
 
 CALLED = "Called the {tool} tool with the following input: {input}"
 RESULT = "Result of calling the {tool} tool:\n{text}"
@@ -222,6 +219,8 @@ async def read_verdict(view: TaskView, call: ToolUse) -> Literal["allow", "ask",
     verdict: Literal["allow", "ask", "deny"] = "allow"
     try:
         for ext in view.extensions:
+            # The hooks plugin runs the person's commands (``PreToolUse``): not
+            # for an attachment's ``Read``, as Claude Code checks only its rules.
             if ext.name in (FS, HOOKS):
                 continue
             try:

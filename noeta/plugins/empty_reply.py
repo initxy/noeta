@@ -10,6 +10,7 @@ turn."""
 from __future__ import annotations
 
 from noeta.core.extension import Extension, TaskView, offer_tools
+from noeta.core.tool import tool_flags
 from noeta.core.types import Message, ModelResponse, ToolResult, user
 from noeta.toolkit.empty_reply import EMPTY_REPLY_NUDGE
 
@@ -28,7 +29,7 @@ def answered_by_tool(view: TaskView) -> bool:
     follow it (``Tool.silent_reply_after``): the turn's answer went through
     the tool, so an empty reply ends the turn without the nudge."""
     offer = offer_tools(view.extensions, view, view.allowed_tools, view.denied_tools)
-    modes = {t.name: getattr(t, "silent_reply_after", None) for t in offer.tools}
+    modes = {t.name: tool_flags(t).silent_reply_after for t in offer.tools}
     if not any(modes.values()):
         return False
     failed: dict[str, bool] = {}

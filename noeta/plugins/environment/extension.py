@@ -39,6 +39,7 @@ from noeta.plugins.environment.notes import (
     with_model_paragraphs,
 )
 from noeta.toolkit.context import task_env
+from noeta.toolkit.plugin_records import working_directories
 from noeta.toolkit.ultrathink import ultrathink_effort, ultrathink_reminders
 from noeta.toolkit.usd_budget import BUDGET_KEY, usd_budget_reminders
 
@@ -175,13 +176,9 @@ class Environment(Extension):
 
     @staticmethod
     def _dirs(view: TaskView) -> list[str]:
-        """The additional working directories: those of the plugin that
-        keeps them (permissions, ``working_directories``) after the first."""
-        for ext in view.extensions:
-            dirs = getattr(ext, "working_directories", None)
-            if callable(dirs):
-                return list(dirs(view))[1:]
-        return []
+        """The additional working directories: the permissions plugin's
+        ``working_directories`` after the first."""
+        return list(working_directories(view))[1:]
 
     async def on_start(self, view: TaskView) -> None:
         if view.ext_state(self.name):

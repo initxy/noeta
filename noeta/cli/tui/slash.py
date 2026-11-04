@@ -19,6 +19,7 @@ from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.host.app import model_choices, prepare_model
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.usage import context_text, cost_text, task_context, tree_usage
+from noeta.toolkit.plugin_records import MEMORY
 
 if TYPE_CHECKING:
     from noeta.cli.tui.app import NoetaApp
@@ -117,7 +118,7 @@ async def _memory_dir(app: NoetaApp) -> str | None:
         return None
     for rec in await app.local.client.events(app.task_id):
         ev = rec.event
-        if isinstance(ev, ExtensionRecorded) and ev.extension == "memory" \
+        if isinstance(ev, ExtensionRecorded) and ev.extension == MEMORY \
                 and ev.kind == "dir" and isinstance(ev.data, dict):
             return str(ev.data.get("dir") or "") or None
     return None

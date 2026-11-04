@@ -9,12 +9,13 @@ from typing import Any
 
 from noeta.core.events import ExtensionRecorded
 from noeta.core.extension import TaskView
+from noeta.toolkit.plugin_records import PERMISSIONS, PLAN_MODE
 
-NAME = "plan_mode"
+NAME = PLAN_MODE
 #: The record name mode switches go under, plan mode's included: front
 #: ends read the mode there (``noeta.toolkit.permission_modes``) and the
 #: permissions plugin folds it from there.
-MODE_RECORDS = "permissions"
+MODE_RECORDS = PERMISSIONS
 #: In a plan record: whether this plan runs with the auto-mode classifier,
 #: settled when plan mode is entered (absent, in a log written before
 #: noeta recorded it: when planning began in auto mode).

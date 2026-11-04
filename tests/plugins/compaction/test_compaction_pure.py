@@ -336,17 +336,17 @@ def test_a_relative_path_a_command_showed_is_taken_from_where_it_ran() -> None:
 
 
 def test_the_restore_finds_the_shell_directory_and_the_calls_by_name() -> None:
-    from noeta.plugins.compaction.extension import _shell_cwd, _shown_by_commands
     from noeta.plugins.fs.state import FileRead, FsState
     from noeta.plugins.shell.state import ShellState
+    from noeta.toolkit.plugin_records import files_shown_by_commands, shell_cwd
 
     ext = {"shell": ShellState(cwd="/w/frontend"),
            "fs": FsState(reads={"/w/a": FileRead(digest="d"),
                                 "/w/frontend/package.json": FileRead(digest="d", call_id="b")})}
-    assert _shell_cwd(ext, "/w") == "/w/frontend"
-    assert _shell_cwd({}, "/w") == "/w"
-    assert _shown_by_commands(ext) == {"b": ["/w/frontend/package.json"]}
-    assert _shown_by_commands({}) == {}
+    assert shell_cwd(ext) == "/w/frontend"
+    assert shell_cwd({}) is None
+    assert files_shown_by_commands(ext) == {"b": ["/w/frontend/package.json"]}
+    assert files_shown_by_commands({}) == {}
 
 
 def test_the_fallback_summarize_request() -> None:

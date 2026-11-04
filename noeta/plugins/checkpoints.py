@@ -47,13 +47,14 @@ from noeta.core.events import (
 )
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ToolUse
+from noeta.toolkit.plugin_records import CHECKPOINTS
 from noeta.toolkit.tools import Workspace, path_within
 
 __all__ = ["EDITING_TOOLS", "MAX_SNAPSHOT_BYTES", "NAME", "RESTORE_SIGNAL", "Checkpoints"]
 
 log = logging.getLogger("noeta.plugins.checkpoints")
 
-NAME = "checkpoints"
+NAME = CHECKPOINTS
 RESTORE_SIGNAL = "restore_files"
 #: The tools whose target file is saved first, and the input field naming it.
 EDITING_TOOLS: Mapping[str, str] = {"Edit": "file_path", "Write": "file_path",

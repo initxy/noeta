@@ -42,6 +42,7 @@ from noeta.core.types import Text, ToolUse
 from noeta.plugins.fs._encoding import decode
 from noeta.plugins.fs.mentions import read_verdict
 from noeta.plugins.fs.state import FS, KIND_READ, current_fs_state
+from noeta.toolkit.plugin_records import shell_cwd as shell_cwd_record
 from noeta.toolkit.shell import ShellRead, shell_reads
 
 __all__ = ["MAX_SHELL_READ_BYTES", "SHELL_TOOL", "record_shell_reads", "shell_cwd"]
@@ -56,8 +57,7 @@ def shell_cwd(view: TaskView) -> str:
     record left it in (read by name, as its state is not this plugin's),
     else the exec env's."""
     assert view.env is not None
-    cwd = getattr(view.state.ext.get("shell"), "cwd", None)
-    return cwd if isinstance(cwd, str) and cwd else view.env.cwd
+    return shell_cwd_record(view.state.ext) or view.env.cwd
 
 
 async def record_shell_reads(view: TaskView, call: ToolUse, output: ToolOutput) -> None:

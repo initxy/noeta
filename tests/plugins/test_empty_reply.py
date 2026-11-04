@@ -19,7 +19,7 @@ from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ModelReplied, TaskEnded, Waiting
 from noeta.core.loop.state import TaskState, apply
 from noeta.core.runner import Runtime
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Message, ModelResponse, Thinking, user
 from noeta.plugins.empty_reply import EmptyReply
 from noeta.testing import ScriptedProvider, reply
@@ -200,7 +200,7 @@ class Ender:
     input_schema = {"type": "object"}
     read_only = True
     clearable = False
-    silent_reply_after = "success"
+    flags = ToolFlags(silent_reply_after="success")
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         return text_output("done", is_error=bool(input.get("fail")))

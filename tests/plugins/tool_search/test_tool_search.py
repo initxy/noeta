@@ -5,6 +5,7 @@ task."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.request import request_tools
 from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
-from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, Text, ToolReference, ToolResult, ToolSpec
 from noeta.plugins.tool_search import PLACEHOLDER, ToolSearch, ToolSearchTool, loaded_tools
 from noeta.plugins.tool_search.search import search_hint
@@ -35,8 +36,7 @@ class Fake:
     def __init__(self, name: str, *, deferred: bool = False, last: bool = False,
                  description: str = "") -> None:
         self.name = name
-        self.deferred = deferred
-        self.listed_last = last
+        self.flags = ToolFlags(deferred=deferred, listed_last=last)
         self.description = description or f"The {name} tool."
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
@@ -89,7 +89,7 @@ def test_a_listed_last_tool_keeps_the_placeholder_before_it() -> None:
 
 def test_a_loaded_tool_is_sent_with_its_loaded_description() -> None:
     long = Fake("mcp__s__t", deferred=True, last=True, description="short")
-    long.loaded_description = "long"  # type: ignore[attr-defined]
+    long.flags = replace(long.flags, loaded_description="long")
     sent = {s.name: s.description for s in specs([Fake("Bash"), long], loaded=["mcp__s__t"])}
     assert sent["mcp__s__t"] == "long"
     plain = request_tools([long], {}, (), lambda _t, text: text, plain={"mcp__s__t"})
@@ -157,7 +157,7 @@ def test_the_raw_name_does_not_score() -> None:
 
 def test_a_search_hint_scores_and_filters() -> None:
     hinted = Fake("NotebookEdit", description="Edit a cell.")
-    hinted.search_hint = "Change Jupyter notebook cells"  # type: ignore[attr-defined]
+    hinted.flags = ToolFlags(search_hint="Change Jupyter notebook cells")
     search = ToolSearchTool({t.name: t for t in [
         Fake("WebFetch", description="Fetch a page about jupyter."), hinted]})
     assert search.search("jupyter") == ["NotebookEdit", "WebFetch"]  # +4 over +2
@@ -314,5 +314,5 @@ def test_a_reference_by_an_mcp_tools_old_name_keeps_it_loaded() -> None:
     tools = [Fake("Read"), Fake("mcp__GitHub__list", deferred=True, last=True)]
     assert "mcp__GitHub__list*" in names(specs(tools, ["mcp__github__list"]))
     assert "mcp__GitHub__list*" not in names(specs(tools))
-    search = ToolSearchTool({t.name: t for t in tools if t.deferred})
+    search = ToolSearchTool({t.name: t for t in tools if t.flags.deferred})
     assert search.search("select:mcp__github__list") == ["mcp__GitHub__list"]

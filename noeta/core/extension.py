@@ -26,7 +26,7 @@ from noeta.core.events import (
 )
 from noeta.core.execenv import ExecEnv
 from noeta.core.mcp_names import allowed_in, named_in
-from noeta.core.tool import Tool, ToolOutput, tool_flag
+from noeta.core.tool import Tool, ToolOutput, tool_flags
 from noeta.core.types import (
     Effort,
     Message,
@@ -180,6 +180,23 @@ class ToolOffer:
     plain: frozenset[str] = frozenset()
 
 
+#: Tool-name clashes already warned of, as ``(name, first, other)``.
+_CLASHES_WARNED: set[tuple[str, str, str]] = set()
+
+
+def _offer(tool: Tool, by: str, tools: list[Tool], seen: dict[str, str]) -> None:
+    """``tool`` added to ``tools`` unless an earlier extension offers its
+    name, which keeps it: that clash is logged once per process."""
+    first = seen.get(tool.name)
+    if first is None:
+        seen[tool.name] = by
+        tools.append(tool)
+    elif first != by and (tool.name, first, by) not in _CLASHES_WARNED:
+        _CLASHES_WARNED.add((tool.name, first, by))
+        log.warning("plugins %r and %r both offer a tool named %r; %r's is used",
+                    first, by, tool.name, first)
+
+
 def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str] | None,
                 denied: Sequence[str]) -> ToolOffer:
     """A task's tools for one step: every extension's (the first of a name
@@ -200,15 +217,13 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
             and not named_in(refused, name, "agent disallowedTools")
 
     tools: list[Tool] = []
-    seen: set[str] = set()
+    seen: dict[str, str] = {}  # tool name -> the extension offering it
     for ext in exts:
         for t in ext.tools(view):
-            if (offered_name(t.name) or tool_flag(t, "past_agent_lists")) \
-                    and t.name not in seen:
-                seen.add(t.name)
-                tools.append(t)
+            if offered_name(t.name) or tool_flags(t).past_agent_lists:
+                _offer(t, ext.name, tools, seen)
     offered = tuple(tools)
-    deferred = {t.name for t in offered if tool_flag(t, "deferred")}
+    deferred = {t.name for t in offered if tool_flags(t).deferred}
     withheld: dict[str, str] = {}
     entries: list[ToolEntry] = []
     plain: set[str] = set()
@@ -220,9 +235,7 @@ def offer_tools(exts: Sequence[Extension], view: TaskView, allowed: Sequence[str
             plain.update(n for n in changes.withhold if n in deferred)
             continue
         for t in changes.add:
-            if t.name not in seen:
-                seen.add(t.name)
-                tools.append(t)
+            _offer(t, ext.name, tools, seen)
         for name, error in changes.withhold.items():
             withheld.setdefault(name, error)
         entries.extend(changes.entries)
@@ -407,7 +420,7 @@ class TaskView(records.CoreNotices):
         A deferred tool sent plain (``ToolOffer.plain``) is not one."""
         offer = offer_tools(self.extensions, self, self.allowed_tools, self.denied_tools)
         return sorted({t.name for t in offer.tools
-                       if tool_flag(t, "deferred") and t.name not in offer.plain})
+                       if tool_flags(t).deferred and t.name not in offer.plain})
 
     def compacted(self, event: Compacted) -> None:
         """Record a compaction (the compaction extension's one core event)."""

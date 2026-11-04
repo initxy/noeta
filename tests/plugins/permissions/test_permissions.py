@@ -579,7 +579,7 @@ async def test_the_shells_directory_resolves_relative_paths(tmp_path: Path) -> N
 
     scope = sc.Scope(dirs=(str(tmp_path),), home="/home/u")
     shell = SimpleNamespace(cwd=str(tmp_path / ".git"))
-    view: Any = SimpleNamespace(ext_state=lambda name: shell if name == "shell" else None)
+    view: Any = SimpleNamespace(state=SimpleNamespace(ext={"shell": shell}))
     here = shell_scope(view, scope)
     assert here.cwd == str(tmp_path / ".git")
     [part] = sc.parts("sed -i s/a/b/ config", here) or []

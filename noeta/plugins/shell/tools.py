@@ -16,7 +16,7 @@ from noeta.core.errors import HeldElsewhere
 from noeta.core.events import Cancel, External
 from noeta.core.execenv import RunResult
 from noeta.core.holds import Release
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.shell.bash import SCHEMA_DIALECT, BashTool
 from noeta.plugins.shell.cwd import CWD_MARK, start_cwd
 from noeta.plugins.shell.hardening import command_script
@@ -447,10 +447,12 @@ class TaskStopTool:
 
     name = "TaskStop"
     read_only = False
-    safe_while_planning = True
+    flags = ToolFlags(
+        safe_while_planning=True,
+        deferred=True,
+        search_hint="stop or kill a running background task",
+    )
     clearable = False
-    deferred = True
-    search_hint = "stop or kill a running background task"
     description = (
         "Stops a background task by its ID: a Bash command started with "
         "`run_in_background`, a Monitor, an agent you started, or a Workflow run.\n\n"
@@ -555,11 +557,13 @@ class MonitorTool:
     name = "Monitor"
     read_only = False
     clearable = False
-    deferred = True
-    search_hint = ("watch or monitor a process, log or command and get each "
-                   "output line as a notification")
     #: Claude Code's Monitor result limit.
-    max_result_chars = 10_000
+    flags = ToolFlags(
+        deferred=True,
+        search_hint=("watch or monitor a process, log or command and get each "
+                     "output line as a notification"),
+        max_result_chars=10_000,
+    )
 
     def __init__(self, shell: BackgroundBash) -> None:
         self.shell = shell

@@ -64,6 +64,7 @@ from noeta.plugins.instructions.files import (
     Reader,
     clean,
 )
+from noeta.toolkit import plugin_records as pr
 from noeta.toolkit.context import new_user_messages, read_text, task_env
 from noeta.toolkit.memory_index import MEMORY_DIR_KEY, MEMORY_INDEX_FILE, read_memory_index
 from noeta.toolkit.tokens import chars_per_token
@@ -105,8 +106,6 @@ LABELS = {
     LOCAL: "the user's private instructions for this project, not part of the repository",
     MEMORY: "your auto memory index for this project, kept across conversations",
 }
-#: The plugin whose recorded state names the memory directory.
-MEMORY_PLUGIN = "memory"
 #: A nested file (one a touched file brings) longer than the larger of
 #: these is cut: characters, and the share of the model's window in
 #: characters (Claude Code's limit).
@@ -121,7 +120,7 @@ FILE_TOOLS = {"Read": "file_path", "Edit": "file_path", "Write": "file_path",
 #: The file tools' record of a file a ``Bash`` command showed (extension,
 #: kind, its ``by``): it brings the file's instructions as a ``Read`` would,
 #: as in Claude Code.
-SHELL_READ = ("fs", "read", "Bash")
+SHELL_READ = (pr.FS, "read", "Bash")
 
 
 def render_file(path: str, kind: str, text: str) -> str:
@@ -211,7 +210,7 @@ class Instructions(Extension):
       file (an agent file's ``omitClaudeMd``).
     """
 
-    name = "instructions"
+    name = pr.INSTRUCTIONS
 
     def __init__(
         self,
@@ -326,9 +325,8 @@ class Instructions(Extension):
         plugin, the one its caller passed on (``MEMORY_DIR_KEY``)."""
         state = view.folded({e.name: e.reduce for e in view.extensions}) \
             if pending else view.state
-        memory = state.ext.get(MEMORY_PLUGIN)
-        directory = memory.get("dir") if isinstance(memory, dict) else None
-        if directory is None and not any(e.name == MEMORY_PLUGIN for e in view.extensions):
+        directory = pr.memory_dir(state.ext)
+        if directory is None and pr.plugin(view, pr.MEMORY) is None:
             directory = state.config.get(MEMORY_DIR_KEY)
         return directory if isinstance(directory, str) else None
 
@@ -350,19 +348,18 @@ class Instructions(Extension):
         """Those of ``paths`` a ``Read`` deny rule covers (asked of the
         plugin that keeps the rules, ``read_deny_rule``; a check that fails
         withholds too). Each is told to the person once, never the model."""
-        check = next((fn for e in view.extensions
-                      if callable(fn := getattr(e, "read_deny_rule", None))), None)
+        check = pr.read_deny_rule(view)
         if check is None or not paths:
             return set()
         out: set[str] = set()
         for path in paths:
             try:
-                rule = await check(view, path)
+                denied = bool(await check(view, path))
             except Exception:
                 log.warning("instructions: could not check %s against the deny rules", path,
                             exc_info=True)
-                rule = True
-            if rule:
+                denied = True
+            if denied:
                 out.add(path)
         told = set((view.ext_state(self.name) or {}).get("withheld") or ())
         new = sorted(out - told)
