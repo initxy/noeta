@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from noeta.core.events import ExtensionRecorded, Recorded
+from noeta.toolkit.plugin_records import PERMISSIONS
 
 PermissionMode = Literal["default", "acceptEdits", "plan", "auto", "dontAsk",
                          "bypassPermissions"]
@@ -34,9 +35,6 @@ MODE_NAMES: dict[str, str] = {
     "bypassPermissions": "Bypass permissions (ask for nothing)",
 }
 MODE_SIGNAL = "permission_mode"
-#: The plugin that offers plan mode (``plan``) and records the switches into
-#: it; without it a task has no plan mode.
-PLAN_MODE_PLUGIN = "plan_mode"
 #: Claude Code's mode names noeta takes as another name for its own.
 MODE_ALIASES: dict[str, str] = {"manual": "default"}
 
@@ -47,7 +45,7 @@ def current_mode(events: Sequence[Recorded]) -> str | None:
     mode = None
     for rec in events:
         ev = rec.event
-        if isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+        if isinstance(ev, ExtensionRecorded) and ev.extension == PERMISSIONS \
                 and ev.kind in ("mode", "plan_exit") and isinstance(ev.data, dict):
             mode = str(ev.data.get("mode") or "") or mode
     return mode
@@ -90,7 +88,7 @@ def published_modes(events: Sequence[Recorded]) -> Modes | None:
     found = None
     for rec in events:
         ev = rec.event
-        if isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+        if isinstance(ev, ExtensionRecorded) and ev.extension == PERMISSIONS \
                 and ev.kind == MODES_KIND and isinstance(ev.data, dict):
             d = ev.data
             found = Modes(modes=tuple(str(m) for m in d.get("modes") or ()),

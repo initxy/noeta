@@ -7,11 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from noeta.toolkit.plugin_records import SHELL
+
 __all__ = ["SANDBOX_KIND", "SHELL", "ShellState", "reduce_shell", "shell_state"]
 
-#: The extension name the shell records under (``cwd``, and the background
-#: job kinds).
-SHELL = "shell"
 #: The record (and reminder) of the sandbox instructions the model was told.
 SANDBOX_KIND = "sandbox_instructions"
 

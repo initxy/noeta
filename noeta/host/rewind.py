@@ -20,12 +20,12 @@ from typing import Any
 
 from noeta.core.client import CONTINUED_AS_KEY, ClientAPI
 from noeta.core.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskCreated
+from noeta.toolkit.plugin_records import CHECKPOINTS
 
 __all__ = ["CHECKPOINTS", "RESTORE_SIGNAL", "FilePlan", "RewindPoint", "Rewound",
            "diff_stats", "file_plan", "rewind", "rewind_points"]
 
-#: The checkpoints plugin's name and signal (its documented records).
-CHECKPOINTS = "checkpoints"
+#: The checkpoints plugin's signal (its documented records).
 RESTORE_SIGNAL = "restore_files"
 
 

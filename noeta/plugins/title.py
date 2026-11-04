@@ -20,13 +20,14 @@ from noeta.core.events import External, InputTaken, Recorded, Say
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import user
 from noeta.toolkit.interactive import interactive
+from noeta.toolkit.plugin_records import TITLE
 from noeta.toolkit.side_requests import side_request
 
 __all__ = ["PROMPT", "Title", "title_of"]
 
 log = logging.getLogger("noeta.plugins.title")
 
-NAME = "title"
+NAME = TITLE
 SIGNAL = "title.named"
 #: A prompt shorter than this (a greeting) does not name the task.
 MIN_PROMPT_CHARS = 10

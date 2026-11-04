@@ -18,6 +18,7 @@ import secrets
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.toolkit.plugin_records import SHELL
 from noeta.toolkit.tools import SCHEMA_DIALECT, input_error, load_description, tool_error
 from noeta.toolkit.worktrees import (
     WORKTREES,
@@ -31,7 +32,7 @@ from noeta.toolkit.worktrees import (
 
 __all__ = ["EnterWorktreeTool", "ExitWorktreeTool"]
 
-SHELL = "shell"
+
 _NAME = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 MAX_NAME = 64
 

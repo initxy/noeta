@@ -66,6 +66,7 @@ from noeta.host.usage import TreeUsage, add_events, tree_usage
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
 from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY
 from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL
+from noeta.toolkit.plugin_records import PERMISSIONS
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta.toolkit.structured_output import ANSWER_KIND, PLUGIN, RETRIES_REASON, SCHEMA_KEY
 from noeta.toolkit.usd_budget import BUDGET_KEY
@@ -500,7 +501,7 @@ class StreamJson(ControlRequests):
                                         task_type="local_agent"))
         elif isinstance(core, records.Notice):
             self._put(self._message(type="system", subtype="informational", content=core.text))
-        elif ev.extension == "permissions" and ev.kind == "mode" and data.get("mode"):
+        elif ev.extension == PERMISSIONS and ev.kind == "mode" and data.get("mode"):
             self._put(self._message(type="system", subtype="status", status=None,
                                     permissionMode=data["mode"]))
 

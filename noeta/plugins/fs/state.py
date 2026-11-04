@@ -56,6 +56,7 @@ from typing import Any
 import msgspec
 
 from noeta.core.types import Struct
+from noeta.toolkit.plugin_records import FS
 
 __all__ = [
     "FS",
@@ -74,8 +75,6 @@ __all__ = [
     "reduce_fs",
 ]
 
-#: The extension name the file tools record under.
-FS = "fs"
 KIND_READ = "read"
 KIND_CHANGED = "changed"
 KIND_CHECKED = "checked"

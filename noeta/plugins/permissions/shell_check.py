@@ -21,11 +21,9 @@ from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.decision import Decision
 from noeta.plugins.permissions.rule_specs import rule_spec_from_command
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.plugin_records import shell_cwd
 from noeta.toolkit.sandbox import leaves_sandbox, runs_sandboxed, sandbox_of
 from noeta.toolkit.shell import parse_argv
-
-#: The plugin whose ``cwd`` record says where the next shell command starts.
-SHELL_PLUGIN = "shell"
 
 #: A path with glob characters: judged by what it expands to.
 _GLOB = re.compile(r"[*?\[]")
@@ -143,8 +141,8 @@ async def _writable(view: TaskView, path: str, mode: str, scope: sc.Scope, real:
 def shell_scope(view: TaskView, scope: sc.Scope) -> sc.Scope:
     """``scope`` at the directory the shell's next command starts in
     (the shell plugin's ``cwd`` record)."""
-    cwd = getattr(view.ext_state(SHELL_PLUGIN), "cwd", None)
-    if isinstance(cwd, str) and cwd and posixpath.isabs(cwd):
+    cwd = shell_cwd(view.state.ext)
+    if cwd is not None and posixpath.isabs(cwd):
         cwd = posixpath.normpath(cwd)
         if scope.contains(cwd):
             return scope.at(cwd)

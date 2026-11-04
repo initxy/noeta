@@ -342,9 +342,9 @@ def test_a_long_server_name_that_drops_every_tool_is_named_to_the_model(
                           [{"name": "a"}, {"name": "b"}])
     assert entry["tools"] == [] and entry["too_long"] == 2
     assert caplog.text.count("of its tools are not offered") == 1
-    text = no_match_text("github", {"servers": [entry], "down": {}})
+    text = no_match_text("github", {"mcp": {"servers": [entry], "down": {}}})
     assert f"{alias}: 2" in text and "longer than 128 characters" in text
-    assert no_match_text("github", {"servers": [], "down": {}}) == \
+    assert no_match_text("github", {"mcp": {"servers": [], "down": {}}}) == \
         "No deferred tool matches 'github'."
 
 

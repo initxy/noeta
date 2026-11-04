@@ -60,6 +60,7 @@ from noeta.toolkit import permission_rules as r
 from noeta.toolkit.context import task_env
 from noeta.toolkit.paths import plans_dir as default_plans_dir
 from noeta.toolkit.permission_modes import MODE_SIGNAL as MODE_SIGNAL
+from noeta.toolkit.plugin_records import PLAN_MODE, plugin
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta.toolkit.worktrees import git
 
@@ -502,7 +503,7 @@ class Permissions(Extension):
 def _plans(view: TaskView) -> bool:
     """Whether the task runs the plan-mode plugin: without it there is no
     plan mode to switch to."""
-    return any(ext.name == pm.PLAN_MODE_PLUGIN for ext in view.extensions)
+    return plugin(view, PLAN_MODE) is not None
 
 
 def _updated_input(view: TaskView, call: ToolUse) -> dict[str, Any] | None:
