@@ -1,7 +1,6 @@
 """What the plan-mode plugin folds: its own records, and the mode switches
 recorded under the permissions plugin's name (``mode``, ``plan_exit``:
-where front ends read the task's mode, and where a log written before plan
-mode was its own plugin keeps all of its plan records)."""
+where front ends read the task's mode)."""
 
 from __future__ import annotations
 
@@ -75,9 +74,8 @@ def state_of(view: TaskView) -> PlanState:
 
 
 def fold(state: Any, kind: str, data: Any) -> PlanState:
-    """One record folded in (this plugin's, or one under ``MODE_RECORDS``;
-    the kinds are named alike in both, as a log written before the split
-    has them all under ``MODE_RECORDS``)."""
+    """One record folded in (this plugin's, or a switch under
+    ``MODE_RECORDS``)."""
     st: PlanState = state if isinstance(state, PlanState) else PlanState()
     d = data if isinstance(data, dict) else {}
     if kind == "mode":

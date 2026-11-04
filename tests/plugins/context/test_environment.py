@@ -18,8 +18,8 @@ from noeta.core.events import ExtensionRecorded, Recorded, Waiting
 from noeta.core.execenv import RunResult
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState
-from noeta.plugins import environment
-from noeta.plugins.environment import Environment, render_git
+from noeta.plugins.environment import Environment, extension, facts, notes, render_git
+from noeta.plugins.environment import git as git_capture
 
 
 def _view(cwd: str, env: Any, **config: Any) -> TaskView:
@@ -180,13 +180,13 @@ async def test_the_shell_line_names_the_shell_commands_run_in(
     # Claude Code's format: bare names, ``bash (login shell: zsh)``.
     bash = shutil.which("bash") or "bash"
     monkeypatch.setenv("SHELL", "/opt/zsh-test/zsh")
-    assert environment._shell() == "bash (login shell: zsh)"
+    assert facts._shell() == "bash (login shell: zsh)"
     monkeypatch.setenv("SHELL", bash)
-    assert environment._shell() == "bash"
+    assert facts._shell() == "bash"
     monkeypatch.setenv("SHELL", "/opt/other/bash")
-    assert environment._shell() == "bash"
+    assert facts._shell() == "bash"
     monkeypatch.delenv("SHELL")
-    assert environment._shell() == "bash"
+    assert facts._shell() == "bash"
 
 
 class FakeContainer:
@@ -251,7 +251,7 @@ async def test_a_long_status_is_cut_at_2000_characters_with_a_note() -> None:
 
     text = await _block(Environment(model="m"), _view("/workspace", Busy("/workspace")))
     shown = text.split("Status:\n", 1)[1].split("\n\nRecent commits:", 1)[0]
-    assert shown == lines[:2000] + environment.GIT_STATUS_CUT_NOTE
+    assert shown == lines[:2000] + git_capture.GIT_STATUS_CUT_NOTE
     assert "run `git status` with Bash" in shown
     short = "?? a.txt\n?? b.txt\n"
 
@@ -630,7 +630,7 @@ async def test_a_compaction_gives_the_stored_snapshot_when_git_fails_or_is_slow(
             await asyncio.sleep(5)
             return await super().run(argv, **kw)
 
-    monkeypatch.setattr(environment, "GIT_RECAPTURE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(extension, "GIT_RECAPTURE_TIMEOUT_S", 0.05)
     view = _view("/workspace", Slow("/workspace"))
     assert await ext._git_for_compaction(view, "stored") == "stored" and not view.pending
 
@@ -672,13 +672,13 @@ async def test_the_main_branch_falls_back_as_claude_code_does(tmp_path: Path) ->
     repo = tmp_path / "repo"
     git = _git_repo(repo, "trunk")
     env = LocalExecEnv(str(repo))
-    assert await environment._main_branch(env, str(repo)) == "main"
+    assert await git_capture._main_branch(env, str(repo)) == "main"
     subprocess.run([*git, "update-ref", "refs/remotes/origin/master", "HEAD"], check=True)
-    assert await environment._main_branch(env, str(repo)) == "master"
+    assert await git_capture._main_branch(env, str(repo)) == "master"
     subprocess.run([*git, "update-ref", "refs/remotes/origin/dev", "HEAD"], check=True)
     subprocess.run([*git, "symbolic-ref", "refs/remotes/origin/HEAD",
                     "refs/remotes/origin/dev"], check=True)
-    assert await environment._main_branch(env, str(repo)) == "dev"
+    assert await git_capture._main_branch(env, str(repo)) == "dev"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
@@ -700,10 +700,10 @@ async def test_a_linked_worktree_gets_the_worktree_and_stash_lines(tmp_path: Pat
     wt = tmp_path / "wt"
     subprocess.run([*git, "worktree", "add", "-q", str(wt)], check=True)
     text = await _block(Environment(), _view(str(wt), LocalExecEnv(str(wt))))
-    assert f" - {environment.WORKTREE_LINE}\n - {environment.STASH_LINE}\n" \
+    assert f" - {facts.WORKTREE_LINE}\n - {facts.STASH_LINE}\n" \
         " - Is a git repository: true" in text
     text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
-    assert environment.WORKTREE_LINE not in text and environment.STASH_LINE not in text
+    assert facts.WORKTREE_LINE not in text and facts.STASH_LINE not in text
 
 
 class _Dirs(Extension):
@@ -789,7 +789,7 @@ async def test_the_language_setting_is_told_and_its_change(tmp_path: Path) -> No
             if r.kind == "language"] == []
     [cleared] = [r for r in await Environment().reminders(_later(str(tmp_path), st))
                  if r.kind == "language"]
-    assert cleared.text == environment.LANGUAGE_CLEARED
+    assert cleared.text == notes.LANGUAGE_CLEARED
     assert [r for r in await Environment().reminders(_later(str(tmp_path), {**st,
             "language": None})) if r.kind == "language"] == []
 

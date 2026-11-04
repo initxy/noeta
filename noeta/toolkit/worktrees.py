@@ -135,7 +135,8 @@ async def unsaved_work(env: ExecEnv, path: str, base: str, branch: str) -> tuple
     (empty when it could): uncommitted files, and commits since ``base`` on
     ``HEAD`` or on ``branch`` (the worktree may have switched away from it)."""
     lost = []
-    code, status = await git(env, ["status", "--porcelain"], path)
+    # Untracked files count whatever status.showUntrackedFiles says.
+    code, status = await git(env, ["status", "--porcelain", "--untracked-files=normal"], path)
     if code != 0:
         return "", f"git status: {status or 'failed'}"
     if status:

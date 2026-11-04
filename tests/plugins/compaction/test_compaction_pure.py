@@ -271,13 +271,13 @@ def test_files_the_conversation_carries_anyway_are_not_restored() -> None:
     from noeta.plugins.compaction.extension import _carried_files
     from noeta.plugins.compaction.restore import recent_files
 
-    class Perm:
+    class Plan:
         plan = {"path": "/home/p/plans/plan.md"}
 
     ext = {"instructions": {"files": [{"path": "/w/NOETA.md", "real": "/w/NOETA.md"}],
                             "nested": [{"path": "/w/sub/AGENTS.md", "real": "/w/sub/AGENTS.md"}],
                             "digests": {"/home/m/MEMORY.md": "d"}},
-           "memory": {"dir": "/home/m"}, "permissions": Perm()}
+           "memory": {"dir": "/home/m"}, "plan_mode": Plan()}
     skip = _carried_files(ext, {})
     history = [user("go"), *_read("a", "NOETA.md"), *_read("b", "/w/sub/AGENTS.md"),
                *_read("c", "/home/m/MEMORY.md"), *_read("d", "/home/p/plans/plan.md"),

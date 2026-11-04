@@ -37,6 +37,7 @@ import httpx
 
 from noeta.plugins.mcp.client import (
     McpClient,
+    cancelled_notice,
     initialize_params,
     reply_result,
     server_instructions,
@@ -116,6 +117,7 @@ class HttpClient(McpClient):
         self._next_id = 0
         self._started = False
         self._closed = False
+        self._cancelling: set[asyncio.Task[None]] = set()
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -141,12 +143,24 @@ class HttpClient(McpClient):
                       timeout: float | None = None) -> dict[str, Any]:
         self._next_id += 1
         req_id = self._next_id
-        msg = await self._post({"jsonrpc": "2.0", "id": req_id, "method": method,
-                                "params": params},
-                               self.timeout if timeout is None else timeout)
+        try:
+            msg = await self._post({"jsonrpc": "2.0", "id": req_id, "method": method,
+                                    "params": params},
+                                   self.timeout if timeout is None else timeout)
+        except asyncio.CancelledError:
+            if method != "initialize" and self.broken is None:
+                # An interrupt or a cancelled task: told without delaying it.
+                task = asyncio.create_task(self._cancel_remote(req_id))
+                self._cancelling.add(task)
+                task.add_done_callback(self._cancelling.discard)
+            raise
         if msg is None:
             raise McpError(f"{method}: no matching JSON-RPC response in body")
         return reply_result(method, msg)
+
+    async def _cancel_remote(self, req_id: int) -> None:
+        with contextlib.suppress(Exception):
+            await self._post(cancelled_notice(req_id, "cancelled"), self.timeout)
 
     async def _post(self, body: dict[str, Any], timeout: float) -> dict[str, Any] | None:
         retried = False
@@ -187,6 +201,7 @@ class HttpClient(McpClient):
                         if resp.status_code == 404 and held is not None \
                                 and self.connection_id == held:
                             self.connection_id = None
+                            self.broken = "the server ended the session"
                         raise McpError(f"{method} http error: {resp.status_code} "
                                        f"{resp.reason_phrase}".rstrip())
                     assigned = resp.headers.get(CONNECTION_ID_HEADER)
@@ -254,6 +269,9 @@ class HttpClient(McpClient):
         if self._closed:
             return
         self._closed = True
+        for task in list(self._cancelling):
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(task, _DELETE_TIMEOUT_S)
         held, self.connection_id = self.connection_id, None
         if held is not None and self._http is not None:
             with contextlib.suppress(Exception):

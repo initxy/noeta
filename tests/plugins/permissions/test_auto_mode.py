@@ -167,6 +167,27 @@ async def test_three_blocks_in_a_row_fall_back_to_asking(store: SqliteStore,
     assert "3 actions in a row were blocked" in detail["prompt"]
 
 
+async def test_past_the_denial_limit_a_task_nobody_answers_is_refused(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """A headless task (``interactive: false``, no prompt tool) on a worker
+    no client follows: the fallback ask would park it for good."""
+    bash = Fake("Bash")
+    block = reply("<block>yes</block><category>Local Data Loss</category>"
+                  "<reason>[Local Data Loss] x</reason>")
+    provider = ScriptedProvider([
+        reply("", ("Bash", {"command": "rm -rf a"})), reply("<block>yes"), block,
+        reply("", ("Bash", {"command": "rm -rf b"})), reply("<block>yes"), block,
+        reply("", ("Bash", {"command": "rm -rf c"})), reply("<block>yes"), block,
+        reply("gave up")])
+    client, tid = await start(store, provider, [bash], tmp_path,
+                              config={"interactive": False})
+    evs = await events(client, tid)
+    assert not any(isinstance(e, Waiting) and e.on == "approval" for e in evs)
+    *_, last = errors(evs)
+    assert "3 actions in a row were blocked" in last
+    assert not bash.runs and (await client.get(tid)).waiting_on == "input"
+
+
 async def test_no_verdict_holds_the_call_back(store: SqliteStore, tmp_path: Path) -> None:
     bash = Fake("Bash")
     provider = ScriptedProvider([

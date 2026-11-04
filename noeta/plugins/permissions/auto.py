@@ -19,13 +19,15 @@ from noeta.plugins.permissions import scope as sc
 from noeta.plugins.permissions import wording as w
 from noeta.plugins.permissions.state import NAME, PermState, state_of
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.interactive import can_ask
 from noeta.toolkit.local_env import env_home, env_platform, is_local
 from noeta.toolkit.notices import HANDBACK_REVIEW_KEY
 from noeta.toolkit.worktrees import git, repository_top
 
 log = logging.getLogger("noeta.permissions")
 
-#: Claude Code's denial limits before auto mode falls back to asking.
+#: Claude Code's denial limits before auto mode falls back to asking (a
+#: task nobody can answer is refused instead: the ask would park it for good).
 MAX_CONSECUTIVE_DENIALS = 3
 MAX_TOTAL_DENIALS = 20
 #: Betas Claude Code's auto-mode requests carry: every main-loop and
@@ -70,6 +72,8 @@ class Classifier:
             while len(self._fresh) > ROOTS_KEPT:
                 self._fresh.popitem(last=False)
         if done.get("fallback"):
+            if not can_ask(view.state.config):
+                return Deny(reason=str(done.get("fallback")))
             return Ask(prompt=str(done.get("fallback")), detail={**ask.detail, "classify": False},
                        firm=True)
         if done.get("too_long"):

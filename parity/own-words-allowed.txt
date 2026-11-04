@@ -4,7 +4,7 @@
 # a comment saying why both sides must spell it the same way.
 #
 # The per-turn token budget note the model is trained to read
-# (noeta/plugins/environment.py writes it; main.md shows its form).
+# (noeta/plugins/environment/notes.py writes it; main.md shows its form).
 <total_tokens>15000000 tokens left</total_tokens>
 # The wrapper of every reminder and injected context part on the wire.
 <system-reminder>

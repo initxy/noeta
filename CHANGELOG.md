@@ -21,6 +21,8 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Removed `WriteTool(allowed_path_globs=)`**: nothing reached it (no plugin argument, agent
+  field or setting); permission rules confine writes.
 - **A write outside the working directories is a permission question, as in Claude Code**: a
   `Write`, `Edit` or `NotebookEdit` outside the working and additional directories was refused
   in every mode; now `default`, `acceptEdits` and plan mode ask (with an "always" rule for its
@@ -1436,6 +1438,16 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   kept for the life of the worker.
 - `noeta -p` in an untrusted directory no longer warns that it skips `.agents/skills` and
   `.noeta/skills` when neither exists; the warning names only the skill directories that do.
+- MCP: a cancelled task that started a server's connection no longer cancels the other tasks
+  waiting on it; a call stopped by an interrupt or a cancel sends the server
+  `notifications/cancelled` (before, only one that timed out did); a Streamable HTTP server
+  that ended the session (a 404) gets a fresh connection on the next use instead of failing
+  every call; closing a stdio server ends its whole process group, and a server that stops
+  reading its input breaks the connection after the timeout instead of hanging the writer.
+- `ExitWorktree` counts untracked files when git is set to hide them
+  (`status.showUntrackedFiles=no`); such a worktree was removed with its new files.
+- Auto mode: past the classifier's denial limit, a task nobody can answer (`interactive:
+  false`, no prompt tool) is refused the call instead of parking on a question for good.
 
 ### Security
 
@@ -1604,3 +1616,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   error that a library or the system raised (it may name the server's paths); the client
   gets a generic message and the server logs the error. Errors noeta raises for the caller
   keep their text.
+- **The command sandbox protects repositories below the working directory**: git hooks and
+  config, editor tasks and the other protected names are read-only down to three levels (as
+  Claude Code's `mandatoryDenySearchDepth`), so a workspace holding several repositories no
+  longer lets a command plant a hook that runs on the person's next commit. At most 2,000
+  directories are listed; dependency and cache trees are skipped.
+- A legacy SSE MCP server whose `endpoint` event names another origin is refused: every
+  message would have carried the configured headers and the OAuth token there.

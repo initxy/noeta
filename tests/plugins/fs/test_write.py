@@ -24,7 +24,6 @@ def test_write_metadata() -> None:
     assert tool.name == "Write"
     assert tool.read_only is False
     assert tool.clearable is True
-    assert tool.allowed_path_globs == ()
     schema = tool.input_schema
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["required"] == ["file_path", "content"]
@@ -273,68 +272,6 @@ async def test_write_arg_validation(h: Harness, args: dict[str, Any], message: s
     out = await WriteTool().run(args, h.ctx())
     assert out.is_error
     assert text_of(out) == f"<tool_use_error>Write {message}</tool_use_error>"
-
-
-# -- allowed_path_globs -------------------------------------------------------
-
-
-async def test_restricted_write_allows_matching_path(h: Harness, ws: Path) -> None:
-    tool = WriteTool(allowed_path_globs=("plans/*.md",))
-    out = await h.call(tool, file_path="plans/feature.md", content="# Plan\n")
-    assert not out.is_error
-    assert (ws / "plans" / "feature.md").read_text() == "# Plan\n"
-
-
-async def test_restricted_write_rejects_path_outside_whitelist(h: Harness, ws: Path) -> None:
-    tool = WriteTool(allowed_path_globs=("plans/*.md",))
-    out = await h.call(tool, file_path="src/main.py", content="print()\n")
-    assert out.is_error
-    assert text_of(out) == (
-        "<tool_use_error>path 'src/main.py' is outside the writable allow-list "
-        "(plans/*.md); this agent may only write matching paths</tool_use_error>"
-    )
-    assert not (ws / "src").exists()
-
-
-async def test_restricted_write_rejects_wrong_extension(h: Harness, ws: Path) -> None:
-    tool = WriteTool(allowed_path_globs=("plans/*.md",))
-    out = await h.call(tool, file_path="plans/notes.txt", content="x")
-    assert out.is_error
-    assert "writable allow-list" in text_of(out)
-
-
-async def test_restricted_write_guard_precedes_read_first_check(h: Harness, ws: Path) -> None:
-    (ws / "src").mkdir()
-    target = ws / "src" / "main.py"
-    target.write_text("old\n")
-    tool = WriteTool(allowed_path_globs=("plans/*.md",))
-    out = await h.call(tool, file_path="src/main.py", content="new\n")
-    assert out.is_error
-    assert "writable allow-list" in text_of(out)
-    assert "this conversation has not read" not in text_of(out)
-    assert target.read_text() == "old\n"
-
-
-def test_allowed_globs_are_sorted() -> None:
-    assert WriteTool(allowed_path_globs=("b/*", "a/*")).allowed_path_globs == ("a/*", "b/*")
-
-
-@pytest.mark.parametrize(
-    ("globs", "path", "allowed"),
-    [
-        (("plans/*.md",), "plans/x.md", True),
-        (("plans/*.md",), "plans/deep/x.md", False),
-        (("plans/**/*.md",), "plans/deep/nested/x.md", True),
-        (("plans/**/*.md",), "plans/x.md", True),
-        (("*.{md,txt}",), "notes.txt", True),
-        (("*.md",), "sub/x.md", False),
-    ],
-)
-async def test_write_globs_star_does_not_cross_slash(
-    h: Harness, globs: tuple[str, ...], path: str, allowed: bool
-) -> None:
-    out = await h.call(WriteTool(allowed_path_globs=globs), file_path=path, content="x")
-    assert out.is_error is (not allowed), text_of(out)
 
 
 # -- the opt-in fence (write_roots) ------------------------------------
