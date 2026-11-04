@@ -45,6 +45,25 @@ log upload, no update check. A plugin you install can of course make its own req
 | go on after a reply with no text and no tool call (the turn ends otherwise) | `on_empty_reply(view, response)` → the message to go on with, or `None` (as `noeta/plugins/empty_reply.py` does) | `noeta/core/extension.py` |
 | block a prompt, or keep a turn going (as UserPromptSubmit and Stop hooks do) | `reminders` + `view.erase_messages` + raise `TurnFailed`; `on_event` on `ModelReplied` posting `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
+## When a hook raises
+
+What the runner does with an exception a hook lets out (`noeta/core/runner/task.py` `_steps`,
+`calls.py`, `model.py`, `closing.py`). `TurnFailed`, `TurnDone` and `RequestStale` from
+`reminders`, `before_model` or `on_context_overflow` are not failures: they fail the turn with
+their reason, end it, or build the request again.
+
+| Hook | When it raises |
+|---|---|
+| `before_tool`, `resolve_ask` | the call is denied (`permission check failed: …`), as the model sees it |
+| a tool's `run`, `resume` | the call's result is an error naming the exception; what the call staged (records, children) is dropped |
+| a tool's `recover` | logged; the outcome counts as unknown (a `retry_safe` tool runs again) |
+| `after_tool` | logged; the result stays as this hook was given it |
+| `on_event`, `resident`, `lead_resident`, `on_empty_reply`, `commands`, `before_compact` | logged and skipped: that plugin has no say this time |
+| `run_command` | raised to whoever ran the command (a front end, or the hook that expanded it) |
+| `inherit` | raised from `view.spawn`, to the tool or hook that spawned |
+| `reduce`, while loading the task | the task is claimed again once its lease runs out; after three such claims in a row it ends failed |
+| anything else in a step: `on_start`, `tools`, `tool_changes`, `context`, `reminders`, `before_model`, `on_context_overflow`, `reduce` | the turn fails (`internal_error`); a second failure in a row ends the task failed |
+
 ## Writing a plugin
 
 ### A plugin file (two steps)
