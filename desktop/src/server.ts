@@ -103,6 +103,8 @@ export interface Running {
   child: ChildProcess;
   /** The server's last output lines, for an error window. */
   output(): string;
+  /** Resolves with how the server ended (`code 1`, `signal SIGKILL`), whoever stopped it. */
+  exited: Promise<string>;
   stop(): Promise<void>;
 }
 
@@ -139,14 +141,14 @@ export async function startServer(
   child.stdout?.on("data", keep);
   child.stderr?.on("data", keep);
   let exited: string | null = null;
-  const exit = new Promise<void>((resolve) => {
+  const exit = new Promise<string>((resolve) => {
     child.once("exit", (code, signal) => {
-      exited = signal ? `signal ${signal}` : `code ${code}`;
-      resolve();
+      exited ??= signal ? `signal ${signal}` : `code ${code}`;
+      resolve(exited);
     });
     child.once("error", (e) => {
-      exited = e.message;
-      resolve();
+      exited ??= e.message;
+      resolve(exited);
     });
   });
   const stop = async () => {
@@ -160,7 +162,7 @@ export async function startServer(
   while (exited === null) {
     try {
       const resp = await get(`${url}/agents`, { headers: { authorization: `Bearer ${o.token}` } });
-      if (resp.status === 200) return { url, token: o.token, child, output: () => tail, stop };
+      if (resp.status === 200) return { url, token: o.token, child, output: () => tail, exited: exit, stop };
     } catch {
       // not listening yet
     }
