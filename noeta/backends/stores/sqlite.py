@@ -485,7 +485,8 @@ class SqliteStore:
                 "SELECT task_id, owner_epoch, queue FROM tasks"
                 f" WHERE queue IN ({marks}){in_roots} AND ("
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
-                " OR (status = 'waiting' AND ready_at <= ?) OR status = 'running')"
+                " OR (status = 'waiting' AND (ready_at <= ? OR lease_until IS NOT NULL))"
+                " OR status = 'running')"
                 " AND (lease_until IS NULL OR lease_until < ?)"
                 " ORDER BY updated_at LIMIT 1",
                 (*queues, *root_ids, now, now, now),

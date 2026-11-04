@@ -220,9 +220,7 @@ async def test_a_kept_wait_is_claimable_once_its_lease_runs_out(store: Store) ->
     await store.append(claim, [Waiting(on="input")], expected_seq=1,
                        patch=Patch(status="waiting", waiting_on="input", keep=True))
     await asyncio.sleep(0.1)
-    # Gone silent: the task is the next post's, as any waiting task.
-    assert await store.claim("w2", ["default"], 30) is None
-    await store.post(Post(task_id="t1", body=say("hi")))
+    # Gone silent: whoever claims it next tells what died with that worker.
     taken = await store.claim("w2", ["default"], 30)
     assert taken is not None and taken.epoch == claim.epoch + 1
     with pytest.raises(Conflict):

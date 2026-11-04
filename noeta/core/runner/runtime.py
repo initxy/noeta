@@ -118,9 +118,10 @@ class Runtime:
                                                         repr=False)
     #: The tasks this runtime runs now (:meth:`run_claim`).
     _running: set[str] = field(default_factory=set, init=False, repr=False)
-    #: Of those, the ones waiting with their claim kept (``ToolContext.keep``):
-    #: they take no slot of :attr:`concurrency`.
-    kept_waiting: int = field(default=0, init=False, repr=False)
+    #: Runs carried on in the background once their task waits with its
+    #: claim kept (``ToolContext.keep``): they take no slot of
+    #: :attr:`concurrency`, and :meth:`run_claim` has returned for them.
+    _kept_runs: set[asyncio.Task[None]] = field(default_factory=set, init=False, repr=False)
 
     def provider_of(self, state: TaskState, model: str) -> Provider:
         """The provider ``state``'s task sends a ``model`` call to."""
@@ -169,21 +170,49 @@ class Runtime:
         return None
 
     async def run_claim(self, claim: Claim, *, sent: float | None = None) -> None:
-        """Run one claim until the task waits or ends. Cancelled (a
-        shutdown), it hands the task back at once instead of leaving it
-        ``running`` until the lease runs out. ``sent`` is this process's
-        monotonic time just before the claim was asked for (default now)."""
+        """Run one claim until the task waits or ends; a task that waits
+        with its claim kept (``ToolContext.keep``) goes on in the background,
+        taking its own inbox, until nothing keeps it (:meth:`let_go` ends
+        those). Cancelled (a shutdown), it hands the task back at once
+        instead of leaving it ``running`` until the lease runs out. ``sent``
+        is this process's monotonic time just before the claim was asked for
+        (default now)."""
         from noeta.core.runner.task import TaskRun
 
         run = TaskRun(self, claim, sent=sent)
         self._running.add(claim.task_id)
+        whole = asyncio.ensure_future(self._run(run))
+        kept = asyncio.ensure_future(run.waiting_kept.wait())
+        try:
+            await asyncio.wait({whole, kept}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            whole.cancel()
+            await asyncio.gather(whole, return_exceptions=True)
+            raise
+        finally:
+            kept.cancel()
+        if whole.done():
+            whole.result()
+            return
+        self._kept_runs.add(whole)
+        whole.add_done_callback(self._kept_runs.discard)
+
+    async def _run(self, run: Any) -> None:
         try:
             await run.run()
         except asyncio.CancelledError:
             await self._release(run.claim)
             raise
         finally:
-            self._running.discard(claim.task_id)
+            self._running.discard(run.task_id)
+
+    async def let_go(self) -> None:
+        """Give up the claims kept over waits (what kept them, a background
+        job, dies with them): a host's way out. The tasks stay waiting."""
+        runs = list(self._kept_runs)
+        for t in runs:
+            t.cancel()
+        await asyncio.gather(*runs, return_exceptions=True)
 
     async def _release(self, claim: Claim) -> None:
         try:
@@ -253,7 +282,7 @@ class Runtime:
         running: set[asyncio.Task[None]] = set()
         try:
             while not stop.is_set():
-                while len(running) - self.kept_waiting < self.concurrency:
+                while len(running) < self.concurrency:
                     claimed = await self._claim()
                     if claimed is None:
                         break
@@ -273,3 +302,4 @@ class Runtime:
             for t in running:
                 t.cancel()
             await asyncio.gather(*running, return_exceptions=True)
+            await self.let_go()

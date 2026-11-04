@@ -21,6 +21,25 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Changed
 
+- **Holds are gone; a task with a background job keeps its own claim** (ADR-029, spec
+  `2026-11-04-v1-finish` D1): `Store.hold` / `unhold` / `reap_holds`, the `tree_holds` table,
+  `hold_lost`, `HeldElsewhere`, `UnservedQueue`, `Runtime.hold`, `ToolContext.hold` and
+  `Post.forward_if_ended` are removed. A tool keeps its task's claim with `ToolContext.keep()`
+  (`KeptClaim`); the task waits with `Patch.keep`, its run goes on in the background
+  (`Runtime.run_claim` returns, no slot taken) and takes its own inbox; `Runtime.let_go` gives
+  the claims up on the way out. No background job is refused for where tasks run any more. A
+  sub-agent's jobs die with it (they used to report to the root); `TaskStop` reaches a running
+  child's job through the child's inbox. A worker that dies loses its jobs; the next worker
+  to claim the task (at once, the kept lease having run out) tells the model they are lost.
+  **Breaking** for code that called the removed names.
+- **Store schema version 5** (D4): a 0.6 store (version 1) is upgraded in place (its `holds`
+  table dropped); the development-only upgrades from versions 2 and 3 are gone.
+- **Postgres claims and wakes** (D5): the claim index holds only claimable rows (not idle
+  waiting tasks); `Runtime.serve` looks for work only after a change that can make a task
+  claimable (`created`, `posted`, `released`, now also reported by an append that leaves its
+  task ready); a running step no longer polls its inbox every 0.5 s on a store whose change
+  feed reaches every process (`shared_changes`, Postgres).
+
 - **A write outside the working directories is a permission question, as in Claude Code**: a
   `Write`, `Edit` or `NotebookEdit` outside the working and additional directories was refused
   in every mode; now `default`, `acceptEdits` and plan mode ask (with an "always" rule for its

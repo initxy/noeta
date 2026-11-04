@@ -92,7 +92,7 @@ _NOW = "EXTRACT(EPOCH FROM transaction_timestamp())::float8"
 #: The rows a claim can take, given a lease run out: the claim index's
 #: predicate, repeated word for word in the claim so the planner uses it.
 _CLAIMABLE = ("(status = 'ready' OR status = 'running'"
-              " OR (status = 'waiting' AND ready_at IS NOT NULL))")
+              " OR (status = 'waiting' AND (ready_at IS NOT NULL OR lease_until IS NOT NULL)))")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS {s}.noeta_schema (version INTEGER NOT NULL);
@@ -477,7 +477,8 @@ class PostgresStore:
                 f" WHERE queue = ANY(%(q)s) AND {_CLAIMABLE}" + in_roots
                 + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
-                f" OR (status = 'waiting' AND ready_at <= {_NOW}) OR status = 'running')"
+                f" OR (status = 'waiting' AND (ready_at <= {_NOW} OR lease_until IS NOT NULL))"
+                " OR status = 'running')"
                 f" AND (lease_until IS NULL OR lease_until < {_NOW})"
                 " ORDER BY updated_at LIMIT 1 FOR UPDATE OF k SKIP LOCKED)"
                 " UPDATE {s}.tasks t SET status = 'running', owner = %(w)s,"

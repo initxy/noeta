@@ -41,11 +41,10 @@ on every machine) or declares itself safe to run again (`retry_safe`).
 Timers (`view.set_timer`) are kernel state too, so a scheduled wake-up survives every worker.
 See [Park](../CONTEXT.md#park).
 
-**Holds** cover what lives in one process: a background shell job holds its task tree on its
-worker (`Store.hold`, one holding worker per tree), so no other worker claims those tasks while
-the job runs. Each hold has
-an epoch; when a worker goes silent any worker reaps its holds and posts `hold_lost` to the
-tree, so the model is told the job is gone instead of waiting forever.
+**Kept claims** cover what lives in one process: a task that owns a background shell job keeps
+its own claim while it waits (`ToolContext.keep`, ADR-029), so its worker takes its inbox and
+no other worker runs it. When that worker goes silent the lease runs out, the next claimer
+finds no such job and the model is told the job is gone instead of waiting forever.
 
 **Snapshots** keep claims cheap: as a task's log grows the runner stores a versioned fold
 snapshot (`noeta/core/snapshots.py`; at most every `Runtime.snapshot_every` events, and once

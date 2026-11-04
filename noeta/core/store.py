@@ -16,8 +16,10 @@ claimed by someone else. A wrong guess costs a retry, never a double write.
 
 A claim can be kept over a wait (``Patch.keep``): the task waits (its row
 says so), but its runner keeps the lease and renews it, so no other worker
-claims the task until the lease runs out, even once a post makes it ready.
-That is for what lives only in the runner's process (a background job).
+claims the task, even once a post makes it ready. That is for what lives
+only in the runner's process (a background job). Once the lease runs out
+(the runner went silent) the task is claimable at once, so the next claimer
+can tell it what died with that runner.
 
 Optional members. For a
 store shared by processes on many machines:
@@ -99,7 +101,7 @@ class Patch(Struct):
     #: For ``waiting``: the runner keeps its claim (owner, epoch, lease) while
     #: the task waits. A claim skips a row whose lease has not run out, so
     #: the task stays with its runner until it gives the claim up
-    #: (:meth:`Store.release`) or goes silent.
+    #: (:meth:`Store.release`) or goes silent (then it is claimable).
     keep: bool = False
 
 
@@ -257,7 +259,7 @@ class Store(Protocol):
     ) -> Claim | None:
         """Take one claimable task whose lease (if any: a running or kept
         claim's) ran out: ``ready`` (and due), ``waiting`` with a due
-        ``ready_at``, or ``running``. Bumps the epoch.
+        ``ready_at`` or a kept claim, or ``running``. Bumps the epoch.
         With ``roots``, only tasks whose ``root_id`` is one of them (a front
         end serving its own task trees); ``None`` takes any task."""
         ...

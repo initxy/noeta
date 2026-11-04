@@ -102,8 +102,9 @@ LET_GO_LOGS_MAX_BYTES = 256 * 1024 * 1024
 TASKS_KEEP = 256
 #: How often a job's guard looks at its worker.
 GUARD_TICK_S = 0.5
-#: How long a job outlives a worker that stopped re-creating its ``.alive``
-#: file: about a claim's lease, after which another worker may take the task.
+#: How long a foreground command (which keeps no claim) outlives a worker
+#: that stopped re-creating its ``.alive`` file; a job that keeps its task's
+#: claim gets the claim's lease, after which another worker may take the task.
 ALIVE_S = 30.0
 #: Ticks of 20 ms a foreground command's keeper is given to write what came
 #: once the command's shell exited.
@@ -417,7 +418,7 @@ class Registry:
         job = Job(job_id=job_id, task_id=task_id, command=command,
                   description=_label(description or command), tool_use_id=tool_use_id,
                   env=env, out_path=out, events_path=events, post=post, release=release, ws=ws,
-                  alive_path=alive, foreground=foreground, cwd_path=cwd_file,
+                  kept=kept, alive_path=alive, foreground=foreground, cwd_path=cwd_file,
                   shell_command=shell_command)
         if monitor_timeout_ms is not None:
             job.monitor = MonitorStream(sink=lambda text, _note: self._event(job, text),
@@ -482,13 +483,18 @@ class Registry:
         return job
 
 
+    def _alive_period(self, job: Job) -> float:
+        """How long ``job``'s guard waits for its ``.alive`` file: its kept
+        claim's lease, else :attr:`alive_s`."""
+        return job.kept.lease_seconds if job.kept is not None else self.alive_s
+
     def _guard(self, job: Job) -> str:
         """The guard's command line for ``job`` (see :data:`_GUARD`)."""
         worker_pid = str(os.getpid()) if is_local(job.env) else ""
         ticks = 0
         if job.alive_path:
             # The worker re-creates the file three times per period.
-            ticks = max(2, round(self.alive_s / GUARD_TICK_S))
+            ticks = max(2, round(self._alive_period(job) / GUARD_TICK_S))
         job.guard_period = ticks * GUARD_TICK_S
         return shlex.join(["sh", "-c", _GUARD, "sh", "$$", worker_pid, job.alive_path,
                            str(ticks), str(GUARD_TICK_S)]).replace("'$$'", "$$")
@@ -514,7 +520,7 @@ class Registry:
                     else:
                         await group[0].env.run(
                             ["sh", "-c", 'for f; do : > "$f"; done', "sh", *paths], timeout=10)
-            period = min(j.guard_period or self.alive_s for j in jobs)
+            period = min(j.guard_period or self._alive_period(j) for j in jobs)
             await asyncio.sleep(max(period / 3, GUARD_TICK_S / 2))
 
     async def _run(self, job: Job, monitor_timeout_ms: float | None) -> None:

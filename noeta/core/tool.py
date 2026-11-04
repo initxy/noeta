@@ -68,6 +68,8 @@ class KeptClaim:
     registers the stop."""
 
     lost: bool = False
+    #: The claim's lease: how long a worker that went silent keeps it.
+    lease_seconds: float = 30.0
     _on_lost: list[Callable[[], None]] = field(default_factory=list, repr=False)
     _release: Callable[[KeptClaim], None] = field(default=lambda _kept: None, repr=False)
 

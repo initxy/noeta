@@ -230,22 +230,25 @@ class Shell(Extension):
         if not isinstance(st, ShellState) or not any(
                 j.get("status") == "running" for j in st.jobs.values()):
             return
+        jobs = st.jobs
         if view.read_log is not None:
             items = [i for r in await view.read_log(view.task_id)
                      if isinstance(r.event, InputTaken) for i in r.event.items]
-            self._decide(view, items)
-        gone = sorted(k for k, j in st.jobs.items()
+            jobs = self._decide(view, items)
+        gone = sorted(k for k, j in jobs.items()
                       if j.get("status") == "running" and not self.registry.live(view.task_id, k))
         if gone:
             view.enqueue(External(name=JOBS_LOST, data={"jobs": gone}))
 
-    def _decide(self, view: TaskView, items: Sequence[InboxItem]) -> None:
+    def _decide(self, view: TaskView,
+                items: Sequence[InboxItem]) -> dict[str, dict[str, Any]]:
         """Settle jobs from what the task took, in inbox order: a job's end
         makes it ended and tells the model; ``JOBS_LOST`` makes the jobs it
         names lost and tells the model so; anything about a job already
         settled is dropped. ``STOP_JOB`` (a parent's ``TaskStop``) stops the
         job here, its end told as any stop's. The notice is posted with the
-        record (``enqueue``), so it opens a turn on an idle task."""
+        record (``enqueue``), so it opens a turn on an idle task. Returns the
+        jobs as decided."""
         st = view.ext_state(self.name)
         jobs = {k: dict(v) for k, v in (st.jobs if isinstance(st, ShellState) else {}).items()}
         for item in items:
@@ -279,6 +282,7 @@ class Shell(Extension):
                 running = self.registry.find(view.task_id, str(body.data.get("job_id") or ""))
                 if running is not None:
                     self.registry.kill(running, quiet=True)
+        return jobs
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         event = recorded.event

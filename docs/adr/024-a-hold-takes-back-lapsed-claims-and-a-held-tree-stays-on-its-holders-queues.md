@@ -1,6 +1,6 @@
 # ADR-024: A hold takes back lapsed claims, and a held tree stays on its holder's queues
 
-- Status: accepted
+- Status: superseded by ADR-029
 - Date: 2026-10-29
 - Refines: [ADR-015](015-a-held-tree-runs-only-on-its-holder.md),
   [ADR-019](019-tenant-limits-are-enforced-by-the-kernel.md) (the running limit)

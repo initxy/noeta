@@ -138,6 +138,9 @@ class TaskRun:
         #: Set by a post to the task, a kept claim given back or the claim
         #: lost: a kept wait looks again (:meth:`_wait_kept`).
         self._nudged = asyncio.Event()
+        #: Set while the task waits with its claim kept (``Runtime.run_claim``
+        #: then lets the run go on in the background).
+        self.waiting_kept = asyncio.Event()
         self._kept_due: float | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -609,7 +612,7 @@ class TaskRun:
     def keep(self) -> KeptClaim:
         """``ToolContext.keep``: keep this claim over the task's waits until
         the returned claim is released."""
-        kept = KeptClaim(_release=self._unkeep)
+        kept = KeptClaim(lease_seconds=self.rt.lease_seconds, _release=self._unkeep)
         self.kept.add(kept)
         return kept
 
@@ -627,9 +630,7 @@ class TaskRun:
         if self._kept_wait is None:
             return False
         rt = self.rt
-        rt.kept_waiting += 1
-        if rt._wake is not None:
-            rt._wake.set()  # a slot is free
+        self.waiting_kept.set()
         shared = getattr(self.store, "shared_changes", False)
         poll = max(rt.lease_seconds / 3, rt.poll_interval) if shared else rt.poll_interval
         try:
@@ -657,7 +658,7 @@ class TaskRun:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._nudged.wait(), max(timeout, 0.01))
         finally:
-            rt.kept_waiting -= 1
+            self.waiting_kept.clear()
 
     def view(self) -> TaskView:
         model = self.model

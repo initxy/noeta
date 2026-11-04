@@ -26,9 +26,9 @@ running ``lookup`` seconds (when ``lookup`` > 0), a background
 once and answers), a ``ScheduleWakeup`` whose prompt is
 ``CLUSTER-WAKE <id>``. With ``child_bg`` > 0 the sub-agent also starts a
 background ``Bash`` (``child_bg`` seconds, journalling ``<id>-cbg``) and ends
-without waiting for it; the root then waits for that job's end or loss too
-(a sub-agent whose job could not start hands back ``CHILD-DONE <id> NO-JOB``
-and leaves nothing to wait for). With ``agent_first`` the ``Agent`` call
+without waiting for it: the job dies with the sub-agent, so the root waits
+for nothing more (a sub-agent whose job could not start hands back
+``CHILD-DONE <id> NO-JOB``). With ``agent_first`` the ``Agent`` call
 comes right after the ``Effect`` calls, before ``Lookup`` and the job.
 With ``cron`` > 0 it loads the cron tools (``ToolSearch``), creates a
 recurring ``CronCreate`` job whose prompt is ``CLUSTER-CRON <id>``, and
@@ -285,10 +285,6 @@ def root_step(spec: dict[str, Any], seen: _Seen) -> ModelResponse:
         pending.append("job")  # its end, or its loss, names the call
     if spec.get("agent") and not seen.failed(agent_id) and not seen.notified(agent_id):
         pending.append("agent")
-    if spec.get("agent") and float(spec.get("child_bg", 0) or 0) > 0 \
-            and not seen.failed(agent_id) and not seen.notified(f"cbg-{rid}") \
-            and f"CHILD-DONE {rid} NO-JOB" not in seen.text:
-        pending.append("the sub-agent's job")
     if spec.get("wake") and not seen.failed(wake_id) and not woke:
         pending.append("wake")
     if cron_pending:
