@@ -43,7 +43,7 @@ describe("Api", () => {
     await api.archive("t 1", false);
     const [url, init] = fetch.mock.calls[3];
     expect(url).toBe("/tasks/t%201/signals");
-    expect(JSON.parse(init.body)).toEqual({ name: "archive", data: { archived: false } });
+    expect(JSON.parse(init.body)).toEqual({ name: "archive", data: { archived: false }, wake: false });
   });
 
   it("watches events and deltas until the server ends the stream", async () => {

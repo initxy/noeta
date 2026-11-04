@@ -64,7 +64,7 @@ class ClientAPI(Protocol):
                      always: bool = False, data: Any = None) -> int: ...
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
-                     dedupe_key: str | None = None) -> int: ...
+                     dedupe_key: str | None = None, wake: bool = True) -> int: ...
 
     async def cancel(self, task_id: str, reason: str = "", *,
                      turn_only: bool = False) -> None: ...
@@ -163,12 +163,13 @@ class Client:
         return seq
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
-                     dedupe_key: str | None = None) -> int:
+                     dedupe_key: str | None = None, wake: bool = True) -> int:
         """Post a named signal (``External``) a plugin of the task reads, such
         as the permissions plugin's ``permission_mode``; returns its inbox
-        seq. It opens no turn."""
+        seq. It opens no turn; ``wake=False`` leaves a waiting task waiting
+        (the signal is read at its next wake)."""
         seq, _ = await self.store.post(Post(task_id=task_id, body=External(name=name, data=data),
-                                            dedupe_key=dedupe_key))
+                                            dedupe_key=dedupe_key, wake=wake))
         return seq
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:

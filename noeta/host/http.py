@@ -24,7 +24,8 @@ events; when this process also runs workers, live model output streams too.
                                       local command answers {output} and sends nothing
     POST /tasks/{id}/answers          {request_id, decision?, always?, data?} — data
                                       {"mode": m} picks a card's mode choice
-    POST /tasks/{id}/signals          {name, data?, dedupe_key?} — a signal: ``permission_mode``
+    POST /tasks/{id}/signals          {name, data?, dedupe_key?, wake?} — a signal (``wake``
+                                      false: a waiting task stays waiting): ``permission_mode``
                                       {mode} switches the permission mode, ``config``
                                       {model?, effort?, max_turns?} changes the task's config;
                                       ``resumed``, ``restore_files``, ``rename`` {title} and

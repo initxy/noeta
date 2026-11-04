@@ -223,6 +223,11 @@ class Compaction(Extension):
                        seen_through=seen if isinstance(seen, int) else None,
                        restored_paths=tuple(paths) if isinstance(paths, list) else None)
 
+    def continue_state(self, state: Any) -> Any:
+        """The ``threshold`` record went to the source's log; front ends
+        follow the continuing task's own, so it is written there again."""
+        return replace(state, published=None) if isinstance(state, CompactionState) else state
+
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The files read again after a compaction, first in the next
         request's system turn (Claude Code's place for them)."""

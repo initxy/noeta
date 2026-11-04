@@ -100,6 +100,21 @@ def test_the_history_file_is_bounded(tmp_path: Path) -> None:
     assert history.load(None) == [] and history.history_file("", "/w") is None
 
 
+def test_a_history_trim_uses_its_own_temp_file(tmp_path: Path) -> None:
+    """Two TUIs trimming one project's history at once must not share a
+    temp file: here another's is in the way (a directory, so writing it fails)."""
+    from noeta_tui import history
+
+    path = history.history_file(str(tmp_path), "/w")
+    assert path is not None
+    path.parent.mkdir(parents=True)
+    (path.parent / "history.tmp").mkdir()
+    for n in range(2 * history.HISTORY_MAX + 1):
+        history.append(path, f"prompt {n}")
+    assert len(path.read_text().splitlines()) == history.HISTORY_MAX
+    assert sorted(p.name for p in path.parent.iterdir()) == ["history.jsonl", "history.tmp"]
+
+
 async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
     from noeta.core.types import Text, ToolResult
     from noeta_tui.widgets import ApprovalCard
@@ -131,6 +146,26 @@ async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
     i = next(i for i, m in enumerate(last) if any(isinstance(b, ToolResult) for b in m.content))
     after = [b.text for m in last[i:] for b in m.content if isinstance(b, Text)]
     assert "then stop" in after  # the yes's words come after the call's result
+
+
+async def test_esc_in_the_amend_line_closes_it_and_keeps_the_turn(tmp_path: Path) -> None:
+    from noeta_tui.widgets import ApprovalCard, Choices
+
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build", "n": 1})),
+                                 reply("ok")])
+    app = make_app(tmp_path, provider, AskBash(), tools=[Lines()])
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(pilot, lambda: ready(app))
+        await type_line(pilot, "clean")
+        await settle(pilot, lambda: len(app.query(ApprovalCard)) == 1)
+        card = app.query_one(ApprovalCard)
+        await pilot.press("tab", *"half a thought", "escape")
+        await pilot.pause()
+        assert not card.query("Input") and not card.amending and not card.done
+        assert app.busy and isinstance(app.focused, Choices)
+        await pilot.press("escape")  # Esc on the choices still says no
+        await settle(pilot, lambda: card.done and not app.busy)
+        assert "No" in plain(card.query_one(".approval-result"))
 
 
 async def test_tab_completes_the_command_word_with_the_cursor_anywhere_in_it(

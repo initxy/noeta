@@ -170,7 +170,7 @@ class Routes:
             raise ValueError("a signal needs a non-empty 'name'")
         seq = await scope(request).guarded.signal(
             request.path_params["task_id"], name, body.get("data"),
-            dedupe_key=body.get("dedupe_key"))
+            dedupe_key=body.get("dedupe_key"), wake=body.get("wake") is not False)
         return _json({"ok": True, "inbox_seq": seq})
 
     async def cancel(self, request: Request) -> Response:

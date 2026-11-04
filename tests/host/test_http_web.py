@@ -112,6 +112,34 @@ async def test_an_archived_session_is_listed_apart_over_http_and_in_process(
     assert await app.summaries(archived=True) == []
 
 
+async def test_archiving_an_idle_session_does_not_wake_it(
+        local: tuple[LocalApp, ScriptedProvider], tmp_path: Path) -> None:
+    """The list reads the archive signal from the inbox: the task neither
+    becomes ready nor records anything, in process, from the web or a remote."""
+    app, provider = local
+    provider.add(reply("hi"))
+    tid = await app.client.create("main", "hello", config={"interactive": False})
+
+    async def idle() -> bool:
+        return (await app.client.get(tid)).status == "waiting"
+
+    await _until(idle)
+    before = len(await app.client.events(tid))
+    api = create_app(app.client, token="secret", app=app, cwd=str(tmp_path))
+    remote = RemoteApp("http://127.0.0.1", token="secret",
+                       transport=httpx.ASGITransport(app=api))
+    async with _http(api) as http:
+        await app.archive(tid)
+        await http.post(f"/tasks/{tid}/signals",
+                        json={"name": "archive", "data": {"archived": False}, "wake": False})
+        await remote.archive(tid)
+    await remote.stop()
+    await asyncio.sleep(0.2)
+    assert (await app.client.get(tid)).status == "waiting"
+    assert len(await app.client.events(tid)) == before
+    assert [r["task_id"] for r in await app.summaries(archived=True)] == [tid]
+
+
 async def test_file_matches_rank_names_first_and_skip_build_dirs(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "node_modules").mkdir()
