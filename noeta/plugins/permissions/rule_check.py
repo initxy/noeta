@@ -232,10 +232,12 @@ class RuleCheck:
             # too: "always" offers one on the target's directory).
             resolved = await real_scope(view, scope)
             inside = scope.contains(literal) and resolved.contains(target)
-            allowed = r.first_match(allow_rules, name, _with_path(args, target), ctx,
-                                    for_allow=True) is not None
+            allowed = _allowed_through_link(allow_rules, name, args, target, ctx,
+                                            allowed, resolved)
         else:
-            inside = scope.contains(literal)
+            # A path through no link may still name a working directory by
+            # its resolved spelling (one reached through a link itself).
+            inside = scope.contains(literal) or (await real_scope(view, scope)).contains(literal)
         plan = state_of(view).plan
         if inside or allowed or self.in_plans(literal) \
                 or (plan is not None and literal == plan.get("path")) \
@@ -276,10 +278,11 @@ class RuleCheck:
             inside = scope.contains(target) and resolved.contains(real)
             plans = self.in_plans(target) and _under(
                 real, await real_path(view, posixpath.normpath(self.plans_dir)))
-            allowed = r.first_match(allow_rules, name, _with_path(args, real), ctx,
-                                    for_allow=True) is not None
+            allowed = _allowed_through_link(allow_rules, name, args, real, ctx,
+                                            allowed, resolved)
         else:
-            inside, plans = scope.contains(target), self.in_plans(target)
+            inside = scope.contains(target) or (await real_scope(view, scope)).contains(target)
+            plans = self.in_plans(target)
         if allowed:
             return Decision("allow")
         verb = w.ASK_EDIT if name != "Write" or os.path.exists(target) else w.ASK_CREATE
@@ -298,6 +301,19 @@ class RuleCheck:
     def in_plans(self, path: str) -> bool:
         base = posixpath.normpath(self.plans_dir)
         return path.startswith(base.rstrip("/") + "/")
+
+
+def _allowed_through_link(allow_rules: Sequence[r.Rule], name: str, args: Mapping[str, Any],
+                          real: str, ctx: r.RuleContext, named: bool,
+                          resolved: sc.Scope) -> bool:
+    """Whether an allow rule covers a call whose path leads through a link
+    to ``real``: a rule matching ``real``, or one matching the path as
+    named (``named``) when ``real`` still lies in the working directories
+    as resolved (a working directory reached through a link)."""
+    if named and resolved.contains(real):
+        return True
+    return r.first_match(allow_rules, name, _with_path(args, real), ctx,
+                         for_allow=True) is not None
 
 
 def _path(args: Mapping[str, Any]) -> str | None:

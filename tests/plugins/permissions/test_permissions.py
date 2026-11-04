@@ -262,6 +262,59 @@ async def test_an_allow_rule_on_where_the_link_points_lets_the_write_through(
     assert write.runs == [{"file_path": "link/authorized_keys"}]
 
 
+def _linked_cwd(tmp_path: Path) -> tuple[Path, Path]:
+    """A working directory reached through a link (macOS ``/tmp``, a
+    mounted volume): ``(the link, the directory)``."""
+    real = tmp_path / "real"
+    (real / "src").mkdir(parents=True)
+    link = tmp_path / "cwd"
+    link.symlink_to(real)
+    return link, real
+
+
+async def test_a_lexical_allow_rule_covers_writes_in_a_linked_working_directory(
+        store: SqliteStore, tmp_path: Path) -> None:
+    link, _real = _linked_cwd(tmp_path)
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "src/a.py"}),
+              ("Write", {"file_path": str(link / "src" / "b.py")})), reply("ok")])
+    await start(store, provider, Permissions(mode="default", allow=["Edit(/src/**)"]),
+                [write], cwd=link)
+    assert len(write.runs) == 2
+
+
+async def test_the_resolved_spelling_of_a_linked_working_directory_is_inside(
+        store: SqliteStore, tmp_path: Path) -> None:
+    link, real = _linked_cwd(tmp_path)
+    read, write = Fake("Read"), Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": str(real / "src" / "a.py")}),
+              ("Write", {"file_path": str(real / "src" / "a.py")})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"),
+                                 [read, write], cwd=link)
+    assert len(read.runs) == 1 and len(write.runs) == 1
+    assert not any(isinstance(e, Waiting) and e.on == "approval"
+                   for e in await events(client, tid))
+
+
+async def test_a_lexical_read_rule_does_not_follow_a_link_out(
+        store: SqliteStore, tmp_path: Path) -> None:
+    link, real = _linked_cwd(tmp_path)
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (real / "out").symlink_to(secret)
+    read = Fake("Read")
+    provider = ScriptedProvider([
+        reply("", ("Read", {"file_path": "out/key"}), ("Read", {"file_path": "src/a.py"})),
+        reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(
+        mode="default", allow=["Read(/out/**)"]), [read], cwd=link)
+    assert read.runs == [{"file_path": "src/a.py"}]
+    [detail] = asked(await events(client, tid)).values()
+    assert str(secret / "key") in detail["prompt"]
+
+
 @pytest.mark.parametrize("rule", ["Edit(//etc/**)", "Write"])
 async def test_an_allow_rule_lets_a_write_outside_through(
         store: SqliteStore, tmp_path: Path, rule: str) -> None:
