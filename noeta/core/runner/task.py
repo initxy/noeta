@@ -544,6 +544,8 @@ class TaskRun:
                         agents=self.rt.agents,
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
                         denied_tools=self.agent.denied_tools if self.agent else (),
+                        # Asks the host for the provider on every view:
+                        # build_model_request relies on it coming first.
                         count_tokens=self.counter(model), read_log=self._read_log,
                         child_tasks=self._child_ids, serves_queue=self.serves_queue,
                         spill_dir=self.rt.spill_root, identity=self.identity,

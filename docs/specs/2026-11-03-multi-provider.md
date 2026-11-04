@@ -150,3 +150,4 @@ endpoint. The kernel calls `rt.provider_for(request.model)` for every model call
   mid-run switches registered limits only at run start, one provider logged `model_route`
   (null on switches), clients could forge a route. Fixed per the (re-review) Decision.
 - 2026-11-03: re-review fixes green: `make check` 3559 passed (89.82%), parity 0 mismatches, cluster 14 passed, e2e 7 passed.
+- 2026-11-04: final items: a failing child route falls back to none (warned); the view-before-sizing order is commented and tested (`tests/core/test_task_provider.py`). Gates green: check 3561 passed (89.83%), parity 0, cluster 14, e2e 7.

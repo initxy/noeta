@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     agent = run.agent
     assert agent is not None
+    # The view asks the host for the task's provider (its token counter,
+    # ``Runtime.provider_of``) before anything below sizes the request: a
+    # host registers a recorded model's limits there, so the context parts
+    # and ``output_ceiling`` read them (tests/core/test_task_provider.py).
     view = run.view()
     offer = run.tool_offer(view)
     request = build_request(

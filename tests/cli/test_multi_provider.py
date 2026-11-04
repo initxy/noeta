@@ -233,3 +233,22 @@ async def test_a_client_cannot_forge_a_route(tmp_path: Path) -> None:
     with pytest.raises(Refused, match=MODEL_ROUTE):
         await guarded.create("main", "hi", config={"model": "m", MODEL_ROUTE: forged})
     assert await guarded.signal("t", CONFIG_SIGNAL, {"model": "m"}) == 1
+
+
+async def test_a_failed_child_route_leaves_the_child_unrouted(
+        caplog: pytest.LogCaptureFixture) -> None:
+    from noeta.core.agent import Agent
+    from noeta.core.events import TaskCreated
+
+    class Broken:
+        def route_record(self, model: str) -> Any:
+            raise RuntimeError("listing exploded")
+
+    class Runtime:
+        def agent(self, name: str) -> Any:
+            return Agent(name=name, model="claude-haiku-5-5")
+
+    prepare = config._route_child(Runtime(), Broken())  # type: ignore[arg-type]
+    created = TaskCreated(agent="Explore", config={"cwd": "/w"})
+    assert await prepare(created) is created
+    assert "recording the route of 'claude-haiku-5-5'" in caplog.text

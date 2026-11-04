@@ -738,7 +738,12 @@ def _route_child(runtime: Any, router: ProviderRouter) -> Any:
         route = created.config.get(MODEL_ROUTE)
         if not model or (isinstance(route, Mapping) and route.get("model") == model):
             return created
-        record = await asyncio.to_thread(router.route_record, model)
+        try:
+            record = await asyncio.to_thread(router.route_record, model)
+        except Exception:
+            log.warning("recording the route of %r for a child task failed; it resolves "
+                        "on the worker that runs it", model, exc_info=True)
+            return created
         if record is None:
             return created
         return msgspec.structs.replace(created, config={**created.config, MODEL_ROUTE: record})
