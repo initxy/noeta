@@ -1,8 +1,7 @@
 """The notes a permission-mode switch owes the model, as Claude Code sends
-them: the shell-first note in auto mode (once until
+them: the shell-first note in auto and bypass-permissions mode (once until
 auto mode is left or the task compacts), the auto-mode exit note, and the
-plan-exit note on any way out of plan mode. bypassPermissions mode gets no
-shell-first note (a deviation from Claude Code)."""
+plan-exit note on any way out of plan mode."""
 
 from __future__ import annotations
 
@@ -130,11 +129,11 @@ async def test_a_switch_and_back_before_any_request_tells_nothing(
     assert EXITED not in second and GUIDANCE not in second
 
 
-async def test_bypass_permissions_mode_gets_no_shell_first_note(
+async def test_bypass_permissions_mode_gets_the_shell_first_note(
         store: SqliteStore, tmp_path: Path) -> None:
     _client, _tid, provider, _rt = await _start(store, tmp_path, "bypassPermissions")
     first = notes(provider.requests[0])
-    assert BYPASS not in first and GUIDANCE not in first
+    assert BYPASS in first and GUIDANCE not in first
 
 
 async def test_an_agent_without_a_writing_tool_gets_no_auto_mode_note(

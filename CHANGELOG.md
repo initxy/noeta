@@ -185,8 +185,8 @@ All notable changes to Noeta are documented here. The format is based on
     before each call with `--max-budget-usd` (task config `max_budget_usd`); `@agent-<type>`
     mentions; `criticalSystemReminder_EXPERIMENTAL` in `--agents` definitions; an @-mentioned file
     already read and unchanged attaches nothing. Mode notes: the auto-mode shell-first note is
-    sent again only after auto mode was left or a compaction (none in `bypassPermissions`, a
-    deviation measured by the eval); an exit note when
+    sent again only after auto mode was left or a compaction, in `bypassPermissions` too (as
+    Claude Code); an exit note when
     leaving auto mode; the plan-exit note on any way out of plan mode; none for agents without
     `Bash` plus `Edit`/`Write`. Two mode switches in one step both count.
   - Hooks: plain stdout of `SessionStart` / `UserPromptSubmit` is "hook success"; `continue: false`
