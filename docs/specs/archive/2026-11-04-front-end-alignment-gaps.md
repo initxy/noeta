@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-04
 branch: v1-align
 ---
@@ -55,7 +55,7 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
 - [x] B Web: session search, archive (delete cut, D5), host routes as needed.
 - [x] B2 Web: auto-compact indicator once A's reader lands.
 - [x] C Eval: why `compaction_resume_edits` stalls at the eighth file; fix the cause.
-- [ ] Integrate, full gates, review.
+- [x] Integrate, full gates, review.
 
 ## Acceptance criteria
 
@@ -120,3 +120,9 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   amend line closes it instead of stopping the turn; the history trim's temp file is per process;
   archiving posts the signal with `wake=False` (`Client.signal` and the HTTP route take `wake`),
   so an idle session is not woken. check 3564 passed, 90.36%; make tui 73, 88.23%; make web 56 + e2e 16.
+- 2026-11-04 Integrated on `v1-align` (f70fcc25) after an independent review (no P0/P1; its
+  four P2s fixed on `v1-align-fix`): check 3564 passed, 90.37%; make tui 73; make web 56 +
+  e2e 16; make desktop 33 + e2e 3; parity 0; cluster 12 passed; e2e 7; eval no regression,
+  no errors or timeouts, wall 593 s (was 1214 s), `compaction_resume_edits` 1.00 (baseline
+  0.78), `hook_block_adapts` 0.70 (0.52). Left from review: a proxy that sends headers and
+  then buffers the body still fails after 60 s of silence (not a regression).
