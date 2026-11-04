@@ -68,8 +68,8 @@ async def test_planning_end_to_end(store: SqliteStore, tmp_path: Path) -> None:
     # The /plan turn itself carries no plan-mode text; the next prompt does.
     assert not any("Plan mode is on" in t for t in system_texts(provider.requests[0]))
 
-    provider.add(reply("", ("Write", {"file_path": str(tmp_path / "proj" / "a.py")}),
-                       ("Write", {"file_path": path})))
+    provider.add(reply("", ("Write", {"file_path": path}),
+                       ("Write", {"file_path": str(tmp_path / "proj" / "a.py")})))
     await client.send(tid, "go on")
     await rt.run_until_idle()
     texts = system_texts(provider.requests[1])

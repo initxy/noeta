@@ -147,6 +147,16 @@ is itself a repository needs `<url>@<commit>`).
   Different code on two workers for the same task is visible in its log and never silent.
 - **Channels** run in every `noeta worker` / `noeta serve` that enables them; inbound posts are
   idempotent, so several replicas are safe, and replies leave from the task's one writer.
+- **Event delivery.** `on_event` gets each event once, after it is committed; a crash before
+  it ran loses it. An extension that records which events it has handled and returns that
+  seq from `delivered_through(view)` gets them at least once: each claim of the task first
+  passes it, again, every event after that seq (with the task's current state). A `Waiting`
+  hands the task back only after every `on_event` for it ran and its records landed, so a crash
+  in between leaves the task to be claimed once its lease runs out, and the wait is not written
+  twice. A failed side effect (a post that raised) is retried at the next claim, which for a
+  waiting task is its next inbox item. The `TaskEnded` that ends the task is the exception:
+  nothing claims an ended task, so its `on_event` runs once and records made there are dropped.
+  Make the side effect idempotent on the event's seq (chat-bridge's `Idempotency-Key`).
 - **Policy.** `/etc/noeta/config.toml` `[policy] allowed_plugins = [...]` /
   `blocked_plugins = [...]` win over every user and project setting.
 

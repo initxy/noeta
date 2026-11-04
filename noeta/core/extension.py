@@ -569,8 +569,20 @@ class Extension:
         return output
 
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
-        """Observe each appended event (metrics, audit, UI bridges). Records
-        made here are appended right after."""
+        """Observe each appended event (metrics, audit, UI bridges), with
+        the task's state as of the append. Records made here are appended
+        right after (a ``Waiting`` hands the task back only once they have
+        landed); for the ``TaskEnded`` that ends the task they are dropped.
+        Each event once, and lost on a crash, unless the extension keeps a
+        cursor (:meth:`delivered_through`)."""
+
+    def delivered_through(self, view: TaskView) -> int | None:
+        """The log seq through which this extension has handled its events,
+        read from its own recorded state: whenever the task is claimed, the
+        events after it are passed to ``on_event`` again (with the task's
+        current state), so an event it records having handled is handled at
+        least once. ``None`` (the default): no redelivery."""
+        return None
 
     async def before_compact(self, view: TaskView, trigger: Literal["manual", "auto"],
                              instructions: str) -> str | Deny | None:
