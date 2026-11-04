@@ -19,7 +19,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | run shell / HTTP hooks in Claude Code's format | settings `hooks`, or a Claude Code plugin's `hooks/hooks.json` (InstructionsLoaded included) | `noeta/plugins/hooks` |
 | add a slash command | `commands()` / `run_command()`, or `commands/*.md` in a Claude Code plugin | `noeta/core/commands.py` |
 | keep state across restarts and machines | `view.record(name, kind, data)` + `reduce()` (never a new event type) | `noeta/core/extension.py` |
-| fold records written under another name (a plugin split out of another; records front ends read by name) | `folds = ("other",)`: those records reach `reduce` too | `noeta/core/extension.py` |
+| fold records written under another name (records front ends read by name) | `folds = ("other",)`: those records reach `reduce` too | `noeta/core/extension.py` |
 | wake a task later | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | ask the person something | `ask(...)` (the call parks, the task holds no worker) | `noeta/core/questions.py` |
 | add an agent or sub-agent | an agent markdown file (Claude Code's format plus `plugins`) | `noeta/agents/agent_files.py` |

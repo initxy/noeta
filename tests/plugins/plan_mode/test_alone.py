@@ -14,13 +14,12 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.commands import expand_command
-from noeta.core.events import ExtensionRecorded, Recorded, ToolFinished, Waiting
+from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import CommandContext
-from noeta.core.loop.state import also_folding, fold
 from noeta.host.pending import pending
 from noeta.plugins.permissions import Permissions
 from noeta.plugins.permissions.state import PermState
-from noeta.plugins.plan_mode import PlanMode, PlanState
+from noeta.plugins.plan_mode import PlanMode
 from noeta.plugins.plan_mode import plan as pl
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.permission_modes import current_mode, published_modes
@@ -172,38 +171,6 @@ async def test_with_neither_plugin_a_plan_config_changes_nothing(store: SqliteSt
     await client.create("a", "go", config={"cwd": str(tmp_path), "permission_mode": "plan"})
     await rt.run_until_idle()
     assert len(write.runs) == 1
-
-
-def test_a_log_from_before_the_split_replays_the_same(tmp_path: Path) -> None:
-    """Records a log holds under ``permissions`` from when plan mode was part
-    of that plugin reach the plan-mode plugin, with or without the
-    permissions plugin."""
-    path = str(tmp_path / "plans" / "a-b-c.md")
-    old = [
-        ("mode", {"mode": "default"}),
-        ("mode", {"mode": "plan", "plan": {"path": path, "pre_mode": "default",
-                                           "entered_seq": 4, "auto_during_plan": False}}),
-        ("noted", {"kinds": ["plan_active"], "plan_noted": 4, "plan_reminders": 1,
-                   "auto_noted": False}),
-        ("compacted", {"auto": False, "plan": True, "seq": 9}),
-        ("plan_file", {"path": path, "text": "1. x"}),
-        ("plan_exit", {"mode": "acceptEdits", "named": True}),
-        ("plan_name", {"name": "add-logging"}),
-    ]
-    log = [Recorded(seq=i + 1, at=0.0, event=ExtensionRecorded(
-        extension="permissions", kind=kind, data=data)) for i, (kind, data) in enumerate(old)]
-    for exts in ([PlanMode()], [Permissions(), PlanMode()]):
-        state = fold(log, {e.name: e.reduce for e in exts}, also=also_folding(exts))
-        st = state.ext["plan_mode"]
-        assert isinstance(st, PlanState)
-        assert st.mode == "acceptEdits" and st.plan is not None and st.plan["path"] == path
-        assert st.plan_noted == 4 and st.plan_reminders == 1 and st.plan_left
-        assert st.due == ("plan_active", "plan_exited")
-        assert st.plan_file == {"path": path, "text": "1. x"}
-        assert st.plan_named and st.plan_name == "add-logging"
-    perms = fold(log, {"permissions": Permissions().reduce}).ext["permissions"]
-    assert isinstance(perms, PermState) and perms.mode == "acceptEdits"
-    assert perms.plan is not None and perms.due == ()
 
 
 def test_coordination_tools_may_run_while_planning() -> None:

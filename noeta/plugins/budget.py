@@ -19,9 +19,6 @@ from noeta.core.types import ModelRequest, ToolUse
 __all__ = ["BudgetCaps", "BudgetState", "Caps", "Counters", "budget_verdict"]
 
 NAME = "budget"
-#: A log from before this plugin was split out of the permissions plugin
-#: has its counts (``step``, ``tool_call``, ``cost``) under that name.
-FORMER_NAME = "permissions"
 
 
 @dataclass(frozen=True)
@@ -96,7 +93,6 @@ class BudgetCaps(Extension):
     a cap that is set is counted."""
 
     name = NAME
-    folds = (FORMER_NAME,)
 
     def __init__(self, *, max_iterations: int | None = None, max_turns: int | None = None,
                  max_tool_calls: int | None = None, max_cost_usd: float | None = None,

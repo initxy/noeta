@@ -599,8 +599,7 @@ def _carried_files(ext: Mapping[str, Any], config: Mapping[str, Any], *,
             if isinstance(directory, str) and directory else None
         if index is not None and index in (instructions.get("digests") or {}):
             out.add(index)
-    plan = getattr(ext.get("plan_mode"), "plan", None) \
-        or getattr(ext.get("permissions"), "plan", None)
+    plan = getattr(ext.get("plan_mode"), "plan", None)
     path = plan.get("path") if isinstance(plan, Mapping) else None
     if isinstance(path, str) and path:
         out.add(path)
