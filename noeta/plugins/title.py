@@ -5,7 +5,9 @@ side request sent beside the main one. A task nobody follows live
 names no session in print mode.
 
 The title is recorded as ``("title", "title", {"title": ...})``; front ends
-read it from the task's events. A failed request leaves the task untitled.
+read it from the task's events. A person renames the task with the
+``rename`` signal (``noeta.toolkit.signals.RENAME_SIGNAL``). A failed request
+leaves the task untitled.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from noeta.core.types import user
 from noeta.toolkit.interactive import interactive
 from noeta.toolkit.plugin_records import TITLE
 from noeta.toolkit.side_requests import side_request
+from noeta.toolkit.signals import RENAME_SIGNAL
 
 __all__ = ["PROMPT", "Title", "title_of"]
 
@@ -77,6 +80,12 @@ class Title(Extension):
                 title = str((body.data or {}).get("title") or "").strip()
                 if title and not title_of(st):
                     view.record(self.name, "title", {"title": title})
+                    st = {**st, "title": title}
+            elif isinstance(body, External) and body.name == RENAME_SIGNAL:
+                title = str((body.data or {}).get("title") or "").strip()
+                if title:
+                    view.record(self.name, "title", {"title": title})
+                    st = {**st, "title": title}
             elif isinstance(body, Say) and body.message.origin in (None, "human") \
                     and not st.get("asked") and not view.state.parent_id \
                     and interactive(view.state.config):

@@ -25,7 +25,10 @@ noeta serve --no-worker --host 0.0.0.0   # the API, on one or more machines
   with the token in `NOETA_SERVER_TOKEN`. They need no model of their own: a new task runs
   on the server's model, in the server's directory, unless
   `--model` names one or `--cwd PATH` names a directory on the server (a relative one is
-  taken from the server's). `noeta -p` always runs here and refuses `--server`.
+  taken from the server's). `noeta -p` always runs here and refuses `--server`. The web
+  app (`web/`, built with `npm run build`) is served at the server's own address with
+  `noeta serve --web web/dist`; it asks for the token once, or takes it from the
+  address's `#token=…` (never sent to the server, kept in the browser).
 - **Same settings everywhere.** Each process reads its own `~/.noeta` (`NOETA_HOME`): agents,
   plugins, `config.toml`. Ship the same copy to every machine; a worker
   missing a plugin a task was started with never runs that task without it

@@ -10,9 +10,10 @@
 #   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
 #   make cluster    worker processes on Postgres under random kills (needs docker or a DSN)
 #   make build      wheel + sdist into dist/
+#   make frontends  the front ends' own checks: web/ (install, typecheck, unit and e2e tests)
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint example e2e eval eval-baseline parity cluster build
+.PHONY: help install check test lint example e2e eval eval-baseline parity cluster build frontends
 
 help:
 	@echo "noeta"
@@ -28,6 +29,7 @@ help:
 	@echo "  make parity     replay Claude Code's recorded scenarios, write parity/report.md"
 	@echo "  make cluster    worker processes on Postgres under random kills (docker or a DSN)"
 	@echo "  make build      wheel + sdist into dist/"
+	@echo "  make frontends  web/: install, typecheck, unit tests, e2e against a real noeta serve"
 
 install:
 	uv sync --all-extras
@@ -84,6 +86,12 @@ cluster:
 
 build:
 	uv build
+
+## the front ends, each its own project with its own test command (never in check:
+## it needs node and a browser). web/: the e2e test runs a real noeta serve on the
+## offline scripted provider in web/e2e/provider
+frontends:
+	cd web && npm ci && npm run typecheck && npm test && npm run e2e
 
 ## every automated gate — CI's test job runs this same target. CI-only on top:
 ## the Postgres params of the store contract tests (skipped unless
