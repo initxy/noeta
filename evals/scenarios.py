@@ -107,6 +107,26 @@ def score_edit_not_write(t: Trace, judge: Judge) -> Result:
     return 0.5 + 0.25 * (not wrote and bool(edits)) + 0.25 * (not rejected), checks
 
 
+def score_read_in_bypass(t: Trace, judge: Judge) -> Result:
+    """The bypass-mode twin of :func:`score_read_over_cat`: Claude Code's note
+    there lets the shell read, so only the answer counts."""
+    correct = "37" in t.final_text
+    return float(correct), {"correct": correct,
+                            "shell_read_commands": [c for c in t.bash_commands()
+                                                    if SHELL_READ_SEARCH.search(c)]}
+
+
+def score_edit_in_bypass(t: Trace, judge: Judge) -> Result:
+    """The bypass-mode twin of :func:`score_edit_not_write`: the shell may make
+    the change, but the file must come out right and not be rewritten whole."""
+    expected = fx.PRICING.replace("MAX_DISCOUNT", "MAX_DISCOUNT_PCT")
+    correct = t.file("shop/pricing.py") == expected
+    rewrote = any(mentions(c, "shop/pricing.py") for c in t.named("Write")) or any(
+        re.search(r">\s*\S*shop/pricing\.py", c) for c in t.bash_commands())
+    checks = {"correct": correct, "rewrote_whole_file": rewrote}
+    return (0.5 + 0.5 * (not rewrote)) if correct else 0.0, checks
+
+
 def score_parallel_reads(t: Trace, judge: Judge) -> Result:
     targets = ("config/dev.toml", "config/staging.toml", "config/prod.toml")
     best = 0
@@ -769,6 +789,22 @@ SCENARIOS: list[Scenario] = [
         permission_mode="default",
         answer=approve_all,
         score=score_read_over_cat,
+        tags=("tool_choice",),
+    ),
+    Scenario(
+        name="read_in_bypass",
+        behavior="in bypass mode (shell reads allowed by Claude Code's note), answers from the file",
+        goal="What request timeout is configured in config/settings.toml?",
+        setup=fx.shop,
+        score=score_read_in_bypass,
+        tags=("tool_choice",),
+    ),
+    Scenario(
+        name="edit_in_bypass",
+        behavior="in bypass mode, makes the small change correctly without rewriting the whole file",
+        goal="In shop/pricing.py, rename the constant MAX_DISCOUNT to MAX_DISCOUNT_PCT (every use in that file).",
+        setup=fx.shop,
+        score=score_edit_in_bypass,
         tags=("tool_choice",),
     ),
     Scenario(
