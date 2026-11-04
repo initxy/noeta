@@ -83,7 +83,9 @@ class LocalClient(Client):
         """A model switch records where the model goes with it."""
         if name == CONFIG_SIGNAL and isinstance(data, dict) and "model" in data \
                 and MODEL_ROUTE not in data and self.route_model is not None:
-            data = {**data, MODEL_ROUTE: await self._route(data["model"])}
+            route = await self._route(data["model"])
+            if route is not None:
+                data = {**data, MODEL_ROUTE: route}
         return await super().signal(task_id, name, data, dedupe_key=dedupe_key)
 
     async def create(self, agent: str, input: Input | None = None, *,

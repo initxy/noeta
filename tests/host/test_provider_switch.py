@@ -13,6 +13,7 @@ import pytest
 
 pytest.importorskip("acp")
 
+import acp
 from acp import schema
 
 from noeta.backends.providers.listing import ListedModel
@@ -76,6 +77,8 @@ async def test_an_acp_pick_moves_the_task_to_the_other_provider(tmp_path: Path) 
     await agent.prompt(sid, text("hi"))
     assert [r.model for r in gateway.requests] == [GATEWAY_MODEL]
 
+    with pytest.raises(acp.RequestError):  # only the server records a route
+        await agent.set_config_option(config_id="model_route", session_id=sid, value="x")
     await agent.set_config_option(config_id="model", session_id=sid, value="sonnet")
     await agent.prompt(sid, text("again"))
     assert [r.model for r in claude.requests] == ["claude-sonnet-5-5"]
@@ -120,5 +123,11 @@ async def test_stream_json_set_model_switches_provider_and_lists_models(
                     and m["response"]["request_id"] == "r0")
         described = {m["value"]: m["description"] for m in init["models"]}
         assert described["claude-sonnet-5-5"] == "on provider anthropic"
+        # A route is the server's to record, never a client's.
+        c.control("r3", subtype="set_model", model="m",
+                  model_route={"model": "m", "provider": "default"})
+        refused = await c.until(lambda m: m.get("response", {}).get("request_id") == "r3")
+        assert refused["response"]["subtype"] == "error"
+        assert "model_route" in refused["response"]["error"]
         await c.inbox.put(None)
         await asyncio.wait_for(running, 10)

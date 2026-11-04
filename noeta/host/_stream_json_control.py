@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from noeta.core import models
 from noeta.core.client import ClientAPI
-from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.loop.state import CONFIG_SIGNAL, MODEL_ROUTE
 from noeta.host._errors import error_text
 from noeta.host.app import AppAPI, model_choices, prepare_model
 from noeta.host.pending import Pending, card_title
@@ -153,6 +153,8 @@ class ControlRequests:
         return {"mode": mode}
 
     async def _on_set_model(self, request: dict[str, Any]) -> dict[str, Any]:
+        if MODEL_ROUTE in request:
+            raise ValueError(f"{MODEL_ROUTE} is the server's to record, not a client's")
         model = request.get("model")
         if model in (None, "", "default"):
             model = self.options.model or None

@@ -341,7 +341,10 @@ class ProviderRouter:
     def task_provider(self, state: TaskState, model: str) -> Provider:
         """``Runtime.task_provider``: ``model`` goes where the task's
         recorded route says when the route is of that model, else as
-        :meth:`provider_for` resolves it."""
+        :meth:`provider_for` resolves it. The runner asks it each time it
+        builds a task's view (its token counter), on the folded state and
+        before the request is sized, so a recorded route's limits are known
+        here from the first request after a switch on."""
         route = state.config.get(MODEL_ROUTE)
         if isinstance(route, Mapping) and route.get("model") == models.resolve_alias(model):
             name = route.get("provider")

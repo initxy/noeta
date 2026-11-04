@@ -63,14 +63,18 @@ comes from noeta's catalog, then a models file (`NOETA_MODELS_FILE`) or table ro
 provider's `/models` listing when that publishes one (read from your endpoint only, kept a day in
 `~/.noeta/cache/models`), else default limits with a warning.
 
-What is deterministic: when a task is started with a model or switched to one (`/model`, the
-SDK's `set_model`, an editor's pick), that resolution is made once and recorded in the task's
-config (`model_route`: the provider, and limits a listing gave) beside the bare model id; every
-worker sends that model to the recorded provider at those limits, whatever its own listings say,
-and fails the call if that provider is not configured there. A sub-agent on its parent's model
-takes the record too. Any other model a task uses (an agent file's own model, a plugin's side
-call) resolves on the worker that runs it: the same everywhere only when a table or models file
-names it. Reasoning a provider signed is replayed only to that provider, and tool-call ids
+What is deterministic, with more than one provider: when a task is started with a model or
+switched to one (`/model`, the SDK's `set_model`, an editor's pick), and when a sub-agent is
+spawned (on its parent's model or its own), that resolution is made once and recorded in the
+task's config (`model_route`: the provider, and limits a listing gave) beside the bare model id.
+Every worker sends that model to the recorded provider at those limits, whatever its own
+listings say, and fails the call if that provider is not configured there. Only the server
+records a route; a client (HTTP, stream-json, an editor) cannot set one. The exceptions, which
+resolve on the worker that runs them and are the same everywhere only when a table or models
+file names the model: a model a plugin calls on the side (`compaction_model`, a title or
+permission-classifier model, a skill's `model`), and the agent's own model after an editor
+picks "default". With one provider nothing is recorded (the log is as before); a model's
+listed limits are then looked up by each process. Reasoning a provider signed is replayed only to that provider, and tool-call ids
 another provider wrote are rewritten to the form Anthropic takes. `/model` alone lists every
 provider's models.
 

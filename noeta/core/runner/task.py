@@ -471,7 +471,9 @@ class TaskRun:
     ) -> None:
         if self._lost:
             raise LostClaim()
-        creates = [replace(c, created=await pin_history(self.store, c.created))
+        prepare = self.rt.prepare_child
+        creates = [replace(c, created=await pin_history(
+            self.store, c.created if prepare is None else await prepare(c.created)))
                    for c in creates]
         async with self._write_lock:
             base = self.state.last_seq

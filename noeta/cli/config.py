@@ -83,6 +83,7 @@ if TYPE_CHECKING:
     from noeta.backends.providers.routing import Endpoint, ProviderRouter
     from noeta.core.agent import Agent
     from noeta.core.channel import Channel
+    from noeta.core.events import TaskCreated
     from noeta.core.loop.state import TaskState
     from noeta.host.local import LocalApp
 
@@ -672,17 +673,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     runtime_kw.setdefault("workspace_trusted", project_trusted)
     # The default provider is built now, so a missing key stops the start.
     router.adopt(router.default.name, settings.make_provider())
-    env_for = runtime_kw["env_for"]
-
-    def env_for_task(state: TaskState) -> ExecEnv:
-        # The first look the host gets at a task loaded here: its recorded
-        # model's limits are made known before its first request is sized.
-        router.adopt_route(state.config.get(MODEL_ROUTE))
-        result: ExecEnv = env_for(state)
-        return result
-
-    runtime_kw["env_for"] = env_for_task
-    if router.several:  # with one provider every route is that one
+    if router.several:
+        # Routes are recorded and followed only with several providers: with
+        # one, every route is that one and the log stays as it always was.
         runtime_kw.setdefault("task_provider", router.task_provider)
     app = LocalApp(store, agents,
                    router.provider_for, own_tasks_only=own_tasks_only,
@@ -697,7 +690,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
 
     app.list_models = router.available
     app.prepare_model = prepare_model
-    app.client.route_model = router.route_record
+    if router.several:
+        app.client.route_model = router.route_record
+        app.runtime.prepare_child = _route_child(app.runtime, router)
 
     def pick_main_agent() -> None:
         """The agent front ends start with: the settings' ``agent``, else
@@ -726,6 +721,29 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
 
     app.reload_plugins = reload_plugins
     return app
+
+
+def _route_child(runtime: Any, router: ProviderRouter) -> Any:
+    """``Runtime.prepare_child``: a child task records the route of the
+    model it runs (its config's, else its agent's), like a task a front end
+    starts, unless it carries that model's route already."""
+    import asyncio
+
+    import msgspec
+
+    async def prepare(created: TaskCreated) -> TaskCreated:
+        agent = runtime.agent(created.agent)
+        model = models.resolve_alias(str(created.config.get("model")
+                                         or (agent.model if agent is not None else "")))
+        route = created.config.get(MODEL_ROUTE)
+        if not model or (isinstance(route, Mapping) and route.get("model") == model):
+            return created
+        record = await asyncio.to_thread(router.route_record, model)
+        if record is None:
+            return created
+        return msgspec.structs.replace(created, config={**created.config, MODEL_ROUTE: record})
+
+    return prepare
 
 
 def _unjoined_notices(agents: Sequence[Agent],

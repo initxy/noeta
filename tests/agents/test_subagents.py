@@ -132,19 +132,3 @@ def test_the_plan_agents_prompt_looks_for_similar_features_and_ends_read_only() 
     closing = prompt.index("Remember: you only explore and plan.")
     assert critical < closing
     assert "must not write, edit or change any file" in prompt[closing:]
-
-
-def test_a_child_on_the_parents_chosen_model_takes_its_route() -> None:
-    from noeta.core.loop.state import MODEL_ROUTE
-    from noeta.plugins.subtasks import Subtasks
-
-    route = {"model": "gw-big", "provider": "gw", "context_window": 300_000}
-    state = TaskState(agent="main", config={"model": "gw-big", MODEL_ROUTE: route})
-    ctx: Any = None
-    sub = Subtasks()
-    same = sub.child_config(state, ctx, "general-purpose", {}, "general-purpose", {},
-                            fork=False, parent_model="gw-big")
-    assert same[MODEL_ROUTE] == route
-    other = sub.child_config(state, ctx, "general-purpose", {}, "general-purpose",
-                             {"model": "haiku"}, fork=False)
-    assert MODEL_ROUTE not in other

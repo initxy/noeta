@@ -54,11 +54,27 @@ endpoint. The kernel calls `rt.provider_for(request.model)` for every model call
   the folded state, before the first request is sized). A sub-agent on its parent's model
   inherits the record (`subtasks.child_config`). One provider: nothing is recorded unless a
   listing gave the limits, and `task_provider` is not set.
+- (re-review, superseding the parts above it contradicts) Routes are recorded and followed
+  only with more than one provider; with one nothing is attached and the log is byte for byte
+  main's (a `None` route is never written). A child task records its own model's route when it
+  is written (`Runtime.prepare_child`, at `TaskRun.append`, so the Agent tool, workflows and any
+  `TaskView.spawn` are covered); the `subtasks` inheritance is gone. A recorded route's limits
+  are registered from `task_provider`, which the runner asks each time it builds a task's view
+  (its token counter), after the config fold and before the request is sized; the `env_for`
+  wrapper is gone. Clients cannot set a route: the HTTP guard leaves `model_route` out of the
+  config keys a request may set or change, stream-json `set_model` refuses it, ACP takes only
+  `model` / `mode`. Exceptions that resolve per worker (README lists them): plugin side-call
+  models (`compaction_model`, title / classifier models, a skill's `model`) and the agent's own
+  model after an editor picks "default".
 - (review) Kernel change, minimal: `MODEL_ROUTE` joins `CHANGEABLE_CONFIG` (a switch must record
   the route atomically with the model), and `Runtime.task_provider(state, model)` /
   `Runtime.provider_of` (3 call sites) let the host pick with the task's state. Needed because
   `provider_for(model)` sees only the model id, and plugin side calls (`TaskView.complete`) and
   token counts bypass every extension hook, so no plugin could carry the route to them.
+  (re-review) Plus `Runtime.prepare_child` (one call in `TaskRun.append`): children are staged
+  synchronously inside tools and plugins, and their model (an agent's own) is known only to the
+  runtime; the hook is the one place every spawn passes, async so a listing read stays off the
+  loop.
 - (review) Listings: 404 / 405 = no listing (kept empty a day); any other failure keeps the older
   copy untouched (its age too) and retries after 60 s, doubling to the max age. Start reads a
   listing only for an uncatalogued start model; routing listings are read when a task is given
@@ -130,3 +146,7 @@ endpoint. The kernel calls `rt.provider_for(request.model)` for every model call
   same-family endpoints, start read every listing, duplicate model names overwrote. Fixed per
   the (review) Decisions; the route record needed a minimal kernel change (reason there).
 - 2026-11-03: review fixes green: `make check` 3556 passed (89.83%), parity 0 mismatches, cluster 14 passed, e2e 7 passed.
+- 2026-11-03: re-review: sub-agents on another model and plugin side-call models had no route,
+  mid-run switches registered limits only at run start, one provider logged `model_route`
+  (null on switches), clients could forge a route. Fixed per the (re-review) Decision.
+- 2026-11-03: re-review fixes green: `make check` 3559 passed (89.82%), parity 0 mismatches, cluster 14 passed, e2e 7 passed.

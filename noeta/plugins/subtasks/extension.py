@@ -27,7 +27,7 @@ from noeta.core.events import (
 )
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import Deny, Extension, Gate, Reminder, Rewrite, TaskView
-from noeta.core.loop.state import MODEL_ROUTE, TaskState
+from noeta.core.loop.state import TaskState
 from noeta.core.runner.texts import STEP_LIMIT_HEAD
 from noeta.core.tool import Tool, ToolContext
 from noeta.core.types import Message, ModelRequest, ToolUse, user
@@ -283,11 +283,6 @@ class Subtasks(Extension):
                 config["effort"] = args["effort"]
         config[DEPTH_KEY] = int(state.config.get(DEPTH_KEY) or 0) + 1
         config[TYPE_KEY] = kind
-        route = state.config.get(MODEL_ROUTE)
-        # A child on the parent's chosen model goes where the parent's does.
-        if isinstance(route, Mapping) and route.get("model") == models.resolve_alias(
-                str(config.get("model") or parent_model)):
-            config[MODEL_ROUTE] = dict(route)
         return config
 
     # ------------------------------------------------------------ tools
