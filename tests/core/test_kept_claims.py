@@ -16,7 +16,9 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
+from noeta.core.events import External, InputTaken, Waiting
 from noeta.core.runner import Runtime
+from noeta.core.store import Post
 from noeta.core.tool import KeptClaim, ToolContext, ToolOutput, text_output
 from noeta.testing import ScriptedProvider, reply
 
@@ -152,3 +154,27 @@ async def test_a_kept_wait_takes_no_slot(store: SqliteStore) -> None:
         await serving
     assert tool.lost == tool.kept  # the worker stopping let go of the first
     assert (await client.get(first)).owner is None
+
+
+async def test_a_kept_wait_leaves_a_post_that_does_not_wake_for_the_next_wake(
+        store: SqliteStore) -> None:
+    tool = Keep()
+    provider = ScriptedProvider([reply("", ("Keep", {})), reply("waiting"), reply("answered")])
+    rt = _runtime(store, provider, tool, poll_interval=0.02)
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    await store.post(Post(task_id=tid, body=External(name="news"), wake=False))
+    await asyncio.sleep(0.3)
+    assert isinstance((await client.events(tid))[-1].event, Waiting)  # nothing taken
+    await client.send(tid, "and now?")
+
+    async def answered() -> bool:
+        return len(provider.requests) == 3
+
+    await _until(answered)
+    [taken] = [r.event for r in await client.events(tid) if isinstance(r.event, InputTaken)][-1:]
+    assert [type(i.body).__name__ for i in taken.items] == ["External", "Say"]
+    tool.kept[0].release()
+    await asyncio.wait_for(next(iter(rt._kept_runs)), 10)
+

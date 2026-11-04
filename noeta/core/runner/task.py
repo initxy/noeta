@@ -655,7 +655,7 @@ class TaskRun:
                 if due is not None and due <= now:
                     self._kept_due = due
                     return True
-                if row.inbox_seq > self.state.inbox_read:
+                if row.status == "ready":  # woken: a post that does not wake leaves it
                     return True
                 if not self.kept:
                     await self.store.release(self.claim)
