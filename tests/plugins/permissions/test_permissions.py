@@ -16,7 +16,9 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
+from noeta.core.extension import Ask, Extension, Gate, TaskView
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
+from noeta.core.types import ToolUse, user
 from noeta.host.pending import pending, pending_tree
 from noeta.plugins.fs import FileTools
 from noeta.plugins.permissions import (
@@ -1171,3 +1173,33 @@ def test_the_working_directories_are_the_cwd_then_the_additional_ones() -> None:
     ext = Permissions(additional_directories=["../shared", "/srv/docs", "/srv/docs"])
     view = TaskView(state=TaskState(task_id="t", config={"cwd": "/w/proj"}))
     assert ext.working_directories(view) == ("/w/proj", "/w/shared", "/srv/docs")
+
+
+class AsksAsOther(Extension):
+    """Another gate's card: it asks before every Read."""
+
+    name = "asks_as_other"
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        return Ask(prompt="read?", detail={"by": "other"}) if call.name == "Read" else None
+
+
+async def test_a_mode_choice_on_another_gates_card_does_not_switch_after_a_message_now(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """A ``Say(now)`` clears the standing wait while the card is pending; the
+    answer still belongs to the other gate's card, so no mode switches."""
+    read = Fake("Read")
+    provider = ScriptedProvider([reply("", ("Read", {"file_path": "a.py"})), reply("done")])
+    rt = runtime(store, provider, agent([Permissions(mode="default"), AsksAsOther()], [read]))
+    client = Client(store)
+    tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
+    await rt.run_until_idle()
+    await client.send(tid, user("job 1 ended", origin="system"), when="now")
+    await rt.run_until_idle()
+    [item] = pending(await client.events(tid), tid)
+    await client.answer(tid, item.request_id, "allow", data={"mode": "acceptEdits"})
+    await rt.run_until_idle()
+    assert len(read.runs) == 1
+    modes = [e.data.get("mode") for e in await events(client, tid)
+             if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    assert modes and "acceptEdits" not in modes
