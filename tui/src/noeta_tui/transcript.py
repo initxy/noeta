@@ -1,30 +1,25 @@
 """What the terminal app shows of a task: the transcript rendered from what
 the task records, live model output streamed into it, approval and question
-cards (sub-agents' too), and the status bar. :class:`TranscriptView` is the
-base of :class:`~noeta.cli.tui.app.NoetaApp`, which holds this state and
-handles input."""
+cards (sub-agents' too), the task list, the spinner and the footer.
+:class:`TranscriptView` is the base of :class:`~noeta_tui.app.NoetaApp`,
+which holds this state and handles input."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rich.text import Text as RichText
+from rich.text import Text
 from textual import work
 from textual.app import App
+from textual.widget import Widget
 from textual.widgets import Markdown, Static
 from textual.widgets.markdown import MarkdownStream
 
-from noeta.cli.tui.widgets import (
-    ApprovalCard,
-    AssistantMessage,
-    Notice,
-    QuestionCard,
-    ToolCall,
-    UserMessage,
-)
 from noeta.core import models, records
 from noeta.core.events import (
     Answer,
@@ -52,11 +47,24 @@ from noeta.host.pending import (
 )
 from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
+from noeta.toolkit.tokens import estimate_tokens
+from noeta_tui import render
+from noeta_tui.widgets import (
+    ApprovalCard,
+    AssistantMessage,
+    Notice,
+    QuestionCard,
+    ToolCall,
+    UserMessage,
+    bulleted,
+)
 
-log = logging.getLogger("noeta.cli.tui")
+log = logging.getLogger("noeta_tui")
 
 
 SERVER_DIRECTORY = "the server's directory"
+#: Seconds between two spinner frames.
+SPINNER_TICK = 0.12
 
 
 def _short_path(path: str, width: int) -> str:
@@ -99,6 +107,24 @@ class TranscriptView(App[None]):
     shown_requests: set[tuple[str, str]]
     waiting_for: str
     _deltas: asyncio.Queue[Delta]
+    #: The task list (the todos plugin's records), by id.
+    todos: dict[str, dict[str, Any]]
+    #: Every call's result shown in full (ctrl+o).
+    verbose: bool
+    #: Messages sent while a turn ran, not yet taken by the task.
+    queued: list[str]
+    #: Messages shown as they were sent, not yet seen in the task's log.
+    echoed: list[str]
+    #: When the running turn started (``time.monotonic``), and the output
+    #: tokens it produced so far.
+    turn_started: float
+    turn_tokens: int
+    turn_output: int
+    turn_verb: str
+    #: The task list is shown (ctrl+t hides it).
+    show_tasks: bool
+    #: What the footer says for a moment (``Press Ctrl-C again to exit``).
+    flash: str
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None: ...
@@ -122,7 +148,7 @@ class TranscriptView(App[None]):
             self.shown_requests.add(key)
             who = p.agent or "sub-agent"
             if p.kind == "approval":
-                self.waiting_for = f"{who} waits for your approval (y/a/n)"
+                self.waiting_for = f"{who} waits for your approval"
 
                 async def decide(call_id: str, choice: str,
                                  task_id: str = p.task_id) -> None:
@@ -137,6 +163,37 @@ class TranscriptView(App[None]):
                 await transcript.mount(QuestionCard(p.detail, who=who))
         transcript.scroll_end(animate=False)
         self.update_status()
+
+    # ------------------------------------------------------------ busy
+
+    def set_busy(self, busy: bool) -> None:
+        """A turn starts or ends: the spinner runs while it does."""
+        if busy and not self.busy:
+            self.turn_started, self.turn_tokens, self.turn_output = time.monotonic(), 0, 0
+            self.turn_verb = random.choice(render.VERBS)
+        self.busy = busy
+        self.update_status()
+
+    def _tick(self) -> None:
+        """The spinner's next frame (a timer while the app runs)."""
+        found = self.query("#spinner")
+        if not found:  # the app is closing
+            return
+        spinner = found.first(Static)
+        show = self.busy and not self.waiting_for
+        spinner.display = show
+        if show:
+            frame = int((time.monotonic() - self.turn_started) / SPINNER_TICK)
+            verb = render.active_form(self.todos) or self.turn_verb
+            spinner.update(render.spinner_line(frame, verb, time.monotonic() - self.turn_started,
+                                               self.turn_tokens))
+
+    async def _turn_done(self) -> None:
+        if self.busy and self.turn_started:
+            took = render.elapsed_text(time.monotonic() - self.turn_started)
+            await self.query_one("#transcript").mount(Notice(
+                Text(f"✻ Worked for {took}", style="dim"), classes="worked"))
+        self.set_busy(False)
 
     # ------------------------------------------------------------ rendering
 
@@ -169,13 +226,14 @@ class TranscriptView(App[None]):
             await self._end_stream(drop=same_call)  # a retry replaces its failed attempt
         if self.stream is None:
             widget = AssistantMessage("")
-            await self.query_one("#transcript").mount(widget)
+            await self.query_one("#transcript").mount(bulleted(widget))
             self.query_one("#transcript").anchor()
             self.stream, self.stream_widget, self.stream_key = \
                 Markdown.get_stream(widget), widget, key
         self.attempts[delta.call_seq] = delta.attempt
         self.streamed.add(delta.call_seq)
         self.stream_text += delta.text
+        self.turn_tokens += estimate_tokens(delta.text)
         await self.stream.write(delta.text)
 
     async def _end_stream(self, *, drop: bool = False) -> None:
@@ -199,7 +257,8 @@ class TranscriptView(App[None]):
                 if not drop and widget is not None:
                     await widget.update(text)
         if drop and widget is not None:
-            await widget.remove()
+            row = widget.parent  # the bullet's row
+            await (row if isinstance(row, Widget) else widget).remove()
 
     async def _retried(self, failed_attempt: int) -> None:
         """A model call's attempt failed: what it streamed is dropped."""
@@ -241,8 +300,15 @@ class TranscriptView(App[None]):
         elif isinstance(ev, InputTaken):
             for item in ev.items:
                 if isinstance(item.body, Say) and item.body.message.origin in (None, "human"):
-                    await transcript.mount(UserMessage(item.body.message.text))
-                    self.busy = True
+                    text = item.body.message.text
+                    if text in self.queued:
+                        self.queued.remove(text)
+                        self._show_queued()
+                    if text in self.echoed:
+                        self.echoed.remove(text)  # shown when it was sent
+                    else:
+                        await transcript.mount(UserMessage(text))
+                    self.set_busy(True)
                 elif isinstance(item.body, Answer) and \
                         item.body.request_id == self.waiting_question and \
                         self.question_task in ("", self.task_id):
@@ -257,13 +323,16 @@ class TranscriptView(App[None]):
             await self._end_stream()
             msg = ev.response.message
             if msg.text.strip() and self.called not in self.streamed:
-                await transcript.mount(AssistantMessage(msg.text))
+                await transcript.mount(bulleted(AssistantMessage(msg.text)))
             self.streamed.discard(self.called)
             for call in msg.tool_uses:
-                block = ToolCall(call)
+                block = ToolCall(call, expanded=self.verbose)
                 self.calls[call.id] = block
                 await transcript.mount(block)
             self.context_tokens = ev.response.usage.input + ev.response.usage.output
+            # The reply's real count replaces what its stream was estimated at.
+            self.turn_output += ev.response.usage.output
+            self.turn_tokens = self.turn_output
             self._refresh_cost(self.task_id)
         elif isinstance(ev, ToolStarted):
             if ev.call.id in self.calls:
@@ -271,14 +340,13 @@ class TranscriptView(App[None]):
         elif isinstance(ev, ToolFinished):
             finished = self.calls.get(ev.result.call_id)
             if finished is not None:
-                diff = ev.meta.get("diff") if isinstance(ev.meta.get("diff"), str) else None
-                finished.set_result(ev.result.text, is_error=ev.result.is_error, diff=diff)
+                finished.set_result(ev.result.text, is_error=ev.result.is_error, meta=ev.meta)
         elif isinstance(ev, ExtensionRecorded):
             await self._render_record(rec, ev, transcript)
         elif isinstance(ev, Waiting):
             await self._render_waiting(ev, transcript)
         elif isinstance(ev, TaskEnded):
-            self.busy = False
+            await self._turn_done()
             self._refresh_cost(self.task_id)
             await transcript.mount(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error
                                                                  else "")))
@@ -297,6 +365,9 @@ class TranscriptView(App[None]):
         core = records.decode(ev)
         if ev.extension == "title" and ev.kind == "title":
             self.sub_title = str(data.get("title") or "")
+        elif ev.extension == "todos":
+            render.fold_todos(self.todos, ev.kind, data)
+            self._show_todos()
         elif isinstance(core, records.Retry):
             await self._retried(int(core.attempt or 1))
             await transcript.mount(Notice(f"retrying (attempt {core.attempt}): "
@@ -304,7 +375,8 @@ class TranscriptView(App[None]):
         elif isinstance(core, records.TurnStopped):
             await self._end_stream()
             self._set_question("", "", {})
-            await transcript.mount(Notice("stopped"))
+            await transcript.mount(Notice(Text("  ⎿  Interrupted · what should noeta do "
+                                               "instead?", style="red")))
         elif isinstance(core, records.TurnFailed):
             await transcript.mount(Notice(f"turn failed: {failure_text(data)}",
                                           classes="-error"))
@@ -313,11 +385,21 @@ class TranscriptView(App[None]):
             await transcript.mount(Markdown(core.text, classes="notice")
                                    if core.notice_kind else Notice(core.text))
 
+    def _show_todos(self) -> None:
+        tasks = self.query_one("#tasks", Static)
+        tasks.update(render.todo_block(self.todos))
+        tasks.display = bool(self.todos) and self.show_tasks
+
+    def _show_queued(self) -> None:
+        box = self.query_one("#queued", Static)
+        box.update(Text("\n".join(f"❯ {q}" for q in self.queued), style="dim"))
+        box.display = bool(self.queued)
+
     async def _render_waiting(self, ev: Waiting, transcript: Any) -> None:
         await self._end_stream()
-        self.waiting_for = {"approval": "waiting for your approval (y/a/n)",
+        self.waiting_for = {"approval": "waiting for your approval",
                             "question": "waiting for your answer",
-                            "children": "waiting for subtasks"}.get(ev.on, "")
+                            "children": ""}.get(ev.on, "")
         if ev.on == "approval":
             uses = {i: block.call for i, block in self.calls.items()}
             for p in approvals(ev, uses, self.task_id):
@@ -333,8 +415,8 @@ class TranscriptView(App[None]):
                 self._set_question(call_id, self.task_id, ev.detail[call_id])
                 await transcript.mount(QuestionCard(ev.detail[call_id]))
         elif ev.on == "input":
-            self.busy = False
             self._set_question("", "", {})
+            await self._turn_done()
 
     def _take_modes(self, offered: Modes | None) -> None:
         if offered is not None and offered.cycle:
@@ -343,19 +425,25 @@ class TranscriptView(App[None]):
     def update_status(self) -> None:
         spec = models.find_spec(self.model)
         window = spec.context_window if spec else models.UNKNOWN_MODEL_CONTEXT_WINDOW
-        used = f"{self.context_tokens / window:.0%}" if self.context_tokens else "-"
+        used = f"{self.context_tokens / window:.0%}" if self.context_tokens else "0%"
         cost = f" · ${self.cost_usd:.2f}" if self.cost_usd else ""
-        state = self.waiting_for or ("working… (Esc to stop)" if self.busy else "ready")
-        width = max(self.size.width - len(self.model) - len(state) - 30, 12)
-        self.query_one("#status", Static).update(RichText(
-            f"{state} · {self.model} · {self.mode or self.permission_mode or 'auto'} mode "
-            f"(shift+tab) · context {used}{cost} · "
-            f"{_short_path(self.task_cwd or SERVER_DIRECTORY, width)}"))
+        hints = self.query_one("#hints", Static)
+        if self.flash:
+            hints.update(Text(self.flash, style="dim"))
+        elif self.waiting_for:
+            hints.update(Text(self.waiting_for, style="yellow"))
+        else:
+            hints.update(render.mode_hint(self.mode or self.permission_mode or ""))
+        width = max(self.size.width // 2 - len(self.model) - 24, 12)
+        self.query_one("#status", Static).update(Text(
+            f"{self.model} · context {used}{cost} · "
+            f"{_short_path(self.task_cwd or SERVER_DIRECTORY, width)}", style="dim"))
+        self._tick()
 
     @work(exclusive=True, group="cost", exit_on_error=False)
     async def _refresh_cost(self, task_id: str) -> None:
-        """The status bar's cost: the whole tree's (sub-agents too), priced
-        per model as ``/cost`` prices it."""
+        """The footer's cost: the whole tree's (sub-agents too), priced per
+        model as ``/cost`` prices it."""
         total = await tree_usage(self.local.client, task_id)
         if task_id == self.task_id:
             self.cost_usd = total.cost_usd

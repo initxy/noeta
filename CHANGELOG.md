@@ -9,6 +9,13 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Added
 
+- **The terminal UI is its own package, `noeta-tui` (`tui/`)**, found by `noeta` through the
+  entry-point group `noeta.frontends`; the `tui` extra is gone (install line in the README).
+  It now looks and works like Claude Code 2.1's: welcome box, `❯` prompt between rules, mode
+  line and shortcuts panel, spinner, folded `⎿` results (`ctrl+o`), numbered diffs, the task
+  list, queued messages, a numbered approval dialog, slash and `@` menus, `!` bash mode,
+  pickers for `/model`, `/resume` and rewind, `/status`, `/permissions`, `/agents` and a
+  `/context` grid (`tui/screenshots/README.md`).
 - **Claude Code's task list as the plugin `todos`** (spec `2026-11-02-task-tools`): `TaskCreate`,
   `TaskGet`, `TaskUpdate`, `TaskList` (deferred) and a reminder after ten model turns without
   them, for the models Claude Code 2.1.312 gives them to: older Claude models (Claude 3.x,

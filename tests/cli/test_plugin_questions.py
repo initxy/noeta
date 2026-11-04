@@ -97,26 +97,6 @@ def test_read_answer() -> None:
         read_answer({"answers": {}}, detail)
 
 
-async def test_the_tui_asks_for_a_plugin(tmp_path: Path) -> None:
-    pytest.importorskip("textual")
-    from noeta.cli.tui.app import NoetaApp
-    from tests.cli.test_frontends_rereview import settle
-
-    provider = ScriptedProvider([reply("", ("Deploy", {})), reply("done")])
-    app = NoetaApp(_local(tmp_path, provider), agent="main", model="m", cwd=str(tmp_path))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"ship it", "enter")
-        await settle(pilot, lambda: bool(app.waiting_question))
-        notices = " ".join(str(w.render()) for w in app.query(".notice"))
-        assert "deploy: asking where to" in notices
-        await pilot.press(*"Prod", "enter")
-        await pilot.press(*"first release", "enter")
-        await settle(pilot, lambda: provider.steps == [])
-        await settle(pilot, lambda: not app.busy)
-        assert await _result(app.local, app.task_id) == "deployed to prod: first release"
-        assert all("deploy: asking" not in m.text for m in provider.requests[-1].messages)
-
-
 async def test_acp_asks_for_a_plugin(tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("", ("Deploy", {})), reply("done")])
     app = _local(tmp_path, provider)

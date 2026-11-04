@@ -1,0 +1,47 @@
+Screen { layout: vertical; }
+#body { height: 1fr; }
+#transcript { width: 1fr; padding: 0 1; }
+#side { width: 36; border-left: solid $panel; padding: 0 1; }
+
+.welcome { border: round #d77757; padding: 0 1; margin: 0 0 1 0; width: auto; max-width: 100%; }
+.user-message { margin: 1 0 0 0; padding: 0 1; background: $boost; color: $text-muted; }
+.row { height: auto; margin: 1 0 0 0; }
+.bullet { width: 2; }
+.assistant-message { width: 1fr; margin: 0; padding: 0; }
+.assistant-message MarkdownParagraph { margin: 0; }
+.notice { color: $text-muted; margin: 1 0 0 0; }
+.notice.-error { color: $error; }
+.worked { margin: 1 0 0 0; }
+.command-output { margin: 1 0 0 2; height: auto; }
+
+.tool-call { height: auto; margin: 1 0 0 0; }
+.tool-head { height: auto; }
+.tool-body { height: auto; }
+
+.approval { border-top: solid $warning; padding: 0 1; margin: 1 0; height: auto; }
+.approval-title { color: $warning; }
+.approval-prompt { padding: 1 2; }
+.approval-result { color: $text-muted; }
+.choices { height: auto; margin: 1 0 0 0; }
+.hint { color: $text-muted; margin: 1 0 0 0; }
+
+.question { border-top: solid $accent; padding: 0 1; margin: 1 0; height: auto; }
+.question.-answered { border-top: solid $panel; }
+.question-option { padding: 0 1; }
+
+#overlay { height: auto; }
+.picker { border-top: solid $secondary; padding: 0 1; height: auto; }
+.picker-title { color: $secondary; }
+
+#spinner { height: 1; padding: 0 1; margin: 1 0 0 0; }
+#tasks { height: auto; padding: 0 1; }
+#queued { height: auto; padding: 0 1; }
+#prompt-box { height: auto; border-top: solid $panel-lighten-2; border-bottom: solid $panel-lighten-2; }
+#prompt-box.-bash { border-top: solid #fd5db1; border-bottom: solid #fd5db1; }
+#marker { width: 2; padding: 0 0 0 1; }
+#prompt { height: auto; max-height: 10; min-height: 1; width: 1fr; border: none; background: transparent; }
+#completions { height: auto; padding: 0 1; }
+#shortcuts { height: auto; padding: 0 1; }
+#footer { height: 1; padding: 0 1; }
+#hints { width: 1fr; }
+#status { width: auto; }

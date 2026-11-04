@@ -4,7 +4,6 @@ asked (``--cwd`` names a directory on the server, ``--model`` a model)."""
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from typing import Any
 
@@ -32,14 +31,16 @@ def no_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 ])
 def test_the_tui_on_a_server_needs_no_local_model(
         argv: list[str], asked: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    # The module ``noeta.cli.main`` imports from: another test may have
-    # made the package attribute a different copy.
-    tui = importlib.import_module("noeta.cli.tui")
+    from noeta.host.remote import RemoteApp
+
     seen: dict[str, Any] = {}
-    monkeypatch.setattr(tui, "run_tui", lambda _s, **kw: seen.update(kw))
+    monkeypatch.setattr(cli, "front_end",
+                        lambda _name: lambda app, start: seen.update(app=app, start=start))
+    monkeypatch.setattr(server_token, "server_problem", lambda *_a: None)
     cli.main(["--server", "http://api.internal:8642", *argv])
-    assert seen["server"] == "http://api.internal:8642"
-    assert seen["task_config"] == asked
+    assert isinstance(seen["app"], RemoteApp)
+    assert str(seen["app"].client.http.base_url) == "http://api.internal:8642"
+    assert seen["start"].on_server and seen["start"].task_config == asked
 
 
 def test_the_tui_without_a_server_still_needs_a_model() -> None:
