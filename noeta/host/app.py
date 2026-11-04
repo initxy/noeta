@@ -17,6 +17,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import ClientAPI
 from noeta.core.commands import Typed, list_commands, run_typed
 from noeta.core.extension import Command, CommandContext
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta
 
 DeltaSink = Callable[[str, Delta], None]
@@ -88,6 +89,15 @@ class FrontEndStart:
     settings: Callable[[], list[tuple[str, str]]] = lambda: []
     #: The installed noeta's version.
     version: str = ""
+    #: Set when the project at ``cwd`` is not trusted: trusts it and loads
+    #: what only a trusted project loads (the front end asks first).
+    trust: Callable[[], None] | None = None
+
+
+async def change_config(client: ClientAPI, task_id: str, changes: Mapping[str, Any]) -> None:
+    """Change a task's config from its next model call on: ``model``,
+    ``effort`` and the kernel's other changeable keys; ``None`` removes one."""
+    await client.signal(task_id, CONFIG_SIGNAL, dict(changes))
 
 
 async def agent_commands(agents: Mapping[str, Agent], agent: str,

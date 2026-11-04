@@ -5,6 +5,7 @@ the spinner line, the footer's mode hint and ``/context``'s grid."""
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -132,6 +133,37 @@ def result_rows(call: ToolUse, text: str, meta: Mapping[str, Any], *,
     return [(line, "") for line in lines]
 
 
+#: Diff lines an approval dialog shows of the edit it asks about.
+PREVIEW_LINES = 30
+
+
+def edit_preview(tool: str, input: Mapping[str, Any], current: str | None
+                 ) -> list[tuple[str, str]]:
+    """The numbered diff an ``Edit`` or ``Write`` would make, for its
+    approval dialog (``[]`` for any other tool); ``current``: the file's
+    text now (``None``: absent or not readable here, so an edit's lines
+    are numbered from its own first line)."""
+    if tool == "Write":
+        before, after = current or "", str(input.get("content") or "")
+    elif tool == "Edit":
+        old, new = str(input.get("old_string") or ""), str(input.get("new_string") or "")
+        if current is not None and old and old in current:
+            before = current
+            after = current.replace(old, new) if input.get("replace_all") \
+                else current.replace(old, new, 1)
+        else:
+            before, after = old, new
+    else:
+        return []
+    diff = "\n".join(difflib.unified_diff(before.splitlines(), after.splitlines(),
+                                            lineterm=""))
+    rows = diff_rows(diff)
+    if len(rows) > PREVIEW_LINES:
+        rows = [*rows[:PREVIEW_LINES], (f"… +{_plural(len(rows) - PREVIEW_LINES, 'line')}",
+                                        "dim")]
+    return rows
+
+
 def folded(rows: list[tuple[str, str]], *, diff: bool, expanded: bool,
            read: bool = False) -> list[tuple[str, str]]:
     """``rows`` cut to what a folded call shows, the cut named
@@ -153,6 +185,15 @@ def result_block(rows: Iterable[tuple[str, str]]) -> Text:
     for n, (line, style) in enumerate(rows):
         out.append("\n" if n else "")
         out.append("  ⎿  " if n == 0 else "     ", style="dim")
+        out.append(line, style=style)
+    return out
+
+
+def rows_text(rows: Iterable[tuple[str, str]]) -> Text:
+    """Rows as lines, each in its style."""
+    out = Text()
+    for n, (line, style) in enumerate(rows):
+        out.append("\n" if n else "")
         out.append(line, style=style)
     return out
 
@@ -236,6 +277,15 @@ def spinner_line(frame: int, verb: str, elapsed: float, tokens: int) -> Text:
         detail += f" · ↓ {tokens_text(tokens)} tokens"
     out.append(f" ({detail} · esc to interrupt)", style="dim")
     return out
+
+
+#: Claude Code's glyph per effort level.
+EFFORT_GLYPHS = {"low": "○", "medium": "◐", "high": "●", "xhigh": "◉", "max": "◈"}
+
+
+def effort_line(level: str) -> Text:
+    """``◐ medium · /effort``: the effort, over the prompt's right end."""
+    return Text(f"{EFFORT_GLYPHS.get(level, '●')} {level} · /effort", style="dim")
 
 
 def mode_hint(mode: str) -> Text:

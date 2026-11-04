@@ -57,7 +57,8 @@ class Welcome(Static):
         out.append("Welcome to noeta", style="bold")
         out.append(f" {version}" if version else "", style="dim")
         out.append("\n\n  /help for help, /status for your current setup\n\n", style="dim")
-        out.append(f"  cwd: {cwd}\n  model: {model}\n  task: {task_id}", style="dim")
+        out.append(f"  cwd: {cwd}\n  model: {model}" + (f"\n  task: {task_id}" if task_id else ""),
+                   style="dim")
         super().__init__(out)
 
 
@@ -104,6 +105,8 @@ class ToolCall(Vertical):
         self.head.update(self._header())
         self.set_class(state == "error", "-error")
         self.set_class(state == "done", "-done")
+        if isinstance(self.parent, ReadGroup):
+            self.parent.show_head()
 
     def set_progress(self, text: str) -> None:
         if self.state in ("done", "error"):
@@ -131,6 +134,52 @@ class ToolCall(Vertical):
                              read=self.call.name == "Read" and self.state == "done")
         self.body.update(render.result_block(rows))
         self.body.display = True
+
+
+class ReadGroup(Vertical):
+    """Reads one after another as one line, Claude Code's ``Read 3 files``;
+    ctrl+o shows each call. A single read shows as itself."""
+
+    DEFAULT_CLASSES = "read-group"
+
+    def __init__(self, *, expanded: bool = False) -> None:
+        super().__init__()
+        self.expanded = expanded
+        self.head = Static("", classes="read-head")
+
+    def compose(self) -> ComposeResult:
+        yield self.head
+
+    @property
+    def calls(self) -> list[ToolCall]:
+        return [c for c in self.children if isinstance(c, ToolCall)]
+
+    async def add(self, call: ToolCall) -> None:
+        await self.mount(call)
+        self.show_head()
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.expanded = expanded
+        self.show_head()
+
+    def show_head(self) -> None:
+        calls = self.calls
+        many = len(calls) > 1
+        self.head.display = many
+        for call in calls:
+            call.display = self.expanded or not many
+        if not many:
+            return
+        failed = any(c.state == "error" for c in calls)
+        running = any(c.state not in ("done", "error") for c in calls)
+        out = Text().append("Reading " if running else "Read ", style="dim")
+        out.append(str(len(calls)), style="bold")
+        out.append(" files…" if running else " files", style="dim")
+        if failed:
+            out.append(" (some failed)", style="red")
+        if not self.expanded:
+            out.append(" (ctrl+o to expand)", style="dim")
+        self.head.update(out)
 
 
 class Choices(Static, can_focus=True):
@@ -203,8 +252,10 @@ class ApprovalCard(Vertical):
                 Binding("n", "choose('deny')", show=False)]
 
     def __init__(self, call_id: str, title: str, prompt: str, decide: Decide,
-                 options: list[dict[str, str]]) -> None:
+                 options: list[dict[str, str]], *, preview: Text | None = None) -> None:
+        """``preview``: the diff the call would make (an edit's)."""
         super().__init__()
+        self.preview = preview
         self.options = options
         self.call_id = call_id
         self.title_text = title
@@ -216,6 +267,8 @@ class ApprovalCard(Vertical):
         yield Static(Text(self.title_text, style="bold"), classes="approval-title")
         if self.prompt and self.prompt != self.title_text:
             yield Static(Text(self.prompt), classes="approval-prompt")
+        if self.preview is not None:
+            yield Static(self.preview, classes="approval-diff")
         yield Static("Do you want to proceed?", classes="approval-question")
         if self.done:
             return

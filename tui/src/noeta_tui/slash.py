@@ -1,5 +1,5 @@
 """The terminal UI's own slash commands with a mechanism behind them, as
-Claude Code has them: ``/help``, ``/status``, ``/model``, ``/context``,
+Claude Code has them: ``/help``, ``/status``, ``/model``, ``/effort``, ``/context``,
 ``/cost``, ``/memory``, ``/config``, ``/permissions``, ``/agents``,
 ``/rewind``, ``/clear``, ``/reload-plugins``. Each takes the app and what
 was typed after the name; what it shows goes to the transcript, never to
@@ -8,10 +8,12 @@ run through ``AppAPI.run_command``."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shlex
 import subprocess
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,8 +21,7 @@ from rich.text import Text
 
 from noeta.core import models
 from noeta.core.events import ExtensionRecorded
-from noeta.core.loop.state import CONFIG_SIGNAL
-from noeta.host.app import model_choices, prepare_model
+from noeta.host.app import change_config, model_choices, prepare_model
 from noeta.host.rewind import RewindPoint, rewind, rewind_points
 from noeta.host.usage import cost_text, tree_usage
 from noeta.toolkit.permission_modes import MODE_NAMES
@@ -32,7 +33,7 @@ from noeta_tui.widgets import Option, Picker
 if TYPE_CHECKING:
     from noeta_tui.app import NoetaApp
 
-__all__ = ["COMMANDS", "matches", "resume_picker", "run"]
+__all__ = ["COMMANDS", "matches", "resume_picker", "run", "trust_picker"]
 
 #: name -> what /help and the slash menu say. The app's own: /new, /resume,
 #: /stop, /exit.
@@ -40,6 +41,7 @@ COMMANDS = {
     "help": "Show help and the commands",
     "status": "Show the version, model, task, directory and settings",
     "model": "Pick or set the model (from the next request on)",
+    "effort": "Pick or set how hard the model thinks (low … max)",
     "context": "Show what fills the next request, as a grid",
     "cost": "Show the tokens and cost of this task and its sub-agents",
     "memory": "List the instruction and memory files; open one in $EDITOR",
@@ -114,7 +116,8 @@ def _shortcuts() -> str:
 
 
 async def _status(app: NoetaApp, arg: str) -> None:
-    rows = [("version", app.start.version or "?"), ("task", app.task_id),
+    rows = [("version", app.start.version or "?"),
+            ("task", app.task_id or "(none yet: the first message starts it)"),
             ("agent", app.agent), ("model", app.model),
             ("permission mode", app.mode or app.permission_mode or "(the plugin's default)"),
             ("working directory", app.task_cwd or SERVER_DIRECTORY),
@@ -160,15 +163,52 @@ async def _model(app: NoetaApp, arg: str) -> None:
 
 
 async def set_model(app: NoetaApp, name: str) -> None:
-    if not app.task_id:
-        return
     real = models.resolve_alias(name)
     note = await prepare_model(app.local, real)
-    await app.local.client.signal(app.task_id, CONFIG_SIGNAL, {"model": real})
+    await _change(app, {"model": real})
     app.model = real
     app.update_status()
     await app.say_notice(f"model set to {real} from the next request on"
                          + (f" — {note}" if note else ""))
+
+
+#: The effort levels ``/effort`` offers, lowest first.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+async def _effort(app: NoetaApp, arg: str) -> None:
+    if arg:
+        await set_effort(app, arg)
+        return
+    options = [Option(level, level) for level in EFFORTS]
+    current = app.effort_level() or ""
+    index = EFFORTS.index(current) if current in EFFORTS else 0
+
+    async def picked(level: str) -> None:
+        app._box().focus()
+        if level:
+            await set_effort(app, level)
+
+    await _picker(app, Picker(f"Select effort (now {current or 'the model default'})", options,
+                              picked, index=index))
+
+
+async def set_effort(app: NoetaApp, level: str) -> None:
+    if level not in EFFORTS:
+        await app.say_notice(f"effort is one of {', '.join(EFFORTS)}")
+        return
+    await _change(app, {"effort": level})
+    app.effort = level
+    app.update_status()
+    await app.say_notice(f"effort set to {level} from the next request on")
+
+
+async def _change(app: NoetaApp, changes: dict[str, str]) -> None:
+    """The task's config changed; a screen with no task yet starts its task with it."""
+    if app.task_id:
+        await change_config(app.local.client, app.task_id, changes)
+    else:
+        app.task_config = {**app.task_config, **changes}
 
 
 async def _picker(app: NoetaApp, picker: Picker) -> None:
@@ -178,9 +218,7 @@ async def _picker(app: NoetaApp, picker: Picker) -> None:
 
 
 async def _context(app: NoetaApp, arg: str) -> None:
-    if not app.task_id:
-        return
-    found = await app.local.context(app.task_id)
+    found = await app.local.context(await app.ensure_task())
     if found is None:
         await app.say_notice("this task's agent is not one this front end runs")
         return
@@ -376,3 +414,30 @@ async def resume_picker(app: NoetaApp, rows: list[Any]) -> None:
             await app.open_task(task_id)
 
     await _picker(app, Picker("Resume a task", options, picked))
+
+
+#: Claude Code's question on first opening a folder.
+TRUST_QUESTION = (
+    "Accessing workspace:\n\n{cwd}\n\nQuick safety check: Is this a project you created or "
+    "one you trust? (Like your own code, a well-known open source project, or work from your "
+    "team). If not, take a moment to review what's in this folder first.\n\nnoeta will be "
+    "able to read, edit, and execute files here, and load the project's plugins, agents, "
+    "prompts, skills and settings.")
+TRUST_OPTIONS = [Option("", "No, exit"), Option("trust", "Yes, I trust this folder")]
+
+
+async def trust_picker(app: NoetaApp, then: Callable[[], Awaitable[None]]) -> None:
+    """The folder is not trusted: ask before anything runs in it; ``then``
+    once it is, else quit."""
+    trust = app.start.trust
+    assert trust is not None
+
+    async def picked(choice: str) -> None:
+        if not choice:
+            app.exit()
+            return
+        await asyncio.to_thread(trust)
+        await then()
+
+    await _picker(app, Picker(TRUST_QUESTION.format(cwd=app.cwd), TRUST_OPTIONS, picked,
+                              hint="Enter to confirm · Esc to cancel"))

@@ -17,6 +17,9 @@ Screen { layout: vertical; }
 .tool-call { height: auto; margin: 1 0 0 0; }
 .tool-head { height: auto; }
 .tool-body { height: auto; }
+.read-group { height: auto; }
+.read-head { height: auto; margin: 1 0 0 2; }
+.approval-diff { padding: 0 2 1 2; }
 
 .approval { border-top: solid $warning; padding: 0 1; margin: 1 0; height: auto; }
 .approval-title { color: $warning; }
@@ -36,6 +39,7 @@ Screen { layout: vertical; }
 #spinner { height: 1; padding: 0 1; margin: 1 0 0 0; }
 #tasks { height: auto; padding: 0 1; }
 #queued { height: auto; padding: 0 1; }
+#effort { height: 1; padding: 0 1; text-align: right; }
 #prompt-box { height: auto; border-top: solid $panel-lighten-2; border-bottom: solid $panel-lighten-2; }
 #prompt-box.-bash { border-top: solid #fd5db1; border-bottom: solid #fd5db1; }
 #marker { width: 2; padding: 0 0 0 1; }

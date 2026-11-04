@@ -13,9 +13,9 @@ from noeta.plugins.permissions import Permissions
 from noeta.plugins.todos import Todos
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui.app import NoetaApp
-from noeta_tui.widgets import ApprovalCard, ToolCall
+from noeta_tui.widgets import ApprovalCard, Choices, Completions, Picker, ToolCall
 
-from support import AskBash, Lines, make_app, settle, shown, type_line
+from support import Lines, make_app, plain, settle, shown, type_line
 
 SIZE = (100, 34)
 
@@ -34,28 +34,40 @@ def save(app: NoetaApp, shots: Path, name: str) -> None:
 
 
 async def test_welcome(tmp_path: Path, shots: Path) -> None:
-    app = make_app(tmp_path, ScriptedProvider([]), Permissions(mode="acceptEdits"))
+    app = make_app(tmp_path, ScriptedProvider([]), Permissions(),
+                   permission_mode="acceptEdits")
     async with app.run_test(size=SIZE) as pilot:
-        await settle(pilot, lambda: app.mode == "acceptEdits")
+        await settle(pilot, lambda: "accept edits on" in plain(app.query_one("#hints")))
         await pilot.press("question_mark")
-        await pilot.pause(0.2)
+        await settle(pilot, lambda: app.query_one("#shortcuts").display)
+        await pilot.pause()
         save(app, shots, "welcome.svg")
+
+
+async def test_trust(tmp_path: Path, shots: Path) -> None:
+    app = make_app(tmp_path, ScriptedProvider([]), trust=lambda: None)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot, lambda: bool(app.query(Picker)))
+        await pilot.pause()
+        save(app, shots, "trust.svg")
 
 
 async def test_transcript(tmp_path: Path, shots: Path) -> None:
     target = tmp_path / "w" / "calc.py"
+    tests = tmp_path / "w" / "test_calc.py"
     provider = ScriptedProvider([
         reply("Let me run the tests first.", ("Bash", {"command": "pytest -q", "n": 12})),
-        reply("", ("Read", {"file_path": str(target)})),
+        reply("", ("Read", {"file_path": str(target)}), ("Read", {"file_path": str(tests)})),
         reply("", ("Edit", {"file_path": str(target), "old_string": "a - b",
                             "new_string": "a + b"})),
         reply("Fixed: `add` subtracted instead of adding. The tests pass now.")])
     app = make_app(tmp_path, provider, tools=[Lines()])
     target.write_text("def add(a, b):\n    return a - b\n")
+    tests.write_text("from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n")
     async with app.run_test(size=SIZE) as pilot:
         await type_line(pilot, "the add test fails, fix it")
-        await settle(pilot, lambda: provider.steps == [] and not app.busy)
-        await pilot.pause(0.3)
+        await settle(pilot, lambda: provider.steps == [] and "✻ Worked for" in shown(app))
+        await pilot.pause()
         save(app, shots, "transcript.svg")
 
 
@@ -76,20 +88,27 @@ async def test_working_with_a_task_list(tmp_path: Path, shots: Path) -> None:
         await type_line(pilot, "fix the add test")
         await settle(pilot, lambda: any(c.state == "running" for c in app.query(ToolCall)))
         await type_line(pilot, "also check sub()")
-        await pilot.pause(0.5)
+        await settle(pilot, lambda: app.query_one("#queued").display
+                     and "Fixing add()" in plain(app.query_one("#spinner")))
+        await pilot.pause()
         save(app, shots, "working.svg")
         lines.release.set()
         await settle(pilot, lambda: not app.busy)
 
 
 async def test_approval(tmp_path: Path, shots: Path) -> None:
-    provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build/", "n": 1})),
+    target = tmp_path / "w" / "calc.py"
+    provider = ScriptedProvider([reply("", ("Edit", {"file_path": str(target),
+                                                     "old_string": "a - b",
+                                                     "new_string": "a + b"})),
                                  reply("ok")])
-    app = make_app(tmp_path, provider, AskBash(), tools=[Lines()])
+    app = make_app(tmp_path, provider, Permissions(mode="default"))
+    target.write_text("def add(a, b):\n    return a - b\n")
     async with app.run_test(size=SIZE) as pilot:
-        await type_line(pilot, "clean the build")
-        await settle(pilot, lambda: len(app.query(ApprovalCard)) == 1)
-        await pilot.pause(0.2)
+        await type_line(pilot, "fix add")
+        await settle(pilot, lambda: len(app.query(ApprovalCard)) == 1
+                     and app.query(Choices) and app.query_one(Choices).has_focus)
+        await pilot.pause()
         save(app, shots, "approval.svg")
 
 
@@ -100,10 +119,11 @@ async def test_slash_menu_and_context(tmp_path: Path, shots: Path) -> None:
         await settle(pilot, lambda: not app.busy and bool(app.plugin_commands))
         await type_line(pilot, "/context")
         await settle(pilot, lambda: "Context Usage" in shown(app))
-        await pilot.pause(0.2)
+        await pilot.pause()
         save(app, shots, "context.svg")
         await pilot.press("/", "c")
-        await pilot.pause(0.2)
+        await settle(pilot, lambda: app.query_one(Completions).display)
+        await pilot.pause()
         save(app, shots, "slash-menu.svg")
 
 

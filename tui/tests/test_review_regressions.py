@@ -177,8 +177,8 @@ async def test_tui_question_card_and_stop_clear_the_pending_question(tmp_path: P
         assert isinstance(inbox[-1].body, Say)
         # Re-opening replays the log; the withdrawn question stays withdrawn.
         await app.open_task(app.task_id)
-        await settle(pilot, lambda: len(app.query(QuestionCard)) == 1)
-        await pilot.pause(0.3)
+        await settle(pilot, lambda: len(app.query(QuestionCard)) == 1 and any(
+            m.source == "fresh start" for m in app.query(AssistantMessage)))  # all replayed
         assert app.waiting_question == ""
 
 
@@ -186,8 +186,8 @@ async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
     app = tui(tmp_path, RetryOnce())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.2)
+        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1
+                     and app._deltas.empty() and not app._pumping)
         assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
 
 
@@ -213,9 +213,8 @@ async def test_tui_survives_a_stream_stopped_before_its_task_ran(
     app = tui(tmp_path, RetryOnce())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.5)
-        assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
+        await settle(pilot, lambda: not app.busy and [
+            w.source for w in app.query(AssistantMessage)] == ["good answer"])
 
 
 async def test_tui_is_not_left_busy_when_the_turn_ends_before_the_send_returns(
@@ -228,18 +227,21 @@ async def test_tui_is_not_left_busy_when_the_turn_ends_before_the_send_returns(
         client = app.local.client
         send = client.send
 
+        returned = asyncio.Event()
+
         async def slow_send(task_id: str, *args: Any, **kw: Any) -> Any:
             out = await send(task_id, *args, **kw)
             for _ in range(400):  # until the follower has shown the turn end
                 await asyncio.sleep(0.05)
                 if app.query(AssistantMessage) and not app.busy:
                     break
+            returned.set()
             return out
 
         client.send = slow_send  # type: ignore[method-assign]
         await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.3)
+        await settle(pilot, lambda: len(app.query(AssistantMessage)) >= 1 and returned.is_set())
+        await pilot.pause()  # the send's caller ran on
         assert not app.busy
 
 
@@ -260,8 +262,8 @@ async def test_tui_shows_only_the_cores_retries(tmp_path: Path) -> None:
                    model="claude-sonnet-4-5", cwd=str(tmp_path))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press(*"go", "enter")
+        # The log is shown in order: the records came before the reply.
         await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.2)
         shown = [w.render().plain for w in app.query(Notice)]
         assert not any("retrying" in s or "not the core's" in s for s in shown), shown
 
@@ -388,7 +390,8 @@ async def test_a_task_whose_agent_is_missing_opens_read_only(tmp_path: Path) -> 
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(pilot, lambda: app.read_only and len(app.query(UserMessage)) == 1)
         await pilot.press(*"hello", "enter")
-        await pilot.pause(0.5)
+        await settle(pilot, lambda: any("read-only here" in w.render().plain
+                                        for w in app.query(Notice)))
     check = SqliteStore(path)
     row = await check.get(theirs)
     assert row is not None and row.status == "waiting" and row.end_status is None
@@ -418,9 +421,8 @@ async def test_tui_help_and_plugin_commands(tmp_path: Path) -> None:
     agent = Agent(name="main", model="m", extensions=[Broken(), Greeter()])
     app = NoetaApp(local(tmp_path, provider, agent), agent="main", model="m", cwd=str(tmp_path))
     async with app.run_test(size=(100, 30)) as pilot:
-        await settle(pilot, lambda: bool(app.task_id and app.plugin_commands))
+        await settle(pilot, lambda: bool(app.plugin_commands))
         await app.submit("/help")
-        await pilot.pause(0.1)
         assert "From plugins" in shown(app) and "/shout" in shown(app)
         assert "Shout <word>" in shown(app)
         await app.submit("/greet bob")
@@ -428,6 +430,5 @@ async def test_tui_help_and_plugin_commands(tmp_path: Path) -> None:
         assert provider.requests[0].messages[-1].text.endswith("Say hello to bob.")
         await app.submit("/nope")
         await app.submit("/shout boom")
-        await pilot.pause(0.2)
         assert "unknown command /nope" in shown(app)
         assert "/shout failed: no voice" in shown(app)

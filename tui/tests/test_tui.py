@@ -26,7 +26,7 @@ from noeta_tui.widgets import (
     UserMessage,
 )
 
-from support import plain, settle
+from support import plain, ready, settle
 
 
 class Look:
@@ -93,8 +93,8 @@ async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path,
     app = NoetaApp(local, agent="main", model="the server's model", cwd=str(tmp_path),
                    task_config={})
     async with app.run_test(size=(100, 30)) as pilot:
-        await settle(pilot, lambda: app.task_id != "")
-        first = (await local.client.events(app.task_id))[0].event
+        await settle(pilot, lambda: ready(app))
+        first = (await local.client.events(await app.ensure_task()))[0].event
         assert isinstance(first, TaskCreated) and first.config == {"timezone": "Asia/Shanghai"}
 
 
@@ -104,8 +104,9 @@ async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:
 
     app = make_app(tmp_path, ScriptedProvider([]), Permissions(mode="default"))
     async with app.run_test(size=(140, 30)) as pilot:
-        await settle(pilot, lambda: app.task_id != "")
-        await pilot.press("shift+tab")
+        await settle(pilot, lambda: ready(app))
+        assert app.task_id == ""
+        await pilot.press("shift+tab")  # the mode key starts the task
         await settle(pilot, lambda: app.mode == "acceptEdits")
         inbox = [i.body for i in await app.local.store.inbox(app.task_id)]
         assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
@@ -121,6 +122,7 @@ async def test_shift_tab_before_the_mode_is_shown_steps_from_the_tasks_mode(
 
     from noeta.core.events import External
     from noeta.plugins.permissions import Permissions
+    from noeta.toolkit.permission_modes import current_mode
 
     app = make_app(tmp_path, ScriptedProvider([]), Permissions(mode="default"))
     client = app.local.client
@@ -133,14 +135,16 @@ async def test_shift_tab_before_the_mode_is_shown_steps_from_the_tasks_mode(
 
     client.watch = held_watch  # type: ignore[method-assign]
     async with app.run_test(size=(140, 30)) as pilot:
-        await settle(pilot, lambda: app.task_id != "")
-        assert app.mode == ""
+        await settle(pilot, lambda: ready(app))
         await pilot.press("shift+tab")
-        await pilot.pause(0.1)
+        await settle(pilot, lambda: app.mode == "acceptEdits")  # not shown by the follower
         hold.set()
+
+        async def recorded() -> bool:
+            return current_mode(await client.events(app.task_id)) == "acceptEdits"
+
+        await settle(pilot, recorded)
         await settle(pilot, lambda: app.mode == "acceptEdits")
-        await pilot.pause(0.5)
-        assert app.mode == "acceptEdits"
         inbox = [i.body for i in await app.local.store.inbox(app.task_id)]
         assert External(name="permission_mode", data={"mode": "acceptEdits"}) in inbox
 
@@ -154,10 +158,9 @@ async def test_shift_tab_steps_only_through_the_modes_the_plugin_offers(
     app = make_app(tmp_path, ScriptedProvider([]),
                    Permissions(mode="auto", disable_bypass_mode=True))
     async with app.run_test(size=(140, 30)) as pilot:
-        await settle(pilot, lambda: app.mode == "auto")
-        await pilot.pause(0.2)
-        await pilot.press("shift+tab")
-        await settle(pilot, lambda: app.mode != "auto")
+        await settle(pilot, lambda: ready(app))
+        await pilot.press("shift+tab")  # from the task's auto, past no bypassPermissions
+        await settle(pilot, lambda: app.mode not in ("", "auto"))
         assert app.mode == "default"
 
 
@@ -225,7 +228,7 @@ async def test_on_a_server_with_no_directory_asked_the_status_names_the_servers(
     app = NoetaApp(local, agent="main", model="the server's model", cwd=str(tmp_path),
                    task_config={}, on_server=True)
     async with app.run_test(size=(160, 30)) as pilot:
-        await settle(pilot, lambda: app.task_id != "")
+        await settle(pilot, lambda: ready(app))
         status = str(app.query_one("#status").render())
         assert str(tmp_path) not in status and "server's directory" in status
 
