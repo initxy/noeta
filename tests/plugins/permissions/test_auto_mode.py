@@ -98,7 +98,26 @@ async def test_a_write_outside_the_working_directories_goes_to_the_classifier(
     assert [r["file_path"] for r in write.runs] == ["in.txt", outside]
     [request] = classifier_calls(provider)
     texts = [b.text for b in request.messages[-1].content if isinstance(b, Text)]
-    assert texts[-3] == f'{{"Write":"{outside}: b"}}\n'
+    assert f'{{"Write":"{outside}: b"}}\n' in texts
+    assert not any('"Write":"in.txt' in t for t in texts)
+
+
+async def test_a_write_through_a_link_to_outside_goes_to_the_classifier(
+        store: SqliteStore, tmp_path: Path) -> None:
+    cwd, outside = tmp_path / "w", tmp_path / "ssh"
+    cwd.mkdir()
+    outside.mkdir()
+    (cwd / "link").symlink_to(outside)
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "link/authorized_keys", "content": "k"})),
+        reply("<block>no"),          # stage 1: the classifier was asked
+        reply("done")])
+    await start(store, provider, [write], cwd)
+    assert len(write.runs) == 1
+    [request] = classifier_calls(provider)
+    texts = [b.text for b in request.messages[-1].content if isinstance(b, Text)]
+    assert '{"Write":"link/authorized_keys: k"}\n' in texts
 
 
 async def test_a_block_at_both_stages_refuses_the_call(store: SqliteStore,

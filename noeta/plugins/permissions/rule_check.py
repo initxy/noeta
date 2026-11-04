@@ -197,7 +197,7 @@ class RuleCheck:
         if name in r.READ_TOOLS:
             return await self._read(view, name, args, scope, ctx, allow_rules, allowed)
         if name in r.EDIT_TOOLS:
-            return await self._edit(view, name, args, mode, scope, allowed)
+            return await self._edit(view, name, args, mode, scope, ctx, allow_rules, allowed)
         if name in r.SHELL_TOOLS:
             return await shell_decision(view, args, mode, scope, ctx, allow_rules)
         if name == p.WEBFETCH_TOOL:
@@ -250,7 +250,8 @@ class RuleCheck:
                             rules=f"Read(//{_dir_of(target)}/**)"))
 
     async def _edit(self, view: TaskView, name: str, args: Mapping[str, Any], mode: str,
-                    scope: sc.Scope, allowed: bool) -> Decision:
+                    scope: sc.Scope, ctx: r.RuleContext, allow_rules: Sequence[r.Rule],
+                    allowed: bool) -> Decision:
         written = _path(args)
         target = scope.absolute(written) if written else scope.cwd
         plan = state_of(view).plan
@@ -267,14 +268,26 @@ class RuleCheck:
                             why="protected")
         if mode == "plan":
             return Decision("ask", w.ASK_PLAN.format(name=name), why="plan")
+        if real != target:
+            # Written through a link: judged where it points, as both
+            # paths (an allow rule too, so a rule naming only the link's
+            # side lets nothing out).
+            resolved = await real_scope(view, scope)
+            inside = scope.contains(target) and resolved.contains(real)
+            plans = self.in_plans(target) and _under(
+                real, await real_path(view, posixpath.normpath(self.plans_dir)))
+            allowed = r.first_match(allow_rules, name, _with_path(args, real), ctx,
+                                    for_allow=True) is not None
+        else:
+            inside, plans = scope.contains(target), self.in_plans(target)
         if allowed:
             return Decision("allow")
         verb = w.ASK_EDIT if name != "Write" or os.path.exists(target) else w.ASK_CREATE
-        if not scope.contains(target) and not self.in_plans(target):
+        if not inside and not plans:
             # Outside the working directories no mode but bypass lets the
             # write through (``in_mode``); auto mode's classifier judges it.
-            rule = r.format_rule("Edit", f"//{_dir_of(target)}/**")
-            return Decision("ask", w.ASK_OUTSIDE.format(ask=verb.format(name=name, path=target)),
+            rule = r.format_rule("Edit", f"//{_dir_of(real)}/**")
+            return Decision("ask", w.ASK_OUTSIDE.format(ask=verb.format(name=name, path=real)),
                             why="edit", always=(rule,),
                             always_label=w.CHOICE_ALWAYS_RULE.format(rules=rule))
         if mode in ("acceptEdits", "auto", "bypassPermissions"):

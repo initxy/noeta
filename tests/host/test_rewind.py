@@ -35,8 +35,9 @@ async def store(tmp_path: Path) -> AsyncIterator[SqliteStore]:
     await s.close()
 
 
-def _runtime(store: SqliteStore, provider: ScriptedProvider, work: Path) -> Runtime:
-    agent = Agent(name="a", model="m", extensions=[FileTools(), Checkpoints()])
+def _runtime(store: SqliteStore, provider: ScriptedProvider, work: Path,
+             fs: FileTools | None = None) -> Runtime:
+    agent = Agent(name="a", model="m", extensions=[fs or FileTools(), Checkpoints()])
     return Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,  # type: ignore[arg-type,return-value]
                    env_for=lambda _s: LocalExecEnv(str(work)), sleep=_no_sleep)
 
@@ -163,6 +164,34 @@ async def test_a_restore_puts_back_a_file_written_outside_the_workspace(
     await client.signal(tid, RESTORE_SIGNAL, {"files": [{"path": str(outside), "data": data}]})
     await rt.run_until_idle()
     assert outside.read_text() == "one\n"
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+async def test_a_restore_leaves_an_outside_file_no_call_wrote(
+        store: SqliteStore, tmp_path: Path, fenced: bool) -> None:
+    """A snapshot is taken when the call starts; outside the workspace it
+    is restored only if the call wrote the file (a refused edit, or the
+    fence, kept it from that)."""
+    work = tmp_path / "w"
+    work.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("one\n")
+    # Unfenced: an Edit of a file never read is refused after it started.
+    call = ("Write", {"file_path": str(outside), "content": "two\n"}) if fenced else \
+        ("Edit", {"file_path": str(outside), "old_string": "one", "new_string": "two"})
+    provider = ScriptedProvider([reply("", call), reply("done")])
+    rt = _runtime(store, provider, work, FileTools(block_writes_outside=True) if fenced else None)
+    client = Client(store)
+    tid = await client.create("a", "change it", config={"model": "m"})
+    await rt.run_until_idle()
+    outside.write_text("changed by someone else\n")
+    data = base64.b64encode(b"one\n").decode()
+    await client.signal(tid, RESTORE_SIGNAL, {"files": [{"path": str(outside), "data": data}]})
+    await rt.run_until_idle()
+    assert outside.read_text() == "changed by someone else\n"
+    [restored] = [r.event.data for r in await client.events(tid)
+                  if isinstance(r.event, ExtensionRecorded) and r.event.kind == "restored"]
+    assert restored["files"] == [] and list(restored["errors"]) == [str(outside)]
 
 
 async def test_a_rewind_restores_what_a_sub_agent_changed(

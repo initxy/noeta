@@ -20,8 +20,9 @@ task runs; ``None`` removes the file. It only puts back what was
 snapshotted in this task's log, the conversations it continues (whole: a
 rewound conversation's fork restores what came after its fork point) and
 the sub-agents under any of them: a path with a snapshot of it (outside the
-workspace too, wherever the file tools were let write), and content hashing
-to one of that path's snapshots
+workspace only one an editing call finished writing without an error, so
+never one the file tools' fence or a refusal kept them from), and content
+hashing to one of that path's snapshots
 (``None`` only when a snapshot found it absent); anything else is reported
 as not restored. Changes made through ``Bash`` are not tracked, as in
 Claude Code.
@@ -41,11 +42,12 @@ from noeta.core.events import (
     InputTaken,
     Recorded,
     TaskCreated,
+    ToolFinished,
     ToolStarted,
 )
 from noeta.core.extension import Extension, TaskView
 from noeta.core.types import ToolUse
-from noeta.toolkit.tools import Workspace
+from noeta.toolkit.tools import Workspace, path_within
 
 __all__ = ["EDITING_TOOLS", "MAX_SNAPSHOT_BYTES", "NAME", "RESTORE_SIGNAL", "Checkpoints"]
 
@@ -73,16 +75,18 @@ def _last_prompt(view: TaskView) -> int:
 _MAX_LINEAGE = 64
 
 
-async def _restorable(view: TaskView) -> dict[str, frozenset[str | None]]:
+async def _restorable(view: TaskView) -> tuple[dict[str, frozenset[str | None]], set[str]]:
     """Per path, every content sha a snapshot found: in this task's state,
     and in the logs a rewind's file plan reads (``noeta.host.rewind``) —
     each conversation this task continues, whole, and every sub-agent under
-    any of them."""
+    any of them; and the paths (as the calls named them) that an editing
+    call in those logs finished writing without an error."""
     state = view.ext_state(NAME) or {}
     snaps: dict[str, frozenset[str | None]] = dict(state.get("snaps") or {})
+    written: set[str] = set()
     read, children = view.read_log, view.child_tasks
     if read is None or children is None:
-        return snaps
+        return snaps, written
     logs: dict[str, Sequence[Recorded]] = {}
     current: str | None = view.task_id
     while current and current not in logs and len(logs) < _MAX_LINEAGE:
@@ -96,14 +100,22 @@ async def _restorable(view: TaskView) -> dict[str, frozenset[str | None]]:
             continue
         seen.add(tid)
         queue += await children(tid)
+        started: dict[str, str] = {}
         for rec in logs.get(tid) or await read(tid):
             ev = rec.event
+            if isinstance(ev, ToolStarted) and ev.call.name in EDITING_TOOLS:
+                raw = ev.call.input.get(EDITING_TOOLS[ev.call.name])
+                if isinstance(raw, str) and raw:
+                    started[ev.call.id] = raw
+            elif isinstance(ev, ToolFinished) and not ev.result.is_error \
+                    and ev.result.call_id in started:
+                written.add(started[ev.result.call_id])
             if isinstance(ev, ExtensionRecorded) and ev.extension == NAME \
                     and ev.kind == "snapshot" and isinstance(ev.data, dict) \
                     and ev.data.get("sha") != "" and ev.data.get("path"):
                 path = str(ev.data["path"])
                 snaps[path] = snaps.get(path, frozenset()) | {ev.data.get("sha")}
-    return snaps
+    return snaps, written
 
 
 class Checkpoints(Extension):
@@ -171,10 +183,11 @@ class Checkpoints(Extension):
         files = data.get("files") if isinstance(data, dict) else None
         if env is None or not isinstance(files, list):
             return
-        snaps = await _restorable(view)
+        snaps, written = await _restorable(view)
         done: list[str] = []
         errors: dict[str, str] = {}
         ws: Workspace | None = None
+        outside_ok: set[str] | None = None
         for entry in files:
             path = entry.get("path") if isinstance(entry, dict) else None
             if not isinstance(path, str) or not path:
@@ -185,6 +198,12 @@ class Checkpoints(Extension):
                 known = snaps.get(resolved)
                 if known is None:
                     raise PermissionError("no snapshot of the file was taken")
+                if not path_within(resolved, ws.root):
+                    if outside_ok is None:
+                        outside_ok = {await ws.canonical(p) for p in written}
+                    if resolved not in outside_ok:
+                        raise PermissionError(
+                            "outside the workspace, and no call wrote the file")
                 blob = entry.get("data")
                 if blob is None:
                     if None not in known:

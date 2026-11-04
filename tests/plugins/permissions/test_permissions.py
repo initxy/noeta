@@ -206,6 +206,62 @@ async def test_a_write_outside_the_working_directories_by_mode(
             "directories"
 
 
+def _link_outside(tmp_path: Path) -> tuple[Path, Path]:
+    """``<cwd>/link`` pointing at a directory outside it: ``(cwd, target dir)``."""
+    cwd, outside = tmp_path / "w", tmp_path / "ssh"
+    cwd.mkdir()
+    outside.mkdir()
+    (cwd / "link").symlink_to(outside)
+    return cwd, outside
+
+
+@pytest.mark.parametrize("mode", ["default", "acceptEdits", "bypassPermissions"])
+async def test_a_write_through_a_link_to_outside_is_an_outside_write(
+        store: SqliteStore, tmp_path: Path, mode: str) -> None:
+    """Judged where the link points: neither acceptEdits nor the plain
+    edit ask treats it as a write inside."""
+    cwd, outside = _link_outside(tmp_path)
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "link/authorized_keys"})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode=mode), [write], cwd=cwd)
+    if mode == "bypassPermissions":
+        assert write.runs == [{"file_path": "link/authorized_keys"}]
+        return
+    assert not write.runs
+    [detail] = asked(await events(client, tid)).values()
+    real = outside / "authorized_keys"
+    assert detail["prompt"] == f"Write wants to create {real}, outside the working directories"
+    assert detail["always"] == [f"Edit(/{outside}/**)"]
+
+
+@pytest.mark.parametrize("rule", ["Edit(/link/**)", "Edit(/w/**)"])
+async def test_an_allow_rule_naming_only_the_link_lets_no_write_out(
+        store: SqliteStore, tmp_path: Path, rule: str) -> None:
+    cwd, _outside = _link_outside(tmp_path)
+    if rule == "Edit(/w/**)":
+        rule = f"Edit(/{cwd}/**)"
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "link/authorized_keys"})), reply("ok")])
+    client, tid, _ = await start(store, provider, Permissions(mode="default", allow=[rule]),
+                                 [write], cwd=cwd)
+    assert not write.runs
+    [detail] = asked(await events(client, tid)).values()
+    assert "outside the working directories" in detail["prompt"]
+
+
+async def test_an_allow_rule_on_where_the_link_points_lets_the_write_through(
+        store: SqliteStore, tmp_path: Path) -> None:
+    cwd, outside = _link_outside(tmp_path)
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "link/authorized_keys"})), reply("ok")])
+    await start(store, provider, Permissions(mode="default", allow=[f"Edit(/{outside}/**)"]),
+                [write], cwd=cwd)
+    assert write.runs == [{"file_path": "link/authorized_keys"}]
+
+
 @pytest.mark.parametrize("rule", ["Edit(//etc/**)", "Write"])
 async def test_an_allow_rule_lets_a_write_outside_through(
         store: SqliteStore, tmp_path: Path, rule: str) -> None:
