@@ -27,7 +27,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | connect MCP servers | `.noeta/mcp.json`, settings `mcpServers`, a plugin's `.mcp.json` | `noeta/plugins/mcp` |
 | let a chat app or webhook in | a `Channel` (`run(client, stop)`), posting with `deliver()` | `noeta/core/channel.py` |
 | send replies back out | `on_event` in an `Extension` inside the task | `examples/chat-bridge` |
-| a new model API | a provider in the `noeta.providers` entry-point group | `noeta/backends/providers` |
+| a new model API | a provider in the `noeta.providers` entry-point group; a `[providers.<name>]` table with `family = "<its name>"` runs it beside the others, routed by model id | `noeta/backends/providers`, `noeta/backends/providers/routing.py` |
 | run commands somewhere else (a container) | an exec env in `noeta.execenvs` | `noeta/backends/execenvs` |
 | store tasks elsewhere | a store in `noeta.stores`, checked by `noeta.testing.store_contract` | `noeta/backends/stores` |
 | a new front end or protocol | the client API (`Client`, `RemoteClient`, HTTP); never a second API | `noeta/core/client.py`, `noeta/host` |

@@ -16,15 +16,29 @@ win. The plugin part of ``config.toml``::
 
     [channels.chat_bridge]     # a channel's arguments; run by `noeta worker` / `noeta serve`
     token = "{env:CHAT_TOKEN}"
+
+More providers than the default one (``model`` / ``provider`` / ``base_url`` /
+``api_key``), each model sent to the one that serves it
+(:mod:`noeta.backends.providers.routing`)::
+
+    [providers.deepseek]
+    family = "openai_compat"
+    base_url = "https://api.deepseek.com/v1"
+    api_key = "{env:DEEPSEEK_API_KEY}"
+    headers = {}
+    models = ["deepseek-chat", {id = "deepseek-reasoner", context_window = 128000,
+                                max_output_tokens = 64000}]
+    list_models = true         # read its /models for more models and their windows
 """
 
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
 import os
 import tomllib
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -60,13 +74,16 @@ from noeta.cli.trust import (
 from noeta.cli.trust import trust_project as trust_project
 from noeta.core import models, registry
 from noeta.core.execenv import ExecEnv
+from noeta.core.loop.state import MODEL_ROUTE
 from noeta.core.provider import Provider
 from noeta.toolkit.local_env import withhold_env_refs
 from noeta.toolkit.sandbox import SandboxSettings
 
 if TYPE_CHECKING:
+    from noeta.backends.providers.routing import Endpoint, ProviderRouter
     from noeta.core.agent import Agent
     from noeta.core.channel import Channel
+    from noeta.core.events import TaskCreated
     from noeta.core.loop.state import TaskState
     from noeta.host.local import LocalApp
 
@@ -85,10 +102,30 @@ class MissingAPIKey(ValueError):
     """No API key for the configured provider; the message names where to set one."""
 
 
+#: The name the default provider goes by when no ``providers`` table is it.
+DEFAULT_PROVIDER = "default"
+
+
+def _adapter(family: str, base_url: str | None, api_key: str | None,
+             headers: Mapping[str, str]) -> Provider:
+    kw: dict[str, Any] = {}
+    if headers:
+        kw["extra_headers"] = dict(headers)
+    if family == "anthropic":
+        kw["device_id"] = home_dir.device_id()
+    return registry.provider(family, base_url=base_url, api_key=api_key, **kw)
+
+
+#: The keys of a ``[providers.<name>]`` table.
+_PROVIDER_KEYS = frozenset({"family", "base_url", "api_key", "headers", "models", "list_models"})
+
+
 @dataclass
 class Settings:
     model: str = ""
-    #: ``anthropic`` | ``openai_compat`` | ``openai_responses``.
+    #: The default provider: a family (``anthropic`` | ``openai_compat`` |
+    #: ``openai_responses`` | a third-party one) set up by ``base_url`` /
+    #: ``api_key`` / ``extra_headers``, or the name of a ``providers`` table.
     provider: str = "anthropic"
     base_url: str | None = None
     api_key: str | None = None
@@ -97,8 +134,16 @@ class Settings:
     extra_headers: dict[str, str] = field(default_factory=dict)
     effort: str | None = None
     #: A JSON file of extra models: ``{"models": [{"id", "context_window",
-    #: "max_output_tokens", "supports_vision"?, "family"?}]}``.
+    #: "max_output_tokens", "supports_vision"?, "family"?, "provider"?}]}``.
     models_file: str | None = None
+    #: More providers, by name (``[providers.<name>]``): see the module's doc.
+    providers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Model id -> the provider that serves it (a table's ``models``, a
+    #: models file row's ``provider``).
+    model_providers: dict[str, str] = field(default_factory=dict)
+    #: Read the default provider's model listing (windows of models the
+    #: catalog does not know).
+    list_models: bool = True
     #: Prompt overrides for every task this front end starts (name -> text,
     #: see ``noeta.core.prompts``): ``--system-prompt`` sets ``system/main``,
     #: ``--append-system-prompt`` ``system/main.append``.
@@ -111,8 +156,10 @@ class Settings:
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def make_provider(self) -> Provider:
-        """Raises :class:`MissingAPIKey` when no key is set for a built-in
-        provider."""
+        """The default provider. Raises :class:`MissingAPIKey` when no key
+        is set for a built-in provider."""
+        if self.provider in self.providers:
+            return self._table_provider(self.provider)
         if not self.api_key and self.provider in _KEY_ENV:
             fallback = _KEY_ENV[self.provider]
             if not (fallback and os.environ.get(fallback)):
@@ -120,13 +167,60 @@ class Settings:
                 raise MissingAPIKey(
                     f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
                     f"or api_key in {home_dir.HOME / 'config.toml'}")
-        kw: dict[str, Any] = {}
-        if self.extra_headers:
-            kw["extra_headers"] = dict(self.extra_headers)
-        if self.provider == "anthropic":
-            kw["device_id"] = home_dir.device_id()
-        return registry.provider(self.provider, base_url=self.base_url, api_key=self.api_key,
-                                 **kw)
+        return _adapter(self.provider, self.base_url, self.api_key, self.extra_headers)
+
+    def _table_secrets(self, name: str) -> tuple[str | None, dict[str, str]]:
+        """A provider table's key and headers, their secret references read."""
+        from noeta.agents.agent_files import resolve_secrets
+
+        table, where = self.providers[name], f"config.toml [providers.{name}]"
+        key = resolve_secrets(table.get("api_key"), where)
+        return key or None, dict(resolve_secrets(table.get("headers") or {}, where))
+
+    def _table_provider(self, name: str) -> Provider:
+        table = self.providers[name]
+        family = table["family"]
+        key, headers = self._table_secrets(name)
+        fallback = _KEY_ENV.get(family)
+        if not key and family in _KEY_ENV and not (fallback and os.environ.get(fallback)):
+            raise MissingAPIKey(f"no API key for provider {name!r}: set api_key in its "
+                                f"[providers.{name}] table of {home_dir.HOME / 'config.toml'}")
+        return _adapter(family, table.get("base_url"), key, headers)
+
+    def make_router(self) -> ProviderRouter:
+        """Every configured provider behind one ``provider_for(model)``, the
+        default first; each adapter is built on first use."""
+        from noeta.backends.providers import listing
+        from noeta.backends.providers.routing import Endpoint, ProviderRouter
+
+        def lister(name: str, family: str, base_url: str | None
+                   ) -> Callable[[], list[listing.ListedModel]]:
+            def read() -> list[listing.ListedModel]:
+                if name in self.providers:
+                    key, headers = self._table_secrets(name)
+                else:
+                    key, headers = self.api_key, dict(self.extra_headers)
+                return listing.fetch_listing(family, base_url, key, headers)
+
+            return read
+
+        def endpoint(name: str) -> Endpoint:
+            if name == DEFAULT_PROVIDER:
+                family, base_url, listed = self.provider, self.base_url, self.list_models
+                make: Callable[[], Provider] = self.make_provider
+            else:
+                table = self.providers[name]
+                family, base_url = table["family"], table.get("base_url")
+                listed = bool(table.get("list_models", True))
+                make = functools.partial(self._table_provider, name)
+            known = listing.listing_url(family, base_url) is not None
+            return Endpoint(name=name, family=family, make=make, base_url=base_url,
+                            listing=lister(name, family, base_url) if listed and known else None)
+
+        default = self.provider if self.provider in self.providers else DEFAULT_PROVIDER
+        names = [default, *(n for n in self.providers if n != default)]
+        return ProviderRouter([endpoint(n) for n in names], explicit=self.model_providers,
+                              cache_dir=home_dir.HOME / "cache" / "models")
 
     @property
     def store_url(self) -> str:
@@ -172,13 +266,64 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
     data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
-    # The secrets this config hands to noeta's plugins and channels are its own.
-    withhold_env_refs([data["plugins"], data["channels"], data["add_plugins"]])
+    data["providers"] = _provider_tables(data.get("providers", {}))
+    # The secrets this config hands to noeta's plugins, channels and
+    # providers are its own.
+    withhold_env_refs([data["plugins"], data["channels"], data["add_plugins"],
+                       data["providers"]])
+    data.pop("model_providers", None)
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
+    named: dict[str, str] = {}  # model id -> where its provider is named
+
+    def name_provider(model: str, provider: str, where: str) -> None:
+        if model in settings.model_providers and settings.model_providers[model] != provider:
+            raise ValueError(f"model {model!r} is named for two providers: "
+                             f"{settings.model_providers[model]!r} ({named[model]}) and "
+                             f"{provider!r} ({where})")
+        settings.model_providers[model] = provider
+        named[model] = where
+
     if settings.models_file:
-        register_models_file(settings.models_file)
+        for model, provider in register_models_file(settings.models_file).items():
+            name_provider(model, provider, settings.models_file)
+    for name, table in settings.providers.items():
+        rows = [r if isinstance(r, dict) else {"id": r} for r in table.get("models", ())]
+        _register_rows(rows)
+        for row in rows:
+            name_provider(row["id"], name, f"[providers.{name}]")
+    names = {*settings.providers} | (
+        set() if settings.provider in settings.providers else {DEFAULT_PROVIDER})
+    stray = sorted({p for p in settings.model_providers.values() if p not in names})
+    if stray:
+        raise ValueError(f"{settings.models_file}: rows name providers that are not "
+                         f"configured: {stray}")
     return settings
+
+
+def _provider_tables(value: Any) -> dict[str, dict[str, Any]]:
+    """The ``[providers.<name>]`` tables, checked."""
+    tables = _plugin_tables(value, "providers")
+    for name, table in tables.items():
+        where = f"config.toml [providers.{name}]"
+        if name == DEFAULT_PROVIDER:
+            raise ValueError(f"{where}: {DEFAULT_PROVIDER!r} names the top-level provider; "
+                             "pick another name")
+        if unknown := set(table) - _PROVIDER_KEYS:
+            raise ValueError(f"{where}: unknown keys {sorted(unknown)}; it takes "
+                             f"{sorted(_PROVIDER_KEYS)}")
+        if not isinstance(table.get("family"), str) or not table["family"]:
+            raise ValueError(f"{where}: family is required (anthropic, openai_compat, "
+                             "openai_responses or a provider package's)")
+        if not isinstance(table.get("headers", {}), dict):
+            raise ValueError(f"{where}: headers is a table of strings")
+        rows = table.get("models", [])
+        if not isinstance(rows, list) or not all(
+                (isinstance(r, str) and r) or (isinstance(r, dict) and isinstance(r.get("id"), str))
+                for r in rows):
+            raise ValueError(f"{where}: models is a list of model ids or {{id = ..., "
+                             "context_window = ..., max_output_tokens = ...}} rows")
+    return tables
 
 
 def _plugin_tables(value: Any, table: str = "plugins") -> dict[str, dict[str, Any]]:
@@ -245,15 +390,23 @@ def merge_plugin_settings(*tables: Mapping[str, PluginSetting]) -> dict[str, Plu
     return out
 
 
-def register_models_file(path: str) -> None:
+def register_models_file(path: str) -> dict[str, str]:
     """Register the models a JSON file describes (gateway models the shipped
-    catalog does not know), so they run at their real limits."""
+    catalog does not know), so they run at their real limits. Returns the
+    rows' ``provider``: model id -> the provider that serves it."""
     import json
-
-    from noeta.core.models import ModelSpec, find_spec, register_models
 
     rows = json.loads(Path(path).expanduser().read_text("utf-8"))
     rows = rows.get("models", rows) if isinstance(rows, dict) else rows
+    _register_rows(rows)
+    return {row["id"]: row["provider"] for row in rows if isinstance(row.get("provider"), str)}
+
+
+def _register_rows(rows: Sequence[Mapping[str, Any]]) -> None:
+    """Catalog rows for the models file rows (or ``providers`` table rows)
+    that give both limits and that the catalog does not know yet."""
+    from noeta.core.models import ModelSpec, find_spec, register_models
+
     specs = {}
     for row in rows:
         if not row.get("context_window") or not row.get("max_output_tokens"):
@@ -437,6 +590,12 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices += load_plugin_files(cwd, plugin_dirs)
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
                 if (n := untrusted_notice(cwd, sub)) is not None]
+    router = settings.make_router()
+    # Only a start model the catalog does not know needs a listing now (its
+    # limits, and whether to say so); its route is settled when a task is
+    # given it.
+    if settings.model and models.find_spec(settings.model) is None:
+        router.prepare(settings.model)
     if (unknown := models.unknown_model_notice(settings.model)) is not None:
         notices.append(unknown)
     for notice in notices:
@@ -512,12 +671,28 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices += _apply_sandbox(sandbox, cwd, runtime_kw)
     runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
+    # The default provider is built now, so a missing key stops the start.
+    router.adopt(router.default.name, settings.make_provider())
+    if router.several:
+        # Routes are recorded and followed only with several providers: with
+        # one, every route is that one and the log stays as it always was.
+        runtime_kw.setdefault("task_provider", router.task_provider)
     app = LocalApp(store, agents,
-                   settings.make_provider(), own_tasks_only=own_tasks_only,
+                   router.provider_for, own_tasks_only=own_tasks_only,
                    task_config={"prompts": settings.prompts} if settings.prompts else None,
                    channels=make_channels(settings.channels) if with_channels else (),
                    **runtime_kw)
     app.notices = notices
+
+    def prepare_model(model: str) -> str | None:
+        router.prepare(model)
+        return models.unknown_model_notice(model)
+
+    app.list_models = router.available
+    app.prepare_model = prepare_model
+    if router.several:
+        app.client.route_model = router.route_record
+        app.runtime.prepare_child = _route_child(app.runtime, router)
 
     def pick_main_agent() -> None:
         """The agent front ends start with: the settings' ``agent``, else
@@ -546,6 +721,34 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
 
     app.reload_plugins = reload_plugins
     return app
+
+
+def _route_child(runtime: Any, router: ProviderRouter) -> Any:
+    """``Runtime.prepare_child``: a child task records the route of the
+    model it runs (its config's, else its agent's), like a task a front end
+    starts, unless it carries that model's route already."""
+    import asyncio
+
+    import msgspec
+
+    async def prepare(created: TaskCreated) -> TaskCreated:
+        agent = runtime.agent(created.agent)
+        model = models.resolve_alias(str(created.config.get("model")
+                                         or (agent.model if agent is not None else "")))
+        route = created.config.get(MODEL_ROUTE)
+        if not model or (isinstance(route, Mapping) and route.get("model") == model):
+            return created
+        try:
+            record = await asyncio.to_thread(router.route_record, model)
+        except Exception:
+            log.warning("recording the route of %r for a child task failed; it resolves "
+                        "on the worker that runs it", model, exc_info=True)
+            return created
+        if record is None:
+            return created
+        return msgspec.structs.replace(created, config={**created.config, MODEL_ROUTE: record})
+
+    return prepare
 
 
 def _unjoined_notices(agents: Sequence[Agent],

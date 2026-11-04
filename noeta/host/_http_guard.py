@@ -18,7 +18,7 @@ from starlette.responses import JSONResponse, Response
 from noeta.core.client import CONTINUED_AS, CONTINUED_AS_KEY, ClientAPI, Input
 from noeta.core.errors import UnknownTask
 from noeta.core.events import Recorded
-from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL
+from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL, MODEL_ROUTE
 from noeta.core.store import Status, TaskRow
 from noeta.host._errors import error_text
 from noeta.host.rewind import RESTORE_SIGNAL
@@ -51,6 +51,10 @@ REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "out
 #: (a background job's end, a sub-agent's idle subscription …) are posted
 #: by plugins inside the server, which trust what they say.
 REQUEST_SIGNALS = (MODE_SIGNAL, CONFIG_SIGNAL, RESUMED_SIGNAL, RESTORE_SIGNAL)
+
+#: The config keys a request's config signal may change: a model's route
+#: (its provider, its limits) is the server's to record, never a client's.
+REQUEST_CHANGEABLE = tuple(k for k in CHANGEABLE_CONFIG if k != MODEL_ROUTE)
 
 
 def _within(path: str, root: str) -> bool:
@@ -147,7 +151,7 @@ class GuardedClient:
         if name == MODE_SIGNAL and isinstance(data, Mapping):
             self._mode(data.get("mode"))
         if name == CONFIG_SIGNAL:
-            data = self.check_config(data, CHANGEABLE_CONFIG)
+            data = self.check_config(data, REQUEST_CHANGEABLE)
             if isinstance(data, Mapping) and data.get(CLIENT_HOOKS_KEY) is not None:
                 # Only taken away (a front end a person follows reopening
                 # the task): the record keeps other workers from running

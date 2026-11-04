@@ -6,9 +6,12 @@ server, so a front end is the same code on one machine or against many."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
+from noeta.core import models
 from noeta.core.agent import Agent
 from noeta.core.client import ClientAPI
 from noeta.core.commands import Typed, list_commands, run_typed
@@ -16,6 +19,8 @@ from noeta.core.extension import Command, CommandContext
 from noeta.core.types import Delta
 
 DeltaSink = Callable[[str, Delta], None]
+
+log = logging.getLogger("noeta.host.app")
 
 
 class AppAPI(Protocol):
@@ -64,3 +69,29 @@ async def agent_run_command(agents: Mapping[str, Agent], agent: str, ctx: Comman
                             text: str) -> Typed | None:
     found = agents.get(agent)
     return await run_typed(found.all_extensions(), ctx, text) if found is not None else None
+
+
+async def model_choices(app: Any, *, catalog: bool = True) -> list[tuple[str, str]]:
+    """``(model, provider name)`` for the models a front end offers: what
+    the app's providers serve (``LocalApp.list_models``), else (``catalog``)
+    the catalog's, with no provider name."""
+    lister = getattr(app, "list_models", None)
+    found: list[tuple[str, str]] = []
+    if lister is not None:
+        try:
+            found = await asyncio.to_thread(lister)
+        except Exception:
+            log.warning("listing the providers' models failed", exc_info=True)
+    if found or not catalog:
+        return found
+    return [(m, "") for m in models.catalog_models()]
+
+
+async def prepare_model(app: Any, model: str) -> str | None:
+    """Settle ``model`` before a switch to it (``LocalApp.prepare_model``):
+    what the person should know about it, or ``None``."""
+    prepare = getattr(app, "prepare_model", None)
+    if prepare is None:
+        return models.unknown_model_notice(model)
+    result: str | None = await asyncio.to_thread(prepare, model)
+    return result

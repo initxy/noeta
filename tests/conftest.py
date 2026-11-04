@@ -97,6 +97,16 @@ def noeta_home_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.
 
 
 @pytest.fixture(autouse=True)
+def no_model_listings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reads a provider's model listing over the network (a front
+    end built from settings would, for a model the catalog does not know);
+    a test of listings passes its own transport or listing."""
+    from noeta.backends.providers import listing
+
+    monkeypatch.setattr(listing, "fetch_listing", lambda *a, **kw: [])
+
+
+@pytest.fixture(autouse=True)
 def fold_snapshots_both_ways(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every task log any test loads is folded both ways and compared: from
     the start, and from a snapshot taken at several seqs plus the events

@@ -9,7 +9,7 @@ import os
 import socket
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +23,7 @@ from noeta.core.store import Claim, Store
 from noeta.core.types import Delta, ModelRequest
 
 if TYPE_CHECKING:
+    from noeta.core.events import TaskCreated
     from noeta.core.loop.state import TaskState
 
 log = logging.getLogger("noeta.core.runner")
@@ -32,6 +33,8 @@ log = logging.getLogger("noeta.core.runner")
 HOLD_ATTEMPTS = 3
 
 ProviderFor = Callable[[str], Provider]
+TaskProviderFor = Callable[["TaskState", str], Provider]
+PrepareChild = Callable[["TaskCreated"], Awaitable["TaskCreated"]]
 EnvFor = Callable[["TaskState"], ExecEnv]
 OnDelta = Callable[[str, Delta], None]
 
@@ -73,6 +76,14 @@ class Runtime:
     agents: dict[str, Agent]
     provider_for: ProviderFor
     env_for: EnvFor = _default_env
+    #: ``task_provider(state, model)``: the provider of one task's call,
+    #: picked with the task's folded state (a route its config records);
+    #: ``None`` asks ``provider_for(model)``.
+    task_provider: TaskProviderFor | None = None
+    #: ``await prepare_child(created)``: a child task's ``TaskCreated`` as
+    #: the host completes it before it is written (the route of its model);
+    #: ``None`` writes it as staged.
+    prepare_child: PrepareChild | None = None
     worker: str = field(default_factory=_worker_id)
     queues: Sequence[str] = ("default",)
     lease_seconds: float = 30.0
@@ -128,6 +139,12 @@ class Runtime:
                                                         repr=False)
     #: The tasks this runtime runs now (:meth:`run_claim`).
     _running: set[str] = field(default_factory=set, init=False, repr=False)
+
+    def provider_of(self, state: TaskState, model: str) -> Provider:
+        """The provider ``state``'s task sends a ``model`` call to."""
+        if self.task_provider is not None:
+            return self.task_provider(state, model)
+        return self.provider_for(model)
 
     def __post_init__(self) -> None:
         # The snapshot version is of the code this process runs: hash it

@@ -16,6 +16,7 @@ from noeta.cli.tui.transcript import SERVER_DIRECTORY
 from noeta.core import models
 from noeta.core.events import ExtensionRecorded
 from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.host.app import model_choices, prepare_model
 from noeta.host.rewind import rewind, rewind_points
 from noeta.host.usage import context_text, cost_text, task_context, tree_usage
 
@@ -70,16 +71,21 @@ async def _reload_plugins(app: NoetaApp, arg: str) -> None:
 async def _model(app: NoetaApp, arg: str) -> None:
     if not arg:
         aliases = ", ".join(f"`{a}` ({r})" for a, r in models.ALIASES.items())
+        by_provider: dict[str, list[str]] = {}
+        for model, provider in await model_choices(app.local):
+            by_provider.setdefault(provider, []).append(f"`{model}`")
+        lines = [f"- {provider or 'catalog'}: {', '.join(names)}"
+                 for provider, names in by_provider.items()]
         await app.say_markdown(f"Model: `{app.model}`. Switch with `/model <name>`; "
-                               f"aliases: {aliases}.")
+                               f"aliases: {aliases}. Available:\n\n" + "\n".join(lines))
         return
     if not app.task_id:
         return
     real = models.resolve_alias(arg)
+    note = await prepare_model(app.local, real)
     await app.local.client.signal(app.task_id, CONFIG_SIGNAL, {"model": real})
     app.model = real
     app.update_status()
-    note = models.unknown_model_notice(real)
     await app.say_notice(f"model set to {real} from the next request on"
                          + (f" — {note}" if note else ""))
 

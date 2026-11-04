@@ -471,7 +471,9 @@ class TaskRun:
     ) -> None:
         if self._lost:
             raise LostClaim()
-        creates = [replace(c, created=await pin_history(self.store, c.created))
+        prepare = self.rt.prepare_child
+        creates = [replace(c, created=await pin_history(
+            self.store, c.created if prepare is None else await prepare(c.created)))
                    for c in creates]
         async with self._write_lock:
             base = self.state.last_seq
@@ -542,6 +544,8 @@ class TaskRun:
                         agents=self.rt.agents,
                         allowed_tools=self.agent.allowed_tools if self.agent else None,
                         denied_tools=self.agent.denied_tools if self.agent else (),
+                        # Asks the host for the provider on every view:
+                        # build_model_request relies on it coming first.
                         count_tokens=self.counter(model), read_log=self._read_log,
                         child_tasks=self._child_ids, serves_queue=self.serves_queue,
                         spill_dir=self.rt.spill_root, identity=self.identity,
@@ -563,7 +567,7 @@ class TaskRun:
         if not model:
             return None
         try:
-            provider = self.rt.provider_for(model)
+            provider = self.rt.provider_of(self.state, model)
         except Exception:  # noqa: BLE001 — no provider, no exact count
             return None
         count = getattr(provider, "count_tokens", None)
@@ -597,7 +601,7 @@ class TaskRun:
         from noeta.core.retry import complete_with_retries
 
         return await complete_with_retries(
-            self.rt.provider_for(request.model), request, sleep=self.rt.sleep)
+            self.rt.provider_of(self.state, request.model), request, sleep=self.rt.sleep)
 
     async def flush(self, view: TaskView) -> None:
         if view.pending or view.creates or view.enqueued:

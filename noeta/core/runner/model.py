@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 def build_model_request(run: TaskRun, *, final: bool) -> ModelRequest:
     agent = run.agent
     assert agent is not None
+    # The view asks the host for the task's provider (its token counter,
+    # ``Runtime.provider_of``) before anything below sizes the request: a
+    # host registers a recorded model's limits there, so the context parts
+    # and ``output_ceiling`` read them (tests/core/test_task_provider.py).
     view = run.view()
     offer = run.tool_offer(view)
     request = build_request(
@@ -195,7 +199,7 @@ async def call_model(run: TaskRun, *, final: bool = False) -> bool:
             attempt=attempt, delay=delay, error=str(error)[: texts.ERROR_DETAIL_CHARS]))])))
 
     try:
-        provider = run.rt.provider_for(request.model)
+        provider = run.rt.provider_of(run.state, request.model)
         response = await complete_with_retries(provider, request, on_delta, sleep=run.rt.sleep,
                                                on_retry=on_retry)
     except ContextOverflow as exc:

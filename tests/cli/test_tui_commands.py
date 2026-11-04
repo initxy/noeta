@@ -96,6 +96,23 @@ async def test_model_cost_context_and_a_local_command(tmp_path: Path) -> None:
         await settle(pilot, lambda: "**Config**" in shown(app))
 
 
+async def test_model_lists_every_providers_models(tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("first")])
+    app = make_app(tmp_path, provider)
+    app.local.list_models = lambda: [("gw-chat", "gateway"), ("claude-opus-5-5", "anthropic")]
+    prepared: list[str] = []
+    app.local.prepare_model = lambda m: prepared.append(m) or "about gw-chat"
+    async with app.run_test(size=(110, 40)) as pilot:
+        await type_line(pilot, "hello")
+        await settle(pilot, lambda: len(provider.requests) == 1 and not app.busy)
+        await type_line(pilot, "/model")
+        await settle(pilot, lambda: "- anthropic: `claude-opus-5-5`" in shown(app))
+        assert "- gateway: `gw-chat`" in shown(app)
+        await type_line(pilot, "/model gw-chat")
+        await settle(pilot, lambda: "model set to gw-chat" in shown(app))
+        assert prepared == ["gw-chat"] and "about gw-chat" in shown(app)
+
+
 async def test_rewind_restores_files_and_forks_the_conversation(tmp_path: Path) -> None:
     target = tmp_path / "w" / "notes.txt"
     provider = ScriptedProvider([

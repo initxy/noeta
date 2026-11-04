@@ -32,6 +32,7 @@ from noeta.core.client import Client, Input
 from noeta.core.commands import Typed
 from noeta.core.errors import NoetaError
 from noeta.core.extension import Command, CommandContext
+from noeta.core.loop.state import CONFIG_SIGNAL, MODEL_ROUTE
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
 from noeta.core.store import Store
@@ -67,6 +68,25 @@ class LocalClient(Client):
         super().__init__(store, **kw)
         self.runtime = runtime
         self.task_config = dict(task_config or {})
+        #: ``route_model(model)``: what a task records with a model it is
+        #: given (``MODEL_ROUTE``: its provider, its limits), or ``None``;
+        #: blocking. Set by a host with several providers.
+        self.route_model: Callable[[str], dict[str, Any] | None] | None = None
+
+    async def _route(self, model: Any) -> dict[str, Any] | None:
+        if self.route_model is None or not isinstance(model, str) or not model:
+            return None
+        return await asyncio.to_thread(self.route_model, model)
+
+    async def signal(self, task_id: str, name: str, data: Any = None, *,
+                     dedupe_key: str | None = None) -> int:
+        """A model switch records where the model goes with it."""
+        if name == CONFIG_SIGNAL and isinstance(data, dict) and "model" in data \
+                and MODEL_ROUTE not in data and self.route_model is not None:
+            route = await self._route(data["model"])
+            if route is not None:
+                data = {**data, MODEL_ROUTE: route}
+        return await super().signal(task_id, name, data, dedupe_key=dedupe_key)
 
     async def create(self, agent: str, input: Input | None = None, *,
                      task_id: str | None = None, config: dict[str, Any] | None = None,
@@ -76,6 +96,11 @@ class LocalClient(Client):
         prompts = {**self.task_config.get("prompts", {}), **(config or {}).get("prompts", {})}
         if prompts:
             merged["prompts"] = prompts
+        if self.route_model is not None and MODEL_ROUTE not in merged:
+            found = self.runtime.agent(agent)
+            route = await self._route(merged.get("model") or (found.model if found else ""))
+            if route is not None:
+                merged[MODEL_ROUTE] = route
         if not kw.get("history_from"):
             input = self._initial_prompt(agent, input)
         self.runtime.serve_root(tid)  # before it exists, so the first claim sees it
@@ -154,6 +179,15 @@ class LocalApp:
         #: set by a host that loads plugins from files (the ``noeta``
         #: command), ``None`` otherwise.
         self.reload_plugins: Callable[[], list[str]] | None = None
+        #: ``(model, provider name)`` for the models every configured
+        #: provider offers; ``None`` when only the catalog is known. May
+        #: read the providers' listings: call it off the event loop.
+        self.list_models: Callable[[], list[tuple[str, str]]] | None = None
+        #: Settle a model before a switch to it (its provider, its limits;
+        #: the client records them, ``LocalClient.route_model``),
+        #: returning what the person should know (an unknown model) or
+        #: ``None``; ``None`` when only the catalog is known. Off the loop.
+        self.prepare_model: Callable[[str], str | None] | None = None
 
     def replace_agents(self, agents: list[Agent]) -> None:
         """Run ``agents`` from now on: every task picked up after this (the

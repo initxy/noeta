@@ -322,3 +322,133 @@ def test_language_and_attribution_settings_reach_the_environment(home: Path) -> 
     (home / "settings.json").write_text(json.dumps({"includeCoAuthoredBy": False}))
     (home / "managed" / "managed-settings.json").write_text("{}")
     assert config.file_settings(str(home)).attribution == {"commit": "", "pr": ""}
+
+
+# -- providers --------------------------------------------------------------
+
+
+def test_one_provider_config_is_unchanged(home: Path) -> None:
+    from noeta.backends.providers.anthropic import AnthropicProvider
+
+    (home / "config.toml").write_text('model = "m"\nprovider = "anthropic"\napi_key = "k"\n')
+    s = load_settings()
+    assert s.providers == {} and s.model_providers == {}
+    router = s.make_router()
+    assert list(router.endpoints) == ["default"] and router.family == "anthropic"
+    assert isinstance(router.provider_for("claude-opus-5-5"), AnthropicProvider)
+    # An uncatalogued model is settled (its window looked up) first.
+    assert router.provider_for("m") is not router.provider_for("claude-opus-5-5")
+    router.prepare("m")
+    assert router.provider_for("m") is router.provider_for("claude-opus-5-5")
+
+
+def test_provider_tables_route_models(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.providers.anthropic import AnthropicProvider
+    from noeta.backends.providers.openai_compat import OpenAICompatProvider
+    from noeta.core import models
+
+    monkeypatch.setenv("DS_KEY", "sk-ds")
+    big = f"ds-big-{os.getpid()}"
+    (home / "models.json").write_text(json.dumps({"models": [
+        {"id": "gw-chat", "context_window": 64000, "max_output_tokens": 8000,
+         "provider": "gw"}]}))
+    (home / "config.toml").write_text(
+        'model = "claude-opus-5-5"\napi_key = "k"\n'
+        f'models_file = "{home / "models.json"}"\n'
+        f'store = "sqlite:///{home / "t.db"}"\n'
+        '[providers.deepseek]\nfamily = "openai_compat"\n'
+        'base_url = "https://api.deepseek.com/v1"\napi_key = "{env:DS_KEY}"\n'
+        'headers = {"x-team" = "a"}\n'
+        f'models = ["deepseek-chat", {{id = "{big}", context_window = 131072, '
+        'max_output_tokens = 65536}]\n'
+        '[providers.gw]\nfamily = "openai_compat"\nbase_url = "https://gw/v1"\n'
+        'api_key = "g"\nlist_models = false\n')
+    s = load_settings()
+    assert s.model_providers == {"gw-chat": "gw", "deepseek-chat": "deepseek", big: "deepseek"}
+    assert models.model_limits(big) == (131072, 65536)
+    app = from_settings(s, cwd=str(home))
+    assert app.prepare_model is not None
+    app.prepare_model("claude-opus-5-5")  # reads the (empty) listings
+
+    def route(model: str) -> Any:
+        provider = app.runtime.provider_for(model)
+        return getattr(provider, "_inner", provider)
+
+    assert isinstance(route("claude-opus-5-5"), AnthropicProvider)
+    deepseek = route("deepseek-chat")
+    assert isinstance(deepseek, OpenAICompatProvider) and deepseek is route(big)
+    assert deepseek._client.headers["authorization"] == "Bearer sk-ds"  # type: ignore[attr-defined]
+    assert deepseek._client.headers["x-team"] == "a"  # type: ignore[attr-defined]
+    assert route("gw-chat") is not deepseek
+    assert app.list_models is not None and app.prepare_model is not None
+    assert ("deepseek-chat", "deepseek") in app.list_models()
+    assert app.prepare_model("deepseek-chat") is not None  # uncatalogued, unlisted
+    assert app.prepare_model(big) is None
+
+
+def test_a_table_can_be_the_default_provider(home: Path,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.cli.config import MissingAPIKey
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (home / "config.toml").write_text(
+        'model = "deepseek-chat"\nprovider = "deepseek"\n'
+        '[providers.deepseek]\nfamily = "openai_compat"\nbase_url = "https://x/v1"\n'
+        'api_key = "k"\n'
+        '[providers.other]\nfamily = "openai_compat"\nbase_url = "https://y/v1"\n')
+    s = load_settings()
+    router = s.make_router()
+    assert list(router.endpoints) == ["deepseek", "other"]
+    assert s.make_provider().family == "openai_compat"
+    with pytest.raises(MissingAPIKey, match="provider 'other'"):
+        s._table_provider("other")
+
+
+async def test_a_tables_missing_secret_fails_only_its_calls(
+        home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.core.errors import Fatal
+    from noeta.core.types import ModelRequest
+
+    monkeypatch.delenv("NOT_SET_ANYWHERE", raising=False)
+    (home / "config.toml").write_text(
+        'model = "claude-opus-5-5"\napi_key = "k"\n'
+        '[providers.x]\nfamily = "openai_compat"\nbase_url = "https://x/v1"\n'
+        'api_key = "{env:NOT_SET_ANYWHERE}"\nmodels = ["x-model"]\n')
+    router = load_settings().make_router()
+    router.provider_for("claude-opus-5-5")
+    with pytest.raises(Fatal, match="NOT_SET_ANYWHERE"):
+        await router.provider_for("x-model").complete(ModelRequest(model="x-model"))
+
+
+@pytest.mark.parametrize(("text", "match"), [
+    ('[providers.a]\nbase_url = "x"\n', "family is required"),
+    ('[providers.a]\nfamily = "openai_compat"\nkey = "x"\n', "unknown keys"),
+    ('[providers.default]\nfamily = "openai_compat"\n', "pick another name"),
+    ('[providers.a]\nfamily = "openai_compat"\nmodels = [1]\n', "models is a list"),
+    ('[providers.a]\nfamily = "openai_compat"\nheaders = "h"\n', "headers"),
+    ('[providers]\na = 1\n', "tables"),
+])
+def test_bad_provider_tables(home: Path, text: str, match: str) -> None:
+    (home / "config.toml").write_text(text)
+    with pytest.raises(ValueError, match=match):
+        load_settings()
+
+
+def test_a_models_file_row_names_a_configured_provider(home: Path) -> None:
+    (home / "models.json").write_text(json.dumps([{"id": "q", "provider": "nobody"}]))
+    (home / "config.toml").write_text(f'models_file = "{home / "models.json"}"\n')
+    with pytest.raises(ValueError, match="nobody"):
+        load_settings()
+
+
+def test_a_model_named_for_two_providers_is_an_error(home: Path) -> None:
+    (home / "models.json").write_text(json.dumps([{"id": "m1", "provider": "b"}]))
+    tables = ('[providers.a]\nfamily = "openai_compat"\nmodels = ["m1"]\n'
+              '[providers.b]\nfamily = "openai_compat"\nmodels = ["m2"]\n')
+    (home / "config.toml").write_text(tables.replace('"m2"', '"m1"'))
+    with pytest.raises(ValueError, match=r"'m1' is named for two providers: 'a' "
+                                         r"\(\[providers.a\]\) and 'b' \(\[providers.b\]\)"):
+        load_settings()
+    (home / "config.toml").write_text(f'models_file = "{home / "models.json"}"\n' + tables)
+    with pytest.raises(ValueError, match=r"models\.json"):
+        load_settings()

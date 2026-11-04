@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any
 
 from noeta.core import models
 from noeta.core.client import ClientAPI
-from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.loop.state import CONFIG_SIGNAL, MODEL_ROUTE
 from noeta.host._errors import error_text
-from noeta.host.app import AppAPI
+from noeta.host.app import AppAPI, model_choices, prepare_model
 from noeta.host.pending import Pending, card_title
 from noeta.host.questions import typed_answer
 from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
@@ -103,7 +103,7 @@ class ControlRequests:
             await self.client.signal(self.task_id, CONFIG_SIGNAL, {SCHEMA_KEY: schema})
             self.options.output_schema = schema
         return {"commands": await self._commands(), "output_style": "default",
-                "available_output_styles": ["default"], "models": self._models(),
+                "available_output_styles": ["default"], "models": await self._models(),
                 "account": {}, "pid": os.getpid()}
 
     async def _hook_callback(self, callback_id: str, payload: dict[str, Any],
@@ -121,16 +121,21 @@ class ControlRequests:
         finally:
             self._hook_replies.pop(request_id, None)
 
-    def _models(self) -> list[dict[str, Any]]:
+    async def _models(self) -> list[dict[str, Any]]:
         out = [{"value": alias, "displayName": alias.capitalize(), "description": real}
                for alias, real in models.ALIASES.items()]
+        seen = {self.options.model, *models.ALIASES}
+        out += [{"value": model, "displayName": model,
+                 "description": f"on provider {provider}" if provider else model}
+                for model, provider in await model_choices(self.app, catalog=False)
+                if model not in seen]
         if self.options.model and self.options.model not in models.ALIASES:
             out.insert(0, {"value": self.options.model, "displayName": self.options.model,
                            "description": "the model this run started with"})
         return out
 
     async def _on_list_models(self, request: dict[str, Any]) -> dict[str, Any]:
-        return {"models": self._models()}
+        return {"models": await self._models()}
 
     async def _on_interrupt(self, request: dict[str, Any]) -> dict[str, Any]:
         if self._turn is not None:
@@ -148,9 +153,13 @@ class ControlRequests:
         return {"mode": mode}
 
     async def _on_set_model(self, request: dict[str, Any]) -> dict[str, Any]:
+        if MODEL_ROUTE in request:
+            raise ValueError(f"{MODEL_ROUTE} is the server's to record, not a client's")
         model = request.get("model")
         if model in (None, "", "default"):
             model = self.options.model or None
+        if model:
+            await prepare_model(self.app, str(model))
         await self.client.signal(self.task_id, CONFIG_SIGNAL, {"model": model})
         return {}
 
