@@ -657,8 +657,9 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         add = {agent: tuple(entries) for agent, entries in add_plugins.items()}
         for agent, names in registry.added_by_files().items():
             add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
-        if "markdown_commands" in from_plugins:
-            add["*"] = (*add.get("*", ()), ("markdown_commands", {}))
+        # Every agent offers the typed commands (``/init``, ``/review`` and
+        # the Claude Code plugins').
+        add["*"] = (*add.get("*", ()), ("markdown_commands", {}))
         agents = default_agents(model, plugins=table, add=add, extra_files=files, made=made)
         unjoined[:] = _unjoined_notices(agents, table)
         notices.extend(n for n in unjoined if n not in notices)

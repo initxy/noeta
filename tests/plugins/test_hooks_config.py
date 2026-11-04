@@ -427,3 +427,19 @@ def test_a_narrowed_answer_keeps_its_deny_and_drops_its_allow() -> None:
     assert narrowed("PermissionRequest", granted).specific == {}
     refused = Read(specific={"decision": {"behavior": "deny", "message": "no"}})
     assert narrowed("PermissionRequest", refused) is refused
+
+
+async def test_slash_hooks_lists_the_hooks_by_event_read_only() -> None:
+    from noeta.core.commands import Typed, run_typed
+    from noeta.core.extension import CommandContext
+
+    ctx = CommandContext(cwd="/w")
+    hooks = Hooks(hooks={
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
+                                                      "command": "./check.sh"}]}],
+        "Stop": [{"hooks": [{"type": "prompt", "prompt": "Done?"}]}]})
+    assert await run_typed([hooks], ctx, "/hooks") == Typed("\n".join([
+        "Hooks: 2 hooks on 2 events (read-only: change them in a settings file)",
+        "PreToolUse", "  Bash · command · ./check.sh", "Stop", "  * · prompt · Done?"]),
+        local=True)
+    assert (await Hooks().run_command(ctx, "hooks", "")).startswith("No hooks configured.")

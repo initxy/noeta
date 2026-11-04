@@ -122,3 +122,21 @@ def test_the_rules_kept_for_an_erase_are_bounded() -> None:
         state = commands.reduce(state, "ran", {"allow_rules": [f"Bash(r{seq})"], "input": seq})
     assert len(state["added"]) <= 64
     assert "499" in state["added"]
+
+
+async def test_init_and_review_come_with_it(run: Harness) -> None:
+    from noeta.plugins.markdown_commands import BUILTIN, REVIEW_PROMPT
+
+    assert set(BUILTIN) == {"init", "review"}
+    run.provider.add(reply("ok"))
+    await run.start([], "/review 42")
+    sent = run.sent()
+    assert "<command-name>/review</command-name>" in sent
+    assert f"{REVIEW_PROMPT}\nARGUMENTS: 42" in sent
+
+
+async def test_a_command_of_the_same_name_replaces_the_builtin_one() -> None:
+    mine = MarkdownCommands([{"name": "init", "body": "Mine."}])
+    listed = {c.name: c for c in await mine.commands(CommandContext(cwd="/"))}
+    assert set(listed) == {"init", "review"} and mine.render("init", "") == "Mine."
+    assert await MarkdownCommands(builtin=False).commands(CommandContext(cwd="/")) == []

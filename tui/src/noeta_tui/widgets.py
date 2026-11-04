@@ -17,6 +17,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Markdown, Static, TextArea
 
 from noeta.core.types import ToolUse
+from noeta.toolkit.commands import parse_command_message
 from noeta_tui import render
 
 
@@ -28,7 +29,8 @@ class UserMessage(Static):
     def __init__(self, text: str, *, marker: str = "❯") -> None:
         self.text = text
         out = Text().append(f"{marker} ", style="bold #fd5db1" if marker == "!" else "dim")
-        out.append(text)
+        typed = parse_command_message(text)  # a prompt command reads as it was typed
+        out.append(f"/{typed[0]} {typed[1]}".rstrip() if typed else text)
         super().__init__(out)
 
 
