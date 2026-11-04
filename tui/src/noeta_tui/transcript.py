@@ -55,6 +55,7 @@ from noeta_tui.widgets import (
     AssistantMessage,
     Notice,
     QuestionCard,
+    ReadGroup,
     ToolCall,
     UserMessage,
     bulleted,
@@ -79,6 +80,7 @@ class TranscriptView(App[None]):
     """Rendering and following; the state is set up by ``NoetaApp``."""
 
     local: Any
+    on_server: bool
     model: str
     cwd: str
     #: The directory the task runs in, as its ``TaskCreated`` recorded it
@@ -126,6 +128,8 @@ class TranscriptView(App[None]):
     show_tasks: bool
     #: What the footer says for a moment (``Press Ctrl-C again to exit``).
     flash: str
+    #: The effort the task's config names (``None``: the model's default).
+    effort: str | None
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None: ...
@@ -157,7 +161,7 @@ class TranscriptView(App[None]):
 
                 await transcript.mount(ApprovalCard(
                     p.request_id, card_title(p, self.task_id), card_prompt(p), decide,
-                    choices(p.detail)))
+                    choices(p.detail), preview=self._preview(p)))
             else:
                 self.waiting_for = f"{who} waits for your answer"
                 self._set_question(p.request_id, p.task_id, p.detail)
@@ -298,6 +302,7 @@ class TranscriptView(App[None]):
         transcript = self.query_one("#transcript")
         if isinstance(ev, TaskCreated):
             self.task_cwd = str(ev.config.get("cwd") or self.task_cwd)
+            self.effort = ev.config.get("effort") or self.effort
         elif isinstance(ev, InputTaken):
             for item in ev.items:
                 if isinstance(item.body, Say) and item.body.message.origin in (None, "human"):
@@ -329,7 +334,14 @@ class TranscriptView(App[None]):
             for call in msg.tool_uses:
                 block = ToolCall(call, expanded=self.verbose)
                 self.calls[call.id] = block
-                await transcript.mount(block)
+                if call.name != "Read":
+                    await transcript.mount(block)
+                    continue
+                last = transcript.children[-1] if transcript.children else None
+                group = last if isinstance(last, ReadGroup) else ReadGroup(expanded=self.verbose)
+                if group is not last:
+                    await transcript.mount(group)
+                await group.add(block)
             self.context_tokens = ev.response.usage.input + ev.response.usage.output
             # The reply's real count replaces what its stream was estimated at.
             self.turn_output += ev.response.usage.output
@@ -408,7 +420,7 @@ class TranscriptView(App[None]):
                     self.calls[p.request_id].set_state("waiting")
                 await transcript.mount(ApprovalCard(
                     p.request_id, card_title(p, self.task_id), card_prompt(p),
-                    self.decide, choices(p.detail)))
+                    self.decide, choices(p.detail), preview=self._preview(p)))
         elif ev.on == "question":
             questions = [k for k, v in ev.detail.items()
                          if isinstance(v, dict) and v.get("on") == "question"]
@@ -419,9 +431,32 @@ class TranscriptView(App[None]):
             self._set_question("", "", {})
             await self._turn_done()
 
+    def _preview(self, p: Pending) -> Text | None:
+        """The diff an edit's approval shows, against the file on this
+        machine (a server's files are not here)."""
+        if p.tool not in ("Edit", "Write"):
+            return None
+        current = None
+        if not self.on_server and (path := str(p.input.get("file_path") or "")):
+            target = Path(self.task_cwd or self.cwd, path).expanduser()
+            try:
+                current = target.read_text("utf-8") if target.is_file() else None
+            except (OSError, UnicodeDecodeError):
+                current = None
+        rows = render.edit_preview(p.tool, p.input, current)
+        return render.rows_text(rows) if rows else None
+
     def _take_modes(self, offered: Modes | None) -> None:
         if offered is not None and offered.cycle:
             self.modes, self.modes_published = offered, True
+
+    def effort_level(self) -> str | None:
+        """The effort the next request runs at, for a model known to take
+        one (``None`` for any other)."""
+        spec = models.find_spec(self.model)
+        if spec is None or not spec.is_reasoning:
+            return None
+        return self.effort or models.default_effort(self.model)
 
     def update_status(self) -> None:
         spec = models.find_spec(self.model)
@@ -439,6 +474,10 @@ class TranscriptView(App[None]):
         self.query_one("#status", Static).update(Text(
             f"{self.model} · context {used}{cost} · "
             f"{_short_path(self.task_cwd or SERVER_DIRECTORY, width)}", style="dim"))
+        level = self.effort_level()
+        effort = self.query_one("#effort", Static)
+        effort.update(render.effort_line(level) if level else "")
+        effort.display = level is not None
         self._tick()
 
     @work(exclusive=True, group="cost", exit_on_error=False)

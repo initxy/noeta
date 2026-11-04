@@ -15,7 +15,7 @@ from noeta.testing import ScriptedProvider, reply
 from noeta_tui.app import NoetaApp
 from noeta_tui.widgets import ApprovalCard, Completions, PromptInput, ToolCall, Welcome
 
-from support import MODEL, AskBash, Lines, make_app, plain, settle, shown, type_line
+from support import MODEL, AskBash, Lines, make_app, plain, ready, settle, shown, type_line
 
 
 def footer(app: NoetaApp) -> str:
@@ -25,7 +25,7 @@ def footer(app: NoetaApp) -> str:
 async def test_welcome_footer_and_the_shortcuts_panel(tmp_path: Path) -> None:
     app = make_app(tmp_path, ScriptedProvider([]), Permissions(mode="default"))
     async with app.run_test(size=(120, 36)) as pilot:
-        await settle(pilot, lambda: app.mode == "default")
+        await settle(pilot, lambda: ready(app))
         welcome = plain(app.query_one(Welcome))
         assert "Welcome to noeta 1.2.3" in welcome and f"model: {MODEL}" in welcome
         assert "/help for help, /status for your current setup" in welcome
@@ -73,7 +73,7 @@ async def test_at_completes_a_path(tmp_path: Path) -> None:
     (tmp_path / "w" / "src" / "calc.py").write_text("x = 1\n")
     (tmp_path / "w" / "calendar.md").write_text("")
     async with app.run_test(size=(120, 36)) as pilot:
-        await settle(pilot, lambda: app.task_id != "")
+        await settle(pilot, lambda: ready(app))
         await pilot.press(*"look at @cal")
         menu = app.query_one(Completions)
         assert [value for value, _, _ in menu.items] == ["@calendar.md", "@src/calc.py"]
@@ -86,7 +86,7 @@ async def test_bash_mode_runs_here_and_goes_with_the_next_message(tmp_path: Path
     provider = ScriptedProvider([reply("seen")])
     app = make_app(tmp_path, provider)
     async with app.run_test(size=(120, 36)) as pilot:
-        await settle(pilot, lambda: app.task_id != "")
+        await settle(pilot, lambda: ready(app))
         await pilot.press(*"!echo hi there")
         assert app.query_one("#prompt-box").has_class("-bash")
         assert plain(app.query_one("#marker")) == "!"
@@ -153,9 +153,7 @@ async def test_the_task_list_and_the_spinner(tmp_path: Path) -> None:
         await pilot.press("ctrl+t")
         assert tasks.display
         lines.release.set()
-        await settle(pilot, lambda: not app.busy)
-        await pilot.pause(0.2)
-        assert not spinner.display
+        await settle(pilot, lambda: not app.busy and not spinner.display)
 
 
 async def test_a_message_sent_during_a_turn_is_queued(tmp_path: Path) -> None:
@@ -225,8 +223,7 @@ async def test_history_ctrl_c_and_double_esc(tmp_path: Path) -> None:
         await pilot.press("ctrl+c")
         assert footer(app) == "Press Ctrl-C again to exit"
         await pilot.press("ctrl+c")
-        await pilot.pause(0.1)
-        assert not app.is_running
+        await settle(pilot, lambda: not app.is_running)
 
 
 async def test_status_permissions_agents_and_context(tmp_path: Path) -> None:

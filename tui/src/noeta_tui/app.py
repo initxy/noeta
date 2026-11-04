@@ -39,6 +39,7 @@ from noeta_tui.widgets import (
     Notice,
     PromptInput,
     QuestionCard,
+    ReadGroup,
     ToolCall,
     UserMessage,
     Welcome,
@@ -50,7 +51,7 @@ SHORTCUTS = """\
 [dim]! for bash mode        double tap esc to clear input     ctrl + c twice to exit
 / for commands         shift + tab to cycle modes        ctrl + v to paste images
 @ for file paths       ctrl + o for verbose output       ctrl + b for subtasks
-                       ctrl + t to toggle tasks          \\⏎ or ctrl + j for newline
+ctrl + r for history   ctrl + t to toggle tasks          \\⏎ or ctrl + j for newline
                        ↑ ↓ for earlier prompts           esc to interrupt[/dim]"""
 
 #: Seconds between two presses of Esc (or Ctrl+C) that count as a double press.
@@ -70,6 +71,7 @@ class NoetaApp(TranscriptView):
         Binding("ctrl+o", "toggle_verbose", "Verbose", show=False, priority=True),
         Binding("ctrl+t", "toggle_tasks", "Tasks", show=False, priority=True),
         Binding("ctrl+c", "interrupt", "Quit", show=False, priority=True),
+        Binding("ctrl+r", "search_history", "History", show=False, priority=True),
     ]
 
     def __init__(self, local: Any, *, agent: str, model: str, cwd: str,
@@ -101,6 +103,8 @@ class NoetaApp(TranscriptView):
         self.task_cwd = self._default_task_cwd()
         self.resume = resume
         self.permission_mode = permission_mode
+        #: The effort the task was given (its config's), ``None``: the model's default.
+        self.effort: str | None = None
         #: The task's permission mode, as its permissions plugin recorded it.
         self.mode = ""
         #: The modes the task's permissions plugin offers (its ``modes`` record).
@@ -155,6 +159,10 @@ class NoetaApp(TranscriptView):
         self.plugin_commands: list[Command] = []
         self._deltas: asyncio.Queue[Delta] = asyncio.Queue()
         self._follower: Any = None
+        #: Held while a new screen's task is created (one task, however many ask).
+        self._creating = asyncio.Lock()
+        #: Ctrl+R: the prompt filters the history menu.
+        self.searching = False
 
     # ------------------------------------------------------------ layout
 
@@ -168,6 +176,7 @@ class NoetaApp(TranscriptView):
         yield Static("", id="tasks")
         yield Static("", id="queued")
         yield Vertical(id="overlay")
+        yield Static("", id="effort")
         with Horizontal(id="prompt-box"):
             yield Static("❯", id="marker")
             yield PromptInput(self.submit, self.add_image, self.prompt_key)
@@ -186,6 +195,13 @@ class NoetaApp(TranscriptView):
         self._pump_deltas()
         self._refresh_side()
         self.set_interval(0.12, self._tick)
+        if self.start.trust is not None:
+            await slash.trust_picker(self, self._open_first)
+        else:
+            await self._open_first()
+
+    async def _open_first(self) -> None:
+        """The task the app starts on: ``--resume``'s, the picked one, or a new one."""
         if self.resume:
             await self.open_task(self.resume)
         elif self.resume == "":
@@ -200,21 +216,35 @@ class NoetaApp(TranscriptView):
     # ------------------------------------------------------------ tasks
 
     async def new_task(self) -> None:
-        self.read_only = False
-        config = dict(self.task_config)
-        if self.permission_mode:
-            config["permission_mode"] = self.permission_mode
-        # The person is at this machine: their dates are in its time zone.
-        if "timezone" not in config and (zone := local_timezone()):
-            config["timezone"] = zone
-        tid = await self.local.client.create(self.agent, None, config=config)
-        await self.open_task(tid, resumed=False)
+        """An empty screen for a new task, created when first needed
+        (:meth:`ensure_task`): a start, ``/clear`` or ``/new`` the person
+        types nothing after leaves no empty task behind, as Claude Code saves
+        a session only from its first message."""
+        await self._clear("")
+        self._load_commands()
+        self.update_status()
+
+    async def ensure_task(self) -> str:
+        """The task shown, created now if the screen is a new one."""
+        async with self._creating:
+            if self.task_id:
+                return self.task_id
+            config = dict(self.task_config)
+            if self.permission_mode:
+                config["permission_mode"] = self.permission_mode
+            # The person is at this machine: their dates are in its time zone.
+            if "timezone" not in config and (zone := local_timezone()):
+                config["timezone"] = zone
+            tid: str = await self.local.client.create(self.agent, None, config=config)
+            await self.local.adopt(tid)
+            self.task_id = tid
+            self._follower = self.follow(tid)
+            self._load_commands()
+            return tid
 
     async def open_task(self, task_id: str, *, resumed: bool = True) -> None:
-        """Show and follow ``task_id``; ``resumed``: an existing task the
-        person reopens (its plugins are told)."""
-        if self._follower is not None:
-            self._follower.cancel()
+        """Show and follow the existing ``task_id``; ``resumed``: the person
+        reopens it (its plugins are told), not a fork rewind just made."""
         refused = ""
         try:
             await self.local.adopt(task_id)
@@ -224,9 +254,22 @@ class NoetaApp(TranscriptView):
             # A person follows it now, whatever headless run had it before.
             await follow(self.local.client, task_id)
             await self.local.client.signal(task_id, RESUMED_SIGNAL)
+        await self._clear(task_id, refused=refused)
+        self._follower = self.follow(task_id)
+        self._load_commands()
+        self.update_status()
+
+    async def _clear(self, task_id: str, *, refused: str = "") -> None:
+        """Forget what was shown and show ``task_id``'s welcome box (``""``:
+        a new task's)."""
+        if self._follower is not None:
+            self._follower.cancel()
+            self._follower = None
         self.read_only = bool(refused)
         self.task_id = task_id
         self.task_cwd = self._default_task_cwd()
+        self.effort = self.task_config.get("effort")
+        self.context_tokens = 0
         self.calls.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
@@ -253,13 +296,11 @@ class NoetaApp(TranscriptView):
         if refused:
             await transcript.mount(Notice(f"read-only: {refused}. Its history is shown; "
                                           "/new starts a task here.", classes="-error"))
-        self._follower = self.follow(task_id)
-        self._load_commands()
-        self.update_status()
 
     def _default_task_cwd(self) -> str:
-        """What the footer shows until the task's ``TaskCreated`` says."""
-        return "" if self.on_server else self.cwd
+        """What the footer shows until the task's ``TaskCreated`` says: the
+        directory new tasks are asked to run in (on a server, ``""`` for its own)."""
+        return str(self.task_config.get("cwd") or ("" if self.on_server else self.cwd))
 
     async def pick_task(self) -> None:
         """Open the latest task and offer the others (``/resume``'s picker)."""
@@ -300,8 +341,6 @@ class NoetaApp(TranscriptView):
         await self.send(text)
 
     async def send(self, text: str) -> None:
-        if not self.task_id:
-            return
         if self.read_only:
             await self.say_notice("this task is read-only here (its agent is not available)")
             return
@@ -325,7 +364,8 @@ class NoetaApp(TranscriptView):
         was_busy = self.busy
         self.set_busy(True)
         try:
-            await self.local.client.send(self.task_id, message, when="next_turn")
+            task_id = await self.ensure_task()
+            await self.local.client.send(task_id, message, when="next_turn")
         except BaseException:
             if not was_busy:
                 self.set_busy(False)
@@ -415,6 +455,14 @@ class NoetaApp(TranscriptView):
         """The prompt's key, first: the completion menu's, history, ``?``."""
         menu = self.query_one(Completions)
         box = self._box()
+        if self.searching and key in ("enter", "tab", "escape"):
+            picked = menu.current() if key != "escape" else None
+            self._end_search(picked if picked is not None else
+                             ("" if key == "escape" else box.text))
+            return True
+        if self.searching and key in ("up", "down"):
+            menu.move(-1 if key == "up" else 1)
+            return True
         if menu.display:
             if key in ("up", "down"):
                 menu.move(-1 if key == "up" else 1)
@@ -444,6 +492,28 @@ class NoetaApp(TranscriptView):
                 return True
         return False
 
+    def action_search_history(self) -> None:
+        """Ctrl+R: what is typed filters the earlier prompts, newest first;
+        Enter puts the picked one in the box, Esc leaves it empty."""
+        if not self.history:
+            return
+        self.searching = True
+        self._set_marker("⌕")
+        self._show_search(self._box().text)
+
+    def _show_search(self, typed: str) -> None:
+        want = typed.lower()
+        found = [h for h in reversed(self.history) if want in h.lower()]
+        self.query_one(Completions).show([(h, h.splitlines()[0][:100], "") for h in found])
+
+    def _end_search(self, text: str) -> None:
+        self.searching = False
+        self.query_one(Completions).hide()
+        self._set_marker("")
+        box = self._box()
+        box.text = text
+        box.move_cursor(box.document.end)
+
     def _step_history(self, step: int) -> None:
         self.history_at = max(0, min(len(self.history), self.history_at + step))
         text = self.history[self.history_at] if self.history_at < len(self.history) else ""
@@ -463,6 +533,9 @@ class NoetaApp(TranscriptView):
     def _typed(self, event: TextArea.Changed) -> None:
         text = event.text_area.text
         self.query_one("#shortcuts").display = False
+        if self.searching:
+            self._show_search(text)
+            return
         self._set_marker("!" if text.startswith("!") else "")
         menu = self.query_one(Completions)
         word = text.rsplit(" ", 1)[-1] if text else ""
@@ -476,7 +549,7 @@ class NoetaApp(TranscriptView):
 
     def _set_marker(self, marker: str) -> None:
         bash = marker == "!"
-        self.query_one("#marker", Static).update(Text("!" if bash else "❯",
+        self.query_one("#marker", Static).update(Text(marker or "❯",
                                                       style="bold #fd5db1" if bash else ""))
         self.query_one("#prompt-box").set_class(bash, "-bash")
 
@@ -525,6 +598,8 @@ class NoetaApp(TranscriptView):
         self.verbose = not self.verbose
         for call in self.query(ToolCall):
             call.set_expanded(self.verbose)
+        for group in self.query(ReadGroup):
+            group.set_expanded(self.verbose)
 
     def action_toggle_tasks(self) -> None:
         self.show_tasks = not self.show_tasks
@@ -538,8 +613,9 @@ class NoetaApp(TranscriptView):
 
     async def action_cycle_mode(self) -> None:
         """Step to the next permission mode (Claude Code's shift+tab)."""
-        if not self.task_id or self.read_only:
+        if self.read_only:
             return
+        await self.ensure_task()
         if not self.mode or not self.modes_published:
             await self._modes_from_log()
         current = self.mode or self.permission_mode

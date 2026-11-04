@@ -4,7 +4,9 @@ gates to drive it, a real PNG, waiting for the UI, and reading what it shows."""
 from __future__ import annotations
 
 import asyncio
+import inspect
 import struct
+import time
 import zlib
 from collections.abc import Sequence
 from pathlib import Path
@@ -34,13 +36,26 @@ def png(width: int = 2, height: int = 2) -> bytes:
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
-async def settle(pilot: Any, cond: Any, tries: int = 400) -> None:
-    """Wait for ``cond()`` while the app runs (20 s at most)."""
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if cond():
+async def settle(pilot: Any, cond: Any, timeout: float = 20.0) -> None:
+    """Wait until ``cond()`` holds (it may return an awaitable) while the
+    app runs: never a fixed sleep, ``timeout`` seconds at most."""
+    deadline = time.monotonic() + timeout
+    while True:
+        held = cond()
+        if inspect.isawaitable(held):
+            held = await held
+        if held:
             return
-    raise AssertionError("UI did not settle")
+        if time.monotonic() > deadline:
+            raise AssertionError("UI did not settle")
+        await pilot.pause(0.02)
+
+
+def ready(app: Any) -> bool:
+    """The app shows its first screen (a new task's: no task yet)."""
+    from noeta_tui.widgets import Welcome
+
+    return bool(app.query(Welcome))
 
 
 def plain(widget: Any) -> str:
@@ -101,14 +116,18 @@ class AskBash(Extension):
 
 
 def make_app(tmp_path: Path, provider: Any, *exts: Extension, tools: Sequence[Any] = (),
-             settings: Any = None) -> NoetaApp:
+             settings: Any = None, **start: Any) -> NoetaApp:
+    """``start``: more of what the ``noeta`` command hands the app
+    (``FrontEndStart``'s ``permission_mode``, ``trust``)."""
     work = tmp_path / "w"
     work.mkdir(exist_ok=True)
     agent = Agent(name="main", model=MODEL, tools=list(tools),
                   extensions=[FileTools(), Where(), *exts])
     local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
                      env_for=lambda _s: LocalExecEnv(str(work)), own_tasks_only=True)
-    start = FrontEndStart(agent="main", cwd=str(work), model=MODEL, version="1.2.3",
+    front = FrontEndStart(agent="main", cwd=str(work), model=MODEL, version="1.2.3",
                           home=str(tmp_path / "home"),
-                          settings=settings or (lambda: [("store", "sqlite:///t.db")]))
-    return NoetaApp(local, agent="main", model=MODEL, cwd=str(work), start=start)
+                          settings=settings or (lambda: [("store", "sqlite:///t.db")]),
+                          **start)
+    return NoetaApp(local, agent="main", model=MODEL, cwd=str(work),
+                    permission_mode=start.get("permission_mode"), start=front)

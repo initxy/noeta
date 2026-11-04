@@ -432,13 +432,28 @@ def _front(argv: list[str]) -> None:
                               settings=lambda: settings_rows(s, cwd), **common)
     else:
         from noeta.cli.config import from_settings
+        from noeta.cli.trust import project_trusted
 
         s = _settings(args)
         backend = from_settings(s, cwd=cwd, own_tasks_only=True, plugin_dirs=args.plugin_dirs)
         start = FrontEndStart(agent=args.agent or backend.main_agent, model=s.model,
-                              task_config={"cwd": cwd, "model": s.model},
-                              settings=lambda: settings_rows(s, cwd), **common)
+                              task_config={"cwd": cwd, "model": s.model,
+                                           **({"effort": s.effort} if s.effort else {})},
+                              settings=lambda: settings_rows(s, cwd),
+                              trust=None if project_trusted(cwd) else
+                              lambda: trust_here(backend, cwd), **common)
     run(backend, start)
+
+
+def trust_here(app: Any, cwd: str) -> None:
+    """Trust the project at ``cwd`` (the terminal UI's trust question) and
+    load what a trusted project loads, its "not trusted" notices dropped."""
+    from noeta.cli.trust import PROJECT_GATED_DIRS, trust_project, untrusted_notice
+
+    stale = {untrusted_notice(cwd, sub) for sub in PROJECT_GATED_DIRS}
+    trust_project(cwd)
+    app.notices = [n for n in app.notices if n not in stale]
+    app.reload_plugins()
 
 
 def front_end(name: str) -> Any:
