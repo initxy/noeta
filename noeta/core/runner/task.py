@@ -480,10 +480,15 @@ class TaskRun:
             self._step.cancel()
 
     async def _watch_inbox(self) -> None:
-        """Polling fallback for posts made by other processes (none when the
-        store's change feed hears them, ``shared_changes``)."""
+        """Polling fallback for posts made by other processes: every
+        ``poll_interval``, or every third of the lease where the store's
+        change feed hears them (``shared_changes``) but may drop some while
+        it reconnects."""
+        rt = self.rt
+        interval = max(rt.lease_seconds / 3, rt.poll_interval) \
+            if getattr(self.store, "shared_changes", False) else rt.poll_interval
         while True:
-            await asyncio.sleep(self.rt.poll_interval)
+            await asyncio.sleep(interval)
             with contextlib.suppress(Exception):
                 await self._check_stop()
 
@@ -857,8 +862,7 @@ class TaskRun:
         """Run a step so a cancel posted mid-step (or a lost claim) can
         interrupt it."""
         self._step = asyncio.create_task(coro)
-        watcher = None if getattr(self.store, "shared_changes", False) \
-            else asyncio.create_task(self._watch_inbox())
+        watcher = asyncio.create_task(self._watch_inbox())
         try:
             result: bool = await self._step
             return result
@@ -870,8 +874,7 @@ class TaskRun:
                 raise LostClaim() from None
             return True  # a cancel landed; the next boundary takes it
         finally:
-            if watcher is not None:
-                watcher.cancel()
+            watcher.cancel()
             self._step = None
 
     async def take_input(self) -> None:

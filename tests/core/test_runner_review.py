@@ -792,3 +792,30 @@ def test_a_stop_recorded_before_thinking_was_kept_folds_to_its_text() -> None:
         ("assistant", [Text(text="Floating")]), ("user", [Text(text="[stopped]\n")])]
     kept = TurnStopped(partial="x", marker="m", thinking=[Thinking(text="t", signature="s")])
     assert TurnStopped.parse(kept.data()) == kept
+
+
+class _DroppedFeed(SqliteStore):
+    """A store whose change feed is shared and, reconnecting, hears nothing."""
+
+    shared_changes = True
+
+    def on_change(self, callback: Any) -> Any:
+        return lambda: None
+
+
+async def test_a_cancel_the_shared_feed_dropped_still_stops_the_step(tmp_path: Path) -> None:
+    store = _DroppedFeed(str(tmp_path / "t.db"))
+    try:
+        slow = Slow()
+        rt = runtime(store, ScriptedProvider([reply("", ("Slow", {}))]),
+                     Agent(name="a", model="m", tools=[slow]), lease_seconds=0.6)
+        client = Client(store)
+        tid = await client.create("a", "go")
+        running = asyncio.create_task(rt.run_once())
+        await asyncio.wait_for(slow.started.wait(), 5)
+        await client.cancel(tid, "stop")
+        await asyncio.wait_for(slow.cancelled.wait(), 5)  # a lease/3 poll, not the step's end
+        await asyncio.wait_for(running, 5)
+        assert (await client.get(tid)).status == "ended"
+    finally:
+        await store.close()
