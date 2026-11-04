@@ -41,7 +41,7 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
 
 ## Plan
 
-- [ ] A TUI + host: D1, D2, D3, Tab-to-amend, Tab completion inside a command word, `-c` exits
+- [x] A TUI + host: D1, D2, D3, Tab-to-amend, Tab completion inside a command word, `-c` exits
       when nothing to continue.
 - [ ] B Web: session search, archive, delete (host routes as needed); auto-compact indicator
       once A's reader lands.
@@ -60,3 +60,22 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
 
 ## Progress log
 - 2026-11-04 Created after the v1-finish goal check found these alignment gaps still open.
+- 2026-11-04 A on `v1-align-a` (one commit per item): D1 the compaction plugin records
+  `threshold` (`threshold`, `window`, `auto`) before a model call when those change,
+  `plugin_records.auto_compact` reads it; the TUI footer shows "N% until auto-compact"
+  within 20K tokens of it (Claude Code's rule; "Context low ... /compact" when automatic
+  compaction is off). D2 `markdown_commands` offers `/init` and `/review` (own words,
+  prompts `markdown_commands/<name>`), and the cli adds it to every agent; `/mcp` (MCP
+  plugin: servers listed now, connected with tool count / sign-in / failed) and `/hooks`
+  (hooks plugin: by event, matcher, type) are local plugin commands, so no `AppAPI`
+  addition; the TUI shows them as panels. D3 `<home>/projects/<slug>/history.jsonl`
+  (0600, newest 100 kept) feeds Up and Ctrl+R. Tab-to-amend is the approval dialog's
+  (Claude Code 2.1.318: Tab on Yes / No opens a line): a No carries it as the refusal's
+  message, a Yes sends it as a message taken in after the call's result. Tab completes the
+  first word at the cursor; `-c` with nothing here prints Claude Code's message, exit 1.
+  Cuts: `/review` is one prompt, not Claude Code's `/code-review` (effort levels,
+  sub-agents); `/mcp` `/hooks` are read-only, without the setting's source; a Yes's words
+  are their own user message, not a block beside the result (the kernel has no such
+  block); Claude Code's mid-prompt slash completion and its "% context used" variant are
+  not built. make check 3552 passed, 90.34%; make tui 71 passed, 88.14%; make parity 0
+  mismatches, own-words none; screenshots rewritten.
