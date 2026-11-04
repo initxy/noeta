@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from noeta.core.extension import Extension, TaskView, ToolChanges, ToolEntry
 from noeta.core.loop.state import TaskState
 from noeta.core.mcp_names import legacy_index
-from noeta.core.tool import Tool, tool_flag
+from noeta.core.tool import Tool, tool_flags
 from noeta.core.types import ToolReference, ToolResult, ToolSpec
 from noeta.plugins.tool_search.search import TOOL_SEARCH, ToolSearchTool
 
@@ -64,7 +64,7 @@ class ToolSearch(Extension):
     name = "tool_search"
 
     def tool_changes(self, view: TaskView, offered: Sequence[Tool]) -> ToolChanges | None:
-        deferred = {t.name: t for t in offered if tool_flag(t, "deferred")}
+        deferred = {t.name: t for t in offered if tool_flags(t).deferred}
         if not deferred:
             return None
         add: list[Tool] = [] if any(t.name == TOOL_SEARCH for t in offered) \
@@ -76,8 +76,8 @@ class ToolSearch(Extension):
         loaded |= {index[o] for o in loaded if index.get(o) in deferred}
         withhold = {n: NOT_LOADED.format(name=n) for n in deferred if n not in loaded}
         sent = [t for t in [*offered, *add] if t.name not in withhold]
-        order = [*sorted(t.name for t in sent if not tool_flag(t, "listed_last")),
-                 *sorted(t.name for t in sent if tool_flag(t, "listed_last"))]
+        order = [*sorted(t.name for t in sent if not tool_flags(t).listed_last),
+                 *sorted(t.name for t in sent if tool_flags(t).listed_last)]
         before = order[-1] if order else ""
         return ToolChanges(add=add, withhold=withhold,
                            entries=[ToolEntry(spec=placeholder_spec(), before=before)])

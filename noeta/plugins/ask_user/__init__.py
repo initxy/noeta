@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from noeta.core.events import Answer
 from noeta.core.extension import Extension, TaskView
 from noeta.core.questions import AnswerValidationError, normalize_answer
-from noeta.core.tool import Park, Tool, ToolContext, ToolOutput, text_output
+from noeta.core.tool import Park, Tool, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY, can_ask
 from noeta.toolkit.tools import SCHEMA_DIALECT
 
@@ -343,7 +343,7 @@ class AskUserQuestionTool:
     description = DESCRIPTION
     input_schema = INPUT_SCHEMA
     read_only = False
-    safe_while_planning = True
+    flags = ToolFlags(safe_while_planning=True)
     #: An answer cannot be fetched again, so it is never cleared.
     clearable = False
 

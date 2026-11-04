@@ -97,7 +97,7 @@ async def test_bad_calls(h: Harness, ws: Path) -> None:
 
 def test_schema_and_deferral() -> None:
     tool = NotebookEditTool()
-    assert tool.deferred and tool.input_schema["required"] == ["notebook_path", "new_source"]
+    assert tool.flags.deferred and tool.input_schema["required"] == ["notebook_path", "new_source"]
     assert tool.input_schema["additionalProperties"] is False
 
 

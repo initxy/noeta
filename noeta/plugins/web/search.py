@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.web.render import collapse_whitespace
 from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, load_description, truncate_bytes
 
@@ -140,10 +140,12 @@ class HttpSearchTransport:
 class WebSearchTool:
     name = "WebSearch"
     read_only = True
-    retry_safe = True
+    flags = ToolFlags(
+        retry_safe=True,
+        deferred=True,
+        search_hint="search the web for up-to-date information",
+    )
     clearable = True
-    deferred = True
-    search_hint = "search the web for up-to-date information"
 
     def __init__(self, transport: SearchTransport) -> None:
         self.transport = transport

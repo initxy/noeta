@@ -16,7 +16,7 @@ from noeta.core.client import Client
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolOutput, text_output, tool_flags
 from noeta.core.types import Message, ModelRequest, Text, Thinking, ToolResult, ToolUse
 from noeta.plugins.todos import (
     PROMPT_LINE,
@@ -101,7 +101,7 @@ def test_claude_codes_canonical_names(model: str, name: str) -> None:
 def test_switches_and_sub_agents() -> None:
     names = [t.name for t in Todos().tools(_view(OLD))]
     assert names == ["TaskCreate", "TaskGet", "TaskUpdate", "TaskList"]
-    assert all(getattr(t, "deferred", False) for t in Todos().tools(_view(OLD)))
+    assert all(tool_flags(t).deferred for t in Todos().tools(_view(OLD)))
     assert Todos().tools(_view("claude-opus-5-5")) == ()
     assert len(Todos(all_models=True).tools(_view("claude-opus-5-5"))) == 4
     # A sub-agent runs in the background: no task tools, as Claude Code's

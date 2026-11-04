@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
-from noeta.core.tool import ToolContext
+from noeta.core.tool import ToolContext, tool_flags
 from noeta.plugins.shell import Shell
 from noeta.plugins.shell.state import ShellState, reduce_shell
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
@@ -158,7 +158,7 @@ async def test_bad_names_and_no_repository(tmp_path: Path, repo: Path) -> None:
 
 def test_the_shell_offers_both_tools_deferred() -> None:
     tools = {t.name: t for t in Shell(background=False)._tools}
-    assert tools["EnterWorktree"].deferred and tools["ExitWorktree"].deferred
+    assert tool_flags(tools["EnterWorktree"]).deferred and tool_flags(tools["ExitWorktree"]).deferred
     assert tools["ExitWorktree"].input_schema["required"] == ["action"]
 
 

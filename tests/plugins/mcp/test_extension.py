@@ -18,6 +18,7 @@ from noeta.core.events import ExtensionRecorded, ToolFinished, Waiting
 from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
+from noeta.core.tool import tool_flags
 from noeta.core.types import Image, ModelRequest, ToolUse
 from noeta.plugins.mcp import Mcp, McpPool, McpServer
 from noeta.plugins.mcp.config import describe_tool, make_tool_name, map_server_names
@@ -342,9 +343,9 @@ def test_a_long_server_name_that_drops_every_tool_is_named_to_the_model(
                           [{"name": "a"}, {"name": "b"}])
     assert entry["tools"] == [] and entry["too_long"] == 2
     assert caplog.text.count("of its tools are not offered") == 1
-    text = no_match_text("github", {"servers": [entry], "down": {}})
+    text = no_match_text("github", {"mcp": {"servers": [entry], "down": {}}})
     assert f"{alias}: 2" in text and "longer than 128 characters" in text
-    assert no_match_text("github", {"servers": [], "down": {}}) == \
+    assert no_match_text("github", {"mcp": {"servers": [], "down": {}}}) == \
         "No deferred tool matches 'github'."
 
 
@@ -389,9 +390,9 @@ def test_a_tool_named_in_the_terminal_list_needs_no_reply(
 
     tool = McpTool(name="mcp__s__t", alias="s", remote="t", description="", input_schema={},
                    invoke=invoke)
-    assert tool.silent_reply_after is None
+    assert tool.flags.silent_reply_after is None
     monkeypatch.setenv("NOETA_TERMINAL_MCP_TOOLS", "mcp__x__y, mcp__s__t")
-    assert tool.silent_reply_after == "success"
+    assert tool.flags.silent_reply_after == "success"
 
 
 async def test_a_remote_http_server_works_end_to_end(store: SqliteStore) -> None:
@@ -493,7 +494,7 @@ def test_the_resource_tools_run_again_after_a_crash() -> None:
     )
 
     for tool in (ListMcpResourcesTool, ReadMcpResourceTool, ReadMcpResourceDirTool):
-        assert getattr(tool, "retry_safe", False) is True, tool
+        assert tool_flags(tool).retry_safe, tool
 
 
 async def test_scopes_partition_connections(store: SqliteStore, pool: McpPool) -> None:

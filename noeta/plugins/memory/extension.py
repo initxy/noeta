@@ -45,6 +45,7 @@ from noeta.toolkit.memory_index import (
     trim_memory_index,
 )
 from noeta.toolkit.paths import noeta_home, project_dir
+from noeta.toolkit.plugin_records import INSTRUCTIONS, MEMORY
 from noeta.toolkit.tokens import has_cjk
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
@@ -96,10 +97,6 @@ INDEX_MAX_CHARS = MEMORY_INDEX_MAX_CHARS
 #: it: its path, then its text.
 INDEX_HEAD = ("Contents of {path} (your auto memory index for this project, kept across "
               "conversations):")
-#: The plugin that shows the index with the instruction files when it runs
-#: after this one.
-INSTRUCTIONS = "instructions"
-
 #: Recall: memories attached per message, the selector's output ceiling, and
 #: the characters attached over a whole task (Claude Code's budget counts
 #: the attached text's length).
@@ -211,7 +208,7 @@ class Memory(Extension):
       ``<cwd>/.noeta/agent-memory-local/<agent>/`` (``local``).
     """
 
-    name = "memory"
+    name = MEMORY
 
     def __init__(self, *, home: str | None = None, directory: str | None = None,
                  recall_model: str | None = None, rehang: bool = True,

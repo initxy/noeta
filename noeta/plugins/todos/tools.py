@@ -5,10 +5,11 @@ record lands with the call's result, so a crash leaves both or neither."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from importlib import resources
 from typing import Any
 
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.tool_input import check_input, tool_use_error
 from noeta.plugins.todos.state import STATUSES, TodoState
 from noeta.toolkit.tools import SCHEMA_DIALECT
@@ -172,13 +173,15 @@ class _TaskTool:
     description: str
     input_schema: dict[str, Any]
     read_only = False
-    safe_while_planning = True
-    clearable = False
-    deferred = True
     #: A call records only together with its result: running it again
     #: after a crash cut it short changes nothing twice.
-    retry_safe = True
-    unchecked_input = True
+    flags = ToolFlags(
+        safe_while_planning=True,
+        deferred=True,
+        retry_safe=True,
+        unchecked_input=True,
+    )
+    clearable = False
 
     def _repair(self, raw: Any) -> dict[str, Any] | None:
         return None
@@ -208,7 +211,7 @@ class _TaskTool:
 class TaskCreateTool(_TaskTool):
     name = CREATE
     description = _description("task_create")
-    search_hint = "create a task in the task list"
+    flags = replace(_TaskTool.flags, search_hint="create a task in the task list")
     input_schema = _schema({
         "subject": {"type": "string", "description": "A brief title for the task"},
         "description": {"type": "string", "description": "What needs to be done"},
@@ -237,7 +240,7 @@ class TaskCreateTool(_TaskTool):
 class TaskGetTool(_TaskTool):
     name = GET
     description = _description("task_get")
-    search_hint = "retrieve a task by ID"
+    flags = replace(_TaskTool.flags, search_hint="retrieve a task by ID")
     read_only = True
     input_schema = _schema(
         {"taskId": {"type": "string", "description": "The ID of the task to retrieve"}},
@@ -274,7 +277,7 @@ _STATUS_ERROR = ('The parameter `status` is invalid: Invalid option: expected on
 class TaskUpdateTool(_TaskTool):
     name = UPDATE
     description = _description("task_update")
-    search_hint = "update a task"
+    flags = replace(_TaskTool.flags, search_hint="update a task")
     input_schema = _schema({
         "taskId": {"type": "string", "description": "The ID of the task to update"},
         "subject": {"type": "string", "description": "New subject for the task"},
@@ -354,7 +357,7 @@ def _link(ctx: ToolContext, todos: TodoState, blocker: str, blocked: str) -> Non
 class TaskListTool(_TaskTool):
     name = LIST
     description = _description("task_list")
-    search_hint = "list all tasks"
+    flags = replace(_TaskTool.flags, search_hint="list all tasks")
     read_only = True
     input_schema = _schema({}, [])
 

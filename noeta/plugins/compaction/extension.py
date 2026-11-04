@@ -54,6 +54,7 @@ from noeta.plugins.compaction.window import (
     percent_from_env,
     window_from_env,
 )
+from noeta.toolkit import plugin_records as pr
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import MEMORY_DIR_KEY, MEMORY_INDEX_FILE
 from noeta.toolkit.paths import file_name_part, noeta_home, project_dir
@@ -438,10 +439,10 @@ class Compaction(Extension):
                 since = sum(1 for s in state.history_seqs if s <= ext.seen_through)
             restored, records, full = await restore_files(
                 recent_files(state.history, raw_cut, since=since, carried=carried,
-                             cwd=_shell_cwd(state.ext, view.cwd),
-                             shown=_shown_by_commands(state.ext),
+                             cwd=pr.shell_cwd(state.ext) or view.cwd,
+                             shown=pr.files_shown_by_commands(state.ext),
                              skip=_carried_files(state.ext, state.config,
-                                                 rehung=_rehangs_instructions(view))),
+                                                 rehung=pr.instructions_rehang(view))),
                 read_tool, self._restore_context(view, state))
             for ext_name, kind, data in records:
                 view.record(ext_name, kind, data)
@@ -564,56 +565,22 @@ class Compaction(Extension):
 __all__ = ["COMMAND", "Compaction", "CompactionState", "command_text"]
 
 
-def _shell_cwd(ext: Mapping[str, Any], task_cwd: str) -> str:
-    """Where the shell is now: the shell plugin's ``cwd`` record (read by
-    name, as its state is not this plugin's), else the task's directory."""
-    cwd = getattr(ext.get("shell"), "cwd", None)
-    return cwd if isinstance(cwd, str) and cwd else task_cwd
-
-
-def _rehangs_instructions(view: TaskView) -> bool:
-    """Whether the instructions plugin (asked by name) gives its files again
-    after a compaction."""
-    ext = next((e for e in view.extensions if e.name == "instructions"), None)
-    return ext is not None and bool(getattr(ext, "rehang", True))
-
-
 def _carried_files(ext: Mapping[str, Any], config: Mapping[str, Any], *,
                    rehung: bool = True) -> set[str]:
     """Files the conversation carries after a compaction anyway, so they are
     not restored as files (Claude Code's exact-path filter): the instruction
     files the instructions resident gives again (``rehung``), the memory
-    index when it recorded showing it, the task's plan file. Each plugin's
-    state is read by name."""
+    index when it recorded showing it, the task's plan file."""
     out: set[str] = set()
-    instructions = ext.get("instructions")
-    if isinstance(instructions, Mapping) and rehung:
-        for entry in [*(instructions.get("files") or ()), *(instructions.get("nested") or ())]:
-            if isinstance(entry, Mapping):
-                out.update(p for p in (entry.get("path"), entry.get("real"))
-                           if isinstance(p, str))
-        memory = ext.get("memory")
-        directory = memory.get("dir") if isinstance(memory, Mapping) else None
-        directory = directory if isinstance(directory, str) else config.get(MEMORY_DIR_KEY)
+    if rehung:
+        for entry in pr.shown_instruction_files(ext):
+            out.update(p for p in (entry.get("path"), entry.get("real")) if isinstance(p, str))
+        directory = pr.memory_dir(ext) or config.get(MEMORY_DIR_KEY)
         index = posixpath.join(directory, MEMORY_INDEX_FILE) \
             if isinstance(directory, str) and directory else None
-        if index is not None and index in (instructions.get("digests") or {}):
+        if index is not None and index in pr.instruction_digests(ext):
             out.add(index)
-    plan = getattr(ext.get("plan_mode"), "plan", None) \
-        or getattr(ext.get("permissions"), "plan", None)
-    path = plan.get("path") if isinstance(plan, Mapping) else None
-    if isinstance(path, str) and path:
+    path = pr.plan_file(ext)
+    if path is not None:
         out.add(path)
     return {posixpath.normpath(p) for p in out}
-
-
-def _shown_by_commands(ext: Mapping[str, Any]) -> dict[str, list[str]]:
-    """Call id -> the resolved paths of the files that ``Bash`` call showed,
-    from the file tools' ``read`` records (read by name)."""
-    out: dict[str, list[str]] = {}
-    reads = getattr(ext.get("fs"), "reads", None)
-    for path, read in (reads.items() if isinstance(reads, dict) else ()):
-        call_id = getattr(read, "call_id", None)
-        if isinstance(call_id, str) and isinstance(path, str):
-            out.setdefault(call_id, []).append(path)
-    return out

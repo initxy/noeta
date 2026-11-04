@@ -12,20 +12,15 @@ from typing import Any
 
 import pytest
 
-pytest.importorskip("textual")
-
 import noeta.cli.main as cli
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli.tui.app import NoetaApp
-from noeta.cli.tui.widgets import ApprovalCard, QuestionCard, UserMessage
 from noeta.core.agent import Agent
 from noeta.core.errors import Transient
-from noeta.core.events import Answer, ToolFinished
+from noeta.core.events import ToolFinished
 from noeta.core.extension import Ask, Extension, TaskView
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Delta, ModelRequest, ModelResponse, ToolUse
-from noeta.host.local import LocalApp, UnknownAgent
-from noeta.plugins.ask_user import AskUser
+from noeta.host.local import LocalApp
 from noeta.testing import ScriptedProvider, reply
 
 MODEL = "claude-sonnet-4-5"
@@ -84,40 +79,12 @@ def local(tmp_path: Path, provider: Any, *agents: Agent, **kw: Any) -> LocalApp:
                     env_for=lambda _s: None, sleep=_no_sleep, **kw)
 
 
-def tui(app: LocalApp) -> NoetaApp:
-    return NoetaApp(app, agent="main", model=MODEL, cwd="/tmp")
-
-
-async def settle(pilot: Any, cond: Any, tries: int = 400) -> None:
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if cond():
-            return
-    raise AssertionError("UI did not settle")
-
-
 async def results(app: LocalApp, task_id: str) -> list[ToolFinished]:
     return [r.event for r in await app.client.events(task_id)
             if isinstance(r.event, ToolFinished)]
 
 
 # ------------------------------------------------------------ P1-1 typed answers
-
-
-async def test_tui_answers_the_real_ask_user_with_a_label(tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", ("AskUserQuestion", DB_QUESTION)),
-                                 reply("using sqlite")])
-    agent = Agent(name="main", model=MODEL, extensions=(AskUser(),))
-    app = tui(local(tmp_path, provider, agent))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"set it up", "enter")
-        await settle(pilot, lambda: bool(app.waiting_question))
-        await pilot.press(*"sqlite", "enter")
-        await settle(pilot, lambda: provider.steps == [] and not app.busy)
-        [done] = await results(app.local, app.task_id)
-        assert not done.result.is_error
-        assert done.result.text.startswith("The user answered your questions: ")
-        assert '="SQLite"' in done.result.text
 
 
 # ------------------------------------------------------------ P1-2 sub-agent requests
@@ -142,92 +109,7 @@ def test_print_mode_refuses_a_sub_agents_approval_and_goes_on(
     assert denied["tool_name"] == "Echo"
 
 
-async def test_tui_shows_and_answers_a_sub_agents_approval(tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", ("Task", {})), reply("", ("Echo", {})),
-                                 reply("child done"), reply("final")])
-    app = tui(local(tmp_path, provider, *main_and_worker(AskEcho())))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: len(app.query(ApprovalCard)) == 1)
-        [card] = list(app.query(ApprovalCard))
-        assert card.title_text == "Echo · from the worker agent"
-        await card.choose("allow")
-        # Two waits, so an intermittent stall says which side stopped.
-        await settle(pilot, lambda: provider.steps == [])
-        await settle(pilot, lambda: not app.busy)
-        [child] = await app.local.client.tasks(parent_id=app.task_id)
-        [echoed] = await results(app.local, child.task_id)
-        assert echoed.result.text == "echoed"
-
-
-async def test_tui_status_cost_counts_the_whole_tree(tmp_path: Path) -> None:
-    """The status bar's cost is ``/cost``'s: sub-agents' calls count too."""
-    from textual.widgets import Static
-
-    from noeta.core.types import Usage
-    from noeta.host.usage import tree_usage
-
-    million = Usage(uncached=1_000_000, output=0)
-    provider = ScriptedProvider([reply("", ("Task", {}), usage=million),
-                                 reply("child done", usage=million),
-                                 reply("final", usage=million)])
-    priced = "claude-sonnet-4-6"
-    agents = [Agent(name="main", model=priced, tools=[Delegate()]),
-              Agent(name="worker", model=priced, one_shot=True, tools=[Echo()])]
-    app = NoetaApp(local(tmp_path, provider, *agents), agent="main", model=priced, cwd="/tmp")
-    async with app.run_test(size=(140, 30)) as pilot:
-        await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: provider.steps == [] and not app.busy)
-        total = await tree_usage(app.local.client, app.task_id)
-        assert total.tasks == 2
-        want = f"${total.cost_usd:.2f}"
-        await settle(pilot, lambda: want in str(app.query_one("#status", Static).content))
-
-
-async def test_tui_shows_and_answers_a_sub_agents_question(tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", ("Task", {})),
-                                 reply("", ("AskUserQuestion", DB_QUESTION)),
-                                 reply("child done"), reply("final")])
-    app = tui(local(tmp_path, provider, *main_and_worker(AskUser())))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: len(app.query(QuestionCard)) == 1)
-        [card] = list(app.query(QuestionCard))
-        assert card.who == "worker"
-        await pilot.press(*"postgres", "enter")
-        await settle(pilot, lambda: provider.steps == [] and not app.busy)
-        [child] = await app.local.client.tasks(parent_id=app.task_id)
-        [answer] = [i.body for i in await app.local.store.inbox(child.task_id)
-                    if isinstance(i.body, Answer)]
-        assert answer.data == {"answers": {"0": {"selected": ["Postgres"]}}}
-        [done] = await results(app.local, child.task_id)
-        assert not done.result.is_error
-
-
 # ------------------------------------------------------------ P2-4 unknown agent
-
-
-async def test_a_task_whose_agent_is_missing_opens_read_only(tmp_path: Path) -> None:
-    path = str(tmp_path / "shared.db")
-    host = LocalApp(SqliteStore(path), [Agent(name="host-agent", model="m")],
-                    ScriptedProvider([reply("host answer")]), env_for=lambda _s: None)
-    async with host:
-        theirs = await host.client.create("host-agent", "made by a host")
-        assert (await host.client.wait(theirs, timeout=5)).waiting_on == "input"
-    mine = LocalApp(SqliteStore(path), [Agent(name="main", model=MODEL)], ScriptedProvider([]),
-                    env_for=lambda _s: None, own_tasks_only=True)
-    with pytest.raises(UnknownAgent, match="host-agent"):
-        await mine.adopt(theirs)
-    app = NoetaApp(mine, agent="main", model=MODEL, cwd="/tmp", resume=theirs)
-    async with app.run_test(size=(100, 30)) as pilot:
-        await settle(pilot, lambda: app.read_only and len(app.query(UserMessage)) == 1)
-        await pilot.press(*"hello", "enter")
-        await pilot.pause(0.5)
-    check = SqliteStore(path)
-    row = await check.get(theirs)
-    assert row is not None and row.status == "waiting" and row.end_status is None
-    assert len(await check.inbox(theirs)) == 1  # only the host's own message
-    await check.close()
 
 
 # ------------------------------------------------------------ P3-8 -p --json

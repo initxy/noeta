@@ -27,6 +27,10 @@ site/
 *.egg
 node_modules/
 
+# web/ test output
+web/test-results/
+web/playwright-report/
+
 # IDE / Editor
 .idea/
 .vscode/

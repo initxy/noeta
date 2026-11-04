@@ -271,13 +271,13 @@ def test_files_the_conversation_carries_anyway_are_not_restored() -> None:
     from noeta.plugins.compaction.extension import _carried_files
     from noeta.plugins.compaction.restore import recent_files
 
-    class Perm:
+    class Plan:
         plan = {"path": "/home/p/plans/plan.md"}
 
     ext = {"instructions": {"files": [{"path": "/w/NOETA.md", "real": "/w/NOETA.md"}],
                             "nested": [{"path": "/w/sub/AGENTS.md", "real": "/w/sub/AGENTS.md"}],
                             "digests": {"/home/m/MEMORY.md": "d"}},
-           "memory": {"dir": "/home/m"}, "permissions": Perm()}
+           "memory": {"dir": "/home/m"}, "plan_mode": Plan()}
     skip = _carried_files(ext, {})
     history = [user("go"), *_read("a", "NOETA.md"), *_read("b", "/w/sub/AGENTS.md"),
                *_read("c", "/home/m/MEMORY.md"), *_read("d", "/home/p/plans/plan.md"),
@@ -336,17 +336,17 @@ def test_a_relative_path_a_command_showed_is_taken_from_where_it_ran() -> None:
 
 
 def test_the_restore_finds_the_shell_directory_and_the_calls_by_name() -> None:
-    from noeta.plugins.compaction.extension import _shell_cwd, _shown_by_commands
     from noeta.plugins.fs.state import FileRead, FsState
     from noeta.plugins.shell.state import ShellState
+    from noeta.toolkit.plugin_records import files_shown_by_commands, shell_cwd
 
     ext = {"shell": ShellState(cwd="/w/frontend"),
            "fs": FsState(reads={"/w/a": FileRead(digest="d"),
                                 "/w/frontend/package.json": FileRead(digest="d", call_id="b")})}
-    assert _shell_cwd(ext, "/w") == "/w/frontend"
-    assert _shell_cwd({}, "/w") == "/w"
-    assert _shown_by_commands(ext) == {"b": ["/w/frontend/package.json"]}
-    assert _shown_by_commands({}) == {}
+    assert shell_cwd(ext) == "/w/frontend"
+    assert shell_cwd({}) is None
+    assert files_shown_by_commands(ext) == {"b": ["/w/frontend/package.json"]}
+    assert files_shown_by_commands({}) == {}
 
 
 def test_the_fallback_summarize_request() -> None:

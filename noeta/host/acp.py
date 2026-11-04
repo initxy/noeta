@@ -72,6 +72,7 @@ from noeta.toolkit.permission_modes import (
     current_mode,
     published_modes,
 )
+from noeta.toolkit.plugin_records import PERMISSIONS
 from noeta.toolkit.signals import RESUMED_SIGNAL
 
 log = logging.getLogger("noeta.host.acp")
@@ -497,7 +498,7 @@ class NoetaAcpAgent:
                 out.put_nowait(finish_update(ev, call))
                 if (plan := log.plan_update()) is not None:
                     out.put_nowait(plan)
-            elif isinstance(ev, ExtensionRecorded) and ev.extension == "permissions" \
+            elif isinstance(ev, ExtensionRecorded) and ev.extension == PERMISSIONS \
                     and (mode := current_mode([rec])):
                 self._mode[session_id] = mode
                 out.put_nowait(schema.CurrentModeUpdate(

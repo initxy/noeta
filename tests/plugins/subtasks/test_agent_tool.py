@@ -9,6 +9,7 @@ import asyncio
 import json
 import subprocess
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ from noeta.core.events import Recorded, TaskCreated, TaskEnded, ToolFinished
 from noeta.core.extension import Ask, Extension, Gate, TaskView
 from noeta.core.loop.state import STARTED_CALL, TaskState
 from noeta.core.runner import Runtime
-from noeta.core.tool import ToolContext
+from noeta.core.tool import ToolContext, ToolFlags
 from noeta.core.types import Message, ModelRequest, ToolResult, ToolUse, Usage
 from noeta.host.pending import pending_tree
 from noeta.host.usage import tree_usage
@@ -56,9 +57,9 @@ ROSTER = [
 def _send_message_loaded() -> Iterator[None]:
     """These tests are about SendMessage itself, so it is offered loaded;
     ``test_send_message_is_deferred`` covers the deferral."""
-    SendMessageTool.deferred = False  # type: ignore[misc]
+    SendMessageTool.flags = replace(SendMessageTool.flags, deferred=False)  # type: ignore[misc]
     yield
-    SendMessageTool.deferred = True  # type: ignore[misc]
+    SendMessageTool.flags = replace(SendMessageTool.flags, deferred=True)  # type: ignore[misc]
 
 
 def parent(*extra: Extension, **kw: Any) -> Agent:
@@ -359,7 +360,7 @@ async def test_send_message_refusals_and_other_tasks(store: SqliteStore) -> None
 async def test_list_agents_says_when_it_looked_at_the_newest_tasks_only(
         store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole listing, not the runner's cut at ListAgents' result limit.
-    monkeypatch.setattr(ListAgentsTool, "max_result_chars", None)
+    monkeypatch.setattr(ListAgentsTool, "flags", ToolFlags(retry_safe=True, max_result_chars=None))
     client = Client(store)
     for _ in range(LIST_WINDOW + 1):  # sessions no worker here runs
         await client.create("worker", "later", queue="elsewhere")
@@ -836,7 +837,7 @@ async def test_resuming_a_worktree_agent_whose_worktree_is_gone(store: SqliteSto
 
 
 async def test_send_message_is_deferred(store: SqliteStore) -> None:
-    SendMessageTool.deferred = True  # type: ignore[misc]
+    SendMessageTool.flags = replace(SendMessageTool.flags, deferred=True)  # type: ignore[misc]
     p = ScriptedProvider([reply("hi")])
     rt = runtime(store, {"p": p}, parent(ToolSearch()))
     await Client(store).create("main", "go")

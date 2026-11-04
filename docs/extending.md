@@ -19,7 +19,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | run shell / HTTP hooks in Claude Code's format | settings `hooks`, or a Claude Code plugin's `hooks/hooks.json` (InstructionsLoaded included) | `noeta/plugins/hooks` |
 | add a slash command | `commands()` / `run_command()`, or `commands/*.md` in a Claude Code plugin | `noeta/core/commands.py` |
 | keep state across restarts and machines | `view.record(name, kind, data)` + `reduce()` (never a new event type) | `noeta/core/extension.py` |
-| fold records written under another name (a plugin split out of another; records front ends read by name) | `folds = ("other",)`: those records reach `reduce` too | `noeta/core/extension.py` |
+| fold records written under another name (records front ends read by name) | `folds = ("other",)`: those records reach `reduce` too | `noeta/core/extension.py` |
 | wake a task later | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | ask the person something | `ask(...)` (the call parks, the task holds no worker) | `noeta/core/questions.py` |
 | add an agent or sub-agent | an agent markdown file (Claude Code's format plus `plugins`) | `noeta/agents/agent_files.py` |
@@ -38,12 +38,31 @@ log upload, no update check. A plugin you install can of course make its own req
 | use another plugin's tool | `view.find_tool(name)` | `noeta/core/extension.py` |
 | call the model from a hook or a tool | `view.complete`, `ctx.complete` (retried, not a step) | `noeta/core/extension.py`, `noeta/core/tool.py` |
 | show a running call's progress | `ctx.progress(text)`: live only, never recorded | `noeta/core/tool.py` |
-| survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `retry_safe`; `ctx.keep()` for work that lives in one process | `noeta/core/tool.py` |
-| offer a tool only when the model asks for it | `deferred = True` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
+| survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `flags = ToolFlags(retry_safe=True)`; `ctx.keep()` for work that lives in one process | `noeta/core/tool.py` |
+| offer a tool only when the model asks for it | `flags = ToolFlags(deferred=True)` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
 | keep text across a compaction, or take part in one | `resident` / `lead_resident`; `before_compact`; `on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/types.py` |
 | go on after a reply with no text and no tool call (the turn ends otherwise) | `on_empty_reply(view, response)` → the message to go on with, or `None` (as `noeta/plugins/empty_reply.py` does) | `noeta/core/extension.py` |
 | block a prompt, or keep a turn going (as UserPromptSubmit and Stop hooks do) | `reminders` + `view.erase_messages` + raise `TurnFailed`; `on_event` on `ModelReplied` posting `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
+
+## When a hook raises
+
+What the runner does with an exception a hook lets out (`noeta/core/runner/task.py` `_steps`,
+`calls.py`, `model.py`, `closing.py`). `TurnFailed`, `TurnDone` and `RequestStale` from
+`reminders`, `before_model` or `on_context_overflow` are not failures: they fail the turn with
+their reason, end it, or build the request again.
+
+| Hook | When it raises |
+|---|---|
+| `before_tool`, `resolve_ask` | the call is denied (`permission check failed: …`), as the model sees it |
+| a tool's `run`, `resume` | the call's result is an error naming the exception; what the call staged (records, children) is dropped |
+| a tool's `recover` | logged; the outcome counts as unknown (a `retry_safe` tool runs again) |
+| `after_tool` | logged; the result stays as this hook was given it |
+| `on_event`, `resident`, `lead_resident`, `on_empty_reply`, `commands`, `before_compact` | logged and skipped: that plugin has no say this time |
+| `run_command` | raised to whoever ran the command (a front end, or the hook that expanded it) |
+| `inherit` | raised from `view.spawn`, to the tool or hook that spawned |
+| `reduce`, while loading the task | the task is claimed again once its lease runs out; after three such claims in a row it ends failed |
+| anything else in a step: `on_start`, `tools`, `tool_changes`, `context`, `reminders`, `before_model`, `on_context_overflow`, `reduce` | the turn fails (`internal_error`); a second failure in a row ends the task failed |
 
 ## Writing a plugin
 
@@ -166,7 +185,7 @@ One tool plus an event handler, from nothing:
 
 | Step | noeta | pi |
 |---|---|---|
-| 1. install | `uv tool install 'noeta[tui] @ git+https://github.com/initxy/noeta'` | `npm install -g @earendil-works/pi-coding-agent` |
+| 1. install | `uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' 'noeta @ git+https://github.com/initxy/noeta'` | `npm install -g @earendil-works/pi-coding-agent` |
 | 2. model key | `NOETA_API_KEY` / `ANTHROPIC_API_KEY`, or `api_key` in `config.toml` | `/login`, or a provider key variable |
 | 3. write one file | `~/.noeta/plugins/x.py`: an `Extension` with `add_to = ("main",)`, one `from noeta import …` line | `~/.pi/agent/extensions/x.ts` |
 | 4. run it | `noeta`, or `/reload-plugins` in a running one | `pi`, or `/reload` |
@@ -215,13 +234,13 @@ worker resumes any task; pi and dsh run in one process, Claude Code in one local
 | Answer an ask in code | — | `approval/request` | PermissionRequest, `canUseTool` | `resolve_ask` | have | Answered before the call parks. |
 | Change a result | `tool_result` | `tools/post-execute` | PostToolUse | `after_tool` | have | Before the result is recorded. |
 | Wrap the whole dispatch | — | `tools/execute` | — | `before_tool` + `after_tool` | won't | Retries belong to the tool (`recover`, `retry_safe`), timing to `ToolStarted` / `ToolFinished`. |
-| Deferred tools | `exposure` | `when` | `defer_loading` + ToolSearch | `Tool.deferred`; `tool_changes` | have | Sent only once `ToolSearch` loads them. |
-| Parallel or last | `executionMode` | `isConcurrencySafe` | read-only tools together | `Tool.read_only`, `run_last` | have | Read-only calls of one reply run together. |
+| Deferred tools | `exposure` | `when` | `defer_loading` + ToolSearch | `ToolFlags.deferred`; `tool_changes` | have | Sent only once `ToolSearch` loads them. |
+| Parallel or last | `executionMode` | `isConcurrencySafe` | read-only tools together | `Tool.read_only`, `ToolFlags.run_last` | have | Read-only calls of one reply run together. |
 | Progress while a tool runs | `onUpdate` | — | live Bash output, `tool_progress` | `ToolContext.progress` | added | Claude Code has it; it streams with live output and is never recorded. |
 | A tool calls the model | `modelRegistry.complete` | `ctx.llm` | WebFetch's small model | `ToolContext.complete` | added | `WebFetch` kept a per-process copy of each task's model call, lost when another worker ran the call. |
 | A tool calls another tool | `ctx.executeTool` | — | — | `view.find_tool(name).run(…)` | have | Not gated again (`by_model` is false). |
 | Wait for a person or children | blocking `ui.confirm` | approval, questions | AskUserQuestion | `ask()`, `ToolOutput.park` | have | The task holds no worker while it waits. |
-| Crash recovery of one call | — | — | — | `Tool.recover`, `retry_safe`, `ctx.idempotency_key` | have | noeta only: a call never runs twice unknowingly. |
+| Crash recovery of one call | — | — | — | `Tool.recover`, `ToolFlags.retry_safe`, `ctx.idempotency_key` | have | noeta only: a call never runs twice unknowingly. |
 | Background work | — | `jobs.start` | background Bash | `ctx.keep()` | have | The task keeps its claim on the worker the job lives on. |
 | Structured output for the model | `outputSchema` | `output.schema` | MCP `structuredContent` | `ToolOutput.meta`, `display` for front ends | won't | The model reads content; structure rides along for front ends. |
 | Rendering code for calls and results | `renderCall`, `renderResult` | UI slots | — | `ToolOutput.display` as data | won't | Front ends import no plugin and may be remote or in another language. |

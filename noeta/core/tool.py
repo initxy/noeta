@@ -189,65 +189,96 @@ class ToolContext(CoreNotices):
         return f"{self.task_id}:{self.call_id}"
 
 
+#: Claude Code's ceiling on any tool's inline text result, in characters.
+RESULT_CEILING_CHARS = 50_000
+#: Claude Code's budget for the text results of one reply's calls together.
+REPLY_RESULTS_BUDGET_CHARS = 200_000
+
+
+#: Starts of a ``retry_safe`` call before a crash during it is answered
+#: "outcome unknown" anyway (a call that kills its worker is not run forever).
+MAX_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class ToolFlags:
+    """How the kernel and plugins treat a tool beyond its name, schema and
+    ``run``: a tool's optional ``flags`` member, :data:`NO_FLAGS` when it
+    has none (:func:`tool_flags`)."""
+
+    #: Named to the model by name only (``TaskView.deferred_tool_names``)
+    #: and sent with ``defer_loading``; the ``tool_search`` plugin withholds
+    #: it until the model loads it.
+    deferred: bool = False
+    #: A few words a ``ToolSearch`` keyword query also matches (Claude
+    #: Code's ``searchHint``); never sent to the model.
+    search_hint: str = ""
+    #: The description sent instead of ``description`` while the tool goes
+    #: with ``defer_loading`` (the model loaded it through ``ToolSearch``),
+    #: as Claude Code gives such a tool a longer one.
+    loaded_description: str | None = None
+    #: Sent after the other tools (keeps a changing set of tools at the end
+    #: of the cached prefix).
+    listed_last: bool = False
+    #: Runs after the reply's other calls (delegation).
+    run_last: bool = False
+    #: Offered whenever its extension offers it, whatever the agent's tool
+    #: allow and deny lists say: the task cannot finish without it (the
+    #: answer tool a requested answer schema adds, as Claude Code adds it to
+    #: every agent's tools).
+    past_agent_lists: bool = False
+    #: Running it again changes nothing outside the call (a read): a call
+    #: that a crash left unfinished runs again (up to :data:`MAX_ATTEMPTS`
+    #: starts) instead of being answered "outcome unknown".
+    retry_safe: bool = False
+    #: A reply with nothing in it after a call of this tool since the
+    #: person's last message ends the turn instead of being asked to go on:
+    #: after any call (``"call"``: the answer tool, whose call is the answer)
+    #: or a successful one (``"success"``: a tool whose result is meant to
+    #: end the turn).
+    silent_reply_after: Literal["call", "success"] | None = None
+    #: Its input goes to it unchecked (an MCP server's tool, a host
+    #: function: Claude Code passes those on as sent); every other tool's
+    #: input is checked against its schema before any gate
+    #: (``noeta.core.tool_input``).
+    unchecked_input: bool = False
+    #: Not read-only, yet changes no file and nothing outside the task: it
+    #: talks to the person, keeps the task's own lists, or starts or answers
+    #: a sub-agent (which is gated on its own). Plan mode lets it run
+    #: without asking.
+    safe_while_planning: bool = False
+    #: The runner saves a text result longer than this (at most
+    #: :data:`RESULT_CEILING_CHARS`) to a file and sends a preview
+    #: (``noeta.core.large_output``); ``None`` exempts a tool that bounds its
+    #: own result (``Read``).
+    max_result_chars: int | None = RESULT_CEILING_CHARS
+
+
+NO_FLAGS = ToolFlags()
+
+
 class Tool(Protocol):
     """A tool the model can call.
 
-    Optional members, read with their default when a tool leaves them out:
+    Optional members, left out by a tool that needs none:
 
-    * ``deferred: bool = False`` — named to the model by name only
-      (``TaskView.deferred_tool_names``) and sent with ``defer_loading``; the
-      ``tool_search`` plugin withholds it until the model loads it.
-    * ``search_hint: str = ""`` — a few words a ``ToolSearch`` keyword query
-      also matches (Claude Code's ``searchHint``); never sent to the model.
-    * ``loaded_description: str`` — the description sent instead of
-      ``description`` while the tool goes with ``defer_loading`` (the model
-      loaded it through ``ToolSearch``), as Claude Code gives such a tool a
-      longer one.
-    * ``listed_last: bool = False`` — sent after the other tools (keeps a
-      changing set of tools at the end of the cached prefix).
-    * ``run_last: bool = False`` — runs after the reply's other calls
-      (delegation).
-    * ``past_agent_lists: bool = False`` — offered whenever its extension
-      offers it, whatever the agent's tool allow and deny lists say: the task
-      cannot finish without it (the answer tool a requested answer schema
-      adds, as Claude Code adds it to every agent's tools).
+    * ``flags: ToolFlags`` — :class:`ToolFlags`, :data:`NO_FLAGS` when left
+      out (read with :func:`tool_flags`).
     * ``async resume(input, ctx, outcome) -> ToolOutput`` — required of a
       tool that parks: ``outcome`` is the ``Answer`` for a question, or
       ``{child_id: ChildEnded}`` for children; ``None`` means the wait was
       withdrawn (the turn was stopped).
-    * ``retry_safe: bool = False`` — running it again changes nothing
-      outside the call (a read): a call that a crash left unfinished runs
-      again (up to :data:`MAX_ATTEMPTS` starts) instead of being answered
-      "outcome unknown".
     * ``async recover(input, ctx) -> ToolOutput | None`` — for a call that a
       crash left unfinished: its result, looked up by
       ``ctx.idempotency_key`` (or got by running it again where the outside
       system drops a repeat of that key); ``None`` when the outcome cannot
       be told (then a ``retry_safe`` tool runs again, any other is answered
       "outcome unknown"). Asked before ``retry_safe``.
-    * ``silent_reply_after: Literal["call", "success"] | None = None`` —
-      a reply with nothing in it after a call of this tool since the
-      person's last message ends the turn instead of being asked to go on:
-      after any call (``"call"``: the answer tool, whose call is the
-      answer) or a successful one (``"success"``: a tool whose result is
-      meant to end the turn).
     * ``async rule_inputs(input, view) -> Sequence[(input, allow_too)]`` —
       other inputs the permission rules also judge the call as (a ``Skill``
       call under its skill's former name): a deny or ask rule matching any
       applies, an allow rule (or a hook ``if`` whose hook allows) only one
       marked ``allow_too``.
-    * ``unchecked_input: bool = False`` — its input goes to it unchecked
-      (an MCP server's tool, a host function: Claude Code passes those on
-      as sent); every other tool's input is checked against its schema
-      before any gate (``noeta.core.tool_input``).
-    * ``safe_while_planning: bool = False`` — not read-only, yet changes no
-      file and nothing outside the task: it talks to the person, keeps the
-      task's own lists, or starts or answers a sub-agent (which is gated on
-      its own). Plan mode lets it run without asking.
-    * ``max_result_chars: int | None`` — the runner saves a text result
-      longer than this (at most :data:`RESULT_CEILING_CHARS`, the default) to
-      a file and sends a preview (``noeta.core.large_output``); ``None``
-      exempts a tool that bounds its own result (``Read``).
     """
 
     name: str
@@ -265,21 +296,8 @@ class Tool(Protocol):
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput: ...
 
 
-#: Claude Code's ceiling on any tool's inline text result, in characters.
-RESULT_CEILING_CHARS = 50_000
-#: Claude Code's budget for the text results of one reply's calls together.
-REPLY_RESULTS_BUDGET_CHARS = 200_000
-
-
-#: Starts of a ``retry_safe`` call before a crash during it is answered
-#: "outcome unknown" anyway (a call that kills its worker is not run forever).
-MAX_ATTEMPTS = 3
-
-
-def tool_flag(tool: Tool,
-              name: Literal["deferred", "listed_last", "run_last", "retry_safe",
-                            "past_agent_lists", "unchecked_input",
-                            "safe_while_planning"]) -> bool:
-    """One of ``tool``'s optional flags (see :class:`Tool`); ``False`` when
-    the tool leaves it out."""
-    return bool(getattr(tool, name, False))
+def tool_flags(tool: object) -> ToolFlags:
+    """``tool``'s :class:`ToolFlags` (:data:`NO_FLAGS` when it has none, or
+    for no tool)."""
+    flags = getattr(tool, "flags", None)
+    return flags if isinstance(flags, ToolFlags) else NO_FLAGS

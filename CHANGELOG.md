@@ -9,6 +9,13 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Added
 
+- **The terminal UI is its own package, `noeta-tui` (`tui/`)**, found by `noeta` through the
+  entry-point group `noeta.frontends`; the `tui` extra is gone (install line in the README).
+  It now looks and works like Claude Code 2.1's: welcome box, `❯` prompt between rules, mode
+  line and shortcuts panel, spinner, folded `⎿` results (`ctrl+o`), numbered diffs, the task
+  list, queued messages, a numbered approval dialog, slash and `@` menus, `!` bash mode,
+  pickers for `/model`, `/resume` and rewind, `/status`, `/permissions`, `/agents` and a
+  `/context` grid (`tui/screenshots/README.md`).
 - **Claude Code's task list as the plugin `todos`** (spec `2026-11-02-task-tools`): `TaskCreate`,
   `TaskGet`, `TaskUpdate`, `TaskList` (deferred) and a reminder after ten model turns without
   them, for the models Claude Code 2.1.312 gives them to: older Claude models (Claude 3.x,
@@ -39,6 +46,20 @@ All notable changes to Noeta are documented here. The format is based on
   claimable (`created`, `posted`, `released`, now also reported by an append that leaves its
   task ready); a running step no longer polls its inbox every 0.5 s on a store whose change
   feed reaches every process (`shared_changes`, Postgres).
+- **Removed `WriteTool(allowed_path_globs=)`**: nothing reached it (no plugin argument, agent
+  field or setting); permission rules confine writes.
+- **A tool's optional flags are one typed `ToolFlags`** (`noeta.core.tool`): `deferred`,
+  `search_hint`, `loaded_description`, `listed_last`, `run_last`, `past_agent_lists`,
+  `retry_safe`, `silent_reply_after`, `unchecked_input`, `safe_while_planning` and
+  `max_result_chars` are set as `flags = ToolFlags(...)` and read with `tool_flags(tool)`
+  (which replaces `tool_flag`); a misspelt flag is now a type error instead of a silent default.
+  A third-party tool that set one as its own attribute sets it in `flags` instead.
+- **Cross-plugin reads go through `noeta.toolkit.plugin_records`**: one typed reader per record
+  a plugin publishes (`permission_mode`, `shell_cwd`, `memory_dir`, ...), the methods one plugin
+  calls on another (`mode_of`, `working_directories`, `read_deny_rule`, ...) and the plugins'
+  names. `PLAN_MODE_PLUGIN` left `toolkit.permission_modes` (`plugin_records.PLAN_MODE`).
+- **A tool name two plugins offer is logged** (once, a warning naming both); the first still
+  wins.
 
 - **A write outside the working directories is a permission question, as in Claude Code**: a
   `Write`, `Edit` or `NotebookEdit` outside the working and additional directories was refused
@@ -1455,6 +1476,16 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   kept for the life of the worker.
 - `noeta -p` in an untrusted directory no longer warns that it skips `.agents/skills` and
   `.noeta/skills` when neither exists; the warning names only the skill directories that do.
+- MCP: a cancelled task that started a server's connection no longer cancels the other tasks
+  waiting on it; a call stopped by an interrupt or a cancel sends the server
+  `notifications/cancelled` (before, only one that timed out did); a Streamable HTTP server
+  that ended the session (a 404) gets a fresh connection on the next use instead of failing
+  every call; closing a stdio server ends its whole process group, and a server that stops
+  reading its input breaks the connection after the timeout instead of hanging the writer.
+- `ExitWorktree` counts untracked files when git is set to hide them
+  (`status.showUntrackedFiles=no`); such a worktree was removed with its new files.
+- Auto mode: past the classifier's denial limit, a task nobody can answer (`interactive:
+  false`, no prompt tool) is refused the call instead of parking on a question for good.
 
 ### Security
 
@@ -1623,3 +1654,10 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
   error that a library or the system raised (it may name the server's paths); the client
   gets a generic message and the server logs the error. Errors noeta raises for the caller
   keep their text.
+- **The command sandbox protects repositories below the working directory**: git hooks and
+  config, editor tasks and the other protected names are read-only down to three levels (as
+  Claude Code's `mandatoryDenySearchDepth`), so a workspace holding several repositories no
+  longer lets a command plant a hook that runs on the person's next commit. At most 2,000
+  directories are listed; dependency and cache trees are skipped.
+- A legacy SSE MCP server whose `endpoint` event names another origin is refused: every
+  message would have carried the configured headers and the OAuth token there.

@@ -24,7 +24,7 @@ from noeta.core.extension import Allow, Ask, Deny, Gate, Rewrite, TaskView, chil
 from noeta.core.large_output import ReplyBudget, bound_result
 from noeta.core.runner import closing, texts
 from noeta.core.store import NewTask, Post
-from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flag
+from noeta.core.tool import MAX_ATTEMPTS, Tool, ToolContext, ToolOutput, tool_flags
 from noeta.core.tool_input import NO_SUCH_TOOL, check_input, tool_use_error
 from noeta.core.types import Delta, Message, Text, ToolResult, ToolUse, user
 
@@ -155,7 +155,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         # and the gates and the tool get them coerced (from the logged call,
         # so every worker derives the same input).
         checked, problems = (c.use.input, None) \
-            if known is None or tool_flag(known, "unchecked_input") \
+            if known is None or tool_flags(known).unchecked_input \
             else check_input(known.name, known.input_schema, c.use.input)
         if problems is not None:
             await run.append([run.error_result(c.use.id, tool_use_error(problems))])
@@ -197,7 +197,7 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     await run.flush(view)
     # A call whose tool declares ``run_last`` (delegation) runs after the
     # reply's ordinary calls, as 0.6 spawned only once they had finished.
-    runnable.sort(key=lambda item: tool_flag(item[1], "run_last"))
+    runnable.sort(key=lambda item: tool_flags(item[1]).run_last)
     budget = _reply_budget(run)
     for group in _groups(runnable):
         await run.append([ToolStarted(call=u) for u, _ in group])
@@ -370,7 +370,7 @@ async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             if output is not None and output.park is None:
                 await _finish(run, use, output, records, creates)
                 continue
-        if tool is not None and tool_flag(tool, "retry_safe") and c.attempts < MAX_ATTEMPTS:
+        if tool is not None and tool_flags(tool).retry_safe and c.attempts < MAX_ATTEMPTS:
             again.append((use, tool))
             continue
         await run.append([run.error_result(use.id, texts.INTERRUPTED_CALL_ERROR)])

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from noeta.core.errors import UnknownTask
 from noeta.core.events import External, Say
-from noeta.core.tool import ToolContext, ToolOutput, text_output
+from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Message, ToolUse, user
 from noeta.plugins.subtasks import idle, texts
 from noeta.plugins.subtasks.worktree import (
@@ -230,10 +230,9 @@ class AgentTool:
     name = texts.AGENT_TOOL
     description = load_description("noeta.plugins.subtasks", "agent")
     read_only = False
-    safe_while_planning = True
-    clearable = False
     #: Spawns after the reply's ordinary calls have run.
-    run_last = True
+    flags = ToolFlags(safe_while_planning=True, run_last=True)
+    clearable = False
 
     def __init__(self, ext: Subtasks, state: TaskState,
                  roster: Mapping[str, SubagentSpec], name: str = texts.AGENT_TOOL,
@@ -339,10 +338,9 @@ class HandbackTool:
     name = texts.HANDBACK_TOOL
     description = load_description("noeta.plugins.subtasks", "subagent_handback")
     read_only = False
-    safe_while_planning = True
-    clearable = False
     #: Last in the sub-agent's tool list, after the deferred-tool placeholder.
-    listed_last = True
+    flags = ToolFlags(safe_while_planning=True, listed_last=True)
+    clearable = False
     input_schema = _schema({"message": {"description": texts.HANDBACK_MESSAGE_PROP,
                                         "type": "string"}}, ["message"])
 
@@ -392,11 +390,13 @@ class SendMessageTool:
     name = texts.SEND_TOOL
     description = load_description("noeta.plugins.subtasks", "send_message")
     read_only = False
-    safe_while_planning = True
-    clearable = False
     #: Claude Code lists it among the tools loaded on demand.
-    deferred = True
-    search_hint = "send a message to a running agent or another session"
+    flags = ToolFlags(
+        safe_while_planning=True,
+        deferred=True,
+        search_hint="send a message to a running agent or another session",
+    )
+    clearable = False
     input_schema = _schema({
         # Claude Code's: one line of at most 300 characters; the message may
         # be left out (a notify_when_idle subscription alone).
@@ -527,8 +527,7 @@ class ListAgentsTool:
     description = load_description("noeta.plugins.subtasks", "list_agents")
     read_only = True
     #: Claude Code's ListAgents result limit.
-    max_result_chars = 10_000
-    retry_safe = True
+    flags = ToolFlags(max_result_chars=10_000, retry_safe=True)
     clearable = True
     input_schema = _schema({
         "channel": {"description": texts.LIST_FILTER_PROP, "type": "string", "maxLength": 256},

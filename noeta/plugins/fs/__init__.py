@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import msgspec
@@ -63,6 +63,7 @@ from noeta.plugins.fs.state import (
 )
 from noeta.plugins.fs.write import WriteTool
 from noeta.toolkit.paths import plans_dir
+from noeta.toolkit.plugin_records import memory_dir
 from noeta.toolkit.tools import PathError, Workspace
 
 __all__ = ["EditTool", "FileTools", "NotebookEditTool", "ReadTool", "WriteTool"]
@@ -127,7 +128,9 @@ class FileTools(Extension):
         self.block_writes_outside = block_writes_outside
 
         def roots(state: Any) -> list[str]:
-            return [*extra, str(plans_dir()), *memory_dir(state)]
+            # The memory directory, when the task keeps memory.
+            memory = memory_dir(state) if isinstance(state, Mapping) else None
+            return [*extra, str(plans_dir()), *([memory] if memory else [])]
 
         self._roots = roots
         fence = (lambda ctx: roots(ctx.state)) if block_writes_outside else None
@@ -239,10 +242,3 @@ class FileTools(Extension):
                                       "mtime": stat.mtime}))
         return out
 
-
-def memory_dir(state: Any) -> list[str]:
-    """The memory plugin's directory for the task (its ``dir`` record), as
-    a one-item list; empty when the task keeps no memory."""
-    memory = state.get("memory") if isinstance(state, dict) else None
-    directory = memory.get("dir") if isinstance(memory, dict) else None
-    return [directory] if isinstance(directory, str) and directory else []

@@ -93,6 +93,7 @@ from noeta.plugins.mcp.tools import (
     ReadMcpResourceTool,
     auth_stub_entries,
 )
+from noeta.toolkit.plugin_records import MCP
 
 __all__ = ["Mcp", "ServersFn"]
 
@@ -185,7 +186,7 @@ class Mcp(Extension):
     source on an alias.
     """
 
-    name = "mcp"
+    name = MCP
     #: What ``noeta mcp`` asks of the plugin (checks, sign-ins).
     admin = McpAdmin
 

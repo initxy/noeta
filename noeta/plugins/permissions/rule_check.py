@@ -26,6 +26,7 @@ from noeta.plugins.permissions.shell_check import (
 )
 from noeta.plugins.permissions.state import inherited_rules, state_of
 from noeta.toolkit import permission_rules as r
+from noeta.toolkit.plugin_records import memory_dir
 
 
 class RuleCheck:
@@ -335,12 +336,6 @@ def _dir_of(path: str) -> str:
     return posixpath.dirname(path).lstrip("/") or ""
 
 
-def _memory_dir(view: TaskView) -> str | None:
-    memory = view.state.ext.get("memory")
-    directory = memory.get("dir") if isinstance(memory, dict) else None
-    return directory if isinstance(directory, str) and directory else None
-
-
 def _under(path: str, directory: str) -> bool:
     return posixpath.normpath(path).startswith(posixpath.normpath(directory).rstrip("/") + "/")
 
@@ -351,7 +346,7 @@ async def memory_file(view: TaskView, path: str, real: str, *, write: bool) -> b
     the working directory reached through no link), and for a write the
     part below it is no protected path, so a link planted in the directory
     cannot carry a read or a write elsewhere."""
-    directory = _memory_dir(view)
+    directory = memory_dir(view.state.ext)
     if directory is None or not _under(path, directory):
         return False
     directory = posixpath.normpath(directory)

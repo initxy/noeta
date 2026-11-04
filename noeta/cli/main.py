@@ -1,6 +1,7 @@
 """The ``noeta`` command.
 
-    noeta                      the terminal UI (needs the ``tui`` extra)
+    noeta                      the terminal UI (the ``noeta-tui`` package, found through
+                               the entry-point group ``noeta.frontends``)
     noeta -p "fix the test"    run one prompt in the current directory and print the answer;
                                Claude Code's headless flags and stream-json protocol
                                (``noeta.cli.headless``)
@@ -36,11 +37,13 @@ SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
 #: the bare name there may be someone else's package.
 SOURCE_URL = "git+https://github.com/initxy/noeta"
 #: The extras the README's install line names.
-README_EXTRAS = ("tui", "images")
+README_EXTRAS = ("images",)
+#: The terminal UI, its own package in this repository's ``tui/``.
+TUI_SOURCE = f"noeta-tui @ {SOURCE_URL}#subdirectory=tui"
 #: The top-level modules each optional extra installs (``pyproject.toml``).
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
-    "textual": "tui", "acp": "acp", "psycopg": "postgres", "psycopg_pool": "postgres",
+    "acp": "acp", "psycopg": "postgres", "psycopg_pool": "postgres",
     "PIL": "images", "keyring": "keyring",
 }
 
@@ -100,6 +103,9 @@ def _parser() -> argparse.ArgumentParser:
                     help="let requests start or switch tasks into bypassPermissions")
     sv.add_argument("--allow-root", action="append", default=[], metavar="PATH",
                     help="a directory besides the server's own tasks may run in")
+    sv.add_argument("--web", metavar="DIR",
+                    help="also serve this directory's files (the built web app, web/dist) "
+                         "at the server's other paths")
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
@@ -220,7 +226,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allowed_hosts=_allowed_hosts(args),
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
-                     roots=[os.path.abspath(r) for r in args.allow_root])
+                     roots=[os.path.abspath(r) for r in args.allow_root],
+                     web_dir=os.path.abspath(args.web) if args.web else None)
+    if args.web:
+        print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)
     redact_token_logs()
     try:
@@ -393,22 +402,58 @@ def _front(argv: list[str]) -> None:
                    agent_files=agent_files, plugin_dirs=args.plugin_dirs)
         sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd,
                                           hook_callbacks=hooks["callbacks"])))
-    from noeta.cli.tui import run_tui
+    run = front_end("tui")
+    from noeta.cli.config import settings_rows
+    from noeta.host.app import FrontEndStart
+    from noeta.host.stream_json import noeta_version
 
+    common: dict[str, Any] = {"cwd": cwd, "resume": args.resume,
+                              "permission_mode": args.permission_mode,
+                              "home": str(home_dir.HOME), "version": noeta_version()}
+    backend: Any
     if args.server:
         if args.plugin_dirs:
             sys.exit("noeta: --plugin-dir loads plugins into this process; with --server "
                      "the server's plugins run")
+        from noeta.cli.server_token import server_problem, server_token
+        from noeta.host.remote import RemoteApp
+
+        s = _settings(args, need_model=False)
+        token = server_token()
+        if (problem := server_problem(args.server, token)) is not None:
+            sys.exit(f"noeta: {problem}")
+        backend = RemoteApp(args.server, token=token)
         # The server's model and directory unless --model / --cwd name one;
         # a local path or a model only this machine knows means nothing there.
-        run_tui(_settings(args, need_model=False), cwd=cwd, resume=args.resume,
-                server=args.server, permission_mode=args.permission_mode,
-                task_config={k: v for k, v in (("cwd", args.cwd), ("model", args.model))
-                             if v})
-        return
-    run_tui(_settings(args), cwd=cwd, resume=args.resume, agent=args.agent,
-            permission_mode=args.permission_mode, plugin_dirs=args.plugin_dirs)
+        config = {k: v for k, v in (("cwd", args.cwd), ("model", args.model)) if v}
+        start = FrontEndStart(agent=args.agent or "main",
+                              model=str(config.get("model") or "the server's model"),
+                              task_config=config, on_server=True,
+                              settings=lambda: settings_rows(s, cwd), **common)
+    else:
+        from noeta.cli.config import from_settings
 
+        s = _settings(args)
+        backend = from_settings(s, cwd=cwd, own_tasks_only=True, plugin_dirs=args.plugin_dirs)
+        start = FrontEndStart(agent=args.agent or backend.main_agent, model=s.model,
+                              task_config={"cwd": cwd, "model": s.model},
+                              settings=lambda: settings_rows(s, cwd), **common)
+    run(backend, start)
+
+
+def front_end(name: str) -> Any:
+    """The front end ``name`` (entry-point group ``noeta.frontends``), or
+    exit naming how to install it."""
+    from noeta.core import registry
+
+    try:
+        return registry.load(registry.FRONTENDS, name)
+    except registry.UnknownName:
+        sys.exit(f"noeta: the terminal UI is its own package, noeta-tui, which is not "
+                 f"installed: uv tool install --reinstall --with '{TUI_SOURCE}' "
+                 f"'noeta[{','.join(README_EXTRAS)}] @ {SOURCE_URL}' (name every extra and "
+                 "--with you use: a reinstall drops the rest; from a checkout, "
+                 f"--with ./tui and its path), or pip install '{TUI_SOURCE}'")
 
 if __name__ == "__main__":
     main()

@@ -40,10 +40,11 @@ from noeta.plugins.hooks.runners import (
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
 from noeta.toolkit.inline_commands import refusal
 from noeta.toolkit.permission_rules import RuleContext, match, rule_inputs
+from noeta.toolkit.plugin_records import HOOKS, permission_mode
 
 log = logging.getLogger("noeta.hooks")
 
-NAME = "hooks"
+NAME = HOOKS
 #: Entries kept per cache (per call id).
 KEEP = 256
 #: How what a hook added for the model is led, after its hook name (the
@@ -115,8 +116,6 @@ def blocking_text(name: str, read: Read) -> str:
     blocking error from command: "<command>": <reason>`` (the command is
     the hook's command line, URL or prompt)."""
     return f'{name}{BLOCK_LABEL} from command: "{read.command}": {(read.block or "").strip()}'
-#: The plugin whose folded ``mode`` is the task's permission mode.
-PERMISSIONS_PLUGIN = "permissions"
 
 
 @dataclass(frozen=True)
@@ -416,9 +415,7 @@ class Dispatcher:
         """Claude Code's common input fields, then the event's own. The root
         task stands for Claude Code's conversation id."""
         st = view.state
-        # The permissions plugin's current mode (its folded ``mode``).
-        mode = getattr(view.ext_state(PERMISSIONS_PLUGIN), "mode", None) \
-            or st.config.get("permission_mode")
+        mode = permission_mode(st.ext) or st.config.get("permission_mode")
         out: dict[str, Any] = {
             "session_id": st.root_id or st.task_id, "transcript_path": "",
             "cwd": self.cwd(view) or "", "permission_mode": mode if isinstance(mode, str)

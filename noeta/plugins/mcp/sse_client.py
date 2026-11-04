@@ -32,6 +32,12 @@ if TYPE_CHECKING:
 __all__ = ["SseClient"]
 
 
+def _origin(url: str) -> tuple[str, str]:
+    parts = urllib.parse.urlsplit(url)
+    port = parts.port or {"http": 80, "https": 443}.get(parts.scheme.lower())
+    return parts.scheme.lower(), f"{(parts.hostname or '').lower()}:{port}"
+
+
 class SseClient(StreamClient):
     """A connection to one legacy HTTP+SSE endpoint. ``http`` lets a host
     route through its own ``httpx.AsyncClient``; otherwise the client owns
@@ -104,7 +110,12 @@ class SseClient(StreamClient):
             async with asyncio.timeout(self.timeout):
                 async for event, data in events:
                     if event == "endpoint":
-                        self.endpoint = urllib.parse.urljoin(self.url, data.strip())
+                        endpoint = urllib.parse.urljoin(self.url, data.strip())
+                        # Every POST carries the headers and the token.
+                        if _origin(endpoint) != _origin(self.url):
+                            raise McpError(f"the endpoint event names another origin: "
+                                           f"{endpoint}")
+                        self.endpoint = endpoint
                         return
         except TimeoutError:
             raise McpError("the server sent no endpoint event") from None

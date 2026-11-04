@@ -19,7 +19,7 @@ a server request to the most recently bound context that can take it.
 :class:`StreamClient` is the multiplexed form of a connection over one
 message stream (stdio, the legacy SSE pair, a WebSocket): one reader routes
 replies to their waiting requests by id, so requests run concurrently, a
-timed-out request is cancelled (``notifications/cancelled``) without
+timed-out or cancelled request is cancelled (``notifications/cancelled``) without
 spoiling the stream, and only a dead stream marks the connection
 ``broken``.
 """
@@ -44,6 +44,7 @@ __all__ = [
     "McpClient",
     "RequestContext",
     "StreamClient",
+    "cancelled_notice",
     "collect_pages",
     "initialize_params",
 ]
@@ -239,6 +240,12 @@ def reply_result(method: str, msg: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def cancelled_notice(req_id: int, reason: str) -> dict[str, Any]:
+    """``notifications/cancelled`` for our request ``req_id``."""
+    return {"jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": {"requestId": req_id, "reason": reason}}
+
+
 @dataclass
 class _Waiting:
     method: str
@@ -306,13 +313,22 @@ class StreamClient(McpClient):
                 async with asyncio.timeout(self.timeout if timeout is None else timeout):
                     msg = await waiting.reply
             except TimeoutError:
-                with contextlib.suppress(Exception):
-                    await self._send({"jsonrpc": "2.0", "method": "notifications/cancelled",
-                                      "params": {"requestId": req_id, "reason": "timeout"}})
+                await self._cancel_remote(method, req_id, "timeout")
                 raise McpError(f"{method}: timeout waiting for server response") from None
+            except asyncio.CancelledError:
+                # An interrupt or a cancelled task: told without delaying it.
+                task = asyncio.create_task(self._cancel_remote(method, req_id, "cancelled"))
+                self._answering.add(task)
+                task.add_done_callback(self._answering.discard)
+                raise
         finally:
             self._waiting.pop(str(req_id), None)
         return reply_result(method, msg)
+
+    async def _cancel_remote(self, method: str, req_id: int, reason: str) -> None:
+        if method != "initialize" and self.broken is None:
+            with contextlib.suppress(Exception):
+                await self._send(cancelled_notice(req_id, reason))
 
     async def _send(self, msg: dict[str, Any]) -> None:
         try:

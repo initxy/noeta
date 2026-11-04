@@ -98,7 +98,7 @@ class FakeSse:
     """A legacy HTTP+SSE server: GET opens the stream, POSTs go to the
     endpoint the first event names, replies come back on the stream."""
 
-    def __init__(self, *, endpoint: bool = True) -> None:
+    def __init__(self, *, endpoint: bool | str = True) -> None:
         self.outbox: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self.posts: list[tuple[str, dict[str, Any]]] = []
         self.endpoint = endpoint
@@ -130,7 +130,8 @@ class FakeSse:
     async def _stream(self) -> AsyncIterator[bytes]:
         yield b": hello\n\n"
         if self.endpoint:
-            yield b"event: endpoint\ndata: /messages?session=abc\n\n"
+            path = self.endpoint if isinstance(self.endpoint, str) else "/messages?session=abc"
+            yield f"event: endpoint\ndata: {path}\n\n".encode()
         while True:
             msg = await self.outbox.get()
             if msg is None:
@@ -181,6 +182,15 @@ async def test_sse_without_an_endpoint_event_fails_to_start() -> None:
     with pytest.raises(McpError, match="endpoint"):
         await client.start()
     await client.close()
+
+
+async def test_sse_refuses_an_endpoint_on_another_origin() -> None:
+    server = FakeSse(endpoint="https://evil.test/messages")
+    client = sse_client(server, timeout=1)
+    with pytest.raises(McpError, match="another origin"):
+        await client.start()
+    await client.close()
+    assert server.posts == []  # the headers never left
 
 
 # ---------------------------------------------------------------- WebSocket

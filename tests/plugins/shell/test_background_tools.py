@@ -17,7 +17,7 @@ import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.events import Cancel, ExtensionRecorded, External, Say
-from noeta.core.tool import KeptClaim, Tool, ToolContext, ToolOutput
+from noeta.core.tool import KeptClaim, Tool, ToolContext, ToolOutput, tool_flags
 from noeta.core.types import Text
 from noeta.plugins.shell import Registry, Shell
 from noeta.plugins.shell.jobs import JOB_ENDED, Job
@@ -160,9 +160,9 @@ async def test_task_stop_stops_a_job_and_sends_no_notice(h: Harness) -> None:
 
 
 def test_monitor_and_task_stop_are_deferred(h: Harness) -> None:
-    assert getattr(h.tool("Monitor"), "deferred", False)
-    assert getattr(h.tool("TaskStop"), "deferred", False)
-    assert not getattr(h.tool("Bash"), "deferred", False)
+    assert tool_flags(h.tool("Monitor")).deferred
+    assert tool_flags(h.tool("TaskStop")).deferred
+    assert not tool_flags(h.tool("Bash")).deferred
     assert [t.name for t in h.ext._tools] == ["Bash", "Monitor", "TaskStop", "EnterWorktree",
                                              "ExitWorktree"]
 

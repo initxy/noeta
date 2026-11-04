@@ -8,13 +8,11 @@ not seen. The diff rides in ``meta`` and ``display``.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput
 from noeta.core.types import Text
 from noeta.plugins.fs._encoding import decode, encode, not_text, refusal
-from noeta.plugins.fs._globs import compile_glob, glob_matches
 from noeta.plugins.fs._mutate import (
     WriteRoots,
     authorized_roots,
@@ -59,9 +57,7 @@ def _input_schema() -> dict[str, Any]:
 
 
 class WriteTool:
-    """``Write``. ``allowed_path_globs`` confines it to workspace-relative
-    paths matching one of the globs (empty = unrestricted); ``write_roots``
-    fences it to the workspace and the directories it names per call
+    """``Write``. ``write_roots`` fences it to the workspace and the directories it names per call
     (``None``: no fence, the permission layer decides)."""
 
     name = "Write"
@@ -70,28 +66,9 @@ class WriteTool:
     clearable = True
     input_schema: dict[str, Any]
 
-    def __init__(
-        self,
-        *,
-        write_roots: WriteRoots | None = None,
-        allowed_path_globs: Sequence[str] = (),
-    ) -> None:
+    def __init__(self, *, write_roots: WriteRoots | None = None) -> None:
         self.input_schema = _input_schema()
         self.write_roots = write_roots
-        self.allowed_path_globs = tuple(sorted(allowed_path_globs))
-
-    def _path_allowed(self, rel: str) -> bool:
-        if not self.allowed_path_globs:
-            return True
-        parts = tuple(p for p in rel.split("/") if p not in ("", "."))
-        for pat in self.allowed_path_globs:
-            try:
-                compiled = compile_glob(pat)
-            except ValueError:
-                continue  # an unusable operator glob admits nothing
-            if glob_matches(parts, compiled):
-                return True
-        return False
 
     async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
         path = require_str(input, "file_path")
@@ -110,13 +87,7 @@ class WriteTool:
                 ws, path, await authorized_roots(ws, self.write_roots, ctx))
         except PathError as exc:
             return input_error(str(exc))
-        # The allow-list is checked on the canonical form, so ``..`` and
-        # symlink escapes are already collapsed.
         rel = ws.relative(resolved)
-        if not self._path_allowed(rel):
-            allowed = ", ".join(self.allowed_path_globs)
-            return input_error(f"path {rel!r} is outside the writable allow-list "
-                               f"({allowed}); this agent may only write matching paths")
         st = await env.stat(resolved)
         overwrite = st is not None
         before_text = ""

@@ -112,6 +112,56 @@ async def test_stdio_timeout_cancels_the_call_not_the_connection(tmp_path: Path)
     assert client.proc is not None and client.proc.returncode is not None
 
 
+async def test_stdio_a_cancelled_call_is_cancelled_on_the_server(tmp_path: Path) -> None:
+    log = tmp_path / "log.txt"
+    client = stdio(FAKE_LOG=str(log))
+    await client.start()
+    try:
+        call = asyncio.create_task(client.call_tool("sleep", {"seconds": 0.3}))
+        await asyncio.sleep(0.1)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        for _ in range(100):
+            if "notifications/cancelled" in log.read_text():
+                break
+            await asyncio.sleep(0.02)
+        assert "notifications/cancelled" in log.read_text()
+        assert client.broken is None
+    finally:
+        await client.close()
+
+
+async def test_stdio_close_ends_what_the_server_started(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    client = StdioClient(["sh", "-c", f'sleep 300 & echo $! > {pidfile}; exec "$0" "$1"',
+                          sys.executable, FAKE])
+    await client.start()
+    grandchild = int(pidfile.read_text())
+    await client.close()
+    for _ in range(100):
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.02)
+    else:
+        os.kill(grandchild, 9)
+        pytest.fail("the server's child outlived it")
+
+
+async def test_stdio_a_server_not_reading_stdin_breaks_the_connection() -> None:
+    client = StdioClient(["sleep", "300"], timeout=0.2)
+    await client._open()
+    try:
+        with pytest.raises(McpError, match="stopped reading"):
+            await asyncio.wait_for(client._send(
+                {"jsonrpc": "2.0", "method": "x", "params": {"a": "x" * 1_000_000}}), 5)
+        assert client.broken
+    finally:
+        await asyncio.wait_for(client.close(), 10)
+
+
 async def test_stdio_env_is_inherited_without_noetas_credentials(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SECRET_TOKEN", "x")
@@ -232,7 +282,49 @@ async def test_http_pagination_and_expired_connection() -> None:
     with pytest.raises(McpError, match="404"):
         await client.call_tool("t", {})
     assert client.connection_id is None
+    assert client.broken  # the pool connects afresh
     await client.close()
+
+
+async def test_pool_reconnects_after_the_server_ends_the_session() -> None:
+    server = FakeHttp()
+    http = httpx.AsyncClient(transport=httpx.MockTransport(server))
+    pool = McpPool(connect=lambda s: HttpClient(s.url or "", http=http))
+    spec = McpServer(alias="remote", url="http://mcp.test/mcp")
+    try:
+        await pool.use(spec, None, lambda c: c.call_tool("t", {}))
+        server.expired, server.session = True, "s-2"
+        with pytest.raises(McpError, match="404"):
+            await pool.use(spec, None, lambda c: c.call_tool("t", {}))
+        result = await pool.use(spec, None, lambda c: c.call_tool("t", {}))
+        assert result["content"][0]["text"] == "ok"
+    finally:
+        await pool.close()
+
+
+async def test_http_a_cancelled_call_is_cancelled_on_the_server() -> None:
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body.get("method"))
+        if body.get("method") == "tools/call":
+            await asyncio.sleep(10)
+        if "id" not in body:
+            return httpx.Response(202)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": {}})
+
+    client = HttpClient("http://mcp.test/",
+                        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    await client.start()
+    call = asyncio.create_task(client.call_tool("t", {}))
+    await asyncio.sleep(0.05)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    await client.close()
+    assert seen == ["initialize", "tools/call", "notifications/cancelled"]
+    assert client.broken is None
 
 
 async def test_http_timeout_breaks_the_connection() -> None:
@@ -296,6 +388,32 @@ async def test_pool_retire_closes_after_the_holder_is_done() -> None:
             assert await _pid(client) > 0  # still usable by its holder
         assert isinstance(client, StdioClient) and client.proc is not None
         assert client.proc.returncode is not None or client._closed
+    finally:
+        await pool.close()
+
+
+async def test_a_cancelled_starter_does_not_cancel_the_tasks_waiting_on_it() -> None:
+    gate = asyncio.Event()
+    starts = 0
+
+    class SlowFirst(StdioClient):
+        async def start(self) -> None:
+            nonlocal starts
+            starts += 1
+            if starts == 1:
+                await gate.wait()  # cancelled here
+            await super().start()
+
+    pool = McpPool(connect=lambda server: SlowFirst(server.command or []))
+    server = fake_server()
+    try:
+        starter = asyncio.create_task(pool.use(server, None, _pid))
+        await asyncio.sleep(0)
+        waiter = asyncio.create_task(pool.use(server, None, _pid))
+        await asyncio.sleep(0.05)
+        starter.cancel()
+        assert await asyncio.wait_for(waiter, 10) > 0
+        assert starter.cancelled() and starts == 2
     finally:
         await pool.close()
 

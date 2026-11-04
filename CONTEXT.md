@@ -33,7 +33,7 @@ A runner claims a task from the store (`claim` / `renew` / `release`; Postgres u
 `SKIP LOCKED`). Every append is conditional on `expected_seq` and the claim's `owner_epoch`, so a
 stale runner can never write. A tool call is logged as started before it runs; on recovery an
 unfinished call is answered "outcome unknown", never re-run, unless its tool looks the outcome
-up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe`. A task that owns what lives only in
+up (`Tool.recover`, by `ToolContext.idempotency_key`) or is `retry_safe` (`ToolFlags`). A task that owns what lives only in
 its worker process (a background job, a parked MCP call) keeps its own claim while it waits
 (`ToolContext.keep`, `Patch.keep`): the row says waiting, the runner renews the lease and takes
 the task's inbox in the background (`Runtime.run_claim`), so no other worker runs it. A lapsed
@@ -42,16 +42,16 @@ a worker stopping (`Runtime.let_go`) leaves its tasks waiting, told with their n
 
 ## Layers
 
-Top to bottom, imports only downward: `noeta/cli` (the `noeta` command, TUI, config) > `noeta/agents` (agent
+Top to bottom, imports only downward: `noeta/cli` (the `noeta` command, config) > `noeta/agents` (agent
 files, built-in agents) > `noeta/plugins/<name>` (capabilities) | `noeta/backends` (providers, exec envs,
 stores) | `noeta/host` (`LocalApp`, and the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code
 plugins share) > `noeta/core`. `|` siblings never import each other, nor do two plugins or two backends
 (`lint-imports`). One plugin reaches another only through the kernel: a tool by name (`TaskView.find_tool`),
-inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or a record documented as read by
-others (memory's `dir` for instructions, permissions and fs, shell's `cwd` (permissions, hooks, fs),
-permissions' `mode` (permissions, hooks, shell), instructions' files for hooks and its `start` for the classifier,
-structured_output's `answer` for workflow and front ends, subtasks' and workflow's for `TaskStop`: `toolkit/background_tasks.py`). Front ends import no plugin; they read permissions'
-`mode` / `modes` and checkpoints' `snapshot`s, a contract a replacement keeps. SDK = all but `noeta/cli`.
+inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or what a plugin publishes, read
+only through a typed reader in `toolkit`: `plugin_records.py` (plugin names, each record and who reads it, the
+methods a plugin keeps for others; `tests/toolkit/test_plugin_records.py` holds writers to readers),
+`background_tasks.py`, `structured_output.py`, `permission_modes.py`. Front ends import no plugin; they read
+permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title`, todos' records (kept by a replacement). SDK = all but `noeta/cli`.
 
 ## Ways in
 
@@ -70,18 +70,19 @@ and replies go out from inside the task (a plugin).
 Ask in order, take the first yes: the kernel itself uses it -> `core`; an agent uses it in a
 task -> a plugin; several plugins (or backends) share it -> `toolkit`; it is replaceable
 infrastructure -> `backends`; it runs noeta or lets the outside in (a protocol) -> `host`; it is
-an agent or the agent-file format -> `agents`; it is the `noeta` command or its terminal UI ->
-`cli`. Front ends in other languages (web, desktop) live outside the package and use HTTP.
-`scripts/lint-layout.py` (in `make check`) fails on any other top-level package and on a `core`
-module the kernel never imports, unless listed there as kernel surface with a reason. Two
-rules for every tool and front end are the kernel's, not capabilities: the runner's result
-limits, saving through the task's exec env (`core/large_output.py`), and the client's image
-limits for every provider (`core/images.py`).
+an agent or the agent-file format -> `agents`; the `noeta` command -> `cli`; a front end -> its
+own top-level project (`tui/`: `noeta-tui` on `AppAPI` only, found through `noeta.frontends`;
+web, desktop: HTTP). `scripts/lint-layout.py` (in `make check`) fails on any other top-level
+package and on a `core` module the kernel never imports, unless listed there as kernel
+surface with a reason. Two rules for every tool and front end are the kernel's, not
+capabilities: the runner's result limits, saving through the task's exec env
+(`core/large_output.py`), and the client's image limits for every provider (`core/images.py`).
 
 ## Registry
 
 Plugins and backends are found by name through entry points (`noeta/core/registry.py`): groups
-`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`, `noeta.channels`. The
+`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`, `noeta.channels`,
+`noeta.frontends` (`run(app, FrontEndStart)`, `noeta/host/app.py`). The
 built-ins register in `pyproject.toml` exactly as a third-party package would
 (`examples/hello-plugin` is one, installed and tested by `make check`). A plugin's registry name
 is its `Extension.name`. A plugin (or channel) can also be a plain file in `~/.noeta/plugins`, a
@@ -138,7 +139,7 @@ something with `notify`; neither reaches the model as the user.
 
 ## Deferred tool
 
-A tool that sets `deferred = True` is named to the model (`TaskView.deferred_tool_names`) and
+A tool whose `flags` say `deferred=True` is named to the model (`TaskView.deferred_tool_names`) and
 sent only once the model loads it with `ToolSearch`. The `tool_search` plugin
 (`noeta/plugins/tool_search`) adds `ToolSearch` and withholds the tools not loaded through
 `Extension.tool_changes`; a tool is loaded once a `ToolReference` in the task's history or open

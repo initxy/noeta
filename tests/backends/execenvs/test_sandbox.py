@@ -491,6 +491,52 @@ async def test_git_cannot_be_pointed_at_other_config_or_hooks(tmp_path: Path,
     assert not (common / "modules").exists() and not (common / "commondir").exists()
 
 
+def _workspace_of_repos(tmp_path: Path) -> Path:
+    """A workspace that is no repository itself, holding one two levels down
+    (with editor tasks and a missing hooks directory) and one in a
+    dependency tree."""
+    ws = tmp_path / "ws"
+    repo = ws / "group" / "proj"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q")
+    shutil.rmtree(repo / ".git" / "hooks")
+    (repo / ".vscode").mkdir()
+    deep = ws / "node_modules" / "dep"
+    deep.mkdir(parents=True)
+    _git(deep, "init", "-q")
+    return ws
+
+
+def test_repositories_below_the_working_directory_are_protected(tmp_path: Path,
+                                                                home: Path) -> None:
+    ws = _workspace_of_repos(tmp_path)
+    repo = ws / "group" / "proj"
+    plan = sb.plan_paths(SandboxSettings(enabled=True), str(ws), str(tmp_path / "t"))
+    for path in (repo / ".git" / "config", repo / ".git" / "hooks", repo / ".vscode"):
+        assert str(path) in plan.deny_write, path
+    assert dict(plan.placeholders)[str(repo / ".git" / "hooks")] is False
+    assert str(repo / ".git") in plan.pinned and str(repo) in plan.pinned
+    assert plan.remove_after == [str(repo / ".git" / "commondir")]
+    # Dependency trees are not searched.
+    assert not any("node_modules" in p for p in plan.deny_write)
+
+
+@needs_bwrap
+async def test_a_nested_repository_hook_cannot_be_planted(tmp_path: Path, home: Path) -> None:
+    ws = _workspace_of_repos(tmp_path)
+    repo = ws / "group" / "proj"
+    env = LocalExecEnv(str(ws), sandbox={"enabled": True})
+    for command in ("mkdir -p group/proj/.git/hooks && echo x > group/proj/.git/hooks/pre-commit",
+                    "echo x >> group/proj/.git/config", "echo x > group/proj/.vscode/tasks.json",
+                    "mv group/proj group/old"):
+        code, _, _ = await _run(env, command)
+        assert code != 0, command
+    assert not (repo / ".git" / "hooks").exists()
+    code, out, _ = await _run(env, "echo hi > group/proj/f && git -C group/proj status "
+                                   "--porcelain && echo ok")
+    assert code == 0 and "ok" in out and "f" in out, out
+
+
 #: What a package manager or build tool runs on its next ordinary command.
 _RUN_ON_NEXT_COMMAND = (".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", ".pnp.cjs",
                         ".pnp.loader.mjs", "bunfig.toml", ".bunfig.toml", ".bazelrc",

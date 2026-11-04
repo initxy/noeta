@@ -16,7 +16,7 @@ def _hide(monkeypatch: pytest.MonkeyPatch, *modules: str) -> None:
     the cached noeta modules that import it, so they import again."""
     for name in list(sys.modules):
         if name.startswith(tuple(f"{m}." for m in modules)) or name.startswith(
-                ("noeta.host.", "noeta.backends.stores.postgres", "noeta.cli.tui")):
+                ("noeta.host.", "noeta.backends.stores.postgres")):
             module = sys.modules[name]
             parent, _, child = name.rpartition(".")
             if parent in sys.modules and getattr(sys.modules[parent], child, None) is module:
@@ -40,7 +40,6 @@ def _exit_message(argv: list[str]) -> str:
     (["serve"], ("starlette",), "server"),
     (["acp"], ("acp",), "acp"),
     (["acp", "--server", "http://127.0.0.1:1"], ("acp",), "acp"),
-    ([], ("textual",), "tui"),
 ])
 def test_a_command_names_its_missing_extra(argv: list[str], hidden: tuple[str, ...], extra: str,
                                            tmp_path: Path,
@@ -51,7 +50,7 @@ def test_a_command_names_its_missing_extra(argv: list[str], hidden: tuple[str, .
     source = f"'noeta[{extra}] @ {cli.SOURCE_URL}'"
     assert f"pip install {source}" in message
     # A reinstall keeps only the extras it names: the README's defaults stay.
-    wanted = ",".join(dict.fromkeys(("tui", "images", extra)))
+    wanted = ",".join(dict.fromkeys(("images", extra)))
     assert f"uv tool install --reinstall 'noeta[{wanted}] @ {cli.SOURCE_URL}'" in message
     assert "every extra" in message
     assert f"'noeta[{extra}]'" not in message  # not on PyPI: the name may be anyone's
@@ -76,3 +75,24 @@ def test_another_missing_module_is_not_hidden(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(cli, "_front", broken)
     with pytest.raises(ModuleNotFoundError):
         cli.main(["--model", "m"])
+
+
+def test_the_terminal_ui_is_found_by_its_entry_point() -> None:
+    import noeta_tui
+
+    assert cli.front_end("tui") is noeta_tui.run
+
+
+def test_a_missing_terminal_ui_names_its_package(tmp_path: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.core import registry
+
+    def missing(group: str, name: str) -> None:
+        raise registry.UnknownName(f"no {group} entry point named {name!r}")
+
+    monkeypatch.setenv("NOETA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(registry, "load", missing)
+    message = _exit_message(["--model", "m", "--cwd", str(tmp_path)])
+    assert "noeta-tui, which is not installed" in message
+    assert f"--with '{cli.TUI_SOURCE}'" in message and f"pip install '{cli.TUI_SOURCE}'" in message
+    assert cli.TUI_SOURCE.endswith("#subdirectory=tui")

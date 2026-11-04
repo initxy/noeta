@@ -62,6 +62,7 @@ from noeta.plugins.shell.tools import (
 )
 from noeta.plugins.shell.worktree import EnterWorktreeTool, ExitWorktreeTool
 from noeta.toolkit.notices import NOTICE_GUARD, STATUS_ORDER
+from noeta.toolkit.plugin_records import permission_mode
 from noeta.toolkit.sandbox import sandbox_of
 
 __all__ = ["JOBS_LOST", "JOB_ENDED", "SHELL", "BashTool", "Registry", "Shell", "lost_notice"]
@@ -117,8 +118,7 @@ def _starts_steered(view: TaskView) -> bool:
     """Whether ``Bash`` steers file work for this task: decided by the
     permission mode it is in (the permissions plugin's ``mode``, else its
     config's) when it first asks."""
-    mode = getattr(view.ext_state("permissions"), "mode", None) \
-        or view.state.config.get("permission_mode")
+    mode = permission_mode(view.state.ext) or view.state.config.get("permission_mode")
     return mode not in _UNSTEERED_MODES
 
 

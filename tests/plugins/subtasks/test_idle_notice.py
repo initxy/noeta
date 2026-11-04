@@ -4,6 +4,7 @@ session next goes idle or ends, its refusals, and the expiry."""
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -23,9 +24,9 @@ ROSTER = [SubagentSpec(name="general-purpose", description="Does work.", agent="
 
 @pytest.fixture(autouse=True)
 def _send_message_loaded() -> Iterator[None]:
-    SendMessageTool.deferred = False  # type: ignore[misc]
+    SendMessageTool.flags = replace(SendMessageTool.flags, deferred=False)  # type: ignore[misc]
     yield
-    SendMessageTool.deferred = True  # type: ignore[misc]
+    SendMessageTool.flags = replace(SendMessageTool.flags, deferred=True)  # type: ignore[misc]
 
 
 def main() -> Agent:

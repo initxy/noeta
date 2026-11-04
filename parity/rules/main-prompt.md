@@ -17,7 +17,7 @@ its hash is only indicative.
 
 noeta today was first measured at the `parity` branch point (deb1f0e), citing that `main.md`'s
 rules 1–13 as `n1`…`n13`; the request, prompt and environment rows are re-measured after the
-Phase 2 main-loop rewrite (`noeta/agents/files/main.md`, `noeta/plugins/environment.py`,
+Phase 2 main-loop rewrite (`noeta/agents/files/main.md`, `noeta/plugins/environment/`,
 `noeta/backends/providers/anthropic.py`); the memory and environment-message rows after the
 Claude Code files work (instructions, settings, skills, deferred-tool and agent lists).
 
