@@ -61,6 +61,11 @@ class WaitParked(Struct, tag="wait_parked"):
     ids: list[str]
 
 
+class WaitApproval(Struct, tag="wait_approval"):
+    """The approval the task asked for is still unanswered: it goes on
+    waiting, nothing gated again."""
+
+
 class WaitInput(Struct, tag="wait_input"):
     pass
 
@@ -77,7 +82,7 @@ class Idle(Struct, tag="idle"):
 
 Action = Union[
     CallModel, Continue, RunCalls, ResumeCalls, Interrupted, FinalReport, MaxTurns, StopTurn,
-    WaitParked, WaitInput, End, Idle,
+    WaitParked, WaitApproval, WaitInput, End, Idle,
 ]
 
 
@@ -93,12 +98,15 @@ def next_action(state: TaskState, *, one_shot: bool, max_steps: int) -> Action:
         started = [c.use.id for c in open_calls if c.started and not c.parked]
         if started:
             return Interrupted(call_ids=started)
+        asking = state.asking
         unstarted = [c.use.id for c in open_calls if not c.started]
-        if unstarted:
+        if unstarted and not asking:
             return RunCalls(call_ids=unstarted)
         ready = [c.use.id for c in open_calls if state.parked_ready(c)]
         if ready:
             return ResumeCalls(call_ids=ready)
+        if asking:
+            return WaitApproval()
         # A question nobody has answered surfaces even while children run.
         kinds = [str((c.parked or {}).get("on") or "question") for c in open_calls]
         on = "question" if "question" in kinds else kinds[0]

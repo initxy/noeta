@@ -6,8 +6,10 @@ ended, `deliver` continues the thread in a new task that remembers it). A reques
 the secret is refused (401) before its sender id is believed, a body without those four strings
 too (400); then only allowlisted senders (by sender id, never by room) get in. The `chat_reply`
 plugin, inside the task, posts each answer back to its `url` and records what it relayed: at
-least once, since a crash between the post and the record posts again, with the same
-`Idempotency-Key` header (`<task id>:<seq>`) so the chat app can drop the repeat. The task's
+least once, since the record is its delivery cursor (`delivered_through`), so an answer whose
+post failed, or whose process died between the post and the record, is posted again when the
+task is next claimed (a crashed worker's lease runs out first), with the same `Idempotency-Key`
+header (`<task id>:<seq>`) so the chat app can drop the repeat. The task's
 config holds only the thread id, so the reply URL (and any token in it) never enters the task
 log. To approve tool calls from the chat as well, add [`chat-approvals`](../chat-approvals).
 

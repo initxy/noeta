@@ -262,6 +262,7 @@ class TaskRun:
         second one in a row ends the task."""
         started = False
         failures = 0
+        loaded = self.state.last_seq
         while True:
             try:
                 if not started:
@@ -272,6 +273,7 @@ class TaskRun:
                         await ext.on_start(view)
                     await self.flush(view)
                     started = True
+                    await self._redeliver(loaded)
                 if not await self._step_once():
                     if not await self._wait_kept():
                         return
@@ -490,6 +492,7 @@ class TaskRun:
         *,
         posts: Sequence[Post] = (),
         creates: Sequence[Any] = (),
+        patch: Patch | None = None,
     ) -> None:
         if self._lost:
             raise LostClaim()
@@ -497,12 +500,19 @@ class TaskRun:
         creates = [replace(c, created=await pin_history(
             self.store, c.created if prepare is None else await prepare(c.created)))
                    for c in creates]
+        hand_back: Patch | None = None
         async with self._write_lock:
             base = self.state.last_seq
-            patch = patch_for(events, self.state.inbox_read, keep=bool(self.kept))
-            if patch.status == "running" and self._kept_wait is not None \
-                    and not any(isinstance(e, InputTaken) for e in events):
-                patch = self._kept_wait  # a hook's record: the task still waits
+            if patch is None:
+                patch = patch_for(events, self.state.inbox_read)
+                if patch.status == "waiting":
+                    # Kept until the extensions have seen the Waiting and their
+                    # records landed: a crash before leaves the task claimable,
+                    # and its claimer delivers the events again.
+                    hand_back, patch = patch, Patch()
+            if patch.status == "waiting" and self.kept:
+                # What lives only here (a background job) keeps the claim.
+                patch = replace(patch, keep=True)
             write = asyncio.ensure_future(self.store.append(
                 self.claim, events, expected_seq=base, patch=patch, posts=posts, creates=creates))
             cancelled = False
@@ -524,12 +534,52 @@ class TaskRun:
         self.snapshots.write_later()
         view = self.view()
         for rec in recs:
-            for ext in self.exts:
-                try:
-                    await ext.on_event(view, rec)
-                except Exception:
-                    log.exception("extension %s on_event failed", ext.name)
+            await self._deliver(view, rec, self.exts)
+        if patch.status == "ended":
+            if view.pending or view.creates or view.enqueued:
+                log.warning("task %s: records made after its end dropped", self.task_id)
+            return
         await self.flush(view)
+        if hand_back is not None:
+            await self.append([], patch=replace(hand_back, inbox_read_seq=self.state.inbox_read))
+
+    async def _deliver(self, view: TaskView, rec: Recorded,
+                       exts: Sequence[Extension]) -> None:
+        for ext in exts:
+            try:
+                await ext.on_event(view, rec)
+            except Exception:
+                log.exception("extension %s on_event failed", ext.name)
+
+    async def _redeliver(self, through: int) -> None:
+        """At each claim: the events up to ``through`` (the log as loaded)
+        after each extension's ``delivered_through`` cursor go to its
+        ``on_event`` again."""
+        view = self.view()
+        cursors = [(e, c) for e in self.exts
+                   if (c := e.delivered_through(view)) is not None and c < through]
+        if not cursors:
+            return
+        for rec in await self.store.read(self.task_id, after=min(c for _, c in cursors)):
+            if rec.seq > through:
+                break
+            await self._deliver(view, rec, [e for e, c in cursors if rec.seq > c])
+        await self.flush(view)
+
+    async def wait(self, waiting: Waiting) -> None:
+        """Hand the task back waiting: ``waiting`` is appended unless it is
+        the one already standing (a wake that changed nothing it waits on),
+        so observers see each wait once."""
+        if self.state.waiting == waiting:
+            await self.keep_waiting()
+        else:
+            await self.append([waiting])
+
+    async def keep_waiting(self) -> None:
+        """Hand the task back still waiting on its log's last ``Waiting`` (a
+        wake that brought nothing it waits for), without writing it again."""
+        assert self.state.waiting is not None
+        await self.append([], patch=patch_for([self.state.waiting], self.state.inbox_read))
 
     @property
     def one_shot(self) -> bool:
@@ -748,7 +798,7 @@ class TaskRun:
                 assert due is not None
                 await timers.fire_timers(self, now=due)
                 return True
-            await self.append([waiting])
+            await self.wait(waiting)
             return False
         if isinstance(action, decide.Interrupted):
             from noeta.core.runner.calls import recover_calls
@@ -768,8 +818,11 @@ class TaskRun:
             parked = {c.use.id: {**((c.parked or {}).get("detail") or {}),
                                  "on": (c.parked or {}).get("on")}
                       for c in self.state.open_calls if c.parked}
-            await self.append([Waiting(on=action.on, ids=action.ids,  # type: ignore[arg-type]
-                                       detail=parked)])
+            await self.wait(Waiting(on=action.on, ids=action.ids,  # type: ignore[arg-type]
+                                    detail=parked))
+            return False
+        if isinstance(action, decide.WaitApproval):
+            await self.keep_waiting()
             return False
         if isinstance(action, decide.ResumeCalls):
             from noeta.core.runner.calls import resume_calls

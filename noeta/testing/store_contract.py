@@ -35,6 +35,10 @@ def new(task_id: str = "t1", **kw: object) -> NewTask:
     return NewTask(task_id=task_id, created=TaskCreated(agent="a"), **kw)  # type: ignore[arg-type]
 
 
+def _record() -> ExtensionRecorded:
+    return ExtensionRecorded(extension="x", kind="k", data={})
+
+
 def say(text: str) -> Say:
     return Say(message=user(text))
 
@@ -95,6 +99,19 @@ async def test_append_returns_the_time_it_stamped(store: Store) -> None:
     assert claim is not None
     done = await store.append(claim, [Waiting(on="input")], expected_seq=1)
     assert [(r.seq, r.at) for r in await store.read("t1", after=1)] == [(2, done.at)]
+
+
+async def test_an_append_of_no_events_applies_its_patch(store: Store) -> None:
+    """A task handed back still waiting writes no event."""
+    await store.create(new())
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    done = await store.append(claim, [], expected_seq=1,
+                              patch=Patch(status="waiting", waiting_on="approval"))
+    row = await store.get("t1")
+    assert done.seq == 1 and row is not None and row.last_seq == 1
+    assert (row.status, row.waiting_on, row.owner) == ("waiting", "approval", None)
+    assert len(await store.read("t1")) == 1
 
 
 async def test_expired_lease_is_reclaimed_and_old_owner_loses(store: Store) -> None:
@@ -191,8 +208,7 @@ async def test_a_kept_wait_stays_with_its_claim(store: Store) -> None:
     assert await store.claim("w2", ["default"], 30) is None  # still w's
     renewed = await store.renew(claim, 30)
     assert renewed is not None
-    await store.append(renewed, [ExtensionRecorded(extension="x", kind="k", data={})], expected_seq=2,
-                       patch=Patch(inbox_read_seq=1))
+    await store.append(renewed, [_record()], expected_seq=2, patch=Patch(inbox_read_seq=1))
     row = await store.get("t1")
     assert row is not None and row.status == "running" and row.owner_epoch == claim.epoch
 
@@ -227,7 +243,7 @@ async def test_releasing_a_kept_wait_leaves_it_waiting(store: Store) -> None:
     assert row.lease_until is None and row.ready_at == 1e12
     assert await store.renew(claim, 30) is None
     with pytest.raises(Conflict):
-        await store.append(claim, [ExtensionRecorded(extension="x", kind="k", data={})], expected_seq=2)
+        await store.append(claim, [_record()], expected_seq=2)
     assert await store.claim("w2", ["default"], 30) is None
     await store.post(Post(task_id="t1", body=say("hi")))
     assert await store.claim("w2", ["default"], 30) is not None

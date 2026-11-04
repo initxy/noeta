@@ -14,7 +14,7 @@ import pytest
 
 from noeta.core.errors import CommitUnknown, StoreUnavailable
 from noeta.core.events import Cancel, TaskCreated, Waiting
-from noeta.core.store import NewTask, Patch, Post, Snapshot
+from noeta.core.store import NewTask, Patch, Post
 
 pytestmark = pytest.mark.usefixtures("pg")
 

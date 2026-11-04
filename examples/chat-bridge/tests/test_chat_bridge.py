@@ -69,6 +69,52 @@ async def test_a_chat_thread_runs_a_task_and_gets_its_answers(tmp_path: Path) ->
     await store.close()
 
 
+class Crash(BaseException):
+    """The worker process dies (nothing in it catches this)."""
+
+
+@respx.mock
+async def test_an_answer_is_posted_again_after_a_crash_before_it_was_recorded(
+        tmp_path: Path) -> None:
+    posts: list[httpx.Request] = []
+
+    def chat_app(request: httpx.Request) -> httpx.Response:
+        posts.append(request)
+        if len(posts) == 1:
+            raise Crash  # the post reached the chat app; the worker died before recording it
+        return httpx.Response(200)
+
+    respx.post(REPLY_URL).mock(side_effect=chat_app)
+    registry.load_plugin_files([HERE])
+    relay = registry.load(registry.PLUGINS, "chat_reply")(url=REPLY_URL)
+    agent = Agent(name="main", model="m", extensions=(relay,))
+    provider = ScriptedProvider([reply("hello alice")])
+    store = SqliteStore(str(tmp_path / "t.db"))
+
+    def worker() -> Runtime:
+        return Runtime(store=store, agents={"main": agent}, provider_for=lambda _m: provider,
+                       env_for=lambda _s: None, lease_seconds=0.2)  # type: ignore[arg-type,return-value]
+
+    client = Client(store)
+    tid = await client.create("main", "hi", config={"chat_reply": {"thread": "T"}})
+    with pytest.raises(Crash):
+        await worker().run_until_idle()
+    assert (await client.get(tid)).status == "running"  # claimed, its lease running out
+    await asyncio.sleep(0.3)
+    await worker().run_until_idle()
+    assert [json.loads(p.content) for p in posts] == [{"thread": "T", "text": "hello alice"}] * 2
+    assert len({p.headers["idempotency-key"] for p in posts}) == 1
+    relayed = [r.event for r in await client.events(tid)
+               if getattr(r.event, "kind", None) == "relayed"]
+    assert len(relayed) == 1
+    row = await client.get(tid)
+    assert (row.status, row.waiting_on) == ("waiting", "input")
+    await client.signal(tid, "unrelated")  # a wake that opens no turn
+    await worker().run_until_idle()
+    assert len(posts) == 2  # nothing left to deliver, and no new wait to relay
+    await store.close()
+
+
 async def test_the_bridge_listens_over_http(tmp_path: Path) -> None:
     pytest.importorskip("uvicorn", reason="the listener needs the server extra")
     with socket.socket() as s:
