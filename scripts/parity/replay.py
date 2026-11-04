@@ -568,6 +568,34 @@ def capture_facts(entries: list[dict[str, Any]], kinds: facts.Kinds,
     return out
 
 
+#: The page the `web` step fetches, as https://example.com serves it.
+EXAMPLE_PAGE = (
+    '<!doctype html><html lang=en><head><meta charset=utf-8><link rel=icon href=data:,>'
+    '<meta name=viewport content="width=device-width,initial-scale=1"><title>Example Domain</title>'
+    '<style>html{color-scheme:light dark;background:light-dark(#eee,#222)}body{font:16px/1.6 '
+    'system-ui,sans-serif;max-width:26em;margin:auto;padding:25vh 2em 2em;text-align:center}'
+    '</style></head><body><p>This domain is for use in documentation examples without needing '
+    'permission. This is not a service; avoid relying on it for testing and monitoring purposes.'
+    '</p><script src=/s.js></script></body></html>')
+
+
+def _serve_pages_offline() -> None:
+    """Answer WebFetch from :data:`EXAMPLE_PAGE`: a network failure made the
+    replay skip the digest request Claude Code's recording has."""
+    from noeta.plugins.web.fetch import HttpFetchTransport
+    from noeta.plugins.web.render import FetchedPage
+
+    async def fetch(self: HttpFetchTransport, url: str) -> FetchedPage:
+        if url.rstrip("/") != "https://example.com":
+            # Loud: the comparison would show only a missing digest request.
+            print(f"parity replay: no page for {url}; add it to _serve_pages_offline",
+                  file=sys.stderr)
+            raise OSError(f"parity replay serves only https://example.com, not {url}")
+        return FetchedPage(EXAMPLE_PAGE, "text/html")
+
+    HttpFetchTransport.fetch = fetch  # type: ignore[method-assign]
+
+
 def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = False
            ) -> dict[str, Any]:
     spec = json.loads((HERE / "scenarios.json").read_text("utf-8"))["sessions"]
@@ -577,6 +605,7 @@ def replay(version: str, sessions: list[str] | None, out: Path, keep: bool = Fal
     # Claude Code offers WebSearch through its API; noeta needs a search key
     # to offer it. No scenario searches, so a placeholder only lists it.
     os.environ.setdefault("NOETA_WEB_SEARCH_API_KEY", "parity-placeholder")
+    _serve_pages_offline()
     (scratch_root / "noeta-home").mkdir(mode=0o700)  # an open home draws a notice
     write_models_file(scratch_root / "models.json")
     from noeta.cli.config import register_models_file
