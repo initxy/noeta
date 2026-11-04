@@ -123,3 +123,12 @@ async def test_the_web_bundle_is_served_without_a_token_beside_the_api(
         assert (await http.get("/assets/app.js")).text == "console.log(1)"
         assert (await http.get("/tasks")).status_code == 401
         assert (await http.get("/nothing-here")).status_code == 404
+
+
+async def test_files_answer_an_unknown_task_404_and_a_bad_limit_400(
+        local: tuple[LocalApp, ScriptedProvider], tmp_path: Path) -> None:
+    app, _ = local
+    api = create_app(app.client, token="secret", app=app, cwd=str(tmp_path))
+    async with _http(api) as http:
+        assert (await http.get("/files", params={"task_id": "nosuch"})).status_code == 404
+        assert (await http.get("/files", params={"limit": "many"})).status_code == 400
