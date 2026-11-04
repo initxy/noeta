@@ -19,7 +19,7 @@ from noeta.core.events import Recorded
 from noeta.core.extension import Command, CommandContext
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta
-from noeta.host.app import AppAPI
+from noeta.host.app import AppAPI, archive_task
 
 #: Reconnects in a row (without an event in between) before ``watch`` gives up.
 WATCH_RETRIES = 5
@@ -202,11 +202,17 @@ class RemoteApp:
             "text": text, "agent": agent, "task_id": ctx.task_id, "cwd": ctx.cwd})
         return None if got is None else Typed(str(got["text"]), bool(got.get("local")))
 
-    async def summaries(self, limit: int = 50) -> list[dict[str, Any]]:
+    async def summaries(self, limit: int = 50, *,
+                        archived: bool | None = None) -> list[dict[str, Any]]:
         """The server's root tasks (``noeta.host.summaries.root_summaries``)."""
-        got: list[dict[str, Any]] = await self.client._call("GET", "/summaries",
-                                                            params={"limit": limit})
+        params: dict[str, Any] = {"limit": limit}
+        if archived is not None:
+            params["archived"] = "true" if archived else "false"
+        got: list[dict[str, Any]] = await self.client._call("GET", "/summaries", params=params)
         return got
+
+    async def archive(self, task_id: str, archived: bool = True) -> None:
+        await archive_task(self.client, task_id, archived)
 
     async def files(self, query: str, ctx: CommandContext, limit: int = 30) -> list[str]:
         """Paths under the task's (or ``ctx.cwd``'s) directory on the server

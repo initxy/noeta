@@ -90,6 +90,8 @@ export interface TaskSummary {
   title: string;
   cwd: string;
   prompt: string;
+  /** The person archived it (an older server leaves it out). */
+  archived?: boolean;
 }
 
 export interface Choice {

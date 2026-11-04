@@ -45,8 +45,8 @@ OPENAPI: dict[str, Any] = {
                 "agent", input="string", config="object", queue="string",
                 dedupe_key="string", history_from="string", history_through="integer")),
             "get": _op("List tasks", query=("parent_id", "status", "limit"))},
-        "/summaries": {"get": _op("Root tasks with their titles, directories and first prompts",
-                                  query=("limit",))},
+        "/summaries": {"get": _op("Root tasks with their titles, directories, first prompts "
+                                  "and whether they are archived", query=("limit", "archived"))},
         "/files": {"get": _op("Paths under a task's or a directory's tree holding q",
                               query=("q", "task_id", "cwd", "limit"))},
         "/tasks/{task_id}": {"get": _op("A task's row", params=_TASK)},
@@ -63,7 +63,8 @@ OPENAPI: dict[str, Any] = {
             "Answer an approval or a question", params=_TASK,
             body=_props("request_id", decision="string", always="boolean", data="object"))},
         "/tasks/{task_id}/signals": {"post": _op(
-            "Post a signal (permission_mode, config, resumed, restore_files, rename)", params=_TASK,
+            "Post a signal (permission_mode, config, resumed, restore_files, rename, archive)",
+            params=_TASK,
             body=_props("name", data="object", dedupe_key="string"))},
         "/tasks/{task_id}/cancel": {"post": _op(
             "End the task, or with turn_only stop the turn", params=_TASK,

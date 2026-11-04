@@ -237,3 +237,27 @@ test("a rewind puts the prompt back and the session is replaced in the sidebar",
   await expect(page.locator(".session")).toHaveCount(rows);
   await expect(page.locator(".session.active")).toBeVisible();
 });
+
+test("sessions are searched, archived and brought back", async ({ page }) => {
+  await newSession(page, "acceptEdits");
+  await say(page, "hello, archive me later");
+  await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
+  const nav = page.getByRole("navigation", { name: "Sessions" });
+  const search = nav.getByRole("searchbox", { name: "Search sessions" });
+  await search.fill("archive me");
+  const row = nav.locator(".session-row");
+  await expect(row).toHaveCount(1);
+  await row.hover();
+  await shot(page, "16-search-archive");
+  await row.getByRole("button", { name: "Archive", exact: true }).click();
+  await expect(nav.getByText("No sessions match")).toBeVisible();
+  await nav.getByRole("button", { name: "Archived" }).click();
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("archive me later");
+  await row.getByRole("button", { name: "Unarchive" }).click();
+  await expect(nav.getByText("No archived sessions")).toBeVisible();
+  await nav.getByRole("button", { name: "Back to sessions" }).click();
+  await expect(row).toHaveCount(1);
+  await search.press("Escape");
+  await expect(nav.locator(".session-row").nth(1)).toBeVisible();
+});

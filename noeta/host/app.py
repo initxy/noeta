@@ -19,6 +19,7 @@ from noeta.core.commands import Typed, list_commands, run_typed
 from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta
+from noeta.toolkit.signals import ARCHIVE_SIGNAL
 
 DeltaSink = Callable[[str, Delta], None]
 
@@ -58,6 +59,18 @@ class AppAPI(Protocol):
         """What fills the task's next request
         (``noeta.host.usage.context_breakdown``); ``None`` when this side
         does not run the task's agent."""
+        ...
+
+    async def summaries(self, limit: int = 50, *,
+                        archived: bool | None = None) -> list[dict[str, Any]]:
+        """The root tasks to resume from, newest first
+        (``noeta.host.summaries.root_summaries``): only the archived ones
+        (``archived=True``), only the others (``False``) or all."""
+        ...
+
+    async def archive(self, task_id: str, archived: bool = True) -> None:
+        """Archive the task (the session lists leave it out), or with
+        ``archived=False`` bring it back (:func:`archive_task`)."""
         ...
 
 
@@ -100,6 +113,12 @@ async def change_config(client: ClientAPI, task_id: str, changes: Mapping[str, A
     """Change a task's config from its next model call on: ``model``,
     ``effort`` and the kernel's other changeable keys; ``None`` removes one."""
     await client.signal(task_id, CONFIG_SIGNAL, dict(changes))
+
+
+async def archive_task(client: ClientAPI, task_id: str, archived: bool = True) -> None:
+    """Post the ``archive`` signal: an ended task takes it too, since the
+    session list reads it from the inbox."""
+    await client.signal(task_id, ARCHIVE_SIGNAL, {"archived": archived})
 
 
 async def agent_commands(agents: Mapping[str, Agent], agent: str,

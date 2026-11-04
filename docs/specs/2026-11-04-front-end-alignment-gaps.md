@@ -38,13 +38,22 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   configured), read-only.
 - D3 Prompt history across sessions is kept by noeta in its own home (as Claude Code keeps
   its history file), per project.
+- D4 (B) Archive is the `archive` signal (`{"archived": bool}`, `noeta/toolkit/signals.py`),
+  not a plugin record or a store column: an ended task is never claimed again, so nothing
+  could record a signal it is sent; the inbox keeps every post, so `root_summaries` reads the
+  last `archive` signal from the inbox (incrementally, cached by inbox seq). Search is
+  client-side over `GET /summaries` (title, first prompt, folder).
+- D5 (B) Delete is cut. The store has no delete: removing a task tree means a new `Store`
+  method in both backends (log, inbox, rows, snapshots, children), a continued or forked
+  session folds its source's log (`history_from`), and deleting data on a host's store is an
+  approval gate (`AGENTS.md`). Archive hides a session instead.
 
 ## Plan
 
 - [ ] A TUI + host: D1, D2, D3, Tab-to-amend, Tab completion inside a command word, `-c` exits
       when nothing to continue.
-- [ ] B Web: session search, archive, delete (host routes as needed); auto-compact indicator
-      once A's reader lands.
+- [x] B Web: session search, archive (delete cut, D5), host routes as needed.
+- [ ] B2 Web: auto-compact indicator once A's reader lands.
 - [ ] C Eval: why `compaction_resume_edits` stalls at the eighth file; fix the cause.
 - [ ] Integrate, full gates, review.
 
@@ -60,3 +69,11 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
 
 ## Progress log
 - 2026-11-04 Created after the v1-finish goal check found these alignment gaps still open.
+- 2026-11-04 B on `v1-align-b`: sidebar search box (title, first prompt, folder; Esc clears),
+  a row's archive button, an "Archived" list whose rows are brought back (D4); delete cut
+  (D5). `GET /summaries` gives `archived` and takes `archived=true|false` (archived roots do
+  not count toward `limit`); the guard allows the `archive` signal; `AppAPI.summaries` /
+  `archive` (`LocalApp`, `RemoteApp`, the server's API-only front). Desktop gets it through
+  `web/`, no menu entries. Not done: the auto-compact indicator (B2, waits on A's reader).
+  check 3550 passed, 90%; make tui 62; make web 53 + e2e 15; make desktop 33 + e2e 3;
+  parity 0. Screenshots regenerated (`web/screenshots/16-search-archive.png` new).

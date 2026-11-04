@@ -7,8 +7,9 @@ events; when this process also runs workers, live model output streams too.
                                       config takes only the keys in _http_guard's
                                       REQUEST_CONFIG (any other: 403)
     GET  /tasks?parent_id=&status=&limit=
-    GET  /summaries?limit=            the root tasks, each with its title, cwd and first
-                                      prompt (``noeta.host.summaries``)
+    GET  /summaries?limit=&archived=  the root tasks, each with its title, cwd, first
+                                      prompt and ``archived`` (``noeta.host.summaries``);
+                                      archived=true / false keeps only those / the others
     GET  /files?q=&task_id=&cwd=&limit=  paths under a task's (or a cwd's) directory
                                       holding ``q``, for a prompt's ``@`` mentions
     GET  /tasks/{id}
@@ -26,8 +27,9 @@ events; when this process also runs workers, live model output streams too.
     POST /tasks/{id}/signals          {name, data?, dedupe_key?} — a signal: ``permission_mode``
                                       {mode} switches the permission mode, ``config``
                                       {model?, effort?, max_turns?} changes the task's config;
-                                      ``resumed``, ``restore_files`` and ``rename`` {title} as
-                                      front ends send them; any other name: 403
+                                      ``resumed``, ``restore_files``, ``rename`` {title} and
+                                      ``archive`` {archived} as front ends send them; any
+                                      other name: 403
     POST /tasks/{id}/cancel           {reason?, turn_only?}
     GET  /tasks/{id}/usage            the task tree's tokens, model calls and cost by model
     GET  /tasks/{id}/context          what fills the next request (workers in this process)
@@ -80,7 +82,8 @@ from noeta.host._http_guard import LOOPBACK_HOSTS, Guard, Refused, token_digest
 from noeta.host._http_openapi import OPENAPI
 from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
-from noeta.host.app import AppAPI, agent_commands, agent_run_command
+from noeta.host.app import AppAPI, agent_commands, agent_run_command, archive_task
+from noeta.host.summaries import root_summaries
 
 __all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "Refused", "create_app",
            "redact_token_logs", "token_digest"]
@@ -119,6 +122,14 @@ class _Front:
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
         return None
+
+    async def summaries(self, limit: int = 50, *,
+                        archived: bool | None = None) -> list[dict[str, Any]]:
+        return await root_summaries(self.client, limit, inbox=self.client.store.inbox,
+                                    archived=archived)
+
+    async def archive(self, task_id: str, archived: bool = True) -> None:
+        await archive_task(self.client, task_id, archived)
 
 
 #: A query parameter: its separator and key, and its value.
