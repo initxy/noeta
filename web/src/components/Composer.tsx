@@ -108,6 +108,13 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter while an input method composes a word confirms the word.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.key === "Tab" && e.shiftKey && onCycleMode) {
+      e.preventDefault();
+      onCycleMode();
+      return;
+    }
     if (options.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -115,9 +122,10 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
         return;
       }
       if (e.key === "Enter" && !e.shiftKey && query?.kind === "slash") {
-        // Enter runs the highlighted command, as Claude Code's menu does.
+        // Enter runs the highlighted command, as Claude Code's menu does,
+        // with what follows the command word.
         e.preventDefault();
-        send(options[active].insert);
+        send(options[active].insert.trimEnd() + text.slice(caret).replace(/^\S*/, ""));
         return;
       }
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
@@ -126,12 +134,7 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
         return;
       }
     }
-    if (e.key === "Tab" && e.shiftKey && onCycleMode) {
-      e.preventDefault();
-      onCycleMode();
-      return;
-    }
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
     } else if (e.key === "Escape" && busy) {

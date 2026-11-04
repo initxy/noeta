@@ -300,7 +300,13 @@ function Workspace({
       if (name === "clear" || name === "new") return open(null);
       if (name === "model" && arg) return changeModel(arg);
       if (name === "rewind") return taskId ? setRewinding(true) : setError("Nothing to rewind to yet.");
+      if (name === "rename" && !taskId) return setError("Nothing to rename yet.");
       if (name === "rename" && !arg) return rename();
+      if (name && (!taskId || ended)) {
+        // A local command answers here: no session is made for it.
+        const typed = await api.runCommand(text, taskId, !taskId && desk ? project : undefined);
+        if (typed?.local) return dispatch({ type: "notice", text: typed.text, tone: "info" });
+      }
       // A first message takes the same path as every later one: the task
       // is made empty, then the message is sent (slash commands expand).
       const id = await target();

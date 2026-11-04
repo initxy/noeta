@@ -12,14 +12,21 @@ export function useApi(): Api {
 }
 
 /** The conversations a task continues (`history_from`, as a rewind or a
- * continued session makes), oldest first, each up to where it was taken. */
-export async function earlierLogs(api: Api, first: Recorded | undefined): Promise<[string, Recorded[]][]> {
-  const out: [string, Recorded[]][] = [];
+ * continued session makes), oldest first, each up to where it was taken; a
+ * log that fails to load is `null`, and what it continued is not known. */
+export async function earlierLogs(api: Api, first: Recorded | undefined): Promise<[string, Recorded[] | null][]> {
+  const out: [string, Recorded[] | null][] = [];
   let ev = first?.event;
   while (ev?.type === "TaskCreated" && ev.history_from && out.length < 16) {
     const from: string = ev.history_from;
     const through = ev.history_through;
-    const log = (await api.events(from, 0)).filter((r) => through == null || r.seq <= through);
+    let log: Recorded[];
+    try {
+      log = (await api.events(from, 0)).filter((r) => through == null || r.seq <= through);
+    } catch {
+      out.unshift([from, null]);
+      break;
+    }
     out.unshift([from, log]);
     ev = log[0]?.event;
   }
@@ -39,7 +46,10 @@ export function useTask(api: Api, taskId: string | null): [TaskState, (a: Action
     };
     const follow = async () => {
       const own = await api.events(taskId, 0);
-      for (const [from, log] of await earlierLogs(api, own[0])) for (const rec of log) live({ type: "history", rec, from });
+      for (const [from, log] of await earlierLogs(api, own[0])) {
+        if (!log) live({ type: "notice", text: "An earlier part of this conversation could not be loaded.", tone: "error" });
+        for (const rec of log ?? []) live({ type: "history", rec, from });
+      }
       for (const rec of own) live({ type: "event", rec });
       const after = own.length ? own[own.length - 1].seq : 0;
       await api.watch(taskId, after, { event: (rec) => live({ type: "event", rec }), delta: (delta) => live({ type: "delta", delta }) }, ctl.signal);

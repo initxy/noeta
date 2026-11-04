@@ -98,6 +98,26 @@ describe("the app inside the desktop app", () => {
     expect(await screen.findByText("What should we work on?")).toBeInTheDocument();
   });
 
+  it("answers a local command as the first message without making a session", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push(`${init?.method ?? "GET"} ${url}`);
+        if (url === "/commands/run") return new Response(JSON.stringify({ text: "in /srv", local: true }));
+        return new Response("[]");
+      }),
+    );
+    window.NOETA_CONFIG = { server: "", token: "web" };
+    render(<App />);
+    const box = await screen.findByLabelText("Message");
+    await userEvent.type(box, "/where{Enter}");
+    expect(await screen.findByText("in /srv")).toBeInTheDocument();
+    await userEvent.type(box, "/rename later{Enter}");
+    expect(await screen.findByText("Nothing to rename yet.")).toBeInTheDocument();
+    expect(calls.filter((c) => c.startsWith("POST"))).toEqual(["POST /commands/run"]);
+  });
+
   it("forgets the saved token on Disconnect (a browser only)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
     localStorage.setItem("noeta.token", "saved");

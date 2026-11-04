@@ -145,6 +145,12 @@ export class Api {
     return this.call("GET", `/commands${query({ task_id: taskId })}`);
   }
 
+  /** A typed slash command run where a task would run it: its text, `local`
+   * when it is shown instead of sent; `null`: no such command. */
+  runCommand(text: string, taskId: string | null, cwd?: string): Promise<{ text: string; local: boolean } | null> {
+    return this.call("POST", "/commands/run", { text, task_id: taskId, cwd: cwd || null });
+  }
+
   models(): Promise<ModelInfo[]> {
     return this.call("GET", "/models");
   }
