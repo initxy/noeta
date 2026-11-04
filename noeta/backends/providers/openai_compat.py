@@ -22,8 +22,10 @@ from typing import Any, Literal
 import httpx
 
 from noeta.backends.providers._common import (
+    FIRST_BYTE_TIMEOUT_SECONDS,
     HOST_INJECTED_PREAMBLE,
     ReasoningContinuation,
+    bounded_silence,
     encode_tool_arguments,
     flatten_text,
     guard_vision,
@@ -31,6 +33,7 @@ from noeta.backends.providers._common import (
     is_host_injected,
     restore_tool_names,
     shorten_names_in_text,
+    stream_timeout,
     tool_result_images,
     tool_result_text,
     translate_http_error,
@@ -104,6 +107,7 @@ class OpenAICompatProvider:
         reasoning_continuation: ReasoningContinuation = "off",
         max_tokens_param: MaxTokensParam = "auto",
         transport: httpx.AsyncBaseTransport | None = None,
+        first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
     ) -> None:
         """``api_key`` defaults to the ``OPENAI_API_KEY`` environment variable.
         An **empty** key counts as absent — the usual way to arrive at one is
@@ -115,6 +119,9 @@ class OpenAICompatProvider:
         ``timeout_seconds`` measures silence between SSE events: a reasoning
         model can think for minutes before its first token, and a gateway that
         has gone quiet for five minutes is dead, not slow.
+        ``first_byte_timeout_seconds`` bounds the wait for the response
+        headers apart: a gateway that holds the stream until the answer is
+        complete sends nothing before then.
         """
         if max_tokens_param not in ("auto", "max_tokens", "max_completion_tokens"):
             raise ValueError(
@@ -128,6 +135,8 @@ class OpenAICompatProvider:
                 f"set the {_API_KEY_ENV} environment variable"
             )
         self._reasoning_continuation = reasoning_continuation
+        self._silence = timeout_seconds
+        self._first_byte_timeout = first_byte_timeout_seconds
         self._max_tokens_param: MaxTokensParam = max_tokens_param
         headers: dict[str, str] = {
             "Authorization": f"Bearer {resolved_key}",
@@ -160,11 +169,13 @@ class OpenAICompatProvider:
                 "/chat/completions",
                 json=body,
                 headers=request.headers or None,
+                timeout=stream_timeout(self._silence, self._first_byte_timeout),
             ) as response:
                 if response.is_error:
                     await response.aread()
                     raise translate_http_error(response)
-                async with aclosing(iter_sse_events(response.aiter_lines())) as events:
+                lines = bounded_silence(response.aiter_lines(), self._silence)
+                async with aclosing(iter_sse_events(lines)) as events:
                     async for _event, data in events:
                         if data.strip() == "[DONE]":
                             accumulator.saw_done = True

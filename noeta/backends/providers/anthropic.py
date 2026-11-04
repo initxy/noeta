@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from contextlib import aclosing
 from typing import Any
 
@@ -59,8 +59,11 @@ from noeta.backends.providers._anthropic_wire import (
     _wrap_system_reminder as _wrap_system_reminder,
 )
 from noeta.backends.providers._common import (
+    FIRST_BYTE_TIMEOUT_SECONDS,
+    bounded_silence,
     guard_vision,
     model_admits_images,
+    stream_timeout,
     translate_http_error,
     transport_error,
 )
@@ -108,21 +111,6 @@ BETA_ORDER: tuple[str, ...] = (
 _BETA_RANK = {b: i for i, b in enumerate(BETA_ORDER)}
 
 
-async def _bounded_silence(lines: AsyncIterator[str], seconds: float) -> AsyncIterator[str]:
-    """``lines``, failing with :class:`httpx.ReadTimeout` when the next one
-    takes longer than ``seconds`` (the read timeout covers the wait for the
-    headers, which may be far longer)."""
-    while True:
-        try:
-            async with asyncio.timeout(seconds):
-                line = await anext(lines)
-        except StopAsyncIteration:
-            return
-        except TimeoutError:
-            raise httpx.ReadTimeout(f"no data on the stream for {seconds:g} s") from None
-        yield line
-
-
 def _beta_place(have: Sequence[str], beta: str) -> int:
     """Where ``beta`` goes in ``have``: before the first beta Claude Code
     lists after it, else at the end."""
@@ -154,9 +142,6 @@ def per_turn_model(model: str) -> bool:
 #: stream: its output and its client timeout (seconds).
 WHOLE_MAX_TOKENS = 64_000
 WHOLE_TIMEOUT_SECONDS = 300.0
-#: How long a streamed call waits for the response headers: Claude Code's
-#: request timeout (``API_TIMEOUT_MS``'s default).
-FIRST_BYTE_TIMEOUT_SECONDS = 600.0
 #: Client timeout of a token count: an estimate stands in when it passes.
 COUNT_TOKENS_TIMEOUT_SECONDS = 10.0
 
@@ -271,7 +256,7 @@ class AnthropicProvider:
                 _MESSAGES_ENDPOINT,
                 json=body,
                 headers=self.request_headers(request) or None,
-                timeout=httpx.Timeout(self._silence, read=self._first_byte_timeout),
+                timeout=stream_timeout(self._silence, self._first_byte_timeout),
             ) as response:
                 if response.is_error:
                     # An unread streaming response cannot be sniffed for the
@@ -279,7 +264,7 @@ class AnthropicProvider:
                     await response.aread()
                     raise translate_http_error(response)
                 began = True
-                lines = _bounded_silence(response.aiter_lines(), self._silence)
+                lines = bounded_silence(response.aiter_lines(), self._silence)
                 async with aclosing(iter_sse_events(lines)) as events:
                     async for event_name, data in events:
                         accumulator.feed(event_name, data)

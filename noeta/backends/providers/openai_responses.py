@@ -16,6 +16,7 @@ from typing import Any, Literal
 import httpx
 
 from noeta.backends.providers._common import (
+    FIRST_BYTE_TIMEOUT_SECONDS,
     HOST_INJECTED_PREAMBLE,
     ReasoningContinuation,
     encode_tool_arguments,
@@ -26,6 +27,7 @@ from noeta.backends.providers._common import (
     model_admits_images,
     restore_tool_names,
     shorten_names_in_text,
+    stream_timeout,
     tool_result_images,
     tool_result_text,
     translate_http_error,
@@ -104,13 +106,20 @@ class OpenAIResponsesProvider:
         extra_headers: dict[str, str] | None = None,
         reasoning_continuation: ReasoningContinuation = "responses",
         transport: httpx.AsyncBaseTransport | None = None,
+        first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
     ) -> None:
+        """``timeout_seconds`` bounds silence on the stream once it began;
+        ``first_byte_timeout_seconds`` the wait for the response headers (a
+        gateway that holds the stream until the answer is complete sends
+        nothing before then)."""
         # The httpx client gets no base_url (which would re-join the endpoint
         # as a relative path); the whole endpoint string is POSTed verbatim.
         self._endpoint = base_url.rstrip("/")
         self._params = {"api-version": api_version} if api_version is not None else None
         self._default_max_tokens = default_max_tokens
         self._reasoning_continuation = reasoning_continuation
+        self._silence = timeout_seconds
+        self._first_byte_timeout = first_byte_timeout_seconds
         headers: dict[str, str] = {"api-key": api_key, "Content-Type": "application/json"}
         if extra_headers:
             headers.update(extra_headers)
@@ -160,6 +169,7 @@ class OpenAIResponsesProvider:
             params=self._params,
             json=body,
             headers=request.headers or None,
+            timeout=stream_timeout(self._silence, self._first_byte_timeout),
         ) as response:
             if response.is_error:
                 await response.aread()
@@ -171,7 +181,7 @@ class OpenAIResponsesProvider:
                 ):
                     raise _StaleReasoning(error)
                 raise error
-            final = await consume_stream(response, on_delta)
+            final = await consume_stream(response, on_delta, self._silence)
         return restore_tool_names(parse_responses_payload(final, request.model), request)
 
     # ------------------------------------------------------------------

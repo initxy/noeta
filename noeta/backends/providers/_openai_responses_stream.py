@@ -11,6 +11,7 @@ from typing import Any, Literal
 import httpx
 
 from noeta.backends.providers._common import (
+    bounded_silence,
     decode_tool_arguments,
     error_dict_is_context_overflow,
 )
@@ -50,7 +51,7 @@ def _output_index(payload: dict[str, Any]) -> int:
 
 
 async def consume_stream(
-    response: httpx.Response, on_delta: OnDelta | None
+    response: httpx.Response, on_delta: OnDelta | None, silence: float
 ) -> dict[str, Any]:
     """Drain one Responses SSE stream, emitting deltas; return the terminal
     response object. The SSE ``event:`` name is authoritative; the JSON
@@ -68,10 +69,12 @@ async def consume_stream(
       events → raised through :func:`_translate_stream_error`.
     * Everything else is skipped; vendor stream vocabularies drift.
 
-    A stream that ends without a terminal event is truncated → Transient.
+    A stream that ends without a terminal event is truncated → Transient;
+    one silent for ``silence`` seconds raises :class:`httpx.ReadTimeout`.
     """
     final: dict[str, Any] | None = None
-    async with aclosing(iter_sse_events(response.aiter_lines())) as events:
+    lines = bounded_silence(response.aiter_lines(), silence)
+    async with aclosing(iter_sse_events(lines)) as events:
         async for event_name, data in events:
             try:
                 payload = json.loads(data)

@@ -41,7 +41,7 @@ from noeta.core.types import (
     Usage,
     user,
 )
-from tests.backends.providers.sse import RaisingStream, sse_bytes, sse_response
+from tests.backends.providers.sse import RaisingStream, held_server, sse_bytes, sse_response
 
 BASE_URL = "https://api.anthropic.test"
 MESSAGES_ENDPOINT = f"{BASE_URL}/v1/messages"
@@ -533,44 +533,19 @@ async def test_a_dropped_connection_or_silence_mid_stream_breaks_the_stream() ->
     assert not isinstance(plain.value, StreamBroken)
 
 
-async def _held_server(hold: float, stall: float) -> tuple[asyncio.Server, str]:
-    """A local server that answers a streamed call after ``hold`` seconds
-    (a gateway that holds the stream until the answer is complete), then
-    sends the first frame, waits ``stall`` seconds, and sends the rest."""
-    first = sse_bytes([_message_start()])
-    rest = sse_bytes([_block_start(0, {"type": "text", "text": "held"}),
+def _held_body() -> bytes:
+    return sse_bytes([_message_start(), _block_start(0, {"type": "text", "text": "held"}),
                       ("content_block_stop", {"type": "content_block_stop", "index": 0}),
                       ("message_delta", {"type": "message_delta",
                                          "delta": {"stop_reason": "end_turn"}}),
                       ("message_stop", {"type": "message_stop"})])
-
-    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        head = await reader.readuntil(b"\r\n\r\n")
-        length = next(int(line.split(b":")[1]) for line in head.split(b"\r\n")
-                      if line.lower().startswith(b"content-length:"))
-        await reader.readexactly(length)
-        await asyncio.sleep(hold)
-        try:
-            writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n"
-                         b"connection: close\r\n\r\n" + first)
-            await writer.drain()
-            await asyncio.sleep(stall)
-            writer.write(rest)
-            await writer.drain()
-        except ConnectionError:  # the client gave up first
-            pass
-        writer.close()
-
-    server = await asyncio.start_server(serve, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    return server, f"http://127.0.0.1:{port}"
 
 
 async def test_the_wait_for_the_headers_is_not_bounded_by_stream_silence() -> None:
     """A gateway that sends nothing until the whole answer is ready (a long
     compaction summary) is waited for up to the request timeout, as Claude
     Code waits; silence once the stream began still breaks it."""
-    server, url = await _held_server(hold=0.5, stall=0.0)
+    server, url = await held_server(_held_body(), hold=0.5, stall=0.0)
     async with server:
         provider = _provider(base_url=url, timeout_seconds=0.2, first_byte_timeout_seconds=5)
         response = await provider.complete(_req())
@@ -579,7 +554,7 @@ async def test_the_wait_for_the_headers_is_not_bounded_by_stream_silence() -> No
         with pytest.raises(Transient) as ex:
             await late.complete(_req())
         assert not isinstance(ex.value, StreamBroken)
-    server, url = await _held_server(hold=0.0, stall=0.5)
+    server, url = await held_server(_held_body(), hold=0.0, stall=0.5)
     async with server:
         with pytest.raises(StreamBroken) as broken:
             await _provider(base_url=url, timeout_seconds=0.2).complete(_req())

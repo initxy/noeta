@@ -10,6 +10,7 @@ the streaming tests themselves with :func:`sse_bytes`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
@@ -20,6 +21,7 @@ __all__ = [
     "RaisingStream",
     "anthropic_sse",
     "chat_sse",
+    "held_server",
     "responses_sse",
     "sse_bytes",
     "sse_response",
@@ -164,3 +166,34 @@ class RaisingStream(httpx.AsyncByteStream):
         for c in self._chunks:
             yield c
         raise self._exc
+
+
+async def held_server(body: bytes, *, hold: float, stall: float) -> tuple[asyncio.Server, str]:
+    """A local server (real sockets, so client timeouts apply) that answers
+    a streamed call with ``body`` after ``hold`` seconds (a gateway that
+    holds the stream until the answer is complete): its first event, then
+    ``stall`` seconds of silence, then the rest. Returns the server and
+    its base URL."""
+    cut = body.index(b"\n\n") + 2
+    first, rest = body[:cut], body[cut:]
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        head = await reader.readuntil(b"\r\n\r\n")
+        length = next(int(line.split(b":")[1]) for line in head.split(b"\r\n")
+                      if line.lower().startswith(b"content-length:"))
+        await reader.readexactly(length)
+        await asyncio.sleep(hold)
+        try:
+            writer.write(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n"
+                         b"connection: close\r\n\r\n" + first)
+            await writer.drain()
+            await asyncio.sleep(stall)
+            writer.write(rest)
+            await writer.drain()
+        except ConnectionError:  # the client gave up first
+            pass
+        writer.close()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, f"http://127.0.0.1:{port}"
