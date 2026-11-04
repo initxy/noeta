@@ -113,7 +113,7 @@ main{max-width:640px;padding:32px}h1{font:400 28px ui-serif,Georgia,serif;margin
 p{color:var(--muted)}pre{background:var(--box);padding:12px 14px;border-radius:8px;white-space:pre-wrap;word-break:break-all;user-select:all}
 </style></head><body><main><h1>${escape(title)}</h1><p>${escape(message)}</p>
 ${command ? `<pre class="command">${escape(command)}</pre>` : ""}
-${output ? `<p>The server said:</p><pre class="output">${escape(output)}</pre>` : ""}
 <p class="retry">View &gt; Reload (Ctrl+R, ⌘R on macOS) starts it again.</p>
+${output ? `<p>The server said:</p><pre class="output">${escape(output)}</pre>` : ""}
 </main></body></html>`;
 }

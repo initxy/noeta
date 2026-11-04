@@ -98,6 +98,15 @@ describe("the app inside the desktop app", () => {
     expect(await screen.findByText("What should we work on?")).toBeInTheDocument();
   });
 
+  it("forgets the saved token on Disconnect (a browser only)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
+    localStorage.setItem("noeta.token", "saved");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(localStorage.getItem("noeta.token")).toBeNull();
+  });
+
   it("shows no folder picker in a browser", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
     window.NOETA_CONFIG = { server: "", token: "web" };
