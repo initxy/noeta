@@ -290,26 +290,21 @@ def test_a_selector_reply_that_is_not_json_still_picks_listed_files() -> None:
     assert selected_names("None of them.", names) == []
 
 
-async def test_a_provider_refusing_disabled_thinking_is_asked_again_without_it(
+async def test_the_selector_sends_no_thinking_field_to_an_uncatalogued_model(
         h: Harness, tmp_path: Path) -> None:
-    from noeta.core.errors import Fatal
-
+    """A gateway serving DeepSeek on the Messages wire refuses ``thinking:
+    disabled`` (a 400): a model the catalog does not know gets no field; a
+    known one has thinking switched off."""
     home = tmp_path / "home"
     directory = Path(memory_dir_for(str(h.work), home))
     directory.mkdir(parents=True)
     _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
-    _memory(directory, "deploy.md", "how deploys run", "Deploy on Fridays.", "project")
-    a = agent(home, recall_model="refuses-disabled-thinking")
-    h.provider.add(Fatal("thinking: disabled is not supported", status=400),
-                   reply("tabs.md"), reply("ok"), reply("deploy.md"), reply("again"))
-    tid = await h.start(a, goal="format this file")
-    refused, retried, main = h.provider.requests[:3]
-    assert refused.thinking is False and retried.thinking is None
-    assert any(m.origin == "memory" and "Use tabs." in m.text for m in main.messages)
-    await h.say(a, tid, "and how do deploys run")
-    selector = h.provider.requests[3]
-    assert selector.model == "refuses-disabled-thinking"
-    assert selector.thinking is None  # remembered for the model
+    for model, thinking in (("opensource/deepseek_v4_1_flash", None),
+                            ("claude-haiku-4-5", False)):
+        h.provider.add(reply("tabs.md"), reply("ok"))
+        await h.start(agent(home, recall_model=model), goal="format this file")
+        selector = next(r for r in reversed(h.provider.requests) if r.model == model)
+        assert selector.thinking is thinking
 
 
 async def test_a_failing_selector_warns_once(h: Harness, tmp_path: Path,

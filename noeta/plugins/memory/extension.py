@@ -26,10 +26,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-import msgspec
-
 from noeta.core import records
-from noeta.core.errors import ModelError
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
@@ -46,14 +43,13 @@ from noeta.toolkit.memory_index import (
 )
 from noeta.toolkit.paths import noeta_home, project_dir
 from noeta.toolkit.plugin_records import INSTRUCTIONS, MEMORY
+from noeta.toolkit.side_requests import thinking_off
 from noeta.toolkit.tokens import has_cjk
 
 __all__ = ["INDEX_FILE", "MEMORY_SECTION", "Memory", "load_index", "memory_dir_for"]
 
 log = logging.getLogger("noeta.memory")
 
-#: Recall models whose provider refused ``thinking: disabled``.
-_THINKING_REFUSED: set[str] = set()
 #: Selector failures already logged (once per process and reason).
 _RECALL_WARNED: set[str] = set()
 _NAME = re.compile(r"[^\s\"'`,\[\]()]+")
@@ -455,20 +451,12 @@ class Memory(Extension):
             messages=[user(f"Memory files:\n{listing}\n\nPick the memories relevant to:\n"
                            f"{query}")],
             max_tokens=RECALL_MAX_TOKENS,
-            thinking=None if self.recall_model in _THINKING_REFUSED else False,
+            thinking=thinking_off(self.recall_model),
             output_schema=_RECALL_SCHEMA)
         names = {name for name, _, _ in manifest}
         mtimes = {name: mtime for name, mtime, _ in manifest}
         try:
-            try:
-                response = await view.complete(request)
-            except ModelError as exc:
-                # Some gateways refuse ``thinking: disabled`` (HTTP 400): ask
-                # again without the field, and from then on for this model.
-                if exc.status != 400 or request.thinking is not False:
-                    raise
-                response = await view.complete(msgspec.structs.replace(request, thinking=None))
-                _THINKING_REFUSED.add(self.recall_model)
+            response = await view.complete(request)
             picked = selected_names(response.message.text, names)
         except Exception as exc:  # noqa: BLE001 — recall is a nicety; the turn goes on
             reason = f"{type(exc).__name__}: {exc}"[:300]

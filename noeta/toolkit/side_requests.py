@@ -16,22 +16,30 @@ from typing import Any, cast
 from noeta.core import models
 from noeta.core.types import Effort, Message, ModelRequest, SystemPart
 
-__all__ = ["side_request"]
+__all__ = ["side_request", "thinking_off"]
+
+
+def thinking_off(model: str) -> bool | None:
+    """The ``thinking`` field of a call that asks for no reasoning:
+    ``False`` (switched off) on a model the catalog knows, left out
+    (``None``) on one it does not, whose main requests leave it out too (a
+    gateway serving DeepSeek on the Messages wire refuses an explicit
+    ``disabled`` with a 400)."""
+    return None if models.model_family(model) is None else False
 
 
 def side_request(*, model: str, identity: str, messages: list[Message], prompt: str = "",
                  effort: Effort | None = None,
                  output_schema: dict[str, Any] | None = None) -> ModelRequest:
     spec = models.find_spec(model)
-    family = models.model_family(model)
-    anthropic = family == "anthropic"
+    anthropic = models.model_family(model) == "anthropic"
     return ModelRequest(
         model=model,
         system=[SystemPart(text=t) for t in (identity, prompt) if t],
         messages=messages,
         max_tokens=spec.output_default if spec is not None
         else models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS,
-        thinking=None if anthropic or family is None else False,
+        thinking=None if anthropic else thinking_off(model),
         effort=(effort or cast(Effort, models.default_effort(model)))
         if anthropic and spec is not None and spec.is_reasoning else None,
         output_schema=output_schema)

@@ -33,6 +33,7 @@ from noeta.core.types import (
 )
 from noeta.plugins.hooks.config import HookCommand
 from noeta.toolkit.local_env import child_env
+from noeta.toolkit.side_requests import thinking_off
 
 log = logging.getLogger("noeta.hooks")
 
@@ -242,7 +243,8 @@ async def run_prompt(hook: HookCommand, payload: dict[str, Any], complete: Compl
     request = ModelRequest(
         model=hook.model or model,
         system=[SystemPart(text=PROMPT_STOP_SYSTEM if stop else PROMPT_SYSTEM)],
-        messages=[*(transcript or []), user(question)], thinking=False, max_tokens=1024)
+        messages=[*(transcript or []), user(question)],
+        thinking=thinking_off(hook.model or model), max_tokens=1024)
     try:
         response = await asyncio.wait_for(complete(request), hook.timeout)
     except TimeoutError:
@@ -329,7 +331,8 @@ async def run_agent(hook: HookCommand, payload: dict[str, Any], complete: Comple
             response = await complete(ModelRequest(
                 model=hook.model or model, system=[SystemPart(text=AGENT_SYSTEM)],
                 messages=list(messages), tools=[*specs, _VERDICT_SPEC], max_tokens=4096,
-                thinking=False))  # Claude Code's agent hooks run without thinking
+                # Claude Code's agent hooks run without thinking.
+                thinking=thinking_off(hook.model or model)))
             messages.append(response.message)
             uses = response.message.tool_uses
             for use in uses:
