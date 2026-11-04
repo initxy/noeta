@@ -37,6 +37,32 @@ export interface Modes {
   names: Record<string, string>;
 }
 
+/** The compaction plugin's `threshold` record (noeta.toolkit.plugin_records.auto_compact). */
+export interface AutoCompact {
+  /** Context tokens at which automatic compaction fires. */
+  threshold: number;
+  /** The window less the summary's reserve. */
+  window: number;
+  /** Whether it compacts automatically (`/compact` only when not). */
+  auto: boolean;
+}
+
+/** How far under the point it counts down to the warning starts. */
+export const CONTEXT_WARN_TOKENS = 20_000;
+
+/** Claude Code's warning once the context is within CONTEXT_WARN_TOKENS of
+ * the auto-compact threshold (of the window when automatic compaction is
+ * off); null before that. */
+export function contextLeft(tokens: number, at: AutoCompact | null): { text: string; low: boolean } | null {
+  if (!at) return null;
+  const limit = at.auto ? at.threshold : at.window;
+  if (limit <= 0 || tokens < limit - CONTEXT_WARN_TOKENS) return null;
+  const left = Math.max(0, Math.round(((limit - tokens) / limit) * 100));
+  return at.auto
+    ? { text: `${left}% until auto-compact`, low: false }
+    : { text: `Context low (${left}% remaining) · Run /compact to compact & continue`, low: true };
+}
+
 export interface TaskState {
   items: Item[];
   /** Text and thinking of the model call streaming now (not yet recorded). */
@@ -57,6 +83,8 @@ export interface TaskState {
   modes: Modes | null;
   todos: Todo[];
   contextTokens: number;
+  /** When the compaction plugin compacts (its `threshold` record), if it said. */
+  compaction: AutoCompact | null;
   /** Inbox seqs of messages sent but not taken yet (queued), with their text. */
   queued: { seq: number; text: string }[];
   /** The highest inbox seq the task has taken: a send receipt at or below it
@@ -81,6 +109,7 @@ export const emptyTask = (): TaskState => ({
   modes: null,
   todos: [],
   contextTokens: 0,
+  compaction: null,
   queued: [],
   taken: 0,
 });
@@ -127,6 +156,11 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
     case "permissions/mode":
     case "permissions/plan_exit":
       return data.mode ? { ...st, mode: String(data.mode) } : st;
+    case "compaction/threshold": {
+      const { threshold, window } = data;
+      const whole = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
+      return whole(threshold) && whole(window) ? { ...st, compaction: { threshold, window, auto: data.auto !== false } } : st;
+    }
     case "permissions/modes":
       return { ...st, modes: data as unknown as Modes };
     case "todos/created":
