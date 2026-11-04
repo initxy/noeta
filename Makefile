@@ -7,7 +7,8 @@
 #   make example    the example plugin, installed as its own package, and its tests
 #   make tui        the terminal UI's tests (tui/, its own package)
 #   make web        the web app: install, typecheck, unit and e2e tests (web/)
-#   make frontends  every front end's tests (tui/, web/)
+#   make desktop    the desktop app: install, typecheck, unit and e2e tests (desktop/)
+#   make frontends  every front end's tests (tui/, web/, desktop/)
 #   make e2e        live tests: real LLM / real container (needs credentials)
 #   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
 #   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
@@ -15,7 +16,7 @@
 #   make build      wheel + sdist into dist/
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint example tui tui-screenshots web frontends e2e eval eval-baseline \
+.PHONY: help install check test lint example tui tui-screenshots web desktop frontends e2e eval eval-baseline \
 	parity cluster build
 
 help:
@@ -29,7 +30,8 @@ help:
 	@echo "  make tui        the terminal UI's tests (tui/), with coverage"
 	@echo "  make tui-screenshots  rewrite tui/screenshots/*.svg"
 	@echo "  make web        web/: install, typecheck, unit tests, e2e against a real noeta serve"
-	@echo "  make frontends  every front end's tests (tui/, web/)"
+	@echo "  make desktop    desktop/: install, typecheck, unit tests, e2e of the built app (xvfb-run)"
+	@echo "  make frontends  every front end's tests (tui/, web/, desktop/)"
 	@echo "  make e2e        live tests: real LLM / real container (needs credentials)"
 	@echo "  make eval       prompt-regression eval vs evals/baseline.json (needs credentials)"
 	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
@@ -68,11 +70,17 @@ tui-screenshots:
 	cd tui && NOETA_TUI_SCREENSHOTS=1 uv run pytest -q tests/test_screenshots.py
 
 ## every front end's own tests
-frontends: tui web
+frontends: tui web desktop
 
 ## the web app: typecheck, unit tests, Playwright against a real noeta serve
 web:
 	cd web && npm ci && npm run typecheck && npm test && npm run e2e
+
+## the desktop app over the web build: typecheck, unit tests, Playwright's Electron
+## driver under xvfb-run against the noeta serve it starts
+desktop:
+	cd web && npm ci && npm run build
+	cd desktop && npm ci && npm run typecheck && npm test && npm run e2e
 
 ## live tests against a real LLM backend / sandbox container (opt-in, never in check)
 e2e:

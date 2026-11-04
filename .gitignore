@@ -31,6 +31,12 @@ node_modules/
 web/test-results/
 web/playwright-report/
 
+# desktop/ build and test output
+desktop/build/
+desktop/release/
+desktop/test-results/
+desktop/playwright-report/
+
 # IDE / Editor
 .idea/
 .vscode/

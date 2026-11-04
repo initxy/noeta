@@ -1,0 +1,18 @@
+# `npm run dist`: installers into release/. The app carries the web build;
+# noeta itself is installed separately (the app names the install line).
+appId: dev.noeta.desktop
+productName: noeta
+directories:
+  output: release
+files:
+  - build/**/*.js
+  - package.json
+extraResources:
+  - from: ../web/dist
+    to: web
+linux:
+  target: [AppImage, deb]
+  category: Development
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
