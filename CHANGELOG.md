@@ -31,6 +31,8 @@ All notable changes to Noeta are documented here. The format is based on
   a plugin publishes (`permission_mode`, `shell_cwd`, `memory_dir`, ...), the methods one plugin
   calls on another (`mode_of`, `working_directories`, `read_deny_rule`, ...) and the plugins'
   names. `PLAN_MODE_PLUGIN` left `toolkit.permission_modes` (`plugin_records.PLAN_MODE`).
+- **A tool name two plugins offer is logged** (once, a warning naming both); the first still
+  wins.
 
 - **A write outside the working directories is a permission question, as in Claude Code**: a
   `Write`, `Edit` or `NotebookEdit` outside the working and additional directories was refused

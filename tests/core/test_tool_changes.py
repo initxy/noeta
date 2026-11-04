@@ -13,7 +13,15 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished, ToolStarted
-from noeta.core.extension import Deny, Extension, Gate, TaskView, ToolChanges, ToolEntry
+from noeta.core.extension import (
+    Deny,
+    Extension,
+    Gate,
+    TaskView,
+    ToolChanges,
+    ToolEntry,
+    offer_tools,
+)
 from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
 from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output, tool_flags
@@ -203,3 +211,19 @@ def test_a_denied_deferred_tool_is_not_announced() -> None:
     view = TaskView(state=TaskState(), extensions=[Offers([Deferred("Mcp"), Deferred("Web")])],
                     denied_tools=("Web",))
     assert view.deferred_tool_names() == ["Mcp"]
+
+
+def test_a_tool_name_two_plugins_offer_is_logged_and_the_first_wins(
+        caplog: pytest.LogCaptureFixture) -> None:
+    class Other(Offers):
+        name = "other"
+
+    first, second = Fake("Clash"), Fake("Clash")
+    view = TaskView(state=TaskState(), extensions=[Offers([first]), Other([second, Fake("Own")])])
+    with caplog.at_level("WARNING", logger="noeta.plugins"):
+        assert view.find_tool("Clash") is first
+        offer = offer_tools(view.extensions, view, None, ())
+        offer_tools(view.extensions, view, None, ())
+    assert [t.name for t in offer.tools] == ["Clash", "Own"] and offer.tools[0] is first
+    [warning] = [r.getMessage() for r in caplog.records if "Clash" in r.getMessage()]
+    assert "'offers'" in warning and "'other'" in warning
