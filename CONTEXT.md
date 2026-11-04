@@ -174,7 +174,8 @@ wake a waiting task goes through the inbox.
 ## Park
 
 A tool call that waits (a question, an approval, children) parks: the task ends its step with
-`Waiting` and holds no worker. An `Answer` or `ChildEnded` in the inbox resumes it.
+`Waiting` and holds no worker. An `Answer` or `ChildEnded` in the inbox resumes it. A reply's
+calls are gated in order and gating stops at the first ask: the calls after it wait ungated.
 
 ## origin
 

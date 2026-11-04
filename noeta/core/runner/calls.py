@@ -1,4 +1,5 @@
-"""The tool step: gate each call, run what may run, park what must ask."""
+"""The tool step: gate the calls in order, run what may run, stop at the
+first that must ask."""
 
 from __future__ import annotations
 
@@ -138,7 +139,10 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
     offer = run.tool_offer(view)
     tools = {t.name: t for t in offer.tools}
     runnable: list[tuple[ToolUse, Tool]] = []
-    asks: dict[str, Ask] = {}
+    #: The first call that must ask: gating stops there, as Claude Code asks
+    #: one call at a time in the reply's order. The calls after it are
+    #: neither started nor refused; they are gated once it is answered.
+    asked: tuple[str, Ask] | None = None
     outright: set[str] = set()
     for c in [c for c in run.state.calls if c.use.id in call_ids]:
         withheld = offer.withheld.get(c.use.name)
@@ -180,8 +184,8 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             await run.append([run.error_result(use.id, verdict.reason or "denied")])
             continue
         if isinstance(verdict, Ask):
-            asks[use.id] = verdict
-            continue
+            asked = (use.id, verdict)
+            break
         tool = tools.get(use.name)
         if tool is None:
             await run.append([run.error_result(
@@ -199,17 +203,18 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         await run.append([ToolStarted(call=u) for u, _ in group])
         await _together([_run_one(run, u, t, budget, outright=u.id in outright)
                          for u, t in group])
-    if asks and run.state.config.get("unattended"):
+    if asked is None:
+        return True
+    if run.state.config.get("unattended"):
         # One-shot: the task ends. Otherwise the turn closes and the loop
         # goes on to wait for input (and gives the task back).
         return await closing.fail_turn(run, texts.NEEDS_HUMAN, texts.NEEDS_HUMAN_DETAIL)
-    if asks:
-        await run.append(
-            [Waiting(on="approval", ids=list(asks),
-                     detail={k: {"prompt": a.prompt, **a.detail} for k, a in asks.items()})],
-        )
-        return False
-    return True
+    # Recorded, so a wake before the answer does not gate it again
+    # (``TaskState.asking``).
+    call_id, ask = asked
+    await run.append([Waiting(on="approval", ids=[call_id],
+                              detail={call_id: {"prompt": ask.prompt, **ask.detail}})])
+    return False
 
 
 def _context(run: TaskRun, use: ToolUse, records: list[Event],

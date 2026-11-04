@@ -188,6 +188,15 @@ class TaskState:
     def open_calls(self) -> list[Call]:
         return [c for c in self.calls if c.result is None]
 
+    @property
+    def asking(self) -> bool:
+        """The approval the task waits on is unanswered: its call, and every
+        call of the reply after it, waits ungated."""
+        w = self.waiting
+        return w is not None and w.on == "approval" and any(
+            c.use.id in w.ids and not c.started and c.result is None
+            and c.use.id not in self.answers for c in self.calls)
+
     def parked_ready(self, call: Call) -> bool:
         """Whether what a parked call waits for has arrived."""
         p = call.parked or {}

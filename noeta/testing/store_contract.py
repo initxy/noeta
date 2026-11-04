@@ -98,6 +98,19 @@ async def test_append_returns_the_time_it_stamped(store: Store) -> None:
     assert [(r.seq, r.at) for r in await store.read("t1", after=1)] == [(2, done.at)]
 
 
+async def test_an_append_of_no_events_applies_its_patch(store: Store) -> None:
+    """A task handed back still waiting writes no event."""
+    await store.create(new())
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    done = await store.append(claim, [], expected_seq=1,
+                              patch=Patch(status="waiting", waiting_on="approval"))
+    row = await store.get("t1")
+    assert done.seq == 1 and row is not None and row.last_seq == 1
+    assert (row.status, row.waiting_on, row.owner) == ("waiting", "approval", None)
+    assert len(await store.read("t1")) == 1
+
+
 async def test_expired_lease_is_reclaimed_and_old_owner_loses(store: Store) -> None:
     await store.create(new())
     old = await store.claim("w1", ["default"], -1)  # already expired

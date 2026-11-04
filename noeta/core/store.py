@@ -231,7 +231,9 @@ class Store(Protocol):
     ) -> Appended:
         """Append ``events`` after ``expected_seq`` and apply ``patch``,
         ``posts`` and ``creates`` atomically. Returns the new last seq and
-        the time stamped on the events (what :meth:`read` returns). Raises
+        the time stamped on the events (what :meth:`read` returns);
+        ``events`` may be empty (the patch alone: a task handed back still
+        waiting). Raises
         ``noeta.core.errors.Conflict`` when the claim's epoch or the expected seq
         no longer holds, or the task is not running; ``InboxUnread`` (a
         ``Conflict``) when the append ends the task and its inbox holds items

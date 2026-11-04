@@ -468,6 +468,7 @@ class TaskRun:
         *,
         posts: Sequence[Post] = (),
         creates: Sequence[Any] = (),
+        patch: Patch | None = None,
     ) -> None:
         if self._lost:
             raise LostClaim()
@@ -477,7 +478,7 @@ class TaskRun:
                    for c in creates]
         async with self._write_lock:
             base = self.state.last_seq
-            patch = patch_for(events, self.state.inbox_read)
+            patch = patch or patch_for(events, self.state.inbox_read)
             write = asyncio.ensure_future(self.store.append(
                 self.claim, events, expected_seq=base, patch=patch, posts=posts, creates=creates))
             cancelled = False
@@ -504,6 +505,12 @@ class TaskRun:
                 except Exception:
                     log.exception("extension %s on_event failed", ext.name)
         await self.flush(view)
+
+    async def keep_waiting(self) -> None:
+        """Hand the task back still waiting on its log's last ``Waiting`` (a
+        wake that brought nothing it waits for), without writing it again."""
+        assert self.state.waiting is not None
+        await self.append([], patch=patch_for([self.state.waiting], self.state.inbox_read))
 
     @property
     def one_shot(self) -> bool:
@@ -704,6 +711,9 @@ class TaskRun:
                       for c in self.state.open_calls if c.parked}
             await self.append([Waiting(on=action.on, ids=action.ids,  # type: ignore[arg-type]
                                        detail=parked)])
+            return False
+        if isinstance(action, decide.WaitApproval):
+            await self.keep_waiting()
             return False
         if isinstance(action, decide.ResumeCalls):
             from noeta.core.runner.calls import resume_calls

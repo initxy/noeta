@@ -63,6 +63,20 @@ def asked(evs: list[Any]) -> dict[str, dict[str, Any]]:
     return last.detail
 
 
+async def every_ask(client: Client, rt: Any, tid: str) -> dict[str, dict[str, Any]]:
+    """The approvals the reply asks for, one at a time in its order: each is
+    declined so the turn goes on to the next call (nothing asked runs)."""
+    seen: dict[str, dict[str, Any]] = {}
+    while True:
+        last = (await events(client, tid))[-1]
+        if not (isinstance(last, Waiting) and last.on == "approval"):
+            return seen
+        seen.update(last.detail)
+        for call_id in last.ids:
+            await client.answer(tid, call_id, "deny", data={"interrupt": False})
+        await rt.run_until_idle()
+
+
 # ------------------------------------------------------------------ default mode
 
 
@@ -171,12 +185,11 @@ async def test_reads_and_writes_outside_the_working_directories_ask(store: Sqlit
         reply("", ("Read", {"file_path": str(other / "a")}),
               ("Read", {"file_path": str(tmp_path.parent / "lib" / "b")}),
               ("Write", {"file_path": "/etc/x"})), reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(
+    client, tid, rt = await start(store, provider, Permissions(
         mode="acceptEdits", additional_directories=["../lib"]), [read, write], cwd=tmp_path)
-    evs = await events(client, tid)
+    reading, writing = (await every_ask(client, rt, tid)).values()
     assert [r["file_path"] for r in read.runs] == [str(tmp_path.parent / "lib" / "b")]
     assert not write.runs
-    reading, writing = asked(evs).values()
     assert reading["always"] == [f"Read(/{other}/**)"]
     # acceptEdits covers the working directories only, as in Claude Code.
     assert "outside the working directories" in writing["prompt"]
@@ -308,10 +321,10 @@ async def test_a_lexical_read_rule_does_not_follow_a_link_out(
     provider = ScriptedProvider([
         reply("", ("Read", {"file_path": "out/key"}), ("Read", {"file_path": "src/a.py"})),
         reply("ok")])
-    client, tid, _ = await start(store, provider, Permissions(
+    client, tid, rt = await start(store, provider, Permissions(
         mode="default", allow=["Read(/out/**)"]), [read], cwd=link)
+    [detail] = (await every_ask(client, rt, tid)).values()
     assert read.runs == [{"file_path": "src/a.py"}]
-    [detail] = asked(await events(client, tid)).values()
     assert str(secret / "key") in detail["prompt"]
 
 
@@ -384,9 +397,9 @@ async def test_protected_paths_ask_even_when_edits_are_accepted(
         ("Write", {"file_path": ".claude/skills/x/SKILL.md"}),
         ("Write", {"file_path": "sub/.bashrc"}),
         ("Bash", {"command": "cp a .noeta/agents/main.md"}))])
-    client, tid, _ = await start(store, provider, Permissions(mode=mode), [write, bash],
-                                 cwd=tmp_path)
-    details = asked(await events(client, tid))
+    client, tid, rt = await start(store, provider, Permissions(mode=mode), [write, bash],
+                                  cwd=tmp_path)
+    details = await every_ask(client, rt, tid)
     assert len(details) == 3
     assert [r["file_path"] for r in write.runs] == [".claude/skills/x/SKILL.md"]
     assert not bash.runs
@@ -430,9 +443,9 @@ async def test_a_symlink_into_a_protected_directory_still_asks(
         ("Write", {"file_path": "conf/settings.local.json"}),
         ("Bash", {"command": "cp evil hooks/post-checkout"}),
         ("Write", {"file_path": "plain.txt"}))])
-    client, tid, _ = await start(store, provider, Permissions(mode=mode), [write, bash],
-                                 cwd=tmp_path)
-    details = asked(await events(client, tid))
+    client, tid, rt = await start(store, provider, Permissions(mode=mode), [write, bash],
+                                  cwd=tmp_path)
+    details = await every_ask(client, rt, tid)
     assert len(details) == 3
     assert [r["file_path"] for r in write.runs] == ["plain.txt"]
     assert not bash.runs
@@ -519,9 +532,9 @@ async def test_a_read_through_a_link_out_of_the_workspace_asks(
         "", ("Read", {"file_path": "docs/id_rsa"}), ("Bash", {"command": "cat docs/id_rsa"}),
         ("Bash", {"command": "cd docs && cat id_rsa"}), ("Bash", {"command": "ls docs/"}),
         ("Read", {"file_path": "README"}), ("Bash", {"command": "cat README"}))])
-    client, tid, _ = await start(store, provider, Permissions(mode="default"), [read, bash],
-                                 cwd=ws)
-    details = asked(await events(client, tid))
+    client, tid, rt = await start(store, provider, Permissions(mode="default"), [read, bash],
+                                  cwd=ws)
+    details = await every_ask(client, rt, tid)
     assert len(details) == 4
     assert any(str(tmp_path / "home" / ".ssh" / "id_rsa") in d["prompt"]
                for d in details.values())
@@ -551,9 +564,9 @@ async def test_a_directory_change_in_the_command_moves_its_paths(store: SqliteSt
         "", ("Bash", {"command": "cd .git && sed -i s/a/b/ config"}),
         ("Bash", {"command": "cd src; rm ../.gitmodules"}),
         ("Bash", {"command": "cd src && touch new.py"}))])
-    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
-                                 cwd=tmp_path)
-    assert len(asked(await events(client, tid))) == 2
+    client, tid, rt = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                  cwd=tmp_path)
+    assert len(await every_ask(client, rt, tid)) == 2
     assert [r["command"] for r in bash.runs] == ["cd src && touch new.py"]
 
 
@@ -658,9 +671,9 @@ async def test_accept_edits_runs_file_commands_inside(store: SqliteStore,
         "", ("Bash", {"command": "mkdir -p out && touch out/x && ls out"}),
         ("Bash", {"command": "rm -rf /tmp/elsewhere"}),
         ("Bash", {"command": f"rm -r {tmp_path}"}))])
-    client, tid, _ = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
-                                 cwd=tmp_path)
-    assert len(asked(await events(client, tid))) == 2
+    client, tid, rt = await start(store, provider, Permissions(mode="acceptEdits"), [bash],
+                                  cwd=tmp_path)
+    assert len(await every_ask(client, rt, tid)) == 2
     assert [r["command"] for r in bash.runs] == ["mkdir -p out && touch out/x && ls out"]
 
 
@@ -690,12 +703,14 @@ async def test_rule_precedence_deny_ask_allow(store: SqliteStore, tmp_path: Path
         ("Bash", {"command": "make build"}))])
     perms = Permissions(mode="bypassPermissions", deny=["Read(./.env)"],
                         ask=["Bash(git push *)"], allow=["Bash(make *)"])
-    client, tid, _ = await start(store, provider, perms, [bash, read], cwd=tmp_path)
+    client, tid, rt = await start(store, provider, perms, [bash, read], cwd=tmp_path)
     evs = await events(client, tid)
     [(text, err)] = [x for x in results(evs) if x[1]]
     assert err and "Read(./.env)" in text
     [detail] = asked(evs).values()
     assert "Bash(git push *)" in detail["prompt"]
+    assert not bash.runs  # the call after the ask waits for it
+    await every_ask(client, rt, tid)
     assert [r["command"] for r in bash.runs] == ["make build"]
 
 
@@ -1129,8 +1144,8 @@ async def test_a_glob_that_takes_in_a_link_out_of_the_workspace_asks(
     provider = ScriptedProvider([reply(
         "", ("Bash", {"command": "cat *"}), ("Bash", {"command": "grep -r k *"}),
         ("Bash", {"command": "cat *.txt"}), ("Bash", {"command": "cat [kn]*"}))])
-    client, tid, _ = await start(store, provider, Permissions(mode="default"), [bash], cwd=ws)
-    assert len(asked(await events(client, tid))) == 3
+    client, tid, rt = await start(store, provider, Permissions(mode="default"), [bash], cwd=ws)
+    assert len(await every_ask(client, rt, tid)) == 3
     assert [r["command"] for r in bash.runs] == ["cat *.txt"]
 
 
@@ -1142,8 +1157,8 @@ async def test_a_quoted_bracket_names_a_file_and_is_checked_as_one(
     provider = ScriptedProvider([reply(
         "", ("Bash", {"command": "cat 'n[1]'"}), ("Bash", {"command": "cat n\\[1\\]"}),
         ("Bash", {"command": 'cat "n[1]"'}), ("Bash", {"command": "cat README"}))])
-    client, tid, _ = await start(store, provider, Permissions(mode="default"), [bash], cwd=ws)
-    assert len(asked(await events(client, tid))) == 3
+    client, tid, rt = await start(store, provider, Permissions(mode="default"), [bash], cwd=ws)
+    assert len(await every_ask(client, rt, tid)) == 3
     assert [r["command"] for r in bash.runs] == ["cat README"]
 
 
