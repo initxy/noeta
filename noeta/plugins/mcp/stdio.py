@@ -13,7 +13,11 @@ never fill a pipe.
 * A line is capped; an oversized line, EOF or a read fault leaves the pipe
   in an unknown state, so the connection marks itself ``broken``; the pool
   then retires it and the next use connects afresh. A malformed line is
-  skipped. A request that times out is cancelled and the pipe stays usable.
+  skipped. A request that times out is cancelled and the pipe stays usable;
+  a server that stops reading its stdin breaks the connection once a write
+  waits past the timeout.
+* Shutdown closes stdin, then terminates and finally kills the server's
+  whole process group, so what it started goes with it.
 """
 
 from __future__ import annotations
@@ -22,6 +26,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import signal
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -92,7 +98,11 @@ class StdioClient(StreamClient):
         line = json.dumps(msg, separators=(",", ":")).encode("utf-8") + b"\n"
         async with self._write_lock:
             self.proc.stdin.write(line)
-            await self.proc.stdin.drain()
+            try:
+                async with asyncio.timeout(self.timeout):
+                    await self.proc.stdin.drain()
+            except TimeoutError:
+                raise McpError("the server stopped reading its stdin") from None
 
     async def _messages(self) -> AsyncIterator[dict[str, Any]]:
         assert self.proc is not None and self.proc.stdout is not None
@@ -124,12 +134,18 @@ class StdioClient(StreamClient):
             with contextlib.suppress(Exception):
                 proc.stdin.close()
         if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.terminate()
+            _signal_group(proc, signal.SIGTERM)
             try:
                 await asyncio.wait_for(proc.wait(), 2.0)
             except TimeoutError:
-                with contextlib.suppress(ProcessLookupError):
-                    proc.kill()
+                _signal_group(proc, signal.SIGKILL)
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(proc.wait(), 2.0)
+        # What the server started and left behind.
+        _signal_group(proc, signal.SIGKILL)
+
+
+def _signal_group(proc: asyncio.subprocess.Process, sig: signal.Signals) -> None:
+    """``sig`` to the process group the server leads (its own session)."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, sig)
