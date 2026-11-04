@@ -105,3 +105,7 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   (shared `stream_timeout` / `bounded_silence` in `_common`). The 400 on each trial's first
   call was the session-title side request sending `thinking: disabled` for an uncatalogued
   model, which the DeepSeek gateway refuses; an uncatalogued model now gets no thinking field.
+- 2026-11-04 C follow-up 2: the auto-mode classifier, prompt/agent hooks and the recall selector
+  take their thinking field from `side_requests.thinking_off` (left out on an uncatalogued model);
+  the selector's retry-without-it on a 400 is gone. Live: a fast classifier stage on DeepSeek is
+  200 (with `disabled` it was 400).
