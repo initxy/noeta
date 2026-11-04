@@ -47,7 +47,9 @@ events; when this process also runs workers, live model output streams too.
                                       the reply's JSON lines out; permission prompts refused
 
 With ``web_dir`` (``noeta serve --web DIR``) the other paths serve that directory's
-files, the built web app (``web/``), without a token: it holds none.
+files, the built web app (``web/``), without a token: it holds none. They go with
+:data:`WEB_HEADERS`: a content security policy (the page's scripts, styles and requests
+are its own server's; images also ``data:`` and ``blob:``) and no framing.
 
 A bearer token is required (``NOETA_SERVER_TOKEN``; ``?token=`` for a
 WebSocket from a browser) unless the host turns auth off. A request from a web page of
@@ -80,8 +82,8 @@ from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command
 
-__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "Refused", "create_app", "redact_token_logs",
-           "token_digest"]
+__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "Refused", "create_app",
+           "redact_token_logs", "token_digest"]
 
 
 @dataclasses.dataclass
@@ -135,6 +137,26 @@ def _redact(text: str) -> str:
 
 #: The loggers uvicorn names a request's path in.
 _UVICORN_LOGGERS = ("uvicorn.access", "uvicorn.error")
+
+#: The headers every file of ``web_dir`` is served with.
+WEB_HEADERS = (
+    (b"content-security-policy",
+     b"default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
+     b"frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
+    (b"x-frame-options", b"DENY"),
+    (b"x-content-type-options", b"nosniff"),
+)
+
+
+class _WebFiles(StaticFiles):
+    """The web app's files, each with :data:`WEB_HEADERS`."""
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        async def with_headers(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", ()), *WEB_HEADERS]
+            await send(message)
+        await super().__call__(scope, receive, with_headers)
 
 
 class _RedactQueryToken(logging.Filter):
@@ -224,5 +246,5 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         WebSocketRoute("/stream-json", s.stream_socket),
     ]
     if web_dir is not None:
-        routes.append(Mount("/", StaticFiles(directory=web_dir, html=True)))
+        routes.append(Mount("/", _WebFiles(directory=web_dir, html=True)))
     return Starlette(routes=routes)
