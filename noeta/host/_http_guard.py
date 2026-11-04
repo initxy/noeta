@@ -24,7 +24,7 @@ from noeta.host._errors import error_text
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 from noeta.toolkit.permission_modes import MODE_SIGNAL
-from noeta.toolkit.signals import RENAME_SIGNAL, RESUMED_SIGNAL
+from noeta.toolkit.signals import ARCHIVE_SIGNAL, RENAME_SIGNAL, RESUMED_SIGNAL
 from noeta.toolkit.structured_output import SCHEMA_KEY, answer_schema_problem
 
 
@@ -51,7 +51,7 @@ REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "out
 #: (a background job's end, a sub-agent's idle subscription …) are posted
 #: by plugins inside the server, which trust what they say.
 REQUEST_SIGNALS = (MODE_SIGNAL, CONFIG_SIGNAL, RESUMED_SIGNAL, RESTORE_SIGNAL,
-                   RENAME_SIGNAL)
+                   RENAME_SIGNAL, ARCHIVE_SIGNAL)
 
 #: The config keys a request's config signal may change: a model's route
 #: (its provider, its limits) is the server's to record, never a client's.
@@ -145,7 +145,7 @@ class GuardedClient:
                                          data=data)
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
-                     dedupe_key: str | None = None) -> int:
+                     dedupe_key: str | None = None, wake: bool = True) -> int:
         if name not in REQUEST_SIGNALS:
             raise Refused(f"a request may not post the signal {name!r} "
                           f"(only {', '.join(REQUEST_SIGNALS)})")
@@ -158,7 +158,7 @@ class GuardedClient:
                 # the task): the record keeps other workers from running
                 # what a headless client's hook callbacks would judge.
                 raise Refused(f"a request may only remove {CLIENT_HOOKS_KEY!r}")
-        return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key)
+        return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key, wake=wake)
 
     async def cancel(self, task_id: str, reason: str = "", *,
                      turn_only: bool = False) -> None:

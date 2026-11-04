@@ -28,7 +28,16 @@ from noeta.core.events import (
     TaskEnded,
     Waiting,
 )
-from noeta.core.extension import Ask, Deny, Extension, Gate, Reminder, TaskView
+from noeta.core.extension import (
+    Ask,
+    Command,
+    CommandContext,
+    Deny,
+    Extension,
+    Gate,
+    Reminder,
+    TaskView,
+)
 from noeta.core.loop.state import CONFIG_SIGNAL, TaskState
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
@@ -61,6 +70,8 @@ log = logging.getLogger("noeta.hooks")
 #: A Stop / SubagentStop hook that keeps blocking is let through after this
 #: many in a row.
 MAX_STOP_CONTINUATIONS = 8
+#: The command that lists the hooks, for the person.
+LIST_COMMAND = "hooks"
 #: What the model is told when a PermissionDenied hook allows a retry.
 RETRY_NOTE = ("A PermissionDenied hook says the denied {tool} call may be retried, "
               "if it is still needed.")
@@ -174,6 +185,20 @@ def _prompt_tool_matcher(name: str) -> Matcher:
                                     permission_prompt=True, block_on_failure=True),))
 
 
+def hooks_listing(matchers: Mapping[str, Sequence[Matcher]]) -> str:
+    """``/hooks``: each event's hooks, by matcher, type and what runs."""
+    events = {e: ms for e, ms in matchers.items() if any(m.hooks for m in ms)}
+    if not events:
+        return "No hooks configured. Hooks come from a settings file's \"hooks\"."
+    count = sum(len(m.hooks) for ms in events.values() for m in ms)
+    lines = [f"Hooks: {count} hook{'s' * (count != 1)} on {len(events)} "
+             f"event{'s' * (len(events) != 1)} (read-only: change them in a settings file)"]
+    for event, ms in events.items():
+        lines.append(event)
+        lines += [f"  {m.pattern or '*'} · {h.type} · {h.label}" for m in ms for h in m.hooks]
+    return "\n".join(lines)
+
+
 class Hooks(Extension):
     """Constructor arguments:
 
@@ -246,6 +271,17 @@ class Hooks(Extension):
     @http_transport.setter
     def http_transport(self, transport: httpx.AsyncBaseTransport | None) -> None:
         self._d.http_transport = transport
+
+    # ------------------------------------------------------------ commands
+
+    async def commands(self, ctx: CommandContext) -> Sequence[Command]:
+        return (Command(name=LIST_COMMAND, description="Show the hooks configured (read-only)",
+                        local=True),)
+
+    async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
+        if name != LIST_COMMAND:
+            return await super().run_command(ctx, name, args)
+        return hooks_listing(self.matchers)
 
     # ------------------------------------------------------------ state
 

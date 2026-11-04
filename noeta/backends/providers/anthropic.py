@@ -21,7 +21,11 @@ holds one socket idle for the whole generation and dies on the client
 timeout: a long answer on a 128K cap reliably outran 60 s and then burned the
 retry budget re-running the same doomed call. A streamed connection keeps
 producing bytes (Anthropic also sends ``ping`` events), so the timeout
-measures silence rather than total generation time. A stream that breaks
+measures silence rather than total generation time. The wait for the
+response headers is bounded apart, by Claude Code's request timeout (10
+minutes): a gateway that holds the stream until the answer is complete sends
+nothing before then, and a silence bound there would retry a long answer
+(a compaction summary) until the budget ran out. A stream that breaks
 after it began raises :class:`~noeta.core.errors.StreamBroken`, and the
 retry helper goes on with :meth:`AnthropicProvider.complete_whole`, Claude
 Code's fallback: the same body sent without streaming, its output capped at
@@ -55,8 +59,11 @@ from noeta.backends.providers._anthropic_wire import (
     _wrap_system_reminder as _wrap_system_reminder,
 )
 from noeta.backends.providers._common import (
+    FIRST_BYTE_TIMEOUT_SECONDS,
+    bounded_silence,
     guard_vision,
     model_admits_images,
+    stream_timeout,
     translate_http_error,
     transport_error,
 )
@@ -167,12 +174,14 @@ class AnthropicProvider:
         device_id: str | None = None,
         system_turns: bool = True,
         whole_timeout_seconds: float = WHOLE_TIMEOUT_SECONDS,
+        first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment
         variable; an explicit argument still wins. Missing credentials raise
         here rather than yielding a client that fails its first call with an
         opaque 401. ``timeout_seconds`` bounds silence on the stream, not the
-        whole generation. ``betas`` is the ``anthropic-beta`` header (an
+        whole generation; ``first_byte_timeout_seconds`` the wait for its
+        response headers. ``betas`` is the ``anthropic-beta`` header (an
         ``extra_headers`` entry wins); ``device_id`` the stable id in
         ``metadata.user_id`` (default: one per process). ``system_turns=False``
         is for an endpoint without mid-conversation ``system`` turns: they go
@@ -189,6 +198,8 @@ class AnthropicProvider:
         self._device_id = device_id
         self._system_turns = system_turns
         self._whole_timeout = whole_timeout_seconds
+        self._silence = timeout_seconds
+        self._first_byte_timeout = first_byte_timeout_seconds
         #: Models whose token count the endpoint refused (:meth:`count_tokens`).
         self._count_unavailable: set[str] = set()
         headers: dict[str, str] = {
@@ -245,6 +256,7 @@ class AnthropicProvider:
                 _MESSAGES_ENDPOINT,
                 json=body,
                 headers=self.request_headers(request) or None,
+                timeout=stream_timeout(self._silence, self._first_byte_timeout),
             ) as response:
                 if response.is_error:
                     # An unread streaming response cannot be sniffed for the
@@ -252,7 +264,8 @@ class AnthropicProvider:
                     await response.aread()
                     raise translate_http_error(response)
                 began = True
-                async with aclosing(iter_sse_events(response.aiter_lines())) as events:
+                lines = bounded_silence(response.aiter_lines(), self._silence)
+                async with aclosing(iter_sse_events(lines)) as events:
                     async for event_name, data in events:
                         accumulator.feed(event_name, data)
         except httpx.RequestError as exc:

@@ -41,6 +41,7 @@ from importlib import resources
 from typing import Any
 
 from noeta.core.types import Block, Message, ModelRequest, SystemPart, Text, ToolResult, ToolUse
+from noeta.toolkit.side_requests import thinking_off
 
 __all__ = [
     "FAST_MODEL",
@@ -329,7 +330,7 @@ def classifier_request(*, model: str, prompt: str, instructions: str, transcript
                        stage: int, fast: bool, user_name: str | None = None,
                        trusted: bool = True, root_id: str | None = None) -> ModelRequest:
     """One stage's request. ``fast``: the classifier model takes thinking
-    off; otherwise the main model gets the headroom and no thinking
+    off (:func:`thinking_off`); otherwise the main model gets the headroom and no thinking
     parameter. ``trusted``: the instructions come from a trusted workspace
     and may count as the person's intent. ``root_id``: the task tree, so
     the request names the main loop's session (``metadata.user_id``)."""
@@ -352,7 +353,7 @@ def classifier_request(*, model: str, prompt: str, instructions: str, transcript
         model=model, system=[SystemPart(text=prompt, cache=True), SystemPart(text=identity)],
         messages=[*head, Message(role="user", content=blocks)],
         max_tokens=budget if fast else budget + THINKING_HEADROOM,
-        thinking=False if fast else None,
+        thinking=thinking_off(model) if fast else None,
         stop_sequences=[STOP] if stage == 1 else [],
         cache_after=[0] if head else [],
         cache_blocks=marks, root_id=root_id)

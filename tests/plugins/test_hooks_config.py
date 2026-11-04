@@ -17,7 +17,7 @@ import pytest
 
 from noeta.core.extension import TaskView
 from noeta.core.loop.state import TaskState
-from noeta.core.types import Message, ModelRequest, ModelResponse, Text
+from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse
 from noeta.plugins.hooks import HookCommand, Hooks, parse_hooks, run_command, run_http, run_prompt
 from noeta.plugins.hooks.config import COMMAND_TIMEOUT_S, PROMPT_TIMEOUT_S, Matcher
 from noeta.plugins.hooks.runners import header_value
@@ -238,13 +238,38 @@ async def test_prompt_hook_asks_the_model() -> None:
     ok = await run_prompt(hook, {"tool_name": "Bash"}, complete, "main")
     assert ok.exit_code == 0 and ok.data == {}
     request = asked[0]
-    assert request.model == "judge" and not request.tools and request.thinking is False
+    # An uncatalogued judge gets no thinking field (a gateway serving
+    # DeepSeek refuses ``disabled``); a known model has it switched off.
+    assert request.model == "judge" and not request.tools and request.thinking is None
     assert request.messages[-1].text == 'Is this safe? {"tool_name": "Bash"}'
     blocked = await run_prompt(hook, {}, complete, "main")
     assert blocked.data == {"decision": "block", "reason": "rm is not allowed",
                             "continue": False, "stopReason": "rm is not allowed"}
     assert (await run_prompt(hook, {}, complete, "main")).failed
     assert (await run_prompt(hook, {}, None, "main")).failed
+
+
+async def test_prompt_and_agent_hooks_switch_thinking_off_on_a_known_model() -> None:
+    from noeta.plugins.hooks.runners import VERDICT_TOOL, run_agent
+
+    asked, complete = _model('{"ok": true}')
+    hook = HookCommand(type="prompt", prompt="ok?", model="claude-haiku-4-5")
+    await run_prompt(hook, {}, complete, "main")
+    assert asked[0].thinking is False
+
+    async def verdict(request: ModelRequest) -> ModelResponse:
+        asked.append(request)
+        return ModelResponse(message=Message(role="assistant", content=[ToolUse(
+            id="v", name=VERDICT_TOOL, input={"ok": True})]), stop_reason="tool_use")
+
+    async def unused(*_: Any) -> Any:
+        raise AssertionError("no tool runs")
+
+    for model, thinking in (("claude-haiku-4-5", False), ("some-gateway-model", None)):
+        agent_hook = HookCommand(type="agent", prompt="ok?", model=model)
+        await run_agent(agent_hook, {}, verdict, "main", [], unused)
+        assert asked[-1].thinking is thinking
+
 
 
 async def test_prompt_stop_hook_reads_the_conversation() -> None:
@@ -427,3 +452,19 @@ def test_a_narrowed_answer_keeps_its_deny_and_drops_its_allow() -> None:
     assert narrowed("PermissionRequest", granted).specific == {}
     refused = Read(specific={"decision": {"behavior": "deny", "message": "no"}})
     assert narrowed("PermissionRequest", refused) is refused
+
+
+async def test_slash_hooks_lists_the_hooks_by_event_read_only() -> None:
+    from noeta.core.commands import Typed, run_typed
+    from noeta.core.extension import CommandContext
+
+    ctx = CommandContext(cwd="/w")
+    hooks = Hooks(hooks={
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
+                                                      "command": "./check.sh"}]}],
+        "Stop": [{"hooks": [{"type": "prompt", "prompt": "Done?"}]}]})
+    assert await run_typed([hooks], ctx, "/hooks") == Typed("\n".join([
+        "Hooks: 2 hooks on 2 events (read-only: change them in a settings file)",
+        "PreToolUse", "  Bash · command · ./check.sh", "Stop", "  * · prompt · Done?"]),
+        local=True)
+    assert (await Hooks().run_command(ctx, "hooks", "")).startswith("No hooks configured.")

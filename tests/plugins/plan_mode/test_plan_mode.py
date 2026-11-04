@@ -164,7 +164,7 @@ async def test_the_plan_is_named_once_approved_not_when_shown(store: SqliteStore
     [named] = provider.named
     assert named.messages[0].text.startswith("<conversation>\n# Plan")
     assert [p.text for p in named.system] == [pl.PLAN_NAME_PROMPT]
-    assert named.thinking is False  # an uncatalogued model: reasoning off
+    assert named.thinking is None  # an uncatalogued model: the field left out
     names = [e.data["name"] for e in await events(client, tid)
              if isinstance(e, ExtensionRecorded) and e.kind == "plan_name"]
     assert names == ["add-logging"]

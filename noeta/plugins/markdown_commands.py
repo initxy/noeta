@@ -5,7 +5,9 @@ name is added: the argument placeholders filled as Claude Code fills them
 (:func:`noeta.toolkit.arguments.substitute_arguments`), its ``!`command```
 lines run through the task's permission checks
 (:mod:`noeta.toolkit.inline_commands`), and the tools its ``allowed-tools``
-names pre-approved from then on."""
+names pre-approved from then on. Two prompt commands come with it,
+``/init`` and ``/review`` (:data:`BUILTIN`), unless a command of the same
+name is passed; their bodies are prompts ``markdown_commands/<name>``."""
 
 from __future__ import annotations
 
@@ -32,20 +34,65 @@ from noeta.toolkit.inline_commands import (
 #: Typed commands whose added rules are kept for an erase, newest last.
 ERASABLE_KEEP = 32
 
+INIT_PROMPT = """\
+Write the instruction file future agent sessions will read in this repository.
+
+First learn the project: its README and build files, how it is built, linted and tested \
+(running one test included), and how the main parts of the code fit together. Take in the \
+instructions other tools keep here too, such as AGENTS.md, .cursorrules, .cursor/rules/ and \
+.github/copilot-instructions.md.
+
+Then write NOETA.md at the project's root; when NOETA.md or AGENTS.md is already there, \
+improve that file instead of adding another. Keep it short and about this project only:
+- the commands to build, lint and test, and how to run a single test;
+- the design that only shows when reading several files together;
+- the conventions someone new here would get wrong.
+
+Leave out general advice, what a directory listing already shows, and anything you have \
+not checked."""
+
+REVIEW_PROMPT = """\
+Review code changes for defects. When arguments follow, they name what to review: a pull \
+request number (read it with `gh pr view` and `gh pr diff`), a branch, or paths. With none, \
+review the uncommitted changes and the commits on the current branch that its base branch \
+lacks (`git status`, `git diff`, `git log`).
+
+Read enough of the code around each change to judge it. Report what should block a merge: \
+wrong logic, errors or edge cases left unhandled, callers the change breaks, security holes, \
+changed behavior without a test. Give each finding its file and line, what goes wrong, and \
+how to fix it, most serious first. Skip matters of taste. When nothing needs fixing, say so. \
+Change no files."""
+
+#: The prompt commands every front end offers: name -> (description, argument
+#: hint, body).
+BUILTIN: dict[str, tuple[str, str, str]] = {
+    "init": ("Write a NOETA.md with what agents need to know about this codebase", "",
+             INIT_PROMPT),
+    "review": ("Review the current changes, a branch or a pull request for bugs",
+               "[PR number | branch | paths]", REVIEW_PROMPT),
+}
+
 
 class MarkdownCommands(Extension):
     """``commands``: one mapping per command — ``name``, ``body`` (the
     markdown after its frontmatter), and optionally ``description``,
     ``argument_hint`` and ``allowed_tools`` (the frontmatter's
-    ``allowed-tools`` as written)."""
+    ``allowed-tools`` as written). ``builtin``: offer :data:`BUILTIN` too."""
 
     name = "markdown_commands"
 
-    def __init__(self, commands: Sequence[Mapping[str, Any]] = ()) -> None:
+    def __init__(self, commands: Sequence[Mapping[str, Any]] = (), *,
+                 builtin: bool = True) -> None:
         self._commands: list[Command] = []
         self._bodies: dict[str, str] = {}
         self._allow: dict[str, tuple[str, ...]] = {}
-        for c in commands:
+        given = {str(c["name"]) for c in commands}
+        extra = [{"name": name, "description": description, "argument_hint": hint,
+                  "body": body}
+                 for name, (description, hint, body) in BUILTIN.items()
+                 if builtin and name not in given]
+        self._builtin = {str(c["name"]) for c in extra}
+        for c in [*commands, *extra]:
             name, body = str(c["name"]), str(c["body"]).strip()
             self._bodies[name] = body
             allowed = c.get("allowed_tools")
@@ -60,9 +107,10 @@ class MarkdownCommands(Extension):
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         return self._commands
 
-    def render(self, name: str, args: str) -> str:
-        """The body ``/<name> <args>`` adds, its commands not yet run."""
-        body = self._bodies[name]
+    def render(self, name: str, args: str, body: str | None = None) -> str:
+        """The body ``/<name> <args>`` adds (``body`` in place of the
+        command's), its commands not yet run."""
+        body = self._bodies[name] if body is None else body
         escape = neutralise if has_commands(body) else None
         return substitute_arguments(body, args, (), escape).strip()
 
@@ -102,9 +150,11 @@ class MarkdownCommands(Extension):
                 continue
             name, args = typed
             rules = self._allow[name]
+            body = view.prompt(f"{self.name}/{name}", self._bodies[name]) \
+                if name in self._builtin else None
             try:
                 text = await run_inline_commands(
-                    view, self.render(name, args), skill=name, what="command",
+                    view, self.render(name, args, body), skill=name, what="command",
                     call_id=f"command-{recorded.seq}", approve_rules=rules)
             except InlineCommandError as exc:
                 view.notify(str(exc))

@@ -41,7 +41,7 @@ from noeta.core.types import (
     Usage,
     user,
 )
-from tests.backends.providers.sse import RaisingStream, sse_bytes, sse_response
+from tests.backends.providers.sse import RaisingStream, held_server, sse_bytes, sse_response
 
 BASE_URL = "https://api.anthropic.test"
 MESSAGES_ENDPOINT = f"{BASE_URL}/v1/messages"
@@ -531,6 +531,34 @@ async def test_a_dropped_connection_or_silence_mid_stream_breaks_the_stream() ->
     with pytest.raises(Transient) as plain:
         await _provider().complete(_req())
     assert not isinstance(plain.value, StreamBroken)
+
+
+def _held_body() -> bytes:
+    return sse_bytes([_message_start(), _block_start(0, {"type": "text", "text": "held"}),
+                      ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                      ("message_delta", {"type": "message_delta",
+                                         "delta": {"stop_reason": "end_turn"}}),
+                      ("message_stop", {"type": "message_stop"})])
+
+
+async def test_the_wait_for_the_headers_is_not_bounded_by_stream_silence() -> None:
+    """A gateway that sends nothing until the whole answer is ready (a long
+    compaction summary) is waited for up to the request timeout, as Claude
+    Code waits; silence once the stream began still breaks it."""
+    server, url = await held_server(_held_body(), hold=0.5, stall=0.0)
+    async with server:
+        provider = _provider(base_url=url, timeout_seconds=0.2, first_byte_timeout_seconds=5)
+        response = await provider.complete(_req())
+        assert response.message.content == [Text(text="held")]
+        late = _provider(base_url=url, timeout_seconds=0.2, first_byte_timeout_seconds=0.3)
+        with pytest.raises(Transient) as ex:
+            await late.complete(_req())
+        assert not isinstance(ex.value, StreamBroken)
+    server, url = await held_server(_held_body(), hold=0.0, stall=0.5)
+    async with server:
+        with pytest.raises(StreamBroken) as broken:
+            await _provider(base_url=url, timeout_seconds=0.2).complete(_req())
+        assert broken.value.stream_retries == 1
 
 
 @respx.mock

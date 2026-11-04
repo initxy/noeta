@@ -200,7 +200,8 @@ async def test_a_file_plugin_with_add_to_joins_its_agents_by_itself(home: Path,
     _write_joining(home / "plugins" / "solo.py", "solo", '("main",)')
     _write_joining(home / "plugins" / "everywhere.py", "everywhere", '("*",)')
     app = from_settings(load_settings(), cwd=str(tmp_path))
-    names = {a: [e.name for e in agent.extensions] for a, agent in app.runtime.agents.items()}
+    names = {a: [e.name for e in agent.extensions if e.name != "markdown_commands"]
+             for a, agent in app.runtime.agents.items()}
     assert names["main"][-2:] == ["solo", "everywhere"]
     assert "solo" not in names["Explore"] and "everywhere" in names["Explore"]
     await app.store.close()

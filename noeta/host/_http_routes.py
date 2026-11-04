@@ -26,7 +26,7 @@ from noeta.host.app import AppAPI
 from noeta.host.files import file_matches
 from noeta.host.pending import Pending, card_title, choices, pending_tree
 from noeta.host.rewind import rewind, rewind_points
-from noeta.host.summaries import root_summaries
+from noeta.host.summaries import Cache, root_summaries
 from noeta.host.usage import tree_usage
 
 _enc = msgspec.json.Encoder()
@@ -48,6 +48,17 @@ def _input(value: Any) -> Any:
     if not all(isinstance(b, (Text, Image)) for b in message.content):
         raise ValueError("an input message holds only text and image blocks")
     return Message(role="user", content=message.content, origin="human")
+
+
+def _flag(value: str | None) -> bool | None:
+    """A yes/no query parameter: ``None`` when absent or empty."""
+    if not value:
+        return None
+    if value in ("true", "1"):
+        return True
+    if value in ("false", "0"):
+        return False
+    raise ValueError(f"expected true or false, got {value!r}")
 
 
 async def _command_place(request: Request, agent: str | None, task_id: str | None,
@@ -76,7 +87,7 @@ class Routes:
         self._serving = serving
         self._app = app
         self._agents = agents
-        self._summaries: dict[str, tuple[int, dict[str, Any]]] = {}
+        self._summaries: Cache = {}
         self._pending: dict[str, tuple[int, list[Pending]]] = {}
 
     async def create(self, request: Request) -> Response:
@@ -94,8 +105,12 @@ class Routes:
         return _json(rows)
 
     async def summaries(self, request: Request) -> Response:
-        limit = int(request.query_params.get("limit", "50"))
-        return _json(await root_summaries(scope(request).client, limit, self._summaries))
+        q = request.query_params
+        limit = int(q.get("limit", "50"))
+        client = scope(request).client
+        return _json(await root_summaries(client, limit, self._summaries,
+                                          inbox=client.store.inbox,
+                                          archived=_flag(q.get("archived"))))
 
     async def files(self, request: Request) -> Response:
         q = request.query_params
@@ -155,7 +170,7 @@ class Routes:
             raise ValueError("a signal needs a non-empty 'name'")
         seq = await scope(request).guarded.signal(
             request.path_params["task_id"], name, body.get("data"),
-            dedupe_key=body.get("dedupe_key"))
+            dedupe_key=body.get("dedupe_key"), wake=body.get("wake") is not False)
         return _json({"ok": True, "inbox_seq": seq})
 
     async def cancel(self, request: Request) -> Response:

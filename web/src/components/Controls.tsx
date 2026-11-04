@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Api } from "../api/client";
 import type { ModelInfo, RewindPoint, TreeUsage } from "../api/types";
-import type { Modes } from "../state/transcript";
+import { contextLeft, type AutoCompact, type Modes } from "../state/transcript";
 
 /** Claude Code's modes when the task has not published its own (a new session). */
 export const DEFAULT_MODES: Modes = {
@@ -56,15 +56,35 @@ export function ModelPicker({ model, models, onChange }: { model: string; models
 const fmt = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 
 /** Tokens and cost of the session and its sub-agents, and how full the context is. */
-export function UsageBadge({ usage, contextTokens, window }: { usage: TreeUsage | null; contextTokens: number; window: number }) {
-  if (!usage) return null;
+/** Tokens and cost; then the context's share of the window, or (near the
+ * auto-compact threshold, as Claude Code's footer does) how far it is left. */
+export function UsageBadge({
+  usage,
+  contextTokens,
+  window,
+  compaction = null,
+}: {
+  usage: TreeUsage | null;
+  contextTokens: number;
+  window: number;
+  compaction?: AutoCompact | null;
+}) {
+  const left = contextLeft(contextTokens, compaction);
+  if (!usage) return left ? <span className={left.low ? "usage context-low" : "usage"}>{left.text}</span> : null;
   const u = usage.usage;
   const total = (u.uncached ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0) + (u.output ?? 0);
   const pct = window && contextTokens ? Math.round((contextTokens / window) * 100) : 0;
   return (
     <span className="usage" title={Object.entries(usage.by_model).map(([m, v]) => `${m}: ${v.calls} calls, $${v.cost_usd.toFixed(4)}`).join("\n")}>
       {fmt(total)} tokens · ${usage.cost_usd.toFixed(2)}
-      {pct > 0 && ` · ${pct}% context`}
+      {left ? (
+        <>
+          {" · "}
+          <span className={left.low ? "context-low" : undefined}>{left.text}</span>
+        </>
+      ) : (
+        pct > 0 && ` · ${pct}% context`
+      )}
     </span>
   );
 }

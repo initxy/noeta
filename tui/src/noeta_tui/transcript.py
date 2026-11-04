@@ -49,7 +49,7 @@ from noeta.host.pending import (
 )
 from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
-from noeta.toolkit.plugin_records import TITLE
+from noeta.toolkit.plugin_records import TITLE, AutoCompact, auto_compact
 from noeta.toolkit.tokens import estimate_tokens
 from noeta_tui import render
 from noeta_tui.widgets import (
@@ -105,6 +105,8 @@ class TranscriptView(App[None]):
     busy: bool
     cost_usd: float
     context_tokens: int
+    #: When the task's compaction plugin compacts (``None``: not said).
+    compacts_at: AutoCompact | None
     waiting_question: str
     question_task: str
     question_detail: dict[str, Any]
@@ -134,7 +136,8 @@ class TranscriptView(App[None]):
     effort: str | None
 
     if TYPE_CHECKING:
-        async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None: ...
+        async def decide(self, call_id: str, choice: str, message: str = "", *,
+                         task_id: str = "") -> None: ...
 
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
         self.waiting_question = call_id
@@ -157,9 +160,9 @@ class TranscriptView(App[None]):
             if p.kind == "approval":
                 self.waiting_for = f"{who} waits for your approval"
 
-                async def decide(call_id: str, choice: str,
+                async def decide(call_id: str, choice: str, message: str = "",
                                  task_id: str = p.task_id) -> None:
-                    await self.decide(call_id, choice, task_id=task_id)
+                    await self.decide(call_id, choice, message, task_id=task_id)
 
                 await transcript.mount(ApprovalCard(
                     p.request_id, card_title(p, self.task_id), card_prompt(p), decide,
@@ -378,6 +381,7 @@ class TranscriptView(App[None]):
         mode = current_mode([rec])
         if mode:
             self.mode = mode
+        self.compacts_at = auto_compact([rec]) or self.compacts_at
         self._take_modes(published_modes([rec]))
         # The core's own records by type: a plugin may record the same
         # kind names (the hooks plugin's "retry") for something else.
@@ -469,6 +473,9 @@ class TranscriptView(App[None]):
         window = spec.context_window if spec else models.UNKNOWN_MODEL_CONTEXT_WINDOW
         used = f"{self.context_tokens / window:.0%}" if self.context_tokens else "0%"
         cost = f" · ${self.cost_usd:.2f}" if self.cost_usd else ""
+        at = self.compacts_at
+        left = render.context_left(self.context_tokens, at.threshold, at.window, at.auto) \
+            if at is not None else None
         hints = self.query_one("#hints", Static)
         if self.flash:
             hints.update(Text(self.flash, style="dim"))
@@ -477,9 +484,11 @@ class TranscriptView(App[None]):
         else:
             hints.update(render.mode_hint(self.mode or self.permission_mode or ""))
         width = max(self.size.width // 2 - len(self.model) - 24, 12)
-        self.query_one("#status", Static).update(Text(
-            f"{self.model} · context {used}{cost} · "
-            f"{_short_path(self.task_cwd or SERVER_DIRECTORY, width)}", style="dim"))
+        status = Text(f"{self.model} · ", style="dim")
+        status.append_text(left if left is not None else Text(f"context {used}", style="dim"))
+        status.append(f"{cost} · {_short_path(self.task_cwd or SERVER_DIRECTORY, width)}",
+                      style="dim")
+        self.query_one("#status", Static).update(status)
         level = self.effort_level()
         effort = self.query_one("#effort", Static)
         effort.update(render.effort_line(level) if level else "")

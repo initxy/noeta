@@ -33,7 +33,7 @@ from noeta.toolkit.permission_modes import (
     published_modes,
 )
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from noeta_tui import bash_mode, files, mentions, slash
+from noeta_tui import bash_mode, files, history, mentions, slash
 from noeta_tui.transcript import SERVER_DIRECTORY, TranscriptView, _short_path
 from noeta_tui.widgets import (
     Completions,
@@ -59,6 +59,10 @@ ctrl + r for history   ctrl + t to toggle tasks          \\⏎ or ctrl + j for n
 DOUBLE_PRESS = 0.8
 #: Seconds the mode key waits for a new task's start to record its mode.
 MODE_WAIT = 2.0
+
+
+#: What ``-c`` says, before it exits, when nothing was started here.
+NOTHING_TO_CONTINUE = "No conversation found to continue"
 
 
 class NoetaApp(TranscriptView):
@@ -132,6 +136,7 @@ class NoetaApp(TranscriptView):
         #: What the task tree has cost so far (``host.usage``, as ``/cost``).
         self.cost_usd = 0.0
         self.context_tokens = 0
+        self.compacts_at = None
         #: The question the next input line answers: its call id, the task
         #: asking (the root or a sub-agent), its detail, and answers so far.
         self.waiting_question = ""
@@ -153,9 +158,11 @@ class NoetaApp(TranscriptView):
         self.turn_output = 0
         self.turn_verb = ""
         self.flash = ""
-        #: Prompts sent, oldest first; ``history_at`` steps through them.
-        self.history: list[str] = []
-        self.history_at = 0
+        #: Prompts sent in this project, oldest first (earlier sessions'
+        #: too); ``history_at`` steps through them.
+        self._history_file = history.history_file(self.start.home, self.start.cwd)
+        self.history: list[str] = history.load(self._history_file)
+        self.history_at = len(self.history)
         #: The commands the slash menu offers: plugins' for this task.
         self.plugin_commands: list[Command] = []
         self._deltas: asyncio.Queue[Delta] = asyncio.Queue()
@@ -203,7 +210,8 @@ class NoetaApp(TranscriptView):
 
     async def _open_first(self) -> None:
         """The task the app starts on: ``--resume``'s, the picked one, the
-        newest one started here (``-c``), or a new one."""
+        newest one started here (``-c``; with none, Claude Code's message and
+        exit code 1), or a new one."""
         if self.resume:
             await self.open_task(self.resume)
         elif self.resume == "":
@@ -211,10 +219,11 @@ class NoetaApp(TranscriptView):
         elif self.start.continue_last and (latest := await find_latest_task(
                 self.local.client, str(self.task_config.get("cwd") or self.cwd), self.agent)):
             await self.open_task(latest)
+        elif self.start.continue_last:
+            self.exit(return_code=1, message=NOTHING_TO_CONTINUE)
+            return
         else:
             await self.new_task()
-            if self.start.continue_last:
-                await self.say_notice("No conversation found to continue")
         self.query_one(PromptInput).focus()
 
     async def on_unmount(self) -> None:
@@ -277,6 +286,7 @@ class NoetaApp(TranscriptView):
         self.task_cwd = self._default_task_cwd()
         self.effort = self.task_config.get("effort")
         self.context_tokens = 0
+        self.compacts_at = None
         self.calls.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
@@ -337,6 +347,7 @@ class NoetaApp(TranscriptView):
         self.query_one("#shortcuts").display = False
         if not self.history or self.history[-1] != text:
             self.history.append(text)
+            history.append(self._history_file, text)
         self.history_at = len(self.history)
         self._set_marker("")
         if text.startswith("/"):
@@ -528,13 +539,26 @@ class NoetaApp(TranscriptView):
         box.text = text
         box.move_cursor(box.document.end)
 
-    def _complete(self, value: str) -> None:
-        """Replace the word being typed with ``value``."""
+    def _word(self) -> tuple[int, int]:
+        """Where the word the cursor is in starts and ends in the box's text."""
         box = self._box()
         text = box.text
-        start = text.rfind(" ") + 1 if not value.startswith("/") else 0
-        box.text = text[:start] + value + " "
-        box.move_cursor(box.document.end)
+        row, column = box.cursor_location
+        at = sum(len(line) + 1 for line in text.split("\n")[:row]) + column
+        start = max(text.rfind(" ", 0, at), text.rfind("\n", 0, at)) + 1
+        ends = [i for i in (text.find(" ", at), text.find("\n", at)) if i != -1]
+        return start, min(ends, default=len(text))
+
+    def _complete(self, value: str) -> None:
+        """Replace the word the cursor is in with ``value`` (what follows it
+        stays), the cursor after it."""
+        box = self._box()
+        text = box.text
+        start, end = self._word()
+        rest = text[end:]
+        box.text = text[:start] + value + ("" if rest.startswith(" ") else " ") + rest
+        at = start + len(value) + 1
+        box.move_cursor((box.text.count("\n", 0, at), at - box.text.rfind("\n", 0, at) - 1))
 
     @on(TextArea.Changed, "#prompt")
     def _typed(self, event: TextArea.Changed) -> None:
@@ -545,10 +569,11 @@ class NoetaApp(TranscriptView):
             return
         self._set_marker("!" if text.startswith("!") else "")
         menu = self.query_one(Completions)
-        word = text.rsplit(" ", 1)[-1] if text else ""
-        if text.startswith("/") and " " not in text:
-            menu.show(slash.matches(self, text[1:]))
-        elif word.startswith("@") and "\n" not in word and not self.on_server:
+        start, end = self._word()
+        word = text[start:end]
+        if start == 0 and word.startswith("/"):  # the command word, cursor anywhere in it
+            menu.show(slash.matches(self, word[1:]))
+        elif word.startswith("@") and not self.on_server:
             menu.show([(f"@{p}", f"+ {p}", "") for p in
                        files.matches(self.task_cwd or self.cwd, word[1:])])
         else:
@@ -612,9 +637,18 @@ class NoetaApp(TranscriptView):
         self.show_tasks = not self.show_tasks
         self._show_todos()
 
-    async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None:
+    async def decide(self, call_id: str, choice: str, message: str = "", *,
+                     task_id: str = "") -> None:
+        """Answer an approval. ``message``: what the person added to it — with
+        a no, the reason the model reads in the refused call's result; with a
+        yes, a message to the task, taken in once the call's result lands
+        (Claude Code puts it beside that result)."""
         self.waiting_for = ""
-        await answer_choice(self.local.client, task_id or self.task_id, call_id, choice)
+        task = task_id or self.task_id
+        await answer_choice(self.local.client, task, call_id, choice,
+                            message if choice == "deny" else "")
+        if message and choice != "deny":
+            await self.local.client.send(task, message, when="now")
         self.update_status()
         self._box().focus()
 

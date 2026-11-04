@@ -1,7 +1,8 @@
 """The terminal UI's own slash commands with a mechanism behind them, as
 Claude Code has them: ``/help``, ``/status``, ``/model``, ``/effort``, ``/context``,
 ``/cost``, ``/memory``, ``/config``, ``/permissions``, ``/agents``,
-``/rewind``, ``/clear``, ``/reload-plugins``. Each takes the app and what
+``/rewind``, ``/clear``, ``/reload-plugins``, and ``/mcp`` ``/hooks`` (what
+the MCP and hooks plugins say, shown as a panel). Each takes the app and what
 was typed after the name; what it shows goes to the transcript, never to
 the model. Plugins' commands (``/compact``, skills, ``.noeta/commands``)
 run through ``AppAPI.run_command``."""
@@ -48,6 +49,8 @@ COMMANDS = {
     "config": "Show the settings; edit a settings file (edit user|project|local)",
     "permissions": "Show the permission mode and rules",
     "agents": "List the agents this front end runs",
+    "mcp": "Show the MCP servers: connected, failed or waiting for a sign-in",
+    "hooks": "Show the hooks configured (read-only)",
     "rewind": "Go back to before a prompt: conversation, code or both (also Esc Esc)",
     "clear": "Start a new task (also /new)",
     "new": "Start a new task",
@@ -123,6 +126,33 @@ async def _status(app: NoetaApp, arg: str) -> None:
             ("working directory", app.task_cwd or SERVER_DIRECTORY),
             ("runs", "on a server" if app.on_server else "in this process")]
     await app.say_text(_rows("Status", rows + app.start.settings()))
+
+
+#: Line marks of a plugin's panel and their colours.
+PANEL_MARKS = {"✔": "green", "✘": "red", "△": "yellow"}
+
+
+async def _plugin_panel(app: NoetaApp, name: str, empty: str) -> None:
+    """The plugin command ``/name``'s text as a panel: its first line the
+    title (``empty`` when no plugin of the agent offers it)."""
+    try:
+        typed = await app.local.run_command(app.agent, app._command_context(), f"/{name}")
+    except Exception as exc:  # noqa: BLE001 — a plugin's failure is shown, not raised
+        await app.say_notice(f"/{name} failed: {exc}")
+        return
+    title, _, rest = (typed.text if typed is not None else empty).partition("\n")
+    out = Text().append(title + "\n", style="bold")
+    for line in rest.splitlines():
+        out.append(f"  {line}\n", style=PANEL_MARKS.get(line[:1], ""))
+    await app.say_text(out)
+
+
+async def _mcp(app: NoetaApp, arg: str) -> None:
+    await _plugin_panel(app, "mcp", "No MCP servers configured.")
+
+
+async def _hooks(app: NoetaApp, arg: str) -> None:
+    await _plugin_panel(app, "hooks", "No hooks configured.")
 
 
 async def _clear(app: NoetaApp, arg: str) -> None:

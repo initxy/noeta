@@ -26,7 +26,7 @@ from tests.backends.providers._responses_helpers import (
     stream_of,
     text_delta,
 )
-from tests.backends.providers.sse import RaisingStream, sse_bytes
+from tests.backends.providers.sse import RaisingStream, held_server, responses_sse, sse_bytes
 
 
 def _message_output(*texts: str) -> dict[str, Any]:
@@ -366,3 +366,23 @@ async def test_cancellation_mid_stream_propagates_and_closes_the_stream() -> Non
         await task
     assert recorder.as_tuples == [("text", "par", 0)]
     assert stream.closed
+
+
+async def test_the_wait_for_the_headers_is_not_bounded_by_stream_silence() -> None:
+    """A gateway that sends nothing until the whole answer is ready is
+    waited for up to the request timeout (Claude Code's); silence once the
+    stream began still fails the call."""
+    body = responses_sse(responses_payload(texts=["held"]))
+    server, url = await held_server(body, hold=0.5, stall=0.0)
+    async with server:
+        provider = make_provider(base_url=url, timeout_seconds=0.2,
+                                 first_byte_timeout_seconds=5)
+        response = await provider.complete(basic_request())
+        assert response.message.text == "held"
+        with pytest.raises(Transient):
+            await make_provider(base_url=url, timeout_seconds=0.2,
+                                first_byte_timeout_seconds=0.3).complete(basic_request())
+    server, url = await held_server(body, hold=0.0, stall=0.5)
+    async with server:
+        with pytest.raises(Transient, match="no data on the stream"):
+            await make_provider(base_url=url, timeout_seconds=0.2).complete(basic_request())

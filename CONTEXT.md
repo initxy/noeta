@@ -51,7 +51,7 @@ inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or 
 only through a typed reader in `toolkit`: `plugin_records.py` (plugin names, each record and who reads it, the
 methods a plugin keeps for others; `tests/toolkit/test_plugin_records.py` holds writers to readers),
 `background_tasks.py`, `structured_output.py`, `permission_modes.py`. Front ends import no plugin; they read
-permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title`, todos' records (kept by a replacement). SDK = all but `noeta/cli`.
+permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title`, compaction's `threshold`, todos' records (kept by a replacement). SDK = all but `noeta/cli`.
 
 ## Ways in
 

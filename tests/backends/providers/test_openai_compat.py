@@ -38,7 +38,7 @@ from noeta.core.types import (
     ToolUse,
     Usage,
 )
-from tests.backends.providers.sse import chat_sse, sse_response
+from tests.backends.providers.sse import chat_sse, held_server, sse_response
 
 BASE_URL = "https://example.test/v1"
 CHAT_ENDPOINT = f"{BASE_URL}/chat/completions"
@@ -508,3 +508,23 @@ async def test_encrypted_reasoning_only_yields_signature_thinking() -> None:
 async def test_no_reasoning_fields_produces_no_thinking() -> None:
     response = await _complete(_chat_response(content="plain"))
     assert all(not isinstance(b, Thinking) for b in response.message.content)
+
+
+async def test_the_wait_for_the_headers_is_not_bounded_by_stream_silence() -> None:
+    """A gateway that sends nothing until the whole answer is ready is
+    waited for up to the request timeout (Claude Code's); silence once the
+    stream began still fails the call."""
+    body = chat_sse(_chat_response(content="held"))
+    server, url = await held_server(body, hold=0.5, stall=0.0)
+    async with server:
+        provider = _make_provider(base_url=url, timeout_seconds=0.2,
+                                  first_byte_timeout_seconds=5)
+        response = await provider.complete(_request())
+        assert response.message.text == "held"
+        with pytest.raises(Transient):
+            await _make_provider(base_url=url, timeout_seconds=0.2,
+                                 first_byte_timeout_seconds=0.3).complete(_request())
+    server, url = await held_server(body, hold=0.0, stall=0.5)
+    async with server:
+        with pytest.raises(Transient, match="no data on the stream"):
+            await _make_provider(base_url=url, timeout_seconds=0.2).complete(_request())

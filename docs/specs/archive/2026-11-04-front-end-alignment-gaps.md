@@ -1,0 +1,128 @@
+---
+status: done
+created: 2026-11-04
+branch: v1-align
+---
+
+# Front-end alignment gaps left by v1-finish
+
+## Goal
+
+Close the Claude Code alignment gaps that `archive/2026-11-04-v1-finish.md` left open in
+`tui/` and `web/`, and find why the `compaction_resume_edits` eval scenario stalls. Same rule
+as v1-finish: the smallest mechanism that is correct; a gap that needs a new subsystem is cut
+with a reason, not built.
+
+## Non-goals
+
+- `TaskState.history` out of the fold (its own spec).
+- The CSP's `connect-src` beyond `'self'` (a deliberate security cut).
+- Anything Claude Code 2.1.318 does not have.
+
+## Context
+
+Open after v1-finish: TUI — `N% until auto-compact` (the compaction plugin publishes no
+threshold), Tab-to-amend, Ctrl+R across sessions, `/mcp` `/hooks` `/init` `/review`, Tab
+completion inside a command word, `noeta -c` with nothing to continue starts a new session.
+Web — no session search, archive or delete; no auto-compact indicator. Eval —
+`compaction_resume_edits` times out 3 of 6 trials at the eighth file with no compaction, on
+`main` before v1-finish too.
+
+## Decisions
+
+- D1 The compaction plugin publishes its threshold as a record front ends may read (a typed
+  reader in `noeta/toolkit/plugin_records.py`), so both front ends compute "N% until
+  auto-compact" the same way.
+- D2 `/init` and `/review` are prompt commands every front end gets through `AppAPI.commands`,
+  not TUI code. `/mcp` and `/hooks` show what the task has (servers and their state; hooks
+  configured), read-only.
+- D3 Prompt history across sessions is kept by noeta in its own home (as Claude Code keeps
+  its history file), per project.
+- D4 (B) Archive is the `archive` signal (`{"archived": bool}`, `noeta/toolkit/signals.py`),
+  not a plugin record or a store column: an ended task is never claimed again, so nothing
+  could record a signal it is sent; the inbox keeps every post, so `root_summaries` reads the
+  last `archive` signal from the inbox (incrementally, cached by inbox seq). Search is
+  client-side over `GET /summaries` (title, first prompt, folder).
+- D5 (B) Delete is cut. The store has no delete: removing a task tree means a new `Store`
+  method in both backends (log, inbox, rows, snapshots, children), a continued or forked
+  session folds its source's log (`history_from`), and deleting data on a host's store is an
+  approval gate (`AGENTS.md`). Archive hides a session instead.
+
+## Plan
+
+- [x] A TUI + host: D1, D2, D3, Tab-to-amend, Tab completion inside a command word, `-c` exits
+      when nothing to continue.
+- [x] B Web: session search, archive (delete cut, D5), host routes as needed.
+- [x] B2 Web: auto-compact indicator once A's reader lands.
+- [x] C Eval: why `compaction_resume_edits` stalls at the eighth file; fix the cause.
+- [x] Integrate, full gates, review.
+
+## Acceptance criteria
+
+- Each item has a test that fails without it; `make check`, `make frontends`, `make parity`,
+  `make cluster` green; `compaction_resume_edits` no longer times out on a 6-trial run.
+
+## Risks
+
+- A and B both touch `noeta/host`; B starts on its own routes and takes A's reader after A
+  merges.
+
+## Progress log
+- 2026-11-04 Created after the v1-finish goal check found these alignment gaps still open.
+- 2026-11-04 B on `v1-align-b`: sidebar search box (title, first prompt, folder; Esc clears),
+  a row's archive button, an "Archived" list whose rows are brought back (D4); delete cut
+  (D5). `GET /summaries` gives `archived` and takes `archived=true|false` (archived roots do
+  not count toward `limit`); the guard allows the `archive` signal; `AppAPI.summaries` /
+  `archive` (`LocalApp`, `RemoteApp`, the server's API-only front). Desktop gets it through
+  `web/`, no menu entries. Not done: the auto-compact indicator (B2, waits on A's reader).
+  check 3550 passed, 90%; make tui 62; make web 53 + e2e 15; make desktop 33 + e2e 3;
+  parity 0. Screenshots regenerated (`web/screenshots/16-search-archive.png` new).
+- 2026-11-04 C done: the hang was the first compaction's summarize call. The Anthropic adapter's
+  60 s stream-silence timeout also bounded the wait for response headers, and the eval gateway
+  sends headers only once the answer is complete, so a summary taking over 60 s timed out and
+  was retried ~20 min. Headers now wait up to Claude Code's request timeout (10 min); silence
+  after the stream began is still 60 s. 6 trials: 1.00 each, no timeouts (was 3 of 6).
+- 2026-11-04 A on `v1-align-a` (one commit per item): D1 the compaction plugin records
+  `threshold` (`threshold`, `window`, `auto`) before a model call when those change,
+  `plugin_records.auto_compact` reads it; the TUI footer shows "N% until auto-compact"
+  within 20K tokens of it (Claude Code's rule; "Context low ... /compact" when automatic
+  compaction is off). D2 `markdown_commands` offers `/init` and `/review` (own words,
+  prompts `markdown_commands/<name>`), and the cli adds it to every agent; `/mcp` (MCP
+  plugin: servers listed now, connected with tool count / sign-in / failed) and `/hooks`
+  (hooks plugin: by event, matcher, type) are local plugin commands, so no `AppAPI`
+  addition; the TUI shows them as panels. D3 `<home>/projects/<slug>/history.jsonl`
+  (0600, newest 100 kept) feeds Up and Ctrl+R. Tab-to-amend is the approval dialog's
+  (Claude Code 2.1.318: Tab on Yes / No opens a line): a No carries it as the refusal's
+  message, a Yes sends it as a message taken in after the call's result. Tab completes the
+  first word at the cursor; `-c` with nothing here prints Claude Code's message, exit 1.
+  Cuts: `/review` is one prompt, not Claude Code's `/code-review` (effort levels,
+  sub-agents); `/mcp` `/hooks` are read-only, without the setting's source; a Yes's words
+  are their own user message, not a block beside the result (the kernel has no such
+  block); Claude Code's mid-prompt slash completion and its "% context used" variant are
+  not built. make check 3552 passed, 90.34%; make tui 71 passed, 88.14%; make parity 0
+  mismatches, own-words none; screenshots rewritten.
+- 2026-11-04 C follow-ups: `openai_compat` / `openai_responses` take the same headers-wait split
+  (shared `stream_timeout` / `bounded_silence` in `_common`). The 400 on each trial's first
+  call was the session-title side request sending `thinking: disabled` for an uncatalogued
+  model, which the DeepSeek gateway refuses; an uncatalogued model now gets no thinking field.
+- 2026-11-04 B2 on `v1-align-b2`: the web folds the compaction plugin's `threshold` record
+  (`compaction/threshold`, the last valid one) and the header's usage shows the TUI's rule
+  in place of "N% context": within 20K tokens of the threshold "N% until auto-compact", with
+  auto off "Context low (N% remaining) · Run /compact to compact & continue" (red). The e2e
+  provider's `crowded` keyword reports a 90,000-token context. Desktop gets it through
+  `web/`. check 3557 passed, 90%; make tui 71; make web 56 + e2e 16; make desktop 33 + e2e 3; parity 0.
+- 2026-11-04 C follow-up 2: the auto-mode classifier, prompt/agent hooks and the recall selector
+  take their thinking field from `side_requests.thinking_off` (left out on an uncatalogued model);
+  the selector's retry-without-it on a 400 is gone. Live: a fast classifier stage on DeepSeek is
+  200 (with `disabled` it was 400).
+- 2026-11-04 review fixes on `v1-align-fix`: a continued task (rewind, continue) writes its own
+  compaction `threshold` record (`continue_state` clears `published`); Esc in the approval card's
+  amend line closes it instead of stopping the turn; the history trim's temp file is per process;
+  archiving posts the signal with `wake=False` (`Client.signal` and the HTTP route take `wake`),
+  so an idle session is not woken. check 3564 passed, 90.36%; make tui 73, 88.23%; make web 56 + e2e 16.
+- 2026-11-04 Integrated on `v1-align` (f70fcc25) after an independent review (no P0/P1; its
+  four P2s fixed on `v1-align-fix`): check 3564 passed, 90.37%; make tui 73; make web 56 +
+  e2e 16; make desktop 33 + e2e 3; parity 0; cluster 12 passed; e2e 7; eval no regression,
+  no errors or timeouts, wall 593 s (was 1214 s), `compaction_resume_edits` 1.00 (baseline
+  0.78), `hook_block_adapts` 0.70 (0.52). Left from review: a proxy that sends headers and
+  then buffers the body still fails after 60 s of silence (not a regression).

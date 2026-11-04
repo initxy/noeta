@@ -11,11 +11,12 @@ framed on its wire.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import email.utils
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -44,8 +45,10 @@ from noeta.core.types import (
 )
 
 __all__ = [
+    "FIRST_BYTE_TIMEOUT_SECONDS",
     "HOST_INJECTED_PREAMBLE",
     "ReasoningContinuation",
+    "bounded_silence",
     "decode_tool_arguments",
     "describe_http_error",
     "encode_tool_arguments",
@@ -59,6 +62,7 @@ __all__ = [
     "parse_retry_after",
     "restore_tool_names",
     "shorten_names_in_text",
+    "stream_timeout",
     "tool_result_text",
     "translate_http_error",
     "transport_error",
@@ -445,6 +449,34 @@ def transport_error(exc: httpx.HTTPError) -> Transient:
     """A timeout or transport failure — including a disconnect mid-stream — is
     worth retrying as is."""
     return Transient(f"{type(exc).__name__}: {exc}")
+
+
+#: How long a streamed call waits for the response headers: Claude Code's
+#: request timeout (``API_TIMEOUT_MS``'s default). A gateway that holds the
+#: stream until the answer is complete sends nothing before then, so the
+#: bound on silence once the stream began must not apply to this wait.
+FIRST_BYTE_TIMEOUT_SECONDS = 600.0
+
+
+def stream_timeout(silence: float, first_byte: float) -> httpx.Timeout:
+    """The client timeout of a streamed call: ``first_byte`` for the
+    response headers (and each read, which :func:`bounded_silence` bounds
+    tighter), ``silence`` for connecting and sending."""
+    return httpx.Timeout(silence, read=first_byte)
+
+
+async def bounded_silence(lines: AsyncIterator[str], seconds: float) -> AsyncIterator[str]:
+    """``lines``, failing with :class:`httpx.ReadTimeout` when the next one
+    takes longer than ``seconds``."""
+    while True:
+        try:
+            async with asyncio.timeout(seconds):
+                line = await anext(lines)
+        except StopAsyncIteration:
+            return
+        except TimeoutError:
+            raise httpx.ReadTimeout(f"no data on the stream for {seconds:g} s") from None
+        yield line
 
 
 # ---------------------------------------------------------------------------

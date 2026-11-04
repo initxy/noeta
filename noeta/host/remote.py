@@ -19,7 +19,7 @@ from noeta.core.events import Recorded
 from noeta.core.extension import Command, CommandContext
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta
-from noeta.host.app import AppAPI
+from noeta.host.app import AppAPI, archive_task
 
 #: Reconnects in a row (without an event in between) before ``watch`` gives up.
 WATCH_RETRIES = 5
@@ -68,9 +68,9 @@ class RemoteClient:
         return int(got.get("inbox_seq", 0))
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
-                     dedupe_key: str | None = None) -> int:
+                     dedupe_key: str | None = None, wake: bool = True) -> int:
         got = await self._call("POST", f"/tasks/{task_id}/signals", json={
-            "name": name, "data": data, "dedupe_key": dedupe_key})
+            "name": name, "data": data, "dedupe_key": dedupe_key, "wake": wake})
         return int(got.get("inbox_seq", 0))
 
     async def cancel(self, task_id: str, reason: str = "", *, turn_only: bool = False) -> None:
@@ -202,11 +202,17 @@ class RemoteApp:
             "text": text, "agent": agent, "task_id": ctx.task_id, "cwd": ctx.cwd})
         return None if got is None else Typed(str(got["text"]), bool(got.get("local")))
 
-    async def summaries(self, limit: int = 50) -> list[dict[str, Any]]:
+    async def summaries(self, limit: int = 50, *,
+                        archived: bool | None = None) -> list[dict[str, Any]]:
         """The server's root tasks (``noeta.host.summaries.root_summaries``)."""
-        got: list[dict[str, Any]] = await self.client._call("GET", "/summaries",
-                                                            params={"limit": limit})
+        params: dict[str, Any] = {"limit": limit}
+        if archived is not None:
+            params["archived"] = "true" if archived else "false"
+        got: list[dict[str, Any]] = await self.client._call("GET", "/summaries", params=params)
         return got
+
+    async def archive(self, task_id: str, archived: bool = True) -> None:
+        await archive_task(self.client, task_id, archived)
 
     async def files(self, query: str, ctx: CommandContext, limit: int = 30) -> list[str]:
         """Paths under the task's (or ``ctx.cwd``'s) directory on the server

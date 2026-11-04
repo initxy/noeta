@@ -124,6 +124,11 @@ INSTRUCTIONS_ORDER = 45
 STATUS_ORDER = 31
 
 
+#: The command that shows the servers' state.
+STATUS_COMMAND = "mcp"
+STATUS_DESCRIPTION = "Show the MCP servers: connected, failed or waiting for a sign-in"
+
+
 def _as_list(servers: Servers) -> list[McpServer]:
     if isinstance(servers, Mapping):
         return servers_from({"mcpServers": servers}, "servers")
@@ -639,10 +644,12 @@ class Mcp(Extension):
         return self._scope if isinstance(self._scope, str) else None
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
-        """Each server prompt as ``/mcp__<alias>__<prompt>``; arguments are
-        typed after it, separated by spaces (the last takes the rest)."""
+        """``/mcp`` (the servers and their state, for the person), then each
+        server prompt as ``/mcp__<alias>__<prompt>``; arguments are typed
+        after it, separated by spaces (the last takes the rest)."""
         scope = self._command_scope(ctx)
-        out: list[Command] = []
+        out: list[Command] = [Command(name=STATUS_COMMAND, description=STATUS_DESCRIPTION,
+                                      local=True)]
         for server in await self._command_servers(ctx):
             try:
                 prompts = await list_prompts([server], scope=scope, pool=self.pool())
@@ -665,6 +672,8 @@ class Mcp(Extension):
         return out
 
     async def run_command(self, ctx: CommandContext, name: str, args: str) -> str:
+        if name == STATUS_COMMAND:
+            return await self._server_states(ctx)
         scope = self._command_scope(ctx)
         if (scope, name) not in self._prompts:
             await self.commands(ctx)
@@ -675,6 +684,30 @@ class Mcp(Extension):
         values = args.split(None, max(len(names) - 1, 0)) if names and args else []
         return await expand_prompt(server, prompt.name, dict(zip(names, values, strict=False)),
                                    scope=scope, pool=self.pool())
+
+    async def _server_states(self, ctx: CommandContext) -> str:
+        """``/mcp``: each server the task (or a new one here) has, listed
+        now: connected with its tool count, waiting for a sign-in, or failed."""
+        servers = sorted(await self._command_servers(ctx), key=lambda s: s.alias)
+        if not servers:
+            return "No MCP servers configured."
+        scope = self._command_scope(ctx)
+        context = self._context(ctx.task_id or "")
+
+        async def state(server: McpServer) -> str:
+            try:
+                raw, _ = await self.pool().use(server, scope, _listing, retry=True,
+                                               context=context)
+            except McpAuthRequired:
+                return f"△ {server.alias} · needs sign-in"
+            except (McpError, McpConfigError) as exc:
+                return f"✘ {server.alias} · failed: {exc}"
+            tools = len(_server_entry(server, raw)["tools"])
+            return f"✔ {server.alias} · connected · {tools} tool{'s' * (tools != 1)}"
+
+        lines = await asyncio.gather(*(state(s) for s in servers))
+        count = f"{len(servers)} server{'s' * (len(servers) != 1)}"
+        return "\n".join([f"MCP servers ({count})", *lines])
 
     async def refresh(self, view: TaskView) -> None:
         """List every server now and record the tool set if it changed."""

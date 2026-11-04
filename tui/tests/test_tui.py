@@ -174,7 +174,7 @@ async def test_an_approval_decided_before_its_card_mounts() -> None:
 
     picked: list[str] = []
 
-    async def decide(call_id: str, choice: str) -> None:
+    async def decide(call_id: str, choice: str, message: str = "") -> None:
         picked.append(choice)
 
     class DecidedEarly(ApprovalCard):

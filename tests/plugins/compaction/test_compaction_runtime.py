@@ -44,6 +44,7 @@ from noeta.plugins.compaction.summary import (
 from noeta.plugins.fs import FileTools
 from noeta.plugins.fs.read import ReadTool
 from noeta.plugins.instructions import Instructions
+from noeta.toolkit import plugin_records as pr
 
 from ._harness import FORMATTED, Model, Probe, answer, call, note_reply, rebuilt, run, runtime
 
@@ -500,3 +501,39 @@ async def test_the_plan_file_is_given_again_after_a_compaction(
     later = model.requests[model.requests.index(after) + 1]
     assert sum(m.text.count(reference) for m in later.messages) == 1  # sent once
     await assert_rebuilds(store, a, tid)
+
+
+
+def thresholds(recs: list[Any]) -> list[Any]:
+    return [r.event.data for r in recs if isinstance(r.event, ExtensionRecorded)
+            and r.event.kind == pr.AUTO_COMPACT_KIND]
+
+
+async def test_a_model_switch_records_the_threshold_again(store: SqliteStore) -> None:
+    """Front ends read "N% until auto-compact" from the task's log."""
+    import msgspec
+
+    class Switch(Extension):
+        """Sends the turn's second request to a model with another window."""
+
+        name = "switch"
+
+        async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
+            return msgspec.structs.replace(request, model="claude-opus-5-5") \
+                if view.state.steps_in_turn else request
+
+    a = Agent(name="a", model="m", tools=[Probe()], extensions=(Switch(), Compaction()))
+    client, tid = await run(store, a, Model([call(), answer("one")]))
+    first, switched = thresholds(await client.events(tid))
+    assert first["threshold"] != switched["threshold"]
+
+
+async def test_a_continued_task_records_the_threshold_in_its_own_log(
+        store: SqliteStore) -> None:
+    a = Agent(name="a", model="m", tools=[Probe()], extensions=(Compaction(),))
+    model = Model([answer("one"), answer("two")])
+    client, src = await run(store, a, model)
+    assert thresholds(await client.events(src))
+    fork = await client.create("a", "go on", history_from=src)
+    await runtime(store, a, model).run_until_idle()
+    assert thresholds(await client.events(fork))

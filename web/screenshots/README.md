@@ -16,6 +16,7 @@ on the offline scripted provider, so they are rewritten on every run.
 | `11-slash-menu.png` | the slash-command menu (the page's commands and the server's) |
 | `12-rewind.png` | rewind to before a prompt (conversation, code or both) |
 | `13-theme.png`, `14-phone.png`, `15-phone-sessions.png` | dark theme; a phone-sized screen and its sessions drawer |
+| `16-search-archive.png` | the session search narrowing the list; a row's archive button |
 
 ## Claude Code's web and desktop app features
 
@@ -35,7 +36,7 @@ on the offline scripted provider, so they are rewritten on every run.
 | `@` file mentions completed from the session's directory | done |
 | Image paste, drop and upload | done |
 | Permission-mode picker (bypass only when the server allows it), model picker | done |
-| Usage: tokens, cost, context fill | done |
+| Usage: tokens, cost, context fill; within 20K tokens of the auto-compact threshold "N% until auto-compact" ("Context low … Run /compact" when auto is off), as the TUI | done |
 | Rewind to a checkpoint (the prompt back in the composer, the rewound session replaced) | done |
 | Continue an ended session (send to it: a new session carries its conversation on) | done |
 | Links in a new tab; remote images in replies shown as links, not loaded; served with a CSP | done |
@@ -44,6 +45,8 @@ on the offline scripted provider, so they are rewritten on every run.
 | Light and dark themes, phone-sized layout | done |
 | Cloud environments, repository picker, branches and pull requests (claude.ai/code) | not here: noeta runs in the server's directories |
 | Diff review across a whole session, file tree, terminal pane (desktop) | not yet |
-| Search across sessions, archive and delete | not yet: the API has no delete |
+| Search sessions (titles, first prompts, folders of the listed sessions) | done |
+| Archive a session, list the archived ones, bring one back | done (the `archive` signal; `GET /summaries?archived=`) |
+| Delete a session | not here: the store keeps every task's log (continued and forked sessions read their source's); archive hides it instead |
 
 Regenerate with `NOETA_SCREENSHOTS=1 make web`.

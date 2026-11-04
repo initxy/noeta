@@ -5,9 +5,15 @@ plugin that reads it."""
 
 from __future__ import annotations
 
+import asyncio
+
+from noeta.core.events import Recorded
 from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import TaskState
+from noeta.core.types import ModelRequest
 from noeta.plugins.checkpoints import Checkpoints
+from noeta.plugins.compaction import Compaction
+from noeta.plugins.compaction.window import derive_window
 from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks
 from noeta.plugins.instructions import Instructions
@@ -32,11 +38,12 @@ def _folded(plugins: list[Extension], *records: tuple[str, str, dict[str, object
 
 
 def test_the_plugins_are_named_as_their_readers_name_them() -> None:
-    plugins: list[Extension] = [Checkpoints(), FileTools(), Hooks(), Instructions(), Mcp(),
-                                Memory(), Permissions(), PlanMode(), Shell(), Title()]
+    plugins: list[Extension] = [Checkpoints(), Compaction(), FileTools(), Hooks(),
+                                Instructions(), Mcp(), Memory(), Permissions(), PlanMode(),
+                                Shell(), Title()]
     assert [p.name for p in plugins] == [
-        pr.CHECKPOINTS, pr.FS, pr.HOOKS, pr.INSTRUCTIONS, pr.MCP, pr.MEMORY, pr.PERMISSIONS,
-        pr.PLAN_MODE, pr.SHELL, pr.TITLE]
+        pr.CHECKPOINTS, pr.COMPACTION, pr.FS, pr.HOOKS, pr.INSTRUCTIONS, pr.MCP, pr.MEMORY,
+        pr.PERMISSIONS, pr.PLAN_MODE, pr.SHELL, pr.TITLE]
 
 
 def test_each_record_reads_back_as_its_writer_folds_it() -> None:
@@ -94,3 +101,19 @@ def test_the_methods_one_plugin_calls_on_another_are_there() -> None:
     assert pr.working_directories(view)[0] == "/w"
     assert pr.read_deny_rule(view) is not None
     assert not pr.instructions_rehang(view) and pr.instructions_managed_only(view)
+
+
+def test_the_auto_compact_threshold_reads_back_once_per_change() -> None:
+    plugin = Compaction(auto=False)
+    view = TaskView(state=TaskState(task_id="t", config={"cwd": "/w"}), extensions=[plugin])
+    request = ModelRequest(model="claude-sonnet-4-5")
+    asyncio.run(plugin.before_model(view, request))
+    written = [Recorded(seq=i, at=0.0, event=e) for i, e in enumerate(view.pending)]
+    expected = derive_window("claude-sonnet-4-5")
+    assert pr.auto_compact(written) == pr.AutoCompact(
+        threshold=expected.threshold, window=expected.effective, auto=False)
+    # The same numbers on the next request: nothing more is written.
+    again = TaskView(state=view.folded({plugin.name: plugin.reduce}), extensions=[plugin])
+    asyncio.run(plugin.before_model(again, request))
+    assert again.pending == []
+    assert pr.auto_compact([]) is None

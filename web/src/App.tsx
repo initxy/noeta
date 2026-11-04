@@ -176,6 +176,7 @@ function Workspace({
   const [draft, setDraft] = useState<{ text: string; n: number } | undefined>();
   const [replaced, setReplaced] = useState(loadReplaced);
   const [navOpen, setNavOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [error, setError] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const desk = desktop();
@@ -207,12 +208,12 @@ function Workspace({
 
   const refreshSessions = useCallback(
     () =>
-      api.summaries().then((list) => {
+      api.summaries(50, showArchived).then((list) => {
         if (desk && listed.current) for (const a of attentionChanges(listed.current, list)) desk.notify(a);
         listed.current = list;
         setSessions(list);
       }, fail),
-    [api, fail, desk],
+    [api, fail, desk, showArchived],
   );
 
   useEffect(() => {
@@ -354,6 +355,12 @@ function Workspace({
         live={taskId && state.lastSeq ? { title: state.title, status: liveStatus(state) } : undefined}
         onOpen={open}
         onNew={() => open(null)}
+        archived={showArchived}
+        onShowArchived={(show) => {
+          listed.current = null; // another list: nothing in it is news
+          setShowArchived(show);
+        }}
+        onArchive={(id, archived) => void api.archive(id, archived).then(refreshSessions, fail)}
         onDisconnect={onDisconnect}
       />
       <div className="scrim" onClick={() => setNavOpen(false)} />
@@ -368,7 +375,7 @@ function Workspace({
             </button>
             {state.cwd && <span className="cwd muted">{state.cwd}</span>}
           </div>
-          <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} />
+          <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} compaction={state.compaction} />
           {taskId && (
             <button className="icon-button" title="Rewind" aria-label="Rewind" onClick={() => setRewinding(true)}>
               ↶

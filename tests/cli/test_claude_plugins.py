@@ -145,3 +145,12 @@ async def test_skills_dirs_in_config_toml_still_add_their_skills_beside_a_plugin
     assert sorted(c.name for c in skills._commands(str(tmp_path))) == [
         "deploy-tools:deploy", "tidy"]
     await app.store.close()
+
+
+async def test_every_agent_offers_init_and_review_with_no_plugin(home: Path,
+                                                                 tmp_path: Path) -> None:
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    for agent in ("main", "Explore"):
+        names = {c.name for c in await app.commands(agent, CommandContext(cwd=str(tmp_path)))}
+        assert {"init", "review"} <= names
+    await app.store.close()
