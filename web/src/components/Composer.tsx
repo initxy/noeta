@@ -34,14 +34,18 @@ interface Props {
   findFiles: (q: string) => Promise<string[]>;
   onSend: (text: string, images: Attachment[]) => void;
   onStop: () => void;
+  /** Shift+Tab: the next permission mode. */
+  onCycleMode?: () => void;
   placeholder?: string;
+  /** Text put in the box (a rewound prompt to edit and send again); `n` tells two apart. */
+  draft?: { text: string; n: number };
 }
 
 /** The prompt box: Enter sends (Shift+Enter a new line), `/` lists the
  * commands, `@` the files, pasted or dropped images go with the message,
  * Esc or the stop button interrupts. Sent while the model works, a message
  * waits in the queue for its next turn. */
-export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, placeholder }: Props) {
+export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, onCycleMode, placeholder, draft }: Props) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<Attachment[]>([]);
   const [caret, setCaret] = useState(0);
@@ -50,6 +54,14 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
   const box = useRef<HTMLTextAreaElement>(null);
   const placeCaret = useRef<number | null>(null); // after a completion, once its text is in
   const query = menuQuery(text, caret);
+
+  useEffect(() => {
+    if (!draft) return;
+    placeCaret.current = draft.text.length;
+    setText(draft.text);
+    setCaret(draft.text.length);
+    box.current?.focus();
+  }, [draft]);
 
   useLayoutEffect(() => {
     if (placeCaret.current !== null) box.current?.setSelectionRange(placeCaret.current, placeCaret.current);
@@ -86,8 +98,8 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
     box.current?.focus();
   };
 
-  const send = () => {
-    const t = text.trim();
+  const send = (typed = text) => {
+    const t = typed.trim();
     if ((!t && !images.length) || disabled) return;
     onSend(t, images);
     setText("");
@@ -102,11 +114,22 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
         setActive((a) => (a + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
         return;
       }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && query?.kind === "mention")) {
+      if (e.key === "Enter" && !e.shiftKey && query?.kind === "slash") {
+        // Enter runs the highlighted command, as Claude Code's menu does.
+        e.preventDefault();
+        send(options[active].insert);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
         choose(options[active].insert);
         return;
       }
+    }
+    if (e.key === "Tab" && e.shiftKey && onCycleMode) {
+      e.preventDefault();
+      onCycleMode();
+      return;
     }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
@@ -197,7 +220,7 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
             ■
           </button>
         )}
-        <button className="send" aria-label="Send" disabled={disabled || (!text.trim() && !images.length)} onClick={send}>
+        <button className="send" aria-label="Send" disabled={disabled || (!text.trim() && !images.length)} onClick={() => send()}>
           ↑
         </button>
       </div>

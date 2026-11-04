@@ -50,12 +50,17 @@ describe("the app inside the desktop app", () => {
 
   it("starts a new session in the chosen project folder and follows the menu", async () => {
     const posts: unknown[] = [];
+    const sent: unknown[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         if (init?.method === "POST" && url === "/tasks") {
           posts.push(JSON.parse(String(init.body)));
           return new Response(JSON.stringify({ task_id: "t9" }), { status: 201 });
+        }
+        if (init?.method === "POST" && url === "/tasks/t9/messages") {
+          sent.push(JSON.parse(String(init.body)));
+          return new Response(JSON.stringify({ inbox_seq: 1 }));
         }
         if (url.includes("/watch")) return new Response("event: end\ndata: {}\n\n");
         return new Response("[]");
@@ -82,9 +87,12 @@ describe("the app inside the desktop app", () => {
     expect(screen.getByRole("button", { name: "/srv/repo" })).toBeInTheDocument();
 
     const box = screen.getByLabelText("Message");
-    await userEvent.type(box, "hello{Enter}");
-    await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toMatchObject({ input: "hello", config: { cwd: "/srv/repo" } });
+    // The first message goes the way every later one does: the task is
+    // made empty, then the message is sent (a slash command expands).
+    await userEvent.type(box, "/greet the team{Enter}");
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(posts).toEqual([expect.objectContaining({ input: null, config: expect.objectContaining({ cwd: "/srv/repo" }) })]);
+    expect(sent[0]).toMatchObject({ input: "/greet the team" });
 
     act(() => command({ name: "new-session" }));
     expect(await screen.findByText("What should we work on?")).toBeInTheDocument();

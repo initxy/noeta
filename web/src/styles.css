@@ -1013,3 +1013,23 @@ code {
     max-width: 100%;
   }
 }
+
+.disconnect {
+  display: block;
+  margin: 16px 8px 0;
+  color: var(--muted);
+}
+
+.card:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.choice.active {
+  border-color: var(--accent);
+}
+
+.keys {
+  margin-top: 6px;
+  font-size: 12px;
+}

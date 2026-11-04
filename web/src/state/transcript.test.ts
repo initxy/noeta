@@ -103,7 +103,7 @@ describe("reduce", () => {
       "info:Interrupted by you",
       "error:Turn failed: provider: 429",
       "compaction",
-      "error:TaskSummary failed: boom",
+      "error:Session failed: boom",
     ]);
     expect(st.ended).toBe("failed");
   });
@@ -114,6 +114,42 @@ describe("reduce", () => {
     st = reduce(st, person("next", 4));
     expect(st.queued).toEqual([]);
     expect(st.items[0]).toMatchObject({ kind: "user", text: "next" });
+  });
+
+  it("ignores a send receipt that arrives after the stream showed the message taken", () => {
+    let st = run(person("fast", 7), ev({ type: "ModelCalled", model: "m" }), reply({ type: "text", text: "done" }), ev({ type: "Waiting", on: "input" }));
+    st = reduce(st, { type: "queued", seq: 7, text: "fast" });
+    expect(st.queued).toEqual([]);
+    expect(st.busy).toBe(false);
+    st = reduce(st, { type: "queued", seq: 8, text: "later" });
+    expect(st.queued).toEqual([{ seq: 8, text: "later" }]);
+  });
+
+  it("ends a wait on an approval once the task takes input", () => {
+    let st = run(ev({ type: "Waiting", on: "approval", ids: [] }));
+    expect(st.waitingOn).toBe("approval");
+    st = reduce(st, ev({ type: "InputTaken", through: 3, items: [{ seq: 3, at: 0, body: { kind: "answer", request_id: "c1", decision: "allow" } }] }));
+    expect(st.waitingOn).toBeNull();
+  });
+
+  it("shows a typed slash command as the person typed it", () => {
+    const st = run(person("<command-message>greet</command-message>\n<command-name>/greet</command-name>\n<command-args>the team</command-args>"));
+    expect(st.items[0]).toMatchObject({ kind: "user", text: "/greet the team" });
+  });
+
+  it("shows the conversation a task continues before its own, without its turn state", () => {
+    const old = (event: Event, n: number): Action => ({ type: "history", from: "old", rec: { seq: n, at: 0, event } as Recorded });
+    let st = run(
+      old({ type: "TaskCreated", agent: "main", config: { cwd: "/w" } }, 1),
+      old({ type: "InputTaken", through: 9, items: [{ seq: 9, at: 0, body: { kind: "message", message: { role: "user", content: [{ type: "text", text: "first" }], origin: "human" } } }] }, 2),
+      old({ type: "ModelCalled", model: "m" }, 3),
+      old({ type: "ExtensionRecorded", extension: "title", kind: "title", data: { title: "Old title" } }, 4),
+      old({ type: "TaskEnded", status: "completed" }, 5),
+    );
+    expect(st).toMatchObject({ lastSeq: 0, taken: 0, busy: false, ended: null, title: "Old title", cwd: "/w" });
+    expect(st.items).toEqual([{ kind: "user", id: "old:u2.9", text: "first", images: [] }]);
+    st = reduce(st, person("second", 1));
+    expect(st.items.map((i) => (i.kind === "user" ? i.text : i.kind))).toEqual(["first", "second"]);
   });
 });
 

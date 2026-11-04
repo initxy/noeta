@@ -57,6 +57,9 @@ export interface TaskState {
   contextTokens: number;
   /** Inbox seqs of messages sent but not taken yet (queued), with their text. */
   queued: { seq: number; text: string }[];
+  /** The highest inbox seq the task has taken: a send receipt at or below it
+   * arrived after the stream showed the message taken. */
+  taken: number;
 }
 
 export const emptyTask = (): TaskState => ({
@@ -76,10 +79,13 @@ export const emptyTask = (): TaskState => ({
   todos: [],
   contextTokens: 0,
   queued: [],
+  taken: 0,
 });
 
 export type Action =
   | { type: "event"; rec: Recorded }
+  /** An event of a conversation the task continues (`history_from`), shown before its own. */
+  | { type: "history"; rec: Recorded; from: string }
   | { type: "delta"; delta: Delta }
   | { type: "queued"; seq: number; text: string }
   | { type: "notice"; text: string; tone: "info" | "error" }
@@ -90,6 +96,12 @@ const text = (blocks: Block[]): string =>
 
 const fromPerson = (m: Message): boolean =>
   m.role === "user" && (m.origin == null || m.origin === "human");
+
+/** A typed slash command as the person typed it (`/name args`), else the text. */
+export function shownPrompt(t: string): string {
+  const m = /^<command-message>[^<]*<\/command-message>\s*<command-name>([^<]*)<\/command-name>\s*(?:<command-args>([\s\S]*?)<\/command-args>)?/.exec(t.trim());
+  return m ? [m[1], (m[2] ?? "").trim()].filter(Boolean).join(" ") : t;
+}
 
 function updateTool(items: Item[], id: string, patch: Partial<Extract<Item, { kind: "tool" }>>): Item[] {
   return items.map((it) => (it.kind === "tool" && it.id === id ? { ...it, ...patch } : it));
@@ -182,12 +194,14 @@ function event(st: TaskState, rec: Recorded): TaskState {
       let items = st.items;
       let busy = st.busy;
       const taken = new Set<number>();
+      let through = Math.max(st.taken, ev.through ?? 0);
       for (const item of ev.items) {
         taken.add(item.seq);
+        through = Math.max(through, item.seq);
         const body = item.body;
         if (body.kind === "message" && fromPerson(body.message) && text(body.message.content).trim()) {
           const images = body.message.content.flatMap((b) => (b.type === "image" ? [`data:${b.media_type};base64,${b.data}`] : []));
-          items = [...items, { kind: "user", id: `u${seq}.${item.seq}`, text: text(body.message.content), images }];
+          items = [...items, { kind: "user", id: `u${seq}.${item.seq}`, text: shownPrompt(text(body.message.content)), images }];
           busy = true;
         } else if (body.kind === "child_ended") {
           items = updateChild(items, body.child_id, body.status);
@@ -196,7 +210,8 @@ function event(st: TaskState, rec: Recorded): TaskState {
           if (typeof model === "string") st = { ...st, model };
         }
       }
-      return { ...st, items, busy, queued: st.queued.filter((q) => !taken.has(q.seq)) };
+      // Taking input ends a wait: the answer (or message) is in.
+      return { ...st, items, busy, waitingOn: null, taken: through, queued: st.queued.filter((q) => !taken.has(q.seq)) };
     }
     case "ModelCalled":
       return { ...st, called: seq, busy: true, model: ev.model || st.model };
@@ -243,7 +258,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
         ended: ev.status,
         items: [
           ...st.items,
-          { kind: "notice", id: `e${seq}`, text: `TaskSummary ${ev.status}${ev.error ? `: ${ev.error}` : ""}`, tone: ev.status === "failed" ? "error" : "info" },
+          { kind: "notice", id: `e${seq}`, text: `Session ${ev.status}${ev.error ? `: ${ev.error}` : ""}`, tone: ev.status === "failed" ? "error" : "info" },
         ],
       };
     case "ExtensionRecorded":
@@ -271,13 +286,39 @@ function delta(st: TaskState, d: Delta): TaskState {
   return { ...st, live, busy: true };
 }
 
+/** An earlier conversation's event: its items and what it set (title, mode,
+ * todos …), but not the state of its turn (busy, waiting, ended) nor its
+ * seqs, which are another log's. */
+function history(st: TaskState, rec: Recorded, from: string): TaskState {
+  if (rec.event.type === "TaskEnded" || rec.event.type === "Waiting") return st;
+  const next = event(st, rec);
+  const added = next.items.slice(st.items.length).map((it) => (it.kind === "tool" ? it : { ...it, id: `${from}:${it.id}` }));
+  return {
+    ...next,
+    items: [...next.items.slice(0, st.items.length), ...added],
+    lastSeq: st.lastSeq,
+    taken: st.taken,
+    called: st.called,
+    replied: st.replied,
+    live: st.live,
+    busy: st.busy,
+    waitingOn: st.waitingOn,
+    ended: st.ended,
+    queued: st.queued,
+  };
+}
+
 export function reduce(st: TaskState, action: Action): TaskState {
   switch (action.type) {
     case "event":
       return event(st, action.rec);
     case "delta":
       return delta(st, action.delta);
+    case "history":
+      return history(st, action.rec, action.from);
     case "queued":
+      // Taken already (the stream outran the receipt): nothing is queued.
+      if (action.seq <= st.taken) return st;
       return { ...st, busy: true, queued: [...st.queued, { seq: action.seq, text: action.text }] };
     case "notice":
       return { ...st, items: [...st.items, { kind: "notice", id: `x${st.items.length}`, text: action.text, tone: action.tone }] };

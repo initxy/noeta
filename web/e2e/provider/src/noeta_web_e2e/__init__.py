@@ -10,6 +10,9 @@ script, and how many replies came since that prompt picks the step.
 * ``agent`` — an ``Agent`` call to ``Explore``, whose task answers ``explored``.
 * ``plan`` — ``ExitPlanMode`` loaded and called with a plan.
 * ``slow`` — a long reply streamed slowly (for interrupting).
+* ``links`` — a reply with a link and a remote image.
+* a slash command the server expanded (Claude Code's ``<command-name>`` tags) — a
+  reply naming it.
 * anything else — a markdown reply with a code block, after a thought.
 
 Text streams in small fragments, so the page shows it as it is written.
@@ -63,6 +66,12 @@ def _step(prompt: str, after: list[Message]) -> tuple[str, list[tuple[str, dict[
     replies = sum(1 for m in after if m.role == "assistant")
     low = prompt.lower()
     work = os.environ.get("NOETA_WEB_E2E_DIR", os.getcwd())
+    if "<command-name>" in prompt:
+        name = prompt.split("<command-name>")[1].split("</command-name>")[0]
+        return f"Ran the command {name}.", [], ""
+    if "links" in low:
+        return ("See [the docs](https://example.com/docs) and this chart: "
+                "![chart](http://127.0.0.1:9/pixel.png)"), [], ""
     if "explore-sub" in low:
         return ("explored", [], "") if replies else \
             ("", [("Glob", {"pattern": "*.txt"})], "")

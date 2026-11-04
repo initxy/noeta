@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { Item } from "../state/transcript";
 import { useApi, useTask } from "../state/useTask";
-import { DiffView, proposedDiff } from "./DiffView";
+import { DiffView, EDITS, editDiff } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { Transcript } from "./Transcript";
 
@@ -17,7 +17,6 @@ export function toolTarget(name: string, input: Record<string, unknown>): string
 }
 
 const COMPACT = new Set(["Read", "Grep", "Glob", "LS", "ToolSearch", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TodoWrite", "NotebookRead"]);
-const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 
 function StatusDot({ status }: { status: Tool["status"] }) {
   return <span className={`dot dot-${status}`} aria-label={status} />;
@@ -38,19 +37,6 @@ function Output({ text, error, open }: { text: string; error?: boolean; open?: b
       )}
     </div>
   );
-}
-
-function editDiff(t: Tool): string {
-  const done = t.meta?.diff;
-  if (typeof done === "string" && done) return done;
-  if (t.name === "Write") return proposedDiff("", str(t.input.content));
-  if (t.name === "Edit") return proposedDiff(str(t.input.old_string), str(t.input.new_string));
-  if (t.name === "MultiEdit" && Array.isArray(t.input.edits)) {
-    return (t.input.edits as { old_string?: string; new_string?: string }[])
-      .map((e) => proposedDiff(str(e.old_string), str(e.new_string)))
-      .join("\n");
-  }
-  return "";
 }
 
 function SubAgent({ t }: { t: Tool }) {
@@ -92,7 +78,8 @@ export function ToolCard({ t }: { t: Tool }) {
       </>
     );
   } else if (EDITS.has(t.name)) {
-    const diff = editDiff(t);
+    const done = t.meta?.diff;
+    const diff = typeof done === "string" && done ? done : editDiff(t.name, t.input);
     const added = t.meta?.added as number | undefined;
     const removed = t.meta?.removed as number | undefined;
     body = (

@@ -91,8 +91,11 @@ export class Api {
     return this.call("GET", `/summaries${query({ limit })}`);
   }
 
-  async create(input: Input | null, config: Record<string, unknown>, agent = "main"): Promise<string> {
-    const got = await this.call<{ task_id: string }>("POST", "/tasks", { agent, input, config });
+  /** A new task; `historyFrom` continues that task's conversation. */
+  async create(input: Input | null, config: Record<string, unknown>, agent = "main", historyFrom?: string): Promise<string> {
+    const body: Record<string, unknown> = { agent, input, config };
+    if (historyFrom) body.history_from = historyFrom;
+    const got = await this.call<{ task_id: string }>("POST", "/tasks", body);
     return got.task_id;
   }
 
@@ -152,7 +155,7 @@ export class Api {
 
   /** Follows the task's events from `after` until the server ends the
    * stream or `signal` aborts; a dropped connection picks up from the last
-   * event seen. */
+   * event seen. Rejects with the server's error when it ends the stream on one. */
   async watch(
     taskId: string,
     after: number,
@@ -167,9 +170,11 @@ export class Api {
           signal,
         });
         if (!resp.ok || !resp.body) throw new ApiError(resp.status, resp.statusText);
+        failures = 0;
         const reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();
         let buffer = "";
         let ended = false;
+        let error = "";
         while (!ended) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -177,19 +182,24 @@ export class Api {
             if (m.event === "event") {
               const rec = JSON.parse(m.data) as Recorded;
               after = rec.seq;
-              failures = 0;
               on.event(rec);
             } else if (m.event === "delta") {
               on.delta(JSON.parse(m.data) as Delta);
             } else if (m.event === "end") {
               ended = true;
+              try {
+                error = String((JSON.parse(m.data) as { error?: unknown }).error ?? "");
+              } catch {
+                // an end without a body
+              }
             }
           });
         }
+        if (error) throw new ApiError(0, error);
         if (ended) return;
       } catch (err) {
         if (signal.aborted) return;
-        if (err instanceof ApiError && err.status > 0 && err.status < 500) throw err;
+        if (err instanceof ApiError && err.status < 500) throw err;
       }
       failures += 1;
       if (failures > 5) throw new Error(`lost the event stream of ${taskId}`);
@@ -230,6 +240,16 @@ export function initialConnection(): Connection | null {
   }
   const token = stored(TOKEN_KEY);
   return token === null ? null : { server: stored(SERVER_KEY) ?? given?.server ?? "", token };
+}
+
+/** Forgets the saved server and token (the page asks for them again). */
+export function forgetConnection(): void {
+  try {
+    localStorage.removeItem(SERVER_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // nothing was saved
+  }
 }
 
 export function saveConnection(conn: Connection): void {

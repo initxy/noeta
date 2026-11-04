@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Api, ApiError, initialConnection, parseSse, type SseMessage } from "./client";
+import { Api, ApiError, forgetConnection, initialConnection, parseSse, type SseMessage } from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -45,6 +45,46 @@ describe("Api", () => {
   });
 });
 
+describe("Api.watch reconnecting", () => {
+  const event = (seq: number) => `event: event\ndata: {"seq":${seq},"at":0,"event":{"type":"Waiting","on":"input"}}\n\n`;
+
+  it("picks up after the last event seen when the stream drops", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(event(1) + event(2)))
+      .mockRejectedValueOnce(new TypeError("network down"))
+      .mockResolvedValueOnce(new Response(event(3) + "event: end\ndata: {}\n\n"));
+    vi.stubGlobal("fetch", fetch);
+    const seen: number[] = [];
+    await new Api({ server: "", token: "" }).watch("t1", 0, { event: (r) => seen.push(r.seq), delta: () => undefined }, new AbortController().signal);
+    expect(seen).toEqual([1, 2, 3]);
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual(["/tasks/t1/watch?after=0", "/tasks/t1/watch?after=2", "/tasks/t1/watch?after=2"]);
+  });
+
+  it("counts only failed connections: a stream that answers and drops resets the count", async () => {
+    const fetch = vi.fn();
+    for (let i = 0; i < 7; i++) fetch.mockResolvedValueOnce(new Response(""));
+    fetch.mockResolvedValueOnce(new Response("event: end\ndata: {}\n\n"));
+    vi.stubGlobal("fetch", fetch);
+    vi.useFakeTimers();
+    try {
+      const done = new Api({ server: "", token: "" }).watch("t1", 0, { event: () => undefined, delta: () => undefined }, new AbortController().signal);
+      await vi.runAllTimersAsync();
+      await expect(done).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(fetch).toHaveBeenCalledTimes(8);
+  });
+
+  it("rejects with the error the server ended the stream on", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('event: end\ndata: {"error":"store unreachable"}\n\n')));
+    await expect(
+      new Api({ server: "", token: "" }).watch("t1", 0, { event: () => undefined, delta: () => undefined }, new AbortController().signal),
+    ).rejects.toThrow("store unreachable");
+  });
+});
+
 describe("initialConnection", () => {
   it("prefers the embedding shell's, then the URL fragment, then what was saved", () => {
     window.NOETA_CONFIG = { server: "http://desk:9", token: "shell" };
@@ -54,7 +94,7 @@ describe("initialConnection", () => {
     expect(initialConnection()).toEqual({ server: "http://x:1", token: "frag" });
     expect(window.location.hash).toBe("");
     expect(initialConnection()).toEqual({ server: "http://x:1", token: "frag" });
-    localStorage.clear();
+    forgetConnection();
     expect(initialConnection()).toBeNull();
   });
 });

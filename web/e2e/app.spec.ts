@@ -2,6 +2,8 @@
 // (e2e/provider: the prompt's keyword picks the script). Screenshots go to
 // screenshots/ (the README there) only with NOETA_SCREENSHOTS=1.
 import { expect, test, type Page } from "@playwright/test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { TOKEN } from "../playwright.config";
 
 const SHOTS = process.env.NOETA_SCREENSHOTS ? "screenshots" : "test-results/screenshots";
@@ -25,8 +27,18 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible();
 });
 
+test("the bundle is served with a content security policy", async ({ page }) => {
+  const resp = await page.request.get("/");
+  expect(resp.headers()["content-security-policy"]).toContain("default-src 'self'");
+  expect(resp.headers()["x-frame-options"]).toBe("DENY");
+});
+
 test("a new session streams a markdown reply", async ({ page }) => {
   await newSession(page);
+  // Shift+Tab cycles the mode, as in Claude Code.
+  await page.getByLabel("Message").press("Shift+Tab");
+  await expect(page.getByLabel("Permission mode")).toHaveValue("acceptEdits");
+  await page.getByLabel("Permission mode").selectOption("default");
   await shot(page, "01-new-session");
   await say(page, "hello there, noeta");
   await expect(page.locator(".msg.user").first()).toContainText("hello there, noeta");
@@ -46,7 +58,8 @@ test("an approval card answered runs the Bash call", async ({ page }) => {
   await expect(card.getByRole("button", { name: /^1 Yes/ })).toBeVisible();
   await expect(page.locator('.tool[data-tool="Bash"]')).toHaveAttribute("data-status", "waiting");
   await shot(page, "03-approval-card");
-  await card.getByRole("button", { name: /^1 Yes/ }).click();
+  await expect(card).toBeFocused();
+  await page.keyboard.press("1");
   const tool = page.locator('.tool[data-tool="Bash"]');
   await expect(tool).toHaveAttribute("data-status", "done");
   await expect(tool.locator(".tool-output")).toContainText("hello-from-bash");
@@ -59,6 +72,7 @@ test("a Write shows its diff, and its card switches the mode", async ({ page }) 
   await say(page, "write notes-e2e.txt please");
   const card = page.getByRole("dialog", { name: "Create file" });
   await expect(card).toBeVisible();
+  await expect(card.locator(".diff-add").first()).toContainText("first line");
   await expect(page.locator('.tool[data-tool="Write"] .diff-add').first()).toContainText("first line");
   await card.getByRole("button", { name: /accept edits/ }).click();
   await expect(page.getByLabel("Permission mode")).toHaveValue("acceptEdits");
@@ -148,4 +162,62 @@ test("rename, rewind, dark theme and a phone-sized screen", async ({ page }) => 
   await page.getByRole("button", { name: "Sessions" }).click();
   await expect(page.locator(".nav-open .sidebar")).toBeVisible();
   await shot(page, "15-phone-sessions");
+});
+
+test("a new session's first message may be a slash command", async ({ page }) => {
+  const commands = join(process.env.NOETA_E2E_DIR!, "home", "commands");
+  mkdirSync(commands, { recursive: true });
+  writeFileSync(join(commands, "greet.md"), "---\ndescription: Greet the team\n---\nSay hello to the team.\n");
+  await newSession(page, "acceptEdits");
+  await say(page, "/greet the team");
+  await expect(page.locator(".msg.user").first()).toHaveText("/greet the team");
+  await expect(page.locator(".msg.assistant").last()).toContainText("Ran the command /greet.");
+});
+
+test("links open in a new tab and remote images are not loaded", async ({ page }) => {
+  const fetched: string[] = [];
+  page.on("request", (r) => fetched.push(r.url()));
+  await newSession(page, "acceptEdits");
+  await say(page, "show me links");
+  const reply = page.locator(".msg.assistant").last();
+  await expect(reply.getByRole("link", { name: "the docs" })).toHaveAttribute("target", "_blank");
+  await expect(reply.getByRole("link", { name: "the docs" })).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(reply.getByRole("link", { name: "Image: chart" })).toBeVisible();
+  await expect(reply.locator("img")).toHaveCount(0);
+  expect(fetched.filter((u) => u.includes("pixel.png"))).toEqual([]);
+});
+
+test("an ended session is continued by sending to it", async ({ page }) => {
+  await newSession(page, "acceptEdits");
+  await say(page, "hello before the end");
+  await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
+  const ended = /#session=(.+)$/.exec(page.url())![1];
+  const cancel = await page.request.post(`/tasks/${ended}/cancel`, { headers: { authorization: `Bearer ${TOKEN}` }, data: {} });
+  expect(cancel.ok()).toBe(true);
+  await expect(page.locator(".notice").last()).toContainText("Session cancelled");
+  await expect(page.getByLabel("Message")).toHaveAttribute("placeholder", /continue it/);
+  await say(page, "hello after the end");
+  await expect(page).not.toHaveURL(new RegExp(ended));
+  await expect(page.locator(".msg.user")).toHaveText(["hello before the end", "hello after the end"]);
+  await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
+  await expect(page.getByLabel("Message")).not.toHaveAttribute("placeholder", /continue it/);
+});
+
+test("a rewind puts the prompt back and the session is replaced in the sidebar", async ({ page }) => {
+  await newSession(page, "acceptEdits");
+  await say(page, "hello one");
+  await expect(page.locator(".msg.assistant")).toHaveCount(1);
+  await say(page, "hello two");
+  await expect(page.locator(".msg.assistant")).toHaveCount(2);
+  const before = /#session=(.+)$/.exec(page.url())![1];
+  const rows = await page.locator(".session").count();
+  await page.getByRole("button", { name: "Rewind" }).click();
+  const dialog = page.getByRole("dialog", { name: "Rewind" });
+  await dialog.locator("li", { hasText: "hello two" }).getByRole("button", { name: "Conversation" }).click();
+  await expect(page).not.toHaveURL(new RegExp(before));
+  await expect(page.getByLabel("Message")).toHaveValue("hello two");
+  // The conversation up to the prompt is still shown, in the new session.
+  await expect(page.locator(".msg.user")).toHaveText(["hello one"]);
+  await expect(page.locator(".session")).toHaveCount(rows);
+  await expect(page.locator(".session.active")).toBeVisible();
 });

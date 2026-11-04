@@ -5,7 +5,9 @@ import type { Api } from "../api/client";
 import type { Pending, TaskSummary } from "../api/types";
 import { emptyTask, type Item } from "../state/transcript";
 import { ApiContext } from "../state/useTask";
+import { ApiError } from "../api/client";
 import { Composer, menuQuery } from "./Composer";
+import { Markdown } from "./Markdown";
 import { PendingCards } from "./PendingCard";
 import { Sidebar } from "./Sidebar";
 import { ToolCard } from "./ToolCard";
@@ -46,6 +48,7 @@ describe("ToolCard", () => {
 
   it("opens a sub-agent's own transcript", async () => {
     const api = {
+      events: vi.fn(async () => []),
       watch: vi.fn(async (_id: string, _after: number, on: { event: (r: unknown) => void }) => {
         on.event({ seq: 1, at: 0, event: { type: "ModelReplied", response: { message: { role: "assistant", content: [{ type: "text", text: "explored it" }] }, stop_reason: "end_turn", usage: {} } } });
       }),
@@ -121,6 +124,40 @@ describe("PendingCards", () => {
     expect(answered).toHaveBeenCalledTimes(3);
   });
 
+  it("answers from the keyboard: a digit picks, arrows and Enter take the highlighted, Esc says no", async () => {
+    const answer = vi.fn().mockResolvedValue({});
+    const api = { answer } as unknown as Api;
+    const { unmount } = render(<PendingCards pending={[approval]} api={api} answered={() => undefined} />);
+    expect(screen.getByRole("dialog")).toHaveFocus();
+    await userEvent.keyboard("2");
+    expect(answer).toHaveBeenLastCalledWith("t1", "c1", "allow", { always: true });
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    expect(answer).toHaveBeenLastCalledWith("t1", "c1", "allow", { data: { mode: "acceptEdits" } });
+    await userEvent.keyboard("{Escape}");
+    expect(answer).toHaveBeenLastCalledWith("t1", "c1", "deny", { data: null });
+    unmount();
+  });
+
+  it("shows why an answer failed, and refreshes the cards when it was answered elsewhere", async () => {
+    const answer = vi.fn().mockRejectedValueOnce(new ApiError(500, "store down")).mockRejectedValueOnce(new ApiError(409, "answered"));
+    const answered = vi.fn();
+    render(<PendingCards pending={[approval]} api={{ answer } as unknown as Api} answered={answered} />);
+    await userEvent.click(screen.getByRole("button", { name: /^1 Yes/ }));
+    expect(await screen.findByText(/not sent: store down/)).toBeInTheDocument();
+    expect(answered).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /^1 Yes/ }));
+    expect(await screen.findByText(/already answered elsewhere/)).toBeInTheDocument();
+    expect(answered).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the change an Edit approval would make", () => {
+    const edit: Pending = { ...approval, tool: "Edit", title: "Edit file", input: { file_path: "/w/a.py", old_string: "x = 1", new_string: "x = 2" }, choices: undefined };
+    const { container } = render(<PendingCards pending={[edit]} api={{} as Api} answered={() => undefined} />);
+    expect(screen.getByText("/w/a.py")).toBeInTheDocument();
+    expect(container.querySelector(".card .diff-del")).toHaveTextContent("-x = 1");
+    expect(container.querySelector(".card .diff-add")).toHaveTextContent("+x = 2");
+  });
+
   it("answers a question with picked options or other text, and shows a plan to review", async () => {
     const answer = vi.fn().mockResolvedValue({});
     const question: Pending = {
@@ -176,6 +213,25 @@ describe("Composer", () => {
     expect(onStop).toHaveBeenCalledTimes(2);
   });
 
+  it("runs the highlighted slash command on Enter and cycles the mode on Shift+Tab", async () => {
+    const onSend = vi.fn();
+    const onCycleMode = vi.fn();
+    const two = [...commands, { name: "context", description: "", argument_hint: "", local: false }];
+    render(<Composer busy={false} commands={two} findFiles={async () => []} onSend={onSend} onStop={() => undefined} onCycleMode={onCycleMode} />);
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "/c{ArrowDown}{Enter}");
+    expect(onSend).toHaveBeenCalledWith("/context", []);
+    expect(box).toHaveValue("");
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(onCycleMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes a draft to edit (a rewound prompt)", async () => {
+    const { rerender } = render(<Composer busy={false} commands={[]} findFiles={async () => []} onSend={() => undefined} onStop={() => undefined} />);
+    rerender(<Composer busy={false} commands={[]} findFiles={async () => []} onSend={() => undefined} onStop={() => undefined} draft={{ text: "try again", n: 1 }} />);
+    expect(screen.getByLabelText("Message")).toHaveValue("try again");
+  });
+
   it("completes @ mentions from the server's files", async () => {
     const findFiles = vi.fn().mockResolvedValue(["src/main.py"]);
     render(<Composer busy={false} commands={[]} findFiles={findFiles} onSend={() => undefined} onStop={() => undefined} />);
@@ -229,5 +285,32 @@ describe("Sidebar", () => {
     expect(screen.getByText("prompt b")).toBeInTheDocument(); // untitled: its prompt
     await userEvent.click(screen.getByText("Fix bug"));
     expect(onOpen).toHaveBeenCalledWith("a");
+  });
+
+  it("shows the open session's live title and status, and offers to disconnect", async () => {
+    const row: TaskSummary = { task_id: "a", agent: "main", status: "ready", waiting_on: null, end_status: null, created_at: 0, updated_at: 0, title: "", cwd: "/w", prompt: "" };
+    const onDisconnect = vi.fn();
+    render(<Sidebar sessions={[row]} current="a" live={{ title: "Live title", status: "needs-you" }} onOpen={() => undefined} onNew={() => undefined} onDisconnect={onDisconnect} />);
+    expect(screen.getByText("Live title")).toBeInTheDocument();
+    expect(screen.getByLabelText("Needs you")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    expect(onDisconnect).toHaveBeenCalled();
+  });
+});
+
+describe("Markdown", () => {
+  it("opens links in a new tab and does not load remote images", () => {
+    const { container } = render(<Markdown text={"[docs](https://example.com/d) ![chart](https://evil.example/pixel.png) ![dot](data:image/png;base64,iVBORw==)"} />);
+    const link = screen.getByRole("link", { name: "docs" });
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(container.querySelector('img[src^="https:"]')).toBeNull();
+    expect(screen.getByRole("link", { name: "Image: chart" })).toHaveAttribute("href", "https://evil.example/pixel.png");
+    expect(container.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw==");
+  });
+
+  it("drops a javascript: link", () => {
+    render(<Markdown text={"[x](javascript:alert(1))"} />);
+    expect(screen.getByText("x").closest("a")?.getAttribute("href") ?? "").not.toMatch(/javascript/);
   });
 });
