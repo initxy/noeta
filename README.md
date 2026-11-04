@@ -45,8 +45,27 @@ noeta -p --output-format stream-json --input-format stream-json --verbose
                                          # Claude Code's SDK protocol: point an Agent SDK at it
 ```
 
-A model noeta has no catalog entry for runs with a warning (default limits);
-`NOETA_MODELS_FILE` describes more. Tasks are kept in `~/.noeta/tasks.db`; `noeta -c` continues
+More providers go in `config.toml` tables; the settings above stay the default provider, and
+`provider = "<table name>"` makes a table the default instead:
+
+```toml
+[providers.claude]
+family = "anthropic"                 # or openai_compat, openai_responses
+api_key = "{env:ANTHROPIC_API_KEY}"  # a literal, or {env:…} / {keyring:…}
+models = ["claude-opus-5-5"]         # optional; rows {id, context_window, max_output_tokens} too
+# base_url, headers = {…}, list_models = false (skip reading its /models)
+```
+
+A task's model is a plain model id; each request goes to the provider whose table names that
+model (or whose models-file row says `"provider"`), else the first provider whose `/models`
+listing has it (the default first), else the default. So `/model` (and the SDK's `set_model`, an
+editor's model pick) switches across providers mid-task, a task resumed on another machine with
+the same config routes the same way, and `/model` alone lists every provider's models. A model
+id two providers serve goes to the first of them.
+
+A model's context window comes from noeta's catalog, then a models file (`NOETA_MODELS_FILE`) or table rows, then
+its provider's `/models` listing when that publishes one (read from your endpoint only, kept a
+day in `~/.noeta/cache/models`); else it runs with a warning at default limits. Tasks are kept in `~/.noeta/tasks.db`; `noeta -c` continues
 the newest conversation in this directory, `noeta -r` lists them. A project's own
 `.noeta/` settings, agents, skills and plugins load only after `noeta trust`.
 

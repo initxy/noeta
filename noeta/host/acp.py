@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 import acp
@@ -46,7 +46,7 @@ from noeta.host._acp_updates import (
     question_text,
     start_updates,
 )
-from noeta.host.app import AppAPI
+from noeta.host.app import AppAPI, model_choices, prepare_model
 from noeta.host.feed import failure_text
 from noeta.host.local import UnknownAgent
 from noeta.host.pending import (
@@ -106,19 +106,25 @@ class EditorServers:
 DEFAULT_MODEL = "default"
 
 
-def model_option(model: str) -> schema.SessionConfigOptionSelect:
-    """The model as an ACP config option: the catalog's models (and the
-    session's own, when it is not one of them)."""
+def model_option(model: str, choices: Sequence[tuple[str, str]] | None = None
+                 ) -> schema.SessionConfigOptionSelect:
+    """The model as an ACP config option: ``choices`` (``(model, provider
+    name)``, the providers' models), else the catalog's models, and the
+    session's own when it is not one of them."""
     aliases = {real: alias for alias, real in models.ALIASES.items()}
-    known = list(models.catalog_models())
+    found = dict(choices) if choices is not None else dict.fromkeys(models.catalog_models(), "")
+    known = list(found)
     if model != DEFAULT_MODEL and model not in known:
         known.insert(0, model)
+
+    def name(m: str) -> str:
+        notes = [n for n in (aliases.get(m), found.get(m)) if n]
+        return f"{m} ({', '.join(notes)})" if notes else m
+
     return schema.SessionConfigOptionSelect(
         type="select", id="model", name="Model", category="model", current_value=model,
         options=[schema.SessionConfigSelectOption(value=DEFAULT_MODEL, name="Agent default"),
-                 *(schema.SessionConfigSelectOption(
-                     value=m, name=f"{m} ({aliases[m]})" if m in aliases else m)
-                   for m in known)])
+                 *(schema.SessionConfigSelectOption(value=m, name=name(m)) for m in known)])
 
 
 #: Commands the adapter answers itself (name, hint, description).
@@ -212,7 +218,8 @@ class NoetaAcpAgent:
             called = [r.event.model for r in events if isinstance(r.event, ModelCalled)]
             self._model[task_id] = str(st.config.get("model") or "") \
                 or (called[-1] if called else DEFAULT_MODEL)
-        options: list[Any] = [model_option(self._model[task_id])]
+        options: list[Any] = [model_option(self._model[task_id],
+                                           await model_choices(self.app))]
         mode = self._mode.get(task_id) or current_mode(events)
         if mode is None:
             return None, options
@@ -244,6 +251,8 @@ class NoetaAcpAgent:
         """Switch the session's model from its next request on (``default``:
         back to the agent's own); the model now picked."""
         real = models.resolve_alias(model)
+        if real != DEFAULT_MODEL:
+            await prepare_model(self.app, real)
         await self.app.client.signal(session_id, CONFIG_SIGNAL,
                                      {"model": None if real == DEFAULT_MODEL else real})
         self._model[session_id] = real

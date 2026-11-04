@@ -154,6 +154,14 @@ class LocalApp:
         #: set by a host that loads plugins from files (the ``noeta``
         #: command), ``None`` otherwise.
         self.reload_plugins: Callable[[], list[str]] | None = None
+        #: ``(model, provider name)`` for the models every configured
+        #: provider offers; ``None`` when only the catalog is known. May
+        #: read the providers' listings: call it off the event loop.
+        self.list_models: Callable[[], list[tuple[str, str]]] | None = None
+        #: Settle a model before a switch to it (its provider, its limits),
+        #: returning what the person should know (an unknown model) or
+        #: ``None``; ``None`` when only the catalog is known. Off the loop.
+        self.prepare_model: Callable[[str], str | None] | None = None
 
     def replace_agents(self, agents: list[Agent]) -> None:
         """Run ``agents`` from now on: every task picked up after this (the
