@@ -15,8 +15,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.loop.state import TaskState
 from noeta.core.runner import Runtime
-from noeta.plugins import environment
-from noeta.plugins.environment import Environment
+from noeta.plugins.environment import Environment, notes
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -98,7 +97,7 @@ async def _first_request(tmp_path: Path, config: dict[str, object],
         def now(cls, tz: tzinfo | None = None) -> Clock:  # type: ignore[override]
             return cls.fromtimestamp(now.timestamp(), tz)
 
-    monkeypatch.setattr(environment, "datetime", Clock)
+    monkeypatch.setattr(notes, "datetime", Clock)
     store = SqliteStore(str(tmp_path / "t.db"))
     provider = ScriptedProvider([reply("a")])
     rt = Runtime(store=store,
