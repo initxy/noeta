@@ -28,8 +28,13 @@ def test_a_side_request_sends_the_models_default_output_and_effort() -> None:
 def test_other_models_switch_reasoning_off_and_send_no_effort() -> None:
     haiku = side_request(model="claude-haiku-4-5", identity="i", messages=[user("q")])
     assert (haiku.thinking, haiku.effort) == (None, None)
-    for model in ("gpt-4o", "some-gateway-model"):
-        r = side_request(model=model, identity="i", messages=[user("q")], effort="high")
-        assert (r.thinking, r.effort) == (False, None)
+    r = side_request(model="gpt-4o", identity="i", messages=[user("q")], effort="high")
+    assert (r.thinking, r.effort) == (False, None)
+    # A model the catalog does not know is not narrowed: the field is left
+    # out, as on its main requests (a gateway serving DeepSeek on the
+    # Messages wire refuses an explicit ``disabled`` with a 400).
+    unknown = side_request(model="some-gateway-model", identity="i", messages=[user("q")],
+                           effort="high")
+    assert (unknown.thinking, unknown.effort) == (None, None)
     assert side_request(model="some-gateway-model", identity="", messages=[user("q")]
                         ).max_tokens == models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS

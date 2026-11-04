@@ -101,3 +101,7 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   block); Claude Code's mid-prompt slash completion and its "% context used" variant are
   not built. make check 3552 passed, 90.34%; make tui 71 passed, 88.14%; make parity 0
   mismatches, own-words none; screenshots rewritten.
+- 2026-11-04 C follow-ups: `openai_compat` / `openai_responses` take the same headers-wait split
+  (shared `stream_timeout` / `bounded_silence` in `_common`). The 400 on each trial's first
+  call was the session-title side request sending `thinking: disabled` for an uncatalogued
+  model, which the DeepSeek gateway refuses; an uncatalogued model now gets no thinking field.
