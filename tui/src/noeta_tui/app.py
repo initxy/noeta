@@ -22,6 +22,7 @@ from noeta.host.app import FrontEndStart
 from noeta.host.local import UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
+from noeta.host.stream_json import find_latest_task
 from noeta.toolkit.interactive import follow
 from noeta.toolkit.local_env import local_timezone
 from noeta.toolkit.permission_modes import (
@@ -201,13 +202,19 @@ class NoetaApp(TranscriptView):
             await self._open_first()
 
     async def _open_first(self) -> None:
-        """The task the app starts on: ``--resume``'s, the picked one, or a new one."""
+        """The task the app starts on: ``--resume``'s, the picked one, the
+        newest one started here (``-c``), or a new one."""
         if self.resume:
             await self.open_task(self.resume)
         elif self.resume == "":
             await self.pick_task()
+        elif self.start.continue_last and (latest := await find_latest_task(
+                self.local.client, str(self.task_config.get("cwd") or self.cwd), self.agent)):
+            await self.open_task(latest)
         else:
             await self.new_task()
+            if self.start.continue_last:
+                await self.say_notice("No conversation found to continue")
         self.query_one(PromptInput).focus()
 
     async def on_unmount(self) -> None:
