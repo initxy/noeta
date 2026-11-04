@@ -26,18 +26,22 @@ Who reads what:
 * the methods above — plan_mode (``mode_of``, ``plan_start_mode``),
   environment (``working_directories``), instructions (``read_deny_rule``),
   compaction (``rehang``), permissions (``managed_only``);
-* checkpoints' ``snapshot``, memory's ``dir``, title's ``title`` — front
-  ends."""
+* checkpoints' ``snapshot``, memory's ``dir``, title's ``title``,
+  compaction's ``threshold`` — front ends."""
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
+from noeta.core.events import ExtensionRecorded, Recorded
 from noeta.core.extension import Extension, TaskView
 
 __all__ = [
+    "AUTO_COMPACT_KIND",
     "CHECKPOINTS",
+    "COMPACTION",
     "FS",
     "HOOKS",
     "INSTRUCTIONS",
@@ -47,6 +51,8 @@ __all__ = [
     "PLAN_MODE",
     "SHELL",
     "TITLE",
+    "AutoCompact",
+    "auto_compact",
     "files_shown_by_commands",
     "instruction_digests",
     "instructions_managed_only",
@@ -66,6 +72,7 @@ __all__ = [
 ]
 
 CHECKPOINTS = "checkpoints"
+COMPACTION = "compaction"
 FS = "fs"
 HOOKS = "hooks"
 INSTRUCTIONS = "instructions"
@@ -156,6 +163,36 @@ def mcp_names_too_long(ext: Mapping[str, Any]) -> dict[str, int]:
     return {str(e.get("alias")): e["too_long"] for e in servers or ()
             if isinstance(e, Mapping) and isinstance(e.get("too_long"), int)
             and not isinstance(e["too_long"], bool) and e["too_long"] > 0}
+
+
+#: The compaction plugin's record of when it compacts.
+AUTO_COMPACT_KIND = "threshold"
+
+
+@dataclass(frozen=True)
+class AutoCompact:
+    #: Context tokens at which automatic compaction fires.
+    threshold: int
+    #: The window less the summary's reserve.
+    window: int
+    #: Whether it compacts automatically (``/compact`` only when not).
+    auto: bool
+
+
+def auto_compact(events: Iterable[Recorded]) -> AutoCompact | None:
+    """When the task's compaction plugin last said it compacts (its
+    ``threshold`` record; ``None`` before it has)."""
+    found = None
+    for rec in events:
+        ev = rec.event
+        if not (isinstance(ev, ExtensionRecorded) and ev.extension == COMPACTION
+                and ev.kind == AUTO_COMPACT_KIND and isinstance(ev.data, Mapping)):
+            continue
+        threshold, window = ev.data.get("threshold"), ev.data.get("window")
+        if isinstance(threshold, int) and isinstance(window, int) and threshold > 0 < window:
+            found = AutoCompact(threshold=threshold, window=window,
+                                auto=bool(ev.data.get("auto", True)))
+    return found
 
 
 # ---------------------------------------------------------------- methods

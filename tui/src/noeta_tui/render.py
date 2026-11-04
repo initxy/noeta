@@ -299,6 +299,24 @@ def mode_hint(mode: str) -> Text:
     return out
 
 
+#: How far under the point it counts down to the footer starts to warn.
+CONTEXT_WARN_TOKENS = 20_000
+
+
+def context_left(tokens: int, threshold: int, window: int, auto: bool) -> Text | None:
+    """Claude Code's footer warning once the context is within
+    :data:`CONTEXT_WARN_TOKENS` of the auto-compact threshold (of the window
+    when automatic compaction is off); ``None`` before that."""
+    limit = threshold if auto else window
+    if limit <= 0 or tokens < limit - CONTEXT_WARN_TOKENS:
+        return None
+    left = max(0, round((limit - tokens) / limit * 100))
+    if auto:
+        return Text(f"{left}% until auto-compact", style="dim")
+    return Text(f"Context low ({left}% remaining) · Run /compact to compact & continue",
+                style="red")
+
+
 # ------------------------------------------------------------- /context
 
 #: Cells of the grid, each a hundredth of the window.

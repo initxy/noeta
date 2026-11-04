@@ -131,6 +131,8 @@ class CompactionState:
     #: request does not try again.
     failures: int = 0
     failed_at: tuple[int, int] | None = None
+    #: The ``threshold`` record last published: threshold, window, auto.
+    published: tuple[int, int, bool] | None = None
 
 
 def _user_turns(state: TaskState) -> int:
@@ -204,6 +206,10 @@ class Compaction(Extension):
             return replace(st, restored=tuple(data.get("texts") or ()))
         if kind == "restored_sent":
             return replace(st, restored=())
+        if kind == pr.AUTO_COMPACT_KIND:
+            return replace(st, published=(int(data.get("threshold") or 0),
+                                          int(data.get("window") or 0),
+                                          bool(data.get("auto", True))))
         if kind == "failed":
             return replace(st, failures=int(data.get("failures") or 0),
                            failed_at=(int(data.get("turn") or 0), int(data.get("step") or 0)))
@@ -263,6 +269,7 @@ class Compaction(Extension):
                                         estimated=self._tokens(state, request, at)[0],
                                         extra=extra, command_at=at)
             raise TurnDone()
+        self._publish(view, request.model)
         if not self.auto or view.complete is None:
             return request
         if state.compaction is not None and state.last_usage is None:
@@ -307,6 +314,19 @@ class Compaction(Extension):
         # Every extension builds the request again from the compacted
         # conversation (betas and notes that depend on it included).
         raise RequestStale()
+
+    def _publish(self, view: TaskView, model: str) -> None:
+        """The threshold for front ends' "N% until auto-compact", recorded
+        when it changes (a model switch)."""
+        try:
+            window = derive_window(model, auto_compact_window=self.auto_compact_window,
+                                   auto_compact_percent=self.auto_compact_percent)
+        except ValueError:
+            return
+        published = (window.threshold, window.effective, self.auto)
+        if self._ext(view.state).published != published:
+            view.record(self.name, pr.AUTO_COMPACT_KIND, {
+                "threshold": window.threshold, "window": window.effective, "auto": self.auto})
 
     async def on_context_overflow(self, view: TaskView, request: ModelRequest) -> bool:
         if view.complete is None:

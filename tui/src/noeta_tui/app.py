@@ -132,6 +132,7 @@ class NoetaApp(TranscriptView):
         #: What the task tree has cost so far (``host.usage``, as ``/cost``).
         self.cost_usd = 0.0
         self.context_tokens = 0
+        self.compacts_at = None
         #: The question the next input line answers: its call id, the task
         #: asking (the root or a sub-agent), its detail, and answers so far.
         self.waiting_question = ""
@@ -277,6 +278,7 @@ class NoetaApp(TranscriptView):
         self.task_cwd = self._default_task_cwd()
         self.effort = self.task_config.get("effort")
         self.context_tokens = 0
+        self.compacts_at = None
         self.calls.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
