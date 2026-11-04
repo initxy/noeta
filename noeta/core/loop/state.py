@@ -158,6 +158,8 @@ class TaskState:
     #: message, as if sent for the next turn.
     timers: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiting: Waiting | None = None
+    #: The log seq of the last ``Waiting``.
+    waiting_seq: int = 0
     #: The open batch's approval wait (its ``Waiting(approval)``): kept when
     #: a message clears ``waiting``, so the asked call is not gated again.
     asked: Waiting | None = None
@@ -273,6 +275,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer],
         _compact(state, ev)
     elif isinstance(ev, Waiting):
         state.waiting = ev
+        state.waiting_seq = rec.seq
         if ev.on == "approval":
             state.asked = ev
     elif isinstance(ev, TaskEnded):

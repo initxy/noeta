@@ -37,6 +37,7 @@ from noeta.core.events import (
     Cancel,
     ChildEnded,
     Event,
+    ExtensionRecorded,
     InputTaken,
     Recorded,
     TaskCreated,
@@ -845,15 +846,19 @@ class TaskRun:
 
     async def _woken_by_timer(self, waiting: Waiting) -> bool:
         """Whether the log ends with this very ``waiting`` (nothing happened
-        since), so the store woke the task for its ``until`` by the store's
-        clock, which this worker's may lag. Writing it again would leave
-        the task claimable at once, again and again; once per claim the
-        timers due by then fire instead."""
-        if (waiting.until is None or self._timer_forced or self.state.waiting != waiting
-                or self.state.last_seq < 1):
+        since but plugins' records of it, such as a relay's), so the store
+        woke the task for its ``until`` by the store's clock, which this
+        worker's may lag. Writing it again would leave the task claimable at
+        once, again and again; once per claim the timers due by then fire
+        instead."""
+        at = self.state.waiting_seq
+        if waiting.until is None or self._timer_forced or self.state.waiting != waiting \
+                or at < 1:
             return False
-        last = await self.store.read(self.task_id, after=self.state.last_seq - 1)
-        if not last or last[-1].seq != self.state.last_seq or last[-1].event != waiting:
+        tail = await self.store.read(self.task_id, after=at - 1)
+        if not tail or tail[0].event != waiting or tail[-1].seq != self.state.last_seq \
+                or any(not isinstance(r.event, ExtensionRecorded)
+                       or r.event.extension == CORE for r in tail[1:]):
             return False
         self._timer_forced = True
         return True
