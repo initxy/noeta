@@ -54,7 +54,7 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
       when nothing to continue.
 - [x] B Web: session search, archive (delete cut, D5), host routes as needed.
 - [ ] B2 Web: auto-compact indicator once A's reader lands.
-- [ ] C Eval: why `compaction_resume_edits` stalls at the eighth file; fix the cause.
+- [x] C Eval: why `compaction_resume_edits` stalls at the eighth file; fix the cause.
 - [ ] Integrate, full gates, review.
 
 ## Acceptance criteria
@@ -77,3 +77,8 @@ Web â€” no session search, archive or delete; no auto-compact indicator. Eval â€
   `web/`, no menu entries. Not done: the auto-compact indicator (B2, waits on A's reader).
   check 3550 passed, 90%; make tui 62; make web 53 + e2e 15; make desktop 33 + e2e 3;
   parity 0. Screenshots regenerated (`web/screenshots/16-search-archive.png` new).
+- 2026-11-04 C done: the hang was the first compaction's summarize call. The Anthropic adapter's
+  60 s stream-silence timeout also bounded the wait for response headers, and the eval gateway
+  sends headers only once the answer is complete, so a summary taking over 60 s timed out and
+  was retried ~20 min. Headers now wait up to Claude Code's request timeout (10 min); silence
+  after the stream began is still 60 s. 6 trials: 1.00 each, no timeouts (was 3 of 6).

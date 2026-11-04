@@ -21,7 +21,11 @@ holds one socket idle for the whole generation and dies on the client
 timeout: a long answer on a 128K cap reliably outran 60 s and then burned the
 retry budget re-running the same doomed call. A streamed connection keeps
 producing bytes (Anthropic also sends ``ping`` events), so the timeout
-measures silence rather than total generation time. A stream that breaks
+measures silence rather than total generation time. The wait for the
+response headers is bounded apart, by Claude Code's request timeout (10
+minutes): a gateway that holds the stream until the answer is complete sends
+nothing before then, and a silence bound there would retry a long answer
+(a compaction summary) until the budget ran out. A stream that breaks
 after it began raises :class:`~noeta.core.errors.StreamBroken`, and the
 retry helper goes on with :meth:`AnthropicProvider.complete_whole`, Claude
 Code's fallback: the same body sent without streaming, its output capped at
@@ -32,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from contextlib import aclosing
 from typing import Any
 
@@ -104,6 +108,21 @@ BETA_ORDER: tuple[str, ...] = (
 _BETA_RANK = {b: i for i, b in enumerate(BETA_ORDER)}
 
 
+async def _bounded_silence(lines: AsyncIterator[str], seconds: float) -> AsyncIterator[str]:
+    """``lines``, failing with :class:`httpx.ReadTimeout` when the next one
+    takes longer than ``seconds`` (the read timeout covers the wait for the
+    headers, which may be far longer)."""
+    while True:
+        try:
+            async with asyncio.timeout(seconds):
+                line = await anext(lines)
+        except StopAsyncIteration:
+            return
+        except TimeoutError:
+            raise httpx.ReadTimeout(f"no data on the stream for {seconds:g} s") from None
+        yield line
+
+
 def _beta_place(have: Sequence[str], beta: str) -> int:
     """Where ``beta`` goes in ``have``: before the first beta Claude Code
     lists after it, else at the end."""
@@ -135,6 +154,9 @@ def per_turn_model(model: str) -> bool:
 #: stream: its output and its client timeout (seconds).
 WHOLE_MAX_TOKENS = 64_000
 WHOLE_TIMEOUT_SECONDS = 300.0
+#: How long a streamed call waits for the response headers: Claude Code's
+#: request timeout (``API_TIMEOUT_MS``'s default).
+FIRST_BYTE_TIMEOUT_SECONDS = 600.0
 #: Client timeout of a token count: an estimate stands in when it passes.
 COUNT_TOKENS_TIMEOUT_SECONDS = 10.0
 
@@ -167,12 +189,14 @@ class AnthropicProvider:
         device_id: str | None = None,
         system_turns: bool = True,
         whole_timeout_seconds: float = WHOLE_TIMEOUT_SECONDS,
+        first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment
         variable; an explicit argument still wins. Missing credentials raise
         here rather than yielding a client that fails its first call with an
         opaque 401. ``timeout_seconds`` bounds silence on the stream, not the
-        whole generation. ``betas`` is the ``anthropic-beta`` header (an
+        whole generation; ``first_byte_timeout_seconds`` the wait for its
+        response headers. ``betas`` is the ``anthropic-beta`` header (an
         ``extra_headers`` entry wins); ``device_id`` the stable id in
         ``metadata.user_id`` (default: one per process). ``system_turns=False``
         is for an endpoint without mid-conversation ``system`` turns: they go
@@ -189,6 +213,8 @@ class AnthropicProvider:
         self._device_id = device_id
         self._system_turns = system_turns
         self._whole_timeout = whole_timeout_seconds
+        self._silence = timeout_seconds
+        self._first_byte_timeout = first_byte_timeout_seconds
         #: Models whose token count the endpoint refused (:meth:`count_tokens`).
         self._count_unavailable: set[str] = set()
         headers: dict[str, str] = {
@@ -245,6 +271,7 @@ class AnthropicProvider:
                 _MESSAGES_ENDPOINT,
                 json=body,
                 headers=self.request_headers(request) or None,
+                timeout=httpx.Timeout(self._silence, read=self._first_byte_timeout),
             ) as response:
                 if response.is_error:
                     # An unread streaming response cannot be sniffed for the
@@ -252,7 +279,8 @@ class AnthropicProvider:
                     await response.aread()
                     raise translate_http_error(response)
                 began = True
-                async with aclosing(iter_sse_events(response.aiter_lines())) as events:
+                lines = _bounded_silence(response.aiter_lines(), self._silence)
+                async with aclosing(iter_sse_events(lines)) as events:
                     async for event_name, data in events:
                         accumulator.feed(event_name, data)
         except httpx.RequestError as exc:
