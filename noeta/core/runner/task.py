@@ -143,6 +143,8 @@ class TaskRun:
         #: then lets the run go on in the background).
         self.waiting_kept = asyncio.Event()
         self._kept_due: float | None = None
+        #: A kept run woken to step holds a slot of ``Runtime.concurrency``.
+        self._slot = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------ lifecycle
@@ -203,6 +205,7 @@ class TaskRun:
             for kept in list(self.kept):
                 kept.mark_lost()
             self.kept.clear()
+            self._give_slot()
             await self.snapshots.finish()
 
     async def _unreadable_inbox(self, exc: Exception, tries: int) -> None:
@@ -638,6 +641,7 @@ class TaskRun:
         if self._kept_wait is None:
             return False
         rt = self.rt
+        self._give_slot()
         self.waiting_kept.set()
         shared = getattr(self.store, "shared_changes", False)
         poll = max(rt.lease_seconds / 3, rt.poll_interval) if shared else rt.poll_interval
@@ -655,8 +659,10 @@ class TaskRun:
                 due = row.ready_at if row.ready_at != self._kept_due else None
                 if due is not None and due <= now:
                     self._kept_due = due
+                    await self._take_slot()
                     return True
                 if row.status == "ready":  # woken: a post that does not wake leaves it
+                    await self._take_slot()
                     return True
                 if not self.kept:
                     await self.store.release(self.claim)
@@ -667,6 +673,15 @@ class TaskRun:
                     await asyncio.wait_for(self._nudged.wait(), max(timeout, 0.01))
         finally:
             self.waiting_kept.clear()
+
+    async def _take_slot(self) -> None:
+        await self.rt.take_slot()
+        self._slot = True
+
+    def _give_slot(self) -> None:
+        if self._slot:
+            self._slot = False
+            self.rt.give_slot()
 
     def view(self) -> TaskView:
         model = self.model

@@ -31,7 +31,8 @@ refused background work by where tasks happened to run.
   a parent stops a child's job by posting `STOP_JOB` to the child; a task's end kills its
   jobs (a sub-agent's when it hands back).
 - `Runtime.run_claim` returns once its task waits with a kept claim; the run goes on in the
-  background without a slot of `concurrency`. `Runtime.let_go` (on the way out of `serve`)
+  background, taking a slot of `concurrency` only while a wake has it stepping (it waits
+  for one when they are all taken). `Runtime.let_go` (on the way out of `serve`)
   gives those claims up: the work dies, the tasks stay waiting, and hear of it with whatever
   wakes them next.
 - A worker that dies loses its work with it. Its kept lease runs out, which makes the

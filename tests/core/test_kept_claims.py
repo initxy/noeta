@@ -1,8 +1,9 @@
 """A claim kept over a wait (``ToolContext.keep``): the task waits, its
 worker renews the lease and takes the task's inbox itself, so no other
-worker runs it; the run goes on in the background without a slot, and
-gives the claim back once nothing keeps it. The claim leaving the worker
-(lost, or the worker stopping) loses what kept it."""
+worker runs it; the run goes on in the background, taking a slot only
+while a wake has it stepping, and gives the claim back once nothing keeps
+it. The claim leaving the worker (lost, or the worker stopping) loses what
+kept it."""
 
 from __future__ import annotations
 
@@ -178,3 +179,56 @@ async def test_a_kept_wait_leaves_a_post_that_does_not_wake_for_the_next_wake(
     tool.kept[0].release()
     await asyncio.wait_for(next(iter(rt._kept_runs)), 10)
 
+
+
+class Block:
+    """Runs until let through."""
+
+    name = "Block"
+    description = "Block."
+    input_schema = {"type": "object"}
+    read_only = False
+    clearable = False
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.go = asyncio.Event()
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        self.started.set()
+        await self.go.wait()
+        return text_output("through")
+
+
+async def test_a_woken_kept_run_takes_a_slot_while_it_steps(store: SqliteStore) -> None:
+    tool, block = Keep(), Block()
+    kept_provider = ScriptedProvider([reply("", ("Keep", {})), reply("waiting"),
+                                      reply("answered")])
+    block_provider = ScriptedProvider([reply("", ("Block", {})), reply("done")])
+    agents = {"a": Agent(name="a", model="m", tools=[tool]),
+              "b": Agent(name="b", model="n", tools=[block])}
+    rt = Runtime(store=store, agents=agents, sleep=_no_sleep, concurrency=1,
+                 provider_for=lambda m: kept_provider if m == "m" else block_provider)
+    client = Client(store)
+    first = await client.create("a", "go")
+    stop = asyncio.Event()
+    serving = asyncio.create_task(rt.serve(stop))
+    try:
+        async def kept() -> bool:
+            return bool(rt._kept_runs)
+
+        await _until(kept)
+        await client.create("b", "block")
+        await asyncio.wait_for(block.started.wait(), 10)  # the one slot is taken
+        await client.send(first, "still there?")
+        await asyncio.sleep(0.3)
+        assert len(kept_provider.requests) == 2  # the wake waits for the slot
+        block.go.set()
+
+        async def answered() -> bool:
+            return len(kept_provider.requests) == 3
+
+        await _until(answered)
+    finally:
+        stop.set()
+        await serving

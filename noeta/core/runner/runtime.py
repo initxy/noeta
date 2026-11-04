@@ -119,9 +119,13 @@ class Runtime:
     #: The tasks this runtime runs now (:meth:`run_claim`).
     _running: set[str] = field(default_factory=set, init=False, repr=False)
     #: Runs carried on in the background once their task waits with its
-    #: claim kept (``ToolContext.keep``): they take no slot of
-    #: :attr:`concurrency`, and :meth:`run_claim` has returned for them.
+    #: claim kept (``ToolContext.keep``): they take a slot of
+    #: :attr:`concurrency` only while a wake has them stepping, and
+    #: :meth:`run_claim` has returned for them.
     _kept_runs: set[asyncio.Task[None]] = field(default_factory=set, init=False, repr=False)
+    #: The :attr:`concurrency` slots: one per claim :meth:`serve` runs, and
+    #: one per kept run while a wake has it stepping.
+    _slots: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
 
     def provider_of(self, state: TaskState, model: str) -> Provider:
         """The provider ``state``'s task sends a ``model`` call to."""
@@ -137,6 +141,21 @@ class Runtime:
                 snapshots.pin(agent.all_extensions())
             except ValueError:  # a misconfigured agent fails when its task loads
                 continue
+
+    def _slot_pool(self) -> asyncio.Semaphore:
+        if self._slots is None:
+            self._slots = asyncio.Semaphore(self.concurrency)
+        return self._slots
+
+    async def take_slot(self) -> None:
+        """Wait for a slot of :attr:`concurrency` (a kept run woken to step)."""
+        await self._slot_pool().acquire()
+
+    def give_slot(self) -> None:
+        """Give a slot back, and look for claimable work with it."""
+        self._slot_pool().release()
+        if self._wake is not None:
+            self._wake.set()
 
     def agent(self, name: str) -> Agent | None:
         """The agent a task's log names: by its name, else by a former one
@@ -280,16 +299,19 @@ class Runtime:
         self._wake = wake
         unsubscribe = self.store.on_change(nudge)
         running: set[asyncio.Task[None]] = set()
+        slots = self._slot_pool()
         try:
             while not stop.is_set():
-                while len(running) < self.concurrency:
+                while not slots.locked():
+                    await slots.acquire()
                     claimed = await self._claim()
                     if claimed is None:
+                        slots.release()
                         break
                     t = asyncio.create_task(self.run_claim(claimed[0], sent=claimed[1]))
                     running.add(t)
                     t.add_done_callback(running.discard)
-                    t.add_done_callback(lambda _d: wake.set())
+                    t.add_done_callback(lambda _d: self.give_slot())
                 wake.clear()
                 waiters = [asyncio.create_task(wake.wait()), asyncio.create_task(stop.wait())]
                 await asyncio.wait(waiters, timeout=self.poll_interval,
