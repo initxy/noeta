@@ -7,7 +7,9 @@ built-ins exactly like a third-party package's (see ``pyproject.toml``):
 * ``noeta.providers`` — a provider family -> ``factory(**kw) -> Provider``;
 * ``noeta.execenvs`` — a name -> ``factory(cwd, **kw) -> ExecEnv``;
 * ``noeta.stores`` — a URL scheme -> ``factory(url) -> Store``;
-* ``noeta.channels`` — a name -> a ``Channel`` class (``noeta.core.channel``).
+* ``noeta.channels`` — a name -> a ``Channel`` class (``noeta.core.channel``);
+* ``noeta.frontends`` — a name -> ``run(app, start)``, a front end the
+  ``noeta`` command opens (``noeta.host.app.FrontEndStart``; ``tui``: noeta-tui).
 
 The kernel imports no plugin or backend module statically; it loads one by
 name here when it needs a default (the local exec env).
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CHANNELS",
     "EXECENVS",
+    "FRONTENDS",
     "PLUGINS",
     "PROVIDERS",
     "STORES",
@@ -74,6 +77,7 @@ PROVIDERS = "noeta.providers"
 EXECENVS = "noeta.execenvs"
 STORES = "noeta.stores"
 CHANNELS = "noeta.channels"
+FRONTENDS = "noeta.frontends"
 
 
 class UnknownName(LookupError):

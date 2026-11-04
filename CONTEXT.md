@@ -42,7 +42,7 @@ hears with its next message); a hold's epoch fences its old holder.
 
 ## Layers
 
-Top to bottom, imports only downward: `noeta/cli` (the `noeta` command, TUI, config) > `noeta/agents` (agent
+Top to bottom, imports only downward: `noeta/cli` (the `noeta` command, config) > `noeta/agents` (agent
 files, built-in agents) > `noeta/plugins/<name>` (capabilities) | `noeta/backends` (providers, exec envs,
 stores) | `noeta/host` (`LocalApp`, and the ways in: HTTP with `RemoteClient`, ACP) > `noeta/toolkit` (code
 plugins share) > `noeta/core`. `|` siblings never import each other, nor do two plugins or two backends
@@ -51,7 +51,7 @@ inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or 
 only through a typed reader in `toolkit`: `plugin_records.py` (plugin names, each record and who reads it, the
 methods a plugin keeps for others; `tests/toolkit/test_plugin_records.py` holds writers to readers),
 `background_tasks.py`, `structured_output.py`, `permission_modes.py`. Front ends import no plugin; they read
-permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title` (kept by a replacement). SDK = all but `noeta/cli`.
+permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title`, todos' records (kept by a replacement). SDK = all but `noeta/cli`.
 
 ## Ways in
 
@@ -70,18 +70,19 @@ and replies go out from inside the task (a plugin).
 Ask in order, take the first yes: the kernel itself uses it -> `core`; an agent uses it in a
 task -> a plugin; several plugins (or backends) share it -> `toolkit`; it is replaceable
 infrastructure -> `backends`; it runs noeta or lets the outside in (a protocol) -> `host`; it is
-an agent or the agent-file format -> `agents`; it is the `noeta` command or its terminal UI ->
-`cli`. Front ends in other languages (web, desktop) live outside the package and use HTTP.
-`scripts/lint-layout.py` (in `make check`) fails on any other top-level package and on a `core`
-module the kernel never imports, unless listed there as kernel surface with a reason. Two
-rules for every tool and front end are the kernel's, not capabilities: the runner's result
-limits, saving through the task's exec env (`core/large_output.py`), and the client's image
-limits for every provider (`core/images.py`).
+an agent or the agent-file format -> `agents`; the `noeta` command -> `cli`; a front end -> its
+own top-level project (`tui/`: `noeta-tui` on `AppAPI` only, found through `noeta.frontends`;
+web, desktop: HTTP). `scripts/lint-layout.py` (in `make check`) fails on any other top-level
+package and on a `core` module the kernel never imports, unless listed there as kernel
+surface with a reason. Two rules for every tool and front end are the kernel's, not
+capabilities: the runner's result limits, saving through the task's exec env
+(`core/large_output.py`), and the client's image limits for every provider (`core/images.py`).
 
 ## Registry
 
 Plugins and backends are found by name through entry points (`noeta/core/registry.py`): groups
-`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`, `noeta.channels`. The
+`noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`, `noeta.channels`,
+`noeta.frontends` (`run(app, FrontEndStart)`, `noeta/host/app.py`). The
 built-ins register in `pyproject.toml` exactly as a third-party package would
 (`examples/hello-plugin` is one, installed and tested by `make check`). A plugin's registry name
 is its `Extension.name`. A plugin (or channel) can also be a plain file in `~/.noeta/plugins`, a

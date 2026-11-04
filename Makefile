@@ -5,15 +5,18 @@
 #   make test       the test suite with coverage
 #   make lint       static checks only (ruff, mypy, naming + import layering)
 #   make example    the example plugin, installed as its own package, and its tests
+#   make tui        the terminal UI's tests (tui/, its own package)
+#   make web        the web app: install, typecheck, unit and e2e tests (web/)
+#   make frontends  every front end's tests (tui/, web/)
 #   make e2e        live tests: real LLM / real container (needs credentials)
 #   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
 #   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
 #   make cluster    worker processes on Postgres under random kills (needs docker or a DSN)
 #   make build      wheel + sdist into dist/
-#   make frontends  the front ends' own checks: web/ (install, typecheck, unit and e2e tests)
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint example e2e eval eval-baseline parity cluster build frontends
+.PHONY: help install check test lint example tui tui-screenshots web frontends e2e eval eval-baseline \
+	parity cluster build
 
 help:
 	@echo "noeta"
@@ -23,13 +26,16 @@ help:
 	@echo "  make test       the test suite with coverage"
 	@echo "  make lint       static checks only: ruff, mypy, naming + import layering"
 	@echo "  make example    install examples/hello-plugin as a package and run its tests"
+	@echo "  make tui        the terminal UI's tests (tui/), with coverage"
+	@echo "  make tui-screenshots  rewrite tui/screenshots/*.svg"
+	@echo "  make web        web/: install, typecheck, unit tests, e2e against a real noeta serve"
+	@echo "  make frontends  every front end's tests (tui/, web/)"
 	@echo "  make e2e        live tests: real LLM / real container (needs credentials)"
 	@echo "  make eval       prompt-regression eval vs evals/baseline.json (needs credentials)"
 	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
 	@echo "  make parity     replay Claude Code's recorded scenarios, write parity/report.md"
 	@echo "  make cluster    worker processes on Postgres under random kills (docker or a DSN)"
 	@echo "  make build      wheel + sdist into dist/"
-	@echo "  make frontends  web/: install, typecheck, unit tests, e2e against a real noeta serve"
 
 install:
 	uv sync --all-extras
@@ -38,7 +44,7 @@ test:
 	uv run pytest -n auto --cov=noeta --cov-report=term
 
 lint:
-	uv run ruff check noeta tests evals bench scripts examples
+	uv run ruff check noeta tests evals bench scripts examples tui
 	uv run mypy
 	uv run python scripts/lint-naming.py
 	uv run python scripts/lint-layout.py
@@ -52,6 +58,21 @@ PLUGIN_FILE_EXAMPLES = examples/run-tests/tests examples/chat-bridge/tests \
 example:
 	uv run --with-editable ./examples/hello-plugin python -m pytest -q -p no:cacheprovider examples/hello-plugin/tests
 	uv run pytest -q -p no:cacheprovider $(PLUGIN_FILE_EXAMPLES)
+
+## the terminal UI, its own package (tui/, a uv workspace member): Textual pilot tests
+tui:
+	cd tui && uv run pytest -n auto -q --cov=noeta_tui --cov-report=term:skip-covered --cov-fail-under=85
+
+## the screenshots tui/screenshots/README.md compares with Claude Code's
+tui-screenshots:
+	cd tui && NOETA_TUI_SCREENSHOTS=1 uv run pytest -q tests/test_screenshots.py
+
+## every front end's own tests
+frontends: tui web
+
+## the web app: typecheck, unit tests, Playwright against a real noeta serve
+web:
+	cd web && npm ci && npm run typecheck && npm test && npm run e2e
 
 ## live tests against a real LLM backend / sandbox container (opt-in, never in check)
 e2e:
@@ -90,8 +111,6 @@ build:
 ## the front ends, each its own project with its own test command (never in check:
 ## it needs node and a browser). web/: the e2e test runs a real noeta serve on the
 ## offline scripted provider in web/e2e/provider
-frontends:
-	cd web && npm ci && npm run typecheck && npm test && npm run e2e
 
 ## every automated gate — CI's test job runs this same target. CI-only on top:
 ## the Postgres params of the store contract tests (skipped unless
@@ -101,4 +120,5 @@ check:
 	$(MAKE) --no-print-directory lint
 	uv run pytest -n auto -q --cov=noeta --cov-report=term:skip-covered --cov-fail-under=85
 	$(MAKE) --no-print-directory example
+	$(MAKE) --no-print-directory tui
 	bash scripts/check-docs.sh

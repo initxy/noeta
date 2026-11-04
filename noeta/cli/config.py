@@ -713,11 +713,18 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     pick_main_agent()
 
     def reload_plugins() -> list[str]:
+        """What changed (one line per plugin), then the files that failed
+        and the notices of loading them."""
+        from noeta.cli.main import broken_plugin_lines
+
+        before = dict(app.runtime.agents)
         registry.forget_plugin_files()
         found = load_plugin_files(cwd, plugin_dirs)
         app.replace_agents(make_agents())
         pick_main_agent()
-        return found + unjoined
+        changes = plugin_changes(before, app.runtime.agents) or ["no plugin changed"]
+        return [*changes, *(f"failed: {line}" for line in broken_plugin_lines()),
+                *found, *unjoined]
 
     app.reload_plugins = reload_plugins
     return app
@@ -816,6 +823,19 @@ def plugins_agent(plugins: Sequence[ClaudePlugin]) -> dict[str, str]:
             log.info("plugin %s overrides setting 'agent' (set by %s)", p.name, out["source"])
         out = {"agent": agent, "source": f"plugin {p.name}"}
     return out
+
+
+def settings_rows(settings: Settings, cwd: str) -> list[tuple[str, str]]:
+    """``(name, value)`` rows of what a front end started in ``cwd`` runs
+    with: provider, store, the settings files and their permission rules."""
+    found = file_settings(cwd)
+    rows = [("provider", settings.provider), ("base URL", settings.base_url or "(default)"),
+            ("store", settings.store_url), ("effort", settings.effort or "(default)"),
+            ("settings files", ", ".join(str(f) for f in found.files) or "(none)")]
+    for key in ("allow", "deny", "ask"):
+        if found.permissions.get(key):
+            rows.append((f"permissions.{key}", ", ".join(found.permissions[key])))
+    return rows
 
 
 def plugin_changes(before: Mapping[str, Agent], after: Mapping[str, Agent]) -> list[str]:

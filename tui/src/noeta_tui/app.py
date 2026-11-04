@@ -8,29 +8,18 @@ import logging
 import time
 from typing import Any
 
-from rich.text import Text as RichText
-from textual import work
+from rich.text import Text
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Markdown, Static
-from textual.widgets.markdown import MarkdownStream
+from textual.widgets import Static, TextArea
 
-from noeta.cli import mentions
-from noeta.cli.tui import slash
-from noeta.cli.tui.transcript import TranscriptView
-from noeta.cli.tui.widgets import (
-    AssistantMessage,
-    Notice,
-    PromptInput,
-    ToolCall,
-    UserMessage,
-)
-from noeta.core.commands import list_commands, run_typed
-from noeta.core.events import Waiting
-from noeta.core.extension import CommandContext
+from noeta.core.events import InputTaken, Say, Waiting
+from noeta.core.extension import Command, CommandContext
 from noeta.core.types import Delta, Image
-from noeta.host.local import LocalApp, UnknownAgent
+from noeta.host.app import FrontEndStart
+from noeta.host.local import UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
 from noeta.toolkit.interactive import follow
@@ -43,20 +32,29 @@ from noeta.toolkit.permission_modes import (
     published_modes,
 )
 from noeta.toolkit.signals import RESUMED_SIGNAL
+from noeta_tui import bash_mode, files, mentions, slash
+from noeta_tui.transcript import SERVER_DIRECTORY, TranscriptView, _short_path
+from noeta_tui.widgets import (
+    Completions,
+    Notice,
+    PromptInput,
+    QuestionCard,
+    ToolCall,
+    UserMessage,
+    Welcome,
+)
 
-log = logging.getLogger("noeta.cli.tui")
+log = logging.getLogger("noeta_tui")
 
-HELP = """\
-**Commands**  `/new` or `/clear` new task · `/resume [n|id]` pick a task · `/stop` stop the
-turn · `/exit` quit
-**Keys**  Enter send · Ctrl+J new line · Esc stop the turn (Esc Esc when idle: rewind) ·
-Ctrl+B side panel · Shift+Tab permission mode · Ctrl+V paste an image · 1-9 or y/a/n approvals
-**Input**  `@path` attaches a file (or directory, or image); a pasted image file path
-attaches the image
-"""
+SHORTCUTS = """\
+[dim]! for bash mode        double tap esc to clear input     ctrl + c twice to exit
+/ for commands         shift + tab to cycle modes        ctrl + v to paste images
+@ for file paths       ctrl + o for verbose output       ctrl + b for subtasks
+                       ctrl + t to toggle tasks          \\⏎ or ctrl + j for newline
+                       ↑ ↓ for earlier prompts           esc to interrupt[/dim]"""
 
-#: Seconds between two presses of Esc that open the rewind list.
-DOUBLE_ESCAPE = 0.8
+#: Seconds between two presses of Esc (or Ctrl+C) that count as a double press.
+DOUBLE_PRESS = 0.8
 #: Seconds the mode key waits for a new task's start to record its mode.
 MODE_WAIT = 2.0
 
@@ -69,26 +67,32 @@ class NoetaApp(TranscriptView):
         Binding("ctrl+b", "toggle_side", "Side panel", show=False),
         Binding("shift+tab", "cycle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+v", "paste_image", "Paste image", show=False),
-        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
+        Binding("ctrl+o", "toggle_verbose", "Verbose", show=False, priority=True),
+        Binding("ctrl+t", "toggle_tasks", "Tasks", show=False, priority=True),
+        Binding("ctrl+c", "interrupt", "Quit", show=False, priority=True),
     ]
 
-    def __init__(self, local: LocalApp | Any, *, agent: str, model: str, cwd: str,
+    def __init__(self, local: Any, *, agent: str, model: str, cwd: str,
                  resume: str | None = None, permission_mode: str | None = None,
-                 settings: Any = None, task_config: dict[str, Any] | None = None,
-                 on_server: bool = False) -> None:
-        """``on_server``: ``local`` is a server's client, so its tasks run in
-        the server's directories, not ``cwd`` on this machine."""
+                 task_config: dict[str, Any] | None = None, on_server: bool = False,
+                 start: FrontEndStart | None = None) -> None:
+        """``local``: the ``AppAPI`` the app runs on. ``on_server``: it is a
+        server's, so its tasks run in the server's directories, not ``cwd``
+        on this machine. ``start``: what the ``noeta`` command said (the
+        home directory, the settings shown, the version)."""
         super().__init__()
         self.on_server = on_server
         #: What each new task's config starts with (default: ``cwd`` and ``model``).
         self.task_config = {"cwd": cwd, "model": model} if task_config is None \
             else task_config
         self.local = local
-        #: The front end's settings (``/config`` shows them), when known.
-        self.settings = settings
+        self.start = start or FrontEndStart(agent=agent, cwd=cwd, model=model)
         #: Images pasted for the next message.
         self.images: list[Image] = []
+        #: Bash-mode output that goes with the next message.
+        self.bash_context: list[str] = []
         self._last_escape = 0.0
+        self._last_interrupt = 0.0
         #: The roots ``/resume`` listed last, so ``/resume <n>`` picks one.
         self.listed: list[str] = []
         self.agent = agent
@@ -105,8 +109,8 @@ class NoetaApp(TranscriptView):
         self.modes_published = False
         self.task_id = ""
         self.calls: dict[str, ToolCall] = {}
-        self.stream: MarkdownStream | None = None
-        self.stream_widget: AssistantMessage | None = None
+        self.stream = None
+        self.stream_widget = None
         #: The model call (its ``ModelCalled`` seq) and attempt being streamed.
         self.stream_key = (0, 1)
         #: What was written to the stream so far.
@@ -134,6 +138,21 @@ class NoetaApp(TranscriptView):
         #: The task's agent is not one this app has: history only, no input.
         self.read_only = False
         self.waiting_for = ""
+        self.todos: dict[str, dict[str, Any]] = {}
+        self.verbose = False
+        self.show_tasks = True
+        self.queued: list[str] = []
+        self.echoed: list[str] = []
+        self.turn_started = 0.0
+        self.turn_tokens = 0
+        self.turn_output = 0
+        self.turn_verb = ""
+        self.flash = ""
+        #: Prompts sent, oldest first; ``history_at`` steps through them.
+        self.history: list[str] = []
+        self.history_at = 0
+        #: The commands the slash menu offers: plugins' for this task.
+        self.plugin_commands: list[Command] = []
         self._deltas: asyncio.Queue[Delta] = asyncio.Queue()
         self._follower: Any = None
 
@@ -145,15 +164,28 @@ class NoetaApp(TranscriptView):
             with Vertical(id="side"):
                 yield Static("[b]Subtasks[/b]", id="side-title")
                 yield Static("", id="side-body")
-        yield PromptInput(self.submit, self.add_image)
-        yield Static("", id="status")
+        yield Static("", id="spinner")
+        yield Static("", id="tasks")
+        yield Static("", id="queued")
+        yield Vertical(id="overlay")
+        with Horizontal(id="prompt-box"):
+            yield Static("❯", id="marker")
+            yield PromptInput(self.submit, self.add_image, self.prompt_key)
+        yield Completions()
+        yield Static(SHORTCUTS, id="shortcuts")
+        with Horizontal(id="footer"):
+            yield Static("", id="hints")
+            yield Static("", id="status")
 
     async def on_mount(self) -> None:
-        self.query_one("#side").display = False
+        for hidden in ("#side", "#spinner", "#tasks", "#queued", "#completions",
+                       "#shortcuts"):
+            self.query_one(hidden).display = False
         await self.local.start()
         self.local.deltas(self._on_delta)
         self._pump_deltas()
         self._refresh_side()
+        self.set_interval(0.12, self._tick)
         if self.resume:
             await self.open_task(self.resume)
         elif self.resume == "":
@@ -206,22 +238,31 @@ class NoetaApp(TranscriptView):
         self.attempts.clear()
         self.cost_usd = 0.0
         self.called = 0
+        self.todos.clear()
+        self._show_todos()
+        self.queued.clear()
+        self.echoed.clear()
+        self._show_queued()
         transcript = self.query_one("#transcript")
         await transcript.remove_children()
-        await transcript.mount(Notice(f"noeta · task {task_id[:8]} · /help for commands"))
+        await transcript.mount(Welcome(version=self.start.version, model=self.model,
+                                       cwd=_short_path(self.task_cwd, 1000) or SERVER_DIRECTORY,
+                                       task_id=task_id))
         for notice in getattr(self.local, "notices", ()):
             await transcript.mount(Notice(notice))
         if refused:
             await transcript.mount(Notice(f"read-only: {refused}. Its history is shown; "
                                           "/new starts a task here.", classes="-error"))
         self._follower = self.follow(task_id)
+        self._load_commands()
         self.update_status()
 
     def _default_task_cwd(self) -> str:
-        """What the status line shows until the task's ``TaskCreated`` says."""
+        """What the footer shows until the task's ``TaskCreated`` says."""
         return "" if self.on_server else self.cwd
 
     async def pick_task(self) -> None:
+        """Open the latest task and offer the others (``/resume``'s picker)."""
         rows = await self.local.client.tasks(limit=20)
         roots = [r for r in rows if r.parent_id is None]
         if not roots:
@@ -229,15 +270,32 @@ class NoetaApp(TranscriptView):
             return
         await self.open_task(roots[0].task_id)
         self.listed = [r.task_id for r in roots[:10]]
-        lines = "\n".join(f"{n}. `{r.task_id}` {r.status}" for n, r in enumerate(roots[:10], 1))
-        await self.say_markdown(f"Resumed the latest task. Others: `/resume <n>` or "
-                                f"`/resume <id>`\n{lines}")
+        await slash.resume_picker(self, roots[:10])
+
+    @work(exclusive=True, group="commands", exit_on_error=False)
+    async def _load_commands(self) -> None:
+        """The plugins' commands for the slash menu."""
+        try:
+            self.plugin_commands = list(await self.local.commands(
+                self.agent, self._command_context()))
+        except Exception:
+            log.warning("listing the plugins' commands failed", exc_info=True)
+            self.plugin_commands = []
 
     # ------------------------------------------------------------ input
 
     async def submit(self, text: str) -> None:
+        self.query_one(Completions).hide()
+        self.query_one("#shortcuts").display = False
+        if not self.history or self.history[-1] != text:
+            self.history.append(text)
+        self.history_at = len(self.history)
+        self._set_marker("")
         if text.startswith("/"):
             await self.command(text)
+            return
+        if text.startswith("!") and not self.waiting_question:
+            await bash_mode.run(self, text[1:].strip())
             return
         await self.send(text)
 
@@ -251,16 +309,26 @@ class NoetaApp(TranscriptView):
             await self.answer_question(text)
             return
         images, self.images = self.images, []
-        message = mentions.attach(text, images) if images else text
+        context, self.bash_context = self.bash_context, []
+        body = "\n\n".join([*context, text]) if context else text
+        message = mentions.attach(body, images) if images else body
+        if self.busy:
+            self.queued.append(body)
+            self._show_queued()
+        else:  # shown at once, as typed; the task's log confirms it
+            self.echoed.append(body)
+            transcript = self.query_one("#transcript")
+            await transcript.mount(UserMessage(text))
+            transcript.scroll_end(animate=False)
         # Busy before the send: the turn may run, and its end be shown,
         # before the send returns.
-        self.busy = True
-        self.update_status()
+        was_busy = self.busy
+        self.set_busy(True)
         try:
             await self.local.client.send(self.task_id, message, when="next_turn")
         except BaseException:
-            self.busy = False
-            self.update_status()
+            if not was_busy:
+                self.set_busy(False)
             raise
 
     async def command(self, text: str) -> None:
@@ -273,10 +341,6 @@ class NoetaApp(TranscriptView):
             await self.resume_command(arg.strip())
         elif name == "stop":
             await self.action_stop_turn()
-        elif name == "help":
-            builtin = "\n".join(f"- `/{n}` {h}" for n, h in slash.COMMANDS.items())
-            await self.query_one("#transcript").mount(
-                Markdown(HELP + builtin + "\n" + await self._plugin_help(), classes="notice"))
         elif not await slash.run(self, name, arg):
             await self._plugin_command(text, name)
 
@@ -286,11 +350,22 @@ class NoetaApp(TranscriptView):
         elif arg:
             await self.open_task(arg)
         else:
-            await self.pick_task()
+            rows = await self.local.client.tasks(limit=20)
+            roots = [r for r in rows if r.parent_id is None][:10]
+            self.listed = [r.task_id for r in roots]
+            await slash.resume_picker(self, roots)
 
     async def say_markdown(self, text: str) -> None:
+        from textual.widgets import Markdown
+
         transcript = self.query_one("#transcript")
         await transcript.mount(Markdown(text, classes="notice"))
+        transcript.scroll_end(animate=False)
+
+    async def say_text(self, text: Text) -> None:
+        """Rich text, as a command's output (``  ⎿`` under the command)."""
+        transcript = self.query_one("#transcript")
+        await transcript.mount(Static(text, classes="command-output"))
         transcript.scroll_end(animate=False)
 
     def prefill(self, text: str) -> None:
@@ -315,26 +390,12 @@ class NoetaApp(TranscriptView):
             return
         await self.add_image(image, "clipboard")
 
-    def _agent(self) -> Any:
-        """This front end's agent, when it runs one (not attached to a server)."""
-        return getattr(getattr(self.local, "runtime", None), "agents", {}).get(self.agent)
-
     def _command_context(self) -> CommandContext:
         return CommandContext(cwd=self.cwd, task_id=self.task_id or None)
 
-    async def _plugin_help(self) -> str:
-        agent = self._agent()
-        commands = await list_commands(agent, self._command_context()) if agent else []
-        lines = [f"`/{c.name}`" + (f" {c.argument_hint}" if c.argument_hint else "")
-                 + (f" — {c.description}" if c.description else "") for c in commands]
-        return "**From plugins**\n" + "\n".join(f"- {line}" for line in lines) \
-            if lines else ""
-
     async def _plugin_command(self, text: str, name: str) -> None:
-        agent = self._agent()
         try:
-            typed = await run_typed(agent.all_extensions(), self._command_context(), text) \
-                if agent else None
+            typed = await self.local.run_command(self.agent, self._command_context(), text)
         except Exception as exc:  # noqa: BLE001 — a plugin's failure is shown, not raised
             await self.say_notice(f"/{name} failed: {exc}")
             return
@@ -345,26 +406,135 @@ class NoetaApp(TranscriptView):
         elif typed.text:
             await self.send(typed.text)
 
+    # ------------------------------------------------------------ the prompt's keys
+
+    def _box(self) -> PromptInput:
+        return self.query_one(PromptInput)
+
+    async def prompt_key(self, key: str) -> bool:
+        """The prompt's key, first: the completion menu's, history, ``?``."""
+        menu = self.query_one(Completions)
+        box = self._box()
+        if menu.display:
+            if key in ("up", "down"):
+                menu.move(-1 if key == "up" else 1)
+                return True
+            if key in ("tab", "enter"):
+                picked = menu.current()
+                menu.hide()
+                if picked is not None:
+                    self._complete(picked)
+                    if key == "enter" and picked.startswith("/"):
+                        text = box.text.strip()
+                        box.clear()
+                        await self.submit(text)
+                return True
+            if key == "escape":
+                menu.hide()
+                return True
+        if key == "question_mark" and not box.text:
+            shortcuts = self.query_one("#shortcuts")
+            shortcuts.display = not shortcuts.display
+            return True
+        if key in ("up", "down") and self.history:
+            row = box.cursor_location[0]
+            last = box.document.line_count - 1
+            if (key == "up" and row == 0) or (key == "down" and row == last):
+                self._step_history(-1 if key == "up" else 1)
+                return True
+        return False
+
+    def _step_history(self, step: int) -> None:
+        self.history_at = max(0, min(len(self.history), self.history_at + step))
+        text = self.history[self.history_at] if self.history_at < len(self.history) else ""
+        box = self._box()
+        box.text = text
+        box.move_cursor(box.document.end)
+
+    def _complete(self, value: str) -> None:
+        """Replace the word being typed with ``value``."""
+        box = self._box()
+        text = box.text
+        start = text.rfind(" ") + 1 if not value.startswith("/") else 0
+        box.text = text[:start] + value + " "
+        box.move_cursor(box.document.end)
+
+    @on(TextArea.Changed, "#prompt")
+    def _typed(self, event: TextArea.Changed) -> None:
+        text = event.text_area.text
+        self.query_one("#shortcuts").display = False
+        self._set_marker("!" if text.startswith("!") else "")
+        menu = self.query_one(Completions)
+        word = text.rsplit(" ", 1)[-1] if text else ""
+        if text.startswith("/") and " " not in text:
+            menu.show(slash.matches(self, text[1:]))
+        elif word.startswith("@") and "\n" not in word and not self.on_server:
+            menu.show([(f"@{p}", f"+ {p}", "") for p in
+                       files.matches(self.task_cwd or self.cwd, word[1:])])
+        else:
+            menu.hide()
+
+    def _set_marker(self, marker: str) -> None:
+        bash = marker == "!"
+        self.query_one("#marker", Static).update(Text("!" if bash else "❯",
+                                                      style="bold #fd5db1" if bash else ""))
+        self.query_one("#prompt-box").set_class(bash, "-bash")
+
+    # ------------------------------------------------------------ keys
+
     async def action_stop_turn(self) -> None:
         if self.task_id and self.busy:
             await self.local.client.cancel(self.task_id, "stopped from the terminal",
                                            turn_only=True)
             return
         now = time.monotonic()
-        if now - self._last_escape <= DOUBLE_ESCAPE and self.task_id and not self.read_only:
-            self._last_escape = 0.0
+        double = now - self._last_escape <= DOUBLE_PRESS
+        self._last_escape = 0.0 if double else now
+        if not double:
+            return
+        box = self._box()
+        if box.text:
+            box.clear()  # Claude Code: double Esc clears the input
+        elif self.task_id and not self.read_only:
             await slash.run(self, "rewind", "")
-        else:
-            self._last_escape = now
+
+    async def action_interrupt(self) -> None:
+        """Ctrl+C: clear the input; on an empty one, twice to quit."""
+        box = self._box()
+        if box.text:
+            box.clear()
+            return
+        now = time.monotonic()
+        if now - self._last_interrupt <= DOUBLE_PRESS:
+            self.exit()
+            return
+        self._last_interrupt = now
+        self.flash = "Press Ctrl-C again to exit"
+        self.update_status()
+        self.set_timer(DOUBLE_PRESS, self._clear_flash)
+
+    def _clear_flash(self) -> None:
+        self.flash = ""
+        self.update_status()
 
     def action_toggle_side(self) -> None:
         side = self.query_one("#side")
         side.display = not side.display
 
+    def action_toggle_verbose(self) -> None:
+        self.verbose = not self.verbose
+        for call in self.query(ToolCall):
+            call.set_expanded(self.verbose)
+
+    def action_toggle_tasks(self) -> None:
+        self.show_tasks = not self.show_tasks
+        self._show_todos()
+
     async def decide(self, call_id: str, choice: str, *, task_id: str = "") -> None:
         self.waiting_for = ""
         await answer_choice(self.local.client, task_id or self.task_id, call_id, choice)
-        self.query_one(PromptInput).focus()
+        self.update_status()
+        self._box().focus()
 
     async def action_cycle_mode(self) -> None:
         """Step to the next permission mode (Claude Code's shift+tab)."""
@@ -399,10 +569,12 @@ class NoetaApp(TranscriptView):
 
     async def answer_question(self, text: str) -> None:
         """The typed line answers the pending question (one line per part of
-        a question with several); the answer is sent once all are in."""
+        a question with several); the answer is sent once all are in. A
+        number picks that option."""
         transcript = self.query_one("#transcript")
         await transcript.mount(UserMessage(text))
-        answers = typed_answer(self.question_detail, text, self.question_answers)
+        answers = typed_answer(self.question_detail, self._numbered(text),
+                               self.question_answers)
         nxt = next_question(self.question_detail, answers)
         if nxt is not None:
             self.question_answers = answers
@@ -410,7 +582,21 @@ class NoetaApp(TranscriptView):
             return
         task_id, call_id = self.question_task or self.task_id, self.waiting_question
         self._set_question("", "", {})
+        for card in self.query(QuestionCard):
+            card.add_class("-answered")
         await self.local.client.answer(task_id, call_id, data={"answers": answers})
+
+    def _numbered(self, text: str) -> str:
+        """``2`` (or ``1, 3``) as the labels of the current question's options."""
+        questions = [q for q in self.question_detail.get("questions") or []
+                     if q.get("id") not in self.question_answers]
+        if not questions:
+            return text
+        options = questions[0].get("options") or []
+        parts = [p.strip() for p in text.split(",")]
+        if not parts or not all(p.isdigit() and 1 <= int(p) <= len(options) for p in parts):
+            return text
+        return ", ".join(str(options[int(p) - 1].get("label", "")) for p in parts)
 
     @work(exclusive=True, group="side", exit_on_error=False)
     async def _refresh_side(self) -> None:
@@ -426,4 +612,17 @@ class NoetaApp(TranscriptView):
                 continue
             body = "\n".join(f"{r.status:8} {r.agent} {r.task_id[-12:]}" for r in rows) \
                 or "(none)"
-            self.query_one("#side-body", Static).update(RichText(body))
+            self.query_one("#side-body", Static).update(Text(body))
+
+
+def first_prompt(events: list[Any]) -> str:
+    """The first thing the person said in a task's log (``/resume`` shows it)."""
+    for rec in events:
+        ev = rec.event
+        if isinstance(ev, InputTaken):
+            for item in ev.items:
+                if isinstance(item.body, Say) and item.body.message.origin in (None, "human"):
+                    return item.body.message.text
+    return ""
+
+

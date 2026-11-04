@@ -79,36 +79,6 @@ def _app(tmp_path: Path, provider: ScriptedProvider) -> LocalApp:
                     env_for=lambda _s: None)
 
 
-async def test_tui_help_and_plugin_commands(tmp_path: Path) -> None:
-    pytest.importorskip("textual")
-    from textual.widgets import Markdown
-
-    from noeta.cli.tui.app import NoetaApp
-
-    provider = ScriptedProvider([reply("hi bob"), reply("ok")])
-    app = NoetaApp(_app(tmp_path, provider), agent="main", model="m", cwd=str(tmp_path))
-    async with app.run_test(size=(100, 30)) as pilot:
-        for _ in range(200):
-            await pilot.pause(0.05)
-            if app.task_id:
-                break
-        await app.submit("/help")
-        await pilot.pause(0.1)
-        helps = [m for m in app.query(Markdown) if "From plugins" in m.source]
-        assert helps and "`/shout` <word> — Shout" in helps[-1].source
-        await app.submit("/greet bob")
-        for _ in range(200):
-            await pilot.pause(0.05)
-            if provider.requests:
-                break
-        assert provider.requests[0].messages[-1].text.endswith("Say hello to bob.")
-        await app.submit("/nope")
-        await app.submit("/shout boom")
-        await pilot.pause(0.2)
-        notices = " ".join(str(w.render()) for w in app.query(".notice"))
-        assert "unknown command /nope" in notices and "/shout failed: no voice" in notices
-
-
 class FakeEditor:
     def __init__(self) -> None:
         self.updates: list[Any] = []

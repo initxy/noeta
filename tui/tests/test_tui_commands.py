@@ -12,12 +12,8 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import Markdown
-
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli.tui.app import NoetaApp
-from noeta.cli.tui.widgets import Notice, PromptInput
 from noeta.core.agent import Agent
 from noeta.core.events import External
 from noeta.core.extension import Command, CommandContext, Extension
@@ -27,7 +23,11 @@ from noeta.plugins.checkpoints import Checkpoints
 from noeta.plugins.fs import FileTools
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from tests.images import png as a_png
+from noeta_tui.app import NoetaApp
+from noeta_tui.widgets import Choices, Picker, PromptInput
+
+from support import png as a_png
+from support import settle, shown, type_line
 
 MODEL = "claude-opus-5-5"
 
@@ -49,26 +49,6 @@ def make_app(tmp_path: Path, provider: ScriptedProvider) -> NoetaApp:
     local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
                      env_for=lambda _s: LocalExecEnv(str(work)), own_tasks_only=True)
     return NoetaApp(local, agent="main", model=MODEL, cwd=str(work))
-
-
-async def settle(pilot: Any, cond: Any, tries: int = 400) -> None:
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if cond():
-            return
-    raise AssertionError("UI did not settle")
-
-
-def shown(app: NoetaApp) -> str:
-    out = [w.render().plain for w in app.query(Notice)]
-    out += [m.source for m in app.query(Markdown)]
-    return "\n".join(out)
-
-
-async def type_line(pilot: Any, text: str) -> None:
-    app = pilot.app
-    app.query_one(PromptInput).text = text
-    await pilot.press("enter")
 
 
 async def test_model_cost_context_and_a_local_command(tmp_path: Path) -> None:
@@ -93,7 +73,7 @@ async def test_model_cost_context_and_a_local_command(tmp_path: Path) -> None:
         await type_line(pilot, "/memory")
         await settle(pilot, lambda: "user instructions" in shown(app))
         await type_line(pilot, "/config")
-        await settle(pilot, lambda: "**Config**" in shown(app))
+        await settle(pilot, lambda: "Config" in shown(app) and "working directory" in shown(app))
 
 
 async def test_model_lists_every_providers_models(tmp_path: Path) -> None:
@@ -106,10 +86,15 @@ async def test_model_lists_every_providers_models(tmp_path: Path) -> None:
         await type_line(pilot, "hello")
         await settle(pilot, lambda: len(provider.requests) == 1 and not app.busy)
         await type_line(pilot, "/model")
-        await settle(pilot, lambda: "- anthropic: `claude-opus-5-5`" in shown(app))
-        assert "- gateway: `gw-chat`" in shown(app)
-        await type_line(pilot, "/model gw-chat")
+        await settle(pilot, lambda: len(app.query(Picker)) == 1)
+        choices = app.query_one(Choices)
+        ids = [o.id for o in choices.options]
+        assert "claude-opus-5-5" in ids and "gw-chat" in ids and "sonnet" in ids
+        assert "claude-opus-5-5  anthropic" in shown(app)
+        choices.index = ids.index("gw-chat")
+        await pilot.press("enter")
         await settle(pilot, lambda: "model set to gw-chat" in shown(app))
+        assert not app.query(Picker) and app.focused is app.query_one(PromptInput)
         assert prepared == ["gw-chat"] and "about gw-chat" in shown(app)
 
 
@@ -129,9 +114,11 @@ async def test_rewind_restores_files_and_forks_the_conversation(tmp_path: Path) 
         assert target.read_text() == "two\n"
         first = app.task_id
         await pilot.press("escape", "escape")
-        await settle(pilot, lambda: "**Rewind**" in shown(app))
+        await settle(pilot, lambda: len(app.query(Picker)) == 1)
         assert "1 file(s) changed since" in shown(app)
-        await type_line(pilot, "/rewind 2")
+        await pilot.press("2")  # the second prompt
+        await settle(pilot, lambda: "Restore code and conversation" in shown(app))
+        await pilot.press("enter")
         await settle(pilot, lambda: app.task_id != first and target.read_text() == "one\n")
         assert app.query_one(PromptInput).text == "change them"
         await type_line(pilot, "something else")
@@ -165,15 +152,20 @@ async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
         await type_line(pilot, "/clear")
         await settle(pilot, lambda: app.task_id != first)
         await type_line(pilot, "/resume")
-        await settle(pilot, lambda: "/resume <n>" in shown(app))
+        await settle(pilot, lambda: len(app.query(Picker)) == 1)
+        assert "look at @calc.py" in shown(app)  # a task shows its first prompt
+        await pilot.press(str(app.listed.index(first) + 1))
+        await settle(pilot, lambda: app.task_id == first)
+        await type_line(pilot, "/clear")
+        await settle(pilot, lambda: app.task_id != first)
         await type_line(pilot, f"/resume {app.listed.index(first) + 1}")
         await settle(pilot, lambda: app.task_id == first)
         # The reopened task is told a person follows it, and that it was
         # resumed (its plugins act on it).
         posted = [p.body for p in await app.local.store.inbox(first)
                   if isinstance(p.body, External)]
-        assert [b.name for b in posted] == ["config", RESUMED_SIGNAL]
-        assert posted[0].data == {"interactive": None, "permission_prompt_tool": None,
+        assert [b.name for b in posted] == ["config", RESUMED_SIGNAL] * 2
+        assert posted[-2].data == {"interactive": None, "permission_prompt_tool": None,
                                   "client_hooks": None}
 
 
@@ -185,10 +177,12 @@ async def test_reload_plugins_reports_what_changed(tmp_path: Path) -> None:
         await settle(pilot, lambda: "restart them" in shown(app))
         local.reload_plugins = lambda: (local.replace_agents(
             [Agent(name="main", model=MODEL, extensions=[FileTools(), Checkpoints()])])
-            or ["a notice"])
+            or ["removed where", "a notice"])
         await type_line(pilot, "/reload-plugins")
         await settle(pilot, lambda: "plugins reloaded" in shown(app))
         assert "removed where" in shown(app) and "a notice" in shown(app)
+        # The slash menu offers what the plugins offer now.
+        await settle(pilot, lambda: all(c.name != "where" for c in app.plugin_commands))
 
 
 async def test_a_task_a_headless_run_resumed_is_interactive_again_in_the_tui(

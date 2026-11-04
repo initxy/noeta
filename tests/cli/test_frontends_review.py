@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 
 pytest.importorskip("acp")
-pytest.importorskip("textual")
 pytest.importorskip("starlette")
 
 import httpx
@@ -20,14 +19,10 @@ from acp import schema
 
 import noeta.cli.main as cli
 from noeta.backends.stores.sqlite import SqliteStore
-from noeta.cli.tui.app import NoetaApp
-from noeta.cli.tui.widgets import AssistantMessage, QuestionCard
 from noeta.core.agent import Agent
 from noeta.core.errors import NoetaError, Transient
 from noeta.core.events import (
-    Answer,
     Recorded,
-    Say,
     TaskCreated,
     Waiting,
 )
@@ -41,23 +36,6 @@ from noeta.testing import ScriptedProvider, reply
 
 async def _no_sleep(_: float) -> None:
     return None
-
-
-class AskTool:
-    name = "Ask"
-    description = "Ask the user."
-    input_schema = {"type": "object"}
-    read_only = False
-    clearable = False
-
-    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
-        return ToolOutput(park=Park(on="question", detail={"questions": [
-            {"question": "Which database?", "options": [{"label": "sqlite"}]}]}))
-
-    async def resume(self, input: dict[str, Any], ctx: ToolContext, outcome: Any) -> ToolOutput:
-        if outcome is None:
-            return text_output("withdrawn", is_error=True)
-        return text_output(f"user said: {outcome.data}")
 
 
 class Delegate:
@@ -105,43 +83,6 @@ def test_print_mode_waits_for_a_foreground_sub_agent(
 # ------------------------------------------------------------ #4 #19 the TUI
 
 
-def tui(tmp_path: Path, provider: Any, *tools: Any) -> NoetaApp:
-    agent = Agent(name="main", model="claude-sonnet-4-5", tools=list(tools))
-    return NoetaApp(local(tmp_path, provider, agent), agent="main", model="claude-sonnet-4-5",
-                    cwd=str(tmp_path))
-
-
-async def settle(pilot: Any, cond: Any, tries: int = 400) -> None:
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if cond():
-            return
-    raise AssertionError("UI did not settle")
-
-
-async def test_tui_question_card_and_stop_clear_the_pending_question(tmp_path: Path) -> None:
-    provider = ScriptedProvider([reply("", ("Ask", {})), reply("fresh start")])
-    app = tui(tmp_path, provider, AskTool())
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"set it up", "enter")
-        await settle(pilot, lambda: bool(app.waiting_question))
-        [card] = list(app.query(QuestionCard))
-        assert card.detail["questions"][0]["question"] == "Which database?"
-        await pilot.press("escape")
-        await settle(pilot, lambda: not app.waiting_question and not app.busy)
-        await pilot.press(*"something else", "enter")
-        await settle(pilot, lambda: provider.steps == [] and not app.busy)
-        inbox = await app.local.store.inbox(app.task_id)
-        assert not any(isinstance(i.body, Answer) for i in inbox)
-        assert isinstance(inbox[-1].body, Say)
-        # Re-opening replays the log; the withdrawn question stays withdrawn.
-        await app.open_task(app.task_id)
-        await settle(pilot, lambda: len(app.query(QuestionCard)) == 1)
-        await pilot.pause(0.3)
-        assert app.waiting_question == ""
-
-
-
 class RetryOnce:
     """The first attempt streams a fragment and fails; the retry succeeds."""
 
@@ -159,91 +100,6 @@ class RetryOnce:
         if on_delta is not None:
             on_delta(Delta(kind="text", text="good answer"))
         return reply("good answer")
-
-
-async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
-    app = tui(tmp_path, RetryOnce())
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.2)
-        assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
-
-
-async def test_tui_survives_a_stream_stopped_before_its_task_ran(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """On a loaded loop a live-output stream can be stopped (the attempt
-    failed, or the reply arrived) before Textual's stream task first ran;
-    its ``stop()`` then raises the cancellation into the caller, which used
-    to end the follower and the delta pump: the TUI froze for the task."""
-    from textual.widgets.markdown import MarkdownStream
-
-    run = MarkdownStream._run
-
-    def late_start(self: MarkdownStream) -> None:
-        async def late() -> None:
-            await asyncio.sleep(0.3)  # the loop runs the stream's task late
-            await run(self)
-
-        if self._task is None:
-            self._task = asyncio.create_task(late())
-
-    monkeypatch.setattr(MarkdownStream, "start", late_start)
-    app = tui(tmp_path, RetryOnce())
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.5)
-        assert [w.source for w in app.query(AssistantMessage)] == ["good answer"]
-
-
-async def test_tui_is_not_left_busy_when_the_turn_ends_before_the_send_returns(
-        tmp_path: Path) -> None:
-    """Under load the task can take the message, reply and wait again before
-    ``client.send`` returns; the front end must not mark itself busy after
-    the turn it sent was already shown ending."""
-    app = tui(tmp_path, ScriptedProvider([reply("done already")]))
-    async with app.run_test(size=(100, 30)) as pilot:
-        client = app.local.client
-        send = client.send
-
-        async def slow_send(task_id: str, *args: Any, **kw: Any) -> Any:
-            out = await send(task_id, *args, **kw)
-            for _ in range(400):  # until the follower has shown the turn end
-                await asyncio.sleep(0.05)
-                if app.query(AssistantMessage) and not app.busy:
-                    break
-            return out
-
-        client.send = slow_send  # type: ignore[method-assign]
-        await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.3)
-        assert not app.busy
-
-
-async def test_tui_shows_only_the_cores_retries(tmp_path: Path) -> None:
-    """A plugin's record named like a core one (the hooks plugin's
-    ``retry``) is not shown as the model being retried."""
-    from noeta.cli.tui.widgets import Notice
-    from noeta.core.extension import Extension, TaskView
-
-    class Recorder(Extension):
-        name = "hooks"
-
-        async def on_start(self, view: TaskView) -> None:
-            view.record(self.name, "retry", {"call_id": "c1"})
-            view.record(self.name, "notice", {"text": "not the core's"})
-
-    agent = Agent(name="main", model="claude-sonnet-4-5", extensions=[Recorder()])
-    app = NoetaApp(local(tmp_path, ScriptedProvider([reply("hi")]), agent), agent="main",
-                   model="claude-sonnet-4-5", cwd=str(tmp_path))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.press(*"go", "enter")
-        await settle(pilot, lambda: not app.busy and len(app.query(AssistantMessage)) >= 1)
-        await pilot.pause(0.2)
-        shown = [w.render().plain for w in app.query(Notice)]
-        assert not any("retrying" in s or "not the core's" in s for s in shown), shown
 
 
 # ------------------------------------------------------------ #11 own tasks only

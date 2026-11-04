@@ -128,7 +128,7 @@ def test_a_module_of_an_extra_names_the_extra(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(registry, "broken_plugin_files",
                         lambda: {"/p.py": "ModuleNotFoundError: No module named 'PIL'"})
     [line] = cli.broken_plugin_lines()
-    assert "the images extra" in line and "noeta[tui,images] @ " in line
+    assert "the images extra" in line and "noeta[images] @ " in line
 
 
 def test_an_installed_plugin_wins_a_name_clash(home: Path) -> None:
@@ -218,7 +218,6 @@ async def test_enabled_false_still_wins_over_add_to(home: Path, tmp_path: Path) 
 
 async def test_reload_plugins_runs_the_new_code_from_the_next_turn(home: Path,
                                                                     tmp_path: Path) -> None:
-    from noeta.cli.config import plugin_changes
     from noeta.core import records
     from noeta.core.events import ToolFinished
     from noeta.testing import ScriptedProvider, reply
@@ -236,9 +235,7 @@ async def test_reload_plugins_runs_the_new_code_from_the_next_turn(home: Path,
     await app.runtime.run_until_idle()
 
     path.write_text(path.read_text().replace('text_output("wave")', 'text_output("WAVE")'))
-    before = dict(app.runtime.agents)
-    assert app.reload_plugins is not None and app.reload_plugins() == []
-    assert plugin_changes(before, app.runtime.agents) == ["changed waver"]
+    assert app.reload_plugins is not None and app.reload_plugins() == ["changed waver"]
     fs_after = next(e for e in app.runtime.agents["plain"].extensions if e.name == "fs")
     assert fs_after is fs_before  # an unchanged plugin is the same instance
     await app.client.send(tid, "again")
