@@ -113,8 +113,9 @@ TITLES = {"Bash": "Bash command", "Monitor": "Monitor command", "Write": "Create
 
 # ---------------------------------------------------------------- reminders
 
-#: The note on using the shell for small jobs, sent in auto mode and in
-#: bypass-permissions mode (``rem.auto-mode.*``); ``{mode}`` names the mode.
+#: The note on using the shell for small jobs, sent in auto mode
+#: (``rem.auto-mode.*``; Claude Code also sends it in bypass-permissions mode,
+#: noeta does not); ``{mode}`` names the mode.
 SHELL_FIRST_GUIDANCE = (
     "{mode} is on, so the shell may also do small jobs: reading (cat, head, sed -n), "
     "searching (grep, find) and small mechanical edits (sed, heredocs, short scripts) "
