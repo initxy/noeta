@@ -67,7 +67,8 @@ def append(path: Path | None, text: str) -> None:
             f.write(line)
         lines = path.read_text("utf-8").splitlines(keepends=True)
         if len(lines) > 2 * HISTORY_MAX:
-            tmp = path.with_suffix(".tmp")
+            # Per process: two TUIs trimming at once each replace whole.
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write("".join(lines[-HISTORY_MAX:]))

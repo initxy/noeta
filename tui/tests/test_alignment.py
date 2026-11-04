@@ -100,6 +100,21 @@ def test_the_history_file_is_bounded(tmp_path: Path) -> None:
     assert history.load(None) == [] and history.history_file("", "/w") is None
 
 
+def test_a_history_trim_uses_its_own_temp_file(tmp_path: Path) -> None:
+    """Two TUIs trimming one project's history at once must not share a
+    temp file: here another's is in the way (a directory, so writing it fails)."""
+    from noeta_tui import history
+
+    path = history.history_file(str(tmp_path), "/w")
+    assert path is not None
+    path.parent.mkdir(parents=True)
+    (path.parent / "history.tmp").mkdir()
+    for n in range(2 * history.HISTORY_MAX + 1):
+        history.append(path, f"prompt {n}")
+    assert len(path.read_text().splitlines()) == history.HISTORY_MAX
+    assert sorted(p.name for p in path.parent.iterdir()) == ["history.jsonl", "history.tmp"]
+
+
 async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
     from noeta.core.types import Text, ToolResult
     from noeta_tui.widgets import ApprovalCard
