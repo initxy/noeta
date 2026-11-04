@@ -138,6 +138,29 @@ describe("PendingCards", () => {
     unmount();
   });
 
+  it("leaves the focus in a box the person is typing in, so their digits are not an answer", async () => {
+    const answer = vi.fn().mockResolvedValue({});
+    const api = { answer } as unknown as Api;
+    const { rerender } = render(
+      <>
+        <textarea aria-label="Message" />
+        <PendingCards pending={[]} api={api} answered={() => undefined} />
+      </>,
+    );
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "step ");
+    rerender(
+      <>
+        <textarea aria-label="Message" />
+        <PendingCards pending={[approval]} api={api} answered={() => undefined} />
+      </>,
+    );
+    expect(box).toHaveFocus();
+    await userEvent.keyboard("12");
+    expect(box).toHaveValue("step 12");
+    expect(answer).not.toHaveBeenCalled();
+  });
+
   it("shows why an answer failed, and refreshes the cards when it was answered elsewhere", async () => {
     const answer = vi.fn().mockRejectedValueOnce(new ApiError(500, "store down")).mockRejectedValueOnce(new ApiError(409, "answered"));
     const answered = vi.fn();
@@ -224,6 +247,25 @@ describe("Composer", () => {
     expect(box).toHaveValue("");
     await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
     expect(onCycleMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("cycles the mode on Shift+Tab with the slash menu open, keeps the text after the command word on Enter, and lets an input method confirm with Enter", async () => {
+    const onSend = vi.fn();
+    const onCycleMode = vi.fn();
+    render(<Composer busy={false} commands={commands} findFiles={async () => []} onSend={onSend} onStop={() => undefined} onCycleMode={onCycleMode} />);
+    const box = screen.getByLabelText("Message") as HTMLTextAreaElement;
+    await userEvent.type(box, "/co");
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(onCycleMode).toHaveBeenCalledTimes(1);
+    expect(box).toHaveValue("/co");
+    await userEvent.type(box, "mp the tests");
+    box.setSelectionRange(3, 3); // the caret inside the word "/comp"
+    fireEvent.select(box);
+    expect(screen.getByRole("listbox", { name: "commands" })).toBeInTheDocument();
+    fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("/compact the tests", []);
   });
 
   it("takes a draft to edit (a rewound prompt)", async () => {

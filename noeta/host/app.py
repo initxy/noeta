@@ -79,6 +79,8 @@ class FrontEndStart:
     task_config: dict[str, Any] = field(default_factory=dict)
     #: A task to open; ``""``: let the person pick one; ``None``: a new one.
     resume: str | None = None
+    #: Without ``resume``: open the newest task started in ``cwd`` (``-c``).
+    continue_last: bool = False
     #: The permission mode new tasks start in (``None``: the plugin's default).
     permission_mode: str | None = None
     #: ``app`` is a server's: tasks run in its directories, not ``cwd``.

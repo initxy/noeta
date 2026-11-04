@@ -35,11 +35,14 @@ function useAnswer(done: () => void): [boolean, string, (send: () => Promise<unk
   return [busy, error, run];
 }
 
-/** Focuses the card when it appears, so its keys work at once. */
+/** Focuses the card when it appears, so its keys work at once — unless the
+ * person is typing in a box: their next keys are not the card's. */
 function useFocus<T extends HTMLElement>(focus: boolean) {
   const ref = useRef<T>(null);
   useEffect(() => {
-    if (focus) ref.current?.focus();
+    const at = document.activeElement;
+    const typing = (at instanceof HTMLTextAreaElement || at instanceof HTMLInputElement) && at.value !== "";
+    if (focus && !typing) ref.current?.focus();
   }, [focus]);
   return ref;
 }

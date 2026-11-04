@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { Api } from "../api/client";
 import type { Event, Recorded } from "../api/types";
 import { emptyTask, reduce, sessionStatus, type Action, type TaskState } from "./transcript";
+import { earlierLogs } from "./useTask";
 
 let seq = 0;
 const ev = (event: Event): Action => ({ type: "event", rec: { seq: ++seq, at: 0, event } as Recorded });
@@ -125,10 +127,14 @@ describe("reduce", () => {
     expect(st.queued).toEqual([{ seq: 8, text: "later" }]);
   });
 
-  it("ends a wait on an approval once the task takes input", () => {
-    let st = run(ev({ type: "Waiting", on: "approval", ids: [] }));
+  it("ends a wait on an approval once its answer is taken, not on a message meanwhile", () => {
+    let st = run(ev({ type: "Waiting", on: "approval", ids: ["c1"] }));
     expect(st.waitingOn).toBe("approval");
-    st = reduce(st, ev({ type: "InputTaken", through: 3, items: [{ seq: 3, at: 0, body: { kind: "answer", request_id: "c1", decision: "allow" } }] }));
+    // A background job's end (or a message) is taken; the approval still stands.
+    st = reduce(st, ev({ type: "InputTaken", through: 2, items: [{ seq: 2, at: 0, body: { kind: "message", when: "now", message: { role: "user", content: [{ type: "text", text: "job done" }], origin: "system" } } }] }));
+    st = reduce(st, person("also this", 3));
+    expect(st.waitingOn).toBe("approval");
+    st = reduce(st, ev({ type: "InputTaken", through: 4, items: [{ seq: 4, at: 0, body: { kind: "answer", request_id: "c1", decision: "allow" } }] }));
     expect(st.waitingOn).toBeNull();
   });
 
@@ -161,5 +167,22 @@ describe("sessionStatus", () => {
     expect(sessionStatus("waiting", "children")).toBe("running");
     expect(sessionStatus("running", null)).toBe("running");
     expect(sessionStatus("ended", null)).toBe("ended");
+  });
+});
+
+describe("earlierLogs", () => {
+  it("keeps the conversations that load and marks the one that did not", async () => {
+    const created = (from: string | null): Recorded => ({ seq: 1, at: 0, event: { type: "TaskCreated", agent: "main", config: {}, history_from: from } as Event });
+    const logs: Record<string, Recorded[]> = { t2: [created("t1")] };
+    const api = {
+      events: async (id: string) => {
+        if (!logs[id]) throw new Error("gone");
+        return logs[id];
+      },
+    } as unknown as Api;
+    expect(await earlierLogs(api, created("t2"))).toEqual([
+      ["t1", null],
+      ["t2", logs.t2],
+    ]);
   });
 });

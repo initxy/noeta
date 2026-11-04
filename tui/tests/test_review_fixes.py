@@ -174,3 +174,24 @@ async def test_reads_one_after_another_are_one_line(tmp_path: Path) -> None:
         assert all(c.display for c in three.calls) and plain(three.head) == "Read 3 files"
         assert len(app.query(ToolCall)) == 4
         assert MODEL in plain(app.query_one("#status"))
+
+
+async def test_continue_opens_the_newest_task_here_with_the_effort_it_runs_with(
+        tmp_path: Path) -> None:
+    first = make_app(tmp_path, ScriptedProvider([reply("hi")]))
+    async with first.run_test(size=(120, 36)) as pilot:
+        await type_line(pilot, "hello")
+        await settle(pilot, lambda: not first.busy and bool(first.task_id))
+        made = first.task_id
+    again = make_app(tmp_path, ScriptedProvider([]), continue_last=True)
+    again.task_config["effort"] = "high"  # the command's, not the task's
+    async with again.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: again.task_id == made and "hello" in shown(again))
+        assert plain(again.query_one("#effort")) == "◐ medium · /effort"  # the model's default
+
+
+async def test_continue_with_nothing_here_starts_a_new_task(tmp_path: Path) -> None:
+    app = make_app(tmp_path, ScriptedProvider([]), continue_last=True)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: "No conversation found to continue" in shown(app))
+        assert app.task_id == ""

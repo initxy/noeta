@@ -47,6 +47,8 @@ export interface TaskState {
   lastSeq: number;
   busy: boolean;
   waitingOn: string | null;
+  /** The calls (approval) or requests (question) the wait is on. */
+  waitingIds: string[];
   ended: string | null;
   title: string;
   cwd: string;
@@ -70,6 +72,7 @@ export const emptyTask = (): TaskState => ({
   lastSeq: 0,
   busy: false,
   waitingOn: null,
+  waitingIds: [],
   ended: null,
   title: "",
   cwd: "",
@@ -195,6 +198,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
       let busy = st.busy;
       const taken = new Set<number>();
       let through = Math.max(st.taken, ev.through ?? 0);
+      let answered = false;
       for (const item of ev.items) {
         taken.add(item.seq);
         through = Math.max(through, item.seq);
@@ -203,6 +207,8 @@ function event(st: TaskState, rec: Recorded): TaskState {
           const images = body.message.content.flatMap((b) => (b.type === "image" ? [`data:${b.media_type};base64,${b.data}`] : []));
           items = [...items, { kind: "user", id: `u${seq}.${item.seq}`, text: shownPrompt(text(body.message.content)), images }];
           busy = true;
+        } else if (body.kind === "cancel" || (body.kind === "answer" && st.waitingIds.includes(body.request_id))) {
+          answered = true;
         } else if (body.kind === "child_ended") {
           items = updateChild(items, body.child_id, body.status);
         } else if (body.kind === "external" && body.name === "config") {
@@ -210,11 +216,14 @@ function event(st: TaskState, rec: Recorded): TaskState {
           if (typeof model === "string") st = { ...st, model };
         }
       }
-      // Taking input ends a wait: the answer (or message) is in.
-      return { ...st, items, busy, waitingOn: null, taken: through, queued: st.queued.filter((q) => !taken.has(q.seq)) };
+      // Taking input ends a wait, but an approval or a question stands until
+      // it is answered: a message taken meanwhile leaves it waiting.
+      const asking = st.waitingOn === "approval" || st.waitingOn === "question";
+      const waiting = asking && !answered ? { waitingOn: st.waitingOn, waitingIds: st.waitingIds } : { waitingOn: null, waitingIds: [] };
+      return { ...st, items, busy, ...waiting, taken: through, queued: st.queued.filter((q) => !taken.has(q.seq)) };
     }
     case "ModelCalled":
-      return { ...st, called: seq, busy: true, model: ev.model || st.model };
+      return { ...st, called: seq, busy: true, waitingOn: null, waitingIds: [], model: ev.model || st.model };
     case "ModelReplied": {
       const msg = ev.response.message;
       const items = [...st.items];
@@ -247,7 +256,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
       if (ev.on === "approval" || ev.on === "question") {
         for (const id of ev.ids ?? []) items = updateTool(items, id, { status: "waiting" });
       }
-      return { ...st, items, live: null, waitingOn: ev.on, busy: ev.on !== "input" };
+      return { ...st, items, live: null, waitingOn: ev.on, waitingIds: ev.ids ?? [], busy: ev.on !== "input" };
     }
     case "TaskEnded":
       return {
@@ -255,6 +264,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
         busy: false,
         live: null,
         waitingOn: null,
+        waitingIds: [],
         ended: ev.status,
         items: [
           ...st.items,
@@ -303,6 +313,7 @@ function history(st: TaskState, rec: Recorded, from: string): TaskState {
     live: st.live,
     busy: st.busy,
     waitingOn: st.waitingOn,
+    waitingIds: st.waitingIds,
     ended: st.ended,
     queued: st.queued,
   };

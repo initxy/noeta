@@ -24,6 +24,7 @@ from noeta.core import models, records
 from noeta.core.events import (
     Answer,
     ExtensionRecorded,
+    External,
     InputTaken,
     ModelCalled,
     ModelReplied,
@@ -35,6 +36,7 @@ from noeta.core.events import (
     ToolStarted,
     Waiting,
 )
+from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta
 from noeta.host.feed import failure_text
 from noeta.host.pending import (
@@ -302,7 +304,8 @@ class TranscriptView(App[None]):
         transcript = self.query_one("#transcript")
         if isinstance(ev, TaskCreated):
             self.task_cwd = str(ev.config.get("cwd") or self.task_cwd)
-            self.effort = ev.config.get("effort") or self.effort
+            # What the task runs with: its config's effort, else the model's default.
+            self.effort = ev.config.get("effort") or None
         elif isinstance(ev, InputTaken):
             for item in ev.items:
                 if isinstance(item.body, Say) and item.body.message.origin in (None, "human"):
@@ -315,6 +318,9 @@ class TranscriptView(App[None]):
                     else:
                         await transcript.mount(UserMessage(text))
                     self.set_busy(True)
+                elif isinstance(item.body, External) and item.body.name == CONFIG_SIGNAL \
+                        and isinstance(item.body.data, dict) and "effort" in item.body.data:
+                    self.effort = item.body.data["effort"] or None
                 elif isinstance(item.body, Answer) and \
                         item.body.request_id == self.waiting_question and \
                         self.question_task in ("", self.task_id):

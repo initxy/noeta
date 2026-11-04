@@ -67,6 +67,22 @@ test("an approval card answered runs the Bash call", async ({ page }) => {
   await shot(page, "04-bash-card");
 });
 
+test("an approval card stays while a message arrives during it", async ({ page }) => {
+  await newSession(page);
+  await say(page, "run bash once more");
+  const card = page.getByRole("dialog", { name: /Bash|command/i });
+  await expect(card).toBeVisible();
+  const id = /#session=(.+)$/.exec(page.url())![1];
+  // Taken at once (as a background job's end or a timer is): the approval still stands.
+  const sent = await page.request.post(`/tasks/${id}/messages`, { headers: { authorization: `Bearer ${TOKEN}` }, data: { input: "a note meanwhile", when: "now" } });
+  expect(sent.ok()).toBe(true);
+  await expect(page.locator(".msg.user").last()).toContainText("a note meanwhile");
+  await page.waitForTimeout(2000); // past a poll of the cards
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: /^1 Yes/ }).click();
+  await expect(page.locator('.tool[data-tool="Bash"]')).toHaveAttribute("data-status", "done");
+});
+
 test("a Write shows its diff, and its card switches the mode", async ({ page }) => {
   await newSession(page);
   await say(page, "write notes-e2e.txt please");

@@ -57,3 +57,10 @@ def test_an_untrusted_project_is_trusted_through_the_front_end(started: dict[str
     assert app.notices == ["something else"]
     cli.main([])
     assert started["start"].trust is None and "effort" not in started["start"].task_config
+
+
+def test_continue_is_handed_to_the_front_end(started: dict[str, Any]) -> None:
+    cli.main(["-c"])
+    assert started["start"].continue_last and started["start"].resume is None
+    cli.main([])
+    assert not started["start"].continue_last

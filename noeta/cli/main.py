@@ -408,6 +408,7 @@ def _front(argv: list[str]) -> None:
     from noeta.host.stream_json import noeta_version
 
     common: dict[str, Any] = {"cwd": cwd, "resume": args.resume,
+                              "continue_last": args.continue_last,
                               "permission_mode": args.permission_mode,
                               "home": str(home_dir.HOME), "version": noeta_version()}
     backend: Any
