@@ -132,6 +132,8 @@ def test_a_marketplace_is_read_to_find_its_plugins(home: Path, tmp_path: Path) -
                    {"name": "formatter", "source": {"source": "url", "url": f"file://{other}",
                                                      "sha": sha}},
                    {"name": "floating", "source": {"source": "url", "url": f"file://{other}"}},
+                   {"name": "branch", "source": {"source": "url", "url": f"file://{other}",
+                                                  "ref": "main"}},
                    {"name": "npm-one", "source": {"source": "npm", "package": "x"}},
                    {"name": "escape", "source": "./../formatter"}]}
     market_sha = repo(market, {".claude-plugin/marketplace.json": json.dumps(listing),
@@ -142,6 +144,8 @@ def test_a_marketplace_is_read_to_find_its_plugins(home: Path, tmp_path: Path) -
     assert name == "formatter" and (path / "commands" / "fmt.md").is_file()
     with pytest.raises(PluginInstallError, match="pins no commit"):
         install("floating", marketplace=str(market))
+    with pytest.raises(PluginInstallError, match="its ref 'main' is not followed"):
+        install("branch", marketplace=str(market))
     with pytest.raises(PluginInstallError, match="'npm' source is not supported"):
         install("npm-one", marketplace=str(market))
     with pytest.raises(PluginInstallError, match="outside"):

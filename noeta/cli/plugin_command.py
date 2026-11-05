@@ -209,7 +209,9 @@ def _from_marketplace(market: str, name: str, commit: str | None, work: Path) ->
                                  "(github, url, git-subdir or a path are)")
     sha = str(src.get("sha") or commit or "").lower()
     if not _COMMIT.match(sha):
-        raise PluginInstallError(f"plugin {name!r} pins no commit: its entry has no sha; "
+        ref = f" (its ref {src['ref']!r} is not followed: a branch or tag can move)" \
+            if src.get("ref") else ""
+        raise PluginInstallError(f"plugin {name!r} pins no commit: its entry has no sha{ref}; "
                                  "give --commit")
     fetched = work / "plugin"
     _checkout(url, sha, fetched)
