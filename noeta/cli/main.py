@@ -362,6 +362,10 @@ def _main(argv: list[str]) -> None:
         from noeta.host.http import LOOPBACK_HOSTS
         if args.no_token and args.host not in LOOPBACK_HOSTS:
             sys.exit("noeta: --no-token serves only a loopback address")
+        if _allowed_hosts(args) is None:
+            print(f"noeta: on {args.host} any Host header is answered; name the names this "
+                  "server is reached by with --allow-host (DNS-rebinding protection)",
+                  file=sys.stderr)
         asyncio.run(_serve(_settings(args), args, cwd))
         return
 

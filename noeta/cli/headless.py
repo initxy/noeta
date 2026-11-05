@@ -37,12 +37,14 @@ from noeta.toolkit.local_env import local_timezone
 #: Accepted for compatibility, not applied (value-taking, then flags).
 IGNORED_WITH_VALUE = ("--fallback-model",
                       "--betas", "--max-thinking-tokens", "--thinking", "--thinking-display",
-                      "--plugin-url", "--task-budget", "--debug-file",
+                      "--plugin-url", "--task-budget", "--debug", "--debug-file",
                       "--name", "--autocompact", "--file", "--system-prompt-snapshot")
 IGNORED_FLAGS = ("--include-hook-events", "--no-session-persistence",
                  "--session-mirror", "--bare", "--allow-dangerously-skip-permissions",
                  "--exclude-dynamic-system-prompt-sections", "--forward-subagent-text",
                  "--disable-slash-commands")
+#: The short spellings of ignored flags.
+_IGNORED_SHORT = {"--debug": ("-d",)}
 
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
@@ -91,9 +93,9 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--plugin-dir", dest="plugin_dirs", action="append", default=[],
                     metavar="PATH", help="load a plugin file or directory for this run only")
     ap.add_argument("-v", "--version", action="store_true")
-    ap.add_argument("-d", "--debug", nargs="?", const="", default=None)
     for flag in IGNORED_WITH_VALUE:
-        ap.add_argument(flag, dest=f"ignored_{flag[2:].replace('-', '_')}", action="append",
+        ap.add_argument(*_IGNORED_SHORT.get(flag, ()), flag,
+                        dest=f"ignored_{flag[2:].replace('-', '_')}", action="append",
                         nargs="?", const="", help=argparse.SUPPRESS)
     for flag in IGNORED_FLAGS:
         ap.add_argument(flag, dest=f"ignored_{flag[2:].replace('-', '_')}",

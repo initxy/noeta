@@ -21,11 +21,13 @@ from noeta.core.events import Recorded
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL, MODEL_ROUTE
 from noeta.core.store import Status, TaskRow
 from noeta.host._errors import error_text
+from noeta.host.pending import pending
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 from noeta.toolkit.signals import ARCHIVE_SIGNAL, RENAME_SIGNAL, RESUMED_SIGNAL
 from noeta.toolkit.structured_output import SCHEMA_KEY, answer_schema_problem
+from noeta.toolkit.usd_budget import BUDGET_KEY
 
 
 def token_digest(token: str) -> str:
@@ -37,6 +39,11 @@ class Refused(Exception):
     """A request asked for what this server does not allow."""
 
 
+class NotOpen(Exception):
+    """An answer names a request the task is not waiting on: unknown, or
+    already answered and taken."""
+
+
 _BYPASS = "bypassPermissions"
 
 #: The task config keys a request may set when it creates a task. The rest
@@ -45,7 +52,7 @@ _BYPASS = "bypassPermissions"
 #: request they would loosen the permission gates.
 REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema",
                   "timezone", "interactive", "permission_prompt_tool", "ultracode",
-                  CONTINUED_AS_KEY)
+                  BUDGET_KEY, CONTINUED_AS_KEY)
 
 #: The signals a request may post: the ones front ends send. The others
 #: (a background job's end, a sub-agent's idle subscription …) are posted
@@ -106,11 +113,18 @@ class GuardedClient:
             raise ValueError("a task config is a JSON object")
         for key in config:
             if key not in allowed:
+                settable = ", ".join(k for k in allowed if k != CLIENT_HOOKS_KEY)
+                removable = (f"; {CLIENT_HOOKS_KEY} may only be removed"
+                             if CLIENT_HOOKS_KEY in allowed else "")
                 raise Refused(f"a request may not set the task config key {key!r} "
-                              f"(only {', '.join(allowed)})")
+                              f"(only {settable}{removable})")
         self._mode(config.get("permission_mode"))
         if config.get(CONTINUED_AS_KEY, "fork") not in CONTINUED_AS:
             raise ValueError(f"{CONTINUED_AS_KEY} is one of {', '.join(CONTINUED_AS)}")
+        budget = config.get(BUDGET_KEY)
+        if budget is not None and (isinstance(budget, bool) or not isinstance(budget, (int, float))
+                                   or not budget > 0):
+            raise ValueError(f"{BUDGET_KEY} is a number of US dollars above 0")
         if config.get(SCHEMA_KEY) is not None:
             problem = answer_schema_problem(config[SCHEMA_KEY])
             if problem is not None:
@@ -141,6 +155,13 @@ class GuardedClient:
                      always: bool = False, data: Any = None) -> int:
         if isinstance(data, Mapping):
             self._mode(data.get("mode"))
+        # An answer to nothing would sit unread in the inbox. Until its
+        # answer is taken a request stays open, so a retry still goes
+        # through (the client deduplicates it).
+        open_ids = {p.request_id for p in pending(await self._client.events(task_id), task_id)}
+        if request_id not in open_ids:
+            raise NotOpen(f"task {task_id} is not waiting on a request {request_id!r} "
+                          "(unknown, or already answered)")
         return await self._client.answer(task_id, request_id, decision, always=always,
                                          data=data)
 
@@ -269,6 +290,8 @@ class Guard:
                 return JSONResponse({"error": f"unknown task {exc}"}, status_code=404)
             except Refused as exc:
                 return JSONResponse({"error": str(exc)}, status_code=403)
+            except NotOpen as exc:
+                return JSONResponse({"error": str(exc)}, status_code=409)
             except (msgspec.ValidationError, ValueError, KeyError, IndexError) as exc:
                 return JSONResponse({"error": error_text(exc)}, status_code=400)
         return wrapped

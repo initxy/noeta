@@ -172,15 +172,24 @@ class Settings:
         is set for a built-in provider."""
         if self.provider in self.providers:
             return self._table_provider(self.provider)
-        if not self.api_key and self.provider in _KEY_ENV:
+        key, headers = self._default_secrets()
+        if not key and self.provider in _KEY_ENV:
             fallback = _KEY_ENV[self.provider]
             if not (fallback and os.environ.get(fallback)):
                 also = f" ({fallback} is read too)" if fallback else ""
                 raise MissingAPIKey(
                     f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
                     f"or api_key in {home_dir.HOME / 'config.toml'}")
-        return _adapter(self.provider, self.base_url, self.api_key, self.extra_headers,
-                        self.prompt_cache_ttl)
+        return _adapter(self.provider, self.base_url, key, headers, self.prompt_cache_ttl)
+
+    def _default_secrets(self) -> tuple[str | None, dict[str, str]]:
+        """The default provider's key and headers, their secret references
+        read as a provider table's are."""
+        from noeta.agents.agent_files import resolve_secrets
+
+        where = "config.toml api_key / extra_headers"
+        key = resolve_secrets(self.api_key, where)
+        return key or None, dict(resolve_secrets(self.extra_headers, where))
 
     def _table_secrets(self, name: str) -> tuple[str | None, dict[str, str]]:
         """A provider table's key and headers, their secret references read."""
@@ -213,7 +222,7 @@ class Settings:
                 if name in self.providers:
                     key, headers = self._table_secrets(name)
                 else:
-                    key, headers = self.api_key, dict(self.extra_headers)
+                    key, headers = self._default_secrets()
                 return listing.fetch_listing(family, base_url, key, headers)
 
             return read
@@ -264,6 +273,8 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     path = home_dir.HOME / "config.toml"
     if path.is_file():
         data.update(tomllib.loads(path.read_text("utf-8")))
+        if unknown := sorted(set(data) - _TOP_LEVEL_KEYS):
+            log.warning("%s: unknown top-level keys %s; ignored", path, unknown)
     env = {
         "model": os.environ.get("NOETA_MODEL"),
         "provider": os.environ.get("NOETA_PROVIDER"),
@@ -284,7 +295,7 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     # The secrets this config hands to noeta's plugins, channels and
     # providers are its own.
     withhold_env_refs([data["plugins"], data["channels"], data["add_plugins"],
-                       data["providers"]])
+                       data["providers"], data.get("api_key"), data.get("extra_headers")])
     data.pop("model_providers", None)
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
@@ -313,6 +324,14 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
         raise ValueError(f"{settings.models_file}: rows name providers that are not "
                          f"configured: {stray}")
     return settings
+
+
+#: The top-level keys of ``config.toml``: the settings a file sets, and
+#: ``[agents.<name>]`` (read into ``add_plugins``). An unknown one warns
+#: rather than fails, so a key a newer or older noeta reads does not stop
+#: this one from starting.
+_TOP_LEVEL_KEYS = frozenset(Settings.__dataclass_fields__) - {"add_plugins",
+                                                              "model_providers"} | {"agents"}
 
 
 def _provider_tables(value: Any) -> dict[str, dict[str, Any]]:

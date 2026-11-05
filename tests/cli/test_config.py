@@ -49,6 +49,17 @@ def test_bad_tables(home: Path, text: str) -> None:
         load_settings()
 
 
+def test_an_unknown_top_level_key_warns_and_is_ignored(
+        home: Path, caplog: pytest.LogCaptureFixture) -> None:
+    (home / "config.toml").write_text(
+        'model = "m"\napikey = "k"\n[agents.main]\nadd_plugins = []\n[plugins.web]\n')
+    with caplog.at_level("WARNING", logger="noeta.cli"):
+        s = load_settings()
+    assert s.model == "m" and s.api_key != "k"
+    assert [r.getMessage() for r in caplog.records] == [
+        f"{home / 'config.toml'}: unknown top-level keys ['apikey']; ignored"]
+
+
 def test_merge() -> None:
     web = Web()
     assert merge_plugin_settings(
@@ -418,6 +429,31 @@ async def test_a_tables_missing_secret_fails_only_its_calls(
     router.provider_for("claude-opus-5-5")
     with pytest.raises(Fatal, match="NOT_SET_ANYWHERE"):
         await router.provider_for("x-model").complete(ModelRequest(model="x-model"))
+
+
+def test_the_top_level_key_reads_secret_references(home: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.providers.openai_compat import OpenAICompatProvider
+    from noeta.toolkit import local_env
+
+    monkeypatch.setattr(local_env, "_withheld", set())
+    monkeypatch.delenv("NOETA_API_KEY", raising=False)
+    monkeypatch.setenv("TOP_KEY", "sk-top")
+    monkeypatch.setenv("TOP_TEAM", "a")
+    (home / "config.toml").write_text(
+        'model = "m"\nprovider = "openai_compat"\nbase_url = "https://x/v1"\n'
+        'api_key = "{env:TOP_KEY}"\nextra_headers = {"x-team" = "{env:TOP_TEAM}"}\n')
+    s = load_settings()
+    assert s.api_key == "{env:TOP_KEY}"  # the reference is what settings hold
+    provider = s.make_provider()
+    inner = getattr(provider, "_inner", provider)
+    assert isinstance(inner, OpenAICompatProvider)
+    assert inner._client.headers["authorization"] == "Bearer sk-top"  # type: ignore[attr-defined]
+    assert inner._client.headers["x-team"] == "a"  # type: ignore[attr-defined]
+    assert not {"TOP_KEY", "TOP_TEAM"} & set(local_env.child_env())
+    monkeypatch.delenv("TOP_KEY")
+    with pytest.raises(ValueError, match="TOP_KEY"):
+        s.make_provider()
 
 
 def test_an_anthropic_provider_takes_the_one_hour_cache(home: Path) -> None:

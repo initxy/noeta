@@ -111,7 +111,8 @@ ERASED_SEQS_KEEP = 64
 RECALL_FILE_MAX_LINES = 200
 RECALL_FILE_MAX_BYTES = 4096
 RECALL_CUT_NOTE = "> Only {what} of this memory are shown; Read {path} for the whole file."
-#: Put ahead of a recalled file last changed more than a day ago.
+#: Put ahead of a recalled file whose age in whole days (rounded down) is
+#: more than one, so two days or older (Claude Code's).
 RECALL_STALE_NOTE = (
     "This memory was last changed {days} days ago. A memory records what was true when it was "
     "written, not what is true now: what it says about the code, and any file:line it cites, "
@@ -163,7 +164,7 @@ def recalled_text(path: str, text: str) -> str:
 
 
 def _stale_note(mtime: float, now: float | None = None) -> str:
-    """The note ahead of a memory changed more than a day ago (``""``
+    """The note ahead of a memory two or more whole days old (``""``
     otherwise), on its own line."""
     days = int(max(0.0, (now if now is not None else time.time()) - mtime) // 86_400)
     return RECALL_STALE_NOTE.format(days=days) + "\n" if days > 1 else ""

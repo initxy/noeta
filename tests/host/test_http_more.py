@@ -101,9 +101,12 @@ async def test_stream_json_over_a_websocket(served: tuple[str, ScriptedProvider]
             if message["type"] == "result":
                 break
         assert message["result"] == "echo done" and not message["is_error"]
-    with pytest.raises(websockets.InvalidStatus, match="403"):
-        async with websockets.connect(f"ws://{host}/stream-json"):
-            pass  # no token
+    # Refused after the handshake, with a code a client (a browser too) can read.
+    for query, code in (("", 4401), ("?token=wrong", 4401)):
+        async with websockets.connect(f"ws://{host}/stream-json{query}") as ws:
+            with pytest.raises(websockets.ConnectionClosed) as closed:
+                await asyncio.wait_for(ws.recv(), 10)
+        assert closed.value.rcvd is not None and closed.value.rcvd.code == code, query
 
 
 async def test_stream_json_init_names_the_directory_the_server_chose(
@@ -190,9 +193,11 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
     host, _ = served
     for query in ("permission_mode=bypassPermissions", "cwd=/"):
-        with pytest.raises(websockets.InvalidStatus, match="403"):
-            async with websockets.connect(f"ws://{host}/stream-json?token=secret&{query}"):
-                pass
+        async with websockets.connect(f"ws://{host}/stream-json?token=secret&{query}") as ws:
+            with pytest.raises(websockets.ConnectionClosed) as closed:
+                await asyncio.wait_for(ws.recv(), 10)
+        assert closed.value.rcvd is not None and closed.value.rcvd.code == 4403, query
+        assert closed.value.rcvd.reason, query  # what was refused
     async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
         assert (await http.post("/stream-json?cwd=/etc", content="")).status_code == 403
         for config in ({"permission_mode": "bypassPermissions"}, {"cwd": "/"},
@@ -236,6 +241,9 @@ async def test_requests_cannot_set_the_config_plugins_own(
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "config", "data": {"permission_rules": ["Bash"]}})
         assert refused.status_code == 403
+        error = refused.json()["error"]
+        assert error.endswith("; client_hooks may only be removed)")
+        assert "client_hooks," not in error and "max_budget_usd" in error
         # A headless client's hook record may be taken away, not set.
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "config", "data": {"client_hooks": {"client": "x", "events": {}}}})
@@ -385,6 +393,29 @@ async def test_a_clients_message_is_the_persons_text_and_images_only(
             await asyncio.sleep(0.01)
         assert "from the person" in events
         assert '"origin":"agent"' not in events
+
+
+async def test_a_budget_is_set_at_create_and_changed_by_signal_alike(
+        served: tuple[str, ScriptedProvider]) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        ok = await http.post("/tasks", json={"agent": "main", "config": {
+            "max_budget_usd": 2.5}})
+        assert ok.status_code == 201
+        task_id = ok.json()["task_id"]
+        [first] = [e for e in (await http.get(f"/tasks/{task_id}/events")).json()
+                   if e["event"]["type"] == "TaskCreated"]
+        assert first["event"]["config"]["max_budget_usd"] == 2.5
+        for bad in (0, -1, "5", True):
+            got = await http.post("/tasks", json={"agent": "main", "config": {
+                "max_budget_usd": bad}})
+            assert got.status_code == 400 and "max_budget_usd" in got.text, bad
+            got = await http.post(f"/tasks/{task_id}/signals", json={
+                "name": "config", "data": {"max_budget_usd": bad}})
+            assert got.status_code == 400 and "max_budget_usd" in got.text, bad
+        changed = await http.post(f"/tasks/{task_id}/signals", json={
+            "name": "config", "data": {"max_budget_usd": None}})
+        assert changed.status_code == 200
 
 
 async def test_continued_as_takes_only_its_values(

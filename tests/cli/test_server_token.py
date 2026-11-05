@@ -64,6 +64,17 @@ async def _done() -> None:
     return None
 
 
+def test_serve_warns_when_no_host_name_is_checked(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(main, "_settings", lambda _a: object())
+    monkeypatch.setattr(main, "_serve", lambda *a: _done())
+    main.main(["serve", "--host", "0.0.0.0"])
+    assert "--allow-host (DNS-rebinding protection)" in capsys.readouterr().err
+    for argv in ([], ["--host", "0.0.0.0", "--allow-host", "noeta.example"]):
+        main.main(["serve", *argv])
+        assert "--allow-host" not in capsys.readouterr().err
+
+
 def test_allowed_hosts_are_checked_on_any_bind_when_named() -> None:
     from noeta.host.http import LOOPBACK_HOSTS
 

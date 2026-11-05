@@ -269,6 +269,10 @@ def _target(spec: dict[str, Any]) -> str:
 
 
 def _status(scope: str, name: str, spec: dict[str, Any], cwd: str) -> str:
+    # A check starts the server (a command, a headersHelper): nothing a
+    # project's files name runs before the project is trusted.
+    if scope in ("project", "local") and not project_trusted(cwd):
+        return "project not trusted (not started; run `noeta trust` here)"
     if scope == "project" and not _consented(name, cwd):
         return "pending approval (not started)"
     status = str(asyncio.run(_admin().check(name, spec)))
