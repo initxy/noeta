@@ -46,11 +46,13 @@ class ScriptedProvider:
     def __init__(self, script: list[ModelResponse | Exception]) -> None:
         self._script = list(script)
         self.calls = 0
+        self.requests: list[ModelRequest] = []
 
     async def complete(
         self, request: ModelRequest, on_delta: OnDelta | None = None
     ) -> ModelResponse:
         self.calls += 1
+        self.requests.append(request)
         item = self._script.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -382,3 +384,44 @@ async def test_a_provider_without_a_whole_call_streams_again() -> None:
     provider = ScriptedProvider([StreamBroken("cut"), _ok()])
     await complete_with_retries(provider, REQUEST, sleep=SleepRecorder(), rng=lambda: 0.0)
     assert provider.calls == 2
+
+
+# ---------------------------------------------------------------------------
+# An overflow of input plus output cap: one retry with a smaller cap
+# ---------------------------------------------------------------------------
+
+CAPPED = ModelRequest(model="m", messages=[user("hi")], max_tokens=32_000)
+
+
+def _too_long(input_tokens: int, limit: int) -> ContextOverflow:
+    return ContextOverflow("input length and `max_tokens` exceed context limit",
+                           input_tokens=input_tokens, context_limit=limit)
+
+
+async def test_an_overflow_with_its_numbers_retries_once_with_the_cap_left() -> None:
+    provider = ScriptedProvider([_too_long(180_000, 200_000), _ok("fits")])
+    retries: list[tuple[int, float]] = []
+    resp = await complete_with_retries(provider, CAPPED, sleep=SleepRecorder(),
+                                       on_retry=lambda a, d, e: retries.append((a, d)))
+    assert resp.message.text == "fits"
+    assert [r.max_tokens for r in provider.requests] == [32_000, 19_000]
+    assert retries == [(1, 0.0)]
+
+
+async def test_a_second_overflow_surfaces() -> None:
+    provider = ScriptedProvider([_too_long(180_000, 200_000), _too_long(190_000, 200_000)])
+    with pytest.raises(ContextOverflow):
+        await complete_with_retries(provider, CAPPED, sleep=SleepRecorder())
+    assert provider.calls == 2
+
+
+@pytest.mark.parametrize("error", [
+    ContextOverflow("prompt is too long"),  # no numbers
+    _too_long(196_500, 200_000),  # 2,500 left: under the 3,000 floor
+    _too_long(100_000, 200_000),  # the cap asked for already fits
+])
+async def test_an_overflow_the_cap_cannot_fix_surfaces_at_once(error: ContextOverflow) -> None:
+    provider = ScriptedProvider([error])
+    with pytest.raises(ContextOverflow):
+        await complete_with_retries(provider, CAPPED, sleep=SleepRecorder())
+    assert provider.calls == 1
