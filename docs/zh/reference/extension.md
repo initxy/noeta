@@ -37,7 +37,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `tools(self, view: TaskView)` | `Sequence[Tool]` | 每一步。同名时第一个提供的插件说了算；每个进程只对一次冲突记一次日志。 |
 | `tool_changes(self, view: TaskView, offered: Sequence[Tool])` | `ToolChanges \| None` | 每一步，所有插件的 `tools` 之后。`offered` 是套上代理允许、禁止清单之后的工具，不含别的插件的改动；每个插件拿到的 `offered` 都一样。加进来的工具如果被代理的清单拒绝，整份答复作废。 |
 | `context(self, view: TaskView)` | `Sequence[ContextPart]` | 每次调用模型：系统提示里的文字。 |
-| `async reminders(self, view: TaskView)` | `Sequence[Reminder]` | 每次调用模型之前。运行器把它们记下，放进这次请求、接在已记录的消息后面。 |
+| `async reminders(self, view: TaskView)` | `Sequence[Reminder]` | 每次调用模型之前，排在所有插件的 `before_model` 前面（和 Claude Code 一样，先加备注、再决定要不要压缩）。运行器把它们记下，放进这次请求、接在已记录的消息后面，所以 `before_model` 看得到它们。 |
 | `inherit(self, state: TaskState)` | `Mapping[str, Any]` | 这个任务派出子任务时：在派出它的工具给的配置之上，再加上这些配置项。 |
 
 ### 调用模型

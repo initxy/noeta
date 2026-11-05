@@ -148,7 +148,8 @@ the agents its `add_to` names by itself (`"*"` for every agent); an installed pa
 ignored, so a dependency never changes your agents by being installed.
 
 **Reloading.** `/reload-plugins` (`LocalApp.reload_plugins`) forgets the plugin files, imports
-them again from source and remakes the agents. A turn already running finishes on the old code;
+them again from source, reads the settings files again (their plugin settings apply; a change to
+`env`, `model`, `agent` or `sandbox` is reported as needing a restart) and remakes the agents. A turn already running finishes on the old code;
 each task runs the new code from its next turn, recorded as such. On servers a reload is a
 rolling restart of the workers.
 

@@ -111,7 +111,7 @@ plugins:
 | 过一段时间再叫醒任务 | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | 问用户一个问题 | `ask(...)`（调用停下来等，期间任务不占工人） | `noeta/core/questions.py` |
 | 加代理或子代理 | 一个代理 markdown 文件（Claude Code 的格式，外加 `plugins`） | `noeta/agents/agent_files.py` |
-| 加技能 | `~/.noeta/skills`、项目的 `.noeta/skills` 或 `.agents/skills`、插件的 `skills/` 下的 `SKILL.md` 目录；`~/.noeta/commands` 或项目 `.noeta/commands` 下的 `*.md`（`~/.agents/skills` 默认不读，要在 `[plugins.skills]` 里用 `global_agents_dir` 指定） | `noeta/plugins/skills` |
+| 加技能 | `~/.noeta/skills`、`~/.agents/skills`、项目的 `.noeta/skills` 或 `.agents/skills`、插件的 `skills/` 下的 `SKILL.md` 目录；`~/.noeta/commands` 或项目 `.noeta/commands` 下的 `*.md` | `noeta/plugins/skills` |
 | 接 MCP 服务器 | `.noeta/mcp.json`、settings 的 `mcpServers`、插件的 `.mcp.json` | `noeta/plugins/mcp` |
 | 让聊天软件或 webhook 进来 | 一个渠道 `Channel`（`run(client, stop)`），用 `deliver()` 投递 | `noeta/core/channel.py` |
 | 把回复送出去 | 任务里某个 `Extension` 的 `on_event` | `examples/chat-bridge` |
@@ -248,7 +248,7 @@ noeta plugin remove your-plugin
 
 - **git 来源必须给完整提交号**（40 位十六进制；SHA-256 仓库是 64 位）。短提交号会被拒：以后推上来的提交可能和它前缀相同。明文的 `http://` 和 `git://` 也会被拒：中间人可以换掉代码。
 - **安装时插件里的东西一行都不执行**：clone 时设 `core.hooksPath=/dev/null`，不拉子模块，不跑安装脚本，不装依赖；检出后删掉 `.git`。插件如果导入了 noeta 环境里没有的包，会被列为坏的（`noeta plugins`、`/reload-plugins`），并给出安装那个包的命令。
-- **marketplace 只读**，只用来找插件的来源。从仓库取的条目装在它的 `sha` 上；条目没固定版本时，用 `--commit <sha>`。marketplace 本身是个仓库时，要写 `<url>@<提交号>`。支持 `github`、`url`、`git-subdir` 和路径这几种来源。
+- **marketplace 只读**，只用来找插件的来源。从仓库取的条目装在它的 `sha` 上；条目没固定版本时，用 `--commit <sha>`。只写了 `ref`（分支或标签）的条目照样被拒，算作没固定提交，报错里会点出这个 ref：分支和标签会变，noeta 只装固定下来的提交。marketplace 本身是个仓库时，要写 `<url>@<提交号>`。支持 `github`、`url`、`git-subdir` 和路径这几种来源。
 - **带 `userConfig` 的插件**在安装时一起配置。配置失败，插件不会以半配置状态留在那里；对不声明任何选项的插件传 `--config`，也会拒绝安装。
 - 插件名取文件名（去掉后缀），否则取 manifest 的 `name`，再否则取目录名。`~/.noeta/plugins/` 里已有同名的，要先 `noeta plugin remove`。
 
@@ -312,7 +312,7 @@ async def test_word_count(tmp_path):                 # pytest-asyncio，asyncio_
 照上面规则写的插件，本来就能在多台机器上跑。内核另外加了这几条规则：
 
 - **任务固定自己的插件集。** 任务开始时记下它用的插件（名字、包版本或文件哈希、参数哈希；`registry.pin`）。缺其中某个插件的工人，绝不会在缺插件的情况下跑这个任务：它让租约自然过期，好让有这个插件的工人接手；同一个工人连续三次这样认领、日志里又没有任何新内容，就以 `plugin_missing` 让任务失败（次数记在这个工人的内存里，重启后从头算）。插件集变了会重新记录。
-- **重新加载。** `/reload-plugins` 重新导入插件文件、重建代理。正在进行的一轮用旧代码跑完；每个任务从下一轮开始用新代码。服务端的重新加载就是滚动重启：一次停一个 `noeta worker`（它手上在跑的任务回到存储，由别的工人按日志接着跑），装好，再启动。要在几个租约周期内做完：固定了新插件的任务如果一直落到没有这个插件的工人上，三个租约后就会失败。同一个任务在两个工人上跑了不同代码，日志里能看到，不会悄无声息。
+- **重新加载。** `/reload-plugins` 重新导入插件文件、重读设置文件、重建代理。正在进行的一轮用旧代码跑完；每个任务从下一轮开始用新代码。服务端的重新加载就是滚动重启：一次停一个 `noeta worker`（它手上在跑的任务回到存储，由别的工人按日志接着跑），装好，再启动。要在几个租约周期内做完：固定了新插件的任务如果一直落到没有这个插件的工人上，三个租约后就会失败。同一个任务在两个工人上跑了不同代码，日志里能看到，不会悄无声息。
 - **渠道**在每个启用它的 `noeta worker` / `noeta serve` 里运行；外部投递进来的消息是幂等的，所以起多个副本也安全，回复则只从任务唯一的写入者发出去（见[作为服务端运行](./server.md)）。
 - **事件投递。** `on_event` 在事件提交后收到每个事件一次；它还没跑进程就崩了，这个事件就丢了。如果插件记下自己处理到哪个事件，并在 `delivered_through(view)` 里返回那个序号，就能保证至少收到一次：任务每次被认领，都会先把那个序号之后的所有事件（连同任务当前状态）再给它一遍。任务进入 `Waiting` 交还之前，会等这个任务的所有 `on_event` 跑完、记录落盘，所以中间崩溃的话，任务会在租约过期后被重新认领，等待也不会被写两次。失败的副作用（比如一次投递抛了异常）在下一次认领时重试；对正在等待的任务来说，就是它收件箱里来下一条消息的时候。唯一的例外是结束任务的那条 `TaskEnded`：已结束的任务不会再被认领，所以它的 `on_event` 只跑一次，期间写的记录会被丢掉。副作用要按事件序号做幂等（参考 chat-bridge 的 `Idempotency-Key`）。
 - **只活在一个进程里的东西**（一个子进程、一条打开的连接），用 `ctx.keep()` 让任务一直留在这个工人上；工人挂了，下一个认领者会告诉模型这份工作丢了（见[单写者与崩溃恢复](../how-it-works/recovery.md)）。

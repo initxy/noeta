@@ -88,8 +88,11 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # the API, on
 | `--web DIR` | — | also serve the built web app from `DIR` at the other paths |
 
 Both also take the common flags (`--model`, `--store`, `--provider`, `--base-url`, `--cwd`, …);
-see [the noeta command](../reference/cli.md). The endpoints are listed in
-[HTTP / WebSocket API](../reference/http-api.md).
+see [the noeta command](../reference/cli.md). `--effort` and `--permission-mode` set the
+starting config of the tasks clients create through `noeta serve` (a request's own value wins);
+on `noeta worker` they reach only the tasks its channels start. Either refuses
+`--permission-mode bypassPermissions` without `--allow-bypass-permissions`. The endpoints are
+listed in [HTTP / WebSocket API](../reference/http-api.md).
 
 ## Postgres
 
@@ -129,7 +132,8 @@ port is reachable from other local processes and from web pages in a browser.
   token one last time.
 - `--no-token` works only on a loopback address.
 - On a loopback bind only the loopback `Host` names are answered (DNS rebinding). On any other
-  bind `Host` is checked only against the names given with `--allow-host`, so name them.
+  bind `Host` is checked only against the names given with `--allow-host`, so name them;
+  without any, `noeta serve` warns on stderr at startup that every `Host` is answered.
 - A request from a web page of another origin is refused unless that origin is given with
   `--allow-origin`.
 - Host code embedding the API uses `create_app(client, token=...)` (or `token_sha256=`); it
@@ -139,12 +143,15 @@ port is reachable from other local processes and from web pages in a browser.
 
 A request may set only the task config a client may (`noeta/host/_http_guard.py`
 `REQUEST_CONFIG`): `model`, `effort`, `max_turns`, `cwd`, `permission_mode`, `output_schema`,
-`timezone`, `interactive`, `permission_prompt_tool`, `ultracode`, `continued_as`. Any other key is
-refused (403). It may post only the signals front ends send, and create tasks only in the
+`timezone`, `interactive`, `permission_prompt_tool`, `ultracode`, `max_budget_usd`,
+`continued_as`. Any other key is refused (403); a `max_budget_usd` that is not a number above 0
+is `400`, at creation and in a config signal. It may post only the signals front ends send, and create tasks only in the
 server's directory and its `--allow-root` paths (a relative `cwd` is taken from the server's).
 
 - `timezone` is the person's IANA zone (`Europe/Berlin`), which noeta's own front ends send:
   without it the model is given the UTC date, marked as UTC's, never the server's local one.
+  Cron jobs (`CronCreate`) and `ScheduleWakeup`'s shown time follow it too; without it they use
+  the zone of the machine that runs the task.
 - `output_schema` (a JSON Schema whose root is `"type": "object"`) makes the model answer
   through a `StructuredOutput` tool, as Claude Code's `--json-schema`; the value is the task's
   `structured_output` `answer` record (`noeta.toolkit.structured_output.structured_answer`).
@@ -239,11 +246,10 @@ Writing your own is in [Write a plugin](./plugins.md).
 
 ## Cleaning up
 
-- **Saved tool outputs.** `noeta serve` with its own worker, and the local front ends, sweep
-  the spill directory (`~/.noeta/tool-results`) once a day (`noeta/host/spill_sweep.py`, started
-  by `LocalApp.start`); a bare `noeta worker` does not start the sweep, so on a cluster run at
-  least one `noeta serve` with a worker against the same directory, or remove old directories
-  yourself. A task's directory is removed once its task (and its tree) has
+- **Saved tool outputs.** `noeta serve` with its own worker, `noeta worker` and the local front
+  ends sweep the spill directory (`~/.noeta/tool-results`) once a day (`noeta/host/spill_sweep.py`,
+  started by `LocalApp.start`). A `noeta serve --no-worker` runs no sweep; its tasks' outputs
+  are written by the workers, which sweep their own machine's directory. A task's directory is removed once its task (and its tree) has
   ended and nothing was written there for 30 days, Claude Code's retention for tool results.
   A waiting task's outputs stay however long it waits. The sweep covers only this machine's
   directory; a host whose tasks run in a remote exec env sweeps that env's directory itself.

@@ -41,7 +41,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `tools(self, view: TaskView)` | `Sequence[Tool]` | Every step. The first plugin offering a name wins; a clash is logged once per process. |
 | `tool_changes(self, view: TaskView, offered: Sequence[Tool])` | `ToolChanges \| None` | Every step, after every plugin's `tools`. `offered` is their tools after the agent's allow and deny lists, never another plugin's changes; every plugin gets the same `offered`. An added tool the agent's lists refuse drops the whole answer. |
 | `context(self, view: TaskView)` | `Sequence[ContextPart]` | Every model call: text for the system prompt. |
-| `async reminders(self, view: TaskView)` | `Sequence[Reminder]` | Before every model call. The runner records them and puts them in this request after the recorded messages. |
+| `async reminders(self, view: TaskView)` | `Sequence[Reminder]` | Before every model call, ahead of every plugin's `before_model` (as Claude Code adds its notes before it decides to compact). The runner records them and puts them in this request after the recorded messages, so `before_model` sees them. |
 | `inherit(self, state: TaskState)` | `Mapping[str, Any]` | When this task spawns a child: config entries laid over the config the spawning tool gave it. |
 
 ### The model call

@@ -115,6 +115,8 @@ In Zed, add it to `settings.json`:
 
 Model and provider come from noeta's own settings, as for the terminal UI (the editor's
 environment is passed to the process, so `NOETA_MODEL` and `NOETA_API_KEY` set there work too).
+`--effort` (or `NOETA_EFFORT`, `config.toml` `effort`) and `--permission-mode` in `args`
+(`["--permission-mode", "acceptEdits", "acp"]`) set every new session's starting effort and mode.
 
 How it maps (`noeta/host/acp.py`):
 

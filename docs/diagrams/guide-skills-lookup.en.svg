@@ -6,7 +6,7 @@
 <text x="556" y="78" class="ntd-mini" text-anchor="end">always</text>
 <rect x="70" y="106" width="500" height="46" rx="10" class="ntd-box"/>
 <text x="86" y="126" class="ntd-chiptext" text-anchor="start">You</text>
-<text x="86" y="143" class="ntd-code" text-anchor="start">~/.noeta/skills</text>
+<text x="86" y="143" class="ntd-code" text-anchor="start">~/.noeta/skills · ~/.agents/skills</text>
 <text x="556" y="134" class="ntd-mini" text-anchor="end">always</text>
 <rect x="70" y="162" width="500" height="46" rx="10" class="ntd-box"/>
 <text x="86" y="182" class="ntd-chiptext" text-anchor="start">The project, nearest first</text>

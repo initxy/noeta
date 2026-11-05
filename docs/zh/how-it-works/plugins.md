@@ -85,7 +85,7 @@
 
 **插件文件。** 插件也可以只是一个 `*.py` 文件，或者一个带 `__init__.py` 的目录，放在 `~/.noeta/plugins`、受信任项目的 `.noeta/plugins`，或者只对这一次运行生效的 `--plugin-dir` 里（`registry.load_plugin_files`）。文件里定义的、带 `name` 的每个 `Extension`（或 `Channel`）子类都按这个名字注册。和已安装的包重名时，包优先。导入失败的文件会被记住原因，有人要这个插件时报出来；如果是 import 了 noeta 环境里没有的模块，会列出把它装上的那行命令。插件文件会自己加入 `add_to` 里列出的代理（`"*"` 表示所有代理）；已安装包的 `add_to` 不生效，这样装一个依赖不会悄悄改掉你的代理。
 
-**重新加载。** `/reload-plugins`（`LocalApp.reload_plugins`）忘掉所有插件文件，从源码重新导入，再重建代理。已经在跑的那一轮用旧代码跑完；每个任务从下一轮起用新代码，并记下这一点。在服务器上，重新加载就是逐台重启工人。
+**重新加载。** `/reload-plugins`（`LocalApp.reload_plugins`）忘掉所有插件文件，从源码重新导入，重读设置文件（里面给插件的设置随之生效；`env`、`model`、`agent`、`sandbox` 变了则提示要重启），再重建代理。已经在跑的那一轮用旧代码跑完；每个任务从下一轮起用新代码，并记下这一点。在服务器上，重新加载就是逐台重启工人。
 
 **Claude Code 插件目录。** `~/.noeta/plugins`（或受信任项目的 `.noeta/plugins`）下面带 `.claude-plugin/plugin.json`、或者是 Claude Code 目录结构的目录，交给读这些格式的插件去加载（`noeta/cli/claude_plugins.py`）：`skills/` 给技能插件，`agents/` 当代理文件，`commands/` 给 `markdown_commands`，`hooks/hooks.json` 给 hooks，`.mcp.json` 给 MCP（项目里的插件除外，所以克隆下来的仓库自己不会启动任何服务器）。它的技能、代理和命令按 `<plugin>:<name>` 命名，`${CLAUDE_PLUGIN_ROOT}`、`${CLAUDE_PLUGIN_DATA}` 和它的 `userConfig` 值按 Claude Code 的方式替换。监视器、`bin/`、LSP 服务器、主题和输出风格不加载。
 

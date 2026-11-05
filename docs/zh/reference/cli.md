@@ -42,14 +42,25 @@ noeta mcp add|add-json|list|get|remove|login|logout
 哪里都没指定模型会报错（`noeta: no model configured`），只有用 `--server` 连服务端的前端例外，
 它用服务端的模型。
 
-`--permission-mode` 和 `--effort`（连同 `NOETA_EFFORT`、`config.toml` 的 `effort`）只对终端界面和
-`-p` 新开的任务生效。`acp`、`serve`、`worker` 接受这两个参数但不用它们：那里每个任务的权限模式和
-effort 由编辑器或接口调用方来定。
+`--permission-mode` 和 `--effort`（连同 `NOETA_EFFORT`、`config.toml` 的 `effort`）成为各个进程
+新建任务时的起始配置；任务一直带着创建时的配置，之后不管哪个进程来跑都一样：
+
+- 终端界面和 `-p`：它们开的任务；
+- `acp`：编辑器每开一个会话对应的新任务（带 `--server` 也一样，这时由服务端的权限插件判断这个模式）；
+- `serve`：客户端创建的每个任务都以此为默认，`--no-worker` 时也一样；请求自己给了 `effort` 或
+  `permission_mode` 的，以请求为准；
+- `worker`：只管它的渠道开的任务（它跑的其他任务是别人建的，保留各自的配置）；给了 `--effort` 或
+  `--permission-mode` 时，它会在 stderr 上说明这一点。
+
+`serve` 和 `worker` 给了 `--permission-mode bypassPermissions` 却没给 `--allow-bypass-permissions`
+时直接报错退出：`noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions`。
 
 ## 终端界面：`noeta`
 
 不带无界面参数时，`noeta` 打开终端界面（`noeta-tui` 包，通过 `noeta.frontends` entry point 找到；
-没装时 noeta 会打印安装命令）。不带 `-p` 时给的提示词不会被用上：界面打开时输入框是空的。在还没信任
+没装时 noeta 会打印安装命令）。不带 `-p` 时给的提示词（`noeta "把测试修好"`）会在第一个任务打开后，
+像你亲手输入的一样作为第一条消息发出去：新任务、`-c` 打开的、`--resume ID` 打开的都是这样。`--resume`
+不带 id 时，它先留在输入框里，等你挑好任务再发给那个任务。在还没信任
 的目录里，它会先问你是否信任；选 "No, exit" 就直接退出。
 
 | 参数 | 含义 |
@@ -101,13 +112,12 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 | `--strict-mcp-config` | 只用 `--mcp-config` 里的服务器，不读设置文件和项目里的 |
 | `--agents JSON` | 用 JSON 对象定义子代理：名字 → `{description, prompt, …}`（代理文件的字段）；最后加载，同名时以它为准 |
 | `--plugin-dir PATH` | 同上 |
-| `-d`、`--debug [FILTER]` | 接受，但 noeta 不使用 |
 
 `-p` 不能和 `--server` 一起用：`-p` 总是在本进程里跑任务。
 
 **接受但忽略的参数**，是为了让 Claude Code 的命令行原样能跑；用到时会在 stderr 上点名：
 `--fallback-model`、`--betas`、`--max-thinking-tokens`、`--thinking`、`--thinking-display`、
-`--plugin-url`、`--task-budget`、`--debug-file`、`--name`、`--autocompact`、`--file`、
+`--plugin-url`、`--task-budget`、`-d` / `--debug`（可带一个过滤值）、`--debug-file`、`--name`、`--autocompact`、`--file`、
 `--system-prompt-snapshot`（这些带值），以及 `--include-hook-events`、`--no-session-persistence`、
 `--session-mirror`、`--bare`、`--allow-dangerously-skip-permissions`、
 `--exclude-dynamic-system-prompt-sections`、`--forward-subagent-text`、`--disable-slash-commands`。
@@ -158,7 +168,7 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 
 token 取自 `NOETA_SERVER_TOKEN`；没有的话，第一次启动时生成一个，只打印这一次。
 `~/.noeta/server-token` 只存它的 SHA-256。删掉这个文件再重启就会换一个新的。没加
-`--allow-bypass-permissions` 时，不管通过什么途径要 `bypassPermissions`，权限插件自己都会拒绝。
+`--allow-bypass-permissions` 时，不管通过什么途径要 `bypassPermissions`，权限插件自己都会拒绝。绑在非回环地址上又没给 `--allow-host` 时，服务端启动时会在 stderr 上提醒一次：任何 `Host` 请求头都会应答（有 DNS 重绑定的风险），并指出用 `--allow-host` 解决；bearer token 照样起保护作用。
 
 ## `noeta worker`
 
@@ -173,7 +183,7 @@ Postgres 存储就能把任务分到多台机器上跑。
 | `--snapshot-every EVENTS` | `100` | 最多每隔多少个事件写一次任务的重放快照；`0` 表示不写 |
 | `--allow-bypass-permissions` | 关 | 允许任务以 `bypassPermissions` 运行 |
 
-退出时，正在跑的任务立刻交还；为后台作业保留着认领的任务会被释放，并在下一轮被告知作业已经没了。
+worker 也会每天清理一次本机存下来的旧工具输出（见[清理](../guides/server.md#清理)）。退出时，正在跑的任务立刻交还；为后台作业保留着认领的任务会被释放，并在下一轮被告知作业已经没了。
 
 ## `noeta trust`
 
@@ -191,9 +201,9 @@ Code 插件目录（带版本号）。加载失败的插件文件打印到 stder
 
 | 命令 | 含义 |
 |---|---|
-| `noeta plugin add SOURCE` | 从 `<git-url>@<commit>`（https 或 ssh，完整的提交号）安装，或复制一个本地路径 |
+| `noeta plugin add SOURCE` | 从 `<git-url>@<commit>`（https 或 ssh，完整的提交号：40 位十六进制，SHA-256 仓库是 64 位）安装，或复制一个本地路径 |
 | `noeta plugin add --marketplace MARKETPLACE NAME` | 从 Claude Code 的 `marketplace.json`（本地路径或 `<git-url>@<commit>`）安装 `NAME`；只读取 marketplace，不执行 |
-| `  --commit SHA` | marketplace 条目没固定提交时，用这个提交 |
+| `  --commit SHA` | marketplace 条目没固定提交时，用这个提交（条目里的 `ref`，也就是分支或标签，不会去跟） |
 | `  --config KEY=VALUE` | Claude Code 插件的 `userConfig` 值（可重复）；没给的在终端上逐个问 |
 | `noeta plugin configure NAME [--config KEY=VALUE]` | 重新设置 Claude Code 插件的 `userConfig` |
 | `noeta plugin list` | 用 `noeta plugin add` 装的插件 |
@@ -217,8 +227,8 @@ Code 插件目录（带版本号）。加载失败的插件文件打印到 stder
 | `  --client-secret` | 提示输入 OAuth 客户端密钥（或者设 `NOETA_MCP_CLIENT_SECRET`） |
 | `  --callback-port N` | OAuth 回调用的固定端口 |
 | `noeta mcp add-json [-s SCOPE] [--client-secret] NAME JSON` | 用一段 JSON 配置添加服务器 |
-| `noeta mcp list` | 列出已配置的服务器并逐个检查 |
-| `noeta mcp get NAME` | 查看一个 |
+| `noeta mcp list` | 列出已配置的服务器并逐个检查；项目没被信任时，它的 `local` 和 `project` 服务器不启动，显示为 ``project not trusted (not started; run `noeta trust` here)`` |
+| `noeta mcp get NAME` | 查看一个（几个文件都配了同名服务器时，显示运行时会启动的那个：managed > `--settings` > local > project > user） |
 | `noeta mcp remove [-s SCOPE] NAME` | 删掉一个 |
 | `noeta mcp login [--no-browser] NAME` | 登录（OAuth）；`--no-browser` 只打印地址，不打开浏览器 |
 | `noeta mcp logout NAME` | 清掉登录信息 |
@@ -247,7 +257,7 @@ Code 插件目录（带版本号）。加载失败的插件文件打印到 stder
 | `/clear`、`/new` | 开一个新任务 |
 | `/resume [N]` | 挑一个任务接着聊；给了 `N`（列表里的序号）或任务 id 就直接打开 |
 | `/stop` | 停下这一轮（也可以按 Esc） |
-| `/reload-plugins` | 重新加载插件和代理文件，下一轮起生效 |
+| `/reload-plugins` | 重新加载插件、代理和设置文件，下一轮起生效；`env`、`model`、`agent`、`sandbox` 变了要重启才生效（界面会提示） |
 | `/exit`、`/quit` | 退出 |
 
 代理的插件提供的命令（由 `noeta/core/commands.py` 列出和展开；每个前端都会显示，

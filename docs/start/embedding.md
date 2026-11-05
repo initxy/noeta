@@ -221,6 +221,10 @@ await runtime.serve(stop)          # until stop is set; running tasks are handed
   `None`, cuts them instead; `LocalApp` sets a temporary directory.
 - `snapshot_every`: events between fold snapshots (default 100; 0 never).
 
+A bare `Runtime` does not sweep old saved tool outputs. `await app.run_until(stop)` on a
+`LocalApp` runs its worker, its channels and that daily sweep until `stop` is set, which is
+what `noeta worker` does.
+
 The same store can be served by `noeta worker` processes on other machines at the same time;
 any of them continues any task ([Many machines](../how-it-works/many-machines.md)). A
 `LocalApp(…, own_tasks_only=True)` serves only the task trees it created or adopted, which is

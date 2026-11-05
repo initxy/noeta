@@ -78,7 +78,7 @@ uv tool install --reinstall --with 'noeta-tui @ git+https://github.com/initxy/no
 }
 ```
 
-模型和 provider 和终端界面一样，读 noeta 自己的设置（编辑器的环境变量会传给这个进程，所以在那里设 `NOETA_MODEL` 和 `NOETA_API_KEY` 也行）。
+模型和 provider 和终端界面一样，读 noeta 自己的设置（编辑器的环境变量会传给这个进程，所以在那里设 `NOETA_MODEL` 和 `NOETA_API_KEY` 也行）。`args` 里写上 `--effort`（或者用 `NOETA_EFFORT`、`config.toml` 的 `effort`）和 `--permission-mode`（如 `["--permission-mode", "acceptEdits", "acp"]`），就定下了每个新会话起步时的推理强度和权限模式。
 
 对应关系（`noeta/host/acp.py`）：
 

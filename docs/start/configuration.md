@@ -138,10 +138,14 @@ model, not settings. Consent for a project's MCP servers given in your own
 `~/.noeta/settings.json` does not count, so a repository that reuses a server's name cannot
 start it through your consent.
 
-The settings files and plugin folders are read once, for the folder a front end or server
-starts in. Trusting a folder at the terminal UI's question loads its plugins, agents, skills and
-prompts at once; its settings files (and so the consent for its `.noeta/mcp.json`) are read from
-the next start. Prompt overrides, skills and the permission checks look at each task's own working
+The settings files and plugin folders are read for the folder a front end or server starts in.
+Trusting a folder at the terminal UI's question loads its plugins, agents, skills and prompts at
+once, and reads the settings files again, so the project's `.noeta/settings*.json` apply from
+the next turn without a restart: permission rules, hooks, MCP servers (and the consent for its
+`.noeta/mcp.json`), skills, plan mode, language. `/reload-plugins` reads them again the same way
+after you edit one. What is read only at the start (`env`, `model`, `agent`, `sandbox`) is not
+reapplied: when it changed, the UI says to restart noeta, and says so at every new task until
+you do. Prompt overrides, skills and the permission checks look at each task's own working
 directory, so on a server a task running in an untrusted directory does not get that
 directory's prompts or skills.
 
@@ -176,7 +180,7 @@ Everything under `~/.noeta` is noeta's home; set `NOETA_HOME` to move it.
 | `~/.noeta/tasks.db` | the default sqlite store: every task's log |
 | `~/.noeta/trusted.json` | trusted projects |
 | `~/.noeta/agents/`, `<project>/.noeta/agents/` | agent files; a later file wins a name |
-| `~/.noeta/skills/`, `<project>/.noeta/skills/`, `<project>/.agents/skills/` | skills; the project's are read in the working directory and each folder above it up to the repository's root |
+| `~/.noeta/skills/`, `~/.agents/skills/`, `<project>/.noeta/skills/`, `<project>/.agents/skills/` | skills (`~/.agents/skills` is under your home directory whatever `$NOETA_HOME` says); the project's are read in the working directory and each folder above it up to the repository's root |
 | `~/.noeta/commands/`, `<project>/.noeta/commands/` | typed slash commands (Claude Code's `commands/*.md`) |
 | `~/.noeta/prompts/`, `<project>/.noeta/prompts/` | prompt overrides, by prompt name |
 | `~/.noeta/plugins/`, `<project>/.noeta/plugins/` | plugin files and Claude Code plugin folders |
@@ -222,8 +226,8 @@ token = "{keyring:chat-bridge/bot}"     # needs the keyring extra
   `NOETA_MCP_CLIENT_SECRET` and `NOETA_WEB_SEARCH_API_KEY` are always withheld the same way
   (`noeta/toolkit/local_env.py`).
 
-The top-level `api_key` in `config.toml` is a literal value; use a `[providers.<name>]`
-table, `NOETA_API_KEY` or the provider's own variable to keep the key out of the file.
+The same references work in the top-level `api_key` and `extra_headers` of `config.toml`, so the
+default provider's key need not be written in the file either.
 
 ## The machine's say: `[policy]`
 

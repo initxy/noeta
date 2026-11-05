@@ -125,7 +125,7 @@ list_models = true                     # read its /models (the default); false s
 A table takes exactly `family`, `base_url`, `api_key`, `headers`, `models`, `list_models` and
 `prompt_cache_ttl`; anything else is a config error, and so is a table named `default` (that name
 is the top-level provider's). `{env:…}` and `{keyring:…}` are read in a table's `api_key` and
-`headers` only: a top-level `api_key` is sent as written. `{keyring:…}` needs the `keyring` extra.
+`headers`, and in the top-level `api_key` and `extra_headers` too. `{keyring:…}` needs the `keyring` extra.
 
 Which provider a model id goes to:
 

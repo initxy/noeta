@@ -77,7 +77,7 @@ The same settings work as flags (`--model`, `--provider`, `--base-url`) or as ke
 model = "claude-sonnet-5-5"
 provider = "anthropic"
 # the key: NOETA_API_KEY or ANTHROPIC_API_KEY in the environment,
-# or api_key = "sk-ant-..." here (a literal: this top-level key takes no {env:…} reference)
+# or api_key here: a literal "sk-ant-..." or a reference such as "{env:MY_KEY}"
 ```
 
 Flags win over environment variables, which win over `config.toml`

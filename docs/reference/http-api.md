@@ -28,7 +28,9 @@ app and the desktop app all use it.
 3. **What a request may ask for** (`GuardedClient`). A request may set only these task config
    keys when it creates a task: `model`, `effort`, `max_turns`, `cwd`, `permission_mode`,
    `output_schema`, `timezone`, `interactive`, `permission_prompt_tool`, `ultracode`,
-   `continued_as`. It may post only the signals front ends send: `permission_mode`, `config`,
+   `max_budget_usd`, `continued_as`. `max_budget_usd` must be a number above 0 (not a bool or
+   a string), here and in a `config` signal; anything else is `400`. Keys the server runs
+   with (`--effort`, `--permission-mode`) are laid under the request's, which win. It may post only the signals front ends send: `permission_mode`, `config`,
    `resumed`, `restore_files`, `rename`, `archive`. It may not start or switch a task into
    `bypassPermissions` unless the server runs with `--allow-bypass-permissions`. A `cwd` must
    lie in the server's directory or an `--allow-root` (a relative one is taken from the
@@ -74,7 +76,7 @@ Host code that builds the app itself calls `noeta.host.http.create_app(client, t
 |---|---|---|
 | `POST /tasks/{id}/messages` | `{input, when?, dedupe_key?}` (`when`: `next_turn`, the default, or `now`) | `{"inbox_seq": n}`; for a local slash command `{"output": text}` and nothing is sent |
 | `GET /tasks/{id}/pending` | | approvals and questions waiting on a person, the task's sub-agents' included |
-| `POST /tasks/{id}/answers` | `{request_id, decision?, always?, data?}` | `{"ok": true, "inbox_seq": n}` |
+| `POST /tasks/{id}/answers` | `{request_id, decision?, always?, data?}` | `{"ok": true, "inbox_seq": n}`; `409` when the task is not waiting on `request_id` |
 | `POST /tasks/{id}/signals` | `{name, data?, dedupe_key?, wake?}` | `{"ok": true, "inbox_seq": n}` |
 | `POST /tasks/{id}/cancel` | `{reason?, turn_only?}` or no body | `{"ok": true}` |
 
@@ -90,13 +92,16 @@ for a card ("Bash command · from the Explore agent") and, for an approval, `cho
 **Answers.** For an approval, `decision` is `allow` or `deny`, and `always: true` also
 remembers the rule the card offered. `data` adds: `{"mode": m}` picks a card's mode choice,
 `{"message": t}` adds the reason for a no or words with a yes. For a question, `data` maps
-each question id to `{"selected": [labels]}` or `{"other": "text"}`. A second answer to the
-same request is ignored.
+each question id to `{"selected": [labels]}` or `{"other": "text"}`. A `request_id` the task
+is not waiting on (unknown, or answered and already taken) is `409`, so a typo or a stale card
+is not answered silently; a request stays open until its answer is taken, so a retried answer
+still succeeds, and a second answer to the same request is ignored.
 
 **Signals.** `permission_mode` with `{mode}` switches the permission mode; `config` with any of
 `model`, `effort`, `max_turns`, `output_schema`, `interactive`, `permission_prompt_tool`,
 `ultracode`, `max_budget_usd` changes the task's config (a `null` value removes the key; a
-request may only remove `client_hooks`, never set it); `resumed`, `restore_files`, `rename`
+request may only remove `client_hooks`, never set it, and `max_budget_usd` must be a number
+above 0); `resumed`, `restore_files`, `rename`
 `{title}` and `archive` `{archived}` are what front ends send when a person reopens, rewinds,
 renames or archives. `wake: false` leaves a waiting task waiting. A model's route (which
 provider serves it) is recorded by the server, never taken from a request.
@@ -173,9 +178,11 @@ and `user` messages, `stream_event`s with partial messages on, system notes, a `
 prompt and `control_request`s of its own (`can_use_tool`: the client answers permission
 prompts on this socket). Query parameters: `resume` (a task id), `fork`, `agent`, `model`,
 `cwd`, `permission_mode`, `max_turns`, `include_partial_messages`, `replay_user_messages`,
-and `token`. A refused socket (cross-site, no valid token, or a mode or `cwd` the server
-does not allow) is closed before it is accepted, which the client sees as the handshake
-answered `HTTP 403`; an unknown `resume` task sends `{"type": "error", …}` and closes.
+and `token`. A request from another site's page or to a rebound `Host` name is refused in the
+handshake (`HTTP 403`), so it gets no connection. A client of this server that is refused is
+accepted and then closed with a code it can read: `4401` (reason `unauthorized`) without a
+valid token, `4403` with the refusal as the reason (cut to 123 bytes) for a mode or `cwd` the
+server does not allow. An unknown `resume` task sends `{"type": "error", …}` and closes.
 
 **POST** `/stream-json`: the same, one way. The request body is JSON lines in; the response is
 JSON lines out (`application/x-ndjson`) until the work is done. Nothing can answer a

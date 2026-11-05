@@ -289,7 +289,7 @@ Hooks: `tools`, `commands`, `run_command`, `reminders`, `on_start`, `on_event`, 
 | Setting | Default | Meaning |
 |---|---|---|
 | `servers` | `[]` | servers in Claude Code's `mcpServers` shape; from host code also a function of the task |
-| `settings_files` | `[]` | settings files whose `mcpServers` are added |
+| `settings_files` | `[]` | settings files whose `mcpServers` are added, lowest precedence first (a later file wins a name; a project's `.noeta/mcp.json` ranks just below that project's own settings files) |
 | `project` | `false` | also the task's `<cwd>/.noeta/mcp.json` servers its settings consent to; from host code a function of the directory |
 | `agent_servers` | | an agent file's own `mcpServers`, for that agent's tasks only |
 | `scope` | one shared partition | **SDK** (or a string): partitions shared connections, so a stateful server never carries one user's state into another's task |
@@ -430,7 +430,7 @@ Hooks: `tools`, `commands`, `reminders`, `on_start`, `before_model`, `before_too
 |---|---|---|
 | `dirs` | `[]` | the lowest tier: built-in and borrowed skill directories |
 | `plugin_dirs` | | directory → plugin name: a Claude Code plugin's skills, named `<plugin>:<skill>` |
-| `global_agents_dir`, `global_dir` | none | the user's `~/.agents/skills` / `~/.noeta/skills` |
+| `global_agents_dir`, `global_dir` | none | the user's `~/.agents/skills` / `~/.noeta/skills` (the `noeta` command passes both; `~/.noeta/skills` ranks first) |
 | `global_commands_dir` | none | the user's `~/.noeta/commands`: each `*.md` is a skill |
 | `managed_dir` | none | the machine's managed directory; its skills go first |
 | `workspace` | `true` | the working directory's (and its parents' up to the repository root) `.noeta/skills`, `.agents/skills`, `.noeta/commands` |

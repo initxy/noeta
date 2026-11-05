@@ -38,6 +38,7 @@ Flags for a run (all in [the CLI reference](../reference/cli.md)):
 
 | Flag | What it does |
 |---|---|
+| `prompt` (`noeta "fix the tests"`) | Sent as the first message once the task opens (also with `-c` and `-r ID`; with `-r` alone it waits in the input box while you pick) |
 | `--model NAME`, `--effort LEVEL` | The model and effort new tasks start with (`low`, `medium`, `high`, `xhigh`, `max`) |
 | `--permission-mode MODE` | The starting permission mode (default `auto`; see [permissions](./permissions.md)) |
 | `--agent NAME` | Start with another agent than `main` |
@@ -130,7 +131,7 @@ highlighted one. The terminal UI's own commands (`tui/src/noeta_tui/slash.py`):
 | `/clear`, `/new` | Start a new task |
 | `/resume [n\|id]` | Pick a task to resume |
 | `/stop` | Stop the turn (as `Esc`) |
-| `/reload-plugins` | Load plugin and agent files again, in effect from the next turn |
+| `/reload-plugins` | Load plugin, agent and settings files again, in effect from the next turn (a changed `env`, `model`, `agent` or `sandbox` needs a restart, and the UI says so) |
 | `/exit`, `/quit` | Quit |
 
 Everything else in the menu comes from the agent's plugins, and runs the same way in every front

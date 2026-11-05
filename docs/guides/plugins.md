@@ -141,7 +141,7 @@ need.
 | wake a task later | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | ask the person something | `ask(...)` (the call parks, the task holds no worker) | `noeta/core/questions.py` |
 | add an agent or sub-agent | an agent markdown file (Claude Code's format plus `plugins`) | `noeta/agents/agent_files.py` |
-| add skills | `SKILL.md` folders in `~/.noeta/skills`, a project's `.noeta/skills` or `.agents/skills`, or a plugin's `skills/`; `*.md` files in `~/.noeta/commands` or a project's `.noeta/commands` (`~/.agents/skills` only when `[plugins.skills] global_agents_dir` names it) | `noeta/plugins/skills` |
+| add skills | `SKILL.md` folders in `~/.noeta/skills`, `~/.agents/skills`, a project's `.noeta/skills` or `.agents/skills`, or a plugin's `skills/`; `*.md` files in `~/.noeta/commands` or a project's `.noeta/commands` | `noeta/plugins/skills` |
 | connect MCP servers | `.noeta/mcp.json`, settings `mcpServers`, a plugin's `.mcp.json` | `noeta/plugins/mcp` |
 | let a chat app or webhook in | a `Channel` (`run(client, stop)`), posting with `deliver()` | `noeta/core/channel.py` |
 | send replies back out | `on_event` in an `Extension` inside the task | `examples/chat-bridge` |
@@ -328,7 +328,9 @@ noeta plugin remove your-plugin
   plugin that imports a package noeta's environment lacks is listed as broken
   (`noeta plugins`, `/reload-plugins`) with the line that installs it.
 - **A marketplace is only read**, to find where a plugin comes from. An entry fetched from a
-  repository installs at its `sha`, or at `--commit <sha>` when it pins none; a marketplace that
+  repository installs at its `sha`, or at `--commit <sha>` when it pins none. An entry with only
+  a `ref` (a branch or tag) is refused as pinning no commit, and the error names the ref: a
+  branch or tag can move, and noeta installs only pinned commits. A marketplace that
   is itself a repository needs `<url>@<commit>`. `github`, `url`, `git-subdir` and path sources
   are supported.
 - **A plugin with `userConfig`** is configured as it is added. If configuring fails it is not
@@ -412,7 +414,7 @@ kernel adds:
   picks the task up, and after three such claims in a row by the same worker, with nothing new in the log, it
   fails the task with `plugin_missing` (the count is kept in that worker's memory, so a restart
   starts it again). A changed set is recorded again.
-- **Reload.** `/reload-plugins` re-imports plugin files and remakes the agents. A turn in
+- **Reload.** `/reload-plugins` re-imports plugin files, reads the settings files again and remakes the agents. A turn in
   progress finishes on the old code; each task runs the new code from its next turn. On servers
   the reload is a rolling restart: stop one `noeta worker` at a time (its running tasks go back
   to the store and continue on another worker from their logs), install, start it again. Finish

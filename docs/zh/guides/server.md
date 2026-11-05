@@ -64,7 +64,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 | `--allow-bypass-permissions` | 关 | 允许请求把任务启动成或切换到 `bypassPermissions` |
 | `--web DIR` | — | 同时在其他路径上提供 `DIR` 里构建好的网页端 |
 
-两者也接受通用参数（`--model`、`--store`、`--provider`、`--base-url`、`--cwd` 等），见 [noeta 命令](../reference/cli.md)。接口列表见 [HTTP / WebSocket 接口](../reference/http-api.md)。
+两者也接受通用参数（`--model`、`--store`、`--provider`、`--base-url`、`--cwd` 等），见 [noeta 命令](../reference/cli.md)。`--effort` 和 `--permission-mode` 在 `noeta serve` 上是客户端新建任务的起始配置（请求自己给了的以请求为准）；在 `noeta worker` 上只作用于它的渠道开的任务。两者给了 `--permission-mode bypassPermissions` 却没给 `--allow-bypass-permissions` 都会报错退出。接口列表见 [HTTP / WebSocket 接口](../reference/http-api.md)。
 
 ## Postgres
 
@@ -81,15 +81,15 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 - 令牌取自 `NOETA_SERVER_TOKEN`；没设的话第一次启动时生成一个，只打印这一次。
 - `~/.noeta/server-token`（只有属主可读）里只存它的 SHA-256（[ADR-013](https://github.com/initxy/noeta/blob/main/docs/adr/013-server-token-kept-as-a-digest.md)），所以客户端（`noeta --server`、`noeta acp --server`）要在自己的 `NOETA_SERVER_TOKEN` 里放令牌。删掉这个文件再重启就会换一个新令牌。旧版 noeta 留下的明文令牌文件会在下次启动时改写成摘要，并最后打印一次令牌。
 - `--no-token` 只能用在回环地址上。
-- 绑定回环地址时，只回应回环地址的 `Host` 名（防 DNS 重绑定）。绑定其他地址时，只会对照 `--allow-host` 给出的名字检查 `Host`，所以要把名字写上。
+- 绑定回环地址时，只回应回环地址的 `Host` 名（防 DNS 重绑定）。绑定其他地址时，只会对照 `--allow-host` 给出的名字检查 `Host`，所以要把名字写上；一个都没给的话，`noeta serve` 启动时会在 stderr 上提醒：任何 `Host` 都会应答。
 - 来自其他来源网页的请求会被拒绝，除非用 `--allow-origin` 允许了这个来源。
 - 在自己程序里嵌入这套接口时，用 `create_app(client, token=...)`（或 `token_sha256=`）；不给令牌它会拒绝创建，除非明确传 `auth=False`。
 
 ## 请求能设置什么
 
-请求只能设置客户端被允许设置的任务配置（`noeta/host/_http_guard.py` 的 `REQUEST_CONFIG`）：`model`、`effort`、`max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、`permission_prompt_tool`、`ultracode`、`continued_as`。其他键一律拒绝（403）。请求只能发前端会发的那些信号，而且只能在服务端自己的目录和 `--allow-root` 目录里创建任务（相对路径的 `cwd` 以服务端目录为基准）。
+请求只能设置客户端被允许设置的任务配置（`noeta/host/_http_guard.py` 的 `REQUEST_CONFIG`）：`model`、`effort`、`max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、`permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`。其他键一律拒绝（403）；`max_budget_usd` 不是大于 0 的数时返回 400，创建任务和配置信号都一样。请求只能发前端会发的那些信号，而且只能在服务端自己的目录和 `--allow-root` 目录里创建任务（相对路径的 `cwd` 以服务端目录为基准）。
 
-- `timezone` 是用户的 IANA 时区（如 `Europe/Berlin`），noeta 自己的前端都会带上：不带的话，模型拿到的是 UTC 日期，并注明是 UTC，绝不会用服务器本地时区。
+- `timezone` 是用户的 IANA 时区（如 `Europe/Berlin`），noeta 自己的前端都会带上：不带的话，模型拿到的是 UTC 日期，并注明是 UTC，绝不会用服务器本地时区。定时任务（`CronCreate`）和 `ScheduleWakeup` 显示的时间也按它来；不带时按跑任务那台机器的时区。
 - `output_schema`（根为 `"type": "object"` 的 JSON Schema）让模型通过 `StructuredOutput` 工具作答，对应 Claude Code 的 `--json-schema`；答案在任务的 `structured_output` `answer` 记录里（`noeta.toolkit.structured_output.structured_answer`）。
 - `interactive: false` 表示没人实时盯着这个任务（不生成标题，除非设了 `permission_prompt_tool`，否则也没有 `AskUserQuestion`），和无界面协议的做法一样。这些键会一直保留，直到客户端重新设置；终端界面和 ACP 重新打开任务时会把它们去掉。
 - 配置信号只能删除、不能设置 `client_hooks`，这是无界面客户端的 hook 回调记录（`noeta.toolkit.hook_callbacks`）。
@@ -141,7 +141,7 @@ url = "https://chat.example/hooks/{env:CHAT_HOOK_TOKEN}"
 
 ## 清理
 
-- **存下来的工具输出。** 带自己工人的 `noeta serve` 和本机前端，每天清理一次存放超长输出的目录（`~/.noeta/tool-results`；`noeta/host/spill_sweep.py`，由 `LocalApp.start` 启动）。单独的 `noeta worker` 不启动这项清理，所以集群里至少要有一个带工人的 `noeta serve` 指向同一个目录，或者自己定期删旧目录。一个任务（及其整棵任务树）结束、并且它的目录 30 天没有写入，就删掉，这是 Claude Code 保留工具结果的时长。还在等待中的任务，不管等多久，输出都保留。清理只管本机的目录；任务跑在远程执行环境里的宿主，要自己清理那个环境里的目录。
+- **存下来的工具输出。** 带自己工人的 `noeta serve`、`noeta worker` 和本机前端，每天清理一次存放超长输出的目录（`~/.noeta/tool-results`；`noeta/host/spill_sweep.py`，由 `LocalApp.start` 启动）。`noeta serve --no-worker` 不做这项清理；它的任务由各个工人执行，输出也写在工人那台机器上，由工人自己清理。一个任务（及其整棵任务树）结束、并且它的目录 30 天没有写入，就删掉，这是 Claude Code 保留工具结果的时长。还在等待中的任务，不管等多久，输出都保留。清理只管本机的目录；任务跑在远程执行环境里的宿主，要自己清理那个环境里的目录。
 - **快照。** 任务结束时删除它的快照。
 - **任务日志**从不删除：任务就是发生过什么的记录。前端可以把任务归档（`archive` 信号），归档后不再出现在列表里。
 

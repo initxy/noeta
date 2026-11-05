@@ -15,17 +15,19 @@
 | `model` | 字符串 | 无（总得有个地方设） | 新任务用的模型，id 或别名 | `--model`、`NOETA_MODEL` |
 | `provider` | 字符串 | `anthropic` | 默认 provider：一种类型（`anthropic`、`openai_compat`、`openai_responses` 或第三方包提供的），或某个 `[providers.<name>]` 表的名字 | `--provider`、`NOETA_PROVIDER` |
 | `base_url` | 字符串 | 该类型的默认地址 | 默认 provider 的地址：`anthropic` 只写主机，`openai_compat` 写到 `…/v1`，`openai_responses` 写完整的 `…/v1/responses` | `--base-url`、`NOETA_BASE_URL` |
-| `api_key` | 字符串 | 无 | 默认 provider 的 key，只能写明文（这里不支持 `{env:…}`）；不写时 `anthropic` 读 `ANTHROPIC_API_KEY`，`openai_compat` 读 `OPENAI_API_KEY`；`openai_responses` 不读任何变量，必须写 | `NOETA_API_KEY` |
-| `extra_headers` | 字符串表 | 无 | 默认 provider 每次请求都带的请求头 | — |
+| `api_key` | 字符串 | 无 | 默认 provider 的 key：明文、`{env:NAME}` 或 `{keyring:service/user}`；不写时 `anthropic` 读 `ANTHROPIC_API_KEY`，`openai_compat` 读 `OPENAI_API_KEY`；`openai_responses` 不读任何变量，必须写 | `NOETA_API_KEY` |
+| `extra_headers` | 字符串表 | 无 | 默认 provider 每次请求都带的请求头；值可以写成 `{env:…}` / `{keyring:…}` 引用 | — |
 | `store` | 字符串 | `sqlite:///~/.noeta/tasks.db` | `sqlite:///path` 或 `postgres://…` | `--store`、`NOETA_STORE` |
-| `effort` | 字符串 | 模型自己的 | `low`、`medium`、`high`、`xhigh` 或 `max`，对终端界面和 `-p` 新开的任务生效 | `--effort`、`NOETA_EFFORT` |
+| `effort` | 字符串 | 模型自己的 | `low`、`medium`、`high`、`xhigh` 或 `max`，对终端界面、`-p`、`acp`、`serve`、`worker` 新建的任务生效（见 [noeta 命令](./cli.md#通用参数)） | `--effort`、`NOETA_EFFORT` |
 | `models_file` | 路径 | 无 | 描述更多模型的 JSON 文件（见下） | `NOETA_MODELS_FILE` |
 | `list_models` | 布尔 | `true` | 对目录里没有的模型，去读默认 provider 的 `/models` 列表 | — |
 | `prompt_cache_ttl` | `"5m"` 或 `"1h"` | 接口默认的（`5m`） | 仅 `anthropic`：一小时的提示词缓存，每次写入计费更高 | — |
 | `prompts` | 表 | 无 | 对这个前端启动的所有任务生效的提示词覆盖，按提示词名写（`"system/main.append" = "…"`） | `--system-prompt`、`--append-system-prompt` |
 
 另外还有这些表：`[providers.<name>]`、`[plugins.<name>]`、`[agents.<name>]`、`[channels.<name>]`
-（见下）。其他顶层键会被忽略。
+（见下）。别的顶层键会被忽略，但会在 stderr 上警告并点出名字
+（`…/config.toml: unknown top-level keys ['modle']; ignored`），这样拼错了能看出来；它不算错误，免得
+新旧版本的 noeta 各自认识的键让对方起不来。表里写了不认识的键则是错误。
 
 ### `[providers.<name>]` {#providers-name}
 
@@ -168,7 +170,7 @@ noeta 会读的变量（在 `noeta/` 和 `tui/` 里逐个查过）：
 
 | 变量 | 谁读 | 含义 |
 |---|---|---|
-| `NOETA_HOME` | 全部 | noeta 的主目录（默认 `~/.noeta`） |
+| `NOETA_HOME` | 全部 | noeta 的主目录（默认 `~/.noeta`）；`~/.agents/skills` 不跟着变，始终在用户主目录下 |
 | `NOETA_MODEL` | `noeta` | 模型 |
 | `NOETA_PROVIDER` | `noeta` | 默认 provider 的类型或表名 |
 | `NOETA_BASE_URL` | `noeta` | 默认 provider 的地址 |

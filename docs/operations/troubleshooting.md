@@ -25,7 +25,8 @@ it comes from.
 | You see | Cause | Fix |
 |---|---|---|
 | `noeta: no model configured (--model or NOETA_MODEL)` | No setting names a model. | Pass `--model`, set `NOETA_MODEL`, or set `model` in `~/.noeta/config.toml` ([configuration](../start/configuration.md)). |
-| `noeta: no API key for the anthropic provider: set NOETA_API_KEY (ANTHROPIC_API_KEY is read too), or api_key in ~/.noeta/config.toml` | The default provider has no key. | Set one of the named variables, or `api_key`. |
+| `noeta: no API key for the anthropic provider: set NOETA_API_KEY (ANTHROPIC_API_KEY is read too), or api_key in ~/.noeta/config.toml` | The default provider has no key. | Set one of the named variables, or `api_key` (a literal or a `{env:NAME}` / `{keyring:service/user}` reference). |
+| `…/config.toml: unknown top-level keys ['modle']; ignored` | A top-level key noeta does not know, often a typo; the setting it meant stays unset. | Fix the key's name ([configuration keys](../reference/config.md#top-level-keys)). |
 | `no API key for provider 'x': set api_key in its [providers.x] table of …/config.toml` | A `[providers.<name>]` table has no key. | Add `api_key` to that table (a `{env:NAME}` or `{keyring:service/user}` reference works). |
 | `…: {env:NAME} names an environment variable that is not set` / `…: the keyring has no secret for 'service/user'` / `…: {keyring:…} needs the keyring package` | A secret reference cannot be filled on this machine. References are filled only when the plugin or provider is made, so this shows when it is first used. | Set the variable, store the secret (`keyring set service user`), or install the `keyring` extra. |
 | `noeta: this needs the server extra, which is not installed: pip install '…'` (also `postgres`, `acp`, `keyring`) | `noeta serve`, a Postgres store, `noeta acp` or keyring secrets need an optional extra. | Run the printed line. With `uv tool install --reinstall`, name every extra you use: a reinstall drops the ones it does not name. |
@@ -170,6 +171,10 @@ it next reads the log. You may see the task pause for one lease (30 seconds by d
 | HTTP 403 `{"error": "cross-site request refused"}` | The `Host` header is not one the server answers (on a loopback bind only the loopback names; elsewhere only `--allow-host` names when any are given), or a browser page from another origin sent the request. | Add `--allow-host NAME` for the name clients use, or `--allow-origin ORIGIN` for a page served elsewhere. |
 | `noeta: --no-token serves only a loopback address` | `--no-token` with `--host` other than loopback. | Keep the token, or bind to `127.0.0.1`. |
 | `this server does not allow bypassPermissions (start it with --allow-bypass-permissions)` | `noeta serve` and `noeta worker` refuse bypass mode by default. In a running task the switch is refused with the notice `bypassPermissions is disabled here`. | Start every worker and server with `--allow-bypass-permissions` if you mean it. |
+| `noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions` | `noeta serve` or `noeta worker` was started in bypass mode without allowing it. | Add `--allow-bypass-permissions`, or pick another mode. |
+| `noeta: on 0.0.0.0 any Host header is answered; name the names this server is reached by with --allow-host (DNS-rebinding protection)` | `noeta serve` on an address that is not loopback, without `--allow-host`. A warning: the server runs, the token still guards it. | Add `--allow-host NAME` for each name clients use. |
+| HTTP 409 `task … is not waiting on a request '…' (unknown, or already answered)` on `POST /tasks/{id}/answers` | The `request_id` is a typo, from a stale card, another task's, or already answered and taken. | Read `GET /tasks/{id}/pending` again and answer what is there. |
+| A `/stream-json` WebSocket closed with code `4401` / `4403` | `4401`: no valid token. `4403`: the permission mode or `cwd` asked for is refused; the close reason says why. | Pass the token (`?token=` or the header); ask for an allowed mode or directory. |
 | `cwd '…' is outside this server's directories (…); start it there or add the directory with --allow-root` | A client asked for a task in a directory the server does not serve. | Add `--allow-root PATH` to `noeta serve`. |
 | `a request may not set the task config key 'x' (only model, effort, …)` | Only some config keys may come from a client; the rest would loosen permission gates. | Set the key in the server's own config or agent file. |
 | `the request failed on the server; its log has the details` | An error raised outside noeta's own code. Its text is not sent, since it may name server paths. | Read the server's standard error. |
@@ -188,6 +193,7 @@ the process running the task.
 
 | You see | Cause | Fix |
 |---|---|---|
+| `noeta mcp list` shows ``project not trusted (not started; run `noeta trust` here)`` | A `local` or `project` server of a project not yet trusted; it is not started, not even to check it. | Run `noeta trust` in the project. |
 | A project's server in `.noeta/mcp.json` never starts | A project's servers start only in a trusted project and with consent in its own settings. `noeta mcp add` says: `It starts once you consent: add 'name' to enabledMcpjsonServers in …`. | Run `noeta trust`, then add the name to `enabledMcpjsonServers` (or set `enableAllProjectMcpServers: true`) in `.noeta/settings.local.json`. |
 | `MCP tool name 'x' is produced by both server 'a' and server 'b'; rename one alias` | Two servers produce one tool name. | Rename one server in your config. |
 | `MCP server 'x' needs exactly one of command and url` | A config entry has both or neither. | Fix the entry. |

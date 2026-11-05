@@ -204,6 +204,9 @@ await runtime.serve(stop)          # 直到 stop 被设置；正在跑的任务�
   `LocalApp` 会设一个临时目录。
 - `snapshot_every`：隔多少个事件写一次重放快照（默认 100；0 表示不写）。
 
+单独的 `Runtime` 不会清理存下来的旧工具输出。在 `LocalApp` 上 `await app.run_until(stop)`，会一直运行它的
+worker、渠道和每天一次的清理，直到 `stop` 被设上；`noeta worker` 就是这么做的。
+
 同一个存储可以同时由其他机器上的 `noeta worker` 进程服务；它们任何一个都能接着跑任何任务
 （[多机运行](../how-it-works/many-machines.md)）。`LocalApp(…, own_tasks_only=True)` 只服务自己
 创建或接手的任务树，前端们就是这样共用 `~/.noeta/tasks.db` 而不抢彼此的任务。

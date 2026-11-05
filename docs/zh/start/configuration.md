@@ -127,8 +127,11 @@ noeta trust
 在你自己的 `~/.noeta/settings.json` 里对某个项目 MCP 服务器点的头不算数，这样一个仓库就没法借用同名
 服务器、蹭你的同意启动它。
 
-设置文件和插件目录只在前端或服务端启动时、按启动目录读一次。在终端界面的询问里选了信任，项目的插件、
-代理、技能和提示词会马上加载；它的设置文件（以及对 `.noeta/mcp.json` 的同意）要等下次启动才读。提示词覆盖、技能和权限检查看的则是每个
+设置文件和插件目录按前端或服务端的启动目录读。在终端界面的询问里选了信任，项目的插件、代理、技能和
+提示词会马上加载，设置文件也会重读一遍，所以项目的 `.noeta/settings*.json` 不用重启、从下一轮起就生效：
+权限规则、hooks、MCP 服务器（以及对 `.noeta/mcp.json` 的同意）、技能、计划模式、语言。改了设置文件之后，
+`/reload-plugins` 也会这样重读。只在启动时读一次的几项（`env`、`model`、`agent`、`sandbox`）不会重新生效：
+它们变了的话，界面会提示重启 noeta，在你重启之前，每开一个新任务都会再提示一次。提示词覆盖、技能和权限检查看的则是每个
 任务自己的工作目录，所以在服务端上，跑在未信任目录里的任务拿不到那个目录的提示词和技能。
 
 ## 项目说明：`NOETA.md` 和 `AGENTS.md`
@@ -161,7 +164,7 @@ noeta trust
 | `~/.noeta/tasks.db` | 默认的 sqlite 存储：所有任务的日志 |
 | `~/.noeta/trusted.json` | 信任过的项目 |
 | `~/.noeta/agents/`、`<项目>/.noeta/agents/` | 代理文件；同名时后读的为准 |
-| `~/.noeta/skills/`、`<项目>/.noeta/skills/`、`<项目>/.agents/skills/` | 技能；项目里的从工作目录往上一直找到仓库根目录 |
+| `~/.noeta/skills/`、`~/.agents/skills/`、`<项目>/.noeta/skills/`、`<项目>/.agents/skills/` | 技能（`~/.agents/skills` 总在你的主目录下，不随 `$NOETA_HOME` 变）；项目里的从工作目录往上一直找到仓库根目录 |
 | `~/.noeta/commands/`、`<项目>/.noeta/commands/` | 斜杠命令（Claude Code 的 `commands/*.md`） |
 | `~/.noeta/prompts/`、`<项目>/.noeta/prompts/` | 按提示词名字覆盖提示词 |
 | `~/.noeta/plugins/`、`<项目>/.noeta/plugins/` | 插件文件和 Claude Code 插件目录 |
@@ -202,8 +205,7 @@ token = "{keyring:chat-bridge/bot}"     # 需要 keyring 组件
   `NOETA_API_KEY`、`NOETA_STORE`、`NOETA_SERVER_TOKEN`、`NOETA_MCP_CLIENT_SECRET`、
   `NOETA_WEB_SEARCH_API_KEY` 也始终这样屏蔽（`noeta/toolkit/local_env.py`）。
 
-`config.toml` 顶层的 `api_key` 只能写明文；不想把 key 写进文件，就用 `[providers.<name>]` 表、
-`NOETA_API_KEY`，或者 provider 自己的环境变量。
+`config.toml` 顶层的 `api_key` 和 `extra_headers` 也认这两种引用，所以默认 provider 的 key 同样不必写进文件。
 
 ## 机器管理员说了算：`[policy]`
 

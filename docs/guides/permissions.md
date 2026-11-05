@@ -115,7 +115,8 @@ Inside the permissions plugin (`noeta/plugins/permissions/rule_check.py`), Claud
   in `acceptEdits` and `bypassPermissions` (in `auto` the classifier judges it). A shell command whose every part is read-only (`ls`, `git log`, `grep`, …) and
   reads only inside the working directories is allowed; any other asks unless an allow rule
   covers every part. `WebFetch` asks per host. Tools that only read or talk to you
-  (`AskUserQuestion`, `Skill`, `ToolSearch`, the todo tools …) are allowed.
+  (`AskUserQuestion`, `Skill`, `ToolSearch`, the todo tools …) are allowed, and so are the cron
+  tools and `EnterWorktree` / `ExitWorktree` ([tools](../reference/tools.md#at-a-glance)).
 - Then the mode: `dontAsk` turns the ask into a deny, `bypassPermissions` into an allow (not a
   firm ask, not a protected path), `auto` hands it to the classifier, `plan` keeps it.
 

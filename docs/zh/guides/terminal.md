@@ -28,6 +28,7 @@ noeta
 
 | 参数 | 作用 |
 |---|---|
+| `prompt`（`noeta "把测试修好"`） | 任务打开后作为第一条消息发出（`-c`、`-r ID` 也一样；只写 `-r` 时先留在输入框里，等你挑好任务） |
 | `--model NAME`、`--effort LEVEL` | 新任务用的模型和推理强度（`low`、`medium`、`high`、`xhigh`、`max`） |
 | `--permission-mode MODE` | 起始权限模式（默认 `auto`，见[权限](./permissions.md)） |
 | `--agent NAME` | 用 `main` 以外的代理开始 |
@@ -102,7 +103,7 @@ noeta
 | `/clear`、`/new` | 开一个新任务 |
 | `/resume [n\|id]` | 挑一个任务接着做 |
 | `/stop` | 停止这一轮（同 `Esc`） |
-| `/reload-plugins` | 重新加载插件和代理文件，从下一轮起生效 |
+| `/reload-plugins` | 重新加载插件、代理和设置文件，从下一轮起生效（`env`、`model`、`agent`、`sandbox` 变了要重启，界面会提示） |
 | `/exit`、`/quit` | 退出 |
 
 菜单里其他命令都来自代理的插件，在每个前端里表现一致（`noeta/core/commands.py`）：

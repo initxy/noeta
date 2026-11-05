@@ -56,7 +56,7 @@ the newest conversation in this directory, `noeta -r` lists them. A project's ow
 
 Project instructions come from `NOETA.md` (or, in a directory without one, the cross-tool
 `AGENTS.md`); skills from `.noeta/skills` and the cross-tool `.agents/skills`, in the project, the
-directories above it, and `~/.noeta/skills`.
+directories above it, `~/.noeta/skills` and `~/.agents/skills`.
 
 | Extra | For |
 |---|---|

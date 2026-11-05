@@ -23,7 +23,9 @@
    （只限回环地址）可以关掉这一步。
 3. **请求能要求什么**（`GuardedClient`）。创建任务时，请求只能设这些配置项：`model`、`effort`、
    `max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、
-   `permission_prompt_tool`、`ultracode`、`continued_as`。只能发前端会发的那几种信号：
+   `permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`。`max_budget_usd`
+   必须是大于 0 的数（布尔值、字符串都不行），这里和 `config` 信号里都一样，不合规就返回 `400`。服务端
+   启动时带的 `--effort`、`--permission-mode` 垫在请求的配置下面，请求自己给了的以请求为准。只能发前端会发的那几种信号：
    `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。除非服务端带了
    `--allow-bypass-permissions`，否则不能让任务以 `bypassPermissions` 启动或切过去。`cwd` 必须在
    服务端的目录或某个 `--allow-root` 之内（相对路径按服务端的目录解析，并以绝对路径存下）；没给
@@ -67,7 +69,7 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 |---|---|---|
 | `POST /tasks/{id}/messages` | `{input, when?, dedupe_key?}`（`when`：默认 `next_turn`，或 `now`） | `{"inbox_seq": n}`；如果是本地斜杠命令，返回 `{"output": 文字}`，不发送任何东西 |
 | `GET /tasks/{id}/pending` | | 等人处理的审批和提问，包括子代理的 |
-| `POST /tasks/{id}/answers` | `{request_id, decision?, always?, data?}` | `{"ok": true, "inbox_seq": n}` |
+| `POST /tasks/{id}/answers` | `{request_id, decision?, always?, data?}` | `{"ok": true, "inbox_seq": n}`；任务没在等这个 `request_id` 时返回 `409` |
 | `POST /tasks/{id}/signals` | `{name, data?, dedupe_key?, wake?}` | `{"ok": true, "inbox_seq": n}` |
 | `POST /tasks/{id}/cancel` | `{reason?, turn_only?}` 或不带请求体 | `{"ok": true}` |
 
@@ -81,13 +83,14 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 
 **回答。** 审批的 `decision` 是 `allow` 或 `deny`，`always: true` 会同时记住卡片上给的那条规则。
 `data` 可以补充：`{"mode": m}` 选卡片上的模式选项，`{"message": t}` 给拒绝附上理由或给同意附上话。
-提问的 `data` 把每个问题 id 映射到 `{"selected": [选项]}` 或 `{"other": "文字"}`。同一个请求的
-第二次回答会被忽略。
+提问的 `data` 把每个问题 id 映射到 `{"selected": [选项]}` 或 `{"other": "文字"}`。任务没在等的
+`request_id`（不存在，或者已经答过、答复已被取走）返回 `409`，免得打错的 id 或过期的卡片被悄悄
+“答掉”；答复被取走之前请求一直算在等，所以重试照样成功，同一个请求的第二次回答会被忽略。
 
 **信号。** `permission_mode` 带 `{mode}` 切换权限模式；`config` 带 `model`、`effort`、
 `max_turns`、`output_schema`、`interactive`、`permission_prompt_tool`、`ultracode`、
 `max_budget_usd` 中的任意几个，修改任务配置（值为 `null` 表示删掉这个键；请求只能删除
-`client_hooks`，不能设置它）；`resumed`、`restore_files`、`rename` `{title}`、`archive`
+`client_hooks`，不能设置它；`max_budget_usd` 必须是大于 0 的数）；`resumed`、`restore_files`、`rename` `{title}`、`archive`
 `{archived}` 是前端在重新打开、回退、改名、归档时发的。`wake: false` 让正在等待的任务继续等。
 模型走哪家 provider 由服务端记录，从不采用请求里给的。
 
@@ -157,8 +160,10 @@ data: {}
 `stream_event`、系统通知、每个提示词一个 `result`，以及它自己的 `control_request`（`can_use_tool`：
 客户端在这条连接上回答权限确认）。查询参数：`resume`（任务 id）、`fork`、`agent`、`model`、`cwd`、
 `permission_mode`、`max_turns`、`include_partial_messages`、`replay_user_messages`，以及 `token`。
-被拒的连接（跨站、token 无效，或服务端不允许的模式或 `cwd`）在握手完成前就被关掉，客户端看到的是
-握手返回 `HTTP 403`；`resume` 的任务不存在时发一条 `{"type": "error", …}` 后关闭。
+别的网站的页面发来的、或者 `Host` 被重绑定的请求，在握手时就被拒绝（`HTTP 403`），根本连不上。
+本服务的客户端被拒时，先接受连接，再用它读得到的关闭码关掉：没有有效 token 是 `4401`（原因
+`unauthorized`），服务端不允许的模式或 `cwd` 是 `4403`，原因里写明为什么（最多 123 字节）。
+`resume` 的任务不存在时发一条 `{"type": "error", …}` 后关闭。
 
 **POST** `/stream-json`：同样的协议，单向。请求体是逐行的 JSON 输入，响应是逐行的 JSON 输出
 （`application/x-ndjson`），直到活干完。POST 上没人能回答权限确认，所以凡是要问人的都直接拒绝，

@@ -20,7 +20,8 @@
 | 看到的报错 | 原因 | 怎么办 |
 |---|---|---|
 | `noeta: no model configured (--model or NOETA_MODEL)` | 没有任何设置指定模型。 | 加 `--model`，或设 `NOETA_MODEL`，或在 `~/.noeta/config.toml` 里写 `model`（见[配置](../start/configuration.md)）。 |
-| `noeta: no API key for the anthropic provider: set NOETA_API_KEY (ANTHROPIC_API_KEY is read too), or api_key in ~/.noeta/config.toml` | 默认 provider 没有 key。 | 设报错里提到的任一环境变量，或写 `api_key`。 |
+| `noeta: no API key for the anthropic provider: set NOETA_API_KEY (ANTHROPIC_API_KEY is read too), or api_key in ~/.noeta/config.toml` | 默认 provider 没有 key。 | 设报错里提到的任一环境变量，或写 `api_key`（明文，或 `{env:NAME}` / `{keyring:service/user}` 引用）。 |
+| `…/config.toml: unknown top-level keys ['modle']; ignored` | 顶层有 noeta 不认识的键，多半是拼错了；它本来要设的那项还是没设上。 | 改对键名（见[配置项](../reference/config.md#顶层键)）。 |
 | `no API key for provider 'x': set api_key in its [providers.x] table of …/config.toml` | 某个 `[providers.<name>]` 表里没 key。 | 在那张表里加 `api_key`（可以写成 `{env:NAME}` 或 `{keyring:service/user}` 引用）。 |
 | `…: {env:NAME} names an environment variable that is not set`、`…: the keyring has no secret for 'service/user'`、`…: {keyring:…} needs the keyring package` | 这台机器上填不出某个密钥引用。引用只在插件或 provider 真正创建时才去读，所以第一次用到时才报。 | 设好变量、把密钥存进系统钥匙串（`keyring set service user`），或装上 `keyring` 这个可选依赖。 |
 | `noeta: this needs the server extra, which is not installed: pip install '…'`（也可能是 `postgres`、`acp`、`keyring`） | `noeta serve`、Postgres 存储、`noeta acp`、钥匙串密钥各自需要一个可选依赖组。 | 照打出来的那行装。用 `uv tool install --reinstall` 时要把你在用的可选依赖全写上，重装会丢掉没写的。 |
@@ -149,6 +150,10 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 | HTTP 403 `{"error": "cross-site request refused"}` | 请求的 `Host` 不在服务端应答的名单里（绑定回环地址时只认回环名字；绑别的地址时，只要给过 `--allow-host` 就只认这些名字），或者是别的源的网页发来的浏览器请求。 | 用 `--allow-host NAME` 加上客户端用的主机名；页面放在别处的话用 `--allow-origin ORIGIN`。 |
 | `noeta: --no-token serves only a loopback address` | `--no-token` 配了一个非回环的 `--host`。 | 保留令牌，或者绑到 `127.0.0.1`。 |
 | `this server does not allow bypassPermissions (start it with --allow-bypass-permissions)` | `noeta serve` 和 `noeta worker` 默认拒绝 bypass 模式。任务运行中切换时，会收到通知 `bypassPermissions is disabled here`。 | 确实需要的话，每台工人和服务端都带上 `--allow-bypass-permissions` 启动。 |
+| `noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions` | 启动 `noeta serve` 或 `noeta worker` 时给了 bypass 模式，却没允许它。 | 加上 `--allow-bypass-permissions`，或者换个模式。 |
+| `noeta: on 0.0.0.0 any Host header is answered; name the names this server is reached by with --allow-host (DNS-rebinding protection)` | `noeta serve` 绑在非回环地址上，又没给 `--allow-host`。这只是提醒：服务照常运行，token 照样起保护作用。 | 客户端用哪些名字访问，就逐个用 `--allow-host NAME` 写上。 |
+| `POST /tasks/{id}/answers` 返回 HTTP 409 `task … is not waiting on a request '…' (unknown, or already answered)` | `request_id` 打错了、来自过期的卡片、是别的任务的，或者已经答过并被取走。 | 重新读一遍 `GET /tasks/{id}/pending`，回答上面列着的。 |
+| `/stream-json` 的 WebSocket 以关闭码 `4401` / `4403` 断开 | `4401`：没有有效 token。`4403`：要的权限模式或 `cwd` 被拒，关闭原因里写着为什么。 | 带上 token（`?token=` 或请求头）；换成允许的模式或目录。 |
 | `cwd '…' is outside this server's directories (…); start it there or add the directory with --allow-root` | 客户端要在服务端不负责的目录里建任务。 | 给 `noeta serve` 加 `--allow-root PATH`。 |
 | `a request may not set the task config key 'x' (only model, effort, …)` | 客户端只能设一部分配置项，其余的会放松权限关卡。 | 把这一项写进服务端自己的配置或代理文件。 |
 | `the request failed on the server; its log has the details` | 出错的不是 noeta 自己的代码。原文可能带服务器路径，所以不发给客户端。 | 去看服务端的标准错误。 |
@@ -165,6 +170,7 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 
 | 看到的现象 | 原因 | 怎么办 |
 |---|---|---|
+| `noeta mcp list` 显示 ``project not trusted (not started; run `noeta trust` here)`` | 这是还没被信任的项目里的 `local` 或 `project` 服务器；连检查都不会把它启动。 | 在项目里执行 `noeta trust`。 |
 | 项目 `.noeta/mcp.json` 里的服务器一直不启动 | 项目里的服务器只有在项目受信任、并且项目自己的设置里表示同意之后才启动。`noeta mcp add` 会提示：`It starts once you consent: add 'name' to enabledMcpjsonServers in …`。 | 先 `noeta trust`，再在 `.noeta/settings.local.json` 的 `enabledMcpjsonServers` 里加上名字（或设 `enableAllProjectMcpServers: true`）。 |
 | `MCP tool name 'x' is produced by both server 'a' and server 'b'; rename one alias` | 两个服务器给出了同名工具。 | 在配置里给其中一个服务器改名。 |
 | `MCP server 'x' needs exactly one of command and url` | 配置里 `command` 和 `url` 都写了或都没写。 | 改配置。 |

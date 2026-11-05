@@ -29,6 +29,7 @@ The last tag: !`git describe --tags --abbrev=0`
 |---|---|
 | 机器统一管理的目录里的 `.noeta/skills`（`/etc/noeta`，macOS 上是 `/Library/Application Support/Noeta`） | 总是 |
 | `~/.noeta/skills/<名字>/SKILL.md` | 总是 |
+| `~/.agents/skills/<名字>/SKILL.md`，各家编程助手共用的技能目录（在你的主目录下，`$NOETA_HOME` 改不了它的位置） | 总是 |
 | 工作目录及其上层各级目录（直到仓库根目录）里的 `.noeta/skills/` 和 `.agents/skills/`（近的优先；同一目录里 `.noeta` 先于 `.agents`） | 已信任的项目 |
 | 每个额外目录（`--add-dir`、`additionalDirectories`）里的同样位置 | 已信任的项目 |
 | 统一管理目录的 `.noeta/commands/`、`~/.noeta/commands/`，再是项目和额外目录里的 `.noeta/commands/`（已信任的项目） | 其中的 `*.md` 当作技能读（见下文） |
@@ -184,7 +185,7 @@ Stage $ARGUMENTS and make a `git commit --fixup` for the last commit that touche
 `${CLAUDE_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_DATA}`（`~/.noeta/plugin-data/<名字>`）在各处都会替换，清单里 `userConfig` 的值也按 Claude Code 的方式填进去。Monitor、`bin/`、LSP 服务器、主题和输出样式不加载。安装时固定到某个提交：
 
 ```bash
-noeta plugin add https://github.com/you/your-plugin@<40 位十六进制提交号>
+noeta plugin add https://github.com/you/your-plugin@<完整提交号：40 位十六进制，SHA-256 仓库是 64 位>
 noeta plugin add --marketplace ./team-marketplace formatter     # 从 marketplace.json 装
 noeta plugins                                                    # 加载了哪些、各自从哪来
 ```

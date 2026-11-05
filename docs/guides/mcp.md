@@ -61,7 +61,10 @@ starts only when both hold:
 A name in `"disabledMcpjsonServers"` in any settings file keeps it off. Consent in your user
 settings does not count: it would follow the name into every repository that reuses it
 (`noeta/plugins/mcp/settings.py`). `noeta mcp list` shows such a server as
-`pending approval (not started)`, and a worker logs which servers wait for consent.
+`pending approval (not started)`, and a worker logs which servers wait for consent. In a
+project that is not trusted yet, `noeta mcp list` and `get` start none of its servers, neither
+`local` nor `project` scope (a check would run the server's command): they show
+``project not trusted (not started; run `noeta trust` here)``.
 
 ```json
 // <project>/.noeta/settings.local.json
@@ -124,10 +127,12 @@ the others still load.
   shape, or a function of the task returning either.
 
 When two sources name the same alias, the first found wins: the agent file's own servers, then
-the ones given in code or by flags and plugins, then the project's `.noeta/mcp.json`, then the
-settings files in the order `~/.noeta/settings.json`, `.noeta/settings.json`,
-`.noeta/settings.local.json`, managed settings (`noeta/plugins/mcp/extension.py` `_resolve`,
-`settings.py` `read_servers`). Keep each name in one place.
+the ones given in code or by flags (`--mcp-config`) and plugins, then the files, highest first:
+managed settings, `--settings`, `.noeta/settings.local.json` (local), the project's
+`.noeta/settings.json`, its `.noeta/mcp.json` (project), `~/.noeta/settings.json` (user). That
+is Claude Code's local > project > user, and `noeta mcp get`, `list` and `remove` use the same
+order, so they show the server the runtime starts (`noeta/toolkit/mcp_sources.py`;
+`noeta/plugins/mcp/extension.py` `_resolve`). Keep each name in one place.
 
 ## What the model sees
 

@@ -98,7 +98,7 @@ api_key = "unused"
 list_models = true                     # 读它的 /models（默认）；false 不读
 ```
 
-一张表只接受 `family`、`base_url`、`api_key`、`headers`、`models`、`list_models` 和 `prompt_cache_ttl`；写了别的键算配置错误，表名叫 `default` 也算（这个名字留给顶层 provider）。`{env:…}` 和 `{keyring:…}` 只在表里的 `api_key` 和 `headers` 中会被替换成真实值；顶层的 `api_key` 写什么就原样发出去。`{keyring:…}` 需要 `keyring` 这个 extra。
+一张表只接受 `family`、`base_url`、`api_key`、`headers`、`models`、`list_models` 和 `prompt_cache_ttl`；写了别的键算配置错误，表名叫 `default` 也算（这个名字留给顶层 provider）。`{env:…}` 和 `{keyring:…}` 在表里的 `api_key` 和 `headers` 中会被替换成真实值，顶层的 `api_key` 和 `extra_headers` 也一样。`{keyring:…}` 需要 `keyring` 这个 extra。
 
 一个模型 id 发给哪个 provider：
 

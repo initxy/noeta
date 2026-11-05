@@ -20,8 +20,8 @@ noeta 里模型能调用的每个工具：由哪个插件提供、有哪些参�
 | [`Bash`](#bash) | `shell` | 总是 | | 只读命令放行；其他要问 |
 | [`Monitor`](#monitor) | `shell` | 延迟 | | 同 `Bash`；连 `ws` 的要问 |
 | [`TaskStop`](#taskstop) | `shell` | 延迟 | | 放行 |
-| [`EnterWorktree`](#enterworktree-exitworktree) | `shell` | 延迟 | | 要问 |
-| [`ExitWorktree`](#enterworktree-exitworktree) | `shell` | 延迟 | | 要问 |
+| [`EnterWorktree`](#enterworktree-exitworktree) | `shell` | 延迟 | | 放行 |
+| [`ExitWorktree`](#enterworktree-exitworktree) | `shell` | 延迟 | | 放行 |
 | [`Agent`](#agent) | `subtasks` | 总是 | | 放行；auto 下交分类器 |
 | [`SendMessage`](#sendmessage) | `subtasks` | 延迟 | | 放行；auto 下交分类器 |
 | [`ListAgents`](#listagents) | `subtasks` | 总是 | 是 | 放行 |
@@ -34,13 +34,12 @@ noeta 里模型能调用的每个工具：由哪个插件提供、有哪些参�
 | [`ExitPlanMode`](#exitplanmode) | `plan_mode` | 延迟 | | 放行（它本身会问你） |
 | [`TaskCreate`、`TaskGet`、`TaskUpdate`、`TaskList`](#任务清单工具) | `todos` | 延迟 | `TaskGet`、`TaskList` | 放行 |
 | [`ScheduleWakeup`](#schedulewakeup) | `schedule` | 总是 | | 放行 |
-| [`CronCreate`、`CronList`、`CronDelete`](#定时任务工具) | `schedule` | 延迟 | `CronList` | 要问 |
+| [`CronCreate`、`CronList`、`CronDelete`](#定时任务工具) | `schedule` | 延迟 | `CronList` | 放行；`CronCreate` 在 auto 下交分类器 |
 | [`Workflow`](#workflow) | `workflow` | 总是 | | 放行；auto 下交分类器 |
 | [`ReportFindings`](#reportfindings) | `findings` | 总是 | 是 | 放行 |
 | [`StructuredOutput`](#structuredoutput) | `structured_output` | 有答案格式时 | 是 | 放行 |
 | [`ToolSearch`](#toolsearch) | `tool_search` | 有延迟工具时 | 是 | 放行 |
-| [`ListMcpResourcesTool`、`ReadMcpResourceTool`](#mcp-工具) | `mcp` | 延迟 | 是 | 放行 |
-| [`ReadMcpResourceDirTool`](#mcp-工具) | `mcp` | 延迟 | 是 | 要问 |
+| [`ListMcpResourcesTool`、`ReadMcpResourceTool`、`ReadMcpResourceDirTool`](#mcp-工具) | `mcp` | 延迟 | 是 | 放行 |
 | [`mcp__<server>__<tool>`](#mcp-工具) | `mcp` | 延迟 | | 要问 |
 | [`run_skill_script`](#run-skill-script) | `skills` | 只在打开 `scripts` 时 | | 要问 |
 
@@ -157,7 +156,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | `ExitWorktree` | **`action`** | string | `keep` 留在磁盘上；`remove` 连同分支一起删掉 |
 | | `discard_changes` | boolean | 有未提交的文件或未合并的提交也照删 |
 
-权限：要问。
+权限：放行，`auto` 下也不交分类器。Claude Code 进 `.claude/worktrees/` 以外的工作树前会问，因为它在那里会把会话的写权限一起挪过去；noeta 的 `EnterWorktree` 只挪 shell，不动权限范围（见 `parity/deviations.md`）。
 
 ## 子代理：`subtasks` 插件
 
@@ -313,17 +312,17 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | `stop` | boolean | 改为结束循环 |
 | `noop` | boolean | 这一次什么都没变 |
 
-除非 `stop` 为 true，前三个和 `noop` 必填。权限：放行。
+除非 `stop` 为 true，前三个和 `noop` 必填。结果里的唤醒时间按任务配置的 `timezone` 显示（没有就用机器的时区）。权限：放行。
 
 ### 定时任务工具
 
 | 工具 | 参数 | 作用 |
 |---|---|---|
-| `CronCreate` | **`cron`**（5 个字段，按跑这个任务的工人所在机器的本地时间）、**`prompt`**、`recurring`（默认 true；循环任务 7 天后失效）、`durable`（接受；所有任务本来就持久保存） | 按计划排一句提问，或只排一次 |
+| `CronCreate` | **`cron`**（5 个字段，按本地时间：任务配置里有 `timezone` 就用它，否则用跑这个任务的机器的时区）、**`prompt`**、`recurring`（默认 true；循环任务 7 天后失效）、`durable`（接受；所有任务本来就持久保存） | 按计划排一句提问，或只排一次 |
 | `CronList` | 无 | 这个任务的定时任务 |
 | `CronDelete` | **`id`** | 取消一个 |
 
-一个任务同时最多 50 个定时任务。权限：三个在 `default` 下都要问（都不在权限插件的低风险列表里）。
+结果里的下次运行时间也按这个时区显示。一个任务同时最多 50 个定时任务。权限：三个都放行；`auto` 下 `CronCreate` 交分类器，另外两个不交。
 
 ## 工作流：`workflow` 插件
 
@@ -380,6 +379,6 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | `mcp__<server>__authenticate`、`mcp__<server>__complete_authentication` | 服务器需要登录时，代替它的工具出现 | 要问 |
 | `ListMcpResourcesTool` | 列出服务器的资源（`server` 可缩小范围） | 放行 |
 | `ReadMcpResourceTool` | 读一个资源（**`server`**、**`uri`**） | 放行 |
-| `ReadMcpResourceDirTool` | 列出一个目录资源下一层的内容（**`server`**、**`uri`**） | 要问（它不在低风险列表里） |
+| `ReadMcpResourceDirTool` | 列出一个目录资源下一层的内容（**`server`**、**`uri`**） | 放行 |
 
 三个资源工具只提供给顶层任务，只要配置了服务器就有（服务器挂了也有）。服务器的工具一律不算只读，不管服务器怎么标。服务器的工具排在内置工具后面。

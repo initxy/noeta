@@ -16,17 +16,20 @@ comes from and which wins is explained in [Configuration](../start/configuration
 | `model` | string | none (required somewhere) | the model new tasks run, an id or an alias | `--model`, `NOETA_MODEL` |
 | `provider` | string | `anthropic` | the default provider: a family (`anthropic`, `openai_compat`, `openai_responses`, or a provider package's) or the name of a `[providers.<name>]` table | `--provider`, `NOETA_PROVIDER` |
 | `base_url` | string | the family's | the default provider's base URL: the host for `anthropic`, `…/v1` for `openai_compat`, the whole `…/v1/responses` URL for `openai_responses` | `--base-url`, `NOETA_BASE_URL` |
-| `api_key` | string | none | the default provider's key, as a literal (no `{env:…}` here); without one, `anthropic` reads `ANTHROPIC_API_KEY` and `openai_compat` reads `OPENAI_API_KEY`; `openai_responses` reads no variable and needs one | `NOETA_API_KEY` |
-| `extra_headers` | table of strings | none | headers sent with every request of the default provider | — |
+| `api_key` | string | none | the default provider's key: a literal, `{env:NAME}` or `{keyring:service/user}`; without one, `anthropic` reads `ANTHROPIC_API_KEY` and `openai_compat` reads `OPENAI_API_KEY`; `openai_responses` reads no variable and needs one | `NOETA_API_KEY` |
+| `extra_headers` | table of strings | none | headers sent with every request of the default provider; values may be `{env:…}` / `{keyring:…}` references | — |
 | `store` | string | `sqlite:///~/.noeta/tasks.db` | `sqlite:///path` or `postgres://…` | `--store`, `NOETA_STORE` |
-| `effort` | string | the model's | `low`, `medium`, `high`, `xhigh` or `max`, for the tasks the terminal UI and `-p` start | `--effort`, `NOETA_EFFORT` |
+| `effort` | string | the model's | `low`, `medium`, `high`, `xhigh` or `max`, for the tasks the terminal UI, `-p`, `acp`, `serve` and `worker` create ([the noeta command](./cli.md#shared-flags)) | `--effort`, `NOETA_EFFORT` |
 | `models_file` | path | none | a JSON file describing more models (below) | `NOETA_MODELS_FILE` |
 | `list_models` | bool | `true` | read the default provider's `/models` listing for models the catalog does not know | — |
 | `prompt_cache_ttl` | `"5m"` or `"1h"` | the API's (`5m`) | `anthropic` only: the one-hour prompt cache, billed higher per write | — |
 | `prompts` | table | none | prompt overrides for every task this front end starts, by prompt name (`"system/main.append" = "…"`) | `--system-prompt`, `--append-system-prompt` |
 
 Tables: `[providers.<name>]`, `[plugins.<name>]`, `[agents.<name>]`, `[channels.<name>]`
-(below). Other top-level keys are ignored.
+(below). Another top-level key is ignored with a warning on stderr naming it
+(`…/config.toml: unknown top-level keys ['modle']; ignored`), so a typo shows; it is not an
+error, so a key an older or newer noeta reads does not stop this one. An unknown key inside a
+table is an error.
 
 ### `[providers.<name>]`
 
@@ -176,7 +179,7 @@ Variables noeta reads (grepped across `noeta/` and `tui/`):
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `NOETA_HOME` | everything | noeta's home (default `~/.noeta`) |
+| `NOETA_HOME` | everything | noeta's home (default `~/.noeta`); `~/.agents/skills` stays under the home directory |
 | `NOETA_MODEL` | `noeta` | the model |
 | `NOETA_PROVIDER` | `noeta` | the default provider family or table name |
 | `NOETA_BASE_URL` | `noeta` | the default provider's base URL |

@@ -29,8 +29,8 @@ How to read the tables:
 | [`Bash`](#bash) | `shell` | always | | read-only commands allowed; others ask |
 | [`Monitor`](#monitor) | `shell` | deferred | | as `Bash`; a `ws` watch asks |
 | [`TaskStop`](#taskstop) | `shell` | deferred | | allowed |
-| [`EnterWorktree`](#enterworktree-exitworktree) | `shell` | deferred | | asks |
-| [`ExitWorktree`](#enterworktree-exitworktree) | `shell` | deferred | | asks |
+| [`EnterWorktree`](#enterworktree-exitworktree) | `shell` | deferred | | allowed |
+| [`ExitWorktree`](#enterworktree-exitworktree) | `shell` | deferred | | allowed |
 | [`Agent`](#agent) | `subtasks` | always | | allowed; classified in `auto` |
 | [`SendMessage`](#sendmessage) | `subtasks` | deferred | | allowed; classified in `auto` |
 | [`ListAgents`](#listagents) | `subtasks` | always | yes | allowed |
@@ -43,13 +43,12 @@ How to read the tables:
 | [`ExitPlanMode`](#exitplanmode) | `plan_mode` | deferred | | allowed (it asks you itself) |
 | [`TaskCreate`, `TaskGet`, `TaskUpdate`, `TaskList`](#task-list-tools) | `todos` | deferred | `TaskGet`, `TaskList` | allowed |
 | [`ScheduleWakeup`](#schedulewakeup) | `schedule` | always | | allowed |
-| [`CronCreate`, `CronList`, `CronDelete`](#cron-tools) | `schedule` | deferred | `CronList` | asks |
+| [`CronCreate`, `CronList`, `CronDelete`](#cron-tools) | `schedule` | deferred | `CronList` | allowed; `CronCreate` classified in `auto` |
 | [`Workflow`](#workflow) | `workflow` | always | | allowed; classified in `auto` |
 | [`ReportFindings`](#reportfindings) | `findings` | always | yes | allowed |
 | [`StructuredOutput`](#structuredoutput) | `structured_output` | with an answer schema | yes | allowed |
 | [`ToolSearch`](#toolsearch) | `tool_search` | while any tool is deferred | yes | allowed |
-| [`ListMcpResourcesTool`, `ReadMcpResourceTool`](#mcp-tools) | `mcp` | deferred | yes | allowed |
-| [`ReadMcpResourceDirTool`](#mcp-tools) | `mcp` | deferred | yes | asks |
+| [`ListMcpResourcesTool`, `ReadMcpResourceTool`, `ReadMcpResourceDirTool`](#mcp-tools) | `mcp` | deferred | yes | allowed |
 | [`mcp__<server>__<tool>`](#mcp-tools) | `mcp` | deferred | | asks |
 | [`run_skill_script`](#run-skill-script) | `skills` | only with `scripts` on | | asks |
 
@@ -195,7 +194,9 @@ the task's shell into it; `ExitWorktree` returns the shell to where it was.
 | `ExitWorktree` | **`action`** | string | `keep` leaves it on disk; `remove` deletes it and its branch |
 | | `discard_changes` | boolean | remove even with uncommitted files or unmerged commits |
 
-Permission: asks.
+Permission: allowed, also in `auto` (no classifier). Claude Code asks before entering a worktree
+outside `.claude/worktrees/`, because there it moves the session's write access; noeta's
+`EnterWorktree` moves only the shell, never the permission scope (`parity/deviations.md`).
 
 ## Sub-agents: the `subtasks` plugin
 
@@ -372,18 +373,20 @@ Sets when the next iteration of a self-paced `/loop` runs.
 | `stop` | boolean | end the loop instead |
 | `noop` | boolean | nothing changed this iteration |
 
-The first three and `noop` are required unless `stop` is true. Permission: allowed.
+The first three and `noop` are required unless `stop` is true. The wake-up time in the result is
+in the task config's `timezone` (else the machine's zone). Permission: allowed.
 
 ### Cron tools
 
 | Tool | Parameters | What it does |
 |---|---|---|
-| `CronCreate` | **`cron`** (5 fields, in the local time of the worker that runs the task), **`prompt`**, `recurring` (default true; a recurring job expires after 7 days), `durable` (accepted; every job is durable) | queue a prompt on a schedule, or once |
+| `CronCreate` | **`cron`** (5 fields, in local time: the task config's `timezone`, else the zone of the machine that runs the task), **`prompt`**, `recurring` (default true; a recurring job expires after 7 days), `durable` (accepted; every job is durable) | queue a prompt on a schedule, or once |
 | `CronList` | none | the task's jobs |
 | `CronDelete` | **`id`** | cancel one |
 
-A task may have at most 50 jobs at once. Permission: all three ask in `default` (none is in the
-permissions plugin's low-risk list).
+Next-run times in the results are shown in that zone too. A task may have at most 50 jobs at
+once. Permission: all three are allowed; in `auto` `CronCreate` goes to the classifier, the other
+two do not.
 
 ## Workflow: the `workflow` plugin
 
@@ -445,7 +448,7 @@ The `mcp` plugin ([MCP servers](../guides/mcp.md)) offers, all deferred:
 | `mcp__<server>__authenticate`, `mcp__<server>__complete_authentication` | in place of a server's tools while it needs a sign-in | asks |
 | `ListMcpResourcesTool` | the servers' resources (`server` to narrow) | allowed |
 | `ReadMcpResourceTool` | read one resource (**`server`**, **`uri`**) | allowed |
-| `ReadMcpResourceDirTool` | list a directory resource, one level down (**`server`**, **`uri`**) | asks (it is not in the low-risk list) |
+| `ReadMcpResourceDirTool` | list a directory resource, one level down (**`server`**, **`uri`**) | allowed |
 
 The three resource tools are offered only to a top-level task, whenever a server is configured
 (even one that is down). A server's tools are not read-only, whatever the server says. Server

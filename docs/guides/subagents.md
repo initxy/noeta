@@ -225,7 +225,8 @@ The `schedule` plugin's wake-ups and cron jobs are kernel timers recorded in the
 - `/loop <prompt>` repeats a prompt. Self-paced, the model calls `ScheduleWakeup` each
   iteration with a delay clamped to 60–3600 s; if it forgets, one fallback wake-up comes after
   20 minutes.
-- `CronCreate` takes a five-field cron expression in local time. A recurring job fires until
+- `CronCreate` takes a five-field cron expression in local time: the task's `timezone` (which
+  noeta's front ends send), else the zone of the machine that runs it. A recurring job fires until
   deleted or for 7 days; `recurring: false` fires once. Each job gets a small offset so jobs
   for the same minute do not all fire at once. At most 50 jobs per task.
 

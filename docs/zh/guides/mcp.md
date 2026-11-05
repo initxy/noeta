@@ -44,7 +44,7 @@ noeta 不读 `~/.claude.json`、项目根目录的 `.mcp.json`，也不读 `.cla
 1. 项目已被信任（在项目里执行 `noeta trust`）；
 2. 项目自己的 settings 文件（`.noeta/settings.json` 或 `.noeta/settings.local.json`）用 Claude Code 的字段表示同意：`"enableAllProjectMcpServers": true`，或者把服务器名写进 `"enabledMcpjsonServers"`。
 
-任何一个 settings 文件的 `"disabledMcpjsonServers"` 里有这个名字，它就不启动。写在你个人 settings 里的同意不算数：否则这个同意会跟着名字，带到每个用了同名服务器的仓库里（`noeta/plugins/mcp/settings.py`）。`noeta mcp list` 会把这样的服务器显示成 `pending approval (not started)`，工人也会在日志里写明哪些服务器在等同意。
+任何一个 settings 文件的 `"disabledMcpjsonServers"` 里有这个名字，它就不启动。写在你个人 settings 里的同意不算数：否则这个同意会跟着名字，带到每个用了同名服务器的仓库里（`noeta/plugins/mcp/settings.py`）。`noeta mcp list` 会把这样的服务器显示成 `pending approval (not started)`，工人也会在日志里写明哪些服务器在等同意。项目还没被信任时，`noeta mcp list` 和 `get` 不会启动它的任何服务器，`local` 和 `project` 两个范围都不启动（检查连通性就得把服务器的命令跑起来），只显示 ``project not trusted (not started; run `noeta trust` here)``。
 
 ```json
 // <项目>/.noeta/settings.local.json
@@ -97,7 +97,7 @@ noeta 不读 `~/.claude.json`、项目根目录的 `.mcp.json`，也不读 `.cla
 - **通过 ACP 接入的编辑器**：每段对话自己指定服务器，只放在内存里，不进日志（`noeta/host/acp.py` 的 `EditorServers`）。
 - **宿主代码**：`Mcp(servers=...)` 接受 `McpServer` 列表、`mcpServers` 形状的字典，或者一个根据任务返回这两者之一的函数。
 
-几个来源出现同一个别名时，先找到的生效，顺序是：agent 文件自己的服务器 → 代码、命令行和插件给的 → 项目的 `.noeta/mcp.json` → settings 文件，按 `~/.noeta/settings.json`、`.noeta/settings.json`、`.noeta/settings.local.json`、机器统一下发的 managed settings 的顺序（`noeta/plugins/mcp/extension.py` 的 `_resolve`，`settings.py` 的 `read_servers`）。一个名字最好只在一个地方配置。
+几个来源出现同一个别名时，先找到的生效，顺序是：agent 文件自己的服务器 → 代码、命令行（`--mcp-config`）和插件给的 → 各个文件，从高到低依次是机器统一下发的 managed settings、`--settings`、`.noeta/settings.local.json`（local）、项目的 `.noeta/settings.json`、项目的 `.noeta/mcp.json`（project）、`~/.noeta/settings.json`（user）。这就是 Claude Code 的 local > project > user；`noeta mcp get`、`list`、`remove` 用的也是这个顺序，所以它们显示的就是运行时真正启动的那个服务器（`noeta/toolkit/mcp_sources.py`；`noeta/plugins/mcp/extension.py` 的 `_resolve`）。一个名字最好只在一个地方配置。
 
 ## 模型看到什么
 

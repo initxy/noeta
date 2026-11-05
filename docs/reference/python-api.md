@@ -122,7 +122,7 @@ Methods:
 ### `noeta.LocalApp(store, agents, provider, *, own_tasks_only=False, task_config=None, channels=(), **runtime_kw)`
 
 A store, a `Runtime` serving in the background and a client, in one process: what the terminal
-UI, `noeta acp` and `noeta -p` run on (`noeta/host/local.py`).
+UI, `noeta acp`, `noeta -p` and `noeta worker` run on (`noeta/host/local.py`).
 
 | Argument | Meaning |
 |---|---|
@@ -131,13 +131,14 @@ UI, `noeta acp` and `noeta -p` run on (`noeta/host/local.py`).
 | `own_tasks_only` | serve only the task trees this app created or adopted |
 | `task_config` | laid under every new task's config (`prompts` merged key by key) |
 | `channels` | `Channel`s to run while started |
-| `**runtime_kw` | passed to `Runtime` (`spill_root` defaults to `noeta-<uid>/tool-results` in the system temp directory; `poll_interval` is fixed at 0.2 and cannot be passed) |
+| `**runtime_kw` | passed to `Runtime` (`spill_root` defaults to `noeta-<uid>/tool-results` in the system temp directory; `poll_interval` defaults to 0.2 and the client polls at the same interval; a caller's own value wins) |
 
 | Member | Is |
 |---|---|
 | `client` | a `LocalClient` (a `Client` subclass) whose new tasks this app's worker serves; it lays `task_config` under each new task and puts an agent file's `initialPrompt` ahead of a new conversation's first message |
 | `runtime`, `store` | the parts |
-| `await start(worker=True)` / `await stop()`, or `async with` | run the worker and channels in the background; stopping also closes the store |
+| `await start(worker=True)` / `await stop()`, or `async with` | run the worker, the channels and the daily sweep of old saved tool outputs in the background; stopping also closes the store |
+| `await run_until(stop)` | `start()`, run until the `asyncio.Event` `stop` is set (or the worker fails, which is raised), then `stop()`: a process that only runs tasks, as `noeta worker` does |
 | `deltas(sink) -> unsubscribe` | live output: `sink(task_id, Delta)` per fragment, also from other machines on Postgres |
 | `await adopt(task_id)` | serve an existing task's tree (resuming it); raises `UnknownAgent` for an agent this app lacks |
 | `replace_agents(agents)` | run these agents from the next pickup on |

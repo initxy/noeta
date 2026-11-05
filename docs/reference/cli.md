@@ -43,15 +43,28 @@ Taken by the terminal UI, `-p`, `acp`, `serve` and `worker`.
 No model from any of these is an error (`noeta: no model configured`), except for a front end
 attached with `--server`, which uses the server's.
 
-`--permission-mode` and `--effort` (with `NOETA_EFFORT` and `config.toml` `effort`) apply only to
-the tasks the terminal UI and `-p` start. `acp`, `serve` and `worker` accept them and do not use
-them: there the editor or the API client sets a task's mode and effort.
+`--permission-mode` and `--effort` (with `NOETA_EFFORT` and `config.toml` `effort`) become the
+starting config of the tasks each process creates; a task keeps the config it was created with,
+whichever process later runs it:
+
+- the terminal UI and `-p`: their tasks;
+- `acp`: each new editor session's task (with `--server` too, where the server's permissions
+  plugin then judges the mode);
+- `serve`: the default for every task its clients create, with `--no-worker` too; a request's
+  own `effort` or `permission_mode` wins;
+- `worker`: only the tasks its channels start (it runs tasks others created, which keep their
+  own); it says so on stderr when `--effort` or `--permission-mode` is given.
+
+`serve` and `worker` exit with `noeta: --permission-mode bypassPermissions needs
+--allow-bypass-permissions` when given that mode without the flag.
 
 ## The terminal UI: `noeta`
 
 `noeta` with no headless flag opens the terminal UI (the `noeta-tui` package, found through the
 `noeta.frontends` entry point; noeta prints the install line when it is missing). A prompt given
-without `-p` is not used: the UI opens with an empty input. In a folder not yet trusted it first
+without `-p` (`noeta "fix the tests"`) is sent as the first message, as if typed, once the first
+task opens: a new one, `-c`'s or `--resume ID`'s. With `--resume` and no id it is left in the
+input box while you pick, so it goes to the task you choose. In a folder not yet trusted it first
 asks whether to trust it; "No, exit" quits.
 
 | Flag | Meaning |
@@ -104,13 +117,12 @@ mode is on with `-p`, with `--input-format stream-json`, or with any `--output-f
 | `--strict-mcp-config` | use only the `--mcp-config` servers, no settings files or project servers |
 | `--agents JSON` | sub-agents as a JSON object: name → `{description, prompt, …}` (agent-file fields); they come last and win a name |
 | `--plugin-dir PATH` | as above |
-| `-d`, `--debug [FILTER]` | accepted; noeta does not use it |
 
 `--server` is refused with `-p`: `-p` always runs its task in this process.
 
 **Accepted and ignored,** so a Claude Code command line runs unchanged; each one used is named
 on stderr: `--fallback-model`, `--betas`, `--max-thinking-tokens`, `--thinking`,
-`--thinking-display`, `--plugin-url`, `--task-budget`, `--debug-file`, `--name`,
+`--thinking-display`, `--plugin-url`, `--task-budget`, `-d` / `--debug` (an optional filter), `--debug-file`, `--name`,
 `--autocompact`, `--file`, `--system-prompt-snapshot` (these take a value),
 `--include-hook-events`, `--no-session-persistence`, `--session-mirror`, `--bare`,
 `--allow-dangerously-skip-permissions`, `--exclude-dynamic-system-prompt-sections`,
@@ -165,7 +177,9 @@ enables and, unless `--no-worker`, workers, all in the same process. Endpoints a
 The token is `NOETA_SERVER_TOKEN`, else one made on the first start and printed that once;
 `~/.noeta/server-token` keeps only its SHA-256. Delete that file and restart for a new one.
 Without `--allow-bypass-permissions` the permissions plugin itself refuses
-`bypassPermissions`, however it is asked for.
+`bypassPermissions`, however it is asked for. On an address that is not loopback without
+`--allow-host`, the server warns once on stderr at startup that any `Host` header is answered
+(DNS rebinding) and names `--allow-host` as the fix; the bearer token still guards it.
 
 ## `noeta worker`
 
@@ -180,7 +194,8 @@ Claims and runs tasks from the store until SIGINT or SIGTERM, with the channels
 | `--snapshot-every EVENTS` | `100` | write a task's fold snapshot at most every this many events; `0` never |
 | `--allow-bypass-permissions` | off | let tasks run in `bypassPermissions` |
 
-On the way out, running tasks are handed back at once; tasks keeping a claim for a background
+A worker also runs the daily sweep of old saved tool outputs on its machine
+([Cleaning up](../guides/server.md#cleaning-up)). On the way out, running tasks are handed back at once; tasks keeping a claim for a background
 job are released and told the job is lost at their next turn.
 
 ## `noeta trust`
@@ -203,9 +218,9 @@ Installs plugins into `~/.noeta/plugins/`, pinned, running nothing from them.
 
 | Command | Meaning |
 |---|---|
-| `noeta plugin add SOURCE` | install from `<git-url>@<commit>` (https or ssh, a full commit), or copy a path |
+| `noeta plugin add SOURCE` | install from `<git-url>@<commit>` (https or ssh, a full commit: 40 hex digits, or 64 in a SHA-256 repository), or copy a path |
 | `noeta plugin add --marketplace MARKETPLACE NAME` | install `NAME` from a Claude Code `marketplace.json` (a path or `<git-url>@<commit>`); the marketplace is only read |
-| `  --commit SHA` | the commit to install when the marketplace entry pins none |
+| `  --commit SHA` | the commit to install when the marketplace entry pins none (an entry's `ref`, a branch or tag, is not followed) |
 | `  --config KEY=VALUE` | a Claude Code plugin's `userConfig` value (repeatable); the others are asked for on a terminal |
 | `noeta plugin configure NAME [--config KEY=VALUE]` | set a Claude Code plugin's `userConfig` values again |
 | `noeta plugin list` | the plugins installed with `noeta plugin add` |
@@ -229,8 +244,8 @@ Manages MCP servers as `claude mcp` does, in noeta's places.
 | `  --client-secret` | ask for the OAuth client secret (or set `NOETA_MCP_CLIENT_SECRET`) |
 | `  --callback-port N` | a fixed port for the OAuth redirect |
 | `noeta mcp add-json [-s SCOPE] [--client-secret] NAME JSON` | add a server from its JSON entry |
-| `noeta mcp list` | list the configured servers and check each |
-| `noeta mcp get NAME` | show one |
+| `noeta mcp list` | list the configured servers and check each; in an untrusted project its `local` and `project` servers are not started, shown as ``project not trusted (not started; run `noeta trust` here)`` |
+| `noeta mcp get NAME` | show one (the one the runtime would start when several files name it: managed > `--settings` > local > project > user) |
 | `noeta mcp remove [-s SCOPE] NAME` | remove one |
 | `noeta mcp login [--no-browser] NAME` | sign in (OAuth); `--no-browser` prints the address instead of opening it |
 | `noeta mcp logout NAME` | forget the sign-in |
@@ -260,7 +275,7 @@ The terminal UI's own commands (`tui/src/noeta_tui/slash.py`):
 | `/clear`, `/new` | start a new task |
 | `/resume [N]` | pick a task to resume; with `N` (a number from the list) or a task id, open it |
 | `/stop` | stop the turn (also Esc) |
-| `/reload-plugins` | load the plugin and agent files again, from the next turn on |
+| `/reload-plugins` | load the plugin, agent and settings files again, from the next turn on; a changed `env`, `model`, `agent` or `sandbox` takes a restart (said in the UI) |
 | `/exit`, `/quit` | quit |
 
 Commands the agent's plugins offer (`noeta/core/commands.py` lists and expands them; every

@@ -219,7 +219,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | 配置项 | 默认 | 含义 |
 |---|---|---|
 | `servers` | `[]` | Claude Code `mcpServers` 格式的服务器；宿主代码里也可以是一个按任务求值的函数 |
-| `settings_files` | `[]` | 把这些 settings 文件里的 `mcpServers` 也加进来 |
+| `settings_files` | `[]` | 把这些 settings 文件里的 `mcpServers` 也加进来，按优先级从低到高排（同名时后面的文件为准；项目的 `.noeta/mcp.json` 排在这个项目自己的 settings 文件下面一位） |
 | `project` | `false` | 同时加载任务 `<cwd>/.noeta/mcp.json` 中、它自己的 settings 同意了的服务器；宿主代码里可以是按目录判断的函数 |
 | `agent_servers` | | 代理文件自己的 `mcpServers`，只给这个代理的任务用 |
 | `scope` | 一个共享分区 | **SDK**（或一个字符串）：给共享连接分区，有状态的服务器不会把一个用户的状态带进另一个用户的任务 |
@@ -328,7 +328,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 |---|---|---|
 | `dirs` | `[]` | 最低一层：自带的和借用的技能目录 |
 | `plugin_dirs` | | 目录 → 插件名：Claude Code 插件的技能，名字是 `<插件>:<技能>` |
-| `global_agents_dir`、`global_dir` | 无 | 用户的 `~/.agents/skills` / `~/.noeta/skills` |
+| `global_agents_dir`、`global_dir` | 无 | 用户的 `~/.agents/skills` / `~/.noeta/skills`（`noeta` 命令两个都传；`~/.noeta/skills` 优先） |
 | `global_commands_dir` | 无 | 用户的 `~/.noeta/commands`：每个 `*.md` 是一个技能 |
 | `managed_dir` | 无 | 机器的托管目录，它的技能排最前 |
 | `workspace` | `true` | 工作目录（及其上级目录，直到仓库根）的 `.noeta/skills`、`.agents/skills`、`.noeta/commands` |

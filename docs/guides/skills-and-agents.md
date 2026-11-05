@@ -35,6 +35,7 @@ by its directory; the frontmatter `name` is only a display name (`noeta/plugins/
 |---|---|
 | the machine's managed directory's `.noeta/skills` (`/etc/noeta`, `/Library/Application Support/Noeta` on macOS) | always |
 | `~/.noeta/skills/<name>/SKILL.md` | always |
+| `~/.agents/skills/<name>/SKILL.md`, the directory coding agents share (under your home directory, not moved by `$NOETA_HOME`) | always |
 | `.noeta/skills/` and `.agents/skills/` in the working directory and each directory above it up to the repository's root (nearest first; `.noeta` before `.agents` in one directory) | trusted projects |
 | the same in each additional directory (`--add-dir`, `additionalDirectories`) | trusted projects |
 | the managed directory's `.noeta/commands/`, `~/.noeta/commands/`, then the project's and additional directories' `.noeta/commands/` (trusted projects) | `*.md` files, as skills (below) |
@@ -241,7 +242,7 @@ everywhere, and the manifest's `userConfig` values as Claude Code fills them. Mo
 LSP servers, themes and output styles are not loaded. Install one pinned to a commit:
 
 ```bash
-noeta plugin add https://github.com/you/your-plugin@<40-hex commit>
+noeta plugin add https://github.com/you/your-plugin@<full commit: 40 hex digits, 64 in a SHA-256 repository>
 noeta plugin add --marketplace ./team-marketplace formatter     # from a marketplace.json
 noeta plugins                                                    # what is loaded, and from where
 ```

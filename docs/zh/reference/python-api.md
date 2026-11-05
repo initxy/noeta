@@ -117,7 +117,7 @@
 
 ### `noeta.LocalApp(store, agents, provider, *, own_tasks_only=False, task_config=None, channels=(), **runtime_kw)`
 
-存储、在后台跑的 `Runtime` 和客户端，全在一个进程里：终端界面、`noeta acp`、`noeta -p` 用的就是它
+存储、在后台跑的 `Runtime` 和客户端，全在一个进程里：终端界面、`noeta acp`、`noeta -p`、`noeta worker` 用的就是它
 （`noeta/host/local.py`）。
 
 | 参数 | 含义 |
@@ -127,13 +127,14 @@
 | `own_tasks_only` | 只服务自己创建或接手的任务树 |
 | `task_config` | 垫在每个新任务配置下面（`prompts` 按键合并） |
 | `channels` | 启动后一起运行的渠道（`Channel`） |
-| `**runtime_kw` | 传给 `Runtime`（`spill_root` 默认是系统临时目录下的 `noeta-<uid>/tool-results`；`poll_interval` 固定为 0.2，不能再传） |
+| `**runtime_kw` | 传给 `Runtime`（`spill_root` 默认是系统临时目录下的 `noeta-<uid>/tool-results`；`poll_interval` 默认 0.2，客户端也按这个间隔轮询；调用方自己传的值优先） |
 
 | 成员 | 说明 |
 |---|---|
 | `client` | 一个 `LocalClient`（`Client` 的子类），它创建的新任务由这个应用的 worker 执行；它把 `task_config` 垫在每个新任务下面，并把代理文件的 `initialPrompt` 放在新对话第一条消息前面 |
 | `runtime`、`store` | 各个部分 |
-| `await start(worker=True)` / `await stop()`，或 `async with` | 在后台运行 worker 和渠道；停止时也会关闭存储 |
+| `await start(worker=True)` / `await stop()`，或 `async with` | 在后台运行 worker、渠道，以及每天一次的旧工具输出清理；停止时也会关闭存储 |
+| `await run_until(stop)` | 先 `start()`，一直跑到 `stop`（一个 `asyncio.Event`）被设上，或者 worker 自己出错（错误照常抛出），然后 `stop()`：只跑任务的进程用它，`noeta worker` 就是这样 |
 | `deltas(sink) -> 取消订阅函数` | 实时输出：每个片段调用一次 `sink(task_id, Delta)`，用 Postgres 时也包括其他机器的 |
 | `await adopt(task_id)` | 接手一个已有任务的任务树（续聊时用）；这个应用没有那个代理时抛 `UnknownAgent` |
 | `replace_agents(agents)` | 从下一次接手任务起改用这些代理 |

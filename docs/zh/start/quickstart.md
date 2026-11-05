@@ -73,7 +73,7 @@ export NOETA_API_KEY=...                 # 或者 OPENAI_API_KEY
 model = "claude-sonnet-5-5"
 provider = "anthropic"
 # key：环境变量 NOETA_API_KEY 或 ANTHROPIC_API_KEY，
-# 或者在这里写 api_key = "sk-ant-..."（只能写明文：顶层这个键不支持 {env:…} 引用）
+# 或者在这里写 api_key：明文 "sk-ant-..."，或者 "{env:MY_KEY}" 这样的引用
 ```
 
 命令行参数优先于环境变量，环境变量优先于 `config.toml`（[配置](./configuration.md)）。同时配置多个
