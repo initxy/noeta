@@ -400,17 +400,27 @@ def error_dict_is_context_overflow(error: dict[str, Any]) -> bool:
 #: "input length and `max_tokens` exceed context limit: 188240 + 21333 >
 #: 200000" (the pattern Claude Code parses), OpenAI's and older vLLM's
 #: "maximum context length is 8192 tokens. However, you requested 9000 tokens
-#: (7000 in the messages, 2000 in the completion)" (or "in your prompt"), and
-#: newer vLLM's "maximum context length is 4096 tokens and your request has
-#: 3000 input tokens".
+#: (7000 in the messages, 500 in the functions, 1500 in the completion)" (or
+#: "in your prompt"; every part but the completion is input), and newer vLLM's
+#: "maximum context length is 4096 tokens and your request has 3000 input
+#: tokens".
 _OVERFLOW_COUNTS: tuple[tuple[re.Pattern[str], int, int], ...] = (
     (re.compile(r"input length and `max_tokens` exceed context limit: (\d+) \+ (\d+) > (\d+)"),
      1, 3),
-    (re.compile(r"maximum context length is (\d+) tokens.{0,80}?\((\d+) in (?:the messages"
-                r"|your prompt)", re.DOTALL), 2, 1),
+    (re.compile(r"maximum context length is (\d+) tokens.{0,80}?\(((\d+) in (?:the messages"
+                r"|your prompt)[^)]*)\)", re.DOTALL), 2, 1),
     (re.compile(r"maximum context length is (\d+) tokens and your request has (\d+) input "
                 r"tokens"), 2, 1),
 )
+_INPUT_PART = re.compile(r"(\d+) (?:in|for) (?:the |your )?(\w+)")
+
+
+def _input_tokens(stated: str) -> int:
+    """The input tokens a count says: a number, or OpenAI's parts ("7000 in
+    the messages, 500 in the functions, ...") summed but the completion."""
+    if stated.isdigit():
+        return int(stated)
+    return sum(int(n) for n, part in _INPUT_PART.findall(stated) if part != "completion")
 
 
 def context_overflow(message: str, *, text: str = "", **kw: Any) -> ContextOverflow:
@@ -420,7 +430,7 @@ def context_overflow(message: str, *, text: str = "", **kw: Any) -> ContextOverf
     for pattern, input_group, limit_group in _OVERFLOW_COUNTS:
         match = pattern.search(haystack)
         if match:
-            return ContextOverflow(message, input_tokens=int(match[input_group]),
+            return ContextOverflow(message, input_tokens=_input_tokens(match[input_group]),
                                    context_limit=int(match[limit_group]), **kw)
     return ContextOverflow(message, **kw)
 

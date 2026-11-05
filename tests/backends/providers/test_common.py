@@ -115,6 +115,14 @@ def test_openai_code_and_type_mark_overflow() -> None:
         ("This model's maximum context length is 128000 tokens. However, you requested "
          "130000 tokens (100000 in the messages, 30000 in the completion). Please reduce "
          "the length of the messages or completion.", 100000, 128000),
+        # The tool definitions are input too.
+        ("This model's maximum context length is 128000 tokens. However, you requested "
+         "131000 tokens (100000 in the messages, 1000 in the functions, 30000 in the "
+         "completion). Please reduce the length of the messages, functions, or completion.",
+         101000, 128000),
+        ("This model's maximum context length is 8192 tokens. However, your messages "
+         "resulted in 9000 tokens (7000 in the messages, 2000 in the functions). Please "
+         "reduce the length of the messages or functions.", 9000, 8192),
         ("This model's maximum context length is 8192 tokens, however you requested 8200 "
          "tokens (7000 in your prompt; 1200 for the completion).", 7000, 8192),
         ("'max_tokens' or 'max_completion_tokens' is too large: 2000. This model's maximum "
