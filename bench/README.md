@@ -97,9 +97,9 @@ suite.
    --permission-mode bypassPermissions --cwd "$(pwd)" --model <id> --effort <e>`,
    with `NOETA_PROVIDER` / `NOETA_BASE_URL` / `NOETA_API_KEY` (or the 0.6
    `LLM_BASE_URL` / `LLM_API_KEY`). The effort is harbor's `--effort` (as for
-   `claude-code`), else `NOETA_EFFORT`; pin it — unset, noeta's Anthropic wire
-   sends `medium`, which DeepSeek V4.1 refuses (it takes `low` / `high` /
-   `xhigh` / `max`).
+   `claude-code`), else `NOETA_EFFORT`; pin it — unset, the effort comes from
+   the model's catalog row (else `high`), and DeepSeek V4.1 refuses `medium`
+   (it takes `low` / `high` / `xhigh` / `max`).
 3. **Models manifest** — a gateway model id is unknown to noeta's catalog and
    would run at the 128k-context / 16k-output fallbacks. The adapter uploads a
    manifest: `NOETA_MODELS_CONFIG=<file>`, or a one-row manifest for the `-m`
