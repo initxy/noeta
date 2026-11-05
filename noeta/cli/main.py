@@ -37,15 +37,21 @@ SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
 #: the bare name there may be someone else's package.
 SOURCE_URL = "git+https://github.com/initxy/noeta"
 #: The extras the README's install line names.
-README_EXTRAS = ("images",)
+README_EXTRAS: tuple[str, ...] = ()
 #: The terminal UI, its own package in this repository's ``tui/``.
 TUI_SOURCE = f"noeta-tui @ {SOURCE_URL}#subdirectory=tui"
 #: The top-level modules each optional extra installs (``pyproject.toml``).
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
     "acp": "acp", "psycopg": "postgres", "psycopg_pool": "postgres",
-    "PIL": "images", "keyring": "keyring",
+    "keyring": "keyring",
 }
+
+
+def _noeta(*extras: str) -> str:
+    """noeta's install requirement with ``extras``."""
+    named = ",".join(dict.fromkeys(extras))
+    return f"noeta[{named}] @ {SOURCE_URL}" if named else f"noeta @ {SOURCE_URL}"
 
 
 def _common(ap: argparse.ArgumentParser) -> None:
@@ -285,13 +291,12 @@ def broken_plugin_lines() -> list[str]:
 def _install_hint(module: str) -> str:
     extra = EXTRA_MODULES.get(module)
     if extra is not None:
-        wanted = ",".join(dict.fromkeys((*README_EXTRAS, extra)))
         return (f"; it needs the {extra} extra: uv tool install --reinstall"
-                f" 'noeta[{wanted}] @ {SOURCE_URL}' (name every extra and --with you use:"
+                f" '{_noeta(*README_EXTRAS, extra)}' (name every extra and --with you use:"
                 " a reinstall drops the rest; from a checkout, its path instead of the URL), or"
                 f" pip install 'noeta[{extra}] @ {SOURCE_URL}'")
     return (f"; install it next to noeta: uv tool install --reinstall --with {module}"
-            f" 'noeta[{','.join(README_EXTRAS)}] @ {SOURCE_URL}' (name every extra and --with"
+            f" '{_noeta(*README_EXTRAS)}' (name every extra and --with"
             f" you use: a reinstall drops the rest; from a checkout, its path instead of the"
             f" URL), or pip install {module} in noeta's"
             " environment; the package's name may differ from the module's")
@@ -307,10 +312,9 @@ def main(argv: list[str] | None = None) -> None:
         if extra is None:
             raise
         # A uv tool reinstall keeps only the extras it names.
-        wanted = ",".join(dict.fromkeys((*README_EXTRAS, extra)))
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
-                 f"pip install 'noeta[{extra}] @ {SOURCE_URL}' (or, for a uv tool install, "
-                 f"uv tool install --reinstall 'noeta[{wanted}] @ {SOURCE_URL}', "
+                 f"pip install '{_noeta(extra)}' (or, for a uv tool install, "
+                 f"uv tool install --reinstall '{_noeta(*README_EXTRAS, extra)}', "
                  "listing every extra you want: a reinstall drops the ones it does not name)")
 
 
@@ -467,7 +471,7 @@ def front_end(name: str) -> Any:
     except registry.UnknownName:
         sys.exit(f"noeta: the terminal UI is its own package, noeta-tui, which is not "
                  f"installed: uv tool install --reinstall --with '{TUI_SOURCE}' "
-                 f"'noeta[{','.join(README_EXTRAS)}] @ {SOURCE_URL}' (name every extra and "
+                 f"'{_noeta(*README_EXTRAS)}' (name every extra and "
                  "--with you use: a reinstall drops the rest; from a checkout, "
                  f"--with ./tui and its path), or pip install '{TUI_SOURCE}'")
 

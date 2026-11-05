@@ -16,8 +16,8 @@ You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta[images] @ git+https://github.com/initxy/noeta'
-# or from a checkout:  git clone https://github.com/initxy/noeta && cd noeta && uv tool install --with ./tui '.[images]'
+  'noeta @ git+https://github.com/initxy/noeta'
+# or from a checkout:  git clone https://github.com/initxy/noeta && cd noeta && uv tool install --with ./tui .
 ```
 
 Pick a model and a provider. With an Anthropic API key:
@@ -89,13 +89,12 @@ directories above it and `~/.noeta` / `~/.agents`.
 
 | Extra | For |
 |---|---|
-| `images` | shrinking large images the way Claude Code does (Pillow) |
 | `acp` | `noeta acp`: an Agent Client Protocol agent for Zed and other editors |
 | `server` | `noeta serve`: the HTTP / WebSocket API |
 | `postgres` | a Postgres store, for many workers |
 | `keyring` | `{keyring:service/user}` secret references in plugin settings |
 
-Install several at once: `'noeta[images,acp,server,postgres] @ git+…'`. The terminal UI (`noeta` without `-p`) is its own package, `noeta-tui` in `tui/` (`tui/README.md`).
+Install several at once: `'noeta[acp,server,postgres] @ git+…'`. The terminal UI (`noeta` without `-p`) is its own package, `noeta-tui` in `tui/` (`tui/README.md`).
 
 ## Embed it in Python
 
