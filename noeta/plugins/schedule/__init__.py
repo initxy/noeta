@@ -15,8 +15,9 @@ from __future__ import annotations
 import secrets
 import time
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from noeta.core.commands import expand_with
 from noeta.core.events import InputTaken, ModelReplied, Recorded, TimerFired
@@ -33,8 +34,21 @@ WAKEUP_TIMER = "schedule.wakeup"
 JOB_TIMER = "schedule.job:"
 
 
-def _when(at: float) -> str:
-    return datetime.fromtimestamp(at).astimezone().strftime("%a %b %d %H:%M %Z").strip()
+def _zone(view: TaskView) -> tzinfo | None:
+    """The task config's ``timezone`` (the person's IANA zone); ``None``
+    (the machine's) without a valid one."""
+    name = view.state.config.get("timezone")
+    if not isinstance(name, str) or not name or name.startswith(("/", ".")):
+        return None
+    try:
+        return ZoneInfo(name)
+    except (ValueError, KeyError, OSError):
+        return None
+
+
+def _when(at: float, zone: tzinfo | None) -> str:
+    return datetime.fromtimestamp(at, zone).astimezone(zone).strftime(
+        "%a %b %d %H:%M %Z").strip()
 
 
 def _trim(text: str, n: int) -> str:
@@ -157,7 +171,7 @@ class Schedule(Extension):
                 >= cron.RECURRING_MAX_AGE_SECONDS:
             view.record(self.name, "job_deleted", {"id": job["id"]})
             return
-        nxt = cron.next_fire(job["cron"], now, job["id"], recurring=True)
+        nxt = cron.next_fire(job["cron"], now, job["id"], recurring=True, zone=_zone(view))
         if nxt is None:
             view.record(self.name, "job_deleted", {"id": job["id"]})
             return
@@ -251,7 +265,7 @@ class WakeupTool(_Base):
                                     "noop": input["noop"]})
         ctx.notify(f"next loop iteration in {int(clamped)}s: {reason}", kind="loop_wakeup",
                    data={"scheduled_for": at, "reason": reason, "noop": input["noop"]})
-        clock = datetime.fromtimestamp(at).strftime("%H:%M:%S")
+        clock = datetime.fromtimestamp(at, _zone(self.view)).strftime("%H:%M:%S")
         note = texts.WAKEUP_CLAMPED.format(seconds=int(clamped)) if clamped != delay else ""
         return text_output(texts.WAKEUP_SCHEDULED.format(clock=clock, seconds=int(clamped),
                                                          clamped=note),
@@ -286,15 +300,15 @@ class CronCreateTool(_Base):
             return text_output("CronCreate: `prompt` must be a string.", is_error=True)
         if cron.parse(expr) is None:
             return text_output(texts.CRON_INVALID.format(cron=expr), is_error=True)
-        now = self.ext.clock()
-        if cron.next_match(expr, now) is None:
+        now, zone = self.ext.clock(), _zone(self.view)
+        if cron.next_match(expr, now, zone) is None:
             return text_output(texts.CRON_NEVER.format(cron=expr), is_error=True)
         st = self._st(ctx)
         if len(st["jobs"]) >= texts.MAX_JOBS:
             return text_output(texts.CRON_TOO_MANY.format(max=texts.MAX_JOBS), is_error=True)
         recurring = input.get("recurring") is not False
         job_id = secrets.token_hex(4)
-        nxt = cron.next_fire(expr, now, job_id, recurring=recurring)
+        nxt = cron.next_fire(expr, now, job_id, recurring=recurring, zone=zone)
         assert nxt is not None
         text = await self.ext.expand(self.view, prompt, texts.DYNAMIC_TICK)
         human = cron.describe(expr)
@@ -304,7 +318,7 @@ class CronCreateTool(_Base):
                                  "next_at": nxt})
         template = texts.CRON_SCHEDULED_RECURRING if recurring else texts.CRON_SCHEDULED_ONCE
         return text_output(template.format(id=job_id, human=human,
-                                           next=texts.CRON_NEXT.format(when=_when(nxt))),
+                                           next=texts.CRON_NEXT.format(when=_when(nxt, zone))),
                            id=job_id, human_schedule=human, recurring=recurring, next_fire_at=nxt)
 
 
@@ -323,9 +337,9 @@ class CronListTool(_Base):
         jobs = sorted(self._st(ctx)["jobs"].values(), key=lambda j: float(j["created_at"]))
         if not jobs:
             return text_output(texts.CRON_NONE)
-        now = self.ext.clock()
+        now, zone = self.ext.clock(), _zone(self.view)
         lines = [f"{j['id']} — {j['human']} ({'recurring' if j['recurring'] else 'one-shot'}), "
-                 f"next run {_when(max(float(j['next_at']), now))}: {_trim(j['prompt'], 80)}"
+                 f"next run {_when(max(float(j['next_at']), now), zone)}: {_trim(j['prompt'], 80)}"
                  for j in jobs]
         return text_output("\n".join(lines))
 
