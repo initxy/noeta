@@ -387,6 +387,29 @@ async def test_a_clients_message_is_the_persons_text_and_images_only(
         assert '"origin":"agent"' not in events
 
 
+async def test_a_budget_is_set_at_create_and_changed_by_signal_alike(
+        served: tuple[str, ScriptedProvider]) -> None:
+    host, _ = served
+    async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
+        ok = await http.post("/tasks", json={"agent": "main", "config": {
+            "max_budget_usd": 2.5}})
+        assert ok.status_code == 201
+        task_id = ok.json()["task_id"]
+        [first] = [e for e in (await http.get(f"/tasks/{task_id}/events")).json()
+                   if e["event"]["type"] == "TaskCreated"]
+        assert first["event"]["config"]["max_budget_usd"] == 2.5
+        for bad in (0, -1, "5", True):
+            got = await http.post("/tasks", json={"agent": "main", "config": {
+                "max_budget_usd": bad}})
+            assert got.status_code == 400 and "max_budget_usd" in got.text, bad
+            got = await http.post(f"/tasks/{task_id}/signals", json={
+                "name": "config", "data": {"max_budget_usd": bad}})
+            assert got.status_code == 400 and "max_budget_usd" in got.text, bad
+        changed = await http.post(f"/tasks/{task_id}/signals", json={
+            "name": "config", "data": {"max_budget_usd": None}})
+        assert changed.status_code == 200
+
+
 async def test_continued_as_takes_only_its_values(
         served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
     host, _ = served

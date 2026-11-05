@@ -26,6 +26,7 @@ from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 from noeta.toolkit.signals import ARCHIVE_SIGNAL, RENAME_SIGNAL, RESUMED_SIGNAL
 from noeta.toolkit.structured_output import SCHEMA_KEY, answer_schema_problem
+from noeta.toolkit.usd_budget import BUDGET_KEY
 
 
 def token_digest(token: str) -> str:
@@ -45,7 +46,7 @@ _BYPASS = "bypassPermissions"
 #: request they would loosen the permission gates.
 REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema",
                   "timezone", "interactive", "permission_prompt_tool", "ultracode",
-                  CONTINUED_AS_KEY)
+                  BUDGET_KEY, CONTINUED_AS_KEY)
 
 #: The signals a request may post: the ones front ends send. The others
 #: (a background job's end, a sub-agent's idle subscription …) are posted
@@ -111,6 +112,10 @@ class GuardedClient:
         self._mode(config.get("permission_mode"))
         if config.get(CONTINUED_AS_KEY, "fork") not in CONTINUED_AS:
             raise ValueError(f"{CONTINUED_AS_KEY} is one of {', '.join(CONTINUED_AS)}")
+        budget = config.get(BUDGET_KEY)
+        if budget is not None and (isinstance(budget, bool) or not isinstance(budget, (int, float))
+                                   or not budget > 0):
+            raise ValueError(f"{BUDGET_KEY} is a number of US dollars above 0")
         if config.get(SCHEMA_KEY) is not None:
             problem = answer_schema_problem(config[SCHEMA_KEY])
             if problem is not None:
