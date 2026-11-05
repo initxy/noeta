@@ -9,8 +9,10 @@ position in the step, sub-agent calls by their opening prompt, compaction
 calls with the recorded summary. noeta runs as the ``noeta`` command would —
 the default agents with its real Anthropic provider, a fresh store and
 ``NOETA_HOME``, the scenario project in a scratch directory — and executes
-every tool for real. Approvals are allowed and questions get their first
-option, as the recording's driver answered Claude Code.
+every tool for real. Approvals get the keys the recording's driver pressed
+on Claude Code's cards, in order (``Escape`` denies, ``2`` allows always,
+any other allows; an approval with no recorded card is allowed and noted),
+and questions get their first option.
 
 Every request noeta makes is kept (``<out>/<session>.json``: how it was
 routed and its facts; ``<out>/raw/<session>/`` the bodies), then the
