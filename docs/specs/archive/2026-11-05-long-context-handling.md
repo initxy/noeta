@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-05
 branch: v1-context
 ---
@@ -82,7 +82,7 @@ facts that drive the design:
 - [x] Clearing old results after an idle gap (compaction).
 - [x] Idle compaction (compaction).
 - [x] Docs: CONTEXT.md / plugin docs / ADR if a costly-to-reverse decision lands.
-- [ ] Review per docs/reviewing.md; gates; archive.
+- [x] Review per docs/reviewing.md; gates; archive.
 
 ## Acceptance criteria
 
@@ -147,3 +147,5 @@ facts that drive the design:
   failure, no summary), and a malformed record folds to nothing (ADR-031 says so). A
   compaction takes the idle timer back; an armed timer does nothing once `auto_compact_idle`
   is off. OpenAI's overflow wording counts the functions part as input.
+- 2026-11-05: independent review: 1 P1 (a clearing's saving not counted in its own step) and 5 P2 fixed (malformed or forged background results, idle timer after a compaction, job bookkeeping, OpenAI functions tokens); the stray `tui` extra commit on this branch came from another session and was left as is.
+- 2026-11-05: gates: check 3629 / 90.41%, frontends, parity 0, cluster 12, e2e 7. Full eval 0.879 with timeouts on a slow gateway; an A/B of the five slow scenarios run at once on this branch and on main: both 1.000 (branch 388 s, main 611 s), so no regression from the change.
