@@ -7,8 +7,10 @@ it, every task is an append-only event log with exactly one writer, so a task su
 without re-running a tool, waits days for a person while holding no worker, and runs on one
 laptop or many machines unchanged.
 
-> 1.0 is in development and not on PyPI yet; install it from the repository. (The 0.x releases
-> were the separate `noeta-runtime` / `noeta-sdk` packages.)
+> 1.0.0rc1 is on PyPI as a pre-release (`uv tool install --prerelease=allow noeta`, or
+> `pip install --pre noeta`): `-p`, the server and the SDK. The terminal UI (`noeta-tui`) is not
+> on PyPI yet, so the install below takes both from the repository. (The 0.x releases were the
+> separate `noeta-runtime` / `noeta-sdk` packages.)
 
 ## Five-minute start
 

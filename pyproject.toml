@@ -1,6 +1,6 @@
 [project]
 name = "noeta"
-version = "1.0.0.dev0"
+version = "1.0.0rc1"
 description = "An open-source Claude Code for servers: the same model-visible behavior on durable event-log tasks that survive crashes and run on many machines."
 readme = "README.md"
 license = "Apache-2.0"

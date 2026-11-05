@@ -5,9 +5,15 @@ terminal UI and `noeta -p`, then come back to a conversation later.
 
 ## 1. Install
 
-You need Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). 1.0 is not on PyPI yet,
-so install from the repository. This puts the `noeta` command and its terminal UI on your
-`PATH`:
+You need Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). `noeta` 1.0.0rc1 is on PyPI
+as a pre-release; that is enough for `-p`, a server and the Python SDK:
+
+```bash
+uv tool install --prerelease=allow noeta      # or: pip install --pre noeta
+```
+
+The terminal UI (`noeta-tui`) is not on PyPI yet. To get the `noeta` command with its terminal
+UI, install both from the repository:
 
 ```bash
 uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \

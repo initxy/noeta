@@ -7,6 +7,11 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.0rc1] - 2026-11-05
+
+The first 1.0 release candidate, published as `noeta` (the 0.x packages were `noeta-runtime`
+and `noeta-sdk`). The terminal UI, `noeta-tui`, is installed from the repository for now.
+
 ### Changed
 
 - **Pillow is a dependency.** Shrinking large images is no longer an extra to remember:

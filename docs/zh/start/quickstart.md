@@ -5,8 +5,14 @@
 
 ## 1. 安装
 
-需要 Python 3.11 或更新版本，以及 [uv](https://docs.astral.sh/uv/)。1.0 还没上 PyPI，所以从仓库
-安装。下面这条命令会把 `noeta` 命令和它的终端界面装进 `PATH`：
+需要 Python 3.11 或更新版本，以及 [uv](https://docs.astral.sh/uv/)。`noeta` 1.0.0rc1 已经作为预发布版
+上了 PyPI，只用 `-p`、服务端或 Python SDK 的话，这样装就够了：
+
+```bash
+uv tool install --prerelease=allow noeta      # 或者：pip install --pre noeta
+```
+
+终端界面（`noeta-tui`）还没上 PyPI。想要带终端界面的 `noeta` 命令，就两个都从仓库装：
 
 ```bash
 uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
