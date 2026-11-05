@@ -397,3 +397,14 @@ def test_the_fallback_call_offers_tool_search_and_mcp_tools_when_searching() -> 
     assert [t.name for t in twice.tools] == ["Read", "ToolSearch", "mcp__db__query",
                                              "mcp__gh__issue"]
     assert next(t for t in twice.tools if t.name == "mcp__db__query").description == ""
+
+
+def test_a_continued_task_counts_reads_from_its_own_start() -> None:
+    """The last compaction's ``seen_through`` is a seq of the source's log:
+    carried on, it would hide the continuing task's own early reads from
+    its first compaction. Its carried messages sit at seq 0."""
+    ext = Compaction()
+    st = ext.reduce(ext.initial_state(), "compacted",
+                    {"seen_through": 50, "restored_paths": ["/w/a.py"], "turn": 7})
+    carried = ext.continue_state(st)
+    assert carried.seen_through == 0 and carried.restored_paths == ("/w/a.py",)

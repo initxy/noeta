@@ -44,7 +44,6 @@ def _records() -> list[Recorded]:
 def test_an_erase_takes_the_message_and_its_expansion_only() -> None:
     state = fold(_records(), {})
     assert [m.text for m in state.messages] == ["from another agent"]
-    assert [m.text for m in state.history] == ["from another agent"]
     assert state.message_seqs == [4]
 
 

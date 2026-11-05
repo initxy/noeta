@@ -17,6 +17,7 @@ from noeta.core.loop.state import CONTINUED_CALL, STARTED_CALL, Call, TaskState,
 from noeta.core.runner import Runtime
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import Message, Text, ToolResult, ToolUse, user
+from noeta.plugins.compaction.transcript import full_conversation
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -169,6 +170,10 @@ async def test_a_fork_answers_the_calls_its_source_still_had_open(store: SqliteS
     assert [r.text for r in results] == [CONTINUED_CALL, STARTED_CALL]
     assert [r.is_error for r in results] == [True, False]
     assert msgs[-1].text == "you are the fork"
+    # The fork's saved transcript, read back from the logs, is what it saw.
+    [child] = await client.tasks(parent_id=tid)
+    whole = await full_conversation(store.read, child.task_id)
+    assert whole[:len(msgs)] == msgs
 
 
 def test_a_continuation_answers_open_calls_before_messages_held_behind_them() -> None:
@@ -221,3 +226,40 @@ async def test_a_fork_keeps_the_history_it_was_created_with(store: SqliteStore) 
     await rt.run_until_idle()
     before, after = fork_p.requests
     assert after.messages[:len(before.messages)] == before.messages
+
+
+def test_the_persons_prompt_is_named_after_a_compaction_and_not_carried() -> None:
+    """``prompt_seq``: the person's newest message (not a tool result, not
+    a notice), kept when a compaction summarizes it (a checkpoint keys its
+    saves by it); a continued task starts at 0, its carried messages at 0."""
+    from noeta.core.events import (
+        Compacted,
+        InboxItem,
+        InputTaken,
+        ModelReplied,
+        Recorded,
+        Say,
+        ToolFinished,
+    )
+    from noeta.core.loop.state import fold
+    from noeta.core.types import ModelResponse
+
+    def rec(seq: int, event: Any) -> Recorded:
+        return Recorded(seq=seq, at=0.0, event=event)
+
+    def said(seq: int, message: Message) -> Recorded:
+        return rec(seq, InputTaken(items=[InboxItem(seq=seq, at=0.0, body=Say(message=message))],
+                                   through=seq))
+
+    use = ToolUse(id="c1", name="Probe", input={})
+    state = fold([
+        said(1, user("first")),
+        rec(2, ModelReplied(response=ModelResponse(
+            message=Message(role="assistant", content=[use]), stop_reason="tool_use"))),
+        rec(3, ToolFinished(result=ToolResult(call_id="c1", content=[Text(text="ok")]))),
+        said(4, user("a notice", origin="system")),
+    ], {})
+    assert state.prompt_seq == 1
+    state = fold([rec(5, Compacted(summary="S", through=4))], {}, state=state)
+    assert state.prompt_seq == 1 and all(s == 0 for s in state.message_seqs)
+    assert continued(state).prompt_seq == 0

@@ -23,7 +23,8 @@ events; when this process also runs workers, live model output streams too.
                                       runs the task agent's slash command of that name; a
                                       local command answers {output} and sends nothing
     POST /tasks/{id}/answers          {request_id, decision?, always?, data?} — data
-                                      {"mode": m} picks a card's mode choice
+                                      {"mode": m} picks a card's mode choice, {"message": t}
+                                      adds a no's reason or a yes's words
     POST /tasks/{id}/signals          {name, data?, dedupe_key?, wake?} — a signal (``wake``
                                       false: a waiting task stays waiting): ``permission_mode``
                                       {mode} switches the permission mode, ``config``

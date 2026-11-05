@@ -24,6 +24,15 @@ describe("ToolCard", () => {
     expect(screen.getByText(/a\s+b/)).toBeInTheDocument();
   });
 
+  it("shows a yes's words under the call's result, a compact call's too", () => {
+    const { container, rerender } = render(<ToolCard t={tool({ input: { command: "ls" }, result: "a", note: "then run the tests" })} />);
+    expect(container.querySelector(".tool-note")).toHaveTextContent("⎿ then run the tests");
+    rerender(<ToolCard t={tool({ name: "Read", input: { file_path: "/a" }, result: "x", note: "skim it" })} />);
+    expect(container.querySelector(".tool-note")).toHaveTextContent("skim it");
+    rerender(<ToolCard t={tool({ input: { command: "ls" }, result: "a" })} />);
+    expect(container.querySelector(".tool-note")).toBeNull();
+  });
+
   it("folds a long output", async () => {
     const long = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
     render(<ToolCard t={tool({ input: { command: "seq 40" }, result: long })} />);

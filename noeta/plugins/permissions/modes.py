@@ -71,7 +71,10 @@ def _guidance_due(view: TaskView, after: int) -> bool:
     the next one with input newer than seq ``after`` (a compaction), and a
     sub-agent's second (as Claude Code sends them)."""
     if view.state.parent_id is not None:
-        return any(m.role == "assistant" for m in view.state.history)
+        # The model has replied: a reply is in view, or one was compacted
+        # (an automatic compaction needs a reply to summarize).
+        return view.state.compaction is not None \
+            or any(m.role == "assistant" for m in view.state.messages)
     return _new_input(view, after)
 
 

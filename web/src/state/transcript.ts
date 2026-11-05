@@ -17,6 +17,8 @@ export type Item =
       result?: string;
       meta?: Record<string, unknown>;
       progress?: string;
+      /** What the person added to their yes; the model reads it beside the result. */
+      note?: string;
       /** The sub-agent task an `Agent` call started. */
       child?: string;
       childStatus?: string;
@@ -122,6 +124,10 @@ export type Action =
   | { type: "queued"; seq: number; text: string }
   | { type: "notice"; text: string; tone: "info" | "error" }
   | { type: "reset" };
+
+/** The note a declined call's result carries (noeta.core.runner.texts.REJECTED_MARKER):
+ * the decline already shows as the call's error. */
+const REJECTED_MARKER = "[Request interrupted by user for tool use]\n";
 
 const text = (blocks: Block[]): string =>
   blocks.map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -281,6 +287,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
           result: text(ev.result.content),
           meta: ev.meta,
           progress: undefined,
+          note: ev.note && ev.note !== REJECTED_MARKER ? ev.note : undefined,
         }),
       };
     case "Compacted":

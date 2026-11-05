@@ -49,6 +49,8 @@ export type Event =
       type: "ToolFinished";
       result: { call_id: string; content: Block[]; is_error?: boolean };
       meta?: Record<string, unknown>;
+      /** Text after the reply's results: a yes's words, or a decline's marker. */
+      note?: string | null;
     }
   | { type: "Compacted"; summary: string; through: number }
   | { type: "Waiting"; on: string; ids?: string[]; detail?: Record<string, unknown> }

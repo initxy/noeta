@@ -91,10 +91,10 @@ class TaskState:
     messages: list[Message] = field(default_factory=list)
     #: Log seq that produced each entry of ``messages`` (0 for a summary).
     message_seqs: list[int] = field(default_factory=list)
-    #: Every message ever added, in order, never compacted (and its log seq):
-    #: what a compaction collapsed stays readable here (its saved transcript).
-    history: list[Message] = field(default_factory=list)
-    history_seqs: list[int] = field(default_factory=list)
+    #: Log seq of the newest message the person wrote (``Message.from_person``,
+    #: no tool results), 0 before any: the person's latest prompt, named even
+    #: once a compaction has summarized it. The log is the full transcript.
+    prompt_seq: int = 0
     #: Usage of the newest model reply; ``None`` before the first one and
     #: after a compaction (no recorded count describes the collapsed history).
     last_usage: Usage | None = None
@@ -222,8 +222,8 @@ class TaskState:
     def _add(self, message: Message, seq: int) -> None:
         self.messages.append(message)
         self.message_seqs.append(seq)
-        self.history.append(message)
-        self.history_seqs.append(seq)
+        if message.from_person and not any(isinstance(b, ToolResult) for b in message.content):
+            self.prompt_seq = seq
 
 
 def new_state(initial_ext: Mapping[str, Any] | None = None) -> TaskState:
@@ -356,11 +356,13 @@ def _on_tool_finished(state: TaskState, ev: ToolFinished, seq: int) -> None:
 
 def _results_message(results: Sequence[ToolResult], notes: Sequence[str] = ()) -> Message:
     """The user message answering a batch of calls: their results, the
-    marker that follows a loaded tool, then each note once."""
+    marker that follows a loaded tool, then the notes in the calls' order
+    (each yes's words, even when two say the same; the decline's marker
+    comes once, since the calls after a decline are refused without it)."""
     content: list[Any] = list(results)
     if any(isinstance(b, ToolReference) for r in results for b in r.content):
         content.append(Text(text=TOOL_LOADED_TEXT))
-    content += [Text(text=n) for n in dict.fromkeys(notes)]
+    content += [Text(text=n) for n in notes]
     return Message(role="user", content=content)
 
 
@@ -456,9 +458,7 @@ def continued(state: TaskState,
     out = TaskState(ext=ext, prompt_files=state.prompt_files,
                     compaction=state.compaction, last_usage=state.last_usage,
                     call_ids=set(state.call_ids))
-    for m in state.messages:
-        out._add(m, 0)
-    out.history, out.history_seqs = list(state.history), [0] * len(state.history)
+    out.messages, out.message_seqs = list(state.messages), [0] * len(state.messages)
     if state.calls:
         results = [c.result or (
             ToolResult(call_id=c.use.id, content=[Text(text=STARTED_CALL)])
@@ -595,23 +595,22 @@ def _end_turn(state: TaskState, seq: int) -> None:
 
 
 def _erase(state: TaskState, seqs: set[int]) -> None:
-    for messages, at in ((state.messages, state.message_seqs),
-                         (state.history, state.history_seqs)):
-        # Where the person's message shares its seq with other text (a stop
-        # marker released with it), only what follows it is its expansion.
-        with_person = {s for m, s in zip(messages, at, strict=True)
-                       if s in seqs and m.origin == "human"}
-        person_seen: set[int] = set()
-        keep = []
-        for i, (m, s) in enumerate(zip(messages, at, strict=True)):
-            if m.origin == "human":
-                person_seen.add(s)
-            if not (s in seqs and m.role == "user" and m.origin in ("human", "inline", "memory")
-                    and (s not in with_person or s in person_seen)
-                    and not any(isinstance(b, ToolResult) for b in m.content)):
-                keep.append(i)
-        messages[:] = [messages[i] for i in keep]
-        at[:] = [at[i] for i in keep]
+    messages, at = state.messages, state.message_seqs
+    # Where the person's message shares its seq with other text (a stop
+    # marker released with it), only what follows it is its expansion.
+    with_person = {s for m, s in zip(messages, at, strict=True)
+                   if s in seqs and m.origin == "human"}
+    person_seen: set[int] = set()
+    keep = []
+    for i, (m, s) in enumerate(zip(messages, at, strict=True)):
+        if m.origin == "human":
+            person_seen.add(s)
+        if not (s in seqs and m.role == "user" and m.origin in ("human", "inline", "memory")
+                and (s not in with_person or s in person_seen)
+                and not any(isinstance(b, ToolResult) for b in m.content)):
+            keep.append(i)
+    messages[:] = [messages[i] for i in keep]
+    at[:] = [at[i] for i in keep]
 
 
 def _close_turn(state: TaskState, seq: int) -> None:

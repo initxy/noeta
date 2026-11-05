@@ -116,8 +116,8 @@ def test_a_history_trim_uses_its_own_temp_file(tmp_path: Path) -> None:
 
 
 async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
-    from noeta.core.types import Text, ToolResult
-    from noeta_tui.widgets import ApprovalCard
+    from noeta.core.types import ToolResult
+    from noeta_tui.widgets import ApprovalCard, ToolCall
 
     provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build", "n": 1})),
                                  reply("", ("Bash", {"command": "ls", "n": 1})),
@@ -139,13 +139,28 @@ async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
         assert not second.done and not second.query("Input")
         await pilot.press("tab", *"then stop", "enter")  # Yes, amended
         await settle(pilot, lambda: second.done and provider.steps == [] and not app.busy)
+        # The words show under that call's result, as the model reads them,
+        # and again when the task is reopened.
+        await settle(pilot, lambda: len(app.query(".tool-note")) == 1)
+        [note] = app.query(".tool-note")
+        assert plain(note).strip() == "⎿  then stop"
+        assert note.parent is list(app.query(ToolCall))[1]
+        first = app.task_id
+        await type_line(pilot, "/clear")
+        await settle(pilot, lambda: app.task_id != first and not app.query(".tool-note"))
+        await type_line(pilot, f"/resume {first}")
+        await settle(pilot, lambda: app.task_id == first and len(app.query(".tool-note")) == 1)
+        assert "⎿  then stop" in plain(app.query_one(".tool-note"))
     asked = provider.requests[1].messages
     results = [b for m in asked for b in m.content if isinstance(b, ToolResult)]
     assert "use make clean" in results[0].text
     last = provider.requests[2].messages
-    i = next(i for i, m in enumerate(last) if any(isinstance(b, ToolResult) for b in m.content))
-    after = [b.text for m in last[i:] for b in m.content if isinstance(b, Text)]
-    assert "then stop" in after  # the yes's words come after the call's result
+    answered = [m for m in last if any(isinstance(b, ToolResult) for b in m.content)][-1]
+    # The yes's words follow the call's result in its message; no message of
+    # their own.
+    assert [type(b).__name__ for b in answered.content] == ["ToolResult", "Text"]
+    assert answered.text == "then stop"
+    assert sum("then stop" in m.text for m in last) == 1
 
 
 async def test_esc_in_the_amend_line_closes_it_and_keeps_the_turn(tmp_path: Path) -> None:

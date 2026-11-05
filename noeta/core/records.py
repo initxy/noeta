@@ -10,12 +10,12 @@ ends read ``notice``, ``retry``, ``turn_failed``, ``turn_stopped`` and
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, ClassVar, Union
 
 import msgspec
 
-from noeta.core.events import Event, ExtensionRecorded
+from noeta.core.events import Event, ExtensionRecorded, Recorded
 from noeta.core.types import Message, Struct, Thinking, Usage
 
 #: The extension name the core records its own entries under.
@@ -359,6 +359,18 @@ def decode(ev: Event) -> CoreRecord | None:
         return None
     cls = _KINDS.get(ev.kind)
     return cls.parse(ev.data) if cls is not None else None
+
+
+def spawning_call(source: Iterable[Recorded], task_id: str) -> str:
+    """The id of the call in ``source`` (a task's records) that staged
+    ``task_id``, or ``""``."""
+    for r in source:
+        spawned = decode(r.event)
+        if isinstance(spawned, Spawned):
+            for child in spawned.children:
+                if child.get("id") == task_id:
+                    return str(child.get("call_id") or "")
+    return ""
 
 
 class CoreNotices:

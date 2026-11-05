@@ -74,13 +74,13 @@ def _ran_in(files: Sequence[tuple[str, bool]], resolved: Sequence[str]) -> str |
     return None
 
 
-def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
+def recent_files(messages: Sequence[Message], boundary: int, *, since: int = 0,
                  carried: Sequence[str] = (), cwd: str = "",
                  shown: Mapping[str, Sequence[str]] | None = None,
                  skip: Collection[str] = ()) -> list[str]:
-    """Paths to restore, newest first. ``history`` is the whole uncompacted
-    history and ``boundary`` the number of its messages the new summary
-    covers. As Claude Code's read-file state, which a compaction resets to
+    """Paths to restore, newest first. ``messages`` is the conversation as
+    the model sees it and ``boundary`` the number of its messages the new
+    summary covers. As Claude Code's read-file state, which a compaction resets to
     the files it restored: only touches from message ``since`` on (those
     after the previous compaction) count, then the files that compaction
     restored in full (``carried``); a file it could only name as too large,
@@ -89,14 +89,14 @@ def recent_files(history: Sequence[Message], boundary: int, *, since: int = 0,
     command ran (``shown``, as :func:`_touched` takes it), else ``cwd``.
     A file at a path in ``skip`` (absolute) is never restored."""
     succeeded = {
-        b.call_id: b.text for m in history for b in m.content
+        b.call_id: b.text for m in messages for b in m.content
         if isinstance(b, ToolResult) and not b.is_error
     }
     kept_reads = {
-        path for m in history[boundary:] for path, tool in _touched(m, succeeded, cwd, shown)
+        path for m in messages[boundary:] for path, tool in _touched(m, succeeded, cwd, shown)
         if tool == READ_TOOL
     }
-    touched = [path for message in reversed(history[since:])
+    touched = [path for message in reversed(messages[since:])
                for path, _tool in reversed(_touched(message, succeeded, cwd, shown))]
     recent: list[str] = []
     for path in [*touched, *carried]:

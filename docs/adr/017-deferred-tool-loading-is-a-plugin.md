@@ -4,6 +4,7 @@
 - Date: 2026-10-28
 - Refines: ADR-002
 - Supersedes: ADR-016
+- Refined by: ADR-030
 
 ## Context
 

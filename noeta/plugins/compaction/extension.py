@@ -42,10 +42,11 @@ from noeta.core.extension import Command, CommandContext, Deny, Extension, Remin
 from noeta.core.loop.state import TaskState
 from noeta.core.models import model_limits
 from noeta.core.tool import Tool, ToolContext
-from noeta.core.types import Message, ModelRequest, ModelResponse, ToolResult, Usage
+from noeta.core.types import Message, ModelRequest, ModelResponse, Usage
 from noeta.plugins.compaction import summary
 from noeta.plugins.compaction.estimate import messages_tokens, prefix_tokens
 from noeta.plugins.compaction.restore import recent_files, restore_files
+from noeta.plugins.compaction.transcript import full_conversation
 from noeta.plugins.compaction.window import (
     Window,
     check_percent,
@@ -119,25 +120,20 @@ class CompactionState:
     #: recorded, where every touch counts).
     seen_through: int | None = None
     restored_paths: tuple[str, ...] | None = None
-    #: Where the last compaction ran (person turns so far, model calls in
-    #: that turn) and the automatic compactions in a row that each came
+    #: Where the last compaction ran (the person's newest prompt, by log seq,
+    #: and model calls in that turn) and the automatic compactions in a row that each came
     #: within ``RAPID_REFILL_CALLS`` calls of the one before.
     turn: int = -1
     step: int = 0
     rapid_refills: int = 0
     #: Automatic compactions in a row whose summary failed, and where the
-    #: last one failed (person turns so far, model calls in that turn): the
+    #: last one failed (the person's newest prompt, model calls in that turn): the
     #: request it was for went out as it was, so a runner rebuilding that
     #: request does not try again.
     failures: int = 0
     failed_at: tuple[int, int] | None = None
     #: The ``threshold`` record last published: threshold, window, auto.
     published: tuple[int, int, bool] | None = None
-
-
-def _user_turns(state: TaskState) -> int:
-    return sum(1 for m in state.history if m.from_person
-               and not any(isinstance(b, ToolResult) for b in m.content))
 
 
 def _last_reply(messages: Sequence[Message]) -> int:
@@ -225,8 +221,12 @@ class Compaction(Extension):
 
     def continue_state(self, state: Any) -> Any:
         """The ``threshold`` record went to the source's log; front ends
-        follow the continuing task's own, so it is written there again."""
-        return replace(state, published=None) if isinstance(state, CompactionState) else state
+        follow the continuing task's own, so it is written there again. Where
+        the last compaction ran, and what it had seen, are seqs of the
+        source's log: every message of this task's own is newer (the carried
+        ones sit at seq 0)."""
+        return replace(state, published=None, turn=-1, failed_at=None, seen_through=0) \
+            if isinstance(state, CompactionState) else state
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
         """The files read again after a compaction, first in the next
@@ -288,7 +288,7 @@ class Compaction(Extension):
             return request
         ext = self._ext(state)
         if ext.failures >= AUTO_FAILURES_TO_STOP \
-                or ext.failed_at == (_user_turns(state), state.steps_in_turn):
+                or ext.failed_at == (state.prompt_seq, state.steps_in_turn):
             return request
         rapid = self._rapid_refills(state)
         if rapid >= RAPID_REFILLS_TO_STOP:
@@ -312,7 +312,7 @@ class Compaction(Extension):
                         view.task_id, failures,
                         "; off for this task" if failures >= AUTO_FAILURES_TO_STOP else "",
                         exc.detail)
-            view.record(self.name, "failed", {"failures": failures, "turn": _user_turns(state),
+            view.record(self.name, "failed", {"failures": failures, "turn": state.prompt_seq,
                                               "step": state.steps_in_turn,
                                               "detail": exc.detail})
             return request
@@ -401,7 +401,7 @@ class Compaction(Extension):
         than the last one's when that ran in this turn fewer than
         ``RAPID_REFILL_CALLS`` model calls ago, else 0."""
         ext = self._ext(state)
-        if not ext.compactions or ext.turn != _user_turns(state):
+        if not ext.compactions or ext.turn != state.prompt_seq:
             return 0
         calls = state.steps_in_turn - ext.step
         return ext.rapid_refills + 1 if 0 <= calls < RAPID_REFILL_CALLS else 0
@@ -447,8 +447,9 @@ class Compaction(Extension):
         note, usage, head_dropped = await self._summarize(view, request, to_summarize, extra)
         kept_replies = sum(1 for m in state.messages[cut:] if m.role == "assistant")
         kept = kept_replies > 0
+        transcript = await self._transcript(view, state)
         text = summary.summary_message(
-            note, tools=summary.tools_used(to_summarize), transcript=self._transcript(view, state),
+            note, tools=summary.tools_used(to_summarize), transcript=transcript,
             head_dropped=head_dropped, kept=kept)
         manual = reason == "manual"
         tail = kept and not manual
@@ -457,13 +458,16 @@ class Compaction(Extension):
         full: list[str] = []
         read_tool = (self.read_tool or view.find_tool("Read")) if self.restore else None
         if read_tool is not None and view.env is not None:
-            raw_cut = sum(1 for s in state.history_seqs if s <= through)
             ext = self._ext(state)
             since, carried = 0, ext.restored_paths or ()
             if ext.seen_through is not None and ext.restored_paths is not None:
-                since = sum(1 for s in state.history_seqs if s <= ext.seen_through)
+                # What came after the last compaction: its kept messages and
+                # what it re-attached are as old as it is.
+                seen = ext.seen_through
+                since = next((i for i, s in enumerate(state.message_seqs) if s > seen),
+                             len(state.message_seqs))
             restored, records, full = await restore_files(
-                recent_files(state.history, raw_cut, since=since, carried=carried,
+                recent_files(state.messages, cut, since=since, carried=carried,
                              cwd=pr.shell_cwd(state.ext) or view.cwd,
                              shown=pr.files_shown_by_commands(state.ext),
                              skip=_carried_files(state.ext, state.config,
@@ -495,27 +499,35 @@ class Compaction(Extension):
         view.compacted(Compacted(summary=text, through=through, lead=lead_turn,
                                  kept=after_summary, after=after, usage=usage))
         view.record(self.name, "compacted", {"reason": reason, "through": through,
-                                             "estimated": estimated, "turn": _user_turns(state),
+                                             "estimated": estimated, "turn": state.prompt_seq,
                                              "step": state.steps_in_turn,
                                              "rapid_refills": rapid_refills,
                                              "kept_replies": kept_replies,
                                              "restored_paths": full,
-                                             "seen_through": max(state.history_seqs,
+                                             "seen_through": max(state.message_seqs,
                                                                  default=0)})
         log.info("task %s: compacted through seq %s (%s)", view.task_id, through, reason)
         return view.folded({self.name: self.reduce})
 
-    def _transcript(self, view: TaskView, state: TaskState) -> str | None:
-        """Write the whole conversation so far as JSON lines and return the
-        file's path; ``None`` when there is nowhere the model could read it."""
-        if not self.transcripts or view.env is None or not is_local(view.env):
+    async def _transcript(self, view: TaskView, state: TaskState) -> str | None:
+        """Write the whole conversation so far (read from the log, never
+        compacted) as JSON lines and return the file's path; ``None`` when
+        there is nowhere the model could read it."""
+        if not self.transcripts or view.env is None or not is_local(view.env) \
+                or view.read_log is None:
+            return None
+        try:
+            messages = await full_conversation(view.read_log, view.task_id)
+        except Exception:  # the file is incidental: the compaction goes on without it
+            log.warning("task %s: could not read the log for the transcript", view.task_id,
+                        exc_info=True)
             return None
         cwd = str(state.config.get("cwd") or view.env.cwd)
         name = file_name_part(view.task_id, "task")
         path = project_dir(cwd, self.home or noeta_home()) / f"{name}.jsonl"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"".join(msgspec.json.encode(m) + b"\n" for m in state.history))
+            path.write_bytes(b"".join(msgspec.json.encode(m) + b"\n" for m in messages))
         except OSError:
             log.warning("task %s: could not write the transcript %s", view.task_id, path)
             return None

@@ -63,14 +63,6 @@ EDITING_TOOLS: Mapping[str, str] = {"Edit": "file_path", "Write": "file_path",
 MAX_SNAPSHOT_BYTES = 10 * 1024 * 1024
 
 
-def _last_prompt(view: TaskView) -> int:
-    """The log seq of the person's newest message (0 before any)."""
-    st = view.state
-    for message, seq in zip(reversed(st.history), reversed(st.history_seqs), strict=True):
-        if message.from_person and message.text:
-            return seq
-    return 0
-
 
 #: How far a restore follows continued conversations back.
 _MAX_LINEAGE = 64
@@ -158,7 +150,7 @@ class Checkpoints(Extension):
         except Exception:  # noqa: BLE001 — the tool reports a bad path itself
             return
         state = view.ext_state(NAME) or self.initial_state()
-        prompt = f"{view.task_id}:{_last_prompt(view)}"
+        prompt = f"{view.task_id}:{view.state.prompt_seq}"
         if path in state["saved"] and state["saved"][path] == prompt:
             return  # saved for this prompt already: the first content is the one to keep
         data: dict[str, Any] = {"path": path, "prompt": prompt, "sha": None}

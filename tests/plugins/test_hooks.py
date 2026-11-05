@@ -22,6 +22,7 @@ from noeta.core.extension import Extension, TaskView
 from noeta.core.loop.state import fold
 from noeta.core.runner import Runtime
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
+from noeta.plugins.compaction.transcript import full_conversation
 from noeta.plugins.fs import FileTools
 from noeta.plugins.hooks import Hooks, parse_hooks
 from noeta.plugins.hooks.config import HookCommand
@@ -93,8 +94,10 @@ async def test_a_blocked_prompt_is_erased_from_later_requests(tmp_path: Path) ->
     texts = [m.text for m in provider.requests[0].messages]
     assert any("hello" in t for t in texts)
     assert not any("SECRET" in t for t in texts)
-    state = fold(await client.events(tid), {})
-    assert not any("SECRET" in m.text for m in state.history)
+    # Nor is it in the whole conversation a compaction's transcript saves.
+    whole = await full_conversation(client.events, tid)
+    assert any("hello" in m.text for m in whole)
+    assert not any("SECRET" in m.text for m in whole)
 
 
 async def _blocked_expansion(tmp_path: Path, extension: Any, prompt: str) -> list[str]:

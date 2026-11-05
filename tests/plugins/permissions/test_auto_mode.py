@@ -751,3 +751,22 @@ async def test_plan_mode_never_lets_the_classifier_allow_a_file_write(
     assert not classifier_calls(provider) and not edit.runs
     last = (await events(client, tid))[-1]
     assert isinstance(last, Waiting) and last.on == "approval"
+
+
+def test_a_sub_agents_auto_note_waits_for_its_first_reply() -> None:
+    """Claude Code sends it with a sub-agent's second request: once the
+    model has replied, a reply still in view or one a compaction summarized."""
+    from noeta.core.events import Compacted
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import new_state
+    from noeta.plugins.permissions.modes import _guidance_due
+
+    child = new_state()
+    child.parent_id, child.root_id = "p", "root"
+    child.messages = [user("go")]
+    assert not _guidance_due(TaskView(state=child), 0)
+    child.messages.append(Message(role="assistant", content=[Text(text="on it")]))
+    assert _guidance_due(TaskView(state=child), 0)
+    child.messages = [user("summary")]
+    child.compaction = Compacted(summary="summary", through=3)
+    assert _guidance_due(TaskView(state=child), 0)

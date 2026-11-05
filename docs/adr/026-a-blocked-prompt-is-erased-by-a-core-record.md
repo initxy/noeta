@@ -4,6 +4,7 @@
 - Date: 2026-10-29
 - Refines: [ADR-001](001-task-is-an-event-log-with-one-writer.md),
   [ADR-002](002-one-extension-interface-and-entry-points.md)
+- Refined by: ADR-030
 
 ## Context
 

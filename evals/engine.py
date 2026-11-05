@@ -256,7 +256,7 @@ async def _start(client: Client, agent: str, sc: Scenario, config: dict[str, Any
 
 
 async def _drive(cfg: EvalConfig, agents: list[Agent], sc: Scenario, ws: Path, root: Path,
-                 ) -> tuple[list[Any], str | None, str, _Person]:
+                 ) -> tuple[list[Any], list[Any], str | None, str, _Person]:
     store = SqliteStore(str(root / "tasks.db"))
     provider = _provider(cfg.provider)
     agent = agents[0]
@@ -282,11 +282,25 @@ async def _drive(cfg: EvalConfig, agents: list[Agent], sc: Scenario, ws: Path, r
         await serving
         await default_pool().close()
     events = [r.event for r in await client.events(tid)]
+    descendants = await subtask_events(client, tid)
     row = await client.get(tid)
     await store.close()
     status = {"waiting": "completed", "ended": row.end_status or "ended"}.get(row.status,
                                                                             row.status)
-    return events, error, status, person
+    return events, descendants, error, status, person
+
+
+async def subtask_events(client: Client, tid: str) -> list[Any]:
+    """The events of every task below ``tid`` (sub-agents, theirs, ...): they
+    count toward the trial's usage, not its trace."""
+    out: list[Any] = []
+    parents = [tid]
+    while parents:
+        rows = [c for p in parents for c in await client.tasks(parent_id=p, limit=1000)]
+        for c in rows:
+            out += [r.event for r in await client.events(c.task_id)]
+        parents = [c.task_id for c in rows]
+    return out
 
 
 def _plugins(cfg: EvalConfig, sc: Scenario, dirs: TrialDirs) -> dict[str, Any]:
@@ -333,14 +347,14 @@ def run_trial(cfg: EvalConfig, sc: Scenario) -> tuple[Trace, dict[str, Any], Pat
     if cfg.system_prompt is not None:
         kw["system_prompt"] = cfg.system_prompt
     agents = default_agents(cfg.model, plugins=_plugins(cfg, sc, dirs), **kw)
-    events, error, status, person = _run(_drive(cfg, agents, sc, ws, root))
+    events, descendants, error, status, person = _run(_drive(cfg, agents, sc, ws, root))
 
     batches: list[list[Any]] = []
     batch_turns: list[int] = []
     results: dict[str, Any] = {}
     texts: list[str] = []
     turn = -1
-    usage = trial_usage(events)
+    usage = trial_usage([*events, *descendants])
     for ev in events:
         if isinstance(ev, InputTaken) and any(
                 isinstance(i.body, Say) and i.body.message.from_person for i in ev.items):
