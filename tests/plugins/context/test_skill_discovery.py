@@ -428,6 +428,31 @@ def test_the_listing_settings_reach_the_plugin(tmp_path: Path,
     assert ext.max_desc_chars == 99 and ext.budget_fraction == 0.02
 
 
+async def test_the_noeta_command_reads_the_shared_agents_skills(tmp_path: Path,
+                                                                 monkeypatch: Any) -> None:
+    """``~/.agents/skills`` (the directory coding agents share) is a user
+    tier of the ``noeta`` command's skills, below ``~/.noeta/skills``."""
+    from noeta.cli import home_dir
+    from noeta.cli.config import _skills_settings
+    from noeta.cli.settings_files import load
+
+    shared = tmp_path / "agents" / "skills"
+    (shared / "shared-one").mkdir(parents=True)
+    (shared / "shared-one" / "SKILL.md").write_text(
+        "---\nname: shared-one\ndescription: Shared.\n---\nShared.\n")
+    monkeypatch.setattr(home_dir, "AGENTS_SKILLS", shared)
+    monkeypatch.setattr(home_dir, "HOME", tmp_path / "noeta-home")
+    settings = tmp_path / "settings.json"
+    settings.write_text("{}")
+    args = _skills_settings(load([settings], ["user"]), [])
+    assert args["global_agents_dir"] == str(shared)
+    work = tmp_path / "work"
+    work.mkdir()
+    names = {c.name for c in await Skills(**{k: v for k, v in args.items() if k != "trusted"})
+             .commands(CommandContext(cwd=str(work)))}
+    assert "shared-one" in names
+
+
 def test_a_listing_cap_that_is_not_a_whole_number_is_ignored(tmp_path: Path) -> None:
     """``skillListingMaxDescChars`` is a positive whole number (Claude
     Code's): ``0.5`` is ignored, not cut to 0 (which the plugin refuses)."""

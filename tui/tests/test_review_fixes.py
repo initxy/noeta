@@ -191,6 +191,24 @@ async def test_continue_opens_the_newest_task_here_with_the_effort_it_runs_with(
         assert plain(again.query_one("#effort")) == "◐ medium · /effort"  # the model's default
 
 
+async def test_the_command_lines_prompt_is_the_first_message(tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("hi"), reply("again")])
+    app = make_app(tmp_path, provider, prompt="hello")
+    async with app.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: not app.busy and "hi" in shown(app))
+        made = app.task_id
+        assert made and "hello" in shown(app)
+    # with -c it goes to the task continued, and while picking one it waits
+    again = make_app(tmp_path, provider, continue_last=True, prompt="more")
+    async with again.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: not again.busy and "again" in shown(again))
+        assert again.task_id == made and len(provider.requests) == 2
+    picking = make_app(tmp_path, ScriptedProvider([]), resume="", prompt="later")
+    async with picking.run_test(size=(120, 36)) as pilot:
+        await settle(pilot, lambda: bool(picking.query(Picker)))
+        assert picking.query_one(PromptInput).text == "later"
+
+
 async def test_continue_with_nothing_here_says_so_and_exits(tmp_path: Path) -> None:
     app = make_app(tmp_path, ScriptedProvider([]), continue_last=True)
     said: list[str] = []

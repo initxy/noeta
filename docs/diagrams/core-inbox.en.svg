@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 380" role="img" aria-label="Everyone posts to a task's inbox; only the task's runner takes items, recording them in one InputTaken event"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="core-inbox-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="core-inbox-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="core-inbox-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="core-inbox-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="core-inbox-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<text x="20" y="28" class="ntd-label">Who posts</text>
+<text x="212" y="28" class="ntd-label">What they post</text>
+<rect x="20" y="42" width="180" height="42" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="110.0" y="67.5" class="ntd-sub" text-anchor="middle">the person (client)</text>
+<rect x="212" y="42" width="188" height="42" rx="8" class="ntd-chip"/>
+<text x="306.0" y="67.5" class="ntd-code" text-anchor="middle">Say · Answer · Cancel</text>
+<path d="M 200 63 L 210 63" class="ntd-line"/>
+<path d="M 400 63 L 424 63 L 424 172 L 446 172" class="ntd-line"/>
+<rect x="20" y="94" width="180" height="42" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="110.0" y="119.5" class="ntd-sub" text-anchor="middle">a parent task</text>
+<rect x="212" y="94" width="188" height="42" rx="8" class="ntd-chip"/>
+<text x="306.0" y="119.5" class="ntd-code" text-anchor="middle">Say · Cancel</text>
+<path d="M 200 115 L 210 115" class="ntd-line"/>
+<path d="M 400 115 L 424 115 L 424 172 L 446 172" class="ntd-line"/>
+<rect x="20" y="146" width="180" height="42" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="110.0" y="171.5" class="ntd-sub" text-anchor="middle">a child ending</text>
+<rect x="212" y="146" width="188" height="42" rx="8" class="ntd-chip"/>
+<text x="306.0" y="171.5" class="ntd-code" text-anchor="middle">ChildEnded</text>
+<path d="M 200 167 L 210 167" class="ntd-line"/>
+<path d="M 400 167 L 424 167 L 424 172 L 446 172" class="ntd-line" marker-end="url(#core-inbox-arrow)"/>
+<rect x="20" y="198" width="180" height="42" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="110.0" y="223.5" class="ntd-sub" text-anchor="middle">a due timer</text>
+<rect x="212" y="198" width="188" height="42" rx="8" class="ntd-chip"/>
+<text x="306.0" y="223.5" class="ntd-code" text-anchor="middle">TimerFired</text>
+<path d="M 200 219 L 210 219" class="ntd-line"/>
+<path d="M 400 219 L 424 219 L 424 172 L 446 172" class="ntd-line"/>
+<rect x="20" y="250" width="180" height="42" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="110.0" y="275.5" class="ntd-sub" text-anchor="middle">plugins, channels, signals</text>
+<rect x="212" y="250" width="188" height="42" rx="8" class="ntd-chip"/>
+<text x="306.0" y="275.5" class="ntd-code" text-anchor="middle">External</text>
+<path d="M 200 271 L 210 271" class="ntd-line"/>
+<path d="M 400 271 L 424 271 L 424 172 L 446 172" class="ntd-line"/>
+<rect x="448" y="42" width="170" height="250" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="533" y="68" class="ntd-title" text-anchor="middle">inbox</text>
+<text x="533" y="88" class="ntd-mini" text-anchor="middle">ordered, one per task</text>
+<rect x="464" y="104" width="138" height="26" rx="6" class="ntd-chip"/>
+<text x="478" y="122" class="ntd-code">#1</text>
+<rect x="464" y="138" width="138" height="26" rx="6" class="ntd-chip"/>
+<text x="478" y="156" class="ntd-code">#2</text>
+<rect x="464" y="172" width="138" height="26" rx="6" class="ntd-chip"/>
+<text x="478" y="190" class="ntd-code">#3</text>
+<rect x="464" y="206" width="138" height="26" rx="6" class="ntd-chip"/>
+<text x="478" y="224" class="ntd-code">#4</text>
+<text x="590" y="224" class="ntd-mini" text-anchor="end">unread</text>
+<rect x="464" y="240" width="138" height="26" rx="6" class="ntd-chip"/>
+<text x="478" y="258" class="ntd-code">#5</text>
+<text x="590" y="258" class="ntd-mini" text-anchor="end">unread</text>
+<path d="M 618 172 L 660 172" class="ntd-line" marker-end="url(#core-inbox-arrow)"/>
+<rect x="662" y="140" width="238" height="64" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="781.0" y="166.5" class="ntd-chiptext" text-anchor="middle">the task's runner</text>
+<text x="781.0" y="186.5" class="ntd-mini" text-anchor="middle">only the claim holder takes items</text>
+<path d="M 781 204 L 781 236" class="ntd-line" marker-end="url(#core-inbox-arrow)"/>
+<rect x="662" y="238" width="238" height="54" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="781.0" y="260.5" class="ntd-code" text-anchor="middle">InputTaken(items, through)</text>
+<text x="781.0" y="278.5" class="ntd-mini" text-anchor="middle">task log</text>
+<rect x="20" y="314" width="284" height="54" rx="10" class="ntd-box"/>
+<text x="162" y="336" class="ntd-sub" text-anchor="middle">dedupe_key: a repeat post</text>
+<text x="162" y="356" class="ntd-mini" text-anchor="middle">returns the first one's seq</text>
+<rect x="316" y="314" width="284" height="54" rx="10" class="ntd-box"/>
+<text x="458" y="336" class="ntd-sub" text-anchor="middle">post wakes a waiting task</text>
+<text x="458" y="356" class="ntd-mini" text-anchor="middle">(unless wake=False)</text>
+<rect x="612" y="314" width="284" height="54" rx="10" class="ntd-box"/>
+<text x="754" y="336" class="ntd-sub" text-anchor="middle">each item taken exactly once</text>
+<text x="754" y="356" class="ntd-mini" text-anchor="middle">a Cancel also interrupts the step in flight</text>
+</svg>

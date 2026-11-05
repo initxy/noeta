@@ -9,8 +9,10 @@ position in the step, sub-agent calls by their opening prompt, compaction
 calls with the recorded summary. noeta runs as the ``noeta`` command would —
 the default agents with its real Anthropic provider, a fresh store and
 ``NOETA_HOME``, the scenario project in a scratch directory — and executes
-every tool for real. Approvals are allowed and questions get their first
-option, as the recording's driver answered Claude Code.
+every tool for real. Approvals get the keys the recording's driver pressed
+on Claude Code's cards, in order (``Escape`` denies, ``2`` allows always,
+any other allows; an approval with no recorded card is allowed and noted),
+and questions get their first option.
 
 Every request noeta makes is kept (``<out>/<session>.json``: how it was
 routed and its facts; ``<out>/raw/<session>/`` the bodies), then the
@@ -435,6 +437,7 @@ class SessionReplay:
         from noeta.cli.config import Settings, from_settings
         from noeta.core.commands import expand_command
         from noeta.core.extension import CommandContext
+        from noeta.toolkit.interactive import BASH_MODE_KEY
         from noeta.toolkit.local_env import local_timezone
 
         # The session's environment knobs (Claude Code's compaction window
@@ -474,6 +477,9 @@ class SessionReplay:
                     # As the TUI does: the person's dates are in this machine's zone.
                     if zone := local_timezone():
                         config["timezone"] = zone
+                    # Recorded in Claude Code's interactive terminal, which
+                    # runs ``!`` commands: a terminal UI task.
+                    config[BASH_MODE_KEY] = True
                     if self.spec.get("permission_mode"):
                         # The mode Claude Code was started in (``--permission-mode``).
                         config["permission_mode"] = self.spec["permission_mode"]

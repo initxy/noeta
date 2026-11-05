@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import acp
@@ -143,12 +143,15 @@ class NoetaAcpAgent:
     ``app`` runs here (``LocalApp``) or is a ``noeta serve`` server
     (``RemoteApp``). ``editor_cwd``: a new session's task runs in the
     directory the editor names; without it (a server, where that path means
-    nothing) in ``cwd``, or where the server puts it when that is empty."""
+    nothing) in ``cwd``, or where the server puts it when that is empty.
+    ``config``: what each new session's task config starts with (the
+    command line's effort and permission mode)."""
 
     def __init__(self, app: AppAPI, *, agent: str = "main", model: str = "",
                  servers: EditorServers | None = None, editor_cwd: bool = True,
-                 cwd: str = "") -> None:
+                 cwd: str = "", config: Mapping[str, Any] | None = None) -> None:
         self.app = app
+        self.config = dict(config or {})
         self.editor_cwd = editor_cwd
         self.cwd = cwd
         self.servers = servers
@@ -186,7 +189,7 @@ class NoetaAcpAgent:
 
     async def new_session(self, cwd: str, mcp_servers: list[Any] | None = None,
                           **kw: Any) -> schema.NewSessionResponse:
-        config: dict[str, Any] = {}
+        config: dict[str, Any] = dict(self.config)
         if task_cwd := (cwd if self.editor_cwd else self.cwd):
             config["cwd"] = task_cwd
         if self.model:
@@ -589,7 +592,8 @@ class NoetaAcpAgent:
 
 async def serve_stdio(app: AppAPI, *, agent: str = "main", model: str = "",
                       servers: EditorServers | None = None, editor_cwd: bool = True,
-                      cwd: str = "") -> None:
+                      cwd: str = "", config: Mapping[str, Any] | None = None) -> None:
     await acp.run_agent(NoetaAcpAgent(app, agent=agent, model=model,  # type: ignore[arg-type]
-                                      servers=servers, editor_cwd=editor_cwd, cwd=cwd))
+                                      servers=servers, editor_cwd=editor_cwd, cwd=cwd,
+                                      config=config))
 

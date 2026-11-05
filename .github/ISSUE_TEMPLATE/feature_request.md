@@ -14,7 +14,7 @@ the solution.
 ## Proposed solution
 
 What you would like noeta to do. If Claude Code already does it, say how. If it could be a
-plugin (`docs/extending.md`), say why it should be built in.
+plugin (`docs/guides/plugins.md`), say why it should be built in.
 
 ## Alternatives considered
 

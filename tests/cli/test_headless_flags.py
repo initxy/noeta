@@ -97,6 +97,12 @@ def test_bad_flag_values_are_refused(tmp_path: Path) -> None:
     assert headless.settings_layer(_parse("--settings", str(file)), tmp_path) == file.resolve()
 
 
+@pytest.mark.parametrize("argv", [("-d",), ("--debug",), ("--debug", "api,hooks"), ("-dapi",)])
+def test_debug_is_named_as_ignored(argv: tuple[str, ...]) -> None:
+    args = _parse(*argv)
+    assert headless._ignored(args) == ["--debug"] and args.prompt == "go"
+
+
 def test_the_command_line_passes_the_flags_on(home: Path, tmp_path: Path,
                                               monkeypatch: pytest.MonkeyPatch,
                                               capsys: pytest.CaptureFixture[str]) -> None:

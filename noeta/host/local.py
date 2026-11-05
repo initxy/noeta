@@ -156,11 +156,12 @@ class LocalApp:
             runtime_kw.setdefault("roots", set())
         runtime_kw.setdefault("spill_root", default_spill_root())
         runtime_kw.setdefault("agent_aliases", former_agent_names([a.name for a in agents]))
+        runtime_kw.setdefault("poll_interval", 0.2)
         self.runtime = Runtime(store=store, agents={a.name: a for a in agents},
                                provider_for=provider_for,  # type: ignore[arg-type]
-                               on_delta=self._fan_out, poll_interval=0.2, **runtime_kw)
+                               on_delta=self._fan_out, **runtime_kw)
         self.client = LocalClient(store, self.runtime, task_config=task_config,
-                                  poll_interval=0.2)
+                                  poll_interval=runtime_kw["poll_interval"])
         #: Listeners letting outside conversations in (``noeta.core.channel``),
         #: run while the app is started.
         self.channels = list(channels)
@@ -284,6 +285,19 @@ class LocalApp:
         if self.channels and self._listening is None:
             self._listening = asyncio.create_task(
                 run_channels(self.channels, self.client, self._stop))
+
+    async def run_until(self, stop: asyncio.Event) -> None:
+        """:meth:`start` the worker and the channels, run until ``stop`` is
+        set (or the worker fails, which is raised), then :meth:`stop`: a
+        process that only runs tasks (``noeta worker``)."""
+        await self.start()
+        assert self._serving is not None
+        stopping = asyncio.create_task(stop.wait())
+        try:
+            await asyncio.wait({stopping, self._serving}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopping.cancel()
+            await self.stop()
 
     async def stop(self) -> None:
         self._stop.set()

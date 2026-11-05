@@ -189,6 +189,20 @@ def _settings(args: argparse.Namespace, *, need_model: bool = True,
     return s
 
 
+def _task_defaults(s: Settings, args: argparse.Namespace) -> dict[str, Any]:
+    """What new tasks' config starts with unless whoever creates one says
+    otherwise: the effort (flag, ``NOETA_EFFORT`` or config.toml) and the
+    command line's permission mode. A task keeps the config it was created
+    with, whichever process later runs it."""
+    return {**({"effort": s.effort} if s.effort else {}),
+            **({"permission_mode": args.permission_mode} if args.permission_mode else {})}
+
+
+def _refuse_bypass(args: argparse.Namespace) -> None:
+    if args.permission_mode == "bypassPermissions" and not args.allow_bypass_permissions:
+        sys.exit("noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions")
+
+
 def _app(s: Settings, **kw: Any) -> Any:
     from noeta.cli.config import from_settings
 
@@ -224,6 +238,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
         "disable_bypass_mode": True}
     app = _app(s, cwd=cwd, with_channels=True, permissions=permissions)
+    app.client.task_config.update(_task_defaults(s, args))
     await app.start(worker=with_worker)
     api = create_app(app.client, auth=server is not None,
                      token_sha256=server.sha256 if server else None,
@@ -246,21 +261,28 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 async def _worker(s: Settings, queues: list[str], concurrency: int,
                   lease: float | None = None, snapshot_every: int | None = None, *,
-                  allow_bypass: bool = False) -> None:
-    from noeta.host.channels import run_channels
-
+                  allow_bypass: bool = False, task_defaults: dict[str, Any] | None = None,
+                  flags: tuple[str, ...] = ()) -> None:
+    """``task_defaults``: the config of the tasks this worker's channels
+    start (``flags``: the command-line flags that gave it, named on stderr:
+    a worker runs tasks others created, which keep their own config)."""
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
     # As noeta serve: bypassPermissions refused in the plugin itself.
     kw["permissions"] = {} if allow_bypass else {"disable_bypass_mode": True}
     if snapshot_every is not None:
         kw["snapshot_every"] = snapshot_every
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
+    app.client.task_config.update(task_defaults or {})
+    if flags:
+        where = "only to the tasks this worker's channels start" if app.channels else \
+            "to no task: this worker has no channels, and it runs tasks others created"
+        print(f"noeta: {' and '.join(flags)} apply {where}; a task keeps the config it was "
+              "created with", file=sys.stderr)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
-    await asyncio.gather(app.runtime.serve(stop), run_channels(app.channels, app.client, stop))
-    await app.store.close()
+    await app.run_until(stop)
 
 
 def missing_extra(exc: BaseException) -> str | None:
@@ -324,6 +346,8 @@ def _main(argv: list[str]) -> None:
         return
     args = _parser().parse_args(argv)
     cwd = os.path.abspath(args.cwd or os.getcwd())
+    if args.permission_mode in MODE_ALIASES:
+        args.permission_mode = MODE_ALIASES[args.permission_mode]
     if args.command == "trust":
         from noeta.cli.trust import trust_project
         print(f"trusted {trust_project(cwd)}: its plugins, agent files, prompt overrides, "
@@ -348,23 +372,35 @@ def _main(argv: list[str]) -> None:
             # model is the server's unless --model names one.
             asyncio.run(serve_stdio(RemoteApp(args.server, token=token),
                                     model=args.model or "", editor_cwd=False,
-                                    cwd=args.cwd or ""))
+                                    cwd=args.cwd or "", config=_task_defaults(
+                                        _settings(args, need_model=False), args)))
             return
         s = _settings(args)
         servers = EditorServers()
         asyncio.run(serve_stdio(_app(s, cwd=cwd, plugins={"mcp": {"servers": servers}},
                                      own_tasks_only=True),
-                                model=s.model, servers=servers))
+                                model=s.model, servers=servers,
+                                config=_task_defaults(s, args)))
         return
     if args.command == "worker":
-        asyncio.run(_worker(_settings(args), args.queue or ["default"], args.concurrency,
+        _refuse_bypass(args)
+        s = _settings(args)
+        flags = tuple(f for f, v in (("--effort", args.effort),
+                                     ("--permission-mode", args.permission_mode)) if v)
+        asyncio.run(_worker(s, args.queue or ["default"], args.concurrency,
                             args.lease, args.snapshot_every,
-                            allow_bypass=args.allow_bypass_permissions))
+                            allow_bypass=args.allow_bypass_permissions,
+                            task_defaults=_task_defaults(s, args), flags=flags))
         return
     if args.command == "serve":
         from noeta.host.http import LOOPBACK_HOSTS
         if args.no_token and args.host not in LOOPBACK_HOSTS:
             sys.exit("noeta: --no-token serves only a loopback address")
+        _refuse_bypass(args)
+        if _allowed_hosts(args) is None:
+            print(f"noeta: on {args.host} any Host header is answered; name the names this "
+                  "server is reached by with --allow-host (DNS-rebinding protection)",
+                  file=sys.stderr)
         asyncio.run(_serve(_settings(args), args, cwd))
         return
 
@@ -413,7 +449,7 @@ def _front(argv: list[str]) -> None:
 
     common: dict[str, Any] = {"cwd": cwd, "resume": args.resume,
                               "continue_last": args.continue_last,
-                              "permission_mode": args.permission_mode,
+                              "permission_mode": args.permission_mode, "prompt": args.prompt,
                               "home": str(home_dir.HOME), "version": noeta_version()}
     backend: Any
     if args.server:

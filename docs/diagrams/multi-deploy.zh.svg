@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" role="img" aria-label="多机部署：前端连 noeta serve，许多 noeta worker 共用一个 Postgres 存储"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="multi-deploy-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker></defs>
+<rect x="24" y="40" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="114" y="63" class="ntd-chiptext" text-anchor="middle">终端界面</text>
+<text x="114" y="82" class="ntd-code" text-anchor="middle">noeta --server URL</text>
+<path d="M 204 68 L 222 68 L 222 166 L 238 166" class="ntd-line" marker-end="url(#multi-deploy-arrow)"/>
+<rect x="24" y="112" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="114" y="135" class="ntd-chiptext" text-anchor="middle">编辑器</text>
+<text x="114" y="154" class="ntd-code" text-anchor="middle">noeta acp --server URL</text>
+<path d="M 204 140 L 222 140 L 222 166 L 238 166" class="ntd-line"/>
+<rect x="24" y="184" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="114" y="207" class="ntd-chiptext" text-anchor="middle">网页</text>
+<text x="114" y="226" class="ntd-code" text-anchor="middle">noeta serve --web DIR</text>
+<path d="M 204 212 L 222 212 L 222 166 L 238 166" class="ntd-line"/>
+<rect x="24" y="256" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="114" y="279" class="ntd-chiptext" text-anchor="middle">你的代码</text>
+<text x="114" y="298" class="ntd-code" text-anchor="middle">RemoteClient · HTTP</text>
+<path d="M 204 284 L 222 284 L 222 166 L 238 166" class="ntd-line"/>
+<text x="222" y="30" class="ntd-mini" text-anchor="middle">建、发、看</text>
+<rect x="240" y="120" width="150" height="92" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="315" y="147.5" class="ntd-chiptext" text-anchor="middle">noeta serve</text>
+<text x="315" y="165.5" class="ntd-mini" text-anchor="middle">HTTP / WebSocket</text>
+<text x="315" y="180.5" class="ntd-mini" text-anchor="middle">要带令牌访问</text>
+<text x="315" y="195.5" class="ntd-mini" text-anchor="middle">可以开好几个</text>
+<rect x="420" y="110" width="190" height="112" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="515" y="140" class="ntd-chiptext" text-anchor="middle">Postgres 存储</text>
+<text x="515" y="158" class="ntd-mini" text-anchor="middle">任务、日志、收件箱、</text>
+<text x="515" y="173" class="ntd-mini" text-anchor="middle">快照；认领用</text>
+<text x="515" y="188" class="ntd-mini" text-anchor="middle">SKIP LOCKED，租约</text>
+<text x="515" y="203" class="ntd-mini" text-anchor="middle">按数据库的时钟</text>
+<path d="M 390 166 L 418 166" class="ntd-line" marker-end="url(#multi-deploy-arrow)" marker-start="url(#multi-deploy-arrow)"/>
+<rect x="690" y="24" width="190" height="250" rx="14" class="ntd-frame"/>
+<text x="704" y="44" class="ntd-label">noeta worker × N</text>
+<rect x="704" y="56" width="162" height="56" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="785" y="79" class="ntd-chiptext" text-anchor="middle">worker A</text>
+<text x="785" y="98" class="ntd-code" text-anchor="middle">claim · renew</text>
+<rect x="704" y="126" width="162" height="56" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="785" y="149" class="ntd-chiptext" text-anchor="middle">worker B</text>
+<text x="785" y="168" class="ntd-code" text-anchor="middle">append · release</text>
+<rect x="704" y="196" width="162" height="56" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="785" y="219" class="ntd-chiptext" text-anchor="middle">worker C</text>
+<text x="785" y="238" class="ntd-code" text-anchor="middle">--queue NAME</text>
+<path d="M 610 166 L 688 166" class="ntd-line" marker-end="url(#multi-deploy-arrow)" marker-start="url(#multi-deploy-arrow)"/>
+<text x="649" y="158" class="ntd-mini" text-anchor="middle">认领·追加</text>
+<rect x="410" y="320" width="210" height="64" rx="10" class="ntd-chip"/>
+<text x="515" y="341" class="ntd-chiptext" text-anchor="middle">执行环境</text>
+<text x="515" y="359" class="ntd-mini" text-anchor="middle">共享文件系统（同一路径）</text>
+<text x="515" y="374" class="ntd-mini" text-anchor="middle">或远端容器</text>
+<rect x="670" y="320" width="210" height="64" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="775" y="348.5" class="ntd-chiptext" text-anchor="middle">模型 provider</text>
+<text x="775" y="366.5" class="ntd-mini" text-anchor="middle">每台机器配置相同</text>
+<path d="M 785 274 L 785 318" class="ntd-line" marker-end="url(#multi-deploy-arrow)"/>
+<path d="M 720 274 L 720 300 L 515 300 L 515 318" class="ntd-line" marker-end="url(#multi-deploy-arrow)"/>
+</svg>

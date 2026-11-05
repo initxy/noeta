@@ -15,6 +15,14 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Added
 
+- **The terminal UI's tasks get Claude Code's `! <command>` line.** The main prompt's
+  `# Session-specific guidance` now opens with Claude Code's rule to suggest `! <command>` for a
+  command the person must run themselves (an interactive login), given only to a task whose
+  config says its front end runs `!` commands: `bash_mode: true`, which the terminal UI sets on
+  the tasks it creates in process (not with `--server`, where it refuses them) and an HTTP
+  request may set. Sub-agents do not get it; a fork keeps it with its parent's prompt. Every
+  other request is byte-identical to before. `drop_skill_guidance` is now
+  `noeta.toolkit.guidance_lines.drop_guidance_line`, shared by both lines.
 - **An output cap the window cannot hold is lowered, not compacted.** A provider's "input
   length and `max_tokens` exceed context limit" (Anthropic's, and OpenAI's and vLLM's forms
   that state the input and the window) retries the call once with the cap the window leaves
@@ -56,6 +64,18 @@ All notable changes to Noeta are documented here. The format is based on
   `[plugins.todos] all_models = true` offers the tools to every model, `enabled = false` to none.
   The list is a fold of the task's log (any worker, after a compaction, in a fork); sub-agents
   get no task tools. Those models' system prompt gains Claude Code's one task-tools line.
+
+### Fixed
+
+- **`noeta worker` sweeps old saved tool outputs**, daily, as `noeta serve` does
+  (`LocalApp.run_until`); a worker-only deployment used to keep them forever.
+- **No permission asked for `CronCreate`, `CronList`, `CronDelete`, `EnterWorktree`,
+  `ExitWorktree` or `ReadMcpResourceDirTool`**, as in Claude Code (`CronCreate` still goes to
+  the auto-mode classifier).
+- **Skills in `~/.agents/skills`** (the directory coding agents share) reach the `noeta`
+  command, below `~/.noeta/skills`.
+- **Cron jobs run in the task's time zone** (task config `timezone`), not the worker
+  machine's; without one, the machine's as before.
 
 ### Changed
 
@@ -1038,6 +1058,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A server name in several config places starts the one `noeta mcp` shows.** The runtime
+  took a project's `.noeta/mcp.json` first and the user's settings before the local ones, so
+  a user server beat a local one of the same name while `noeta mcp get` showed the local one.
+  Both now follow Claude Code: managed > `--settings` > local > the project's
+  `settings.json` > `.noeta/mcp.json` > the user's (`noeta/toolkit/mcp_sources.py`);
+  `--mcp-config` still wins over every file, as in Claude Code.
 - **Deny rules now hold against shell commands** (spec `2026-11-03-shell-deny-paths`): a `Bash`
   or `Monitor` command that writes a path an `Edit` deny rule covers (`mkdir`, `touch`, `rm`,
   `rmdir`, `mv`, `cp`, `sed -i`, `tee`, an output redirection) or reads one a `Read` deny rule

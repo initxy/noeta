@@ -104,7 +104,7 @@ def test_a_pin_is_a_full_commit_over_an_encrypted_transport(home: Path,
     for short in (first[:7], first[:12], first[:39]):
         with pytest.raises(PluginInstallError, match="full commit id"):
             install(f"file://{src}@{short}")
-    with pytest.raises(PluginInstallError, match="full commit id"):
+    with pytest.raises(PluginInstallError, match=r"40 hex digits, or 64 in a SHA-256"):
         install(f"file://{src}", commit=first[:10])
     # Plain-text transports: anyone on the way could hand over other code.
     for url in ("http://example.invalid/p.git", "git://example.invalid/p.git"):
@@ -132,6 +132,8 @@ def test_a_marketplace_is_read_to_find_its_plugins(home: Path, tmp_path: Path) -
                    {"name": "formatter", "source": {"source": "url", "url": f"file://{other}",
                                                      "sha": sha}},
                    {"name": "floating", "source": {"source": "url", "url": f"file://{other}"}},
+                   {"name": "branch", "source": {"source": "url", "url": f"file://{other}",
+                                                  "ref": "main"}},
                    {"name": "npm-one", "source": {"source": "npm", "package": "x"}},
                    {"name": "escape", "source": "./../formatter"}]}
     market_sha = repo(market, {".claude-plugin/marketplace.json": json.dumps(listing),
@@ -142,6 +144,8 @@ def test_a_marketplace_is_read_to_find_its_plugins(home: Path, tmp_path: Path) -
     assert name == "formatter" and (path / "commands" / "fmt.md").is_file()
     with pytest.raises(PluginInstallError, match="pins no commit"):
         install("floating", marketplace=str(market))
+    with pytest.raises(PluginInstallError, match="its ref 'main' is not followed"):
+        install("branch", marketplace=str(market))
     with pytest.raises(PluginInstallError, match="'npm' source is not supported"):
         install("npm-one", marketplace=str(market))
     with pytest.raises(PluginInstallError, match="outside"):

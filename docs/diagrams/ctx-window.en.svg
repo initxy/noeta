@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 320" role="img" aria-label="Lines across a context window: write-ahead start, compaction threshold, effective window, summary reserve"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs></defs>
+<text x="450" y="36" class="ntd-sub" text-anchor="middle">Measured before every model call: the newest reply&#x27;s usage (input + output) plus an estimate of what came after it</text>
+<rect x="40" y="60" width="410" height="52" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="245" y="90" class="ntd-chiptext" text-anchor="middle">Normal steps</text>
+<rect x="454" y="60" width="172" height="52" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="540" y="82.5" class="ntd-chiptext" text-anchor="middle">Summary written ahead</text>
+<text x="540" y="100.5" class="ntd-mini" text-anchor="middle">auto_compact_precompute</text>
+<rect x="630" y="60" width="92" height="52" rx="10" class="ntd-chip"/>
+<text x="676" y="82.5" class="ntd-chiptext" text-anchor="middle">Compact</text>
+<text x="676" y="100.5" class="ntd-mini" text-anchor="middle">13,000</text>
+<rect x="726" y="60" width="134" height="52" rx="10" class="ntd-chip ntd-dash"/>
+<text x="793" y="82.5" class="ntd-chiptext" text-anchor="middle">Summary reserve</text>
+<text x="793" y="100.5" class="ntd-mini" text-anchor="middle">≤ 20,000</text>
+<path d="M 452 116 L 452 126" class="ntd-line"/>
+<text x="452" y="142" class="ntd-mini" text-anchor="middle">write ahead</text>
+<path d="M 628 116 L 628 126" class="ntd-line"/>
+<text x="628" y="160" class="ntd-mini" text-anchor="middle">threshold</text>
+<path d="M 724 116 L 724 126" class="ntd-line"/>
+<text x="724" y="142" class="ntd-mini" text-anchor="middle">effective window</text>
+<path d="M 860 116 L 860 126" class="ntd-line"/>
+<text x="860" y="160" class="ntd-mini" text-anchor="end">context window</text>
+<rect x="40" y="182" width="260" height="70" rx="10" class="ntd-chip"/>
+<text x="170" y="213.5" class="ntd-chiptext" text-anchor="middle">effective = window − reserve</text>
+<text x="170" y="231.5" class="ntd-mini" text-anchor="middle">reserve = min(output cap, 20,000)</text>
+<rect x="320" y="182" width="260" height="70" rx="10" class="ntd-chip"/>
+<text x="450" y="206" class="ntd-chiptext" text-anchor="middle">threshold = effective − 13,000</text>
+<text x="450" y="224" class="ntd-mini" text-anchor="middle">or auto_compact_percent of</text>
+<text x="450" y="239" class="ntd-mini" text-anchor="middle">effective, when that is lower</text>
+<rect x="600" y="182" width="260" height="70" rx="10" class="ntd-chip"/>
+<text x="730" y="213.5" class="ntd-chiptext" text-anchor="middle">write ahead = 80% of effective</text>
+<text x="730" y="231.5" class="ntd-mini" text-anchor="middle">never above the threshold</text>
+<text x="450" y="286" class="ntd-mini" text-anchor="middle">Claude Opus 5.5 (1M window): threshold 967,000, written ahead from 784,000. An uncatalogued model: 128,000 window, threshold 98,616.</text>
+</svg>

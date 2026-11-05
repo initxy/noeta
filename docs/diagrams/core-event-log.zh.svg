@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 500" role="img" aria-label="一条真实的任务日志：十二条事件（第 2、3 条合在一行）折叠成 TaskState，下一次请求和下一步动作都由它算出"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="core-event-log-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="core-event-log-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="core-event-log-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="core-event-log-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="core-event-log-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<text x="20" y="28" class="ntd-label">一个任务的日志（真实的一条）</text>
+<text x="36" y="63" class="ntd-mini" text-anchor="end">1</text>
+<rect x="46" y="42" width="390" height="32" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="60" y="63" class="ntd-code">TaskCreated</text>
+<text x="424" y="63" class="ntd-sub" text-anchor="end">代理 demo</text>
+<text x="36" y="103" class="ntd-mini" text-anchor="end">2–3</text>
+<rect x="46" y="82" width="390" height="32" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="60" y="103" class="ntd-code">ExtensionRecorded</text>
+<text x="424" y="103" class="ntd-sub" text-anchor="end">core · prompts、plugins</text>
+<text x="36" y="143" class="ntd-mini" text-anchor="end">4</text>
+<rect x="46" y="122" width="390" height="32" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="60" y="143" class="ntd-code">InputTaken</text>
+<text x="424" y="143" class="ntd-sub" text-anchor="end">“a.txt 里写了什么？”</text>
+<text x="36" y="183" class="ntd-mini" text-anchor="end">5</text>
+<rect x="46" y="162" width="390" height="32" rx="8" class="ntd-chip ntd-chip-cyan"/>
+<text x="60" y="183" class="ntd-code">ModelCalled</text>
+<text x="424" y="183" class="ntd-sub" text-anchor="end">request_hash 3729…</text>
+<text x="36" y="223" class="ntd-mini" text-anchor="end">6</text>
+<rect x="46" y="202" width="390" height="32" rx="8" class="ntd-chip ntd-chip-cyan"/>
+<text x="60" y="223" class="ntd-code">ModelReplied</text>
+<text x="424" y="223" class="ntd-sub" text-anchor="end">tool_use Read(a.txt)</text>
+<text x="36" y="263" class="ntd-mini" text-anchor="end">7</text>
+<rect x="46" y="242" width="390" height="32" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="60" y="263" class="ntd-code">ToolStarted</text>
+<text x="424" y="263" class="ntd-sub" text-anchor="end">Read</text>
+<text x="36" y="303" class="ntd-mini" text-anchor="end">8</text>
+<rect x="46" y="282" width="390" height="32" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="60" y="303" class="ntd-code">ExtensionRecorded</text>
+<text x="424" y="303" class="ntd-sub" text-anchor="end">fs · read（读过哪个文件）</text>
+<text x="36" y="343" class="ntd-mini" text-anchor="end">9</text>
+<rect x="46" y="322" width="390" height="32" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="60" y="343" class="ntd-code">ToolFinished</text>
+<text x="424" y="343" class="ntd-sub" text-anchor="end">“1→hello world”</text>
+<text x="36" y="383" class="ntd-mini" text-anchor="end">10</text>
+<rect x="46" y="362" width="390" height="32" rx="8" class="ntd-chip ntd-chip-cyan"/>
+<text x="60" y="383" class="ntd-code">ModelCalled</text>
+<text x="424" y="383" class="ntd-sub" text-anchor="end">request_hash 223c…</text>
+<text x="36" y="423" class="ntd-mini" text-anchor="end">11</text>
+<rect x="46" y="402" width="390" height="32" rx="8" class="ntd-chip ntd-chip-cyan"/>
+<text x="60" y="423" class="ntd-code">ModelReplied</text>
+<text x="424" y="423" class="ntd-sub" text-anchor="end">“写的是 hello world。”</text>
+<text x="36" y="463" class="ntd-mini" text-anchor="end">12</text>
+<rect x="46" y="442" width="390" height="32" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="60" y="463" class="ntd-code">Waiting</text>
+<text x="424" y="463" class="ntd-sub" text-anchor="end">等输入</text>
+<path d="M 436 250 L 500 250" class="ntd-line" marker-end="url(#core-event-log-arrow)"/>
+<text x="468" y="240" class="ntd-mini" text-anchor="middle">折叠</text>
+<rect x="502" y="42" width="404" height="258" rx="10" class="ntd-box"/>
+<text x="704" y="70" class="ntd-title" text-anchor="middle">TaskState</text>
+<text x="704" y="92" class="ntd-mini" text-anchor="middle">不做 I/O：同样的事件，同样的状态</text>
+<rect x="518" y="106" width="372" height="26" rx="7" class="ntd-chip"/>
+<text x="704.0" y="123.5" class="ntd-sub" text-anchor="middle">messages（模型看到的对话）</text>
+<rect x="518" y="138" width="372" height="26" rx="7" class="ntd-chip"/>
+<text x="704.0" y="155.5" class="ntd-sub" text-anchor="middle">calls · answers · children</text>
+<rect x="518" y="170" width="372" height="26" rx="7" class="ntd-chip"/>
+<text x="704.0" y="187.5" class="ntd-sub" text-anchor="middle">turn_open · waiting · timers</text>
+<rect x="518" y="202" width="372" height="26" rx="7" class="ntd-chip"/>
+<text x="704.0" y="219.5" class="ntd-sub" text-anchor="middle">usage · last_seq · inbox_read</text>
+<rect x="518" y="234" width="372" height="26" rx="7" class="ntd-chip"/>
+<text x="704.0" y="251.5" class="ntd-sub" text-anchor="middle">ext：各插件自己的状态</text>
+<text x="704" y="286" class="ntd-code" text-anchor="middle">noeta/core/loop/state.py</text>
+<path d="M 600 300 L 600 330" class="ntd-line" marker-end="url(#core-event-log-arrow)"/>
+<path d="M 808 300 L 808 330" class="ntd-line" marker-end="url(#core-event-log-arrow)"/>
+<rect x="502" y="332" width="196" height="64" rx="10" class="ntd-chip"/>
+<text x="600.0" y="359.0" class="ntd-chiptext" text-anchor="middle">build_request</text>
+<text x="600.0" y="378.0" class="ntd-code" text-anchor="middle">loop/request.py</text>
+<rect x="710" y="332" width="196" height="64" rx="10" class="ntd-chip"/>
+<text x="808.0" y="359.0" class="ntd-chiptext" text-anchor="middle">next_action</text>
+<text x="808.0" y="378.0" class="ntd-code" text-anchor="middle">loop/decide.py</text>
+<path d="M 600 396 L 600 420" class="ntd-line" marker-end="url(#core-event-log-arrow)"/>
+<path d="M 808 396 L 808 420" class="ntd-line" marker-end="url(#core-event-log-arrow)"/>
+<rect x="502" y="422" width="196" height="62" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="600.0" y="448.0" class="ntd-chiptext" text-anchor="middle">ModelRequest</text>
+<text x="600.0" y="467.0" class="ntd-mini" text-anchor="middle">同样的日志，同样的字节</text>
+<rect x="710" y="422" width="196" height="62" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="808.0" y="457.5" class="ntd-code" text-anchor="middle">CallModel · RunCalls · …</text>
+</svg>

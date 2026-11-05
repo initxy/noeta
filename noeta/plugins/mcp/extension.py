@@ -179,7 +179,8 @@ class Mcp(Extension):
     loop, idle connections closed after 30 minutes).
 
     ``settings_files``: settings files whose ``mcpServers`` are added, in
-    Claude Code's format (:mod:`noeta.plugins.mcp.settings`), read on the
+    Claude Code's format (:mod:`noeta.plugins.mcp.settings`), lowest
+    precedence first (a later file wins a name), read on the
     worker each pick-up; with ``project`` also the task's ``<cwd>/.noeta/mcp.json``
     servers its own settings files consent to. ``project`` is ``True`` (the
     host trusts every task's working directory) or a function of the

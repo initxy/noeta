@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" role="img" aria-label="What a sandboxed Bash command may write, may not read, and may reach"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="guide2-sandbox-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="guide2-sandbox-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="guide2-sandbox-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="guide2-sandbox-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="guide2-sandbox-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<rect x="262" y="40" width="380" height="320" rx="10" class="ntd-frame"/>
+<text x="452" y="66" class="ntd-label" text-anchor="middle">bwrap (Linux) / sandbox-exec (macOS)</text>
+<rect x="332" y="168" width="240" height="70" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="452.0" y="197.0" class="ntd-title" text-anchor="middle">Bash command</text>
+<text x="452.0" y="219.0" class="ntd-mini" text-anchor="middle">own network, PID and mount view</text>
+<rect x="24" y="40" width="210" height="90" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="129" y="68" class="ntd-chiptext" text-anchor="middle">writable</text>
+<text x="129" y="92" class="ntd-mini" text-anchor="middle">working dir · allowWrite</text>
+<text x="129" y="112" class="ntd-mini" text-anchor="middle">Edit allow rules · $TMPDIR</text>
+<rect x="24" y="160" width="210" height="90" rx="10" class="ntd-chip"/>
+<text x="129" y="188" class="ntd-chiptext" text-anchor="middle">read-only</text>
+<text x="129" y="212" class="ntd-mini" text-anchor="middle">.git/hooks · .noeta · .npmrc …</text>
+<text x="129" y="232" class="ntd-mini" text-anchor="middle">missing ones: empty placeholder</text>
+<rect x="24" y="280" width="210" height="90" rx="10" class="ntd-chip ntd-chip-red"/>
+<text x="129" y="308" class="ntd-chiptext" text-anchor="middle">unreadable</text>
+<text x="129" y="332" class="ntd-mini" text-anchor="middle">~/.ssh · ~/.aws · ~/.kube …</text>
+<text x="129" y="352" class="ntd-mini" text-anchor="middle">denyRead · Read deny rules</text>
+<path d="M 332 190 C 290 190, 280 85, 236 85" class="ntd-line-green" marker-end="url(#guide2-sandbox-arrow-green)"/>
+<path d="M 332 203 C 290 203, 280 205, 236 205" class="ntd-line" marker-end="url(#guide2-sandbox-arrow)"/>
+<path d="M 332 216 C 290 216, 280 325, 240 325" class="ntd-line-red"/>
+<path d="M 244 318 L 256 332 M 256 318 L 244 332" class="ntd-line-red"/>
+<rect x="676" y="168" width="200" height="70" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="776.0" y="197.0" class="ntd-chiptext" text-anchor="middle">filtering proxy</text>
+<text x="776.0" y="219.0" class="ntd-mini" text-anchor="middle">outside, in noeta&#x27;s process</text>
+<path d="M 572 203 H 674" class="ntd-line" marker-end="url(#guide2-sandbox-arrow)"/>
+<text x="623" y="195" class="ntd-mini" text-anchor="middle">all traffic</text>
+<rect x="676" y="40" width="200" height="70" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="776.0" y="69.0" class="ntd-code" text-anchor="middle">allowedDomains</text>
+<text x="776.0" y="91.0" class="ntd-mini" text-anchor="middle">the only hosts that answer</text>
+<path d="M 776 168 V 112" class="ntd-line" marker-end="url(#guide2-sandbox-arrow)"/>
+<rect x="676" y="290" width="200" height="70" rx="10" class="ntd-chip ntd-chip-red"/>
+<text x="776.0" y="319.0" class="ntd-chiptext" text-anchor="middle">refused hosts</text>
+<text x="776.0" y="341.0" class="ntd-mini" text-anchor="middle">listed in &lt;sandbox_violations&gt;</text>
+<path d="M 776 238 V 288" class="ntd-line-red" marker-end="url(#guide2-sandbox-arrow-red)"/>
+<rect x="24" y="384" width="852" height="40" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="450" y="409" class="ntd-sub" text-anchor="middle">dangerouslyDisableSandbox: true → asks the person (ignored when allowUnsandboxedCommands is off)</text>
+<text x="450" y="452" class="ntd-mini" text-anchor="middle">Only Bash is confined (background jobs and Monitor too); Read / Edit / Write follow the permission rules</text>
+</svg>

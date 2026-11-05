@@ -97,6 +97,17 @@ def noeta_home_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.
 
 
 @pytest.fixture(autouse=True)
+def no_shared_agents_skills(monkeypatch: pytest.MonkeyPatch,
+                            tmp_path_factory: pytest.TempPathFactory) -> None:
+    """The ``noeta`` command reads ``~/.agents/skills``; a test never sees
+    the user's."""
+    from noeta.cli import home_dir
+
+    monkeypatch.setattr(home_dir, "AGENTS_SKILLS",
+                        tmp_path_factory.mktemp("agents") / "skills")
+
+
+@pytest.fixture(autouse=True)
 def no_model_listings(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test reads a provider's model listing over the network (a front
     end built from settings would, for a model the catalog does not know);

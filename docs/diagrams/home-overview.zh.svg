@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 462" role="img" aria-label="各种入口都走同一个客户端接口；插件给模型 Claude Code 那一套工具；内核按存储里的事件日志运行每个任务，并调用模型 provider"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="home-overview-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="home-overview-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="home-overview-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="home-overview-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="home-overview-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<text x="106" y="44" class="ntd-label" text-anchor="middle">入口</text>
+<rect x="16" y="60" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="106.0" y="83.5" class="ntd-chiptext" text-anchor="middle">终端界面</text>
+<text x="106.0" y="102.5" class="ntd-code" text-anchor="middle">noeta</text>
+<path d="M 196 88 L 210 88" class="ntd-line"/>
+<rect x="16" y="136" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="106.0" y="159.5" class="ntd-chiptext" text-anchor="middle">无界面模式、Agent SDK</text>
+<text x="106.0" y="178.5" class="ntd-code" text-anchor="middle">noeta -p</text>
+<path d="M 196 164 L 210 164" class="ntd-line"/>
+<rect x="16" y="212" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="106.0" y="235.5" class="ntd-chiptext" text-anchor="middle">编辑器（ACP）</text>
+<text x="106.0" y="254.5" class="ntd-code" text-anchor="middle">noeta acp</text>
+<path d="M 196 240 L 210 240" class="ntd-line"/>
+<rect x="16" y="288" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="106.0" y="311.5" class="ntd-chiptext" text-anchor="middle">HTTP / WebSocket</text>
+<text x="106.0" y="330.5" class="ntd-code" text-anchor="middle">noeta serve</text>
+<path d="M 196 316 L 210 316" class="ntd-line"/>
+<rect x="16" y="364" width="180" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="106.0" y="387.5" class="ntd-chiptext" text-anchor="middle">Python</text>
+<text x="106.0" y="406.5" class="ntd-code" text-anchor="middle">noeta.Client</text>
+<path d="M 196 392 L 210 392" class="ntd-line"/>
+<path d="M 210 88 L 210 392 L 244 392" class="ntd-line" marker-end="url(#home-overview-arrow)"/>
+<rect x="228" y="20" width="418" height="426" rx="14" class="ntd-frame"/>
+<text x="246" y="44" class="ntd-label" text-anchor="start">noeta</text>
+<rect x="246" y="58" width="382" height="78" rx="10" class="ntd-box"/>
+<text x="437.0" y="83.0" class="ntd-title" text-anchor="middle">模型看到的东西</text>
+<text x="437.0" y="102.0" class="ntd-sub" text-anchor="middle">Claude Code 的工具、参数格式、提示词规则、</text>
+<text x="437.0" y="121.0" class="ntd-sub" text-anchor="middle">提醒、压缩和请求结构</text>
+<rect x="246" y="152" width="382" height="162" rx="10" class="ntd-box"/>
+<text x="437" y="178" class="ntd-title" text-anchor="middle">插件：只有一个接口 Extension</text>
+<rect x="258" y="192" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="315.0" y="211.0" class="ntd-code" text-anchor="middle">fs</text>
+<rect x="380" y="192" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="437.0" y="211.0" class="ntd-code" text-anchor="middle">shell</text>
+<rect x="502" y="192" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="559.0" y="211.0" class="ntd-code" text-anchor="middle">web</text>
+<rect x="258" y="228" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="315.0" y="247.0" class="ntd-code" text-anchor="middle">permissions</text>
+<rect x="380" y="228" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="437.0" y="247.0" class="ntd-code" text-anchor="middle">hooks</text>
+<rect x="502" y="228" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="559.0" y="247.0" class="ntd-code" text-anchor="middle">skills</text>
+<rect x="258" y="264" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="315.0" y="283.0" class="ntd-code" text-anchor="middle">subtasks</text>
+<rect x="380" y="264" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="437.0" y="283.0" class="ntd-code" text-anchor="middle">mcp</text>
+<rect x="502" y="264" width="114" height="28" rx="10" class="ntd-chip"/>
+<text x="559.0" y="283.0" class="ntd-code" text-anchor="middle">compaction</text>
+<text x="437" y="306" class="ntd-mini" text-anchor="middle">内置插件和你写的插件加载方式完全一样</text>
+<rect x="246" y="330" width="382" height="100" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="437" y="352" class="ntd-title" text-anchor="middle">内核</text>
+<rect x="258" y="362" width="114" height="58" rx="10" class="ntd-chip"/>
+<text x="315.0" y="381.0" class="ntd-code" text-anchor="middle">Client</text>
+<text x="315.0" y="396.0" class="ntd-mini" text-anchor="middle">创建 · 发消息</text>
+<text x="315.0" y="411.0" class="ntd-mini" text-anchor="middle">回答 · 跟踪</text>
+<rect x="380" y="362" width="114" height="58" rx="10" class="ntd-chip"/>
+<text x="437.0" y="381.0" class="ntd-code" text-anchor="middle">Runtime</text>
+<text x="437.0" y="396.0" class="ntd-mini" text-anchor="middle">认领 · 续约</text>
+<text x="437.0" y="411.0" class="ntd-mini" text-anchor="middle">释放</text>
+<rect x="502" y="362" width="114" height="58" rx="10" class="ntd-chip"/>
+<text x="559.0" y="381.0" class="ntd-code" text-anchor="middle">TaskRun</text>
+<text x="559.0" y="396.0" class="ntd-mini" text-anchor="middle">重放 · 走一步</text>
+<text x="559.0" y="411.0" class="ntd-mini" text-anchor="middle">追加</text>
+<path d="M 437 330 L 437 316" class="ntd-line" marker-end="url(#home-overview-arrow)"/>
+<path d="M 437 152 L 437 138" class="ntd-line" marker-end="url(#home-overview-arrow)"/>
+<rect x="736" y="58" width="208" height="192" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="840" y="86" class="ntd-title" text-anchor="middle">存储</text>
+<text x="840" y="106" class="ntd-sub" text-anchor="middle">sqlite 或 Postgres</text>
+<rect x="752" y="120" width="176" height="24" rx="10" class="ntd-box"/>
+<text x="840.0" y="137.0" class="ntd-mini" text-anchor="middle">每个任务一条事件日志</text>
+<rect x="752" y="150" width="176" height="24" rx="10" class="ntd-box"/>
+<text x="840.0" y="167.0" class="ntd-mini" text-anchor="middle">每个任务一个收件箱</text>
+<rect x="752" y="180" width="176" height="24" rx="10" class="ntd-box"/>
+<text x="840.0" y="197.0" class="ntd-mini" text-anchor="middle">带 epoch 的认领</text>
+<rect x="752" y="210" width="176" height="24" rx="10" class="ntd-box"/>
+<text x="840.0" y="227.0" class="ntd-mini" text-anchor="middle">快照</text>
+<rect x="736" y="330" width="208" height="100" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="840.0" y="366.0" class="ntd-title" text-anchor="middle">模型 provider</text>
+<text x="840.0" y="385.0" class="ntd-code" text-anchor="middle">anthropic · openai_compat</text>
+<text x="840.0" y="404.0" class="ntd-code" text-anchor="middle">openai_responses</text>
+<path d="M 628 360 L 692 360 L 692 154 L 734 154" class="ntd-line" marker-end="url(#home-overview-arrow)" marker-start="url(#home-overview-arrow)"/>
+<text x="684" y="257" class="ntd-mini" text-anchor="middle" transform="rotate(-90 684 257)">追加 · 重放</text>
+<path d="M 628 400 L 734 400" class="ntd-line" marker-end="url(#home-overview-arrow)" marker-start="url(#home-overview-arrow)"/>
+<text x="682" y="392" class="ntd-mini" text-anchor="middle">请求 · 回复</text>
+</svg>

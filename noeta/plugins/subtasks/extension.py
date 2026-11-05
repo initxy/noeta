@@ -62,6 +62,7 @@ from noeta.plugins.subtasks.tool import (
 )
 from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
+from noeta.toolkit.interactive import BASH_MODE_KEY
 from noeta.toolkit.notices import NOTICE_GUARD, STATUS_ORDER, escape, one_line
 from noeta.toolkit.tools import large_output_message, mark_spill_dir, spill_path, task_spill_dir
 
@@ -280,6 +281,9 @@ class Subtasks(Extension):
         config = {k: state.config[k] for k in self.inherit_config if k in state.config}
         config.update(spec_config)
         cap = config.pop(MODEL_CAP_KEY, None)
+        if fork and BASH_MODE_KEY in state.config:
+            # A fork runs its parent's prompt, so the prompt's cache serves both.
+            config[BASH_MODE_KEY] = state.config[BASH_MODE_KEY]
         if not fork:
             if isinstance(args.get("model"), str):
                 config["model"] = models.resolve_alias(args["model"])

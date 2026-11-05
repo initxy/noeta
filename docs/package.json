@@ -1,0 +1,15 @@
+{
+  "name": "noeta-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "node scripts/diagrams.mjs --check && vitepress build",
+    "preview": "vitepress preview",
+    "diagrams": "node scripts/diagrams.mjs --write"
+  },
+  "devDependencies": {
+    "markdown-it-cjk-friendly": "3.0.0",
+    "vitepress": "1.6.3"
+  }
+}

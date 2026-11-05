@@ -1,4 +1,5 @@
-"""Five-field cron expressions in local time, as Claude Code reads them:
+"""Five-field cron expressions in local time (the task's time zone, else the
+machine's), as Claude Code reads them:
 parsing, the next matching minute, a readable form, and the per-job offset
 the scheduler adds so jobs created for the same minute do not all fire at
 once."""
@@ -7,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 
 #: minute, hour, day of month, month, day of week (0 or 7 is Sunday).
 _FIELDS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
@@ -95,13 +96,14 @@ def parse(expr: str) -> Cron | None:
     return Cron(minute, hour, day, month, weekday)
 
 
-def next_match(expr: str, after: float) -> float | None:
+def next_match(expr: str, after: float, zone: tzinfo | None = None) -> float | None:
     """The first matching minute strictly after ``after`` (epoch seconds),
-    in local time; ``None`` when nothing matches within a year."""
+    in ``zone`` (``None``: the machine's); ``None`` when nothing matches
+    within a year."""
     cron = parse(expr)
     if cron is None:
         return None
-    t = datetime.fromtimestamp((int(after) // 60) * 60 + 60).replace(second=0, microsecond=0)
+    t = datetime.fromtimestamp((int(after) // 60) * 60 + 60, zone).replace(second=0, microsecond=0)
     end = t + timedelta(minutes=_SEARCH_MINUTES)
     while t < end:
         if t.month not in cron.month:
@@ -128,19 +130,20 @@ def job_fraction(job_id: str) -> float:
         return 0.0
 
 
-def next_fire(expr: str, after: float, job_id: str, *, recurring: bool) -> float | None:
+def next_fire(expr: str, after: float, job_id: str, *, recurring: bool,
+              zone: tzinfo | None = None) -> float | None:
     """When the job runs next: the next match plus the job's fixed offset (a
     recurring job runs late by part of its period; a one-shot job on a :00
     or :30 minute runs a little early)."""
-    first = next_match(expr, after)
+    first = next_match(expr, after, zone)
     if first is None:
         return None
     frac = job_fraction(job_id)
     if not recurring:
-        if datetime.fromtimestamp(first).minute % ONE_SHOT_MINUTE_MOD != 0:
+        if datetime.fromtimestamp(first, zone).minute % ONE_SHOT_MINUTE_MOD != 0:
             return first
         return first - frac * ONE_SHOT_MAX_SECONDS
-    second = next_match(expr, first)
+    second = next_match(expr, first, zone)
     if second is None:
         return first
     period = second - first

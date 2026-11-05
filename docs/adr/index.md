@@ -2,7 +2,7 @@
 
 Each record holds one shipped decision that is costly to reverse: what was decided, why, and
 which alternatives were rejected, so a rejected design is not proposed again. Terms are defined
-in [CONTEXT.md](../../CONTEXT.md); how the pieces fit is [docs/architecture.md](../architecture.md).
+in [CONTEXT.md](../../CONTEXT.md); how the pieces fit is the site's [How it works](../how-it-works/index.md).
 
 Rules (`AGENTS.md`, enforced by `scripts/check-docs.sh`): files are `NNN-<slug>.md`; each has a
 `- Status:` line reading `accepted` or `superseded by ADR-NNN`; a decision is never amended in

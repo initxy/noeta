@@ -41,5 +41,5 @@ isolation lives in the exec env, MCP servers and command hooks).
 ## Consequences
 
 - New capabilities are added as plugins; a change to the kernel needs a reason no plugin can
-  meet. `docs/extending.md` documents the extension points and what is deliberately not built.
+  meet. `docs/guides/plugins.md` documents the extension points and `docs/operations/comparison.md` what is deliberately not built.
 - Reloading plugin code happens between turns, never inside one.

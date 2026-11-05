@@ -49,6 +49,17 @@ def test_bad_tables(home: Path, text: str) -> None:
         load_settings()
 
 
+def test_an_unknown_top_level_key_warns_and_is_ignored(
+        home: Path, caplog: pytest.LogCaptureFixture) -> None:
+    (home / "config.toml").write_text(
+        'model = "m"\napikey = "k"\n[agents.main]\nadd_plugins = []\n[plugins.web]\n')
+    with caplog.at_level("WARNING", logger="noeta.cli"):
+        s = load_settings()
+    assert s.model == "m" and s.api_key != "k"
+    assert [r.getMessage() for r in caplog.records] == [
+        f"{home / 'config.toml'}: unknown top-level keys ['apikey']; ignored"]
+
+
 def test_merge() -> None:
     web = Web()
     assert merge_plugin_settings(
@@ -130,6 +141,32 @@ def test_settings_files_layer_in_claude_codes_precedence(
     assert exts["permissions"].mode == "bypassPermissions"  # type: ignore[attr-defined]
     assert exts["instructions"].user_dir == str(home)  # type: ignore[attr-defined]
     assert exts["hooks"] is not None
+
+
+def test_trusting_a_project_applies_its_settings_files_at_once(
+        home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.cli.main import trust_here
+
+    project = home / "proj"
+    (project / ".noeta").mkdir(parents=True)
+    (home / "config.toml").write_text(
+        f'model = "m"\nprovider = "anthropic"\napi_key = "k"\n'
+        f'store = "sqlite:///{home / "t.db"}"\n')
+    monkeypatch.delenv("TRUSTED_ONLY", raising=False)
+    (project / ".noeta" / "settings.json").write_text(json.dumps({
+        "env": {"TRUSTED_ONLY": "1"}, "permissions": {"deny": ["WebFetch"]}}))
+    app = from_settings(load_settings(cwd=str(project)), cwd=str(project))
+
+    def denied() -> list[str]:
+        [perms] = [e for e in app.runtime.agents["main"].extensions if e.name == "permissions"]
+        return [str(rule) for rule in perms.deny_rules]  # type: ignore[attr-defined]
+
+    assert not any("WebFetch" in rule for rule in denied())
+    trust_here(app, str(project))
+    assert any("WebFetch" in rule for rule in denied())  # no restart needed
+    # what is read only at the start says so, on every new task's start
+    assert "the settings files' env changed: restart noeta to apply it" in app.notices
+    assert "TRUSTED_ONLY" not in os.environ
 
 
 def test_claude_codes_own_places_are_never_read(
@@ -267,7 +304,8 @@ def test_serve_refuses_bypass_in_the_plugin_itself(
     for allow in (False, True):
         args = types.SimpleNamespace(host="127.0.0.1", no_worker=True, no_token=True,
                                      allow_origin=[], allow_bypass_permissions=allow,
-                                     allow_root=[], allow_host=[], port=0, web=None)
+                                     allow_root=[], allow_host=[], port=0, web=None,
+                                     permission_mode=None)
         asyncio.run(main._serve(load_settings(cwd=str(home)), args, str(home)))
         exts = {e.name: e for e in apps[-1].runtime.agents["main"].extensions}
         perms = exts["permissions"]
@@ -418,6 +456,31 @@ async def test_a_tables_missing_secret_fails_only_its_calls(
     router.provider_for("claude-opus-5-5")
     with pytest.raises(Fatal, match="NOT_SET_ANYWHERE"):
         await router.provider_for("x-model").complete(ModelRequest(model="x-model"))
+
+
+def test_the_top_level_key_reads_secret_references(home: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.providers.openai_compat import OpenAICompatProvider
+    from noeta.toolkit import local_env
+
+    monkeypatch.setattr(local_env, "_withheld", set())
+    monkeypatch.delenv("NOETA_API_KEY", raising=False)
+    monkeypatch.setenv("TOP_KEY", "sk-top")
+    monkeypatch.setenv("TOP_TEAM", "a")
+    (home / "config.toml").write_text(
+        'model = "m"\nprovider = "openai_compat"\nbase_url = "https://x/v1"\n'
+        'api_key = "{env:TOP_KEY}"\nextra_headers = {"x-team" = "{env:TOP_TEAM}"}\n')
+    s = load_settings()
+    assert s.api_key == "{env:TOP_KEY}"  # the reference is what settings hold
+    provider = s.make_provider()
+    inner = getattr(provider, "_inner", provider)
+    assert isinstance(inner, OpenAICompatProvider)
+    assert inner._client.headers["authorization"] == "Bearer sk-top"  # type: ignore[attr-defined]
+    assert inner._client.headers["x-team"] == "a"  # type: ignore[attr-defined]
+    assert not {"TOP_KEY", "TOP_TEAM"} & set(local_env.child_env())
+    monkeypatch.delenv("TOP_KEY")
+    with pytest.raises(ValueError, match="TOP_KEY"):
+        s.make_provider()
 
 
 def test_an_anthropic_provider_takes_the_one_hour_cache(home: Path) -> None:

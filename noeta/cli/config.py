@@ -172,15 +172,24 @@ class Settings:
         is set for a built-in provider."""
         if self.provider in self.providers:
             return self._table_provider(self.provider)
-        if not self.api_key and self.provider in _KEY_ENV:
+        key, headers = self._default_secrets()
+        if not key and self.provider in _KEY_ENV:
             fallback = _KEY_ENV[self.provider]
             if not (fallback and os.environ.get(fallback)):
                 also = f" ({fallback} is read too)" if fallback else ""
                 raise MissingAPIKey(
                     f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
                     f"or api_key in {home_dir.HOME / 'config.toml'}")
-        return _adapter(self.provider, self.base_url, self.api_key, self.extra_headers,
-                        self.prompt_cache_ttl)
+        return _adapter(self.provider, self.base_url, key, headers, self.prompt_cache_ttl)
+
+    def _default_secrets(self) -> tuple[str | None, dict[str, str]]:
+        """The default provider's key and headers, their secret references
+        read as a provider table's are."""
+        from noeta.agents.agent_files import resolve_secrets
+
+        where = "config.toml api_key / extra_headers"
+        key = resolve_secrets(self.api_key, where)
+        return key or None, dict(resolve_secrets(self.extra_headers, where))
 
     def _table_secrets(self, name: str) -> tuple[str | None, dict[str, str]]:
         """A provider table's key and headers, their secret references read."""
@@ -213,7 +222,7 @@ class Settings:
                 if name in self.providers:
                     key, headers = self._table_secrets(name)
                 else:
-                    key, headers = self.api_key, dict(self.extra_headers)
+                    key, headers = self._default_secrets()
                 return listing.fetch_listing(family, base_url, key, headers)
 
             return read
@@ -264,6 +273,8 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     path = home_dir.HOME / "config.toml"
     if path.is_file():
         data.update(tomllib.loads(path.read_text("utf-8")))
+        if unknown := sorted(set(data) - _TOP_LEVEL_KEYS):
+            log.warning("%s: unknown top-level keys %s; ignored", path, unknown)
     env = {
         "model": os.environ.get("NOETA_MODEL"),
         "provider": os.environ.get("NOETA_PROVIDER"),
@@ -284,7 +295,7 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     # The secrets this config hands to noeta's plugins, channels and
     # providers are its own.
     withhold_env_refs([data["plugins"], data["channels"], data["add_plugins"],
-                       data["providers"]])
+                       data["providers"], data.get("api_key"), data.get("extra_headers")])
     data.pop("model_providers", None)
     known = {f for f in Settings.__dataclass_fields__}
     settings = Settings(**{k: v for k, v in data.items() if k in known})
@@ -313,6 +324,14 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
         raise ValueError(f"{settings.models_file}: rows name providers that are not "
                          f"configured: {stray}")
     return settings
+
+
+#: The top-level keys of ``config.toml``: the settings a file sets, and
+#: ``[agents.<name>]`` (read into ``add_plugins``). An unknown one warns
+#: rather than fails, so a key a newer or older noeta reads does not stop
+#: this one from starting.
+_TOP_LEVEL_KEYS = frozenset(Settings.__dataclass_fields__) - {"add_plugins",
+                                                              "model_providers"} | {"agents"}
 
 
 def _provider_tables(value: Any) -> dict[str, dict[str, Any]]:
@@ -521,11 +540,12 @@ SKILL_BUDGET_ENV = "NOETA_SLASH_COMMAND_TOOL_CHAR_BUDGET"
 
 
 def _skills_settings(found: FileSettings, additional: Sequence[str]) -> dict[str, Any]:
-    """The skills plugin's arguments: noeta's places (``~/.noeta/skills``
-    and ``commands``, the managed directory's), the additional directories,
-    and the listing settings."""
+    """The skills plugin's arguments: the user's places (``~/.noeta/skills``
+    and ``commands``, ``~/.agents/skills``), the managed directory's, the
+    additional directories, and the listing settings."""
     out: dict[str, Any] = {"trusted": project_trusted,
                            "global_dir": str(home_dir.HOME / "skills"),
+                           "global_agents_dir": str(home_dir.AGENTS_SKILLS),
                            "global_commands_dir": str(home_dir.HOME / "commands"),
                            "managed_dir": str(managed_dir()),
                            "additional_dirs": list(additional)}
@@ -625,18 +645,24 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     runtime_kw.setdefault("spill_root", str(home_dir.HOME / "tool-results"))
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
-    base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
-    fs = base.get("fs")
-    if own_tasks_only and isinstance(fs, Mapping):
-        # A front end runs on the person's machine: an @-mention of a path
-        # under ~ is their home (never on a server, whose home is not theirs).
-        base["fs"] = {**fs, "home": str(Path.home())}
     store = open_store(settings.store_url)
-    # Claude Code ranks the skill listing by use across its sessions; here
-    # the store's tasks are the sessions (scanned in the background).
-    skills = base.get("skills")
-    if isinstance(skills, Mapping):
-        base["skills"] = {**skills, "usage_from": Client(store)}
+
+    def plugin_base(found: FileSettings) -> dict[str, PluginSetting]:
+        base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
+        fs = base.get("fs")
+        if own_tasks_only and isinstance(fs, Mapping):
+            # A front end runs on the person's machine: an @-mention of a path
+            # under ~ is their home (never on a server, whose home is not theirs).
+            base["fs"] = {**fs, "home": str(Path.home())}
+        # Claude Code ranks the skill listing by use across its sessions; here
+        # the store's tasks are the sessions (scanned in the background).
+        skills = base.get("skills")
+        if isinstance(skills, Mapping):
+            base["skills"] = {**skills, "usage_from": Client(store)}
+        return base
+
+    base = plugin_base(found)
+    started_with = found
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
     plugin_agent: dict[str, str] = {}
@@ -728,21 +754,40 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     pick_main_agent()
 
     def reload_plugins() -> list[str]:
-        """What changed (one line per plugin), then the files that failed
-        and the notices of loading them."""
+        """What changed (one line per plugin), then the files that failed,
+        the notices of loading them, and the settings that take a restart.
+        The settings files are read again too (a project just trusted adds
+        its own), so the plugins' arguments from them apply."""
         from noeta.cli.main import broken_plugin_lines
 
+        nonlocal found, base
         before = dict(app.runtime.agents)
         registry.forget_plugin_files()
-        found = load_plugin_files(cwd, plugin_dirs)
+        loaded = load_plugin_files(cwd, plugin_dirs)
+        found = file_settings(cwd, sources=setting_sources, flag=flag_settings)
+        base = plugin_base(found)
         app.replace_agents(make_agents())
         pick_main_agent()
         changes = plugin_changes(before, app.runtime.agents) or ["no plugin changed"]
+        restart = restart_needed(started_with, found)
+        # Shown with every new task's start until the restart.
+        app.notices.extend(n for n in restart if n not in app.notices)
         return [*changes, *(f"failed: {line}" for line in broken_plugin_lines()),
-                *found, *unjoined]
+                *loaded, *unjoined, *restart]
 
     app.reload_plugins = reload_plugins
     return app
+
+
+def restart_needed(start: FileSettings, now: FileSettings) -> list[str]:
+    """A notice naming the settings changed since the process started that
+    only a restart applies (they are read once, at the start)."""
+    changed = [name for name in ("env", "model", "agent", "sandbox")
+               if getattr(start, name) != getattr(now, name)]
+    if not changed:
+        return []
+    return [f"the settings files' {', '.join(changed)} changed: restart noeta to apply "
+            f"{'it' if len(changed) == 1 else 'them'}"]
 
 
 def _route_child(runtime: Any, router: ProviderRouter) -> Any:

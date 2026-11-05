@@ -1,5 +1,6 @@
 """What the ``noeta`` command hands the terminal UI on this machine: the
-effort asked for, and in a project not yet trusted a way to trust it."""
+effort asked for, the first message, and in a project not yet trusted a way
+to trust it."""
 
 from __future__ import annotations
 
@@ -64,3 +65,11 @@ def test_continue_is_handed_to_the_front_end(started: dict[str, Any]) -> None:
     assert started["start"].continue_last and started["start"].resume is None
     cli.main([])
     assert not started["start"].continue_last
+
+
+def test_a_prompt_without_print_mode_is_the_front_ends_first_message(
+        started: dict[str, Any]) -> None:
+    cli.main(["fix the test"])
+    assert started["start"].prompt == "fix the test"
+    cli.main([])
+    assert started["start"].prompt is None

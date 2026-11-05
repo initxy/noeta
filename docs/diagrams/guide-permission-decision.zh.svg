@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 440" role="img" aria-label="权限插件按顺序做的检查，以及权限模式怎样处理“要问”"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="guide-permission-decision-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="guide-permission-decision-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker><marker id="guide-permission-decision-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="guide-permission-decision-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="guide-permission-decision-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker></defs>
+<rect x="20" y="44" width="430" height="46" rx="10" class="ntd-box"/>
+<text x="235.0" y="63.0" class="ntd-chiptext" text-anchor="middle">工具被拿掉了？</text>
+<text x="235.0" y="81.0" class="ntd-mini" text-anchor="middle">--tools、--disallowedTools、代理文件里的列表</text>
+<path d="M235 90 L235 110" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<text x="243" y="104" class="ntd-mini" text-anchor="start">否</text>
+<rect x="20" y="112" width="430" height="46" rx="10" class="ntd-box"/>
+<text x="235.0" y="131.0" class="ntd-chiptext" text-anchor="middle">命中拒绝规则？</text>
+<text x="235.0" y="149.0" class="ntd-mini" text-anchor="middle">看调用本身，也看链接指向的真实路径</text>
+<path d="M235 158 L235 178" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<text x="243" y="172" class="ntd-mini" text-anchor="start">否</text>
+<rect x="20" y="180" width="430" height="46" rx="10" class="ntd-box"/>
+<text x="235.0" y="199.0" class="ntd-chiptext" text-anchor="middle">Bash 命令碰到被拒绝的路径？</text>
+<text x="235.0" y="217.0" class="ntd-mini" text-anchor="middle">写 Edit 拒绝的路径，或读 Read 拒绝的路径</text>
+<path d="M235 226 L235 246" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<text x="243" y="240" class="ntd-mini" text-anchor="start">否</text>
+<rect x="20" y="248" width="430" height="46" rx="10" class="ntd-box"/>
+<text x="235.0" y="267.0" class="ntd-chiptext" text-anchor="middle">命中询问规则？</text>
+<text x="235.0" y="285.0" class="ntd-mini" text-anchor="middle">任何模式都跳不过</text>
+<path d="M235 294 L235 314" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<text x="243" y="308" class="ntd-mini" text-anchor="start">否</text>
+<rect x="20" y="316" width="430" height="66" rx="10" class="ntd-box"/>
+<text x="235.0" y="345.0" class="ntd-chiptext" text-anchor="middle">这次调用碰了什么</text>
+<text x="235.0" y="363.0" class="ntd-mini" text-anchor="middle">目录内读 → 放行 · 改文件 → 要问（acceptEdits 放行）</text>
+<rect x="500" y="49" width="100" height="36" rx="10" class="ntd-chip ntd-chip-red"/>
+<text x="550.0" y="72.0" class="ntd-chiptext" text-anchor="middle">拒绝</text>
+<path d="M450 67 L498 67" class="ntd-line-red" marker-end="url(#guide-permission-decision-arrow-red)"/>
+<text x="474" y="61" class="ntd-mini" text-anchor="middle">是</text>
+<rect x="500" y="117" width="100" height="36" rx="10" class="ntd-chip ntd-chip-red"/>
+<text x="550.0" y="140.0" class="ntd-chiptext" text-anchor="middle">拒绝</text>
+<path d="M450 135 L498 135" class="ntd-line-red" marker-end="url(#guide-permission-decision-arrow-red)"/>
+<text x="474" y="129" class="ntd-mini" text-anchor="middle">是</text>
+<rect x="500" y="185" width="100" height="36" rx="10" class="ntd-chip ntd-chip-red"/>
+<text x="550.0" y="208.0" class="ntd-chiptext" text-anchor="middle">拒绝</text>
+<path d="M450 203 L498 203" class="ntd-line-red" marker-end="url(#guide-permission-decision-arrow-red)"/>
+<text x="474" y="197" class="ntd-mini" text-anchor="middle">是</text>
+<rect x="500" y="253" width="100" height="36" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="550.0" y="276.0" class="ntd-chiptext" text-anchor="middle">要问（强制）</text>
+<path d="M450 271 L498 271" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<text x="474" y="265" class="ntd-mini" text-anchor="middle">是</text>
+<rect x="500" y="318" width="100" height="28" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="550.0" y="337.0" class="ntd-chiptext" text-anchor="middle">放行</text>
+<rect x="500" y="352" width="100" height="28" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="550.0" y="371.0" class="ntd-chiptext" text-anchor="middle">要问</text>
+<path d="M450 349 L474 349 L474 332 L498 332" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<path d="M474 349 L474 366 L498 366" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<rect x="660" y="150" width="240" height="210" rx="10" class="ntd-box"/>
+<text x="780" y="176" class="ntd-title" text-anchor="middle">由模式决定怎么问</text>
+<text x="780" y="208" class="ntd-code" text-anchor="middle">dontAsk</text>
+<text x="780" y="225" class="ntd-mini" text-anchor="middle">直接拒绝</text>
+<text x="780" y="246" class="ntd-code" text-anchor="middle">bypassPermissions</text>
+<text x="780" y="263" class="ntd-mini" text-anchor="middle">放行，强制或受保护的除外</text>
+<text x="780" y="284" class="ntd-code" text-anchor="middle">auto</text>
+<text x="780" y="301" class="ntd-mini" text-anchor="middle">交给分类器回答</text>
+<text x="780" y="322" class="ntd-code" text-anchor="middle">default · acceptEdits · plan</text>
+<text x="780" y="339" class="ntd-mini" text-anchor="middle">问你</text>
+<path d="M600 271 L658 236" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<path d="M600 366 L658 320" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
+<text x="460" y="420" class="ntd-mini" text-anchor="middle">强制的问（询问规则、hook 要求确认）不走 bypass 也不交给分类器；写受保护路径在 bypass 下照样要问。</text>
+</svg>

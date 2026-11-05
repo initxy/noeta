@@ -121,6 +121,25 @@ async def test_permission_options_name_the_remembered_rule(
     await app.stop()
 
 
+async def test_sessions_start_with_the_command_lines_mode_and_effort(tmp_path: Path) -> None:
+    from noeta.core.loop.state import fold
+    from noeta.plugins.permissions import Permissions
+
+    agent = Agent(name="main", model="m", extensions=[Permissions(mode="default")])
+    app = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
+                   env_for=lambda _s: None)
+    acp_agent = NoetaAcpAgent(app, config={"permission_mode": "acceptEdits", "effort": "high"})
+    acp_agent.on_connect(FakeEditor())
+    await acp_agent.initialize(protocol_version=1)
+    session = await acp_agent.new_session(cwd=str(tmp_path))
+    assert session.modes is not None and session.modes.current_mode_id == "acceptEdits"
+    state = fold(await app.client.events(session.session_id), {})
+    assert state.config["effort"] == "high" and state.config["cwd"] == str(tmp_path)
+    # An editor runs no ``!`` commands: the prompt's line suggesting one is left out.
+    assert "bash_mode" not in state.config
+    await app.stop()
+
+
 async def test_permission_modes_are_session_modes(tmp_path: Path) -> None:
     from noeta.plugins.permissions import Permissions
 

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 420" role="img" aria-label="工人 A 卡住超过了租期；工人 B 用更高的 epoch 认领任务接着跑；A 醒来后带着旧 epoch 追加，被拒绝"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="core-claim-epochs-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="core-claim-epochs-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="core-claim-epochs-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="core-claim-epochs-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="core-claim-epochs-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<text x="20" y="49" class="ntd-title">工人 A</text>
+<text x="20" y="121" class="ntd-title">任务行</text>
+<path d="M 20 82 L 906 82" class="ntd-line ntd-dashed"/>
+<text x="20" y="193" class="ntd-title">任务日志</text>
+<path d="M 20 154 L 906 154" class="ntd-line ntd-dashed"/>
+<text x="20" y="265" class="ntd-title">工人 B</text>
+<path d="M 20 226 L 906 226" class="ntd-line ntd-dashed"/>
+<rect x="130" y="24" width="120" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="190.0" y="48.5" class="ntd-mini" text-anchor="middle">认领 · epoch 7</text>
+<rect x="256" y="24" width="110" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="311.0" y="48.5" class="ntd-mini" text-anchor="middle">追加 41–45</text>
+<rect x="372" y="24" width="318" height="40" rx="8" class="ntd-chip ntd-chip-red ntd-dash"/>
+<text x="531.0" y="48.5" class="ntd-mini" text-anchor="middle">卡住（GC 停顿、SIGSTOP、断网）</text>
+<rect x="696" y="24" width="104" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="748.0" y="48.5" class="ntd-mini" text-anchor="middle">醒来，追加</text>
+<rect x="806" y="24" width="100" height="40" rx="8" class="ntd-chip ntd-chip-red"/>
+<text x="856.0" y="48.5" class="ntd-mini" text-anchor="middle">Conflict：停手</text>
+<rect x="130" y="96" width="340" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="300.0" y="120.5" class="ntd-mini" text-anchor="middle">持有者 A · epoch 7 · 持续续租</text>
+<rect x="476" y="96" width="110" height="40" rx="8" class="ntd-chip ntd-chip-red"/>
+<text x="531.0" y="120.5" class="ntd-mini" text-anchor="middle">租约到期</text>
+<rect x="592" y="96" width="314" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="606" y="121" class="ntd-mini">持有者 B · epoch 8</text>
+<rect x="130" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="146" y="190" class="ntd-mini" text-anchor="middle">38</text>
+<rect x="166" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="182" y="190" class="ntd-mini" text-anchor="middle">39</text>
+<rect x="202" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="218" y="190" class="ntd-mini" text-anchor="middle">40</text>
+<rect x="238" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="254" y="190" class="ntd-mini" text-anchor="middle">41</text>
+<rect x="274" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="290" y="190" class="ntd-mini" text-anchor="middle">42</text>
+<rect x="310" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="326" y="190" class="ntd-mini" text-anchor="middle">43</text>
+<rect x="346" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="362" y="190" class="ntd-mini" text-anchor="middle">44</text>
+<rect x="382" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="398" y="190" class="ntd-mini" text-anchor="middle">45</text>
+<rect x="650" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="666" y="190" class="ntd-mini" text-anchor="middle">46</text>
+<rect x="686" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="702" y="190" class="ntd-mini" text-anchor="middle">47</text>
+<rect x="722" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="738" y="190" class="ntd-mini" text-anchor="middle">48</text>
+<rect x="758" y="168" width="32" height="34" rx="6" class="ntd-chip ntd-chip-violet"/>
+<text x="774" y="190" class="ntd-mini" text-anchor="middle">49</text>
+<rect x="592" y="240" width="104" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="644.0" y="264.5" class="ntd-mini" text-anchor="middle">认领 · epoch 8</text>
+<rect x="702" y="240" width="80" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="742.0" y="264.5" class="ntd-mini" text-anchor="middle">折叠 1–45</text>
+<rect x="788" y="240" width="118" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="847.0" y="264.5" class="ntd-mini" text-anchor="middle">追加 46、47……</text>
+<path d="M 311 64 L 311 166" class="ntd-line" marker-end="url(#core-claim-epochs-arrow)"/>
+<path d="M 830 240 L 790 204" class="ntd-line" marker-end="url(#core-claim-epochs-arrow)"/>
+<path d="M 748 64 L 748 164" class="ntd-line-red ntd-dashed" marker-end="url(#core-claim-epochs-arrow-red)"/>
+<path d="M 741 151 L 755 165 M 755 151 L 741 165" class="ntd-line-red"/>
+<text x="530" y="190" class="ntd-mini ntd-red" text-anchor="middle">epoch 7 ≠ 8：一个字都写不进去</text>
+<rect x="20" y="310" width="886" height="96" rx="10" class="ntd-box"/>
+<text x="36" y="336" class="ntd-label">每次追加都在写入的同一个事务里检查：</text>
+<rect x="36" y="352" width="274" height="38" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="173.0" y="375.5" class="ntd-sub" text-anchor="middle">认领还有租约</text>
+<rect x="326" y="352" width="274" height="38" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="463.0" y="375.5" class="ntd-code" text-anchor="middle">owner_epoch = 认领的 epoch</text>
+<rect x="616" y="352" width="274" height="38" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="753.0" y="375.5" class="ntd-code" text-anchor="middle">last_seq = expected_seq</text>
+</svg>

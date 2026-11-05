@@ -39,4 +39,4 @@ and two copies to keep in step).
 ## Consequences
 
 - A lost token cannot be recovered, only replaced (delete the file, restart).
-- `docs/server.md` ("Tokens and tenants") documents the client side.
+- `docs/guides/server.md` documents the client side.

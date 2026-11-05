@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 422" role="img" aria-label="任务行的状态：ready、running、waiting（是否保留认领）、ended，以及状态之间怎么切换"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="core-task-states-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="core-task-states-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="core-task-states-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="core-task-states-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="core-task-states-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<rect x="60" y="150" width="150" height="60" rx="10" class="ntd-chip"/>
+<text x="135.0" y="174.5" class="ntd-code" text-anchor="middle">ready</text>
+<text x="135.0" y="194.5" class="ntd-mini" text-anchor="middle">可被认领</text>
+<rect x="330" y="150" width="180" height="60" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="420.0" y="174.5" class="ntd-code" text-anchor="middle">running</text>
+<text x="420.0" y="194.5" class="ntd-mini" text-anchor="middle">某个工人持有认领</text>
+<rect x="650" y="40" width="250" height="60" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="775.0" y="64.5" class="ntd-code" text-anchor="middle">waiting</text>
+<text x="775.0" y="84.5" class="ntd-mini" text-anchor="middle">等输入 · 批准 · 提问 · 子任务</text>
+<rect x="650" y="150" width="250" height="60" rx="10" class="ntd-chip ntd-chip-amber ntd-dash"/>
+<text x="775.0" y="174.5" class="ntd-chiptext" text-anchor="middle">waiting，保留认领</text>
+<text x="775.0" y="194.5" class="ntd-mini" text-anchor="middle">Patch.keep：持有者和租约不变</text>
+<rect x="650" y="260" width="250" height="60" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="775.0" y="284.5" class="ntd-code" text-anchor="middle">ended</text>
+<text x="775.0" y="304.5" class="ntd-mini" text-anchor="middle">完成 · 失败 · 取消</text>
+<path d="M 16 180 L 58 180" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="30" y="170" class="ntd-mini" text-anchor="middle">创建</text>
+<path d="M 210 172 L 328 172" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="269" y="164" class="ntd-mini" text-anchor="middle">认领：epoch + 1</text>
+<path d="M 328 192 L 210 192" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="269" y="208" class="ntd-mini" text-anchor="middle">交还（停机时）</text>
+<path d="M 390 150 C 390 112, 450 112, 450 148" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="420" y="106" class="ntd-mini" text-anchor="middle">每 1/3 租期续租一次</text>
+<path d="M 400 210 C 400 252, 440 252, 440 212" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="370" y="268" class="ntd-mini" text-anchor="middle">租约到期：任何工人都能认领（epoch + 1）</text>
+<path d="M 510 162 L 524 162 L 524 70 L 648 70" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="534" y="62" class="ntd-mini">追加 Waiting</text>
+<path d="M 510 180 L 648 180" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="586" y="172" class="ntd-mini" text-anchor="middle">Waiting + 保留认领</text>
+<path d="M 510 198 L 524 198 L 524 290 L 648 290" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="534" y="282" class="ntd-mini">追加 TaskEnded</text>
+<path d="M 775 40 L 775 16 L 135 16 L 135 148" class="ntd-line" marker-end="url(#core-task-states-arrow)"/>
+<text x="455" y="30" class="ntd-mini" text-anchor="middle">有投递唤醒 · ready_at 到点</text>
+<path d="M 900 194 L 912 194 L 912 226 L 520 226 L 512 210" class="ntd-line ntd-dashed" marker-end="url(#core-task-states-arrow)"/>
+<text x="778" y="242" class="ntd-mini" text-anchor="middle">有投递：原工人接着跑</text>
+<rect x="16" y="336" width="888" height="76" rx="10" class="ntd-box"/>
+<text x="30" y="358" class="ntd-sub">要去等待时收件箱里还有没读的东西：任务直接回到 ready。</text>
+<text x="30" y="380" class="ntd-sub">收件箱里还有没读的东西时不准结束（InboxUnread）：先取进来，再重新决定。</text>
+<text x="30" y="402" class="ntd-sub">保留的认领租约过期（工人没了声音）：任务立刻可被认领，接手的工人告诉模型那份工作丢了。</text>
+</svg>

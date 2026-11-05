@@ -95,7 +95,36 @@ async def test_a_new_task_asks_only_for_its_task_config(tmp_path: Path,
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(pilot, lambda: ready(app))
         first = (await local.client.events(await app.ensure_task()))[0].event
-        assert isinstance(first, TaskCreated) and first.config == {"timezone": "Asia/Shanghai"}
+        # It runs ``!`` commands: the main prompt may suggest one.
+        assert isinstance(first, TaskCreated) and first.config == {"timezone": "Asia/Shanghai",
+                                                                   "bash_mode": True}
+
+
+async def test_only_a_task_the_ui_runs_bang_commands_for_says_so(tmp_path: Path) -> None:
+    """``--server`` refuses bash mode (the task's files are on the server),
+    so a task made there leaves the main prompt's ``!`` line out; the HTTP
+    API takes the key from a client that does run them."""
+    httpx = pytest.importorskip("httpx")
+    pytest.importorskip("starlette")
+    from noeta.host.http import create_app
+    from noeta.host.remote import RemoteApp
+
+    agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
+    local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
+                     env_for=lambda _s: None)
+    api = create_app(local.client, token="secret", app=local, cwd=str(tmp_path))
+    remote = RemoteApp("http://127.0.0.1", token="secret",
+                       transport=httpx.ASGITransport(app=api))
+    app = NoetaApp(remote, agent="main", model="the server's model", cwd=str(tmp_path),
+                   task_config={}, on_server=True)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot, lambda: ready(app))
+        tid = await app.ensure_task()
+        first = (await local.client.events(tid))[0].event
+        assert "bash_mode" not in first.config  # type: ignore[attr-defined]
+        other = await remote.client.create("main", None, config={"bash_mode": True})
+        first = (await local.client.events(other))[0].event
+        assert first.config["bash_mode"] is True  # type: ignore[attr-defined]
 
 
 async def test_shift_tab_cycles_the_permission_mode(tmp_path: Path) -> None:

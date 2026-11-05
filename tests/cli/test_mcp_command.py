@@ -11,8 +11,10 @@ import pytest
 
 from noeta.cli import config, home_dir
 from noeta.cli.main import main
+from noeta.cli.trust import trust_project
 from noeta.plugins.mcp.config import McpServer
 from noeta.plugins.mcp.oauth import store_for
+from noeta.plugins.mcp.settings import read_servers
 
 FAKE = str(Path(__file__).parents[1] / "plugins" / "mcp" / "fake_server.py")
 
@@ -89,6 +91,7 @@ def test_list_get_and_remove(places: tuple[Path, Path],
     assert mcp(project, "add", "-s", "project", "shared", sys.executable, FAKE) == 0
     assert mcp(project, "add", "-s", "local", "fake", sys.executable, FAKE) == 0
     assert mcp(project, "add", "-s", "user", "dead", "/no/such/server") == 0
+    trust_project(str(project))
     capsys.readouterr()
     assert mcp(project, "list") == 0
     out = capsys.readouterr().out
@@ -111,6 +114,46 @@ def test_list_get_and_remove(places: tuple[Path, Path],
     capsys.readouterr()
     assert mcp(project, "list") == 0
     assert "No MCP servers configured" in capsys.readouterr().out
+
+
+def test_an_untrusted_projects_servers_are_listed_not_started(
+        places: tuple[Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _home, project = places
+    ran = tmp_path / "ran"
+    for scope in ("local", "project"):
+        assert mcp(project, "add", "-s", scope, f"from-{scope}", "--", "sh", "-c",
+                   f"echo {scope} >> {ran}") == 0
+    (project / ".noeta" / "settings.local.json").write_text(json.dumps({
+        **read(project / ".noeta" / "settings.local.json"),
+        "enabledMcpjsonServers": ["from-project"]}))
+    capsys.readouterr()
+    assert mcp(project, "list") == 0
+    out = capsys.readouterr().out
+    assert out.count("project not trusted (not started; run `noeta trust` here)") == 2
+    assert mcp(project, "get", "from-local") == 0
+    assert "project not trusted" in capsys.readouterr().out
+    assert not ran.exists()
+
+
+def test_the_cli_and_the_runtime_pick_the_same_server(places: tuple[Path, Path],
+                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    """A name in every scope: ``get`` shows, and the MCP plugin starts, the
+    local one, then the project's, then the user's (Claude Code's order)."""
+    _, project = places
+    for scope in ("user", "project", "local"):
+        assert mcp(project, "add", "-s", scope, "x", f"from-{scope}") == 0
+    local = project / ".noeta" / "settings.local.json"
+    data = read(local)
+    local.write_text(json.dumps({**data, "enabledMcpjsonServers": ["x"]}))
+    trust_project(str(project))
+    files = config.file_settings(str(project)).files
+    for scope in ("local", "project", "user"):
+        capsys.readouterr()
+        assert mcp(project, "get", "x") == 0
+        assert f"Scope: {scope}" in capsys.readouterr().out
+        started = read_servers(files, [str(project)])
+        assert started[0].command[0] == f"from-{scope}"
+        assert mcp(project, "remove", "-s", scope, "x") == 0
 
 
 def test_login_and_logout(places: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,

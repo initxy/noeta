@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 450" role="img" aria-label="How the kernel combines every plugin&#x27;s verdict on a tool call: deny wins, rewrite is gated again, asks park unless answered"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="guide-gates-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="guide-gates-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker><marker id="guide-gates-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="guide-gates-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="guide-gates-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker></defs>
+<rect x="20" y="190" width="140" height="70" rx="10" class="ntd-box"/>
+<text x="90.0" y="220.5" class="ntd-title" text-anchor="middle">ToolUse</text>
+<text x="90.0" y="239.5" class="ntd-mini" text-anchor="middle">a call in the reply</text>
+<rect x="180" y="44" width="210" height="370" rx="14" class="ntd-frame"/>
+<text x="285" y="66" class="ntd-label" text-anchor="middle">before_tool</text>
+<rect x="196" y="80" width="178" height="48" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="285.0" y="100.5" class="ntd-chiptext" text-anchor="middle">permissions</text>
+<text x="285.0" y="117.5" class="ntd-mini" text-anchor="middle">modes · rules</text>
+<rect x="196" y="140" width="178" height="48" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="285.0" y="160.5" class="ntd-chiptext" text-anchor="middle">hooks</text>
+<text x="285.0" y="177.5" class="ntd-mini" text-anchor="middle">PreToolUse</text>
+<rect x="196" y="200" width="178" height="48" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="285.0" y="220.5" class="ntd-chiptext" text-anchor="middle">skills</text>
+<text x="285.0" y="237.5" class="ntd-mini" text-anchor="middle">allowed-tools</text>
+<rect x="196" y="260" width="178" height="48" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="285.0" y="280.5" class="ntd-chiptext" text-anchor="middle">plan_mode</text>
+<text x="285.0" y="297.5" class="ntd-mini" text-anchor="middle">read-only while planning</text>
+<rect x="196" y="320" width="178" height="48" rx="10" class="ntd-chip ntd-chip-green ntd-dash"/>
+<text x="285.0" y="340.5" class="ntd-chiptext" text-anchor="middle">your plugin</text>
+<text x="285.0" y="357.5" class="ntd-mini" text-anchor="middle">any Extension</text>
+<text x="285" y="400" class="ntd-mini" text-anchor="middle">a check that raises = Deny</text>
+<path d="M160 225 L178 225" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<rect x="420" y="56" width="200" height="56" rx="10" class="ntd-chip ntd-chip-red"/>
+<text x="520.0" y="80.0" class="ntd-chiptext" text-anchor="middle">any Deny wins</text>
+<text x="520.0" y="98.0" class="ntd-mini" text-anchor="middle">refused; the model reads why</text>
+<path d="M390 229 L418 84" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<rect x="420" y="128" width="200" height="56" rx="10" class="ntd-chip"/>
+<text x="520.0" y="152.0" class="ntd-chiptext" text-anchor="middle">else the first Rewrite</text>
+<text x="520.0" y="170.0" class="ntd-mini" text-anchor="middle">gated again, at most 3 times</text>
+<path d="M390 229 L418 156" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<rect x="420" y="200" width="200" height="56" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="520.0" y="224.0" class="ntd-chiptext" text-anchor="middle">else, no Ask</text>
+<text x="520.0" y="242.0" class="ntd-mini" text-anchor="middle">the call runs</text>
+<path d="M390 229 L418 228" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<rect x="420" y="272" width="200" height="56" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="520.0" y="296.0" class="ntd-chiptext" text-anchor="middle">else, an Ask</text>
+<text x="520.0" y="314.0" class="ntd-mini" text-anchor="middle">a hook&#x27;s allow skips one not firm</text>
+<path d="M390 229 L418 300" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<text x="520" y="44" class="ntd-mini" text-anchor="middle">checked in this order</text>
+<path d="M620 156 L642 156 L642 26 L300 26 L300 42" class="ntd-line ntd-dashed" marker-end="url(#guide-gates-arrow)"/>
+<text x="470" y="20" class="ntd-mini" text-anchor="middle">the rewritten call</text>
+<rect x="680" y="172" width="220" height="60" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="790.0" y="197.5" class="ntd-chiptext" text-anchor="middle">Run the call</text>
+<text x="790.0" y="216.5" class="ntd-code" text-anchor="middle">ToolStarted</text>
+<path d="M620 228 L678 206" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<rect x="680" y="268" width="220" height="104" rx="10" class="ntd-box"/>
+<text x="790" y="290" class="ntd-code" text-anchor="middle">resolve_ask</text>
+<text x="790" y="312" class="ntd-mini" text-anchor="middle">PermissionRequest hook</text>
+<text x="790" y="330" class="ntd-mini" text-anchor="middle">auto-mode classifier</text>
+<text x="790" y="348" class="ntd-mini" text-anchor="middle">can_use_tool · prompt tool</text>
+<path d="M620 300 L678 314" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<path d="M790 268 L790 234" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+<text x="798" y="256" class="ntd-mini" text-anchor="start">answered</text>
+<rect x="680" y="388" width="220" height="50" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="790.0" y="409.5" class="ntd-chiptext" text-anchor="middle">Park: Waiting</text>
+<text x="790.0" y="426.5" class="ntd-mini" text-anchor="middle">no worker held; your answer resumes it</text>
+<path d="M790 372 L790 386" class="ntd-line" marker-end="url(#guide-gates-arrow)"/>
+</svg>

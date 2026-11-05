@@ -64,7 +64,7 @@ def test_acp_on_a_server_leaves_the_directory_to_it(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(acp, "serve_stdio", serve)
     monkeypatch.setattr(server_token, "server_problem", lambda _url, _token: None)
     cli.main(["acp", "--server", "http://api.internal:8642"])
-    assert seen == {"model": "", "editor_cwd": False, "cwd": ""}
+    assert seen == {"model": "", "editor_cwd": False, "cwd": "", "config": {}}
 
 
 @pytest.mark.parametrize("argv", [
@@ -85,4 +85,20 @@ def test_acp_takes_cwd_and_model_on_either_side(
     monkeypatch.setattr(acp, "serve_stdio", serve)
     monkeypatch.setattr(server_token, "server_problem", lambda _url, _token: None)
     cli.main(argv)
-    assert seen == {"model": "opus", "editor_cwd": False, "cwd": "projects/web"}
+    assert seen == {"model": "opus", "editor_cwd": False, "cwd": "projects/web", "config": {}}
+
+
+def test_acp_on_a_server_starts_sessions_with_the_effort_and_mode_asked(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import noeta.host.acp as acp
+
+    seen: dict[str, Any] = {}
+
+    async def serve(_app: Any, **kw: Any) -> None:
+        seen.update(kw)
+
+    monkeypatch.setattr(acp, "serve_stdio", serve)
+    monkeypatch.setattr(server_token, "server_problem", lambda _url, _token: None)
+    cli.main(["--effort", "high", "--permission-mode", "plan",
+              "acp", "--server", "http://api.internal:8642"])
+    assert seen["config"] == {"effort": "high", "permission_mode": "plan"}

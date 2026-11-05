@@ -488,6 +488,9 @@ async def test_a_headless_task_is_not_interactive(tmp_path: Path) -> None:
         conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path), ask_client=True),
                           Client().emit)
         await asyncio.wait_for(drive(conv, prompt=prompt), 10)
+        # It runs no ``!`` commands: the main prompt's line suggesting one is left out.
+        for row in await app.client.tasks():
+            assert "bash_mode" not in (await app.client.events(row.task_id))[0].event.config
     # Two main requests and no title request.
     assert len(provider.requests) == 2
     assert "AskUserQuestion" not in _tool_names(provider.requests[0])

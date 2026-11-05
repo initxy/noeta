@@ -42,7 +42,6 @@ from noeta.plugins.skills.gates import (
     pre_approved,
     script_gate,
 )
-from noeta.plugins.skills.guidance import drop_skill_guidance
 from noeta.plugins.skills.listing import (
     MENU_DESCRIPTION_MAX_CHARS,
     listing_lines,
@@ -76,6 +75,7 @@ from noeta.plugins.skills.usage import UsageRank
 from noeta.toolkit import permission_rules as pr
 from noeta.toolkit.commands import command_message, parse_command_message
 from noeta.toolkit.context import new_user_messages, task_env
+from noeta.toolkit.guidance_lines import drop_guidance_line
 from noeta.toolkit.inline_commands import (
     InlineCommandError,
     has_commands,
@@ -104,6 +104,8 @@ _warned_untrusted: dict[str, None] = {}
 WARNED_KEEP = 1024
 
 AGENT_TOOL = "Agent"
+#: What the main prompt's skill line names: the typed form it is about.
+SKILL_LINE_MARK = "`/<skill-name>`"
 #: Fork skills waiting for their commands to run, remembered at most.
 FORKS_DUE_KEEP = 256
 #: The agent a ``context: fork`` skill runs in when it names none.
@@ -886,7 +888,7 @@ class Skills(Extension):
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         """No model call answers a typed fork skill's message (its agent's
         report opens a turn later). The prompt's skill line goes only with
-        skills and the ``Skill`` tool (:func:`drop_skill_guidance`). A skill
+        skills and the ``Skill`` tool (:func:`drop_guidance_line`). A skill
         loaded this turn with its own ``model`` or ``effort`` sets the rest of
         the turn's (Claude Code's)."""
         request = await self._skill_guidance(view, request)
@@ -919,7 +921,7 @@ class Skills(Extension):
         if any(t.name == SKILL_TOOL for t in request.tools) \
                 and (await self.turn_registry(view)).names():
             return request
-        system = [msgspec.structs.replace(p, text=drop_skill_guidance(p.text))
+        system = [msgspec.structs.replace(p, text=drop_guidance_line(p.text, SKILL_LINE_MARK))
                   for p in request.system]
         return msgspec.structs.replace(request, system=system)
 

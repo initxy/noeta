@@ -56,7 +56,7 @@ COMMANDS = {
     "new": "Start a new task",
     "resume": "Pick a task to resume",
     "stop": "Stop the turn (also Esc)",
-    "reload-plugins": "Load the plugin and agent files again (from the next turn on)",
+    "reload-plugins": "Load the plugin, agent and settings files again (from the next turn on)",
     "exit": "Quit",
 }
 #: Turns the /rewind picker restores.

@@ -105,6 +105,23 @@ async def test_pending_lists_the_card(served: tuple[str, ScriptedProvider]) -> N
     [row] = rows
     assert row["kind"] == "approval" and row["title"] == "Read x"
     assert [c["id"] for c in row["choices"]] == ["allow", "always", "deny"]
+    async with httpx.AsyncClient(base_url=url,
+                                 headers={"authorization": "Bearer secret"}) as http:
+        answers = f"/tasks/{tid}/answers"
+        unknown = await http.post(answers, json={"request_id": "nope", "decision": "allow"})
+        assert unknown.status_code == 409 and "'nope'" in unknown.json()["error"]
+        for _ in range(2):  # a retry before the answer is taken goes through
+            ok = await http.post(answers, json={"request_id": row["request_id"],
+                                                "decision": "allow"})
+            assert ok.status_code == 200
+        for _ in range(200):
+            if (await client.get(tid)).status == "waiting" and not (
+                    await http.get(f"/tasks/{tid}/pending")).json():
+                break
+            await asyncio.sleep(0.02)
+        again = await http.post(answers, json={"request_id": row["request_id"],
+                                               "decision": "allow"})
+        assert again.status_code == 409
     await client.cancel(tid)
     await client.close()
 

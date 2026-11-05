@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 430" role="img" aria-label="任务开始时项目说明文件从哪里来，以及之后哪些文件会跟着补上"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="guide-instructions-sources-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="guide-instructions-sources-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker><marker id="guide-instructions-sources-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="guide-instructions-sources-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="guide-instructions-sources-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker></defs>
+<text x="220" y="30" class="ntd-label" text-anchor="middle">任务开始时读，按这个顺序</text>
+<rect x="20" y="44" width="400" height="48" rx="10" class="ntd-box"/>
+<text x="36" y="64" class="ntd-chiptext" text-anchor="start">1. 机器统一管理的</text>
+<text x="36" y="82" class="ntd-code" text-anchor="start">/etc/noeta/NOETA.md · .noeta/rules/</text>
+<rect x="20" y="104" width="400" height="48" rx="10" class="ntd-box"/>
+<text x="36" y="124" class="ntd-chiptext" text-anchor="start">2. 你自己的</text>
+<text x="36" y="142" class="ntd-code" text-anchor="start">~/.noeta/NOETA.md · ~/.noeta/rules/</text>
+<rect x="20" y="164" width="400" height="114" rx="10" class="ntd-box"/>
+<text x="36" y="184" class="ntd-chiptext" text-anchor="start">3. 每一级目录，从最外层往里</text>
+<text x="36" y="202" class="ntd-code" text-anchor="start">NOETA.md · .noeta/NOETA.md</text>
+<text x="36" y="220" class="ntd-mini" text-anchor="start">两个都没有时读 AGENTS.md</text>
+<text x="36" y="238" class="ntd-code" text-anchor="start">.noeta/rules/*.md · NOETA.local.md</text>
+<text x="36" y="256" class="ntd-mini" text-anchor="start">带 paths: 的规则等匹配到再给</text>
+<rect x="20" y="290" width="400" height="48" rx="10" class="ntd-box"/>
+<text x="36" y="310" class="ntd-chiptext" text-anchor="start">4. 自动记忆</text>
+<text x="36" y="328" class="ntd-code" text-anchor="start">MEMORY.md 的前 200 行</text>
+<path d="M420 68.0 L458 205" class="ntd-line" marker-end="url(#guide-instructions-sources-arrow)"/>
+<path d="M420 128.0 L458 205" class="ntd-line" marker-end="url(#guide-instructions-sources-arrow)"/>
+<path d="M420 221.0 L458 205" class="ntd-line" marker-end="url(#guide-instructions-sources-arrow)"/>
+<path d="M420 314.0 L458 205" class="ntd-line" marker-end="url(#guide-instructions-sources-arrow)"/>
+<rect x="460" y="150" width="200" height="110" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="560.0" y="180.0" class="ntd-title" text-anchor="middle">一条消息</text>
+<text x="560.0" y="200.0" class="ntd-mini" text-anchor="middle">放在你的第一句话之前</text>
+<text x="560.0" y="220.0" class="ntd-mini" text-anchor="middle">每个文件带路径和类别</text>
+<text x="560.0" y="240.0" class="ntd-mini" text-anchor="middle">记进任务日志</text>
+<text x="795" y="30" class="ntd-label" text-anchor="middle">之后，随着任务推进</text>
+<rect x="690" y="44" width="210" height="60" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="795.0" y="69.5" class="ntd-chiptext" text-anchor="middle">工具碰到某个文件</text>
+<text x="795.0" y="88.5" class="ntd-code" text-anchor="middle">Read · Edit · Write · Bash</text>
+<path d="M795 104 L795 136" class="ntd-line" marker-end="url(#guide-instructions-sources-arrow)"/>
+<rect x="690" y="138" width="210" height="84" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="795.0" y="158.0" class="ntd-chiptext" text-anchor="middle">跟在结果后面补上</text>
+<text x="795.0" y="176.0" class="ntd-mini" text-anchor="middle">沿途各级目录的</text>
+<text x="795.0" y="194.0" class="ntd-mini" text-anchor="middle">说明文件</text>
+<text x="795.0" y="212.0" class="ntd-mini" text-anchor="middle">paths: 匹配上的规则</text>
+<rect x="690" y="246" width="210" height="52" rx="10" class="ntd-box ntd-dash"/>
+<text x="795.0" y="268.0" class="ntd-chiptext" text-anchor="middle">你每发一条新消息</text>
+<text x="795.0" y="286.0" class="ntd-mini" text-anchor="middle">改过的文件重新给一遍</text>
+<rect x="690" y="314" width="210" height="52" rx="10" class="ntd-box ntd-dash"/>
+<text x="795.0" y="336.0" class="ntd-chiptext" text-anchor="middle">压缩之后</text>
+<text x="795.0" y="354.0" class="ntd-mini" text-anchor="middle">全部重读一遍</text>
+<text x="460" y="412" class="ntd-mini" text-anchor="middle">CLAUDE.md、.claude/、~/.claude/ 一概不读；被 Read 拒绝规则覆盖的文件不加载。</text>
+</svg>
