@@ -43,13 +43,11 @@ from pathlib import Path
 from typing import Any
 
 from noeta.plugins.mcp.config import McpConfigError, McpServer, OAuthSettings
+from noeta.toolkit.mcp_sources import PROJECT_FILE, mcp_sources, own_settings_file
 
 __all__ = ["PROJECT_FILE", "alias_for", "read_servers", "servers_from"]
 
 log = logging.getLogger("noeta.mcp")
-
-#: A workspace's MCP servers, relative to its directory.
-PROJECT_FILE = ".noeta/mcp.json"
 
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
@@ -155,26 +153,23 @@ def servers_from(data: Mapping[str, Any], source: str,
     return out
 
 
-def _own(path: str | Path, project: Path) -> bool:
-    """``path`` is one of ``project``'s own settings files."""
-    try:
-        return Path(path).expanduser().resolve().parent == project / ".noeta"
-    except OSError:
-        return False
-
-
 def read_servers(settings_files: Sequence[str | Path],
                  project_dirs: Iterable[str] = ()) -> list[McpServer]:
-    """The servers of ``project_dirs``' ``.noeta/mcp.json`` the project's own
-    settings files (among ``settings_files``) consent to, then those of
-    ``settings_files``; the first of an alias wins. A host passes only
-    trusted directories as ``project_dirs``."""
-    settings = [_read(Path(f).expanduser()) for f in settings_files]
-    disabled = {str(n) for s in settings for n in s.get("disabledMcpjsonServers") or []}
+    """The servers of ``settings_files`` (lowest precedence first) and of
+    ``project_dirs``' ``.noeta/mcp.json`` that the project's own settings
+    files (among ``settings_files``) consent to, highest precedence first
+    (:func:`noeta.toolkit.mcp_sources.mcp_sources`: managed > local >
+    project > user); the first of an alias wins. A host passes only trusted
+    directories as ``project_dirs``."""
+    settings = {Path(f): _read(Path(f).expanduser()) for f in settings_files}
+    disabled = {str(n) for s in settings.values()
+                for n in s.get("disabledMcpjsonServers") or []}
     out: list[McpServer] = []
-    for d in project_dirs:
-        project = Path(d).expanduser().resolve()
-        own = [s for f, s in zip(settings_files, settings, strict=True) if _own(f, project)]
+    for path, project in mcp_sources(settings_files, project_dirs):
+        if project is None:
+            out += servers_from(settings[path], str(path))
+            continue
+        own = [s for f, s in settings.items() if own_settings_file(f, project)]
         enable_all = any(s.get("enableAllProjectMcpServers") is True for s in own)
         enabled = {str(n) for s in own for n in s.get("enabledMcpjsonServers") or []}
 
@@ -182,14 +177,12 @@ def read_servers(settings_files: Sequence[str | Path],
                       enabled: set[str] = enabled) -> bool:
             return name not in disabled and (enable_all or name in enabled)
 
-        path = project / PROJECT_FILE
+        path = path.expanduser()
         data = _read(path)
         out += servers_from(data, str(path), consented)
         waiting = sorted(n for n in data.get("mcpServers") or {} if not consented(str(n)))
         if waiting:
             log.warning("mcp: %s names servers not started without consent (%s); add them "
                         "to enabledMcpjsonServers in %s", path, ", ".join(waiting),
-                        project / ".noeta" / "settings.local.json")
-    for f, data in zip(settings_files, settings, strict=True):
-        out += servers_from(data, str(f))
+                        path.parent / "settings.local.json")
     return out

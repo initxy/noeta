@@ -117,6 +117,30 @@ def test_workspace_servers_need_consent(tmp_path: Path) -> None:
     assert [s.alias for s in read_servers([settings, local], [str(ws)])] == ["b", "user"]
 
 
+def test_a_name_in_several_files_follows_claude_codes_precedence(tmp_path: Path) -> None:
+    """managed > --settings > local > the project's settings.json > its
+    .noeta/mcp.json > the user's, the files given lowest first as the
+    settings layers list them."""
+    ws = tmp_path / "ws"
+    names = ["user", "project", "local", "flag", "managed"]
+    files = dict(zip(names, [tmp_path / "home" / "settings.json", ws / ".noeta" / "settings.json",
+                             ws / ".noeta" / "settings.local.json", tmp_path / "flag.json",
+                             tmp_path / "managed" / "managed-settings.json"], strict=True))
+    write(ws / ".noeta" / "mcp.json", {"mcpServers": {"x": {"command": "mcp.json"}}})
+    for name, path in files.items():
+        write(path, {"mcpServers": {"x": {"command": name}},
+                     **({"enabledMcpjsonServers": ["x"]} if name == "local" else {})})
+    winners = []
+    for name in ["managed", "flag", "local", "project", "mcp.json", "user"]:
+        got = read_servers(list(files.values()), [str(ws)])
+        winners.append(got[0].command[0])
+        if name == "mcp.json":
+            (ws / ".noeta" / "mcp.json").unlink()
+        else:
+            write(files[name], {"enabledMcpjsonServers": ["x"]})
+    assert winners == ["managed", "flag", "local", "project", "mcp.json", "user"]
+
+
 def test_consent_is_per_project(tmp_path: Path) -> None:
     """Consent in the user's settings, or in another project's, starts no
     server of a cloned repository that reuses the name."""

@@ -14,6 +14,7 @@ from noeta.cli.main import main
 from noeta.cli.trust import trust_project
 from noeta.plugins.mcp.config import McpServer
 from noeta.plugins.mcp.oauth import store_for
+from noeta.plugins.mcp.settings import read_servers
 
 FAKE = str(Path(__file__).parents[1] / "plugins" / "mcp" / "fake_server.py")
 
@@ -132,6 +133,27 @@ def test_an_untrusted_projects_servers_are_listed_not_started(
     assert mcp(project, "get", "from-local") == 0
     assert "project not trusted" in capsys.readouterr().out
     assert not ran.exists()
+
+
+def test_the_cli_and_the_runtime_pick_the_same_server(places: tuple[Path, Path],
+                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    """A name in every scope: ``get`` shows, and the MCP plugin starts, the
+    local one, then the project's, then the user's (Claude Code's order)."""
+    _, project = places
+    for scope in ("user", "project", "local"):
+        assert mcp(project, "add", "-s", scope, "x", f"from-{scope}") == 0
+    local = project / ".noeta" / "settings.local.json"
+    data = read(local)
+    local.write_text(json.dumps({**data, "enabledMcpjsonServers": ["x"]}))
+    trust_project(str(project))
+    files = config.file_settings(str(project)).files
+    for scope in ("local", "project", "user"):
+        capsys.readouterr()
+        assert mcp(project, "get", "x") == 0
+        assert f"Scope: {scope}" in capsys.readouterr().out
+        started = read_servers(files, [str(project)])
+        assert started[0].command[0] == f"from-{scope}"
+        assert mcp(project, "remove", "-s", scope, "x") == 0
 
 
 def test_login_and_logout(places: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
