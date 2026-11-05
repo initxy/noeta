@@ -101,12 +101,14 @@ def _blocks(messages: Sequence[Message]) -> int:
 
 
 def turns_since(messages: Sequence[Message], seqs: Sequence[int],
-                reminded_at: int) -> tuple[int, int]:
+                reminded_at: int, compacted_through: int | None = None) -> tuple[int, int]:
     """Model turns since the last ``TaskCreate`` / ``TaskUpdate`` call in
     ``messages`` (the conversation as the model sees it, ``seqs`` their log
     seqs), and since the last reminder, given after log seq ``reminded_at``
     (``-1``: never). Neither count reaches back past a compaction, as Claude
-    Code counts in the compacted conversation."""
+    Code counts in the compacted conversation: a reminder the compaction
+    through ``compacted_through`` folded away is no longer there, so every
+    turn counts, those it kept (at seq 0) too."""
     since_use = 0
     for m in reversed(messages):
         if m.role != "assistant":
@@ -120,7 +122,8 @@ def turns_since(messages: Sequence[Message], seqs: Sequence[int],
         else:
             continue
         break
-    since_reminder = _blocks(messages) if reminded_at < 0 else _blocks(
+    gone = compacted_through is not None and 0 < reminded_at <= compacted_through
+    since_reminder = _blocks(messages) if reminded_at < 0 or gone else _blocks(
         [m for m, s in zip(messages, seqs, strict=True) if s > reminded_at])
     return since_use, since_reminder
 
@@ -171,8 +174,10 @@ class Todos(Extension):
             return ()
         st = view.ext_state(NAME)
         st = st if isinstance(st, TodoState) else TodoState()
-        since_use, since_reminder = turns_since(view.state.messages, view.state.message_seqs,
-                                                st.reminded_at)
+        compaction = view.state.compaction
+        since_use, since_reminder = turns_since(
+            view.state.messages, view.state.message_seqs, st.reminded_at,
+            compaction.through if compaction is not None else None)
         if since_use < TURNS or since_reminder < TURNS:
             return ()
         text = view.prompt(f"reminder/{NAME}", REMINDER)
