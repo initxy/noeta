@@ -1076,7 +1076,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
     { name = "websockets", marker = "extra == 'server'", specifier = ">=12" },
 ]
-provides-extras = ["postgres", "server", "acp", "images", "keyring"]
+provides-extras = ["postgres", "server", "acp", "keyring"]
 
 [package.metadata.requires-dev]
 dev = [
