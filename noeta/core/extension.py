@@ -510,10 +510,10 @@ class Extension:
         return None
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
-        """Reminders to record now. Called before every model call, after
-        every ``before_model``, on the state those left (a compaction made
-        in this round included); the core records them and puts them in
-        this request, after the recorded messages."""
+        """Reminders to record now. Called before every model call, before
+        any ``before_model`` (so those hooks, a compaction among them, see
+        the request with the reminders in it); the core records them and
+        puts them in this request, after the recorded messages."""
         return ()
 
     def inherit(self, state: TaskState) -> Mapping[str, Any]:
