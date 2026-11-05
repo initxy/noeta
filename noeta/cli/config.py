@@ -625,18 +625,24 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     runtime_kw.setdefault("spill_root", str(home_dir.HOME / "tool-results"))
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
-    base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
-    fs = base.get("fs")
-    if own_tasks_only and isinstance(fs, Mapping):
-        # A front end runs on the person's machine: an @-mention of a path
-        # under ~ is their home (never on a server, whose home is not theirs).
-        base["fs"] = {**fs, "home": str(Path.home())}
     store = open_store(settings.store_url)
-    # Claude Code ranks the skill listing by use across its sessions; here
-    # the store's tasks are the sessions (scanned in the background).
-    skills = base.get("skills")
-    if isinstance(skills, Mapping):
-        base["skills"] = {**skills, "usage_from": Client(store)}
+
+    def plugin_base(found: FileSettings) -> dict[str, PluginSetting]:
+        base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
+        fs = base.get("fs")
+        if own_tasks_only and isinstance(fs, Mapping):
+            # A front end runs on the person's machine: an @-mention of a path
+            # under ~ is their home (never on a server, whose home is not theirs).
+            base["fs"] = {**fs, "home": str(Path.home())}
+        # Claude Code ranks the skill listing by use across its sessions; here
+        # the store's tasks are the sessions (scanned in the background).
+        skills = base.get("skills")
+        if isinstance(skills, Mapping):
+            base["skills"] = {**skills, "usage_from": Client(store)}
+        return base
+
+    base = plugin_base(found)
+    started_with = found
     made: dict[Any, Any] = {}
     model, add_plugins = settings.model, settings.add_plugins
     plugin_agent: dict[str, str] = {}
@@ -728,21 +734,40 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     pick_main_agent()
 
     def reload_plugins() -> list[str]:
-        """What changed (one line per plugin), then the files that failed
-        and the notices of loading them."""
+        """What changed (one line per plugin), then the files that failed,
+        the notices of loading them, and the settings that take a restart.
+        The settings files are read again too (a project just trusted adds
+        its own), so the plugins' arguments from them apply."""
         from noeta.cli.main import broken_plugin_lines
 
+        nonlocal found, base
         before = dict(app.runtime.agents)
         registry.forget_plugin_files()
-        found = load_plugin_files(cwd, plugin_dirs)
+        loaded = load_plugin_files(cwd, plugin_dirs)
+        found = file_settings(cwd, sources=setting_sources, flag=flag_settings)
+        base = plugin_base(found)
         app.replace_agents(make_agents())
         pick_main_agent()
         changes = plugin_changes(before, app.runtime.agents) or ["no plugin changed"]
+        restart = restart_needed(started_with, found)
+        # Shown with every new task's start until the restart.
+        app.notices.extend(n for n in restart if n not in app.notices)
         return [*changes, *(f"failed: {line}" for line in broken_plugin_lines()),
-                *found, *unjoined]
+                *loaded, *unjoined, *restart]
 
     app.reload_plugins = reload_plugins
     return app
+
+
+def restart_needed(start: FileSettings, now: FileSettings) -> list[str]:
+    """A notice naming the settings changed since the process started that
+    only a restart applies (they are read once, at the start)."""
+    changed = [name for name in ("env", "model", "agent", "sandbox")
+               if getattr(start, name) != getattr(now, name)]
+    if not changed:
+        return []
+    return [f"the settings files' {', '.join(changed)} changed: restart noeta to apply "
+            f"{'it' if len(changed) == 1 else 'them'}"]
 
 
 def _route_child(runtime: Any, router: ProviderRouter) -> Any:
