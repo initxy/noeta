@@ -534,7 +534,6 @@ async def test_an_idle_firing_cut_short_by_a_crash_is_finished(tmp_path: Path) -
 
 
 def test_only_the_one_hour_cache_counts() -> None:
-
     from noeta.core.loop.state import TaskState
 
     assert compaction_ext.cache_life(TaskState()) is None
