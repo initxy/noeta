@@ -49,8 +49,6 @@ a `Say(when="now")` person message: it counts as a person turn for todos, compac
 
 - [x] H History out of the fold (D1, D2), snapshot version bumped, tests per reader.
 - [x] N Approval note beside the result (D3), TUI switched to it, web if it offers words.
-- [x] H History out of the fold (D1, D2), snapshot version bumped, tests per reader.
-- [ ] N Approval note beside the result (D3), TUI switched to it, web if it offers words.
 - [ ] Integrate, full gates, review.
 
 ## Acceptance criteria
