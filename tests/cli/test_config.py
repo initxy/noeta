@@ -143,6 +143,32 @@ def test_settings_files_layer_in_claude_codes_precedence(
     assert exts["hooks"] is not None
 
 
+def test_trusting_a_project_applies_its_settings_files_at_once(
+        home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.cli.main import trust_here
+
+    project = home / "proj"
+    (project / ".noeta").mkdir(parents=True)
+    (home / "config.toml").write_text(
+        f'model = "m"\nprovider = "anthropic"\napi_key = "k"\n'
+        f'store = "sqlite:///{home / "t.db"}"\n')
+    monkeypatch.delenv("TRUSTED_ONLY", raising=False)
+    (project / ".noeta" / "settings.json").write_text(json.dumps({
+        "env": {"TRUSTED_ONLY": "1"}, "permissions": {"deny": ["WebFetch"]}}))
+    app = from_settings(load_settings(cwd=str(project)), cwd=str(project))
+
+    def denied() -> list[str]:
+        [perms] = [e for e in app.runtime.agents["main"].extensions if e.name == "permissions"]
+        return [str(rule) for rule in perms.deny_rules]  # type: ignore[attr-defined]
+
+    assert not any("WebFetch" in rule for rule in denied())
+    trust_here(app, str(project))
+    assert any("WebFetch" in rule for rule in denied())  # no restart needed
+    # what is read only at the start says so, on every new task's start
+    assert "the settings files' env changed: restart noeta to apply it" in app.notices
+    assert "TRUSTED_ONLY" not in os.environ
+
+
 def test_claude_codes_own_places_are_never_read(
         home: Path, tmp_path_factory: pytest.TempPathFactory,
         monkeypatch: pytest.MonkeyPatch) -> None:
@@ -278,7 +304,8 @@ def test_serve_refuses_bypass_in_the_plugin_itself(
     for allow in (False, True):
         args = types.SimpleNamespace(host="127.0.0.1", no_worker=True, no_token=True,
                                      allow_origin=[], allow_bypass_permissions=allow,
-                                     allow_root=[], allow_host=[], port=0, web=None)
+                                     allow_root=[], allow_host=[], port=0, web=None,
+                                     permission_mode=None)
         asyncio.run(main._serve(load_settings(cwd=str(home)), args, str(home)))
         exts = {e.name: e for e in apps[-1].runtime.agents["main"].extensions}
         perms = exts["permissions"]
