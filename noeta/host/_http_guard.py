@@ -21,6 +21,7 @@ from noeta.core.events import Recorded
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL, MODEL_ROUTE
 from noeta.core.store import Status, TaskRow
 from noeta.host._errors import error_text
+from noeta.host.pending import pending
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 from noeta.toolkit.permission_modes import MODE_SIGNAL
@@ -36,6 +37,11 @@ def token_digest(token: str) -> str:
 
 class Refused(Exception):
     """A request asked for what this server does not allow."""
+
+
+class NotOpen(Exception):
+    """An answer names a request the task is not waiting on: unknown, or
+    already answered and taken."""
 
 
 _BYPASS = "bypassPermissions"
@@ -146,6 +152,13 @@ class GuardedClient:
                      always: bool = False, data: Any = None) -> int:
         if isinstance(data, Mapping):
             self._mode(data.get("mode"))
+        # An answer to nothing would sit unread in the inbox. Until its
+        # answer is taken a request stays open, so a retry still goes
+        # through (the client deduplicates it).
+        open_ids = {p.request_id for p in pending(await self._client.events(task_id), task_id)}
+        if request_id not in open_ids:
+            raise NotOpen(f"task {task_id} is not waiting on a request {request_id!r} "
+                          "(unknown, or already answered)")
         return await self._client.answer(task_id, request_id, decision, always=always,
                                          data=data)
 
@@ -274,6 +287,8 @@ class Guard:
                 return JSONResponse({"error": f"unknown task {exc}"}, status_code=404)
             except Refused as exc:
                 return JSONResponse({"error": str(exc)}, status_code=403)
+            except NotOpen as exc:
+                return JSONResponse({"error": str(exc)}, status_code=409)
             except (msgspec.ValidationError, ValueError, KeyError, IndexError) as exc:
                 return JSONResponse({"error": error_text(exc)}, status_code=400)
         return wrapped
