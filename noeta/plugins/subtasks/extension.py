@@ -47,6 +47,7 @@ from noeta.plugins.subtasks.tool import (
     DELEGATION_TOOLS,
     DEPTH_KEY,
     HANDBACK_KEY,
+    RESULT_LIMIT_CHARS,
     TRANSCRIPT_KEY,
     TYPE_KEY,
     AgentTool,
@@ -62,7 +63,7 @@ from noeta.plugins.subtasks.tool import (
 from noeta.plugins.subtasks.worktree import close_worktree
 from noeta.toolkit import notices
 from noeta.toolkit.notices import NOTICE_GUARD, STATUS_ORDER, escape, one_line
-from noeta.toolkit.tools import mark_spill_dir
+from noeta.toolkit.tools import large_output_message, mark_spill_dir, spill_path, task_spill_dir
 
 __all__ = ["SubagentSpec", "Subtasks", "task_notification"]
 
@@ -92,16 +93,23 @@ AGENT_LIST_ORDER = 40
 
 def task_notification(*, agent_id: str, call_id: str, status: str, summary: str,
                       result: str, ended: ChildEnded, duration_ms: int,
-                      output_file: str = "", worktree: Mapping[str, str] | None = None) -> str:
+                      output_file: str = "", worktree: Mapping[str, str] | None = None,
+                      saved_to: str | None = None) -> str:
     """A finished agent's ``<task-notification>``, behind the not-the-user
     guard: ``<result>`` only when there is one, ``<worktree>`` when its
-    worktree was kept."""
+    worktree was kept. A result over :data:`RESULT_LIMIT_CHARS` is shown as
+    a preview of the file ``saved_to`` holds it in, or without one cut to
+    its start and end."""
     fields = [("task-id", agent_id), ("tool-use-id", call_id)]
     if output_file:
         fields.append(("output-file", escape(output_file)))
     body = f"\n<note>{texts.NOTICE_NOTE}</note>"
     if result:
-        body += f"\n<result>{escape(result)}</result>"
+        shown = escape(result)
+        if len(result) > RESULT_LIMIT_CHARS:
+            shown = large_output_message(shown, RESULT_LIMIT_CHARS,
+                                         saved_to=escape(saved_to) if saved_to else None)
+        body += f"\n<result>{shown}</result>"
     body += (f"\n<usage><subagent_tokens>{subagent_tokens(ended)}</subagent_tokens><tool_uses>"
              f"{ended.tool_calls}</tool_uses><duration_ms>{duration_ms}</duration_ms></usage>")
     if worktree:
@@ -596,7 +604,8 @@ class Subtasks(Extension):
         text = task_notification(agent_id=agent_id, call_id=agent.get("call_id", ""),
                                  status=status, summary=summary, result=result, ended=ended,
                                  duration_ms=duration, output_file=agent.get("output_file") or "",
-                                 worktree=kept_tree)
+                                 worktree=kept_tree,
+                                 saved_to=await _save_result(view, ended.child_id, result))
         if handed_back:
             if handbacks.get(agent_id) == "seen":
                 self._deliver(view, ended.child_id, text)
@@ -611,6 +620,23 @@ class Subtasks(Extension):
         await view.post(Say(message=message, when="now"),
                         dedupe_key=f"subtasks:notice:{ended.child_id}")
         view.record(self.name, "noticed", data)
+
+
+async def _save_result(view: TaskView, child_id: str, result: str) -> str | None:
+    """Save a result over :data:`RESULT_LIMIT_CHARS` whole in this task's
+    spill directory, through its env: the path, or ``None`` when it fits or
+    cannot be saved. The path is a pure function of the task and the child,
+    so a notice made again names the same file."""
+    if len(result) <= RESULT_LIMIT_CHARS or not view.spill_dir or view.env is None:
+        return None
+    path = spill_path(view.spill_dir, view.task_id, f"agent-{child_id}")
+    try:
+        await view.env.write_bytes(path, result.encode("utf-8"))
+    except OSError:
+        log.debug("result of %s not saved", child_id, exc_info=True)
+        return None
+    await mark_spill_dir(view.env, task_spill_dir(view.spill_dir, view.task_id), view.task_id)
+    return path
 
 
 def _outcome(agent: Mapping[str, Any], agent_id: str, ended: ChildEnded,
