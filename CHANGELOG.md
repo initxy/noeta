@@ -67,6 +67,9 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Fixed
 
+- **A foreground `Bash` command's output is kept on Ubuntu 26.04.** Its coreutils are uutils,
+  whose `dd` empties its output file when it reads nothing, so the keeper's last read wiped the
+  log and every foreground command came back "(Bash completed with no output)".
 - **`noeta worker` sweeps old saved tool outputs**, daily, as `noeta serve` does
   (`LocalApp.run_until`); a worker-only deployment used to keep them forever.
 - **No permission asked for `CronCreate`, `CronList`, `CronDelete`, `EnterWorktree`,
