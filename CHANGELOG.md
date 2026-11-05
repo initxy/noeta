@@ -10,7 +10,8 @@ All notable changes to Noeta are documented here. The format is based on
 ### Changed
 
 - **Pillow is a dependency.** Shrinking large images is no longer an extra to remember:
-  `uv tool install --with ./tui .` is the whole install line. The `images` extra is gone.
+  the `images` extra is gone. The terminal UI is the `tui` extra: from a checkout,
+  `uv tool install '.[tui]'` is the whole install line.
 
 ### Added
 

@@ -17,7 +17,7 @@ You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 ```bash
 uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
   'noeta @ git+https://github.com/initxy/noeta'
-# or from a checkout:  git clone https://github.com/initxy/noeta && cd noeta && uv tool install --with ./tui .
+# or from a checkout:  git clone https://github.com/initxy/noeta && cd noeta && uv tool install '.[tui]'
 ```
 
 Pick a model and a provider. With an Anthropic API key:
@@ -93,6 +93,7 @@ directories above it and `~/.noeta` / `~/.agents`.
 | `server` | `noeta serve`: the HTTP / WebSocket API |
 | `postgres` | a Postgres store, for many workers |
 | `keyring` | `{keyring:service/user}` secret references in plugin settings |
+| `tui` | the terminal UI (`noeta-tui`, in `tui/`) |
 
 Install several at once: `'noeta[acp,server,postgres] @ git+…'`. The terminal UI (`noeta` without `-p`) is its own package, `noeta-tui` in `tui/` (`tui/README.md`).
 
