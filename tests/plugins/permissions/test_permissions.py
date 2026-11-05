@@ -115,6 +115,17 @@ async def test_scheduling_and_worktree_tools_run_without_asking(
     assert results(await events(client, tid)) == [(f"ran {name}", False)]
 
 
+@pytest.mark.parametrize("name", ["ListMcpResourcesTool", "ReadMcpResourceTool",
+                                  "ReadMcpResourceDirTool"])
+async def test_mcp_resource_reads_run_without_asking(
+        store: SqliteStore, tmp_path: Path, name: str) -> None:
+    tool = Fake(name)
+    provider = ScriptedProvider([reply("", (name, {})), reply("done")])
+    client, tid, _ = await start(store, provider, Permissions(mode="default"), [tool],
+                                 cwd=tmp_path)
+    assert results(await events(client, tid)) == [(f"ran {name}", False)]
+
+
 async def test_read_only_commands_run_and_others_offer_a_rule(store: SqliteStore,
                                                               tmp_path: Path) -> None:
     bash = Fake("Bash")

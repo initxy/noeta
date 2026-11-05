@@ -58,6 +58,7 @@ DEFAULT_RISK: Mapping[str, str] = {
     "Skill": "low",
     "ListMcpResourcesTool": "low",
     "ReadMcpResourceTool": "low",
+    "ReadMcpResourceDirTool": "low",
     "ScheduleWakeup": "low",
     "ReportFindings": "low",
     "Workflow": "low",
