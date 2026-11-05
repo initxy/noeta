@@ -761,8 +761,11 @@ SCENARIOS: list[Scenario] = [
         score=score_delegate_review,
         # The score is settled by the first responses (did they fan out), but
         # the task is not over until the sub-agents report and the combined
-        # report is written; three reviews take a slower model past 240 s.
-        timeout_s=600.0,
+        # report is written. On a gateway that streams ~43 output tokens/s, a
+        # sub-agent writes 7-20K tokens (up to ~470 s of generation alone) and
+        # the whole trial took 430-590 s with no idle time, before any of the
+        # 60-160 s stalls single calls sometimes show.
+        timeout_s=900.0,
         tags=("delegation", "parallel"),
     ),
     Scenario(
