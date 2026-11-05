@@ -1,4 +1,5 @@
-"""``noeta worker``: its options reach the runtime it serves with."""
+"""``noeta worker``: its options reach the runtime it serves with; the
+effort and permission mode only the tasks its channels start, as it says."""
 
 from __future__ import annotations
 
@@ -24,11 +25,18 @@ class _Store:
         return None
 
 
+class _Client:
+    def __init__(self) -> None:
+        self.task_config: dict[str, Any] = {}
+
+
 class _App:
     runtime = _Runtime()
     store = _Store()
     channels: tuple[Any, ...] = ()
-    client = None
+
+    def __init__(self) -> None:
+        self.client = _Client()
 
 
 @pytest.mark.parametrize(("argv", "lease"), [([], None), (["--lease", "1.5"], 1.5)])
@@ -74,3 +82,29 @@ def test_a_worker_refuses_bypass_like_serve(argv: list[str], disabled: bool, tmp
     permissions = _worker_permissions(tmp_path, monkeypatch, argv)
     assert permissions.get("disable_bypass_mode", False) is disabled
 
+
+@pytest.mark.parametrize(("channels", "said"), [((), "to no task"),
+                                                (("chat",), "only to the tasks")])
+def test_a_workers_effort_and_mode_are_for_the_tasks_it_starts(
+        channels: tuple[Any, ...], said: str, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    made: list[_App] = []
+
+    def app(_settings: Any, **kw: Any) -> _App:
+        made.append(_App())
+        made[-1].channels = channels
+        return made[-1]
+
+    async def no_channels(*_a: Any) -> None:
+        return None
+
+    monkeypatch.setenv("NOETA_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "_app", app)
+    monkeypatch.setattr("noeta.host.channels.run_channels", no_channels)
+    cli.main(["--model", "m", "--store", f"sqlite:///{tmp_path}/t.db", "--effort", "low",
+              "--permission-mode", "acceptEdits", "worker"])
+    assert made[0].client.task_config == {"effort": "low", "permission_mode": "acceptEdits"}
+    err = capsys.readouterr().err
+    assert "--effort and --permission-mode apply " + said in err
+    with pytest.raises(SystemExit, match="needs --allow-bypass-permissions"):
+        cli.main(["--model", "m", "--permission-mode", "bypassPermissions", "worker"])
