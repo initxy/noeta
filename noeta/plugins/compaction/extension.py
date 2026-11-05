@@ -43,6 +43,7 @@ import hashlib
 import logging
 import posixpath
 import re
+import secrets
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -109,7 +110,7 @@ PRECOMPUTE_FAILURES_TO_STOP = 3
 #: context worth it, when in the cache's life it fires, and how late a
 #: firing may be before it is dropped.
 IDLE_TIMER = "compaction.idle"
-IDLE_MIN_TOKENS = max(100_000, 200_000)
+IDLE_MIN_TOKENS = 200_000  # Claude Code's default
 IDLE_FIRE_FRACTION = 0.9
 IDLE_LATE_SECONDS = 60
 IDLE_NOTICE = "Compacted while idle, before the prompt cache expired."
@@ -191,6 +192,9 @@ class CompactionState:
     #: and how many failed.
     precomputed: Precomputed | None = None
     precompute_failures: int = 0
+    #: The id of the summary being written ahead: only a result that names
+    #: it is taken, on whichever worker holds the task then.
+    job: str | None = None
     #: Calls whose results are cleared, the tokens the last clearing saved,
     #: and the log seq of the reply whose reported usage still counts them.
     cleared: tuple[str, ...] = ()
@@ -285,10 +289,10 @@ class Compaction(Extension):
         self.idle = auto_compact_idle
         self.clock = clock
         #: Summaries being written ahead in this process, by task id, with
-        #: the compaction count they were started at. A finished one stays
-        #: until its result is taken here, so a step between its post and
-        #: that take does not start another.
-        self._jobs: dict[str, tuple[asyncio.Future[None], int]] = {}
+        #: their job id. A finished one stays until its result is taken (here
+        #: or by another worker: the log no longer names it), so a step
+        #: between its post and that take does not start another.
+        self._jobs: dict[str, tuple[asyncio.Future[None], str]] = {}
 
     # ------------------------------------------------------------ state
 
@@ -299,6 +303,14 @@ class Compaction(Extension):
         st = state if isinstance(state, CompactionState) else CompactionState()
         if not isinstance(data, Mapping):
             return st
+        try:
+            return self._reduce(st, kind, data)
+        except (TypeError, ValueError, msgspec.ValidationError):
+            log.warning("compaction: ignored a malformed %r record", kind)
+            return st
+
+    @staticmethod
+    def _reduce(st: CompactionState, kind: str, data: Mapping[str, Any]) -> CompactionState:
         if kind == "restored":
             return replace(st, restored=tuple(data.get("texts") or ()))
         if kind == "restored_sent":
@@ -310,10 +322,12 @@ class Compaction(Extension):
         if kind == "failed":
             return replace(st, failures=int(data.get("failures") or 0),
                            failed_at=(int(data.get("turn") or 0), int(data.get("step") or 0)))
+        if kind == "precompute_started":
+            return replace(st, job=str(data.get("job") or "") or None)
         if kind == "precomputed":
-            return replace(st, precomputed=msgspec.convert(data, Precomputed))
+            return replace(st, precomputed=msgspec.convert(data, Precomputed), job=None)
         if kind == "precompute_failed":
-            return replace(st, precompute_failures=int(data.get("failures") or 0))
+            return replace(st, precompute_failures=int(data.get("failures") or 0), job=None)
         if kind == "cleared":
             return replace(st, cleared=tuple(data.get("ids") or ()),
                            cleared_saved=int(data.get("saved") or 0),
@@ -327,7 +341,7 @@ class Compaction(Extension):
             return st
         seen, paths = data.get("seen_through"), data.get("restored_paths")
         return replace(st, compactions=st.compactions + 1, failures=0, failed_at=None,
-                       precomputed=None, idle=None,
+                       precomputed=None, job=None, idle=None,
                        turn=int(data.get("turn") or 0), step=int(data.get("step") or 0),
                        rapid_refills=int(data.get("rapid_refills") or 0),
                        kept_replies=int(data.get("kept_replies") or 0),
@@ -342,7 +356,8 @@ class Compaction(Extension):
         ones sit at seq 0). A summary written ahead, the reply a clearing
         was measured against and an idle arming belong to the source."""
         return replace(state, published=None, turn=-1, failed_at=None, seen_through=0,
-                       precomputed=None, cleared_reply=-1, cleared_saved=0, idle=None) \
+                       precomputed=None, job=None, cleared_reply=-1, cleared_saved=0,
+                       idle=None) \
             if isinstance(state, CompactionState) else state
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
@@ -376,9 +391,8 @@ class Compaction(Extension):
             raise TurnFailed("compaction_config_invalid", str(exc)) from None
 
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        state = view.state
+        request, state = self._clear(view, request)
         n = len(state.messages)
-        request = self._clear(view, request)
         command = self._command(state)
         if command is not None:
             at, args = command
@@ -489,10 +503,12 @@ class Compaction(Extension):
 
     # ------------------------------------------------------------ clearing
 
-    def _clear(self, view: TaskView, request: ModelRequest) -> ModelRequest:
-        """``request`` with the cleared results replaced; first, once the
-        cache has gone cold (``auto_compact_clear_results``), older results
-        of clearable tools are cleared and recorded."""
+    def _clear(self, view: TaskView, request: ModelRequest) -> tuple[ModelRequest, TaskState]:
+        """``request`` with the cleared results replaced, and the state the
+        step goes on with; first, once the cache has gone cold
+        (``auto_compact_clear_results``), older results of clearable tools
+        are cleared and recorded, and the returned state has that record
+        folded in, so this step measures the context with what it saved."""
         state = view.state
         cleared: tuple[str, ...] = self._ext(state).cleared
         if self.clear_results and state.model_called_at \
@@ -510,12 +526,14 @@ class Compaction(Extension):
                            if isinstance(b, ToolResult)}
                 cleared = (*(i for i in cleared if i in present), *ids)
                 last = _last_reply(state.messages)
-                view.record(self.name, "cleared", {
-                    "ids": list(cleared), "saved": saved,
-                    "reply": state.message_seqs[last] if last >= 0 else -1})
+                data = {"ids": list(cleared), "saved": saved,
+                        "reply": state.message_seqs[last] if last >= 0 else -1}
+                view.record(self.name, "cleared", data)
                 log.info("task %s: cleared %d old tool results (~%d tokens) after an idle gap",
                          view.task_id, len(ids), saved)
-        return clearing.cleared_request(request, set(cleared))
+                state = replace(state, ext={**state.ext, self.name: self.reduce(
+                    self._ext(state), "cleared", data)})
+        return clearing.cleared_request(request, set(cleared)), state
 
     # ------------------------------------------------------------ precomputing
 
@@ -541,9 +559,10 @@ class Compaction(Extension):
         ext = self._ext(state)
         job = self._jobs.get(view.task_id)
         if job is not None:
-            if not job[0].done() or job[1] == ext.compactions:
-                return
-            del self._jobs[view.task_id]  # its result went elsewhere, and is outdated
+            future, job_id = job
+            if not future.done() or ext.job == job_id:
+                return  # being written, or posted and not taken yet
+            del self._jobs[view.task_id]  # taken (on any worker), or outdated
         if ext.precompute_failures >= PRECOMPUTE_FAILURES_TO_STOP \
                 or self._ready(state) is not None:
             return
@@ -555,13 +574,16 @@ class Compaction(Extension):
             view.record(self.name, "precompute_failed", {
                 "failures": ext.precompute_failures + 1, "detail": "declined"})
             return
-        key = {"cut": cut, "digest": _digest(state, cut), "compactions": ext.compactions}
+        job_id = secrets.token_hex(8)
+        view.record(self.name, "precompute_started", {"job": job_id})
+        key = {"job": job_id, "cut": cut, "digest": _digest(state, cut),
+               "compactions": ext.compactions}
         text = summary.instruction(
             view.prompt("compaction/summarize", summary.SUMMARIZE_PROMPT), extra)
         job_future = asyncio.ensure_future(self._write_ahead(
-            view.complete, view.post, view.task_id, request, list(request.messages[:cut]),
-            text, key))
-        self._jobs[view.task_id] = (job_future, ext.compactions)
+            view.complete, view.post, view.task_id, request,
+            self._to_summarize(state, request, cut), text, key))
+        self._jobs[view.task_id] = (job_future, job_id)
         log.info("task %s: writing a summary of %d messages ahead of the threshold",
                  view.task_id, cut)
 
@@ -592,29 +614,47 @@ class Compaction(Extension):
         except Exception:
             log.warning("task %s: could not hand the summary written ahead back", task_id,
                         exc_info=True)
+            if self._jobs.get(task_id, (None, ""))[1] == key["job"]:
+                del self._jobs[task_id]  # lost: the next step writes another
 
     def _took_precomputed(self, view: TaskView, data: Mapping[str, Any]) -> None:
-        """A summary written ahead, taken from the inbox: its calls' cost and
-        the summary (or the failure) are recorded."""
-        job = self._jobs.get(view.task_id)
-        if job is not None and job[0].done():
+        """A summary written ahead, taken from the inbox: its calls' cost is
+        recorded, and the summary (or the failure) when it is the result of
+        the job the log says is running; any other is outdated or forged."""
+        job_id = data.get("job")
+        if self._jobs.get(view.task_id, (None, None))[1] == job_id:
             del self._jobs[view.task_id]
-        for item in data.get("spent") or ():
-            spent = core_records.Spent(model=str(item.get("model") or ""),
-                                       usage=msgspec.convert(item.get("usage") or {}, Usage),
-                                       purpose="compaction")
+        spent_items = data.get("spent")
+        for item in spent_items if isinstance(spent_items, list) else ():
+            try:
+                spent = core_records.Spent(model=str(item.get("model") or ""),
+                                           usage=msgspec.convert(item.get("usage") or {}, Usage),
+                                           purpose="compaction")
+            except (AttributeError, msgspec.ValidationError):
+                continue
             view.record(core_records.CORE, spent.kind, spent.data())
-        if data.get("failed") is not None or not data.get("note"):
-            failures = self._ext(view.state).precompute_failures + 1
+        ext = self._ext(view.folded({self.name: self.reduce}))
+        if not isinstance(job_id, str) or job_id != ext.job:
+            log.info("task %s: dropped a summary written ahead for another job", view.task_id)
+            return
+        result = None
+        if data.get("failed") is None:
+            try:
+                result = msgspec.convert({k: data[k] for k in (
+                    "note", "cut", "digest", "compactions", "usage", "head_dropped")},
+                    Precomputed)
+            except (KeyError, msgspec.ValidationError):
+                pass
+        if result is None or not result.note:
+            failures = ext.precompute_failures + 1
             log.warning("task %s: the summary written ahead failed (%d%s): %s", view.task_id,
                         failures, "; no more for this task"
-                        if failures >= PRECOMPUTE_FAILURES_TO_STOP else "", data.get("failed"))
+                        if failures >= PRECOMPUTE_FAILURES_TO_STOP else "",
+                        data.get("failed") or "a malformed result")
             view.record(self.name, "precompute_failed", {
-                "failures": failures, "detail": str(data.get("failed") or "")})
+                "failures": failures, "detail": str(data.get("failed") or "malformed")})
             return
-        view.record(self.name, "precomputed", {
-            k: data.get(k) for k in ("note", "cut", "digest", "compactions", "usage",
-                                     "head_dropped")})
+        view.record(self.name, "precomputed", msgspec.to_builtins(result))
 
     # ------------------------------------------------------------ idle
 
@@ -643,17 +683,17 @@ class Compaction(Extension):
         ``IDLE_FIRE_FRACTION`` of the cache's life after the newest model
         call); otherwise take back one set earlier."""
         state = view.state
-        if not self.idle or state.turn_open or state.calls:
+        if state.turn_open or state.calls:
             return
         life = cache_life(state)
         usage = state.last_usage
-        if self.auto and life is not None and usage is not None and not state.parent_id \
-                and usage.input + usage.output >= IDLE_MIN_TOKENS:
+        if self.idle and self.auto and life is not None and usage is not None \
+                and not state.parent_id and usage.input + usage.output >= IDLE_MIN_TOKENS:
             due = state.model_called_at + IDLE_FIRE_FRACTION * life
             view.set_timer(IDLE_TIMER, due)
             view.record(self.name, "idle_armed", {"called_at": state.model_called_at,
                                                   "due": due})
-        elif self._ext(state).idle is not None:
+        elif self._ext(state).idle is not None or IDLE_TIMER in state.timers:
             view.clear_timer(IDLE_TIMER)
             view.record(self.name, "idle_done", {"outcome": "disarmed"})
 
@@ -667,7 +707,9 @@ class Compaction(Extension):
             return
         called_at, due = ext.idle
         outcome = None
-        if not self.auto:
+        if not self.idle:
+            outcome = "idle_off"
+        elif not self.auto:
             outcome = "auto_off"
         elif state.model_called_at != called_at:
             outcome = "newer_request"
@@ -764,6 +806,14 @@ class Compaction(Extension):
         calls = state.steps_in_turn - ext.step
         return ext.rapid_refills + 1 if 0 <= calls < RAPID_REFILL_CALLS else 0
 
+    def _to_summarize(self, state: TaskState, request: ModelRequest, cut: int
+                      ) -> list[Message]:
+        """The first ``cut`` messages of ``request`` as a summary reads them:
+        the cleared results given back (clearing saves the main request
+        tokens; the summary should still know what they said)."""
+        return clearing.uncleared(request.messages[:cut], state.messages,
+                                  set(self._ext(state).cleared))
+
     @staticmethod
     def _through(state: TaskState, cut: int) -> int | None:
         """The newest log seq among the first ``cut`` messages, or ``None``
@@ -802,7 +852,9 @@ class Compaction(Extension):
         index of the ``/compact`` message a manual compaction answers."""
         through = self._through(state, cut)
         assert through is not None
-        to_summarize = list(request.messages[:cut])
+        to_summarize = self._to_summarize(state, request, cut)
+        if IDLE_TIMER in state.timers:
+            view.clear_timer(IDLE_TIMER)  # the compaction takes the idle arming back
         if ready is not None:
             note, usage, head_dropped = ready.note, ready.usage, ready.head_dropped
         else:

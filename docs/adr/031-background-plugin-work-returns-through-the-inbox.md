@@ -15,12 +15,13 @@ one side request this way; compaction is the first whose result decides later re
 ## Decision
 
 - A plugin starts the background call from a hook (the step's own state and request,
-  captured then) and keeps nothing durable about it: what is in flight lives in the plugin
-  instance's memory only and decides no bytes.
+  captured then) and records only a random job id with it; the call itself lives in the
+  plugin instance's memory and decides no bytes.
 - The outcome, with what the calls cost, is posted to the task's own inbox as an `External`
   signal; the runner takes it at its next boundary like any input, and the plugin's
-  `on_event` records it (`ExtensionRecorded`, the cost as `core` `spent`). From then on it is
-  ordinary folded state.
+  `on_event` records it (`ExtensionRecorded`, the cost as `core` `spent`) when it names the
+  job the log says is running; any other (outdated, or posted by someone else) leaves only
+  its cost. From then on it is ordinary folded state.
 - A recorded result names what it was computed from (for a summary: the compaction count and
   a digest of the messages it covers); the step that would use it checks that against the
   current state and ignores it when they differ. A lost call (its process died) is simply
@@ -32,8 +33,10 @@ one side request this way; compaction is the first whose result decides later re
 ## Rationale
 
 The inbox is already the one way in (ADR-001): ordered, deduplicated, taken by the claim
-holder only, delivered to whichever worker holds the task when the call finishes. Validating
-on use, not on arrival, makes a late or duplicate result harmless and needs no cancellation
+holder only, delivered to whichever worker holds the task when the call finishes; the job id
+in the log lets that worker tell the result apart from a stale or forged signal, so no
+other `External` of that name can swap a summary in. Validating on use, not on
+arrival, makes a result outdated by a later change harmless and needs no cancellation
 protocol. A restart loses at most the call in flight; every decided step folds the same.
 
 Rejected: recording the result from the background coroutine (a second writer, or a write

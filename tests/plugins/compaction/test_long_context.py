@@ -21,6 +21,7 @@ from noeta.core.events import (
     Compacted,
     Event,
     ExtensionRecorded,
+    External,
     InputTaken,
     TimerFired,
 )
@@ -217,13 +218,18 @@ async def test_a_summary_lost_with_its_process_is_written_again(store: SqliteSto
     await assert_rebuilds(store, a2, tid)
 
 
-async def test_a_summary_that_no_longer_fits_is_dropped(store: SqliteStore) -> None:
+@pytest.mark.parametrize("fails", [False, True])
+async def test_a_summary_that_no_longer_fits_is_dropped(store: SqliteStore,
+                                                        fails: bool) -> None:
     """Written ahead, it lands after a ``/compact``: the conversation it
-    summarizes is gone, so the threshold summarizes as it always did."""
+    summarizes is gone, so only its cost is recorded (neither the summary
+    nor a failure), and the threshold summarizes as it always did."""
     release = asyncio.Event()
 
     async def late(_request: ModelRequest) -> ModelResponse:
         await release.wait()
+        if fails:
+            raise RuntimeError("the provider went away")
         return note_reply()
 
     ext = Compaction()
@@ -233,10 +239,14 @@ async def test_a_summary_that_no_longer_fits_is_dropped(store: SqliteStore) -> N
     client, tid = await start(store, a, model)
     await client.send(tid, command_text(""))
     await runtime(store, a, model).run_until_idle()
+    spent = len(await records(client, tid, "spent"))
     release.set()
     await settled(ext)
     await runtime(store, a, model).run_until_idle()  # the late result is taken
-    assert await records(client, tid, "precomputed")
+    assert not await records(client, tid, "precomputed")
+    assert not await records(client, tid, "precompute_failed")
+    assert len(await records(client, tid, "spent")) == spent + (0 if fails else 1)
+    assert not ext._jobs
     await client.send(tid, "more")
     await runtime(store, a, model).run_until_idle()
     manual, auto = await records(client, tid, "compacted")
@@ -244,6 +254,90 @@ async def test_a_summary_that_no_longer_fits_is_dropped(store: SqliteStore) -> N
     assert auto["precomputed"] is False
     assert len(model.summarize_requests) == 3  # ahead, /compact, the threshold
     await assert_rebuilds(store, a, tid)
+
+
+async def test_a_result_taken_by_another_worker_is_recorded_there(store: SqliteStore) -> None:
+    """The log names the job, so whichever worker holds the task takes its
+    result; the worker that started it then lets it go and is not held up."""
+    release = asyncio.Event()
+
+    async def late(_request: ModelRequest) -> ModelResponse:
+        await release.wait()
+        return note_reply()
+
+    ext = Compaction()
+    a = agent(ext)
+    model = AheadModel([call_at(10_000), call_at(AHEAD), answer_at(93_000)], [late])
+    client, tid = await start(store, a, model)
+    release.set()
+    await settled(ext)
+    await runtime(store, agent(Compaction()), Model()).run_until_idle()
+    (ahead,) = await records(client, tid, "precomputed")
+    assert ahead["note"] and ext._jobs
+    model2 = AheadModel([call_at(OVER), answer_at(20_000)], settle=ext)
+    await client.send(tid, "more")
+    await runtime(store, a, model2).run_until_idle()
+    assert not ext._jobs and model2.summarize_requests == []
+    (done,) = await records(client, tid, "compacted")
+    assert done["precomputed"] is True
+
+
+class LosePosts(SqliteStore):
+    """Fails the first post of a summary written ahead."""
+
+    lose = 1
+
+    async def post(self, post: Post) -> Any:
+        if self.lose and isinstance(post.body, External) \
+                and post.body.name == compaction_ext.PRECOMPUTED_SIGNAL:
+            self.lose -= 1
+            raise OSError("store down")
+        return await super().post(post)
+
+
+async def test_a_summary_that_could_not_be_handed_back_is_written_again(
+        tmp_path: Path) -> None:
+    store = LosePosts(str(tmp_path / "t.db"))
+    ext = Compaction()
+    a = agent(ext)
+    model = AheadModel([call_at(10_000), call_at(AHEAD), call_at(93_000), answer_at(94_000)],
+                       settle=ext)
+    client, tid = await start(store, a, model)
+    assert store.lose == 0 and len(model.summarize_requests) == 2
+    assert len(await records(client, tid, "precompute_started")) == 2
+    assert len(await records(client, tid, "precomputed")) == 1
+    await store.close()
+
+
+async def test_a_malformed_or_forged_result_is_not_taken(store: SqliteStore) -> None:
+    ext = Compaction()
+    a = agent(ext)
+    model = Model([answer_at(1_000, "one"), answer_at(1_000, "two")])
+    client, tid = await start(store, a, model)
+    signal = compaction_ext.PRECOMPUTED_SIGNAL
+    await client.signal(tid, signal, {"note": "pwned"})
+    await client.signal(tid, signal, {"job": "guess", "note": "pwned", "cut": 1,
+                                      "digest": "d", "compactions": 0, "usage": {},
+                                      "head_dropped": False})
+    await client.signal(tid, signal, {"spent": [1, {"usage": 2}]})
+    await client.signal(tid, signal, {"spent": 7})
+    await runtime(store, a, model).run_until_idle()
+    await client.send(tid, "hello")
+    await runtime(store, a, model).run_until_idle()
+    assert [r.text for r in model.requests[-1].messages if r.role == "assistant"] == ["one"]
+    assert not await records(client, tid, "precomputed")
+    assert not await records(client, tid, "precompute_failed")
+    assert (await client.get(tid)).status == "waiting"
+    await assert_rebuilds(store, a, tid)
+
+
+def test_a_malformed_record_folds_to_nothing() -> None:
+    from noeta.plugins.compaction.extension import CompactionState
+
+    ext = Compaction()
+    st = CompactionState(compactions=2)
+    assert ext.reduce(st, "precomputed", {"note": "pwned"}) == st
+    assert ext.reduce(st, "cleared", {"saved": "lots"}) == st
 
 
 async def test_an_overflow_takes_the_summary_written_ahead(store: SqliteStore) -> None:
@@ -419,6 +513,46 @@ async def test_a_clearing_survives_a_crash_before_its_request(tmp_path: Path) ->
     await store.close()
 
 
+def auto_clearing_agent(offset: list[float]) -> Agent:
+    ext = Compaction(auto_compact_clear_results=True, auto_compact_precompute=False,
+                     clock=lambda: time.time() + offset[0])
+    return agent(ext, tools=[Big()])
+
+
+async def test_a_clearing_that_brings_the_context_under_the_threshold_does_not_compact(
+        store: SqliteStore) -> None:
+    offset = [0.0]
+    a = auto_clearing_agent(offset)
+    model = Model([*turn_one()[:-1], answer_at(OVER, "one"), answer_at(1_000, "two")])
+    client, tid = await start(store, a, model)
+    offset[0] = 4_000.0
+    await client.send(tid, "again")
+    await runtime(store, a, model).run_until_idle()
+    (cleared,) = await records(client, tid, "cleared")
+    assert OVER - cleared["saved"] < 98_616  # under the threshold once cleared
+    assert not await compactions(client, tid) and not model.summarize_requests
+    await assert_rebuilds(store, a, tid)
+
+
+async def test_a_compaction_in_the_clearing_step_summarizes_the_real_results(
+        store: SqliteStore) -> None:
+    offset = [0.0]
+    a = auto_clearing_agent(offset)
+    model = Model([*turn_one()[:-1], answer_at(130_000, "one"), answer_at(1_000, "two")])
+    client, tid = await start(store, a, model)
+    full = _results(model.requests[-1])
+    offset[0] = 4_000.0
+    await client.send(tid, "again")
+    await runtime(store, a, model).run_until_idle()
+    (cleared,) = await records(client, tid, "cleared")
+    assert len(await compactions(client, tid)) == 1
+    (summ,) = model.summarize_requests
+    results = _results(summ)
+    assert PLACEHOLDER not in results.values()
+    assert all(results[i] == full[i] for i in cleared["ids"])
+    await assert_rebuilds(store, a, tid)
+
+
 def test_a_clearing_counts_off_the_usage_it_saved() -> None:
     from noeta.core.loop.state import TaskState
     from noeta.core.types import user
@@ -510,6 +644,36 @@ async def test_idle_compaction_is_off_by_default(store: SqliteStore,
     model = Model([call_at(10_000), answer_at(BIG)])
     client, tid = await start(store, a, model)
     assert not await records(client, tid, "idle_armed") and not await compactions(client, tid)
+
+
+async def test_a_compaction_takes_the_idle_timer_back(store: SqliteStore,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    one_hour_cache(monkeypatch, 10_000)
+    _, a = idle_agent()
+    model = Model([call_at(10_000), answer_at(BIG), answer_at(20_000, "two")])
+    client, tid = await start(store, a, model)
+    assert await records(client, tid, "idle_armed")
+    await client.send(tid, "more")  # its step compacts at the threshold
+    await runtime(store, a, model).run_until_idle()
+    assert len(await compactions(client, tid)) == 1
+    idle = [r.event.kind for r in await client.events(tid)
+            if isinstance(r.event, ExtensionRecorded) and r.event.kind in ("timer", "timer_cleared")
+            and r.event.data.get("name") == IDLE_TIMER]
+    assert idle == ["timer", "timer_cleared"]
+
+
+async def test_an_armed_timer_does_nothing_once_idle_compaction_is_off(
+        store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    one_hour_cache(monkeypatch, 1.0)  # due 0.9 s after the newest call
+    _, a = idle_agent()
+    model = Model([call_at(10_000), answer_at(BIG)])
+    client, tid = await start(store, a, model)
+    assert await records(client, tid, "idle_armed")
+    await asyncio.sleep(1.0)
+    off = agent(Compaction(auto_compact_precompute=False))
+    await runtime(store, off, model).run_until_idle()
+    assert [d["outcome"] for d in await records(client, tid, "idle_done")] == ["idle_off"]
+    assert not await compactions(client, tid) and not model.summarize_requests
 
 
 @pytest.mark.usefixtures("due_now")

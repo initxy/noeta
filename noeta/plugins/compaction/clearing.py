@@ -63,3 +63,20 @@ def cleared_request(request: ModelRequest, cleared: Collection[str]) -> ModelReq
             changed = True
         messages.append(m)
     return msgspec.structs.replace(request, messages=messages) if changed else request
+
+
+def uncleared(messages: Sequence[Message], originals: Sequence[Message],
+              cleared: Collection[str]) -> list[Message]:
+    """``messages`` with the results of the ``cleared`` calls given back as
+    ``originals`` hold them: what a summary of the conversation reads."""
+    real = {b.call_id: b for m in originals if m.role == "user" for b in m.content
+            if isinstance(b, ToolResult) and b.call_id in cleared} if cleared else {}
+    out: list[Message] = []
+    for m in messages:
+        if real and m.role == "user" and any(isinstance(b, ToolResult) and b.call_id in real
+                                             for b in m.content):
+            m = msgspec.structs.replace(m, content=[
+                real[b.call_id] if isinstance(b, ToolResult) and b.call_id in real else b
+                for b in m.content])
+        out.append(m)
+    return out

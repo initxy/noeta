@@ -54,7 +54,7 @@ facts that drive the design:
   20,000 tokens; only after an idle gap longer than the cache life (3,900 s for the 1 h cache),
   when clearing costs no cache.
 - Idle compaction (`idleCompaction`): only with a 1 h cache TTL; fires at 90% of the cache
-  life after the last request; needs at least max(100,000, 200,000) tokens of context;
+  life after the last request; needs at least 200,000 tokens of context (Claude Code's default);
   dropped if more than 60 s late or a newer request went out.
 - noeta's Anthropic requests use the default 5-minute `ephemeral` cache
   (`noeta/backends/providers/_anthropic_wire.py`), though the `extended-cache-ttl` beta is sent.
@@ -81,7 +81,7 @@ facts that drive the design:
 - [x] Precomputed compaction (compaction).
 - [x] Clearing old results after an idle gap (compaction).
 - [x] Idle compaction (compaction).
-- [ ] Docs: CONTEXT.md / plugin docs / ADR if a costly-to-reverse decision lands.
+- [x] Docs: CONTEXT.md / plugin docs / ADR if a costly-to-reverse decision lands.
 - [ ] Review per docs/reviewing.md; gates; archive.
 
 ## Acceptance criteria
@@ -135,3 +135,15 @@ facts that drive the design:
   that lands. `make parity`: 0 mismatches; no scenario reaches 80% of the window.
 - 2026-11-05: cut: at the threshold with a summary still being written, the step summarizes as
   before rather than waiting for it (the late result is then dropped as outdated).
+- 2026-11-05: `TaskState.cache_ttl` is wired (the Anthropic provider's `prompt_cache_ttl`
+  item): idle compaction reads it directly, no longer "defensively until that lands".
+- 2026-11-05: review fixes. A clearing is measured in the step that makes it (it could bring
+  the context under the threshold and still compact). Decided: a summary, made in that step
+  or written ahead, reads the cleared results as they were (`clearing.uncleared`): clearing
+  saves the main request tokens, the summary should still know what they said; a summarize
+  call that no longer fits drops its oldest rounds as before. A summary written ahead is bound
+  to a random job id recorded when it starts (`precompute_started`): only the result naming
+  the running job is taken, on any worker; an outdated or forged one leaves only its cost (no
+  failure, no summary), and a malformed record folds to nothing (ADR-031 says so). A
+  compaction takes the idle timer back; an armed timer does nothing once `auto_compact_idle`
+  is off. OpenAI's overflow wording counts the functions part as input.
