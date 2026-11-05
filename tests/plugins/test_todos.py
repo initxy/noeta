@@ -200,13 +200,15 @@ def test_turns_count_content_blocks_and_skip_thinking() -> None:
                 *step(Thinking(text="hm"), Text(text="a"), ToolUse(id="2", name="Probe",
                                                                     input={})),
                 *step(Text(text="b"))]
+    seqs = [1, 2, 3, 4, 5, 6]
     # Never reminded: every turn shown counts.
-    assert turns_since(messages, messages, -1) == (3, 4)
-    # Reminded after the third turn of the history.
-    assert turns_since(messages, messages, 3) == (3, 1)
+    assert turns_since(messages, seqs, -1) == (3, 4)
+    # Reminded after seq 4 (the second step's results): one turn since.
+    assert turns_since(messages, seqs, 4) == (3, 1)
     # A compaction left two turns: no count reaches back past it.
-    assert turns_since(messages[2:4], messages, -1) == (2, 2)
-    assert turns_since(messages[2:4], [*messages, *messages], 0) == (2, 2)
+    assert turns_since(messages[2:4], seqs[2:4], -1) == (2, 2)
+    assert turns_since(messages[2:4], [0, 0], -1) == (2, 2)
+    assert turns_since(messages[2:4], [0, 0], 0) == (2, 0)
 
 
 async def test_input_repairs_and_hints() -> None:
@@ -235,3 +237,13 @@ def test_the_folded_list_snapshots() -> None:
         Item(id="2", subject="c", description="d", blocked_by=("1",))), highest=3)})
     data = snapshots.encode(state)
     assert data is not None and snapshots.decode(data) == state
+
+
+def test_a_continued_task_counts_the_reminder_from_its_own_turns() -> None:
+    """The reminder's place is a seq of the source's log; a continued task's
+    carried messages sit at seq 0, so its count starts with its own turns."""
+    ext = Todos()
+    reminded = ext.reduce(TodoState(), "task_reminder", {"seq": 40})
+    assert reminded.reminded_at == 40
+    assert ext.continue_state(reminded).reminded_at == 0
+    assert ext.continue_state(TodoState()).reminded_at == -1

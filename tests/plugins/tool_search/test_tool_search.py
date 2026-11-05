@@ -50,10 +50,7 @@ def names(specs: Sequence[ToolSpec]) -> list[str]:
 def specs(tools: Sequence[Tool], loaded: Sequence[str] = ()) -> list[ToolSpec]:
     """The request's tool list with the plugin's changes, ``loaded`` named
     by an earlier tool result."""
-    state = TaskState()
-    if loaded:
-        state._add(Message(role="user", content=[ToolResult(call_id="c", content=[
-            ToolReference(tool_name=n) for n in loaded])]), 1)
+    state = TaskState(ext={"tool_search": frozenset(loaded)} if loaded else {})
     changes = ToolSearch().tool_changes(TaskView(state=state), tools)
     if changes is None:
         return request_tools(tools, {}, (), lambda _t, text: text)

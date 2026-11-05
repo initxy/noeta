@@ -142,8 +142,8 @@ something with `notify`; neither reaches the model as the user.
 A tool whose `flags` say `deferred=True` is named to the model (`TaskView.deferred_tool_names`) and
 sent only once the model loads it with `ToolSearch`. The `tool_search` plugin
 (`noeta/plugins/tool_search`) adds `ToolSearch` and withholds the tools not loaded through
-`Extension.tool_changes`; a tool is loaded once a `ToolReference` in the task's history or open
-batch names it. Every agent built from agent files runs it. MCP tools are deferred by default
+`Extension.tool_changes`; a tool is loaded once a `ToolReference` result names it (recorded with
+that result, so a compaction keeps it). Every agent built from agent files runs it. MCP tools are deferred by default
 (ADR-017).
 
 ## Agent file

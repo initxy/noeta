@@ -443,7 +443,7 @@ async def test_an_extension_can_refuse_a_compaction(store: SqliteStore) -> None:
 
 
 @pytest.mark.parametrize("task_id", ["../../escaped", "a/../../b", "..", "/abs/x"])
-def test_a_transcript_stays_in_the_project_directory_whatever_the_task_id(
+async def test_a_transcript_stays_in_the_project_directory_whatever_the_task_id(
         tmp_path: Path, task_id: str) -> None:
     """A child's id carries the provider's tool-use id, which a gateway
     picks."""
@@ -454,8 +454,11 @@ def test_a_transcript_stays_in_the_project_directory_whatever_the_task_id(
     work = tmp_path / "w"
     work.mkdir()
     ext = Compaction(home=str(tmp_path / "home"))
-    view = SimpleNamespace(env=LocalExecEnv(str(work)), task_id=task_id)
-    written = ext._transcript(view, TaskState(task_id=task_id))  # type: ignore[arg-type]
+    async def read_log(_task_id: str, after: int = 0) -> list[Any]:
+        return []
+
+    view = SimpleNamespace(env=LocalExecEnv(str(work)), task_id=task_id, read_log=read_log)
+    written = await ext._transcript(view, TaskState(task_id=task_id))  # type: ignore[arg-type]
     assert written is not None
     from noeta.toolkit.paths import project_slug
 
@@ -537,3 +540,27 @@ async def test_a_continued_task_records_the_threshold_in_its_own_log(
     fork = await client.create("a", "go on", history_from=src)
     await runtime(store, a, model).run_until_idle()
     assert thresholds(await client.events(fork))
+
+
+async def test_the_saved_transcript_holds_the_whole_conversation(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Read from the log at each compaction: the second transcript still
+    has the first prompt and every call the first compaction collapsed."""
+    home = tmp_path / "home"
+    work = tmp_path / "w"
+    work.mkdir()
+    a = agent(home=str(home))
+    model = Model([*(call() for _ in range(26)), answer("done")])
+    client, tid = await run(store, a, model, env_for=lambda _s: LocalExecEnv(str(work)))
+    assert len(await compactions(client, tid)) >= 2
+    transcript = next(home.glob("projects/*/*.jsonl"))
+    lines = [json.loads(line) for line in transcript.read_text().splitlines()]
+    assert lines[0]["role"] == "user" and lines[0]["content"][0]["text"] == "go"
+    uses = [b["id"] for m in lines if m["role"] == "assistant" for b in m["content"]
+            if b.get("type") == "tool_use"]
+    called = [e.response.message.tool_uses[0].id for e in await events(client, tid)
+              if isinstance(e, ModelReplied) and e.response.message.tool_uses]
+    # Every call up to the last compaction, in order; no summary among them.
+    assert len(uses) > 8 and uses == called[:len(uses)]
+    assert not any(m["content"][0].get("text", "").startswith(SUMMARY_PREAMBLE)
+                   for m in lines if m["content"])

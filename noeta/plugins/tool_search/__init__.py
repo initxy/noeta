@@ -5,9 +5,9 @@ loaded it.
 While a task offers at least one deferred tool, this plugin adds
 ``ToolSearch`` (``Extension.tool_changes``, computed from the other
 plugins' tools). A tool is loaded once a tool result of the task named it
-with a ``ToolReference``: the conversation's whole history counts (a
-compaction does not unload a tool, a continued task keeps its source's),
-and so do the results of the batch still open. The plugin withholds every
+with a ``ToolReference``: the plugin records the names with that result
+(``loaded``), so a compaction does not unload a tool and a continued task
+keeps its source's. The plugin withholds every
 deferred tool not loaded yet from the request (a call to one is refused
 with :data:`NOT_LOADED`), and the request always lists
 ``DeferredToolPlaceholder``, an entry that is never called and keeps the
@@ -22,12 +22,13 @@ it is (Claude Code inserts it at ``length - 1``).
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from noeta.core.extension import Extension, TaskView, ToolChanges, ToolEntry
 from noeta.core.loop.state import TaskState
 from noeta.core.mcp_names import legacy_index
-from noeta.core.tool import Tool, tool_flags
-from noeta.core.types import ToolReference, ToolResult, ToolSpec
+from noeta.core.tool import Tool, ToolOutput, tool_flags
+from noeta.core.types import ToolReference, ToolSpec, ToolUse
 from noeta.plugins.tool_search.search import TOOL_SEARCH, ToolSearchTool
 
 __all__ = ["NOT_LOADED", "PLACEHOLDER", "ToolSearch", "ToolSearchTool", "loaded_tools"]
@@ -48,13 +49,14 @@ def placeholder_spec() -> ToolSpec:
                     input_schema={"type": "object", "properties": {}}, defer_loading=True)
 
 
+#: The record of the tools a result loaded (``{"names": [...]}``).
+LOADED = "loaded"
+
+
 def loaded_tools(state: TaskState) -> set[str]:
-    """Every tool a ``ToolReference`` result of the task named: in its
-    history (never compacted) and in the open batch."""
-    results = [b for m in state.history if m.role == "user" for b in m.content
-               if isinstance(b, ToolResult)]
-    results += [c.result for c in state.calls if c.result is not None]
-    return {b.tool_name for r in results for b in r.content if isinstance(b, ToolReference)}
+    """Every tool a ``ToolReference`` result of the task named (recorded
+    with the result, :data:`LOADED`)."""
+    return set(state.ext.get(ToolSearch.name) or ())
 
 
 class ToolSearch(Extension):
@@ -62,6 +64,18 @@ class ToolSearch(Extension):
     the deferred tools not loaded yet from the request."""
 
     name = "tool_search"
+
+    def reduce(self, state: Any, kind: str, data: Any) -> Any:
+        if kind == LOADED and isinstance(data, dict):
+            return frozenset(state or ()) | frozenset(data.get("names") or ())
+        return state
+
+    async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
+        names = sorted({b.tool_name for b in output.content if isinstance(b, ToolReference)}
+                       - loaded_tools(view.state))
+        if names:
+            view.record(self.name, LOADED, {"names": names})
+        return output
 
     def tool_changes(self, view: TaskView, offered: Sequence[Tool]) -> ToolChanges | None:
         deferred = {t.name: t for t in offered if tool_flags(t).deferred}

@@ -95,6 +95,10 @@ class TaskState:
     #: what a compaction collapsed stays readable here (its saved transcript).
     history: list[Message] = field(default_factory=list)
     history_seqs: list[int] = field(default_factory=list)
+    #: Log seq of the newest message the person wrote (``Message.from_person``,
+    #: no tool results), 0 before any: the person's latest prompt, named even
+    #: once a compaction has summarized it. The log is the full transcript.
+    prompt_seq: int = 0
     #: Usage of the newest model reply; ``None`` before the first one and
     #: after a compaction (no recorded count describes the collapsed history).
     last_usage: Usage | None = None
@@ -224,6 +228,8 @@ class TaskState:
         self.message_seqs.append(seq)
         self.history.append(message)
         self.history_seqs.append(seq)
+        if message.from_person and not any(isinstance(b, ToolResult) for b in message.content):
+            self.prompt_seq = seq
 
 
 def new_state(initial_ext: Mapping[str, Any] | None = None) -> TaskState:
