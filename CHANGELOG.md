@@ -1038,6 +1038,12 @@ Third-party `Store` implementations must add these; `noeta.testing.store_contrac
 
 ### Fixed
 
+- **A server name in several config places starts the one `noeta mcp` shows.** The runtime
+  took a project's `.noeta/mcp.json` first and the user's settings before the local ones, so
+  a user server beat a local one of the same name while `noeta mcp get` showed the local one.
+  Both now follow Claude Code: managed > `--settings` > local > the project's
+  `settings.json` > `.noeta/mcp.json` > the user's (`noeta/toolkit/mcp_sources.py`);
+  `--mcp-config` still wins over every file, as in Claude Code.
 - **Deny rules now hold against shell commands** (spec `2026-11-03-shell-deny-paths`): a `Bash`
   or `Monitor` command that writes a path an `Edit` deny rule covers (`mkdir`, `touch`, `rm`,
   `rmdir`, `mv`, `cp`, `sed -i`, `tee`, an output redirection) or reads one a `Read` deny rule

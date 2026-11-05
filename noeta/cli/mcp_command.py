@@ -37,6 +37,7 @@ from typing import Any
 from noeta.cli import config, home_dir
 from noeta.cli.trust import project_trusted
 from noeta.core import registry
+from noeta.toolkit.mcp_sources import PROJECT_FILE, mcp_sources
 
 __all__ = ["CLIENT_SECRET_ENV", "SCOPES", "add_parser", "run"]
 
@@ -101,7 +102,7 @@ def scope_file(scope: str, cwd: str) -> Path:
     if scope == "user":
         return home_dir.HOME / "settings.json"
     if scope == "project":
-        return Path(cwd) / ".noeta" / "mcp.json"
+        return Path(cwd) / PROJECT_FILE
     return Path(cwd) / ".noeta" / "settings.local.json"
 
 
@@ -126,10 +127,13 @@ def _write(path: Path, data: dict[str, Any]) -> None:
 
 def configured(cwd: str) -> list[tuple[str, str, dict[str, Any]]]:
     """``(scope, name, spec)`` of every server, in the order a later one of
-    the same name loses (local, project, user)."""
+    the same name loses: the MCP plugin's (local, project, user)."""
+    scopes = {scope_file(s, cwd): s for s in SCOPES}
+    order = mcp_sources([scope_file("user", cwd), scope_file("local", cwd)], [cwd])
     out = []
-    for scope in SCOPES:
-        table = _read(scope_file(scope, cwd)).get("mcpServers") or {}
+    for path, _ in order:
+        scope = scopes[path]
+        table = _read(path).get("mcpServers") or {}
         if isinstance(table, dict):
             out += [(scope, str(n), s) for n, s in table.items() if isinstance(s, dict)]
     return out
