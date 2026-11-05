@@ -100,13 +100,13 @@ def _blocks(messages: Sequence[Message]) -> int:
                for b in m.content if not isinstance(b, Thinking))
 
 
-def turns_since(messages: Sequence[Message], history: Sequence[Message],
+def turns_since(messages: Sequence[Message], seqs: Sequence[int],
                 reminded_at: int) -> tuple[int, int]:
     """Model turns since the last ``TaskCreate`` / ``TaskUpdate`` call in
-    ``messages`` (the conversation as the model sees it), and since the last
-    reminder, given at turn ``reminded_at`` of ``history`` (``-1``: never).
-    Neither count reaches back past a compaction, as Claude Code counts in
-    the compacted conversation."""
+    ``messages`` (the conversation as the model sees it, ``seqs`` their log
+    seqs), and since the last reminder, given after log seq ``reminded_at``
+    (``-1``: never). Neither count reaches back past a compaction, as Claude
+    Code counts in the compacted conversation."""
     since_use = 0
     for m in reversed(messages):
         if m.role != "assistant":
@@ -120,8 +120,8 @@ def turns_since(messages: Sequence[Message], history: Sequence[Message],
         else:
             continue
         break
-    shown = _blocks(messages)
-    since_reminder = shown if reminded_at < 0 else min(shown, _blocks(history) - reminded_at)
+    since_reminder = _blocks(messages) if reminded_at < 0 else _blocks(
+        [m for m, s in zip(messages, seqs, strict=True) if s > reminded_at])
     return since_use, since_reminder
 
 
@@ -140,8 +140,15 @@ class Todos(Extension):
     def reduce(self, state: Any, kind: str, data: Any) -> Any:
         if kind == REMINDER_KIND:
             st = state if isinstance(state, TodoState) else TodoState()
-            return replace(st, reminded_at=int((data or {}).get("turn", 0)))
+            return replace(st, reminded_at=int((data or {}).get("seq", 0)))
         return reduce_todos(state, kind, data)
+
+    def continue_state(self, state: Any) -> Any:
+        """The reminder's seq is the source log's; the carried messages sit
+        at seq 0, before any new turn."""
+        if isinstance(state, TodoState) and state.reminded_at > 0:
+            return replace(state, reminded_at=0)
+        return state
 
     def active(self, view: TaskView) -> bool:
         """Whether this task gets the task tools."""
@@ -164,7 +171,7 @@ class Todos(Extension):
             return ()
         st = view.ext_state(NAME)
         st = st if isinstance(st, TodoState) else TodoState()
-        since_use, since_reminder = turns_since(view.state.messages, view.state.history,
+        since_use, since_reminder = turns_since(view.state.messages, view.state.message_seqs,
                                                 st.reminded_at)
         if since_use < TURNS or since_reminder < TURNS:
             return ()
@@ -173,10 +180,10 @@ class Todos(Extension):
         if items:
             text += REMINDER_LIST + "\n".join(f"#{i.id}. [{i.status}] {i.subject}"
                                               for i in items)
-        # The turn it is given at is recorded with it (``reduce``), so the
-        # next count needs no text to find it by.
+        # Where it is given is recorded with it (``reduce``), so the next
+        # count needs no text to find it by.
         return (Reminder(text=text, kind=REMINDER_KIND, role="system", order=ORDER,
-                         data={"turn": _blocks(view.state.history)}),)
+                         data={"seq": view.state.last_seq}),)
 
 
 def _offered(view: TaskView, name: str) -> bool:

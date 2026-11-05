@@ -566,3 +566,35 @@ def test_a_continued_task_recalls_for_its_own_prompts(tmp_path: Path) -> None:
           "recent": [{"through": 40, "paths": ["a.md"], "chars": 10}], "voided": [12]}
     out = Memory(home=str(tmp_path)).continue_state(st)
     assert out == {"dir": "/m", "surfaced": ["a.md"], "chars": 10, "through": 0}
+
+
+async def test_a_memory_read_is_recorded_once_and_outlives_a_compaction(
+        tmp_path: Path) -> None:
+    """Recorded with the ``Read`` call's result, in the plugin's state: a
+    compaction that summarizes the call still leaves the file skipped; a
+    file outside the memory directory is not recorded."""
+    from noeta.core.events import Compacted
+    from noeta.core.extension import TaskView
+    from noeta.core.loop.state import TaskState, fold_on_copy
+    from noeta.core.tool import ToolOutput
+    from noeta.core.types import ToolUse
+    from noeta.plugins.memory.extension import _read_files
+
+    ext = Memory()
+    directory = str(tmp_path / "memory") + "/"
+    state = TaskState(ext={"memory": ext.reduce(None, "dir", {"dir": directory})})
+
+    async def read(state: TaskState, path: str) -> TaskState:
+        view = TaskView(state=state)
+        await ext.after_tool(view, ToolUse(id="c", name="Read", input={"file_path": path}),
+                             ToolOutput())
+        return fold_on_copy(state, view.pending, {"memory": ext.reduce})
+
+    tabs = str(tmp_path / "memory" / "tabs.md")
+    state = await read(state, tabs)
+    state = await read(state, directory + "sub/../tabs.md")  # the same file: not again
+    state = await read(state, str(tmp_path / "notes.md"))
+    state = fold_on_copy(state, [Compacted(summary="S", through=state.last_seq)],
+                         {"memory": ext.reduce})
+    assert state.ext["memory"]["read"] == [tabs]
+    assert _read_files(TaskView(state=state)) == {tabs}

@@ -30,7 +30,8 @@ from noeta.core import records
 from noeta.core.execenv import ExecEnv
 from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
-from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, user
+from noeta.core.tool import ToolOutput
+from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, ToolUse, user
 from noeta.toolkit.context import read_task_text, task_env, task_files
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import (
@@ -169,15 +170,10 @@ def _stale_note(mtime: float, now: float | None = None) -> str:
 
 
 def _read_files(view: TaskView) -> set[str]:
-    """The files the task's ``Read`` calls named: a memory already read is
-    not recalled again."""
-    out: set[str] = set()
-    for m in view.state.history:
-        for use in m.tool_uses if m.role == "assistant" else ():
-            path = use.input.get("file_path") if use.name == "Read" else None
-            if isinstance(path, str) and path:
-                out.add(posixpath.normpath(path))
-    return out
+    """The memory files the task's ``Read`` calls named (recorded as
+    ``read`` with each call's result): a memory already read is not
+    recalled again."""
+    return set((view.ext_state(MEMORY) or {}).get("read") or ())
 
 
 def _instructions_show_index(view: TaskView, name: str) -> bool:
@@ -250,6 +246,8 @@ class Memory(Extension):
                     "through": through, "recent": recent[-ERASABLE_RECALLS:]}
         if kind == "checked":
             return {**state, "through": data["through"]}
+        if kind == "read":
+            return {**state, "read": [*(state.get("read") or ()), data["path"]]}
         if kind == records.ERASED_KIND:
             seqs = set(data["seqs"])
             state = {**state, "erased": [*(state.get("erased") or ()),
@@ -277,6 +275,16 @@ class Memory(Extension):
         if self.agent_scope is not None or not isinstance(directory, str):
             return {}
         return {MEMORY_DIR_KEY: directory}
+
+    async def after_tool(self, view: TaskView, call: ToolUse, output: ToolOutput) -> ToolOutput:
+        """A ``Read`` of a memory file: recorded, so recall skips that file."""
+        directory, path = self._dir(view), call.input.get("file_path")
+        if call.name == "Read" and directory and isinstance(path, str) and path:
+            path = posixpath.normpath(path)
+            if posixpath.dirname(path) == posixpath.normpath(directory) \
+                    and path not in _read_files(view):
+                view.record(self.name, "read", {"path": path})
+        return output
 
     # ------------------------------------------------------------ prompt
 
