@@ -16,17 +16,20 @@ and describe a different codebase.
   (refined by 026)
 - [029](029-a-task-keeps-its-own-claim-while-it-owns-process-bound-work.md) A task keeps its own claim while it owns process-bound work
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
-  (refined by 012, 023)
+  (refined by 012, 023, 030)
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends
   (refined by 023)
 - [023](023-snapshots-per-fold-version-and-newer-logs-left-to-newer-workers.md) Snapshots are kept per fold version; a newer version's log is left to a newer worker
+- [030](030-the-log-is-the-only-full-transcript.md) The log is the only full transcript; the fold keeps what the next step needs
 
 ## Extensibility and behavior
 
 - [002](002-one-extension-interface-and-entry-points.md) Every capability is a plugin behind one Extension interface, found through entry points
   (refined by 017, 026)
 - [017](017-deferred-tool-loading-is-a-plugin.md) Deferred tool loading is a plugin; extensions change the tool list through tool_changes
+  (refined by 030)
 - [026](026-a-blocked-prompt-is-erased-by-a-core-record.md) A blocked prompt is erased by a core record, and plugin state follows it
+  (refined by 030)
 - [016](016-deferred-tool-loading-stays-in-the-kernel-for-now.md) Deferred tool loading stays in the kernel for now
   (superseded by 017)
 - [003](003-claude-code-is-the-model-visible-contract.md) Claude Code's model-visible behavior is the contract; prompt text is our own words
