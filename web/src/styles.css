@@ -555,6 +555,13 @@ code {
   color: var(--error);
 }
 
+.tool-note {
+  padding: 0 10px 8px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .command {
   color: var(--text);
 }
