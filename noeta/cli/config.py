@@ -273,6 +273,8 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     path = home_dir.HOME / "config.toml"
     if path.is_file():
         data.update(tomllib.loads(path.read_text("utf-8")))
+        if unknown := sorted(set(data) - _TOP_LEVEL_KEYS):
+            log.warning("%s: unknown top-level keys %s; ignored", path, unknown)
     env = {
         "model": os.environ.get("NOETA_MODEL"),
         "provider": os.environ.get("NOETA_PROVIDER"),
@@ -322,6 +324,14 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
         raise ValueError(f"{settings.models_file}: rows name providers that are not "
                          f"configured: {stray}")
     return settings
+
+
+#: The top-level keys of ``config.toml``: the settings a file sets, and
+#: ``[agents.<name>]`` (read into ``add_plugins``). An unknown one warns
+#: rather than fails, so a key a newer or older noeta reads does not stop
+#: this one from starting.
+_TOP_LEVEL_KEYS = frozenset(Settings.__dataclass_fields__) - {"add_plugins",
+                                                              "model_providers"} | {"agents"}
 
 
 def _provider_tables(value: Any) -> dict[str, dict[str, Any]]:

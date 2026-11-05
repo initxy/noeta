@@ -49,6 +49,17 @@ def test_bad_tables(home: Path, text: str) -> None:
         load_settings()
 
 
+def test_an_unknown_top_level_key_warns_and_is_ignored(
+        home: Path, caplog: pytest.LogCaptureFixture) -> None:
+    (home / "config.toml").write_text(
+        'model = "m"\napikey = "k"\n[agents.main]\nadd_plugins = []\n[plugins.web]\n')
+    with caplog.at_level("WARNING", logger="noeta.cli"):
+        s = load_settings()
+    assert s.model == "m" and s.api_key != "k"
+    assert [r.getMessage() for r in caplog.records] == [
+        f"{home / 'config.toml'}: unknown top-level keys ['apikey']; ignored"]
+
+
 def test_merge() -> None:
     web = Web()
     assert merge_plugin_settings(
