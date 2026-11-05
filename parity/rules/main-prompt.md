@@ -74,8 +74,8 @@ Claude Code files work (instructions, settings, skills, deferred-tool and agent 
 
 | id | rule | noeta today |
 |---|---|---|
-| `main.session.1` | When the user must run a command themselves (an interactive login, say), suggest they type it after a `!` prefix, which runs it in the session and puts its output into the conversation. | deviation — no `!` passthrough in any noeta front end yet (`parity/deviations.md`). |
-| `main.session.2` | A user message of the form `/<skill-name>` means: invoke that skill through the `Skill` tool. The line is given only when there are skills and `Skill` is offered; the `# Session-specific guidance` heading goes when nothing is left under it (2.1.312 bundle). | covered — the `skills` plugin's `before_model` drops the line, and the empty heading, otherwise (`drop_skill_guidance`). |
+| `main.session.1` | When the user must run a command themselves (an interactive login, say), suggest they type it after a `!` prefix, which runs it in the session and puts its output into the conversation. | covered for terminal UI tasks — Claude Code gives the line only in its interactive terminal (`offersShellEscape`), not to `-p` or the Agent SDK. The terminal UI marks the tasks it creates `bash_mode: true` (not attached to a server, where it refuses `!` commands); the `environment` plugin's `before_model` drops the line otherwise, and the empty heading with it (`drop_guidance_line`, `noeta/toolkit/guidance_lines.py`). The replay marks its tasks so, as the recordings come from Claude Code's terminal. |
+| `main.session.2` | A user message of the form `/<skill-name>` means: invoke that skill through the `Skill` tool. The line is given only when there are skills and `Skill` is offered; the `# Session-specific guidance` heading goes when nothing is left under it (2.1.312 bundle). | covered — the `skills` plugin's `before_model` drops the line, and the empty heading, otherwise (`drop_guidance_line`). |
 | `main.session.3` | Only skills listed in the user-invocable skill list may be invoked that way; never guess a skill name. | covered |
 
 ## Memory section

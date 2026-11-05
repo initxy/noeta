@@ -87,11 +87,12 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 
 ## 请求能设置什么
 
-请求只能设置客户端被允许设置的任务配置（`noeta/host/_http_guard.py` 的 `REQUEST_CONFIG`）：`model`、`effort`、`max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、`permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`。其他键一律拒绝（403）；`max_budget_usd` 不是大于 0 的数时返回 400，创建任务和配置信号都一样。请求只能发前端会发的那些信号，而且只能在服务端自己的目录和 `--allow-root` 目录里创建任务（相对路径的 `cwd` 以服务端目录为基准）。
+请求只能设置客户端被允许设置的任务配置（`noeta/host/_http_guard.py` 的 `REQUEST_CONFIG`）：`model`、`effort`、`max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、`permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`、`bash_mode`。其他键一律拒绝（403）；`max_budget_usd` 不是大于 0 的数时返回 400，创建任务和配置信号都一样。请求只能发前端会发的那些信号，而且只能在服务端自己的目录和 `--allow-root` 目录里创建任务（相对路径的 `cwd` 以服务端目录为基准）。
 
 - `timezone` 是用户的 IANA 时区（如 `Europe/Berlin`），noeta 自己的前端都会带上：不带的话，模型拿到的是 UTC 日期，并注明是 UTC，绝不会用服务器本地时区。定时任务（`CronCreate`）和 `ScheduleWakeup` 显示的时间也按它来；不带时按跑任务那台机器的时区。
 - `output_schema`（根为 `"type": "object"` 的 JSON Schema）让模型通过 `StructuredOutput` 工具作答，对应 Claude Code 的 `--json-schema`；答案在任务的 `structured_output` `answer` 记录里（`noeta.toolkit.structured_output.structured_answer`）。
 - `interactive: false` 表示没人实时盯着这个任务（不生成标题，除非设了 `permission_prompt_tool`，否则也没有 `AskUserQuestion`），和无界面协议的做法一样。这些键会一直保留，直到客户端重新设置；终端界面和 ACP 重新打开任务时会把它们去掉。
+- `bash_mode: true` 表示客户端会替用户执行 `! <命令>`，就像终端界面在本机跑时那样：主提示词里就会多一行，让模型碰到交互式命令时建议用户这么跑。只在创建任务时设；子代理不会带上它（fork 出来的任务沿用父任务的提示词，所以会带上）。
 - 配置信号只能删除、不能设置 `client_hooks`，这是无界面客户端的 hook 回调记录（`noeta.toolkit.hook_callbacks`）。
 - `ultracode: true` 是 Claude Code 的 ultracode 开关：告诉模型遇到像样的任务都用 `Workflow` 来编排，关掉时也会再告诉它一次（`noeta.plugins.workflow.opt_in`）。
 - `continued_as` 说明一个用 `history_from` 创建的任务以什么方式接续原任务，供 SessionStart hook 判断：`fork`（默认）、`resume` 或 `rewind`（不触发任何 hook）。

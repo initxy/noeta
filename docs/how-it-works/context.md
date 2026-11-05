@@ -35,10 +35,12 @@ conversation keeps the system prompt identical for every task of an agent, and l
 compaction put them back next to its summary (ahead of it for an automatic one).
 
 Two plugins change the system text in `before_model`: `environment` keeps the prompt
-paragraphs written for the model in use and drops the `<total_tokens>` line for a model that is
-told no budget (`noeta/plugins/environment/notes.py`), and `skills` drops the prompt's skill
-line when the task has no skills or no `Skill` tool (`drop_skill_guidance`,
-`noeta/plugins/skills/guidance.py`). `environment` also sends a turn the person asked to
+paragraphs written for the model in use, drops the `<total_tokens>` line for a model that is
+told no budget (`noeta/plugins/environment/notes.py`), and drops the `! <command>` line unless the
+task's config says its front end runs `!` commands (`bash_mode`, set by the terminal UI); `skills`
+drops the prompt's skill line when the task has no skills or no `Skill` tool. Both lines sit
+under `# Session-specific guidance`, which goes once neither is left (`drop_guidance_line`,
+`noeta/toolkit/guidance_lines.py`). `environment` also sends a turn the person asked to
 `ultrathink` at `xhigh` effort.
 
 ### Prompt names and overrides

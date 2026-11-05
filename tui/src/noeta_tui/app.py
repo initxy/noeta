@@ -23,7 +23,7 @@ from noeta.host.local import UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
 from noeta.host.stream_json import find_latest_task
-from noeta.toolkit.interactive import follow
+from noeta.toolkit.interactive import BASH_MODE_KEY, follow
 from noeta.toolkit.local_env import local_timezone
 from noeta.toolkit.permission_modes import (
     MODE_SIGNAL,
@@ -257,6 +257,10 @@ class NoetaApp(TranscriptView):
             # The person is at this machine: their dates are in its time zone.
             if "timezone" not in config and (zone := local_timezone()):
                 config["timezone"] = zone
+            # It runs the person's ``!`` commands (not on a server, where the
+            # task's files are): the prompt may suggest one.
+            if not self.on_server:
+                config[BASH_MODE_KEY] = True
             tid: str = await self.local.client.create(self.agent, None, config=config)
             await self.local.adopt(tid)
             self.task_id = tid

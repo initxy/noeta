@@ -23,7 +23,7 @@
    （只限回环地址）可以关掉这一步。
 3. **请求能要求什么**（`GuardedClient`）。创建任务时，请求只能设这些配置项：`model`、`effort`、
    `max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、
-   `permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`。`max_budget_usd`
+   `permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`、`bash_mode`。`max_budget_usd`
    必须是大于 0 的数（布尔值、字符串都不行），这里和 `config` 信号里都一样，不合规就返回 `400`。服务端
    启动时带的 `--effort`、`--permission-mode` 垫在请求的配置下面，请求自己给了的以请求为准。只能发前端会发的那几种信号：
    `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。除非服务端带了

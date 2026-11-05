@@ -144,7 +144,7 @@ port is reachable from other local processes and from web pages in a browser.
 A request may set only the task config a client may (`noeta/host/_http_guard.py`
 `REQUEST_CONFIG`): `model`, `effort`, `max_turns`, `cwd`, `permission_mode`, `output_schema`,
 `timezone`, `interactive`, `permission_prompt_tool`, `ultracode`, `max_budget_usd`,
-`continued_as`. Any other key is refused (403); a `max_budget_usd` that is not a number above 0
+`continued_as`, `bash_mode`. Any other key is refused (403); a `max_budget_usd` that is not a number above 0
 is `400`, at creation and in a config signal. It may post only the signals front ends send, and create tasks only in the
 server's directory and its `--allow-root` paths (a relative `cwd` is taken from the server's).
 
@@ -158,6 +158,10 @@ server's directory and its `--allow-root` paths (a relative `cwd` is taken from 
 - `interactive: false` marks a task nobody follows live (no title, no `AskUserQuestion` unless
   `permission_prompt_tool` is set), as the headless protocol does. These keys stay until a
   client sets them again; the terminal UI and ACP take them away when they reopen a task.
+- `bash_mode: true` says the client runs the person's `! <command>` lines, as the terminal UI
+  does in process: the main prompt then tells the model to suggest one for an interactive
+  command. Set it only at creation; sub-agents do not get it (a fork keeps it with its parent's
+  prompt).
 - A config signal may remove, never set, `client_hooks`: the record of a headless client's
   hook callbacks (`noeta.toolkit.hook_callbacks`).
 - `ultracode: true` is Claude Code's ultracode switch: the model is told to orchestrate with

@@ -135,6 +135,8 @@ async def test_sessions_start_with_the_command_lines_mode_and_effort(tmp_path: P
     assert session.modes is not None and session.modes.current_mode_id == "acceptEdits"
     state = fold(await app.client.events(session.session_id), {})
     assert state.config["effort"] == "high" and state.config["cwd"] == str(tmp_path)
+    # An editor runs no ``!`` commands: the prompt's line suggesting one is left out.
+    assert "bash_mode" not in state.config
     await app.stop()
 
 

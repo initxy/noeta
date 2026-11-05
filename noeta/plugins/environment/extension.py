@@ -22,6 +22,7 @@ from noeta.plugins.environment.facts import (
 from noeta.plugins.environment.git import SNAPSHOT_AGAIN, _find_root, capture_git, git_head
 from noeta.plugins.environment.notes import (
     _PROMPT_BUDGET_LINE,
+    BASH_MODE_LINE_MARK,
     DATE_CHANGED_REMINDER,
     DATE_CHANGED_UTC_REMINDER,
     LANGUAGE_CLEARED,
@@ -39,6 +40,8 @@ from noeta.plugins.environment.notes import (
     with_model_paragraphs,
 )
 from noeta.toolkit.context import task_env
+from noeta.toolkit.guidance_lines import drop_guidance_line
+from noeta.toolkit.interactive import BASH_MODE_KEY
 from noeta.toolkit.plugin_records import working_directories
 from noeta.toolkit.ultrathink import ultrathink_effort, ultrathink_reminders
 from noeta.toolkit.usd_budget import BUDGET_KEY, usd_budget_reminders
@@ -285,18 +288,24 @@ class Environment(Extension):
     async def before_model(self, view: TaskView, request: ModelRequest) -> ModelRequest:
         """The main prompt's paragraphs for this model
         (:func:`with_model_paragraphs`); a model that is told no budget is
-        not shown the prompt's budget line either. A turn the person asked to
-        ``ultrathink`` runs at ``xhigh`` effort (``noeta.toolkit.ultrathink``)."""
+        not shown the prompt's budget line either, and a task whose front end
+        runs no ``!`` commands (``BASH_MODE_KEY``) not the line suggesting
+        one. A turn the person asked to ``ultrathink`` runs at ``xhigh``
+        effort (``noeta.toolkit.ultrathink``)."""
         request = ultrathink_effort(view, request)
         budget = bool(self.token_budget and gets_budget(request.model))
+        bash_mode = view.state.config.get(BASH_MODE_KEY) is True
         system = [msgspec.structs.replace(p, text=t) for p in request.system
-                  if (t := self._prompt_text(p.text, request.model, budget)) is not None]
+                  if (t := self._prompt_text(p.text, request.model, budget,
+                                             bash_mode)) is not None]
         if all(a.text == b.text for a, b in zip(system, request.system, strict=True)):
             return request
         return msgspec.structs.replace(request, system=system)
 
     @staticmethod
-    def _prompt_text(text: str, model: str, budget: bool) -> str:
+    def _prompt_text(text: str, model: str, budget: bool, bash_mode: bool) -> str:
+        if not bash_mode:
+            text = drop_guidance_line(text, BASH_MODE_LINE_MARK)
         text = with_model_paragraphs(text, model)
         return text if budget else _PROMPT_BUDGET_LINE.sub("", text)
 

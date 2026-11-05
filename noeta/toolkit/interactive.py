@@ -18,7 +18,14 @@ copies), as a Claude Code session resumed in its terminal is interactive
 whatever ran it before. An HTTP client sets the keys itself (a config
 signal). A headless run that exits leaves its record: until a front end
 reopens the task, a worker without the client refuses what the client's
-callbacks would judge (``noeta.toolkit.hook_callbacks``)."""
+callbacks would judge (``noeta.toolkit.hook_callbacks``).
+
+:data:`BASH_MODE_KEY` says the task's front end runs a person's ``!``
+commands (Claude Code's bash mode; only the terminal UI does, and not
+attached to a server, where the task's files are): set once, by
+the front end that creates the task, so every request of the task is built
+alike, and not copied to sub-agents (a fork keeps it with its parent's
+prompt)."""
 
 from __future__ import annotations
 
@@ -29,11 +36,12 @@ from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.store import TaskRow
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 
-__all__ = ["FOLLOWED_CONFIG", "INTERACTIVE_KEY", "PROMPT_TOOL_KEY", "can_ask", "follow",
-           "interactive"]
+__all__ = ["BASH_MODE_KEY", "FOLLOWED_CONFIG", "INTERACTIVE_KEY", "PROMPT_TOOL_KEY", "can_ask",
+           "follow", "interactive"]
 
 INTERACTIVE_KEY = "interactive"
 PROMPT_TOOL_KEY = "permission_prompt_tool"
+BASH_MODE_KEY = "bash_mode"
 #: The config signal's data a front end a person follows sends when it
 #: reopens a task: a headless run's say on who answers, and its client's
 #: hook callbacks, taken away.

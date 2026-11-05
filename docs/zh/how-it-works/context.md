@@ -19,7 +19,7 @@
 
 开头那些背景信息不在系统提示里。`instructions` 插件在 `on_start` 里读项目说明文件（`NOETA.md`、`AGENTS.md`、`.noeta/rules`、记忆索引），作为第一句提问前的一条消息记下来；`environment` 插件用同样的办法记下 git 快照和提交署名的说明，而环境信息（工作目录、平台、模型、日期）则作为第一次请求里的一个系统轮。放在对话里，同一个代理的所有任务系统提示就完全一样，压缩之后也能把它们放回摘要旁边（自动压缩放在摘要前面）。
 
-有两个插件会在 `before_model` 里改系统提示的文字：`environment` 只留下写给当前模型的那几段，并且对不需要告知预算的模型去掉 `<total_tokens>` 那一行（`noeta/plugins/environment/notes.py`）；`skills` 在任务没有技能、或者没有 `Skill` 工具时，把提示词里讲技能的那一行删掉（`noeta/plugins/skills/guidance.py` 里的 `drop_skill_guidance`）。另外，用户要求 `ultrathink` 的那一轮，`environment` 会按 `xhigh` 的推理强度发。
+有两个插件会在 `before_model` 里改系统提示的文字：`environment` 只留下写给当前模型的那几段，对不需要告知预算的模型去掉 `<total_tokens>` 那一行（`noeta/plugins/environment/notes.py`），并且除非任务配置里写明它的前端能跑 `!` 命令（`bash_mode`，终端界面会设），否则去掉讲 `! <命令>` 的那一行；`skills` 在任务没有技能、或者没有 `Skill` 工具时，把提示词里讲技能的那一行删掉。这两行都在 `# Session-specific guidance` 标题下，两行都删掉后标题也一起去掉（`noeta/toolkit/guidance_lines.py` 里的 `drop_guidance_line`）。另外，用户要求 `ultrathink` 的那一轮，`environment` 会按 `xhigh` 的推理强度发。
 
 ### 提示词的名字和覆盖
 

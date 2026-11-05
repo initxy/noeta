@@ -177,6 +177,9 @@ EARLY_STOPPING = (
     "reading. When you cannot find the cause of a problem, report what you ruled out and "
     "what would settle it. A question at the end of finished work costs the user one reply, "
     "the same as one asked before any work.")
+#: What the main prompt's ``!`` line names (Claude Code gives the line only in
+#: its interactive terminal, the front end that runs ``!`` commands).
+BASH_MODE_LINE_MARK = "`! <command>`"
 #: Where the paragraphs go in the main prompt: before the first of these
 #: headings (Fable's), and before the budget line or at the end (Haiku's).
 _IDENTITY_ANCHORS = ("\n# Session-specific guidance\n", "\n# Environment\n")

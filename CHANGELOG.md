@@ -15,6 +15,14 @@ All notable changes to Noeta are documented here. The format is based on
 
 ### Added
 
+- **The terminal UI's tasks get Claude Code's `! <command>` line.** The main prompt's
+  `# Session-specific guidance` now opens with Claude Code's rule to suggest `! <command>` for a
+  command the person must run themselves (an interactive login), given only to a task whose
+  config says its front end runs `!` commands: `bash_mode: true`, which the terminal UI sets on
+  the tasks it creates in process (not with `--server`, where it refuses them) and an HTTP
+  request may set. Sub-agents do not get it; a fork keeps it with its parent's prompt. Every
+  other request is byte-identical to before. `drop_skill_guidance` is now
+  `noeta.toolkit.guidance_lines.drop_guidance_line`, shared by both lines.
 - **An output cap the window cannot hold is lowered, not compacted.** A provider's "input
   length and `max_tokens` exceed context limit" (Anthropic's, and OpenAI's and vLLM's forms
   that state the input and the window) retries the call once with the cap the window leaves

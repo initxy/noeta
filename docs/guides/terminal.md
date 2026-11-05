@@ -177,6 +177,10 @@ A command may run 120 seconds; the next message carries at most 30,000 character
 (`tui/src/noeta_tui/bash_mode.py`). Bash mode does not go through the permission checks: you
 typed the command. It is refused with `--server`, since the task's files are on the server.
 
+When a command needs you at the keyboard (an interactive login such as `gcloud auth login`), the
+model asks you to type it as `! <command>`, as Claude Code does: the terminal UI marks the tasks it
+creates `bash_mode: true`, and only those get that line of the main prompt (not with `--server`).
+
 ### Images
 
 `Ctrl+V` attaches the clipboard's image; pasting the absolute path of an image file attaches that file (PNG,

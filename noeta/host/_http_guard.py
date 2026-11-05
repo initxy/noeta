@@ -24,6 +24,7 @@ from noeta.host._errors import error_text
 from noeta.host.pending import pending
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
+from noeta.toolkit.interactive import BASH_MODE_KEY
 from noeta.toolkit.permission_modes import MODE_SIGNAL
 from noeta.toolkit.signals import ARCHIVE_SIGNAL, RENAME_SIGNAL, RESUMED_SIGNAL
 from noeta.toolkit.structured_output import SCHEMA_KEY, answer_schema_problem
@@ -52,7 +53,7 @@ _BYPASS = "bypassPermissions"
 #: request they would loosen the permission gates.
 REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema",
                   "timezone", "interactive", "permission_prompt_tool", "ultracode",
-                  BUDGET_KEY, CONTINUED_AS_KEY)
+                  BUDGET_KEY, CONTINUED_AS_KEY, BASH_MODE_KEY)
 
 #: The signals a request may post: the ones front ends send. The others
 #: (a background job's end, a sub-agent's idle subscription …) are posted

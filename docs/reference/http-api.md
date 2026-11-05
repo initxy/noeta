@@ -28,7 +28,7 @@ app and the desktop app all use it.
 3. **What a request may ask for** (`GuardedClient`). A request may set only these task config
    keys when it creates a task: `model`, `effort`, `max_turns`, `cwd`, `permission_mode`,
    `output_schema`, `timezone`, `interactive`, `permission_prompt_tool`, `ultracode`,
-   `max_budget_usd`, `continued_as`. `max_budget_usd` must be a number above 0 (not a bool or
+   `max_budget_usd`, `continued_as`, `bash_mode`. `max_budget_usd` must be a number above 0 (not a bool or
    a string), here and in a `config` signal; anything else is `400`. Keys the server runs
    with (`--effort`, `--permission-mode`) are laid under the request's, which win. It may post only the signals front ends send: `permission_mode`, `config`,
    `resumed`, `restore_files`, `rename`, `archive`. It may not start or switch a task into
