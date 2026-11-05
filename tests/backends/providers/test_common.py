@@ -107,6 +107,34 @@ def test_openai_code_and_type_mark_overflow() -> None:
     assert not http_error_is_context_overflow(_resp(400, json={"error": {"message": "bad"}}))
 
 
+@pytest.mark.parametrize(
+    ("message", "input_tokens", "limit"),
+    [
+        ("input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000, "
+         "decrease input length or `max_tokens` and try again", 188240, 200000),
+        ("This model's maximum context length is 128000 tokens. However, you requested "
+         "130000 tokens (100000 in the messages, 30000 in the completion). Please reduce "
+         "the length of the messages or completion.", 100000, 128000),
+        ("This model's maximum context length is 8192 tokens, however you requested 8200 "
+         "tokens (7000 in your prompt; 1200 for the completion).", 7000, 8192),
+        ("'max_tokens' or 'max_completion_tokens' is too large: 2000. This model's maximum "
+         "context length is 4096 tokens and your request has 3000 input tokens "
+         "(2000 > 4096 - 3000).", 3000, 4096),
+    ],
+)
+def test_an_overflow_that_says_its_numbers_carries_them(
+        message: str, input_tokens: int, limit: int) -> None:
+    error = translate_http_error(_resp_400(message))
+    assert isinstance(error, ContextOverflow)
+    assert (error.input_tokens, error.context_limit) == (input_tokens, limit)
+
+
+def test_an_overflow_without_numbers_carries_none() -> None:
+    error = translate_http_error(_resp_400("prompt is too long: 250000 tokens > 200000 maximum"))
+    assert isinstance(error, ContextOverflow)
+    assert (error.input_tokens, error.context_limit) == (None, None)
+
+
 # ---------------------------------------------------------------------------
 # HTTP error translation
 # ---------------------------------------------------------------------------

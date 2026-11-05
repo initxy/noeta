@@ -98,6 +98,9 @@ class TaskState:
     #: Usage of the newest model reply; ``None`` before the first one and
     #: after a compaction (no recorded count describes the collapsed history).
     last_usage: Usage | None = None
+    #: The newest model reply's ``ModelResponse.cache_ttl``: how long the
+    #: prompt cache it wrote lives, when longer than the provider's default.
+    cache_ttl: int | None = None
 
     #: Calls of the latest reply that are not all answered yet, in order.
     calls: list[Call] = field(default_factory=list)
@@ -313,6 +316,7 @@ def _on_model_replied(state: TaskState, ev: ModelReplied, seq: int) -> None:
     state.empty_replies = 0
     state.usage = state.usage + resp.usage
     state.last_usage = resp.usage
+    state.cache_ttl = resp.cache_ttl
     state.last_stop = resp.stop_reason
     state._add(resp.message, seq)
     if state.continuing:

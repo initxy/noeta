@@ -216,6 +216,10 @@ class ModelResponse(Struct):
     stop_reason: StopReason
     usage: Usage = msgspec.field(default_factory=Usage)
     model: str = ""
+    #: Seconds the prompt cache this call wrote lives, when the request
+    #: asked for longer than the provider's default (Anthropic's one-hour
+    #: cache: 3600); ``None``: the provider's default (minutes) or unknown.
+    cache_ttl: int | None = None
 
 
 class Delta(Struct):

@@ -205,6 +205,23 @@ async def test_empty_system_part_is_not_sent() -> None:
 
 
 @respx.mock
+async def test_the_one_hour_cache_marks_every_breakpoint_and_the_reply() -> None:
+    request = _req(system=[SystemPart(text="s", cache=True)], messages=[user("hi")],
+                   cache_after=[0])
+    body, response = await _send(request, prompt_cache_ttl="1h")
+    hour = {"type": "ephemeral", "ttl": "1h"}
+    assert body["system"] == [{"type": "text", "text": "s", "cache_control": hour}]
+    assert body["messages"][0]["content"][-1]["cache_control"] == hour
+    assert response.cache_ttl == 3600
+    # The default sends the API's own five minutes, as before, and says nothing.
+    default_body, default = await _send(request)
+    assert default_body["system"][0]["cache_control"] == EPHEMERAL
+    assert default.cache_ttl is None
+    with pytest.raises(ValueError, match="prompt_cache_ttl"):
+        _provider(prompt_cache_ttl="2h")
+
+
+@respx.mock
 async def test_no_system_omits_top_level_system_field() -> None:
     body, _ = await _send()
     assert "system" not in body

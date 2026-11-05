@@ -12,12 +12,12 @@ import httpx
 
 from noeta.backends.providers._common import (
     bounded_silence,
+    context_overflow,
     decode_tool_arguments,
     error_dict_is_context_overflow,
 )
 from noeta.backends.providers._sse import iter_sse_events
 from noeta.core.errors import (
-    ContextOverflow,
     Fatal,
     MalformedToolArguments,
     ModelError,
@@ -139,7 +139,7 @@ def _translate_stream_error(error: dict[str, Any]) -> ModelError:
     message = str(error.get("message") or "")
     detail = f"Responses stream error: code={code or 'unknown'}; {message}"
     if error_dict_is_context_overflow(error):
-        return ContextOverflow(detail)
+        return context_overflow(detail)
     if code == "rate_limit_exceeded":
         return RateLimited(detail)
     if code in _TRANSIENT_STREAM_ERROR_CODES or not code:

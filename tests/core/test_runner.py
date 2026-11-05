@@ -17,7 +17,7 @@ from noeta.core.runner import (
     Runtime,
 )
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import ToolUse
+from noeta.core.types import ModelResponse, ToolUse
 from noeta.testing import ScriptedProvider, reply
 
 
@@ -251,3 +251,36 @@ async def test_extensions_see_the_time_the_store_stamped(store: SqliteStore) -> 
     await rt.run_until_idle()
     stored = {r.seq: r.at for r in await client.events(tid)}
     assert seen and all(stored[seq] == at for seq, at in seen)
+
+
+class SeesCacheTtl(Extension):
+    name = "ttl"
+
+    def __init__(self) -> None:
+        self.seen: list[int | None] = []
+
+    async def before_model(self, view: TaskView, request: Any) -> Any:
+        self.seen.append(view.state.cache_ttl)
+        return request
+
+
+async def test_the_newest_replys_cache_life_folds_from_the_log(store: SqliteStore) -> None:
+    """A provider that asked for a longer prompt cache says so on its reply;
+    the task's state carries the newest reply's, read back from the log by
+    whichever runner runs the task next."""
+    hour = reply("cached for an hour")
+    hour = ModelResponse(message=hour.message, stop_reason=hour.stop_reason, cache_ttl=3600)
+    first = SeesCacheTtl()
+    rt = runtime(store, ScriptedProvider([hour]), Agent(name="a", model="m",
+                                                        extensions=[first]))
+    client = Client(store)
+    tid = await client.create("a", "one")
+    await rt.run_until_idle()
+    later = SeesCacheTtl()  # a restarted worker
+    rt = runtime(store, ScriptedProvider([reply("default cache"), reply("three")]),
+                 Agent(name="a", model="m", extensions=[later]))
+    await client.send(tid, "two")
+    await rt.run_until_idle()
+    await client.send(tid, "three")
+    await rt.run_until_idle()
+    assert first.seen == [None] and later.seen == [3600, None]

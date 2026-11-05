@@ -66,6 +66,10 @@ MID_TURN_MESSAGE = (
 
 #: The single ephemeral cache breakpoint marker (default 5-minute TTL).
 _CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+#: The prompt-cache lifetimes a breakpoint can ask for (Claude Code's
+#: ``promptCacheTtl`` values), in seconds; ``"5m"`` is the API's default and
+#: sends no ``ttl``.
+CACHE_TTLS: dict[str, int] = {"5m": 300, "1h": 3600}
 
 
 class _References:
@@ -266,8 +270,12 @@ def apply_cache_control(
     request: ModelRequest,
     last_block: list[dict[str, Any] | None],
     blocks_of: list[list[dict[str, Any]]] | None = None,
+    *,
+    ttl: str = "5m",
 ) -> None:
-    """Stamp ephemeral prompt-cache breakpoints onto the wire body.
+    """Stamp ephemeral prompt-cache breakpoints onto the wire body, each
+    asking for ``ttl`` (a :data:`CACHE_TTLS` key) as Claude Code writes it:
+    ``{"type": "ephemeral", "ttl": "1h"}``, no ``ttl`` for the default.
 
     Anthropic renders the prefix ``tools`` → ``system`` → ``messages`` and a
     breakpoint caches everything before it. Candidates, highest priority
@@ -303,13 +311,16 @@ def apply_cache_control(
                 cached_system.append(block)
         targets.extend(reversed(cached_system))
 
+    marker = dict(_CACHE_CONTROL_EPHEMERAL)
+    if ttl != "5m":
+        marker["ttl"] = ttl
     stamped: list[dict[str, Any]] = []
     for target in targets:
         if len(stamped) >= _MAX_CACHE_BREAKPOINTS:
             break
         if any(target is seen for seen in stamped):
             continue
-        target["cache_control"] = dict(_CACHE_CONTROL_EPHEMERAL)
+        target["cache_control"] = dict(marker)
         stamped.append(target)
 
 

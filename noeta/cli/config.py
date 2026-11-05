@@ -29,6 +29,10 @@ More providers than the default one (``model`` / ``provider`` / ``base_url`` /
     models = ["deepseek-chat", {id = "deepseek-reasoner", context_window = 128000,
                                 max_output_tokens = 64000}]
     list_models = true         # read its /models for more models and their windows
+
+An ``anthropic`` provider (the default one, or a table) also takes
+``prompt_cache_ttl = "1h"``: the one-hour prompt cache, billed higher per
+write (default ``"5m"``, the API's).
 """
 
 from __future__ import annotations
@@ -107,17 +111,22 @@ DEFAULT_PROVIDER = "default"
 
 
 def _adapter(family: str, base_url: str | None, api_key: str | None,
-             headers: Mapping[str, str]) -> Provider:
+             headers: Mapping[str, str], cache_ttl: str | None = None) -> Provider:
     kw: dict[str, Any] = {}
     if headers:
         kw["extra_headers"] = dict(headers)
     if family == "anthropic":
         kw["device_id"] = home_dir.device_id()
+        if cache_ttl:
+            kw["prompt_cache_ttl"] = cache_ttl
+    elif cache_ttl:
+        raise ValueError(f"prompt_cache_ttl is an anthropic provider's setting, not {family}'s")
     return registry.provider(family, base_url=base_url, api_key=api_key, **kw)
 
 
 #: The keys of a ``[providers.<name>]`` table.
-_PROVIDER_KEYS = frozenset({"family", "base_url", "api_key", "headers", "models", "list_models"})
+_PROVIDER_KEYS = frozenset({"family", "base_url", "api_key", "headers", "models", "list_models",
+                            "prompt_cache_ttl"})
 
 
 @dataclass
@@ -144,6 +153,9 @@ class Settings:
     #: Read the default provider's model listing (windows of models the
     #: catalog does not know).
     list_models: bool = True
+    #: The default provider's prompt-cache lifetime (``anthropic`` only):
+    #: ``"1h"`` or ``"5m"``; ``None`` is the API's default.
+    prompt_cache_ttl: str | None = None
     #: Prompt overrides for every task this front end starts (name -> text,
     #: see ``noeta.core.prompts``): ``--system-prompt`` sets ``system/main``,
     #: ``--append-system-prompt`` ``system/main.append``.
@@ -167,7 +179,8 @@ class Settings:
                 raise MissingAPIKey(
                     f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
                     f"or api_key in {home_dir.HOME / 'config.toml'}")
-        return _adapter(self.provider, self.base_url, self.api_key, self.extra_headers)
+        return _adapter(self.provider, self.base_url, self.api_key, self.extra_headers,
+                        self.prompt_cache_ttl)
 
     def _table_secrets(self, name: str) -> tuple[str | None, dict[str, str]]:
         """A provider table's key and headers, their secret references read."""
@@ -185,7 +198,8 @@ class Settings:
         if not key and family in _KEY_ENV and not (fallback and os.environ.get(fallback)):
             raise MissingAPIKey(f"no API key for provider {name!r}: set api_key in its "
                                 f"[providers.{name}] table of {home_dir.HOME / 'config.toml'}")
-        return _adapter(family, table.get("base_url"), key, headers)
+        return _adapter(family, table.get("base_url"), key, headers,
+                        table.get("prompt_cache_ttl"))
 
     def make_router(self) -> ProviderRouter:
         """Every configured provider behind one ``provider_for(model)``, the

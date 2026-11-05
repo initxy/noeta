@@ -73,7 +73,18 @@ class RateLimited(Transient):
 
 
 class ContextOverflow(ModelError):
-    """The request does not fit the model's window; compact and retry."""
+    """The request does not fit the model's window; compact and retry.
+
+    ``input_tokens`` and ``context_limit`` are set when the provider said
+    them: the input may fit and only the requested output cap not, and the
+    call is made again with a smaller cap instead
+    (:func:`noeta.core.retry.complete_with_retries`)."""
+
+    def __init__(self, message: str, *, input_tokens: int | None = None,
+                 context_limit: int | None = None, **kw: object) -> None:
+        super().__init__(message, **kw)  # type: ignore[arg-type]
+        self.input_tokens = input_tokens
+        self.context_limit = context_limit
 
 
 class Fatal(ModelError):
