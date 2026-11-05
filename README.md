@@ -55,6 +55,7 @@ family = "anthropic"                 # or openai_compat, openai_responses
 api_key = "{env:ANTHROPIC_API_KEY}"  # a literal, or {env:…} / {keyring:…}
 models = ["claude-opus-5-5"]         # optional; rows {id, context_window, max_output_tokens} too
 # base_url, headers = {…}, list_models = false (skip reading its /models)
+# prompt_cache_ttl = "1h" (anthropic: the one-hour prompt cache, billed higher per write)
 ```
 
 A model id resolves to the provider whose table names it (or whose models-file row says

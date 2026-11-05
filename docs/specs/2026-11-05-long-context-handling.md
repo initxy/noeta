@@ -75,9 +75,9 @@ facts that drive the design:
 
 ## Plan
 
-- [ ] Max-tokens overflow retries with a smaller output cap (kernel / providers).
-- [ ] Sub-agent result bound (subtasks).
-- [ ] One-hour cache option (Anthropic provider).
+- [x] Max-tokens overflow retries with a smaller output cap (kernel / providers).
+- [x] Sub-agent result bound (subtasks).
+- [x] One-hour cache option (Anthropic provider).
 - [ ] Precomputed compaction (compaction).
 - [ ] Clearing old results after an idle gap (compaction).
 - [ ] Idle compaction (compaction).
@@ -107,3 +107,20 @@ facts that drive the design:
 ## Progress log
 
 - 2026-11-05: spec written; owner approved the recommended set (3 on, 4/5/6 off).
+- 2026-11-05: (1) done in `core/retry.py` (`complete_with_retries`, so a plugin's model calls
+  get it too): providers put the parsed numbers on `ContextOverflow` (`input_tokens`,
+  `context_limit`; Anthropic's form plus OpenAI's and vLLM's two that state the input), and the
+  call is made again once with the lowered cap, logged as an ordinary `retry` record. Nothing
+  else is recorded: like Claude Code's `maxTokensOverride` the cap lives for that one call, and
+  a restarted runner re-sends the request the log builds, meets the same error and retries the
+  same way.
+- 2026-11-05: (2) done: the completion notice's `<result>` and the hand-back report are bound
+  at 100,000 chars (`RESULT_LIMIT_CHARS`), saved in the spill dir with a preview, start and end
+  without one. Found and closed one more path: a parked tool's resumed result (a tool that waits
+  on its children) skipped `bound_result`; `resume_calls` now applies it.
+- 2026-11-05: (5) done: `prompt_cache_ttl = "5m" | "1h"` on the Anthropic provider and in
+  `config.toml` (Claude Code's `promptCacheTtl` values; it sends `{"type": "ephemeral",
+  "ttl": "1h"}`, checked in the 2.1.318 binary; the 2.1.312 recordings are all API-key 5-minute
+  requests). Plugins read it from the log, not the provider: the reply says
+  `ModelResponse.cache_ttl` (3600; `None` = the provider's default), folded into
+  `TaskState.cache_ttl` (the newest reply's). Default off sends the same bytes (`make parity` 0).
