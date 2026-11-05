@@ -58,7 +58,7 @@
 
 - **配置位置。** noeta 从不读 `~/.claude`、`.claude/`、`CLAUDE.md`、`.mcp.json` 和 `CLAUDE_*` 变量。
   格式是 Claude Code 的，位置是 noeta 自己的（`~/.noeta`、`.noeta/`、`NOETA.md`、`AGENTS.md`）。
-- **终端界面里没有 `!` 命令**，主提示词里提到它的那条规则也去掉了。
+- **主提示词里没有那条 `! <命令>` 规则**（让模型建议人用 `!` 自己跑交互式命令）。终端界面其实能跑 `!` 命令，别的前端不能。
 - **没有 `LSP` 工具**；Claude Code 插件里的语言服务器、监视进程（monitors）、`bin/`、主题、输出风格都不加载
   （见[和其他 agent 对比](./comparison.md)）。
 - **没有代理团队（agent teams）**，`Agent` 也没有 `name` 参数。

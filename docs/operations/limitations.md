@@ -80,7 +80,8 @@ Most of a task lives in its log and moves freely between workers. These parts do
 - **Config places.** noeta never reads `~/.claude`, `.claude/`, `CLAUDE.md`, `.mcp.json` or
   `CLAUDE_*` variables. The formats are Claude Code's; the places are noeta's own
   (`~/.noeta`, `.noeta/`, `NOETA.md`, `AGENTS.md`).
-- **No `!` commands** in the terminal UI; the main prompt leaves out the rule that mentions them.
+- **The main prompt leaves out the `! <command>` rule** (suggesting the person run an interactive
+  command with `!`), although the terminal UI runs `!` commands; other front ends do not.
 - **No `LSP` tool**, and a Claude Code plugin's LSP servers, monitors, `bin/`, themes and output
   styles are not loaded ([comparison](./comparison.md)).
 - **No agent teams**, and `Agent` has no `name` parameter.
