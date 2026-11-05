@@ -565,10 +565,12 @@ async def test_a_planted_bare_repository_is_refused_unless_a_person_approved(
     h = Harness(env=LocalExecEnv(str(ws)))
     out = await bash(h, "git -C sub log --oneline")
     assert out.is_error and "not a .git directory" in text_of(out)
-    # A person approved the command: it runs, still hardened.
+    # A person approved the command: it runs, still hardened. It names the
+    # repository with --git-dir: git 2.38+ under safe.bareRepository=explicit
+    # never finds a bare one by -C (it walks up to the clone instead).
     ctx = h.ctx()
     ctx.approved = True
-    out = await BashTool().run({"command": "git -C sub diff HEAD~ HEAD"}, ctx)
+    out = await BashTool().run({"command": "git --git-dir=sub diff HEAD~ HEAD"}, ctx)
     assert not out.is_error, text_of(out)
     assert "+2" in text_of(out)
     assert [k for k, m in markers.items() if m.exists()] == []
