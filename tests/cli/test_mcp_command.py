@@ -11,6 +11,7 @@ import pytest
 
 from noeta.cli import config, home_dir
 from noeta.cli.main import main
+from noeta.cli.trust import trust_project
 from noeta.plugins.mcp.config import McpServer
 from noeta.plugins.mcp.oauth import store_for
 
@@ -89,6 +90,7 @@ def test_list_get_and_remove(places: tuple[Path, Path],
     assert mcp(project, "add", "-s", "project", "shared", sys.executable, FAKE) == 0
     assert mcp(project, "add", "-s", "local", "fake", sys.executable, FAKE) == 0
     assert mcp(project, "add", "-s", "user", "dead", "/no/such/server") == 0
+    trust_project(str(project))
     capsys.readouterr()
     assert mcp(project, "list") == 0
     out = capsys.readouterr().out
@@ -111,6 +113,25 @@ def test_list_get_and_remove(places: tuple[Path, Path],
     capsys.readouterr()
     assert mcp(project, "list") == 0
     assert "No MCP servers configured" in capsys.readouterr().out
+
+
+def test_an_untrusted_projects_servers_are_listed_not_started(
+        places: tuple[Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _home, project = places
+    ran = tmp_path / "ran"
+    for scope in ("local", "project"):
+        assert mcp(project, "add", "-s", scope, f"from-{scope}", "--", "sh", "-c",
+                   f"echo {scope} >> {ran}") == 0
+    (project / ".noeta" / "settings.local.json").write_text(json.dumps({
+        **read(project / ".noeta" / "settings.local.json"),
+        "enabledMcpjsonServers": ["from-project"]}))
+    capsys.readouterr()
+    assert mcp(project, "list") == 0
+    out = capsys.readouterr().out
+    assert out.count("project not trusted (not started; run `noeta trust` here)") == 2
+    assert mcp(project, "get", "from-local") == 0
+    assert "project not trusted" in capsys.readouterr().out
+    assert not ran.exists()
 
 
 def test_login_and_logout(places: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
