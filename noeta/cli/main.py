@@ -247,8 +247,6 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 async def _worker(s: Settings, queues: list[str], concurrency: int,
                   lease: float | None = None, snapshot_every: int | None = None, *,
                   allow_bypass: bool = False) -> None:
-    from noeta.host.channels import run_channels
-
     kw: dict[str, Any] = {"lease_seconds": lease} if lease else {}
     # As noeta serve: bypassPermissions refused in the plugin itself.
     kw["permissions"] = {} if allow_bypass else {"disable_bypass_mode": True}
@@ -259,8 +257,7 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
-    await asyncio.gather(app.runtime.serve(stop), run_channels(app.channels, app.client, stop))
-    await app.store.close()
+    await app.run_until(stop)
 
 
 def missing_extra(exc: BaseException) -> str | None:
