@@ -66,6 +66,14 @@ DEFAULT_RISK: Mapping[str, str] = {
     "TaskGet": "low",
     "TaskUpdate": "low",
     "TaskList": "low",
+    # Claude Code asks for none of these (CronCreate only goes to the auto-mode
+    # classifier); its EnterWorktree asks only for a worktree that moves write
+    # access, which noeta's never does.
+    "CronCreate": "low",
+    "CronList": "low",
+    "CronDelete": "low",
+    "EnterWorktree": "low",
+    "ExitWorktree": "low",
 }
 
 #: The plan-mode plugin's tools (their names are the contract).
@@ -81,6 +89,7 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset({
     "ListAgents", "TaskStop",
     "StructuredOutput", "ReportFindings", "ScheduleWakeup",
     "TaskCreate", "TaskGet", "TaskUpdate", "TaskList",
+    "CronList", "CronDelete", "EnterWorktree", "ExitWorktree",
 })
 
 #: Tools an allowlist (``--tools``, ``allowed_tools``) never removes: how the
