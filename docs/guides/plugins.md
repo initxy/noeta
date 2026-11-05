@@ -79,7 +79,7 @@ To write the tool as a class instead, give it `name`, `description`, `input_sche
 does.
 
 To try a file kept elsewhere for one run: `noeta --plugin-dir ./word_count.py` (also with
-`-p`; a plugin directory or a Claude Code plugin works too, and the flag repeats). It loads into
+`-p`, the print mode; a plugin directory or a Claude Code plugin works too, and the flag repeats). It loads into
 this process only, so it is refused together with `--server`. A plugin file that joins no agent
 is named in a notice that tells you to set `add_to` or `add_plugins`.
 
@@ -141,7 +141,7 @@ need.
 | wake a task later | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | ask the person something | `ask(...)` (the call parks, the task holds no worker) | `noeta/core/questions.py` |
 | add an agent or sub-agent | an agent markdown file (Claude Code's format plus `plugins`) | `noeta/agents/agent_files.py` |
-| add skills | `SKILL.md` folders in `~/.noeta/skills` or `~/.agents/skills`, a project's `.noeta/skills` or `.agents/skills`, or a plugin's `skills/`; `*.md` files in `.noeta/commands` | `noeta/plugins/skills` |
+| add skills | `SKILL.md` folders in `~/.noeta/skills`, a project's `.noeta/skills` or `.agents/skills`, or a plugin's `skills/`; `*.md` files in `~/.noeta/commands` or a project's `.noeta/commands` (`~/.agents/skills` only when `[plugins.skills] global_agents_dir` names it) | `noeta/plugins/skills` |
 | connect MCP servers | `.noeta/mcp.json`, settings `mcpServers`, a plugin's `.mcp.json` | `noeta/plugins/mcp` |
 | let a chat app or webhook in | a `Channel` (`run(client, stop)`), posting with `deliver()` | `noeta/core/channel.py` |
 | send replies back out | `on_event` in an `Extension` inside the task | `examples/chat-bridge` |
@@ -160,7 +160,7 @@ need.
 | survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `flags = ToolFlags(retry_safe=True)`; `ctx.keep()` for work that lives in one process | `noeta/core/tool.py` |
 | offer a tool only when the model asks for it | `flags = ToolFlags(deferred=True)` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
 | keep text across a compaction, or take part in one | `resident` / `lead_resident`; `before_compact`; `on_context_overflow(view, request)` | `noeta/core/extension.py` |
-| show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/types.py` |
+| show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/tool.py`, `noeta/core/types.py` |
 | go on after a reply with no text and no tool call (the turn ends otherwise) | `on_empty_reply(view, response)` → the message to go on with, or `None` (as `noeta/plugins/empty_reply.py` does) | `noeta/core/extension.py` |
 | block a prompt, or keep a turn going (as UserPromptSubmit and Stop hooks do) | `reminders` + `view.erase_messages` + raise `TurnFailed`; `on_event` on `ModelReplied` posting `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
@@ -341,7 +341,8 @@ Running front ends pick up an install or a removal with `/reload-plugins`.
 
 ### The machine's policy
 
-`/etc/noeta/config.toml` (the managed directory) can allow and block plugins by name, over every
+`/etc/noeta/config.toml` (the managed directory: `/Library/Application Support/Noeta` on macOS,
+`C:\Program Files\Noeta` on Windows) can allow and block plugins by name, over every
 user and project setting (`noeta/cli/plugin_policy.py`):
 
 ```toml
@@ -454,7 +455,7 @@ Who reads which record is held in one place, `noeta/toolkit/plugin_records.py`.
 
 ## Worked examples
 
-Each is one file, a short README and a test `make example` runs:
+Each is one file (hello-plugin a package), a short README and a test `make example` runs:
 
 - [`examples/run-tests`](https://github.com/initxy/noeta/tree/main/examples/run-tests) — a tool:
   runs the test command where the task's commands run, folds the last result from the log,

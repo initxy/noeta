@@ -36,7 +36,8 @@ app and the desktop app all use it.
    directory. Refused: `403` with the reason.
 
 Other errors: an unknown task is `404 {"error": "unknown task …"}`; a malformed body or query
-is `400` with the reason. Every response body is JSON.
+is `400` with the reason. Every error body is JSON `{"error": …}`; a path not listed here
+is a plain `404` (unless the server serves the web app's files, below).
 
 The token is `NOETA_SERVER_TOKEN`, else one made on the server's first start and printed
 once; `~/.noeta/server-token` keeps only its SHA-256
@@ -51,7 +52,7 @@ Host code that builds the app itself calls `noeta.host.http.create_app(client, t
 | `POST /tasks` | `{agent, input?, config?, queue?, dedupe_key?, history_from?, history_through?}` | `201 {"task_id": …}` |
 | `GET /tasks` | `?parent_id=&status=&limit=` (`status`: `ready`, `running`, `waiting`, `ended`; `limit` default 100) | a list of task rows |
 | `GET /tasks/{id}` | | one task row |
-| `GET /summaries` | `?limit=&archived=` (`limit` default 50; `archived=true` / `false` keeps only those / the others) | the root tasks, newest first, each with `title`, `cwd`, first `prompt` (200 characters), `archived`, status and times |
+| `GET /summaries` | `?limit=&archived=` (`limit` default 50; `archived=true` / `false` keeps only those / the others) | the root tasks, most recently updated first, each `{task_id, agent, status, waiting_on, end_status, created_at, updated_at, title, cwd, prompt, archived}` (`prompt`: the first one, 200 characters) |
 | `GET /tasks/{id}/events` | `?after=N` | the task's events after seq `N`, as `Recorded` objects (`seq`, `at`, `event`) |
 | `GET /tasks/{id}/watch` | `?after=N` | `text/event-stream`, below |
 
@@ -62,8 +63,9 @@ Host code that builds the app itself calls `noeta.host.http.create_app(client, t
 - `history_from` / `history_through` start the task from another task's conversation up to
   that task's event `history_through` (a fork).
 - A task row has `task_id`, `root_id`, `parent_id`, `agent`, `queue`, `status`, `waiting_on`,
-  `end_status`, `last_seq`, `created_at`, `updated_at`, the claim's `owner`, `owner_epoch` and
-  `lease_until`, and the inbox counters `inbox_seq` / `inbox_read_seq`.
+  `end_status`, `last_seq`, `created_at`, `updated_at`, `ready_at`, the claim's `owner`,
+  `owner_epoch` and `lease_until`, and the inbox counters `inbox_seq` / `inbox_read_seq`. A
+  field still at its default (`null`, `0`) is left out of the JSON.
 - The ten event types and their fields are in [Events](./events.md).
 
 ## Talking to a task
@@ -78,6 +80,7 @@ Host code that builds the app itself calls `noeta.host.http.create_app(client, t
 
 **Messages.** A text starting with `/name args` runs the task agent's slash command of that
 name first: a prompt command's text is what gets sent; a local command answers `{output}`.
+A text that names no command is sent as it is.
 
 **Pending.** Each item has `task_id` (the task that asks, maybe a sub-agent), `request_id`,
 `kind` (`approval` or `question`), `tool`, `input`, `prompt`, `detail`, `agent`, a `title`
@@ -105,7 +108,7 @@ provider serves it) is recorded by the server, never taken from a request.
 | Method and path | Answers |
 |---|---|
 | `GET /tasks/{id}/usage` | the task tree's `tasks`, `cost_usd`, `api_seconds`, `usage`, and `by_model` (`usage`, `calls`, `cost_usd`, `api_seconds` per model) |
-| `GET /tasks/{id}/context` | what fills the next request: estimated tokens per category (Claude Code's `/context` order), `total`, `window`, `model`, `tools`. Only when a worker in this server process runs the task's agent; else `501` |
+| `GET /tasks/{id}/context` | what fills the next request: `{model, window, total, categories, deferred_tools, tools}`, `categories` being estimated tokens per part (`System prompt`, `System tools`, `MCP tools`, `Messages`, `Free space`, Claude Code's `/context` order). Only when a worker in this server process runs the task's agent (not with `--no-worker`); else `501` |
 | `GET /tasks/{id}/rewind` | the person's prompts, each `{index, task_id, seq, at, text, files}` (the files changed since) |
 | `POST /tasks/{id}/rewind` | `{index, conversation?, files?}` (both default true): go back to before prompt `index`, restoring the conversation (in a new task), the files, or both. Answers `{task_id, prompt, files}` |
 
@@ -170,13 +173,14 @@ and `user` messages, `stream_event`s with partial messages on, system notes, a `
 prompt and `control_request`s of its own (`can_use_tool`: the client answers permission
 prompts on this socket). Query parameters: `resume` (a task id), `fork`, `agent`, `model`,
 `cwd`, `permission_mode`, `max_turns`, `include_partial_messages`, `replay_user_messages`,
-and `token`. A refused socket is closed with code `4403` (cross-site, or a mode or `cwd` the
-server does not allow) or `4401` (no valid token); an unknown `resume` task sends
-`{"type": "error", …}` and closes.
+and `token`. A refused socket (cross-site, no valid token, or a mode or `cwd` the server
+does not allow) is closed before it is accepted, which the client sees as the handshake
+answered `HTTP 403`; an unknown `resume` task sends `{"type": "error", …}` and closes.
 
 **POST** `/stream-json`: the same, one way. The request body is JSON lines in; the response is
 JSON lines out (`application/x-ndjson`) until the work is done. Nothing can answer a
-permission prompt on a POST, so anything that would ask is refused and the turn goes on.
+permission prompt on a POST, so anything that would ask is refused and the turn goes on. A
+mode or `cwd` the server does not allow is a `403` before anything runs.
 
 ```bash
 printf '%s\n' '{"type":"user","message":{"role":"user","content":"what is in this folder?"}}' |
@@ -226,6 +230,7 @@ curl -s -X POST $S/tasks/40efba61…/cancel -H "$H" -H 'content-type: applicatio
 The same from Python:
 
 ```python
+import os
 import noeta
 client = noeta.connect("http://127.0.0.1:8642", token=os.environ["NOETA_SERVER_TOKEN"])
 task = await client.create("main", "list the TODOs", config={"permission_mode": "default"})

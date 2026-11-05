@@ -52,13 +52,13 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | `fs` | `Read`、`Write`、`Edit`、`NotebookEdit`（延迟加载） | |
 | `hooks` | | `/hooks` |
 | `markdown_commands` | | `/init`、`/review`，以及每个 `commands/*.md` |
-| `mcp` | `mcp__<server>__<tool>`（延迟加载）、`ListMcpResourcesTool`、`ReadMcpResourceTool`、`ReadMcpResourceDirTool`（延迟加载）；需要登录的服务器提供 `mcp__<server>__authenticate` / `complete_authentication` | `/mcp`，以及每个服务器提示词 |
+| `mcp` | `mcp__<server>__<tool>`（延迟加载）、`ListMcpResourcesTool`、`ReadMcpResourceTool`、`ReadMcpResourceDirTool`（延迟加载，只给顶层任务）；需要登录的服务器提供 `mcp__<server>__authenticate` / `complete_authentication` | `/mcp`，以及每个服务器提示词 |
 | `plan_mode` | `EnterPlanMode`、`ExitPlanMode`（都延迟加载） | `/plan` |
 | `schedule` | `ScheduleWakeup`；`CronCreate`、`CronList`、`CronDelete`（延迟加载） | `/loop` |
 | `shell` | `Bash`；`Monitor`、`TaskStop`、`EnterWorktree`、`ExitWorktree`（延迟加载） | |
 | `skills` | `Skill`；`scripts = true` 时还有 `run_skill_script` | 每个技能一个 `/<skill>` |
 | `structured_output` | `StructuredOutput`（仅当任务有输出 schema） | |
-| `subtasks` | `Agent`、`ListAgents`、`SendMessage`（延迟加载）；由 `Agent` 启动的任务里还有 `SubagentHandback` | |
+| `subtasks` | `Agent`、`ListAgents`（只给顶层任务）、`SendMessage`（延迟加载）；由 `Agent` 启动的任务里还有 `SubagentHandback` | |
 | `todos` | `TaskCreate`、`TaskGet`、`TaskUpdate`、`TaskList`（延迟加载） | |
 | `tool_search` | `ToolSearch`（只要有延迟加载的工具就提供） | |
 | `web` | `WebFetch`（延迟加载）；`WebSearch`（延迟加载，需要密钥） | |
@@ -387,7 +387,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 
 ### `todos`
 
-`noeta/plugins/todos`：Claude Code 的任务清单：`TaskCreate`、`TaskGet`、`TaskUpdate`、`TaskList`，以及连续十轮没用它们时的提醒。和 Claude Code 2.1.312 一样，默认只有比它精简版提示词更老的 Claude 模型才有这些工具；Claude 5 系列和其他所有模型都没有。只有没有父任务的任务才有。
+`noeta/plugins/todos`：Claude Code 的任务清单：`TaskCreate`、`TaskGet`、`TaskUpdate`、`TaskList`，以及连续十轮没用它们时的提醒。和 Claude Code 2.1.312 一样，默认只有比它精简版提示词更老的 Claude 模型（以及 Bedrock 的应用推理配置 application inference profile）才有这些工具；Claude 5 系列和其他所有模型都没有。只有没有父任务的任务才有。
 
 实现的方法：`tools`、`context`、`reminders`、`reduce`、`continue_state`。
 
@@ -423,7 +423,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | 配置项 | 默认 | 含义 |
 |---|---|---|
 | `default_agent` | `"general-purpose"` | `agent()` 跑的代理类型，没有就用任务自己的 |
-| `max_running` | | 每次运行同时跑几个代理 |
+| `max_running` | CPU 核数减 2，限制在 2 到 16 之间 | 每次运行同时跑几个代理 |
 | `home` | `~/.noeta` | noeta 的目录，存着用户保存的 workflow |
 | `engine` | | **SDK**：测试用 |
 

@@ -20,7 +20,7 @@ settings files and the project's `.noeta/mcp.json`; an SDK host that builds agen
 noeta mcp add files -- npx -y @modelcontextprotocol/server-filesystem /srv/data
 
 # a remote server over Streamable HTTP, with a header
-noeta mcp add -t http -H 'Authorization: Bearer ${GH_TOKEN}' github https://api.example.com/mcp
+noeta mcp add -t http github https://api.example.com/mcp -H 'Authorization: Bearer ${GH_TOKEN}'
 
 # the whole entry as JSON
 noeta mcp add-json -s user search '{"type":"sse","url":"https://search.example.com/sse"}'
@@ -31,7 +31,8 @@ noeta mcp remove github   # add -s SCOPE when the name is in several
 ```
 
 `-e KEY=VALUE` (repeatable) sets a stdio server's environment, `-H "Name: value"` a remote
-server's headers. Quote `${VAR}` with single quotes so the file keeps the reference and the
+server's headers. Both take several values, so put them after the name and the command or URL
+(or close them with `--`): `noeta mcp add -e A=1 files -- …` reads `files` as a variable. Quote `${VAR}` with single quotes so the file keeps the reference and the
 secret is read from the environment when the server starts, not written into the file. A server name may hold any characters; the alias used in tool names replaces
 everything outside `[A-Za-z0-9_-]` with `_` (`noeta/plugins/mcp/settings.py` `alias_for`).
 
@@ -134,12 +135,13 @@ settings files in the order `~/.noeta/settings.json`, `.noeta/settings.json`,
 
 A server tool is offered as `mcp__<alias>__<tool>`: the tool's own name with every character
 outside `[A-Za-z0-9_-]` made `_`, case kept, nothing cut. Two names of one server that come out
-the same get `_` plus 8 hex digits of the raw name's SHA-256. A full name over 128 characters
+the same get `_` plus 8 hex digits of the raw name's SHA-256 (one that was already clean keeps its
+plain form). A full name over 128 characters
 is not offered (the server's log says so, and a shorter server name fixes it). Two servers that
 produce the same tool name are a clash: the second is reported down until one alias is renamed
-(`noeta/plugins/mcp/config.py`).
+(`noeta/plugins/mcp/config.py`, `extension.py` `refresh`).
 
-noeta once lower-cased aliases and cut names to 64 characters. Permission rules, hook matchers
+noeta once lower-cased aliases (cutting them to 32 characters) and cut names to 64 characters. Permission rules, hook matchers
 and `--disallowedTools` lists written that way still match, but only to narrow: an old name
 works in a deny or ask rule, never in an allow rule (`noeta/core/mcp_names.py`).
 

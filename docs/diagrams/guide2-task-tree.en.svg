@@ -38,7 +38,7 @@
 <text x="24" y="338" class="ntd-mini" text-anchor="start">Every box is a task: its own log, inbox and row in tasks</text>
 <text x="24" y="362" class="ntd-mini" text-anchor="start">A child&#x27;s end posts ChildEnded to its parent&#x27;s inbox</text>
 <text x="24" y="386" class="ntd-mini" text-anchor="start">A parent&#x27;s end posts Cancel to every live child</text>
-<text x="672" y="346" class="ntd-mini" text-anchor="start">max_depth 3: no Agent at depth 3</text>
+<text x="672" y="346" class="ntd-mini" text-anchor="start">max_depth 3: depth 3 can&#x27;t delegate</text>
 <text x="672" y="370" class="ntd-mini" text-anchor="start">at most 20 running per task</text>
 <rect x="16" y="416" width="868" height="40" rx="10" class="ntd-chip ntd-chip-violet ntd-dash"/>
 <text x="450" y="441" class="ntd-sub" text-anchor="middle">All in one store: any worker can continue any task of the tree</text>

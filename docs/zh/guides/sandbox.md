@@ -35,13 +35,13 @@
 
 ## 沙箱
 
-沙箱就是 Claude Code 的 `sandbox` 设置，Linux 上用 bubblewrap、macOS 上用 Seatbelt（`sandbox-exec`）实现（`noeta/backends/execenvs/sandbox.py`、`noeta/toolkit/sandbox.py`）。它关住的是 **`Bash`**：前台命令、后台命令和 `Monitor` 脚本都算。文件工具（`Read`、`Edit`、`Write`、`Grep`、`Glob`）不在沙箱里跑，由权限规则管；`Edit(...)` 允许规则和 `Read(...)` 拒绝规则也会并进沙箱自己的名单，两边口径一致。
+沙箱就是 Claude Code 的 `sandbox` 设置，Linux 上用 bubblewrap、macOS 上用 Seatbelt（`sandbox-exec`）实现（`noeta/backends/execenvs/sandbox.py`、`noeta/toolkit/sandbox.py`）。它关住的是 **`Bash`**：前台命令、后台命令和 `Monitor` 脚本都算。文件工具（`Read`、`Edit`、`Write`、`Grep`、`Glob`）不在沙箱里跑，由权限规则管；`Edit(...)` 允许规则、`Read(...)` 拒绝规则和 `WebFetch(domain:…)` 允许规则也会并进沙箱自己的名单，两边口径一致。
 
 <Diagram name="guide2-sandbox" caption="沙箱里的命令能写哪里、读不到哪里、能连到哪里。" />
 
 沙箱里的命令能做的事：
 
-- **读**：什么都能读，除了家目录里的凭据（`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker/config.json`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.pypirc`、`~/.npmrc`、cargo 凭据、`~/.pgpass`、`~/.password-store`）、`filesystem.denyRead`、`Read(...)` 拒绝规则和 `credentials.files` 里列的文件。`filesystem.allowRead` 可以在这些里面重新放开某个路径。
+- **读**：什么都能读，除了家目录里的凭据（`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker/config.json`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.pypirc`、`~/.npmrc`、cargo 凭据、`~/.pgpass`、`~/.password-store`）、noeta 自己的家目录（`~/.noeta`，里面有访问令牌和任务存储；其中存下来的工具输出、项目记忆和粘贴的图片仍然能读）、`filesystem.denyRead`、`Read(...)` 拒绝规则和 `credentials.files` 里列的文件。`filesystem.allowRead` 可以在这些里面重新放开某个路径。
 - **写**：只能写工作目录、`filesystem.allowWrite`、`Edit(...)` 允许规则和 `additionalDirectories` 里的路径，以及一个私有的 `$TMPDIR`。`filesystem.denyWrite` 和**受保护路径**永远写不了。
 - **联网**：只能经过 noeta 在沙箱外跑的过滤代理，只能连 `network.allowedDomains` 里的主机（`*.example.com` 覆盖所有子域名，`host:port` 只开一个端口；`deniedDomains` 优先）。一个都没列，就哪儿都连不上。被拒的主机会附在命令输出后面的 `<sandbox_violations>` 里。允许的域名如果解析到回环、链路本地或云厂商元数据地址，同样拒绝。设了 `network.httpProxyPort` / `socksProxyPort` 就改走你自己的代理。
 - **环境变量**：`credentials.envVars` 里列的会被清掉。
@@ -83,12 +83,12 @@ Linux 上先装 bubblewrap（`apt install bubblewrap` 或 `dnf install bubblewra
 | `enabled` | `false` | 把 `Bash` 关进沙箱 |
 | `failIfUnavailable` | `false` | 沙箱起不来时拒绝执行命令 |
 | `autoAllowBashIfSandboxed` | `true` | 在沙箱里跑的命令不用审批（计划模式除外） |
-| `allowUnsandboxedCommands` | `true` | 调用可以设 `dangerouslyDisableSandbox: true` 出沙箱跑，但一定会问你 |
+| `allowUnsandboxedCommands` | `true` | 调用可以设 `dangerouslyDisableSandbox: true` 出沙箱跑，但一定会问你（关掉后这个参数不起作用，命令照样在沙箱里跑） |
 | `excludedCommands` | `[]` | 这些命令模式（`docker *`、`Bash(npm *)`）总是在沙箱外跑 |
 | `filesystem.allowWrite` / `denyWrite` / `denyRead` / `allowRead` | `[]` | 上面说的路径名单 |
 | `filesystem.disabled` | `false` | 只管网络，不管文件 |
 | `network.allowedDomains` / `deniedDomains` | `[]` | 上面说的主机名单 |
-| `network.allowUnixSockets`、`allowAllUnixSockets`、`allowLocalBinding` | 关 | macOS：Unix socket 和绑定本地端口 |
+| `network.allowUnixSockets`、`allowAllUnixSockets`、`allowLocalBinding` | 关 | Unix socket 和绑定本地端口（macOS；`allowAllUnixSockets` 在 Linux 上也会放开对 Unix socket 的拦截） |
 | `network.httpProxyPort` / `socksProxyPort` | 无 | 改走你自己的代理 |
 | `credentials.files` / `credentials.envVars` | `[]` | `mode: "deny"`（`"mask"` 也按 deny 处理）的条目会藏起文件或清掉变量 |
 | `enableWeakerNestedSandbox` | `false` | Linux：不挂新的 `/proc`，给挂不了的宿主用 |
@@ -149,7 +149,7 @@ asyncio.run(main())
 
 ## 出问题时
 
-- **`bubblewrap (bwrap) is not installed`**、**`bwrap cannot run: …`**，或者系统不让建用户命名空间：沙箱起不来。命令照常不带沙箱跑（启动时有提示），设了 `failIfUnavailable` 就带着这个原因被拒。macOS 上缺 `/usr/bin/sandbox-exec` 也一样；其他平台没有沙箱。
+- **`bubblewrap (bwrap) is not installed`**、**`bwrap cannot run: …`**，或者 **`bwrap cannot create the sandbox here: …`**（系统不让建用户命名空间）：沙箱起不来。命令照常不带沙箱跑（启动时有提示），设了 `failIfUnavailable` 就带着这个原因被拒。macOS 上缺 `/usr/bin/sandbox-exec` 也一样；其他平台没有沙箱。
 - **命令写某个点文件或 `.git/hooks` 失败。** 那是受保护路径；这一步你自己来做，或者经你同意在沙箱外跑。
 - **沙箱里下载失败。** 看输出里的 `<sandbox_violations>`，把主机加进你自己设置里的 `network.allowedDomains`（项目设置加不了）。
 - **找不到 `docker`，或容器没了。** `ContainerExecEnv` 抛 `ContainerError`，这次工具调用以这个错误失败，模型看得到。

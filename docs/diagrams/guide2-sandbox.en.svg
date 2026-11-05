@@ -35,6 +35,6 @@
 <text x="776.0" y="341.0" class="ntd-mini" text-anchor="middle">listed in &lt;sandbox_violations&gt;</text>
 <path d="M 776 238 V 288" class="ntd-line-red" marker-end="url(#guide2-sandbox-arrow-red)"/>
 <rect x="24" y="384" width="852" height="40" rx="10" class="ntd-chip ntd-chip-amber"/>
-<text x="450" y="409" class="ntd-sub" text-anchor="middle">dangerouslyDisableSandbox: true → asks the person (refused if allowUnsandboxedCommands is off)</text>
+<text x="450" y="409" class="ntd-sub" text-anchor="middle">dangerouslyDisableSandbox: true → asks the person (ignored when allowUnsandboxedCommands is off)</text>
 <text x="450" y="452" class="ntd-mini" text-anchor="middle">Only Bash is confined (background jobs and Monitor too); Read / Edit / Write follow the permission rules</text>
 </svg>

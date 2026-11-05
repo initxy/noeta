@@ -64,8 +64,8 @@ The sandbox is Claude Code's `sandbox` settings object, implemented with bubblew
 Seatbelt (`sandbox-exec`) on macOS (`noeta/backends/execenvs/sandbox.py`,
 `noeta/toolkit/sandbox.py`). It confines **`Bash`**: foreground commands, background jobs and
 `Monitor` scripts. The file tools (`Read`, `Edit`, `Write`, `Grep`, `Glob`) are not run inside
-it; the permission rules govern them, and `Edit(...)` allow rules and `Read(...)` deny rules
-feed the sandbox's own lists so both agree.
+it; the permission rules govern them, and `Edit(...)` allow rules, `Read(...)` deny rules and
+`WebFetch(domain:…)` allow rules feed the sandbox's own lists so both agree.
 
 <Diagram name="guide2-sandbox" caption="What a sandboxed command can write, cannot read, and can reach." />
 
@@ -74,8 +74,10 @@ What a sandboxed command may do:
 - **Read** everything except the credential stores in your home directory (`~/.ssh`,
   `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.docker/config.json`,
   `~/.config/gh`, `~/.netrc`, `~/.git-credentials`, `~/.pypirc`, `~/.npmrc`, cargo credentials,
-  `~/.pgpass`, `~/.password-store`), `filesystem.denyRead`, `Read(...)` deny rules and
-  `credentials.files` entries. `filesystem.allowRead` opens a path inside one of them again.
+  `~/.pgpass`, `~/.password-store`), noeta's own home directory (`~/.noeta`: the token, the task
+  store; its saved tool outputs, project memory and pasted images stay readable),
+  `filesystem.denyRead`, `Read(...)` deny rules and `credentials.files` entries.
+  `filesystem.allowRead` opens a path inside one of them again.
 - **Write** only in the working directory, `filesystem.allowWrite`, the paths of `Edit(...)`
   allow rules and `additionalDirectories`, and a private `$TMPDIR`. Never in
   `filesystem.denyWrite`, and never in the **protected paths**.
@@ -141,12 +143,12 @@ unless `failIfUnavailable` is true: then they are refused.
 | `enabled` | `false` | confine `Bash` |
 | `failIfUnavailable` | `false` | refuse commands when the sandbox cannot start |
 | `autoAllowBashIfSandboxed` | `true` | a command that runs sandboxed needs no approval (except in plan mode) |
-| `allowUnsandboxedCommands` | `true` | a call may set `dangerouslyDisableSandbox: true` to leave the sandbox; that always asks you |
+| `allowUnsandboxedCommands` | `true` | a call may set `dangerouslyDisableSandbox: true` to leave the sandbox; that always asks you (off: the flag is ignored and the command stays inside) |
 | `excludedCommands` | `[]` | command patterns (`docker *`, `Bash(npm *)`) that always run outside |
 | `filesystem.allowWrite` / `denyWrite` / `denyRead` / `allowRead` | `[]` | the path lists above |
 | `filesystem.disabled` | `false` | network filtering only |
 | `network.allowedDomains` / `deniedDomains` | `[]` | the host lists above |
-| `network.allowUnixSockets`, `allowAllUnixSockets`, `allowLocalBinding` | off | macOS: Unix sockets and binding local ports |
+| `network.allowUnixSockets`, `allowAllUnixSockets`, `allowLocalBinding` | off | Unix sockets and binding local ports (macOS; `allowAllUnixSockets` also lifts the Linux filter on Unix sockets) |
 | `network.httpProxyPort` / `socksProxyPort` | none | use your own proxy |
 | `credentials.files` / `credentials.envVars` | `[]` | entries with `mode: "deny"` (or `"mask"`, treated as deny) hide a file or unset a variable |
 | `enableWeakerNestedSandbox` | `false` | Linux: no fresh `/proc`, for hosts that cannot mount one |
@@ -234,7 +236,8 @@ proxy of a sandbox or a sandboxed container, which runs in the process that star
 
 ## When things go wrong
 
-- **`bubblewrap (bwrap) is not installed`**, **`bwrap cannot run: …`**, or no user namespaces:
+- **`bubblewrap (bwrap) is not installed`**, **`bwrap cannot run: …`**, or
+  **`bwrap cannot create the sandbox here: …`** (no user namespaces):
   the sandbox cannot start. Commands run unconfined (with a notice at start) or, with
   `failIfUnavailable`, are refused with that reason. On macOS a missing `/usr/bin/sandbox-exec`
   does the same; other platforms have no sandbox.

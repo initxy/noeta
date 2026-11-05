@@ -47,7 +47,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `async on_start(self, view: TaskView)` | `None` | 运行器每次接手任务、第一步之前。 |
 | `async before_model(self, view: TaskView, request: ModelRequest)` | `ModelRequest` | 每次调用模型之前、提醒之后，按插件顺序，每个拿到上一个返回的请求。可以抛 `TurnDone`（不调用，这一轮结束）、`RequestStale`（按新状态重新拼请求）或 `TurnFailed(reason, detail)`。 |
 | `async on_context_overflow(self, view: TaskView, request: ModelRequest)` | `bool` | 模型以太长为由拒了 `request`。腾出地方（记下一次压缩）后返回 `True`，然后重新调用。谁都没腾，这一轮以 `context_overflow` 失败。写成 `(self, view)` 的老版本也照样会被调用。 |
-| `async on_empty_reply(self, view: TaskView, response: ModelResponse)` | `Message \| None` | 回复以 `end_turn` 结束，却没有文字也没有工具调用。返回一条让它接着干的消息，第一个返回的算数。内核把它记进一条 `continue` 记录（原因 `empty_reply`），再调用一次模型。 |
+| `async on_empty_reply(self, view: TaskView, response: ModelResponse)` | `Message \| None` | 回复以 `end_turn` 结束，却没有文字也没有工具调用。返回一条让它接着干的消息，第一个返回的算数。内核把它记进一条 `continue` 记录（原因 `empty_reply`），再调用一次模型。谁都没给，这一轮就不带回答地结束（`turn_done`，原因 `empty_reply`）。 |
 
 ### 工具调用
 
@@ -217,7 +217,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `idempotency_key`（属性） | `str` | `<task id>:<call id>`：这次调用不管在哪台工人上跑多少次都一样。可以交给能识别重复请求的外部系统，或者在 `recover` 里按它查结果。 |
 | `env` | `ExecEnv` | 任务的执行环境。 |
 | `state` | `Mapping[str, Any]` | 每个插件折叠出的状态，按名字（只读）。 |
-| `record` | `(extension, kind, data) -> None` | 记一条；在这次调用的 `ToolFinished` 之前追加。 |
+| `record` | `(extension, kind, data) -> None` | 记一条；在这次调用的 `ToolFinished` 之前追加。写一个内核不认识的 `core` 记录会抛 `ValueError`。 |
 | `spill_dir` | `str \| None` | 太长、无法直接返回的完整输出存到哪。 |
 | `spawn` | `(agent, prompt, *, config=None, background=False, queue=None, history_from=None, history_through=None) -> str`，或 `None` | 暂存一个子任务，和这次调用的记录一起原子地创建，所以重试的调用不会建出第二个子任务。`history_from` 表示接着那个任务的对话。 |
 | `post` | `async (body, task_id=None, dedupe_key=None)`，或 `None` | 在一步之外往这个任务的收件箱投递，或者投给另一个任务（不存在的任务会抛 `UnknownTask`）。 |

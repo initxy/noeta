@@ -27,7 +27,7 @@ How to read the tables:
 | [`Edit`](#edit) | `fs` | always | | as `Write` |
 | [`NotebookEdit`](#notebookedit) | `fs` | deferred | | as `Write` |
 | [`Bash`](#bash) | `shell` | always | | read-only commands allowed; others ask |
-| [`Monitor`](#monitor) | `shell` | deferred | | asks |
+| [`Monitor`](#monitor) | `shell` | deferred | | as `Bash`; a `ws` watch asks |
 | [`TaskStop`](#taskstop) | `shell` | deferred | | allowed |
 | [`EnterWorktree`](#enterworktree-exitworktree) | `shell` | deferred | | asks |
 | [`ExitWorktree`](#enterworktree-exitworktree) | `shell` | deferred | | asks |
@@ -47,10 +47,11 @@ How to read the tables:
 | [`Workflow`](#workflow) | `workflow` | always | | allowed; classified in `auto` |
 | [`ReportFindings`](#reportfindings) | `findings` | always | yes | allowed |
 | [`StructuredOutput`](#structuredoutput) | `structured_output` | with an answer schema | yes | allowed |
-| [`ToolSearch`](#toolsearch) | `tool_search` | while any tool is deferred | | allowed |
-| [`ListMcpResourcesTool`, `ReadMcpResourceTool`, `ReadMcpResourceDirTool`](#mcp-tools) | `mcp` | deferred | | allowed |
-| [`mcp__<server>__<tool>`](#mcp-tools) | `mcp` | deferred | as the server says | asks |
-| `run_skill_script` | `skills` | only with `scripts` on | | asks |
+| [`ToolSearch`](#toolsearch) | `tool_search` | while any tool is deferred | yes | allowed |
+| [`ListMcpResourcesTool`, `ReadMcpResourceTool`](#mcp-tools) | `mcp` | deferred | yes | allowed |
+| [`ReadMcpResourceDirTool`](#mcp-tools) | `mcp` | deferred | yes | asks |
+| [`mcp__<server>__<tool>`](#mcp-tools) | `mcp` | deferred | | asks |
+| [`run_skill_script`](#run-skill-script) | `skills` | only with `scripts` on | | asks |
 
 The `main` agent runs every plugin above; sub-agents run fewer
 ([agent files](../guides/skills-and-agents.md#agent-files)). Turning a plugin off
@@ -135,11 +136,12 @@ Permission: as `Write`.
 ### Bash
 
 Runs a bash command and returns what it printed. The shell keeps its directory between calls.
+A result longer than 30,000 characters is saved to a file and the model gets a preview.
 
 | Parameter | Type | Meaning |
 |---|---|---|
 | **`command`** | string | the command line |
-| `timeout` | number | milliseconds; at most 600,000 in the foreground |
+| `timeout` | number | milliseconds; default 120,000 (two minutes), at most 600,000 in the foreground |
 | `description` | string | what it does, in plain words, for the person |
 | `run_in_background` | boolean | run detached; the model gets an id at once and is told when it ends |
 | `dangerouslyDisableSandbox` | boolean | ask to run outside the sandbox |
@@ -148,7 +150,10 @@ Permission: a command whose every part is read-only (`ls`, `cat`, `git log`, `rg
 only inside the working directories is allowed; in `acceptEdits` file commands (`touch`, `mkdir`,
 `mv`, …) inside them are too; any other asks, offering a rule for its parts. In `auto` the
 classifier answers. A command naming `.noeta` asks in every mode but `bypassPermissions`; one
-writing a protected path asks in every mode; one leaving the sandbox always asks. `Bash(...)`
+writing a protected path asks in every mode, `bypassPermissions` included; one leaving the
+sandbox asks whatever the allow rules say (`bypassPermissions` lets it run). With the sandbox on
+and `autoAllowBashIfSandboxed` (the default), a command that runs inside the sandbox is allowed
+outside `plan` mode. `Bash(...)`
 rules are matched part by part ([rules](../guides/permissions.md#rules)). A background job keeps
 its task's claim on the worker that runs it.
 
@@ -164,7 +169,8 @@ notification for the model, which goes on working meanwhile.
 | **`description`** | string | a short label shown with every notification |
 | **`timeout_ms`** | number | when to stop (default 300,000; at most 1,800,000) |
 
-Permission: asks; `Bash(...)` rules cover its `command`.
+Permission: as `Bash` for its `command` (a read-only one is allowed, others ask; `Bash(...)`
+rules cover it); a `ws` watch asks.
 
 ### TaskStop
 
@@ -184,8 +190,8 @@ the task's shell into it; `ExitWorktree` returns the shell to where it was.
 
 | Tool | Parameter | Type | Meaning |
 |---|---|---|---|
-| `EnterWorktree` | `name` | string | a name for a new worktree (random when left out) |
-| | `path` | string | an existing worktree to move into instead |
+| `EnterWorktree` | `name` | string | a name for a new worktree: letters, digits, `.`, `_`, `-`, segments joined by `/`, at most 64 characters (random when left out); its branch is `worktree-<name>` |
+| | `path` | string | an existing worktree of this repository to move into instead (not with `name`) |
 | `ExitWorktree` | **`action`** | string | `keep` leaves it on disk; `remove` deletes it and its branch |
 | | `discard_changes` | boolean | remove even with uncommitted files or unmerged commits |
 
@@ -206,8 +212,8 @@ conversation; any other type, or none (`general-purpose`), starts fresh.
 | **`description`** | string | a 3–5 word label |
 | **`prompt`** | string | the task |
 | `subagent_type` | string | which agent (from the listing in the conversation) |
-| `model` | string | its model, over its definition's (a fork ignores it) |
-| `effort` | string | its effort (a fork ignores it) |
+| `model` | string | `sonnet`, `opus`, `haiku` or `fable`, over its definition's model (a fork ignores it) |
+| `effort` | string | `low`, `medium`, `high`, `xhigh` or `max` (a fork ignores it) |
 | `isolation` | string | `worktree`: a temporary git worktree; `remote`: elsewhere, where available |
 
 Permission: allowed; in `auto` the classifier judges it. `Agent(Explore)` rules name a type.
@@ -229,8 +235,8 @@ Permission: allowed; classified in `auto`.
 ### ListAgents
 
 Lists the agents `SendMessage` can reach: the sub-agents this task started and other open tasks in
-the store, each with its kind and state. Parameters `channel` and `q` exist for Claude Code's
-schema and are not used. Permission: allowed.
+the store, each with its kind and state. Offered only to a top-level task. Parameters `channel`
+and `q` exist for Claude Code's schema and are not used. Permission: allowed.
 
 ### SubagentHandback
 
@@ -257,8 +263,18 @@ Loads a skill's instructions into the conversation ([skills](../guides/skills-an
 Permission: allowed; `Skill(name)` rules name one. A skill's `allowed-tools` pre-approve those
 tools while it is active.
 
-`run_skill_script` (run a script shipped in a skill's directory) is offered only when the skills
-plugin's `scripts` argument is on; it asks.
+### run_skill_script
+
+Runs a script an active skill ships in its directory, with no shell. Offered only when the skills
+plugin's `scripts` argument is on.
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| **`skill`** | string | the active skill that ships the script |
+| **`relpath`** | string | the script's path inside that skill's directory (`scripts/check.sh`) |
+| `args` | array | the script's arguments, one string each, no shell metacharacters |
+
+Permission: asks.
 
 ## Asking the person: the `ask_user` plugin
 
@@ -269,7 +285,7 @@ while it waits and holds no worker.
 
 | Parameter | Type | Meaning |
 |---|---|---|
-| **`questions`** | array | 1–4 questions, each with its options (single or multiple choice, "other" text) |
+| **`questions`** | array | 1–4 questions; each has **`question`**, **`header`** (at most 12 characters), **`options`** (2–4, each **`label`**, **`description`** and an optional `preview`) and **`multiSelect`**; an "Other" choice is always added |
 | `answers`, `annotations` | object | filled in by the front end |
 | `metadata` | object | statistics only |
 
@@ -285,7 +301,7 @@ tools that do, apart from MCP servers and your commands.
 
 Fetches a URL, turns the page into Markdown, and answers `prompt` about it with a model
 (`webfetch_model`, default the task's): the model gets the answer, not the page. Pages are cached
-15 minutes; HTTP is upgraded to HTTPS; a redirect to another host is reported back instead of
+15 minutes; HTTP is upgraded to HTTPS (loopback addresses excepted); a redirect to another host is reported back instead of
 followed.
 
 | Parameter | Type | Meaning |
@@ -303,9 +319,9 @@ Searches the web and returns titles, URLs and snippets. Offered only with a sear
 
 | Parameter | Type | Meaning |
 |---|---|---|
-| **`query`** | string | what to search for |
+| **`query`** | string | what to search for (at least 2 characters) |
 | `allowed_domains`, `blocked_domains` | array | keep, or leave out, these domains |
-| `mode` | string | `standard` (quick) or `extended` (thorough, costs more) |
+| `mode` | string | `standard` (quick) or `extended` (thorough, costs more; the default) |
 
 Permission: asks.
 
@@ -328,7 +344,7 @@ answer.
 
 `TaskCreate`, `TaskGet`, `TaskUpdate`, `TaskList` (the `todos` plugin) keep Claude Code's task
 list in the task's log. Offered by default only to Claude models older than Claude Code's lean
-prompt, and only to a top-level task (`[plugins.todos] all_models = true` gives every model them;
+prompt (and Bedrock application inference profiles), and only to a top-level task (`[plugins.todos] all_models = true` gives every model them;
 [the task list](../guides/memory-and-instructions.md#the-task-list)).
 
 | Tool | Parameters |
@@ -362,11 +378,12 @@ The first three and `noop` are required unless `stop` is true. Permission: allow
 
 | Tool | Parameters | What it does |
 |---|---|---|
-| `CronCreate` | **`cron`** (5 fields, the person's local time), **`prompt`**, `recurring` (default true; a recurring job expires after 7 days), `durable` (accepted; every job is durable) | queue a prompt on a schedule, or once |
+| `CronCreate` | **`cron`** (5 fields, in the local time of the worker that runs the task), **`prompt`**, `recurring` (default true; a recurring job expires after 7 days), `durable` (accepted; every job is durable) | queue a prompt on a schedule, or once |
 | `CronList` | none | the task's jobs |
 | `CronDelete` | **`id`** | cancel one |
 
-Permission: all three ask in `default` (none is in the permissions plugin's low-risk list).
+A task may have at most 50 jobs at once. Permission: all three ask in `default` (none is in the
+permissions plugin's low-risk list).
 
 ## Workflow: the `workflow` plugin
 
@@ -395,7 +412,7 @@ for it.
 
 | Parameter | Type | Meaning |
 |---|---|---|
-| **`findings`** | array | the verified findings, most severe first |
+| **`findings`** | array | the verified findings, most severe first, at most 32; each has **`file`**, **`summary`**, **`failure_scenario`** and optionally `line`, `short_summary`, `category`, `verdict`, `outcome` |
 | `level` | string | the effort the review ran at |
 
 Permission: allowed.
@@ -414,7 +431,7 @@ in the conversation; a call to one before it is loaded fails with a hint. `ToolS
 | Parameter | Type | Meaning |
 |---|---|---|
 | **`query`** | string | `select:WebFetch,NotebookEdit` loads those; words search names and descriptions; `+mcp resource` keeps names containing `mcp` |
-| **`max_results`** | number | how many to load from a search |
+| **`max_results`** | number | how many to load from a keyword search (default 5) |
 
 A loaded tool stays loaded for the rest of the task, a compaction included. Permission: allowed.
 
@@ -428,6 +445,8 @@ The `mcp` plugin ([MCP servers](../guides/mcp.md)) offers, all deferred:
 | `mcp__<server>__authenticate`, `mcp__<server>__complete_authentication` | in place of a server's tools while it needs a sign-in | asks |
 | `ListMcpResourcesTool` | the servers' resources (`server` to narrow) | allowed |
 | `ReadMcpResourceTool` | read one resource (**`server`**, **`uri`**) | allowed |
-| `ReadMcpResourceDirTool` | read a resource directory | allowed |
+| `ReadMcpResourceDirTool` | list a directory resource, one level down (**`server`**, **`uri`**) | asks (it is not in the low-risk list) |
 
-Server tools are listed after the built-in ones.
+The three resource tools are offered only to a top-level task, whenever a server is configured
+(even one that is down). A server's tools are not read-only, whatever the server says. Server
+tools are listed after the built-in ones.

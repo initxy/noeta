@@ -54,7 +54,7 @@ noeta 自带的模型目录不认识的模型，会按保守的默认上限跑�
 {"models": [
   {"id": "deepseek-chat", "context_window": 128000, "max_output_tokens": 8192},
   {"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct", "context_window": 262144,
-   "max_output_tokens": 65536, "supports_vision": false, "provider": "local"}
+   "max_output_tokens": 65536, "supports_vision": false}
 ]}
 ```
 
@@ -62,7 +62,7 @@ noeta 自带的模型目录不认识的模型，会按保守的默认上限跑�
 export NOETA_MODELS_FILE=~/.noeta/models.json
 ```
 
-一条记录要两个上限都写才算数；模型目录里已有的模型，写了也不改变什么。`provider` 指明由哪个 provider 表来服务这个模型。
+一条记录要两个上限都写才算数；模型目录里已有的模型，写了也不改变什么。记录里还可以写 `"provider": "<表名>"`，指明由哪张 [provider 表](#同时用几个-provider)来服务这个模型；这张表必须在 `config.toml` 里存在，否则 noeta 报配置错误、不启动。
 
 网关要自己的请求头：在 provider 表里写 `headers = {"X-Team" = "infra"}`，默认 provider 则用 `extra_headers`。
 
@@ -71,9 +71,11 @@ export NOETA_MODELS_FILE=~/.noeta/models.json
 `openai_responses` 走 OpenAI 的 `/v1/responses`。它的接口地址要写完整，也没有专门的密钥环境变量：设 `NOETA_API_KEY` 或 `api_key`。
 
 ```bash
-export NOETA_PROVIDER=openai_responses NOETA_BASE_URL=https://api.openai.com/v1/responses
+export NOETA_PROVIDER=openai_responses NOETA_BASE_URL=https://gateway.example.com/v1/responses
 export NOETA_MODEL=gpt-5.5-2026-04-24 NOETA_API_KEY=sk-...
 ```
+
+密钥放在 `api-key` 请求头里发出去，这是 Azure OpenAI 和同类网关认的写法（`noeta/backends/providers/openai_responses.py`）。OpenAI 自己的 `api.openai.com` 认的是 `Authorization: Bearer …`：在 `config.toml` 里写 `extra_headers = {Authorization = "Bearer sk-..."}` 补上（provider 表里则写在 `headers`）。
 
 ## 同时用几个 provider
 
@@ -81,7 +83,7 @@ export NOETA_MODEL=gpt-5.5-2026-04-24 NOETA_API_KEY=sk-...
 
 ```toml
 model = "claude-sonnet-5-5"            # 默认 provider：anthropic
-api_key = "{env:ANTHROPIC_API_KEY}"
+                                       # （密钥读 NOETA_API_KEY，没有就读 ANTHROPIC_API_KEY）
 
 [providers.deepseek]
 family = "openai_compat"               # anthropic | openai_compat | openai_responses
@@ -96,7 +98,7 @@ api_key = "unused"
 list_models = true                     # 读它的 /models（默认）；false 不读
 ```
 
-一张表只接受 `family`、`base_url`、`api_key`、`headers`、`models`、`list_models` 和 `prompt_cache_ttl`；写了别的键算配置错误，表名叫 `default` 也算（这个名字留给顶层 provider）。`{keyring:…}` 需要 `keyring` 这个 extra。
+一张表只接受 `family`、`base_url`、`api_key`、`headers`、`models`、`list_models` 和 `prompt_cache_ttl`；写了别的键算配置错误，表名叫 `default` 也算（这个名字留给顶层 provider）。`{env:…}` 和 `{keyring:…}` 只在表里的 `api_key` 和 `headers` 中会被替换成真实值；顶层的 `api_key` 写什么就原样发出去。`{keyring:…}` 需要 `keyring` 这个 extra。
 
 一个模型 id 发给哪个 provider：
 
@@ -104,7 +106,7 @@ list_models = true                     # 读它的 /models（默认）；false �
 2. 否则发给 `/models` 列表里有它的第一个 provider，默认的排第一；
 3. 都没有，就发给默认 provider。
 
-配了不止一个 provider 时，这个选择只在任务以某个模型开始、或切换到某个模型时做一次，并和模型 id 一起记进任务配置（`model_route`）。之后每个工人都把这个模型发给记下的那个 provider，不管自己的列表怎么说；如果那个工人上根本没配这个 provider，这次调用就失败，所以每个工人都要用同一份 `config.toml`。只有一个 provider 时什么都不记。
+配了不止一个 provider 时，这个选择只在任务以某个模型开始、或切换到某个模型时做一次，并和模型 id 一起记进任务配置（`model_route`）。之后每个工人都把这个模型发给记下的那个 provider，不管自己的列表怎么说；如果那个工人上根本没配这个 provider，这次调用就失败，所以每个工人都要用同一份 `config.toml`。只有一个 provider 时什么都不记，除非它的 `/models` 列表给出了这个模型的上限（这时会记下上限，让每个工人按同样的大小组织请求）。
 
 一次对话里混用几家也没问题：某家签过名的推理内容只回放给那一家，别家写的工具调用 id 会改写成 Anthropic 接受的格式。
 
@@ -134,7 +136,7 @@ list_models = true                     # 读它的 /models（默认）；false �
 
 ## 插件在旁边用的模型
 
-有些插件会在任务自己的轮次之外另外调一次模型。默认都用任务的模型，你可以给它们指定便宜些的；在 `config.toml` 里作为插件参数来设：
+有些插件会在任务自己的轮次之外另外调一次模型。大多默认用任务的模型（例外见下表），你可以给它们指定便宜些的；在 `config.toml` 里作为插件参数来设：
 
 ```toml
 [plugins.compaction]

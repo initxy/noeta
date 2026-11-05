@@ -9,7 +9,7 @@
 ## 总览
 
 ```text
-noeta [参数] [提示词]           终端界面；带 -p（或指定 stream-json 格式）就是无界面模式
+noeta [参数] [提示词]           终端界面；带 -p、--output-format 或 --input-format stream-json 就是无界面模式
 noeta acp [--server URL]        在标准输入输出上提供 Agent Client Protocol，给编辑器用
 noeta serve [参数]              HTTP / WebSocket 接口，默认同时跑 worker（--no-worker 关掉）
 noeta worker [参数]             从存储里认领并运行任务，直到被停止
@@ -42,10 +42,15 @@ noeta mcp add|add-json|list|get|remove|login|logout
 哪里都没指定模型会报错（`noeta: no model configured`），只有用 `--server` 连服务端的前端例外，
 它用服务端的模型。
 
+`--permission-mode` 和 `--effort`（连同 `NOETA_EFFORT`、`config.toml` 的 `effort`）只对终端界面和
+`-p` 新开的任务生效。`acp`、`serve`、`worker` 接受这两个参数但不用它们：那里每个任务的权限模式和
+effort 由编辑器或接口调用方来定。
+
 ## 终端界面：`noeta`
 
-不带提示词、也不带无界面参数时，`noeta` 打开终端界面（`noeta-tui` 包，通过 `noeta.frontends`
-entry point 找到；没装时 noeta 会打印安装命令）。在还没信任的目录里，它会先问你是否信任。
+不带无界面参数时，`noeta` 打开终端界面（`noeta-tui` 包，通过 `noeta.frontends` entry point 找到；
+没装时 noeta 会打印安装命令）。不带 `-p` 时给的提示词不会被用上：界面打开时输入框是空的。在还没信任
+的目录里，它会先问你是否信任；选 "No, exit" 就直接退出。
 
 | 参数 | 含义 |
 |---|---|
@@ -107,8 +112,9 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 `--session-mirror`、`--bare`、`--allow-dangerously-skip-permissions`、
 `--exclude-dynamic-system-prompt-sections`、`--forward-subagent-text`、`--disable-slash-commands`。
 
-**退出码：** 结果成功为 0；结果出错、参数有误、提示词为空、没有可接着的任务时为 1。用
-`--input-format stream-json` 时，标准输入结束就以 0 退出。
+**退出码：** 结果成功为 0；结果出错、参数的值没法用、没配模型、提示词为空、没有可接着的任务时为 1；
+参数不认识或命令行写错（argparse 报错）时为 2。用 `--input-format stream-json` 时，标准输入结束后
+按最后一个结果定退出码（一个提示词都没跑就是 0）。
 
 **结果对象**（`json` 格式，以及 `stream-json` 里每个提示词的最后一行）字段和 Claude Code 的一样：
 `type: "result"`、`subtype`（`success`、`error_during_execution`、`error_max_budget_usd` 等）、
@@ -135,8 +141,8 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 
 ## `noeta serve`
 
-通过 HTTP 和 WebSocket 提供客户端接口（需要 `server` 组件）；除非加 `--no-worker`，同一个进程里
-还会跑 worker 和渠道。接口清单见 [HTTP / WebSocket 接口](./http-api.md)。
+通过 HTTP 和 WebSocket 提供客户端接口（需要 `server` 组件）；同一个进程里还会跑 `config.toml`
+启用的渠道，没加 `--no-worker` 时也跑 worker。接口清单见 [HTTP / WebSocket 接口](./http-api.md)。
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
@@ -171,8 +177,8 @@ Postgres 存储就能把任务分到多台机器上跑。
 
 ## `noeta trust`
 
-把当前目录（或 `--cwd`）加进 `~/.noeta/trusted.json`。之后它的 `.noeta/settings*.json`、代理、
-技能、提示词覆盖和插件才会加载（[配置](../start/configuration.md#trust)）。
+把当前目录（或 `--cwd`）加进 `~/.noeta/trusted.json`。之后它的 `.noeta/settings*.json`、
+`.noeta/mcp.json`（还要你同意）、代理、技能、命令、提示词覆盖和插件才会加载（[配置](../start/configuration.md#trust)）。
 
 ## `noeta plugins`
 
@@ -239,10 +245,10 @@ Code 插件目录（带版本号）。加载失败的插件文件打印到 stder
 | `/hooks` | 已配置的 hooks（只读） |
 | `/rewind` | 回到某次提问之前：恢复对话、代码或两者（也可以连按两次 Esc） |
 | `/clear`、`/new` | 开一个新任务 |
-| `/resume [N]` | 挑一个任务接着聊 |
+| `/resume [N]` | 挑一个任务接着聊；给了 `N`（列表里的序号）或任务 id 就直接打开 |
 | `/stop` | 停下这一轮（也可以按 Esc） |
 | `/reload-plugins` | 重新加载插件和代理文件，下一轮起生效 |
-| `/exit` | 退出 |
+| `/exit`、`/quit` | 退出 |
 
 代理的插件提供的命令（由 `noeta/core/commands.py` 列出和展开；每个前端都会显示，
 `POST /tasks/{id}/messages` 也能执行）：
@@ -261,4 +267,6 @@ Code 插件目录（带版本号）。加载失败的插件文件打印到 stder
 | `/<command>` | `markdown_commands` | `~/.noeta/commands`、`.noeta/commands` 或 Claude Code 插件里的 `commands/*.md` |
 
 终端界面的按键：Esc 停下这一轮；连按两次 Esc 清空输入框，输入框已空时打开 `/rewind`；Shift+Tab
-切换权限模式；Ctrl+C 清空输入框（输入框为空时连按两次退出）；输入以 `!` 开头时直接执行 shell 命令。
+切换权限模式；Ctrl+C 清空输入框（输入框为空时连按两次退出）；输入以 `!` 开头时直接执行 shell 命令；
+Ctrl+R 搜索以前输入过的提示词；Ctrl+O 展开或收起工具调用；Ctrl+T 显示或隐藏待办列表；Ctrl+B 显示或
+隐藏侧栏；Ctrl+V 粘贴图片。

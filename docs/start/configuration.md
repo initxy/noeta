@@ -31,7 +31,8 @@ of these that sets a value wins (`load_settings` in `noeta/cli/config.py`):
 4. for the model only: a settings file's `model`, when none of the above names one.
 
 With no API key set, the `anthropic` provider also reads `ANTHROPIC_API_KEY` and
-`openai_compat` reads `OPENAI_API_KEY`. A missing key stops the start with a message naming
+`openai_compat` reads `OPENAI_API_KEY`; `openai_responses` reads no variable of its own. A
+missing key stops the start with a message naming
 where to set one. The store defaults to `sqlite:///~/.noeta/tasks.db`.
 
 A complete `config.toml` might look like this:
@@ -117,8 +118,8 @@ cd ~/code/some-project
 noeta trust
 ```
 
-or answer "Yes, I trust this folder" when the terminal UI asks on first opening a folder. The
-trusted folders are kept in `~/.noeta/trusted.json` (`noeta/cli/trust.py`); the check is on
+or answer "Yes, I trust this folder" when the terminal UI asks on first opening a folder ("No,
+exit" quits). The trusted folders are kept in `~/.noeta/trusted.json` (`noeta/cli/trust.py`); the check is on
 the exact folder noeta starts in.
 
 | In a project | Before trust | After trust |
@@ -127,7 +128,8 @@ the exact folder noeta starts in.
 | `.noeta/plugins/` (Python plugin files, Claude Code plugin folders) | not loaded, with a notice | loaded |
 | `.noeta/agents/` | not loaded, with a notice | loaded |
 | `.noeta/skills/`, `.agents/skills/` | not loaded, with a notice | loaded |
-| `.noeta/prompts/` (prompt overrides) | not read | read |
+| `.noeta/commands/` | not loaded | loaded |
+| `.noeta/prompts/` (prompt overrides) | not read, with a notice | read |
 | `.noeta/mcp.json` | servers never start | a server starts only with consent in the project's own settings files: `enableAllProjectMcpServers: true` or its name in `enabledMcpjsonServers` |
 | `NOETA.md`, `.noeta/NOETA.md`, `NOETA.local.md`, `.noeta/rules/`, `AGENTS.md` | read | read |
 
@@ -137,7 +139,9 @@ model, not settings. Consent for a project's MCP servers given in your own
 start it through your consent.
 
 The settings files and plugin folders are read once, for the folder a front end or server
-starts in. Prompt overrides, skills and the permission checks look at each task's own working
+starts in. Trusting a folder at the terminal UI's question loads its plugins, agents, skills and
+prompts at once; its settings files (and so the consent for its `.noeta/mcp.json`) are read from
+the next start. Prompt overrides, skills and the permission checks look at each task's own working
 directory, so on a server a task running in an untrusted directory does not get that
 directory's prompts or skills.
 
@@ -155,7 +159,8 @@ Project instructions work like Claude Code's `CLAUDE.md`, under noeta's names
 | `NOETA.local.md` | yours for this project, kept out of git |
 | `.noeta/rules/*.md` | rules, optionally limited to `paths:` globs in their frontmatter |
 
-`@path` mentions import another file (up to five levels deep). An import from a project file
+`@path` mentions import another file; imports nest at most four deep (the file that starts
+the chain is depth 0, and a file at depth 5 is not read). An import from a project file
 must stay inside the working directory or the folder of the file that started the chain.
 `/init` writes a `NOETA.md` for the project. More in
 [Instructions and memory](../guides/memory-and-instructions.md).
@@ -171,15 +176,17 @@ Everything under `~/.noeta` is noeta's home; set `NOETA_HOME` to move it.
 | `~/.noeta/tasks.db` | the default sqlite store: every task's log |
 | `~/.noeta/trusted.json` | trusted projects |
 | `~/.noeta/agents/`, `<project>/.noeta/agents/` | agent files; a later file wins a name |
-| `~/.noeta/skills/`, `~/.agents/skills/`, `.noeta/skills/`, `.agents/skills/` | skills, in the project and the folders above it |
+| `~/.noeta/skills/`, `<project>/.noeta/skills/`, `<project>/.agents/skills/` | skills; the project's are read in the working directory and each folder above it up to the repository's root |
 | `~/.noeta/commands/`, `<project>/.noeta/commands/` | typed slash commands (Claude Code's `commands/*.md`) |
 | `~/.noeta/prompts/`, `<project>/.noeta/prompts/` | prompt overrides, by prompt name |
 | `~/.noeta/plugins/`, `<project>/.noeta/plugins/` | plugin files and Claude Code plugin folders |
+| `~/.noeta/plugin-sources.json` | where each `noeta plugin add` install came from |
 | `~/.noeta/plugin-data/<name>/` | a Claude Code plugin's `${CLAUDE_PLUGIN_DATA}` |
 | `~/.noeta/mcp-auth/` | MCP sign-ins and OAuth client secrets (owner-only) |
 | `~/.noeta/server-token` | the SHA-256 of `noeta serve`'s token |
 | `~/.noeta/cache/models/` | providers' model listings, kept a day |
 | `~/.noeta/tool-results/<task>/` | tool outputs too long to return inline |
+| `~/.noeta/image-cache/<task>/` | images pasted into a prompt |
 | `~/.noeta/plans/`, `~/.noeta/projects/<project>/memory/`, `~/.noeta/agent-memory/` | plan files and auto memory |
 | `~/.noeta/device_id` | the random device id Claude Code also sends in `metadata.user_id` |
 

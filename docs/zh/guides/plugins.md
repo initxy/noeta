@@ -60,7 +60,7 @@ class WordCount(Extension):
 
 想把工具写成类，给它 `name`、`description`、`input_schema`、`read_only`、`clearable` 和 `async def run(self, input, ctx) -> ToolOutput`（`noeta/core/tool.py`）即可，[`examples/hello-plugin`](https://github.com/initxy/noeta/blob/main/examples/hello-plugin/src/noeta_hello/__init__.py) 就是这么写的。
 
-放在别处的文件，只想试一次：`noeta --plugin-dir ./word_count.py`（`-p` 也能用；也可以给一个插件目录或 Claude Code 插件，参数可以重复）。它只加载进当前进程，所以和 `--server` 一起用会被拒绝。没加入任何代理的插件文件会有一条提示，告诉你去设 `add_to` 或 `add_plugins`。
+放在别处的文件，只想试一次：`noeta --plugin-dir ./word_count.py`（`-p` 打印模式下也能用；也可以给一个插件目录或 Claude Code 插件，参数可以重复）。它只加载进当前进程，所以和 `--server` 一起用会被拒绝。没加入任何代理的插件文件会有一条提示，告诉你去设 `add_to` 或 `add_plugins`。
 
 `noeta plugins` 列出所有插件和各自来源。导入失败的文件会标成坏的并写明原因；如果是缺了 noeta 环境里没有的模块，还会给出补装的那行 `uv tool install --with …` / `pip install` 命令（插件自己不会装任何东西）。
 
@@ -111,7 +111,7 @@ plugins:
 | 过一段时间再叫醒任务 | `view.set_timer(name, at, text)` | `noeta/core/records.py` |
 | 问用户一个问题 | `ask(...)`（调用停下来等，期间任务不占工人） | `noeta/core/questions.py` |
 | 加代理或子代理 | 一个代理 markdown 文件（Claude Code 的格式，外加 `plugins`） | `noeta/agents/agent_files.py` |
-| 加技能 | `~/.noeta/skills`、`~/.agents/skills`、项目的 `.noeta/skills` 或 `.agents/skills`、插件的 `skills/` 下的 `SKILL.md` 目录；`.noeta/commands` 下的 `*.md` | `noeta/plugins/skills` |
+| 加技能 | `~/.noeta/skills`、项目的 `.noeta/skills` 或 `.agents/skills`、插件的 `skills/` 下的 `SKILL.md` 目录；`~/.noeta/commands` 或项目 `.noeta/commands` 下的 `*.md`（`~/.agents/skills` 默认不读，要在 `[plugins.skills]` 里用 `global_agents_dir` 指定） | `noeta/plugins/skills` |
 | 接 MCP 服务器 | `.noeta/mcp.json`、settings 的 `mcpServers`、插件的 `.mcp.json` | `noeta/plugins/mcp` |
 | 让聊天软件或 webhook 进来 | 一个渠道 `Channel`（`run(client, stop)`），用 `deliver()` 投递 | `noeta/core/channel.py` |
 | 把回复送出去 | 任务里某个 `Extension` 的 `on_event` | `examples/chat-bridge` |
@@ -130,7 +130,7 @@ plugins:
 | 调用到一半进程崩了也能收拾 | `Tool.recover`（按 `ctx.idempotency_key` 查结果）或 `flags = ToolFlags(retry_safe=True)`；只活在一个进程里的东西用 `ctx.keep()` | `noeta/core/tool.py` |
 | 工具等模型要用时才发给它 | `flags = ToolFlags(deferred=True)`（经 `ToolSearch` 加载） | `noeta/plugins/tool_search` |
 | 文字在压缩后保留，或者参与压缩 | `resident` / `lead_resident`；`before_compact`；`on_context_overflow(view, request)` | `noeta/core/extension.py` |
-| 把结果以数据形式给前端展示 | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/types.py` |
+| 把结果以数据形式给前端展示 | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/tool.py`、`noeta/core/types.py` |
 | 模型回了个既没文字也没工具调用的空回复时继续（否则这一轮就结束了） | `on_empty_reply(view, response)` → 用来继续的那条消息，或 `None`（参考 `noeta/plugins/empty_reply.py`） | `noeta/core/extension.py` |
 | 拦下一条用户输入，或让一轮继续下去（就像 UserPromptSubmit 和 Stop hook） | `reminders` + `view.erase_messages` + 抛 `TurnFailed`；在 `on_event` 里看到 `ModelReplied` 就投一条 `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
@@ -256,7 +256,7 @@ noeta plugin remove your-plugin
 
 ### 机器级策略
 
-`/etc/noeta/config.toml`（机器的托管目录）可以按名字允许或屏蔽插件，优先级高于所有用户和项目设置（`noeta/cli/plugin_policy.py`）：
+`/etc/noeta/config.toml`（机器的托管目录；macOS 上是 `/Library/Application Support/Noeta`，Windows 上是 `C:\Program Files\Noeta`）可以按名字允许或屏蔽插件，优先级高于所有用户和项目设置（`noeta/cli/plugin_policy.py`）：
 
 ```toml
 [policy]
@@ -326,7 +326,7 @@ async def test_word_count(tmp_path):                 # pytest-asyncio，asyncio_
 
 ## 现成的例子
 
-每个都是一个文件、一份简短 README，外加一个 `make example` 会跑的测试：
+每个都是一个文件（hello-plugin 是一个包）、一份简短 README，外加一个 `make example` 会跑的测试：
 
 - [`examples/run-tests`](https://github.com/initxy/noeta/tree/main/examples/run-tests)：一个工具。在任务跑命令的地方执行测试命令，从日志里算出上次结果，改过文件后提醒模型一次。配置 `[plugins.run_tests] command = "uv run pytest -q"`。
 - [`examples/house-style`](https://github.com/initxy/noeta/tree/main/examples/house-style)：提示词和提醒。任务开始时抓一次输出风格，任务恢复后发的字节不变；加入所有代理（`add_to = ("*",)`）。

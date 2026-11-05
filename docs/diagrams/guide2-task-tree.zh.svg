@@ -38,7 +38,7 @@
 <text x="24" y="338" class="ntd-mini" text-anchor="start">每个方框都是一个任务：自己的日志、收件箱和 tasks 表里的一行</text>
 <text x="24" y="362" class="ntd-mini" text-anchor="start">子任务结束 → 给父任务的收件箱投一条 ChildEnded</text>
 <text x="24" y="386" class="ntd-mini" text-anchor="start">父任务结束 → 给每个还在跑的子任务投 Cancel</text>
-<text x="672" y="346" class="ntd-mini" text-anchor="start">max_depth 3：第 3 层拿不到 Agent</text>
+<text x="672" y="346" class="ntd-mini" text-anchor="start">max_depth 3：第 3 层不能再派</text>
 <text x="672" y="370" class="ntd-mini" text-anchor="start">每个任务同时最多 20 个在跑</text>
 <rect x="16" y="416" width="868" height="40" rx="10" class="ntd-chip ntd-chip-violet ntd-dash"/>
 <text x="450" y="441" class="ntd-sub" text-anchor="middle">全部在同一个存储里：任何工人都能接着跑树上的任何一个任务</text>

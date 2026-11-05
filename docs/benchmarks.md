@@ -177,7 +177,8 @@ NOETA_EFFORT=high bench/run_benchmark.sh tb4-full
 bench/summarize.py --dataset bench/datasets/terminal-bench-2-1 bench/jobs/<job>
 ```
 
-Pin the effort: unset, noeta's Anthropic wire sends `medium`, which DeepSeek V4.1 refuses. A
+Pin the effort anyway: unset, a request carries the model row's default effort (`high` for a
+model whose row names none), and DeepSeek V4.1 refuses `medium`. A
 gateway model id the catalog does not know needs a models file
 (`NOETA_MODELS_CONFIG`, or `NOETA_MODEL_CONTEXT_WINDOW` and `NOETA_MODEL_MAX_OUTPUT_TOKENS`
 for the adapter to write one), or it runs at 128K / 16K. Restricted networks, Docker cleanup,

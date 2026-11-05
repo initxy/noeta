@@ -64,7 +64,7 @@
 
 1. **任何一个拒绝都算数。** 插件在检查时自己出错也算拒绝（`permission check failed: …`），所以检查坏掉绝不会把调用放过去。
 2. **改写**（hook 的 `updatedInput`、客户端改过参数的批准）替换掉原来的调用，从头重新判断，最多三次。
-3. **要问。** 没人要问，调用就执行。一个表示批准的放行（PreToolUse hook 的 `allow`）可以免掉非强制的问；强制的问（询问规则、hook 的 `ask`、受保护路径）一定要有人回答。
+3. **要问。** 没人要问，调用就执行。一个表示批准的放行（PreToolUse hook 的 `allow`）可以免掉非强制的问；强制的问（询问规则、hook 的 `ask`）一定要有人回答。
 4. **在到你之前先回答**（`resolve_ask`）：PermissionRequest hook、auto 模式的分类器、无界面客户端的 `can_use_tool`，或者一个 MCP 权限提示工具。
 5. **否则就挂起。** 任务记下 `Waiting`，让出工人，给你看卡片。你的回答进入它的收件箱，调用继续往下走，接手的是哪个工人都行。
 
@@ -76,7 +76,7 @@
 
 - 被拿掉的工具（`--tools`、`--disallowedTools` 里的工具名、代理文件的 `disallowedTools`）直接拒绝，而且压根不提供给模型。
 - 先看拒绝规则，再做 shell 的路径检查，然后看询问规则。
-- 再看这次调用碰了什么：读工作目录内的文件（以及计划文件、记忆目录、保存下来的工具输出）放行；在 `default` 下改工作目录内的文件要问；改工作目录外的文件，除了 `bypassPermissions` 以外的模式都要问；写受保护路径在任何模式下都要问。shell 命令如果每一段都是只读的（`ls`、`git log`、`grep` 等）、并且只读工作目录内的东西，放行；其他的要问，除非放行规则覆盖了每一段。`WebFetch` 按主机问。只读或只跟你说话的工具（`AskUserQuestion`、`Skill`、`ToolSearch`、任务清单工具等）放行。
+- 再看这次调用碰了什么：读工作目录内的文件（以及计划文件、记忆目录、保存下来的工具输出）放行；在 `default` 下改工作目录内的文件要问；改工作目录外的文件，除了 `bypassPermissions` 以外的模式都要问；写受保护路径在 `acceptEdits` 和 `bypassPermissions` 下也要问（`auto` 下交给分类器判断）。shell 命令如果每一段都是只读的（`ls`、`git log`、`grep` 等）、并且只读工作目录内的东西，放行；其他的要问，除非放行规则覆盖了每一段。`WebFetch` 按主机问。只读或只跟你说话的工具（`AskUserQuestion`、`Skill`、`ToolSearch`、任务清单工具等）放行。
 - 最后看模式：`dontAsk` 把要问变成拒绝，`bypassPermissions` 变成放行（强制的问和受保护路径除外），`auto` 交给分类器，`plan` 照问不误。
 
 受保护的路径（`noeta/toolkit/protected_paths.py`）包括这些目录：`.git`、`.vscode`、`.idea`、`.claude`、`.husky`、`.cargo`、`.devcontainer`、`.yarn`、`.mvn`、`.noeta`（但不含其中的 `skills`、`commands`、`worktrees`）和 `.config/git`；以及配置 shell、git、包管理器或 hook 工具的文件（`.bashrc`、`.zshrc`、`.gitconfig`、`.npmrc`、`.envrc`、`.mcp.json`、`.pre-commit-config.yaml` 等）。

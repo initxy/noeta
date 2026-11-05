@@ -157,7 +157,7 @@ NOETA_EFFORT=high bench/run_benchmark.sh tb4-full
 bench/summarize.py --dataset bench/datasets/terminal-bench-2-1 bench/jobs/<job>
 ```
 
-一定要指定 effort：不指定时，noeta 走 Anthropic 协议会发 `medium`，而 DeepSeek V4.1 不接受。模型
+最好还是指定 effort：不指定时，请求带的是模型目录里这一行的默认值（没写默认值的就用 `high`），而 DeepSeek V4.1 不接受 `medium`。模型
 目录里没有的网关模型 id 需要一个模型描述文件（`NOETA_MODELS_CONFIG`，或者用
 `NOETA_MODEL_CONTEXT_WINDOW` 和 `NOETA_MODEL_MAX_OUTPUT_TOKENS` 让适配器生成一个），否则按 128K /
 16K 运行。受限网络、Docker 清理、网关并发、固定 SWE-bench 子集等内容见

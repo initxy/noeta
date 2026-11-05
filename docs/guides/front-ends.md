@@ -82,8 +82,10 @@ It looks for `noeta` on `PATH` and in `~/.local/bin`, `/opt/homebrew/bin` and `/
 (an app started from the Dock does not get the login shell's `PATH`); set
 `NOETA_DESKTOP_NOETA` or `noetaPath` in the app's `settings.json` (Settings, `⌘,`) to name
 another. When it is missing the window shows the install line, which includes the `server`
-extra. File > Open Project Folder (`⌘O`) picks the directory new conversations run in; each folder you
-pick is added as an `--allow-root` of the server. When the local server dies the window shows its
+extra. File > Open Project Folder (`⌘O`) picks the directory new conversations run in. The server runs
+in your home directory, so a folder under it needs nothing more; a folder outside it is added as an
+`--allow-root` of the server, which restarts it (after asking, when sessions are working or
+waiting; `desktop/src/main.ts`). When the local server dies the window shows its
 last output, and View > Reload starts it again. It also raises a system notification when a
 conversation needs you or finishes while the window is in the background.
 

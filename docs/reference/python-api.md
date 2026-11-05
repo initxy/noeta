@@ -20,7 +20,7 @@ The store for `url`, chosen by its scheme through the `noeta.stores` entry point
 The provider adapter for `family` (the `noeta.providers` entry points: `anthropic`,
 `openai_compat`, `openai_responses`, or a third party's). Keywords go to its factory; the
 built-ins take `api_key=`, `base_url=` and `extra_headers=`. `openai_compat` needs
-`base_url` (ending in `/v1`); `openai_responses` needs both `base_url` (the whole
+`base_url` (the API root that `/chat/completions` is appended to, e.g. `…/v1`); `openai_responses` needs both `base_url` (the whole
 `…/v1/responses` URL) and `api_key`. Without `api_key`, `anthropic` reads
 `ANTHROPIC_API_KEY` and `openai_compat` reads `OPENAI_API_KEY`; `anthropic` also takes
 `prompt_cache_ttl="1h"`.
@@ -33,7 +33,7 @@ replaces it).
 
 | Argument | Meaning |
 |---|---|
-| `model` | the model every agent runs unless its file names another (`model: inherit` takes the task's) |
+| `model` | the model every agent runs unless its file names another; a file with `model: inherit` (or no `model`) runs on it, and as a sub-agent on its caller's model |
 | `plugins` | per plugin name: its arguments (a mapping; `enabled: False` turns it off), a ready `Extension`, or `False` to leave it out of every agent. `memory`, `mcp` and `repetition_guard` stay off until this names them |
 | `add` | per agent name (`"*"` for all): more plugins after the file's own, as `(name, arguments)` pairs |
 | `extensions` | `Extension` instances added to every agent |
@@ -43,7 +43,7 @@ replaces it).
 
 ### `noeta.parse_agent_file(text, *, source="", default_name="") -> AgentFile`
 
-Reads one agent file: YAML frontmatter in Claude Code's fields (plus `plugins` and `one_shot`)
+Reads one agent file: YAML frontmatter in Claude Code's fields (plus `plugins`, `one_shot` and `identity`)
 and the system prompt as the body. Raises `AgentFileError` on a malformed file.
 
 ### `noeta.read_agent_dir(path) -> list[AgentFile]`
@@ -73,6 +73,9 @@ A dataclass; what a `Runtime` runs.
 | `allowed_tools` | `None` | only these tool names are offered (`None`: all) |
 | `denied_tools` | `()` | tool names never offered |
 
+`all_extensions()` is the list a task runs: `extensions`, with `tools` wrapped as a `ToolSet`
+ahead of them; it raises `ValueError` when two plugins share a name or one has none.
+
 ## Running tasks
 
 ### `noeta.Runtime`
@@ -100,6 +103,7 @@ A worker: claims tasks from the store and runs them, many at once. A dataclass:
 | `snapshot_every` | `100` | events between fold snapshots; `0` never |
 | `agent_aliases` | `{}` | a former agent name -> its name now, for tasks recorded under the former |
 | `roots` | `None` | serve only these task trees (a set the front end adds to); `None` serves every task |
+| `sleep` | `asyncio.sleep` | how it waits between model retries (tests pass a fake) |
 
 Methods:
 
@@ -112,6 +116,8 @@ Methods:
 | `await preview(task_id) -> ModelRequest \| None` | the request the task's next model call would start from, recording nothing |
 | `serve_root(root_id)` | add a task tree to `roots` and look for work at once |
 | `agent(name) -> Agent \| None` | the agent by name or former name |
+| `provider_of(state, model) -> Provider` | the provider a task's call goes to: `task_provider` when set, else `provider_for` |
+| `await run_claim(claim)` | run one claim the caller already holds until the task waits or ends |
 
 ### `noeta.LocalApp(store, agents, provider, *, own_tasks_only=False, task_config=None, channels=(), **runtime_kw)`
 
@@ -125,20 +131,23 @@ UI, `noeta acp` and `noeta -p` run on (`noeta/host/local.py`).
 | `own_tasks_only` | serve only the task trees this app created or adopted |
 | `task_config` | laid under every new task's config (`prompts` merged key by key) |
 | `channels` | `Channel`s to run while started |
-| `**runtime_kw` | passed to `Runtime` (`spill_root` defaults to a temporary directory) |
+| `**runtime_kw` | passed to `Runtime` (`spill_root` defaults to `noeta-<uid>/tool-results` in the system temp directory; `poll_interval` is fixed at 0.2 and cannot be passed) |
 
 | Member | Is |
 |---|---|
-| `client` | a `Client` whose new tasks this app's worker serves |
+| `client` | a `LocalClient` (a `Client` subclass) whose new tasks this app's worker serves; it lays `task_config` under each new task and puts an agent file's `initialPrompt` ahead of a new conversation's first message |
 | `runtime`, `store` | the parts |
 | `await start(worker=True)` / `await stop()`, or `async with` | run the worker and channels in the background; stopping also closes the store |
 | `deltas(sink) -> unsubscribe` | live output: `sink(task_id, Delta)` per fragment, also from other machines on Postgres |
 | `await adopt(task_id)` | serve an existing task's tree (resuming it); raises `UnknownAgent` for an agent this app lacks |
 | `replace_agents(agents)` | run these agents from the next pickup on |
+| `await agent_names()` | the agents' names, sorted |
 | `await commands(agent, ctx)`, `await run_command(agent, ctx, text)` | an agent's slash commands |
 | `await context(task_id)` | what fills the task's next request, by category |
 | `await summaries(limit=50, archived=None)`, `await archive(task_id, archived=True)` | the root tasks for a resume list |
-| `notices`, `main_agent` | what a front end should show; the agent to start with |
+| `notices`, `main_agent` | what a front end should show; the agent to start with (`"main"`) |
+| `channels` | the channels it runs |
+| `reload_plugins`, `list_models`, `prepare_model` | hooks a host sets (the `noeta` command does): find the plugins again, list every provider's models, settle a model before a switch; `None` otherwise |
 
 ### `noeta.Client(store, *, poll_interval=0.5)`
 
@@ -158,12 +167,15 @@ The client API on a store, in this process (`noeta/core/client.py`). It writes t
 | `watch(task_id, after=0) -> AsyncIterator[Recorded]` | the log from `after` on, live, until the task ends |
 | `await wait(task_id, *, timeout=None) -> TaskRow` | until the task is waiting or ended |
 
-`input` is a string or a `noeta.core.types.Message` (a user turn of `Text` and `Image` blocks).
+`input` is a string or a `noeta.core.types.Message` (a user turn of `Text` and `Image` blocks);
+an image is shrunk to fit before it is stored. A `history_from` that is no task raises
+`UnknownTask`.
 
 ### `noeta.RemoteClient(url, *, token=None, transport=None)`
 
 The same methods as `Client`, over a `noeta serve` server's HTTP API
-(`noeta/host/remote.py`); `watch` reconnects by itself. `await close()` closes its HTTP client.
+(`noeta/host/remote.py`); `watch` reconnects by itself. It also has `await context(task_id)` (what fills the task's next
+request) and `await close()`, which closes its HTTP client.
 `transport` is an `httpx` transport (tests).
 
 ### `noeta.connect(url, *, token=None, **kw) -> Client | RemoteClient`

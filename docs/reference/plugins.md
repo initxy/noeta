@@ -72,13 +72,13 @@ those, key by key.
 | `fs` | `Read`, `Write`, `Edit`, `NotebookEdit` (deferred) | |
 | `hooks` | | `/hooks` |
 | `markdown_commands` | | `/init`, `/review`, and each `commands/*.md` |
-| `mcp` | `mcp__<server>__<tool>` (deferred), `ListMcpResourcesTool`, `ReadMcpResourceTool`, `ReadMcpResourceDirTool` (deferred); `mcp__<server>__authenticate` / `complete_authentication` for a server that needs a sign-in | `/mcp`, and each server prompt |
+| `mcp` | `mcp__<server>__<tool>` (deferred), `ListMcpResourcesTool`, `ReadMcpResourceTool`, `ReadMcpResourceDirTool` (deferred, top-level task only); `mcp__<server>__authenticate` / `complete_authentication` for a server that needs a sign-in | `/mcp`, and each server prompt |
 | `plan_mode` | `EnterPlanMode`, `ExitPlanMode` (both deferred) | `/plan` |
 | `schedule` | `ScheduleWakeup`; `CronCreate`, `CronList`, `CronDelete` (deferred) | `/loop` |
 | `shell` | `Bash`; `Monitor`, `TaskStop`, `EnterWorktree`, `ExitWorktree` (deferred) | |
 | `skills` | `Skill`; `run_skill_script` with `scripts = true` | `/<skill>` for each skill |
 | `structured_output` | `StructuredOutput` (only when the task has an output schema) | |
-| `subtasks` | `Agent`, `ListAgents`, `SendMessage` (deferred); `SubagentHandback` in a task `Agent` started | |
+| `subtasks` | `Agent`, `ListAgents` (top-level task only), `SendMessage` (deferred); `SubagentHandback` in a task `Agent` started | |
 | `todos` | `TaskCreate`, `TaskGet`, `TaskUpdate`, `TaskList` (deferred) | |
 | `tool_search` | `ToolSearch` (while any deferred tool is offered) | |
 | `web` | `WebFetch` (deferred); `WebSearch` (deferred, with a key) | |
@@ -501,7 +501,8 @@ Hooks: `on_event`, `reduce`.
 
 `noeta/plugins/todos` — Claude Code's task list: `TaskCreate`, `TaskGet`, `TaskUpdate`,
 `TaskList`, and a reminder after ten model turns without them. As in Claude Code 2.1.312, only
-the Claude models older than its lean prompt get them by default; the Claude 5 family and every
+the Claude models older than its lean prompt (and Bedrock application inference profiles) get
+them by default; the Claude 5 family and every
 other model get none. Only a task without a parent gets the tools.
 
 Hooks: `tools`, `context`, `reminders`, `reduce`, `continue_state`.
@@ -546,7 +547,7 @@ Hooks: `tools`, `reminders`, `on_start`, `on_event`, `reduce`, `continue_state`.
 | Setting | Default | Meaning |
 |---|---|---|
 | `default_agent` | `"general-purpose"` | the agent type `agent()` runs, else the task's own |
-| `max_running` | | agents running at once per run |
+| `max_running` | CPUs − 2, between 2 and 16 | agents running at once per run |
 | `home` | `~/.noeta` | noeta's directory, holding the user's saved workflows |
 | `engine` | | **SDK**: tests |
 

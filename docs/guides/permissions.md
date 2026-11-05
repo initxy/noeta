@@ -93,8 +93,7 @@ plugins; hooks, skills' `allowed-tools` and plan mode are others.
 2. **A rewrite** (a hook's `updatedInput`, a client's edited approval) replaces the call, which is
    gated again from the top, at most three times.
 3. **Asks.** With none, the call runs. An approving allow (a PreToolUse hook's `allow`) satisfies
-   asks that are not firm; a firm ask (an ask rule, a hook's `ask`, a protected path) always needs
-   an answer.
+   asks that are not firm; a firm ask (an ask rule, a hook's `ask`) always needs an answer.
 4. **Answering an ask before it reaches you** (`resolve_ask`): a PermissionRequest hook, the
    auto-mode classifier, a headless client's `can_use_tool`, or an MCP permission-prompt tool.
 5. **Otherwise the call parks.** The task records `Waiting`, gives up its worker and shows you
@@ -112,8 +111,8 @@ Inside the permissions plugin (`noeta/plugins/permissions/rule_check.py`), Claud
 - Deny rules, then the shell's path checks, then ask rules.
 - What the call touches: a read inside the working directories (or of the plan file, the memory
   directory, a saved tool output) is allowed; an edit inside them asks in `default`; an edit
-  outside them asks in every mode but `bypassPermissions`; a write to a protected path asks in
-  every mode. A shell command whose every part is read-only (`ls`, `git log`, `grep`, …) and
+  outside them asks in every mode but `bypassPermissions`; a write to a protected path asks even
+  in `acceptEdits` and `bypassPermissions` (in `auto` the classifier judges it). A shell command whose every part is read-only (`ls`, `git log`, `grep`, …) and
   reads only inside the working directories is allowed; any other asks unless an allow rule
   covers every part. `WebFetch` asks per host. Tools that only read or talk to you
   (`AskUserQuestion`, `Skill`, `ToolSearch`, the todo tools …) are allowed.

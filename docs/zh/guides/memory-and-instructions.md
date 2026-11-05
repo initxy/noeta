@@ -35,7 +35,7 @@ noeta              # 然后输入 /init：模型会给这个项目写一份 NOET
   ```
 
   开始时不给，等碰到它匹配的文件时才出现。
-- **导入：** 文件里（代码块之外）的 `@路径` 会把那个文件紧接着导入进来，类别相同，最多嵌套五层；每个文件只读一次。项目文件或本地文件发起的导入，必须留在工作目录内，或留在发起这串导入的那个文件所在的目录内（Claude Code 遇到外面的会先问你；noeta 没有这种提示，直接跳过）。
+- **导入：** 文件里（代码块之外）的 `@路径` 会把那个文件紧接着导入进来，类别相同，最多往下导入四层；每个文件只读一次。项目文件或本地文件发起的导入，必须留在工作目录内，或留在发起这串导入的那个文件所在的目录内（Claude Code 遇到外面的会先问你；noeta 没有这种提示，直接跳过）。
 - **注释：** 开头的 YAML frontmatter 会去掉，自成一块的 HTML 注释也会去掉，所以 `<!-- 写给人看的备注 -->` 不占模型的上下文。
 
 ### 跟着工作补上的文件
@@ -91,7 +91,7 @@ Model: Sonnet 5.5, exact id `claude-sonnet-5-5`; knowledge cutoff ….
 - **在哪儿：** `~/.noeta/projects/<project>/memory/`，`<project>` 是仓库主目录（不是某个 worktree；不在仓库里就是工作目录）的路径，其中字母数字以外的字符都换成 `-`。同一仓库的各个 worktree 共用一份。
 - **怎么写：** 系统提示词里的记忆一节告诉模型目录在哪、格式是什么（frontmatter 里的 `name`、`description`、`metadata.type`：`user`、`feedback`、`project` 或 `reference`）。模型用普通的 `Write` 和 `Edit` 工具建文件、改文件，在这个目录里写 markdown 在任何模式下都不用问。你也可以自己改。
 - **索引：** 同一目录下的 `MEMORY.md`，每条记忆一行。任务开始时，它的前 200 行、最多 25,000 个字符，和项目说明文件一起给模型；压缩后再给一次。
-- **召回（可选）：** 设了 `recall_model`，你每发一条消息，就问那个模型哪些记忆文件和它有关，最多附上五个（每个截到 200 行、4,096 字节；整个任务累计最多 61,440 个字符）。一天以前改过的记忆会附一句提醒：可能已经过时。模型已经读过的文件不会再召回。
+- **召回（可选）：** 设了 `recall_model`，你每发一条消息，就问那个模型哪些记忆文件和它有关，最多附上五个（每个截到 200 行、4,096 字节；整个任务累计最多 61,440 个字符）。两天或更早以前改过的记忆会附一句提醒：可能已经过时。模型已经读过的文件不会再召回。
 
 ```toml
 [plugins.memory]
@@ -115,7 +115,7 @@ recall_model = "claude-haiku-5-5"   # 不设就不召回
 
 ## 任务清单
 
-`todos` 插件给模型提供 Claude Code 的任务清单：`TaskCreate`、`TaskGet`、`TaskUpdate` 和 `TaskList`（都要通过 `ToolSearch` 加载），连续十轮没用它们时提醒一次（`noeta/plugins/todos/`）。和 Claude Code 2.1.312 一样，默认只有比它的精简提示词更早的 Claude 模型（Claude 4.x 及更早）才有；Claude 5 系列和其他所有模型（DeepSeek、网关上的模型名）都没有。要让所有模型都有：
+`todos` 插件给模型提供 Claude Code 的任务清单：`TaskCreate`、`TaskGet`、`TaskUpdate` 和 `TaskList`（都要通过 `ToolSearch` 加载），连续十轮没用它们时提醒一次（`noeta/plugins/todos/`）。和 Claude Code 2.1.312 一样，默认只有比它的精简提示词更早的 Claude 模型（Claude 3 和 Claude 4，Opus 4.8 除外）才有；Claude 5 系列和其他所有模型（DeepSeek、网关上的模型名）都没有。要让所有模型都有：
 
 ```toml
 [plugins.todos]

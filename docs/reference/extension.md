@@ -51,7 +51,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `async on_start(self, view: TaskView)` | `None` | Each time a runner picks the task up, before the first step. |
 | `async before_model(self, view: TaskView, request: ModelRequest)` | `ModelRequest` | Before every model call, after the reminders, in plugin order; each gets the previous one's request. May raise `TurnDone` (no call; the turn ends), `RequestStale` (the request is built again from the new state) or `TurnFailed(reason, detail)`. |
 | `async on_context_overflow(self, view: TaskView, request: ModelRequest)` | `bool` | The model refused `request` as too long. Return `True` after making room (recording a compaction); the call is made again. When none does, the turn fails with `context_overflow`. A hook written as `(self, view)` is still called. |
-| `async on_empty_reply(self, view: TaskView, response: ModelResponse)` | `Message \| None` | The reply ended (`end_turn`) with no text and no tool call. A message to go on with; the first one wins. The core records it in a `continue` entry (reason `empty_reply`) and calls the model again. |
+| `async on_empty_reply(self, view: TaskView, response: ModelResponse)` | `Message \| None` | The reply ended (`end_turn`) with no text and no tool call. A message to go on with; the first one wins. The core records it in a `continue` entry (reason `empty_reply`) and calls the model again. When none comes, the turn ends without an answer (`turn_done`, reason `empty_reply`). |
 
 ### Tool calls
 
@@ -230,7 +230,7 @@ question was withdrawn; `noeta/core/questions.py`).
 | `idempotency_key` (property) | `str` | `<task id>:<call id>`: the same for every run of this call on any worker. Pass it to an outside system that can drop a repeat, or look the outcome up by it in `recover`. |
 | `env` | `ExecEnv` | The task's exec env. |
 | `state` | `Mapping[str, Any]` | Every plugin's folded state, by name (read only). |
-| `record` | `(extension, kind, data) -> None` | Record an entry; appended just before the call's `ToolFinished`. |
+| `record` | `(extension, kind, data) -> None` | Record an entry; appended just before the call's `ToolFinished`. A `core` record of an unknown kind raises `ValueError`. |
 | `spill_dir` | `str \| None` | Where full outputs too large to return go. |
 | `spawn` | `(agent, prompt, *, config=None, background=False, queue=None, history_from=None, history_through=None) -> str`, or `None` | Stage a child task, created atomically with this call's record, so a retried call never makes a second child. `history_from` continues that task's conversation. |
 | `post` | `async (body, task_id=None, dedupe_key=None)`, or `None` | Post to this task's inbox from outside a step, or to another task (an unknown one raises `UnknownTask`). |

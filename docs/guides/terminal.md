@@ -302,7 +302,8 @@ What comes in:
 What goes out:
 
 - `system` / `init` first: directory, tools, model, permission mode, slash commands, agents.
-- An `assistant` message per model reply; a `user` message per tool result.
+- An `assistant` message per model reply; a `user` message per tool result; `tool_progress`
+  while a tool runs.
 - `stream_event`s (Anthropic's streaming events) with `--include-partial-messages`.
 - `system` notes: `compact_boundary`, `task_started` and `task_notification` (sub-agents),
   `status`, `local_command_output`, `informational`.

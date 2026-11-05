@@ -15,7 +15,7 @@
 noeta mcp add files -- npx -y @modelcontextprotocol/server-filesystem /srv/data
 
 # 远程服务器，走 Streamable HTTP，带一个请求头
-noeta mcp add -t http -H 'Authorization: Bearer ${GH_TOKEN}' github https://api.example.com/mcp
+noeta mcp add -t http github https://api.example.com/mcp -H 'Authorization: Bearer ${GH_TOKEN}'
 
 # 整条配置用 JSON 给
 noeta mcp add-json -s user search '{"type":"sse","url":"https://search.example.com/sse"}'
@@ -25,7 +25,7 @@ noeta mcp get github      # 看一个服务器的完整配置
 noeta mcp remove github   # 同名出现在多个范围时加 -s 指定
 ```
 
-`-e KEY=VALUE`（可重复）给 stdio 服务器设环境变量，`-H "Name: value"` 给远程服务器加请求头。`${VAR}` 记得用单引号括起来：这样文件里存的是引用，服务器启动时才从环境变量读出密钥，密钥本身不会写进文件。服务器名字可以带任意字符；用在工具名里的别名会把 `[A-Za-z0-9_-]` 以外的字符换成 `_`（`noeta/plugins/mcp/settings.py` 的 `alias_for`）。
+`-e KEY=VALUE`（可重复）给 stdio 服务器设环境变量，`-H "Name: value"` 给远程服务器加请求头。这两个选项后面能跟好几个值，所以要放在名字和命令（或地址）后面，或者用 `--` 收尾：写成 `noeta mcp add -e A=1 files -- …` 的话，`files` 会被当成一个环境变量。`${VAR}` 记得用单引号括起来：这样文件里存的是引用，服务器启动时才从环境变量读出密钥，密钥本身不会写进文件。服务器名字可以带任意字符；用在工具名里的别名会把 `[A-Za-z0-9_-]` 以外的字符换成 `_`（`noeta/plugins/mcp/settings.py` 的 `alias_for`）。
 
 ### 范围：配置写到哪个文件
 
@@ -103,9 +103,9 @@ noeta 不读 `~/.claude.json`、项目根目录的 `.mcp.json`，也不读 `.cla
 
 ### 工具名
 
-服务器的工具以 `mcp__<别名>__<工具名>` 的形式提供：工具名里 `[A-Za-z0-9_-]` 以外的字符换成 `_`，大小写不变，不截断。同一个服务器的两个工具名换完以后撞了，就各自加上 `_` 和原名 SHA-256 的前 8 位十六进制。全名超过 128 个字符的工具不提供（服务器日志会说明，把服务器名改短就能解决）。两个服务器产生了同一个工具名算冲突：后一个会被当成连不上，直到改掉其中一个别名（`noeta/plugins/mcp/config.py`）。
+服务器的工具以 `mcp__<别名>__<工具名>` 的形式提供：工具名里 `[A-Za-z0-9_-]` 以外的字符换成 `_`，大小写不变，不截断。同一个服务器的两个工具名换完以后撞了，就各自加上 `_` 和原名 SHA-256 的前 8 位十六进制（原名本来就没有要替换的字符的，保持原样）。全名超过 128 个字符的工具不提供（服务器日志会说明，把服务器名改短就能解决）。两个服务器产生了同一个工具名算冲突：后一个会被当成连不上，直到改掉其中一个别名（`noeta/plugins/mcp/config.py`，`extension.py` 的 `refresh`）。
 
-noeta 早期会把别名转小写、把工具名截到 64 个字符。按旧名字写的权限规则、hook 匹配和 `--disallowedTools` 仍然认，但只用于收紧：旧名字在拒绝规则和询问规则里有效，在允许规则里无效（`noeta/core/mcp_names.py`）。
+noeta 早期会把别名转小写（并截到 32 个字符）、把工具名截到 64 个字符。按旧名字写的权限规则、hook 匹配和 `--disallowedTools` 仍然认，但只用于收紧：旧名字在拒绝规则和询问规则里有效，在允许规则里无效（`noeta/core/mcp_names.py`）。
 
 ### 延后加载
 

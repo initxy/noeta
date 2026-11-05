@@ -28,7 +28,8 @@ noeta 有两套配置，管的是不同的事：
    `models_file`；
 4. 只对模型：上面都没指定时，用设置文件里的 `model`。
 
-没配 API key 时，`anthropic` 会去读 `ANTHROPIC_API_KEY`，`openai_compat` 会去读 `OPENAI_API_KEY`。
+没配 API key 时，`anthropic` 会去读 `ANTHROPIC_API_KEY`，`openai_compat` 会去读 `OPENAI_API_KEY`；
+`openai_responses` 不读任何变量。
 还是没有就启动失败，并告诉你该在哪儿设。存储默认是 `sqlite:///~/.noeta/tasks.db`。
 
 一个完整的 `config.toml` 大概长这样：
@@ -108,7 +109,7 @@ cd ~/code/some-project
 noeta trust
 ```
 
-或者在终端界面第一次打开这个目录、问你时选"Yes, I trust this folder"。信任过的目录记在
+或者在终端界面第一次打开这个目录、问你时选"Yes, I trust this folder"（选"No, exit"就直接退出）。信任过的目录记在
 `~/.noeta/trusted.json`（`noeta/cli/trust.py`），按 noeta 启动时所在的那个目录精确匹配。
 
 | 项目里的东西 | 信任之前 | 信任之后 |
@@ -117,7 +118,8 @@ noeta trust
 | `.noeta/plugins/`（Python 插件文件、Claude Code 插件目录） | 不加载，并提示 | 加载 |
 | `.noeta/agents/` | 不加载，并提示 | 加载 |
 | `.noeta/skills/`、`.agents/skills/` | 不加载，并提示 | 加载 |
-| `.noeta/prompts/`（提示词覆盖） | 不读 | 读 |
+| `.noeta/commands/` | 不加载 | 加载 |
+| `.noeta/prompts/`（提示词覆盖） | 不读，并提示 | 读 |
 | `.noeta/mcp.json` | 服务器永远不启动 | 还要项目自己的设置文件点头才启动：`enableAllProjectMcpServers: true`，或者把它的名字写进 `enabledMcpjsonServers` |
 | `NOETA.md`、`.noeta/NOETA.md`、`NOETA.local.md`、`.noeta/rules/`、`AGENTS.md` | 读 | 读 |
 
@@ -125,7 +127,8 @@ noeta trust
 在你自己的 `~/.noeta/settings.json` 里对某个项目 MCP 服务器点的头不算数，这样一个仓库就没法借用同名
 服务器、蹭你的同意启动它。
 
-设置文件和插件目录只在前端或服务端启动时、按启动目录读一次。提示词覆盖、技能和权限检查看的则是每个
+设置文件和插件目录只在前端或服务端启动时、按启动目录读一次。在终端界面的询问里选了信任，项目的插件、
+代理、技能和提示词会马上加载；它的设置文件（以及对 `.noeta/mcp.json` 的同意）要等下次启动才读。提示词覆盖、技能和权限检查看的则是每个
 任务自己的工作目录，所以在服务端上，跑在未信任目录里的任务拿不到那个目录的提示词和技能。
 
 ## 项目说明：`NOETA.md` 和 `AGENTS.md`
@@ -142,7 +145,8 @@ noeta trust
 | `NOETA.local.md` | 你自己对这个项目的，不进 git |
 | `.noeta/rules/*.md` | 规则，可以在 frontmatter 里用 `paths:` 限定只对某些文件生效 |
 
-文件里的 `@path` 会把另一个文件一起读进来（最多嵌套五层）。从项目文件出发的引用必须落在工作目录或
+文件里的 `@path` 会把另一个文件一起读进来；最多往下嵌套四层（发起引用的文件算第 0 层，第 5 层的
+文件不读）。从项目文件出发的引用必须落在工作目录或
 发起这串引用的文件所在目录之内。`/init` 会为项目写一份 `NOETA.md`。详见
 [项目说明与记忆](../guides/memory-and-instructions.md)。
 
@@ -157,15 +161,17 @@ noeta trust
 | `~/.noeta/tasks.db` | 默认的 sqlite 存储：所有任务的日志 |
 | `~/.noeta/trusted.json` | 信任过的项目 |
 | `~/.noeta/agents/`、`<项目>/.noeta/agents/` | 代理文件；同名时后读的为准 |
-| `~/.noeta/skills/`、`~/.agents/skills/`、`.noeta/skills/`、`.agents/skills/` | 技能，项目及其上级目录里的都算 |
+| `~/.noeta/skills/`、`<项目>/.noeta/skills/`、`<项目>/.agents/skills/` | 技能；项目里的从工作目录往上一直找到仓库根目录 |
 | `~/.noeta/commands/`、`<项目>/.noeta/commands/` | 斜杠命令（Claude Code 的 `commands/*.md`） |
 | `~/.noeta/prompts/`、`<项目>/.noeta/prompts/` | 按提示词名字覆盖提示词 |
 | `~/.noeta/plugins/`、`<项目>/.noeta/plugins/` | 插件文件和 Claude Code 插件目录 |
+| `~/.noeta/plugin-sources.json` | 每个用 `noeta plugin add` 装的插件是从哪装的 |
 | `~/.noeta/plugin-data/<name>/` | Claude Code 插件的 `${CLAUDE_PLUGIN_DATA}` |
 | `~/.noeta/mcp-auth/` | MCP 登录凭据和 OAuth 客户端密钥（只有你能读） |
 | `~/.noeta/server-token` | `noeta serve` 的 token 的 SHA-256 |
 | `~/.noeta/cache/models/` | 各 provider 的模型列表，缓存一天 |
 | `~/.noeta/tool-results/<任务>/` | 太长、没法直接返回的工具输出 |
+| `~/.noeta/image-cache/<任务>/` | 粘贴进提示词的图片 |
 | `~/.noeta/plans/`、`~/.noeta/projects/<项目>/memory/`、`~/.noeta/agent-memory/` | 计划文件和自动记忆 |
 | `~/.noeta/device_id` | 一个随机的设备 id，Claude Code 也会在 `metadata.user_id` 里发这个 |
 

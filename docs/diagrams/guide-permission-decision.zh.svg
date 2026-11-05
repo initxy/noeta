@@ -57,5 +57,5 @@
 <text x="780" y="339" class="ntd-mini" text-anchor="middle">问你</text>
 <path d="M600 271 L658 236" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
 <path d="M600 366 L658 320" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
-<text x="460" y="420" class="ntd-mini" text-anchor="middle">强制的问（询问规则、hook 要求确认、受保护路径）不走 bypass 也不交给分类器：要么问你，要么在 dontAsk 下直接拒绝。</text>
+<text x="460" y="420" class="ntd-mini" text-anchor="middle">强制的问（询问规则、hook 要求确认）不走 bypass 也不交给分类器；写受保护路径在 bypass 下照样要问。</text>
 </svg>

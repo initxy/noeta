@@ -27,13 +27,13 @@ The last tag: !`git describe --tags --abbrev=0`
 
 | 位置 | 什么时候读 |
 |---|---|
-| 机器统一管理的目录：`/etc/noeta/.noeta/skills`、`/etc/noeta/.noeta/commands` | 总是 |
+| 机器统一管理的目录里的 `.noeta/skills`（`/etc/noeta`，macOS 上是 `/Library/Application Support/Noeta`） | 总是 |
 | `~/.noeta/skills/<名字>/SKILL.md` | 总是 |
 | 工作目录及其上层各级目录（直到仓库根目录）里的 `.noeta/skills/` 和 `.agents/skills/`（近的优先；同一目录里 `.noeta` 先于 `.agents`） | 已信任的项目 |
 | 每个额外目录（`--add-dir`、`additionalDirectories`）里的同样位置 | 已信任的项目 |
-| `~/.noeta/commands/*.md`、`.noeta/commands/*.md` | 当作技能读（见下文） |
+| 统一管理目录的 `.noeta/commands/`、`~/.noeta/commands/`，再是项目和额外目录里的 `.noeta/commands/`（已信任的项目） | 其中的 `*.md` 当作技能读（见下文） |
 | Claude Code 插件的 `skills/` | 命名为 `<插件>:<技能>` |
-| 工作目录下层的 `.noeta/skills` 和 `.agents/skills`，在文件工具碰到那里的文件后才发现 | 已信任的项目；命名为 `<目录>:<技能>`（如 `apps/web:deploy`），不会顶掉同名技能 |
+| 工作目录下层的 `.noeta/skills` 和 `.agents/skills`，在文件工具碰到那里的文件后才发现 | 已信任的项目；不会顶掉同名技能：名字被占了的，命名为 `<目录>:<技能>`（如 `apps/web:deploy`） |
 
 同一个名字，先找到的技能算数，和 Claude Code 一样；查找顺序是确定的，同样的目录树总得出同样的清单。比技能目录深一层以上的 `SKILL.md` 不算技能。Claude Code 的 `.claude/skills` 从来不读。没被信任的项目（见 [`noeta trust`](./terminal.md#安装和启动)）会跳过它的技能目录，并提示一句。每次有新输入时会重新查找技能，模型每次调用前如果某个 `SKILL.md` 变了也会重新查找，所以任务中途新加的技能能马上被发现。
 
@@ -100,9 +100,10 @@ You review code changes. Read the diff with `git diff`, …
 | `mcpServers` | 给它用的 MCP 服务器：直接写定义，或写别处配置好的名字 |
 | `hooks` | 它运行期间生效的 hook（作为子代理运行时，它的 `Stop` hook 变成 `SubagentStop`） |
 | `memory: user\|project\|local` | 它自己的记忆目录（见[代理记忆](./memory-and-instructions.md#代理记忆)） |
+| `isolation: worktree` | 作为子代理时，在自己单独的 git worktree 里跑 |
 | `initialPrompt`、`autoCompactWindow`、`criticalSystemReminder_EXPERIMENTAL` | 同 Claude Code |
 
-noeta 不处理的字段（`color`、`isolation`、`cacheTtl` 等）会记一次日志。没写 `plugins` 的文件（也就是普通的 Claude Code 代理文件）用默认那一套：权限、规划模式、预算、hook、shell、网页、MCP、文件、技能、项目说明、环境、子代理、压缩等等（`noeta/agents/__init__.py` 里的 `DEFAULT_PLUGINS`）。每个代理还都带着 `tool_search` 和 `structured_output`。
+noeta 不处理的字段（`cacheTtl`、`observer` 等）会记一次日志。没写 `plugins` 的文件（也就是普通的 Claude Code 代理文件）用默认那一套：权限、规划模式、预算、hook、shell、网页、MCP、文件、技能、项目说明、环境、子代理、压缩等等（`noeta/agents/__init__.py` 里的 `DEFAULT_PLUGINS`）。每个代理还都带着 `tool_search` 和 `structured_output`。
 
 ### 去哪里找代理文件
 

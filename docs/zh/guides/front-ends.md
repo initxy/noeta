@@ -55,7 +55,7 @@ npm start            # 构建并打开应用
 npm run dist         # 安装包：macOS dmg、Linux AppImage 和 deb（未签名）
 ```
 
-它在 `PATH` 以及 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找 `noeta`（从程序坞启动的应用拿不到登录 shell 的 `PATH`）；要指定别的位置，设 `NOETA_DESKTOP_NOETA`，或在应用的 `settings.json`（Settings，`⌘,`）里写 `noetaPath`。找不到时窗口里会显示安装命令，那条命令带着 `server` extra。File > Open Project Folder（`⌘O`）选新对话的工作目录；选过的每个目录都会作为服务器的 `--allow-root`。本地服务器挂了，窗口会显示它最后的输出，View > Reload 重新启动它。窗口在后台时，某个对话需要你、或者跑完了，会弹系统通知。
+它在 `PATH` 以及 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找 `noeta`（从程序坞启动的应用拿不到登录 shell 的 `PATH`）；要指定别的位置，设 `NOETA_DESKTOP_NOETA`，或在应用的 `settings.json`（Settings，`⌘,`）里写 `noetaPath`。找不到时窗口里会显示安装命令，那条命令带着 `server` extra。File > Open Project Folder（`⌘O`）选新对话的工作目录。服务器在你的主目录里运行，所以主目录下的文件夹直接就能用；主目录以外的文件夹会加成服务器的 `--allow-root`，服务器因此要重启（有对话正在跑或在等你时会先问一句；`desktop/src/main.ts`）。本地服务器挂了，窗口会显示它最后的输出，View > Reload 重新启动它。窗口在后台时，某个对话需要你、或者跑完了，会弹系统通知。
 
 桌面版总是跑自己的本地服务器；要连远端服务器，打开那台服务器提供的网页版。
 

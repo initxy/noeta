@@ -50,7 +50,7 @@ bytes.
 
   It is left out at the start and shown once a file it matches is touched.
 - **Imports:** `@path` in a file (outside code) imports that file right after it, with the same
-  kind, up to five levels deep; each file is read once. An import from a project or local file
+  kind, up to four imports deep; each file is read once. An import from a project or local file
   must stay inside the working directory or the folder of the file that began the chain
   (Claude Code asks before following one outside; noeta has no such prompt and skips it).
 - **Comments:** a leading YAML frontmatter is cut, and HTML comments standing as blocks of their
@@ -136,8 +136,8 @@ per file, kept across conversations (`noeta/plugins/memory/`). The `noeta` comma
   compaction.
 - **Recall (optional):** with `recall_model` set, each message of yours asks that model which
   memory files bear on it, and up to five are attached (each cut at 200 lines and 4,096 bytes; at
-  most 61,440 characters over a task). A memory changed more than a day ago comes with a note that
-  it may be out of date. A file the model already read is not recalled again.
+  most 61,440 characters over a task). A memory last changed two or more days ago comes with a note
+  that it may be out of date. A file the model already read is not recalled again.
 
 ```toml
 [plugins.memory]
@@ -167,8 +167,8 @@ A sub-agent without the memory plugin is shown its caller's index, without the m
 The `todos` plugin gives the model Claude Code's task list: `TaskCreate`, `TaskGet`,
 `TaskUpdate` and `TaskList` (all loaded through `ToolSearch`), and a reminder after ten model turns
 without them (`noeta/plugins/todos/`). As in Claude Code 2.1.312, only the Claude models older than
-its lean prompt (Claude 4.x and earlier) get them by default; the Claude 5 family and every other
-model (DeepSeek, a gateway's name) get none. To give them to every model:
+its lean prompt (Claude 3 and Claude 4, but not Opus 4.8) get them by default; the Claude 5 family
+and every other model (DeepSeek, a gateway's name) get none. To give them to every model:
 
 ```toml
 [plugins.todos]

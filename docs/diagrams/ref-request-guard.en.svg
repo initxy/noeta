@@ -39,5 +39,5 @@
 <path d="M 693 250 L 693 288" class="ntd-line-red" marker-end="url(#ref-request-guard-arrow-red)"/>
 <path d="M 854 250 L 854 288" class="ntd-line" marker-end="url(#ref-request-guard-arrow)"/>
 <rect x="166" y="290" width="422" height="40" rx="10" class="ntd-box ntd-dash"/>
-<text x="377.0" y="315.0" class="ntd-mini" text-anchor="middle">a WebSocket is closed with 4403 / 4401 instead</text>
+<text x="377.0" y="315.0" class="ntd-mini" text-anchor="middle">a refused WebSocket: handshake answered 403</text>
 </svg>

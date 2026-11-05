@@ -57,5 +57,5 @@
 <text x="780" y="339" class="ntd-mini" text-anchor="middle">asks you</text>
 <path d="M600 271 L658 236" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
 <path d="M600 366 L658 320" class="ntd-line" marker-end="url(#guide-permission-decision-arrow)"/>
-<text x="460" y="420" class="ntd-mini" text-anchor="middle">A firm ask (an ask rule, a hook&#x27;s ask, a protected path) skips bypass and the classifier: it asks you, or dontAsk refuses it.</text>
+<text x="460" y="420" class="ntd-mini" text-anchor="middle">A firm ask (an ask rule, a hook&#x27;s ask) skips bypass and the classifier; a protected path still asks in bypass.</text>
 </svg>

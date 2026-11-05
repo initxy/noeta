@@ -20,7 +20,7 @@ it waits, the parent holds no worker.
 | `ListAgents` | `subtasks` | The agents this task started, and the store's other open top-level tasks. Main conversation only. |
 | `Workflow` | `workflow` | Run a JavaScript script that starts many agents (`agent()`, `parallel()`, `pipeline()`, `phase()`). Returns a run id at once. |
 | `TaskStop` | `shell` (deferred) | Stop a background shell job, a `Monitor`, an agent this task started, or a `Workflow` run. |
-| `Bash` with `run_in_background`, `Monitor` | `shell` | Background commands whose end (or each output line, for `Monitor`) comes back as a notice. |
+| `Bash` with `run_in_background`, `Monitor` (deferred) | `shell` | Background commands whose end (or each output line, for `Monitor`) comes back as a notice. |
 | `ScheduleWakeup`, `CronCreate` / `CronList` / `CronDelete`, `/loop` | `schedule` | Prompts that fire later, once or on a cron schedule. |
 
 Deferred tools are named to the model and loaded through `ToolSearch` when it needs them (see
@@ -79,7 +79,8 @@ The child's config is built in this order, later steps winning
 3. The call's own `model` and `effort`.
 4. What every plugin of the parent passes on through `Extension.inherit`: the permissions
    plugin passes its remembered rules and, if the person switched mode during the task, the
-   current mode; memory, hooks, instructions, environment and plan mode pass their own pieces.
+   current mode; memory, hooks, instructions, environment, plan mode and `ask_user` pass their own
+   pieces.
 
 `model: inherit` means "the caller's model". The built-in `Explore` is capped at the Opus family:
 under a Fable caller it runs on Opus, as in Claude Code (`BUILTIN_INHERIT_CAP`,
@@ -118,8 +119,8 @@ After a hand-back, the notice does not wake the parent a second time: it is held
 has answered the report, then rides along with the next request. Without a hand-back (outside
 auto mode, or an agent whose tools exclude it), the child's last reply is the notice's
 `<result>`, and the notice itself wakes the parent. An agent that was offered a hand-back and
-ended without one delivers no result; the notice says so and suggests asking it with
-`SendMessage`.
+ended without one delivers no result; the notice says so and (for any type but `Explore` and
+`Plan`) suggests asking it with `SendMessage`.
 
 A sub-agent's task always runs **one turn**: it ends when its turn ends, whatever its agent file
 says (`TaskRun.one_shot`). If it started background agents of its own, it waits for them
@@ -141,7 +142,8 @@ A child that needs an approval or asks a question parks like any task: it logs `
 holds no worker. Front ends look across the whole tree (`noeta/host/pending.py`
 `pending_tree`), so the person sees and answers a sub-agent's approval from the main
 conversation. A task whose config has `unattended: true` (a host sets it for tasks nobody
-follows) ends with `needs_human` instead of waiting.
+follows) does not wait: it fails with `needs_human` (a sub-agent ends; a top-level task's turn
+ends and the task waits for its next message).
 
 ## Talking to a running or finished agent
 

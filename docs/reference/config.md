@@ -16,10 +16,10 @@ comes from and which wins is explained in [Configuration](../start/configuration
 | `model` | string | none (required somewhere) | the model new tasks run, an id or an alias | `--model`, `NOETA_MODEL` |
 | `provider` | string | `anthropic` | the default provider: a family (`anthropic`, `openai_compat`, `openai_responses`, or a provider package's) or the name of a `[providers.<name>]` table | `--provider`, `NOETA_PROVIDER` |
 | `base_url` | string | the family's | the default provider's base URL: the host for `anthropic`, `…/v1` for `openai_compat`, the whole `…/v1/responses` URL for `openai_responses` | `--base-url`, `NOETA_BASE_URL` |
-| `api_key` | string | none | the default provider's key, as a literal (no `{env:…}` here); without one, `anthropic` reads `ANTHROPIC_API_KEY` and `openai_compat` reads `OPENAI_API_KEY` | `NOETA_API_KEY` |
+| `api_key` | string | none | the default provider's key, as a literal (no `{env:…}` here); without one, `anthropic` reads `ANTHROPIC_API_KEY` and `openai_compat` reads `OPENAI_API_KEY`; `openai_responses` reads no variable and needs one | `NOETA_API_KEY` |
 | `extra_headers` | table of strings | none | headers sent with every request of the default provider | — |
 | `store` | string | `sqlite:///~/.noeta/tasks.db` | `sqlite:///path` or `postgres://…` | `--store`, `NOETA_STORE` |
-| `effort` | string | the model's | `low`, `medium`, `high`, `xhigh` or `max` | `--effort`, `NOETA_EFFORT` |
+| `effort` | string | the model's | `low`, `medium`, `high`, `xhigh` or `max`, for the tasks the terminal UI and `-p` start | `--effort`, `NOETA_EFFORT` |
 | `models_file` | path | none | a JSON file describing more models (below) | `NOETA_MODELS_FILE` |
 | `list_models` | bool | `true` | read the default provider's `/models` listing for models the catalog does not know | — |
 | `prompt_cache_ttl` | `"5m"` or `"1h"` | the API's (`5m`) | `anthropic` only: the one-hour prompt cache, billed higher per write | — |
@@ -193,12 +193,12 @@ Variables noeta reads (grepped across `noeta/` and `tui/`):
 | `NOETA_MCP_TIMEOUT` | `mcp` | milliseconds for every MCP request but a tool call (default 30 s) |
 | `NOETA_MCP_TOOL_TIMEOUT` | `mcp` | milliseconds for one MCP tool call when the server sets none (default: in effect no limit) |
 | `NOETA_MAX_MCP_OUTPUT_TOKENS` | `mcp` | an MCP result's size before it is saved to a file instead (default 25,000) |
-| `NOETA_MAX_MCP_DESCRIPTION_LENGTH` | `mcp` | the cap on MCP tool descriptions and server instructions (default 4,096 characters) |
+| `NOETA_MAX_MCP_DESCRIPTION_LENGTH` | `mcp` | the cap on MCP tool descriptions and server instructions (default 4,096 characters, 16,384 for a deferred tool once loaded; the variable sets both) |
 | `NOETA_TERMINAL_MCP_TOOLS` | `mcp` | comma-separated full MCP tool names whose result ends the turn |
 | `NOETA_MCP_OAUTH_CALLBACK_PORT` | `mcp` | the OAuth redirect port |
-| `NOETA_MCP_CLIENT_SECRET` | `noeta mcp add` | the OAuth client secret, instead of typing it (never passed to commands) |
+| `NOETA_MCP_CLIENT_SECRET` | `noeta mcp add` / `add-json` with `--client-secret` | the OAuth client secret, instead of typing it (never passed to commands) |
 | `NOETA_WEB_SEARCH_API_KEY` | `web` | the Tavily key that turns on `WebSearch` (never passed to commands) |
-| `TZ` | terminal UI, `-p`, `acp` | the person's time zone, sent with each new task as its `timezone` |
+| `TZ` | terminal UI, `-p`, `acp` | the person's time zone, sent with each new task as its `timezone` (else the zone `/etc/localtime` or `/etc/timezone` names) |
 | `VISUAL`, `EDITOR` | terminal UI | the editor `/memory` and `/config edit` open |
 
 Variables noeta sets for what it starts:
@@ -210,8 +210,10 @@ Variables noeta sets for what it starts:
 | `CLAUDE_PLUGIN_OPTION_<KEY>` | a Claude Code plugin's hooks | its `userConfig` values |
 
 In skill and command bodies, `${NOETA_SKILL_DIR}` / `${CLAUDE_SKILL_DIR}`,
-`${NOETA_PROJECT_DIR}` / `${CLAUDE_PROJECT_DIR}` and `${NOETA_EFFORT}` / `${CLAUDE_EFFORT}`
-are substituted.
+`${NOETA_PROJECT_DIR}` / `${CLAUDE_PROJECT_DIR}`, `${NOETA_EFFORT}` / `${CLAUDE_EFFORT}` and
+`${CLAUDE_SESSION_ID}` (the root task's id) are substituted. In a Claude Code plugin's files,
+`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}` (`~/.noeta/plugin-data/<name>`) and
+`${user_config.KEY}` are too.
 
 Every variable a `{env:NAME}` reference in noeta's config names is withheld from commands,
 hooks and MCP servers too, as are `PGPASSWORD`, `PGPASSFILE`, `PGSERVICE` and

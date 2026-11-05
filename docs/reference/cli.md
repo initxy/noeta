@@ -9,7 +9,7 @@ terminal UI. For a guided tour see [The terminal UI and -p](../guides/terminal.m
 ## Overview
 
 ```text
-noeta [flags] [prompt]          the terminal UI; with -p (or a stream-json format) headless
+noeta [flags] [prompt]          the terminal UI; headless with -p, --output-format or --input-format stream-json
 noeta acp [--server URL]        Agent Client Protocol on stdio, for editors
 noeta serve [flags]             the HTTP / WebSocket API, with workers unless --no-worker
 noeta worker [flags]            run tasks from the store until stopped
@@ -43,11 +43,16 @@ Taken by the terminal UI, `-p`, `acp`, `serve` and `worker`.
 No model from any of these is an error (`noeta: no model configured`), except for a front end
 attached with `--server`, which uses the server's.
 
+`--permission-mode` and `--effort` (with `NOETA_EFFORT` and `config.toml` `effort`) apply only to
+the tasks the terminal UI and `-p` start. `acp`, `serve` and `worker` accept them and do not use
+them: there the editor or the API client sets a task's mode and effort.
+
 ## The terminal UI: `noeta`
 
-`noeta` with no prompt and no headless flag opens the terminal UI (the `noeta-tui` package,
-found through the `noeta.frontends` entry point; noeta prints the install line when it is
-missing). In a folder not yet trusted it first asks whether to trust it.
+`noeta` with no headless flag opens the terminal UI (the `noeta-tui` package, found through the
+`noeta.frontends` entry point; noeta prints the install line when it is missing). A prompt given
+without `-p` is not used: the UI opens with an empty input. In a folder not yet trusted it first
+asks whether to trust it; "No, exit" quits.
 
 | Flag | Meaning |
 |---|---|
@@ -111,9 +116,10 @@ on stderr: `--fallback-model`, `--betas`, `--max-thinking-tokens`, `--thinking`,
 `--allow-dangerously-skip-permissions`, `--exclude-dynamic-system-prompt-sections`,
 `--forward-subagent-text`, `--disable-slash-commands`.
 
-**Exit code:** 0 when the result is a success, 1 on an error result, a bad flag, an empty
-prompt, or no task to continue. With `--input-format stream-json` the code is 0 when stdin
-ends.
+**Exit code:** 0 when the result is a success, 1 on an error result, a flag value noeta cannot
+use, no model, an empty prompt, or no task to continue; 2 on an unknown flag or a malformed
+command line (argparse). With `--input-format stream-json` the code follows the last result
+when stdin ends (0 when no prompt ran).
 
 **The result** (`json`, and the last `stream-json` line of each prompt) has Claude Code's
 fields: `type: "result"`, `subtype` (`success`, `error_during_execution`,
@@ -141,8 +147,8 @@ Editor setup is in [Web, desktop and editors](../guides/front-ends.md).
 
 ## `noeta serve`
 
-The client API over HTTP and WebSocket (the `server` extra), plus workers and channels in the
-same process unless `--no-worker`. Endpoints are in [HTTP / WebSocket API](./http-api.md).
+The client API over HTTP and WebSocket (the `server` extra), plus the channels `config.toml`
+enables and, unless `--no-worker`, workers, all in the same process. Endpoints are in [HTTP / WebSocket API](./http-api.md).
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -180,7 +186,8 @@ job are released and told the job is lost at their next turn.
 ## `noeta trust`
 
 Adds the current folder (or `--cwd`) to `~/.noeta/trusted.json`. From then on its
-`.noeta/settings*.json`, agents, skills, prompt overrides and plugins load
+`.noeta/settings*.json`, `.noeta/mcp.json` (with consent), agents, skills, commands, prompt
+overrides and plugins load
 ([Configuration](../start/configuration.md#trust)).
 
 ## `noeta plugins`
@@ -251,10 +258,10 @@ The terminal UI's own commands (`tui/src/noeta_tui/slash.py`):
 | `/hooks` | the hooks configured (read-only) |
 | `/rewind` | go back to before a prompt: conversation, code or both (also Esc Esc) |
 | `/clear`, `/new` | start a new task |
-| `/resume [N]` | pick a task to resume |
+| `/resume [N]` | pick a task to resume; with `N` (a number from the list) or a task id, open it |
 | `/stop` | stop the turn (also Esc) |
 | `/reload-plugins` | load the plugin and agent files again, from the next turn on |
-| `/exit` | quit |
+| `/exit`, `/quit` | quit |
 
 Commands the agent's plugins offer (`noeta/core/commands.py` lists and expands them; every
 front end shows them, and `POST /tasks/{id}/messages` runs them):
@@ -274,4 +281,6 @@ front end shows them, and `POST /tasks/{id}/messages` runs them):
 
 Keys in the terminal UI: Esc stops the turn; Esc Esc clears the input, or on an empty one
 opens `/rewind`; Shift+Tab cycles the permission mode; Ctrl+C clears the input (twice on an
-empty one quits); `!` at the start of the input runs a shell command (bash mode).
+empty one quits); `!` at the start of the input runs a shell command (bash mode); Ctrl+R
+searches earlier prompts; Ctrl+O expands or folds the tool calls; Ctrl+T shows or hides the
+to-do list; Ctrl+B shows or hides the side panel; Ctrl+V pastes an image.

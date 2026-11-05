@@ -100,8 +100,9 @@ partly, or not applied. Check its effect before running it again.
 除非这个工具能自己查出结果（`Tool.recover`），或者声明了重跑无害（`retry_safe`）。模型读到这段话，一般会先去核实。
 除非工人经常死，否则不需要处理（见[单写者与崩溃恢复](../how-it-works/recovery.md)）。
 
-后台 `Bash` 任务所在的工人死掉时，模型会收到 `background job '…' was lost: the worker process running it
-stopped, so its further output and exit status are unknown`。后台命令只活在一个工人进程里，没法重新接上。
+后台 `Bash` 任务所在的工人死掉时，模型会收到 `Background command "…" was lost: the worker process
+running it stopped, so its further output and exit status are unknown`（`Monitor` 则是
+`Monitor "…" was lost: …`）。后台命令只活在一个工人进程里，没法重新接上。
 
 ## 插件
 
@@ -110,7 +111,7 @@ stopped, so its further output and exit status are unknown`。后台命令只活
 | `(failed) <path>: <error>; install it next to noeta: uv tool install --reinstall --with <module> '…'`（来自 `noeta plugins` 或 `/reload-plugins`） | 插件文件 import 了 noeta 所在环境里没有的模块。`noeta plugin add` 故意不装任何依赖。 | 照打出来的那行装，并把你已经在用的可选依赖和 `--with` 都写上。 |
 | `plugin file <path>: 'name' joins no agent; set add_to = ("main",) on its class, or [agents.main] add_plugins = ["name"] in config.toml` | 插件加载了，但没有哪个代理用它。 | 照提示二选一（见[写一个插件](../guides/plugins.md)）。 |
 | `<project>/.noeta/plugins was not loaded: this project is not trusted (run `noeta trust` in <project> to load its plugins)` | 项目里的 `.noeta/plugins`、`.noeta/agents`、`.noeta/prompts`、`.noeta/skills`、`.agents/skills` 只有在你信任这个项目之后才加载。 | 在项目目录里跑 `noeta trust`，或者在终端界面里回答信任提问。 |
-| 插件一直不出现，也没有报错 | 机器级的 `/etc/noeta/config.toml` 里 `[policy]` 把它列进了 `blocked_plugins`，或者设了 `allowed_plugins` 却没写它。这份策略压过所有用户和项目设置。 | 找管这台机器的人。 |
+| 插件一直不出现，也没有报错 | 机器级的 `/etc/noeta/config.toml` 里 `[policy]` 把它列进了 `blocked_plugins`，或者设了 `allowed_plugins` 却没写它（这个名单只管 noeta 自带插件以外的）。这份策略压过所有用户和项目设置。 | 找管这台机器的人。 |
 | 任务以 `plugin_missing: this task runs with <names>, which the worker that claimed it does not have; install them there (or run the task where they are)` 结束 | 见下。 | 每台工人都装上这个插件。 |
 
 ### 工人缺了任务要用的插件

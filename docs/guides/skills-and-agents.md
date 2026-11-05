@@ -33,13 +33,13 @@ by its directory; the frontmatter `name` is only a display name (`noeta/plugins/
 
 | Place | Read |
 |---|---|
-| the machine's managed directory: `/etc/noeta/.noeta/skills`, `/etc/noeta/.noeta/commands` | always |
+| the machine's managed directory's `.noeta/skills` (`/etc/noeta`, `/Library/Application Support/Noeta` on macOS) | always |
 | `~/.noeta/skills/<name>/SKILL.md` | always |
 | `.noeta/skills/` and `.agents/skills/` in the working directory and each directory above it up to the repository's root (nearest first; `.noeta` before `.agents` in one directory) | trusted projects |
 | the same in each additional directory (`--add-dir`, `additionalDirectories`) | trusted projects |
-| `~/.noeta/commands/*.md`, `.noeta/commands/*.md` | as skills (below) |
+| the managed directory's `.noeta/commands/`, `~/.noeta/commands/`, then the project's and additional directories' `.noeta/commands/` (trusted projects) | `*.md` files, as skills (below) |
 | a Claude Code plugin's `skills/` | named `<plugin>:<skill>` |
-| `.noeta/skills` and `.agents/skills` below the working directory, once a file tool touches a file there | trusted projects; named `<dir>:<skill>` (`apps/web:deploy`), never shadowing |
+| `.noeta/skills` and `.agents/skills` below the working directory, once a file tool touches a file there | trusted projects; never shadowing: one whose name is taken is named `<dir>:<skill>` (`apps/web:deploy`) |
 
 The first skill found under a name wins, as in Claude Code, and the order is deterministic, so
 the same tree always gives the same listing. A skill directory more than one level deep holds no
@@ -129,9 +129,10 @@ You review code changes. Read the diff with `git diff`, …
 | `mcpServers` | MCP servers for it: inline definitions, or names configured elsewhere |
 | `hooks` | Hooks while it runs (its `Stop` hooks become `SubagentStop` when it runs as a sub-agent) |
 | `memory: user\|project\|local` | Its own memory directory ([memory](./memory-and-instructions.md#agent-memory)) |
+| `isolation: worktree` | As a sub-agent, runs in a git worktree of its own |
 | `initialPrompt`, `autoCompactWindow`, `criticalSystemReminder_EXPERIMENTAL` | as in Claude Code |
 
-A field noeta does not act on (`color`, `isolation`, `cacheTtl`, …) is logged once. A file with
+A field noeta does not act on (`cacheTtl`, `observer`, …) is logged once. A file with
 no `plugins` (a plain Claude Code agent file) gets the default set: permissions, plan mode,
 budget, hooks, shell, web, MCP, files, skills, instructions, environment, sub-agents, compaction
 and a few more (`noeta/agents/__init__.py` `DEFAULT_PLUGINS`). Every agent also runs

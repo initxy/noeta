@@ -233,14 +233,14 @@ noeta -p --output-format stream-json --verbose "count the Python files" | jq -c 
 出去的消息：
 
 - 先发 `system` / `init`：目录、工具、模型、权限模式、斜杠命令、代理。
-- 模型每回复一次发一条 `assistant`；每个工具结果发一条 `user`。
+- 模型每回复一次发一条 `assistant`；每个工具结果发一条 `user`；工具运行期间发 `tool_progress`。
 - 加了 `--include-partial-messages` 时发 `stream_event`（Anthropic 的流式事件）。
 - `system` 通知：`compact_boundary`、`task_started` 和 `task_notification`（子代理）、`status`、`local_command_output`、`informational`。
 - 一句提问的活干完后发一条 `result`，内容同 `json` 格式。
 
 ### 用 Claude Code 的 Agent SDK 来驱动
 
-noeta 讲这套协议、认 Claude Code 的参数，所以为 Claude Code 的 Agent SDK 写的程序可以直接换成 noeta：把 SDK 的可执行文件指向 `noeta` 即可（Python SDK 里是 `ClaudeAgentOptions(cli_path=...)`，TypeScript 里是 `pathToClaudeCodeExecutable`）。SDK 会带着 `--output-format stream-json --verbose --input-format stream-json` 和其他参数启动它；noeta 认识的参数照办，不认识的在 stderr 上点名。
+noeta 讲这套协议、认 Claude Code 的参数，所以为 Claude Code 的 Agent SDK 写的程序可以直接换成 noeta：把 SDK 的可执行文件指向 `noeta` 即可（Python SDK 里是 `ClaudeAgentOptions(cli_path=...)`，TypeScript 里是 `pathToClaudeCodeExecutable`）。SDK 会带着 `--output-format stream-json --verbose --input-format stream-json` 和其他参数启动它；noeta 用得上的参数照办，接受但用不上的在 stderr 上点名。
 
 ```python
 from claude_agent_sdk import ClaudeAgentOptions, query

@@ -15,10 +15,10 @@
 | `model` | 字符串 | 无（总得有个地方设） | 新任务用的模型，id 或别名 | `--model`、`NOETA_MODEL` |
 | `provider` | 字符串 | `anthropic` | 默认 provider：一种类型（`anthropic`、`openai_compat`、`openai_responses` 或第三方包提供的），或某个 `[providers.<name>]` 表的名字 | `--provider`、`NOETA_PROVIDER` |
 | `base_url` | 字符串 | 该类型的默认地址 | 默认 provider 的地址：`anthropic` 只写主机，`openai_compat` 写到 `…/v1`，`openai_responses` 写完整的 `…/v1/responses` | `--base-url`、`NOETA_BASE_URL` |
-| `api_key` | 字符串 | 无 | 默认 provider 的 key，只能写明文（这里不支持 `{env:…}`）；不写时 `anthropic` 读 `ANTHROPIC_API_KEY`，`openai_compat` 读 `OPENAI_API_KEY` | `NOETA_API_KEY` |
+| `api_key` | 字符串 | 无 | 默认 provider 的 key，只能写明文（这里不支持 `{env:…}`）；不写时 `anthropic` 读 `ANTHROPIC_API_KEY`，`openai_compat` 读 `OPENAI_API_KEY`；`openai_responses` 不读任何变量，必须写 | `NOETA_API_KEY` |
 | `extra_headers` | 字符串表 | 无 | 默认 provider 每次请求都带的请求头 | — |
 | `store` | 字符串 | `sqlite:///~/.noeta/tasks.db` | `sqlite:///path` 或 `postgres://…` | `--store`、`NOETA_STORE` |
-| `effort` | 字符串 | 模型自己的 | `low`、`medium`、`high`、`xhigh` 或 `max` | `--effort`、`NOETA_EFFORT` |
+| `effort` | 字符串 | 模型自己的 | `low`、`medium`、`high`、`xhigh` 或 `max`，对终端界面和 `-p` 新开的任务生效 | `--effort`、`NOETA_EFFORT` |
 | `models_file` | 路径 | 无 | 描述更多模型的 JSON 文件（见下） | `NOETA_MODELS_FILE` |
 | `list_models` | 布尔 | `true` | 对目录里没有的模型，去读默认 provider 的 `/models` 列表 | — |
 | `prompt_cache_ttl` | `"5m"` 或 `"1h"` | 接口默认的（`5m`） | 仅 `anthropic`：一小时的提示词缓存，每次写入计费更高 | — |
@@ -185,12 +185,12 @@ noeta 会读的变量（在 `noeta/` 和 `tui/` 里逐个查过）：
 | `NOETA_MCP_TIMEOUT` | `mcp` | 除工具调用外每个 MCP 请求的超时，毫秒（默认 30 秒） |
 | `NOETA_MCP_TOOL_TIMEOUT` | `mcp` | 服务器没设时，一次 MCP 工具调用的超时，毫秒（默认相当于不限） |
 | `NOETA_MAX_MCP_OUTPUT_TOKENS` | `mcp` | MCP 结果超过这个大小就改存文件（默认 25,000） |
-| `NOETA_MAX_MCP_DESCRIPTION_LENGTH` | `mcp` | MCP 工具描述和服务器说明的长度上限（默认 4,096 字符） |
+| `NOETA_MAX_MCP_DESCRIPTION_LENGTH` | `mcp` | MCP 工具描述和服务器说明的长度上限（默认 4,096 字符，延迟加载的工具加载后是 16,384；设了这个变量就两者都按它） |
 | `NOETA_TERMINAL_MCP_TOOLS` | `mcp` | 逗号分隔的完整 MCP 工具名，它们返回结果后这一轮就结束 |
 | `NOETA_MCP_OAUTH_CALLBACK_PORT` | `mcp` | OAuth 回调端口 |
-| `NOETA_MCP_CLIENT_SECRET` | `noeta mcp add` | OAuth 客户端密钥，省得手敲（不会传给命令） |
+| `NOETA_MCP_CLIENT_SECRET` | 带 `--client-secret` 的 `noeta mcp add` / `add-json` | OAuth 客户端密钥，省得手敲（不会传给命令） |
 | `NOETA_WEB_SEARCH_API_KEY` | `web` | Tavily 的 key，设了才有 `WebSearch` 工具（不会传给命令） |
-| `TZ` | 终端界面、`-p`、`acp` | 你的时区，随每个新任务作为 `timezone` 发出 |
+| `TZ` | 终端界面、`-p`、`acp` | 你的时区，随每个新任务作为 `timezone` 发出（没设就用 `/etc/localtime` 或 `/etc/timezone` 指的时区） |
 | `VISUAL`、`EDITOR` | 终端界面 | `/memory` 和 `/config edit` 打开的编辑器 |
 
 noeta 给它启动的东西设的变量：
@@ -202,7 +202,9 @@ noeta 给它启动的东西设的变量：
 | `CLAUDE_PLUGIN_OPTION_<KEY>` | Claude Code 插件的 hooks | 它的 `userConfig` 值 |
 
 技能和命令正文里的 `${NOETA_SKILL_DIR}` / `${CLAUDE_SKILL_DIR}`、`${NOETA_PROJECT_DIR}` /
-`${CLAUDE_PROJECT_DIR}`、`${NOETA_EFFORT}` / `${CLAUDE_EFFORT}` 会被替换成实际的值。
+`${CLAUDE_PROJECT_DIR}`、`${NOETA_EFFORT}` / `${CLAUDE_EFFORT}`，以及 `${CLAUDE_SESSION_ID}`（根任务的
+id）会被替换成实际的值。Claude Code 插件的文件里，`${CLAUDE_PLUGIN_ROOT}`、`${CLAUDE_PLUGIN_DATA}`
+（`~/.noeta/plugin-data/<name>`）和 `${user_config.KEY}` 也会被替换。
 
 noeta 配置里每个 `{env:NAME}` 引用到的变量，同样不会传给命令、hook 和 MCP 服务器；存储用 Postgres
 时，`PGPASSWORD`、`PGPASSFILE`、`PGSERVICE`、`PGSERVICEFILE` 也一样（`noeta/toolkit/local_env.py`）。

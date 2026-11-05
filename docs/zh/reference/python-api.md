@@ -18,7 +18,7 @@
 
 按类型找 provider 适配器（`noeta.providers` entry point：`anthropic`、`openai_compat`、
 `openai_responses`，或第三方的）。关键字参数交给它的工厂函数；内置的接受 `api_key=`、`base_url=`
-和 `extra_headers=`。`openai_compat` 必须给 `base_url`（以 `/v1` 结尾）；`openai_responses` 必须
+和 `extra_headers=`。`openai_compat` 必须给 `base_url`（接口根地址，后面会拼上 `/chat/completions`，比如 `…/v1`）；`openai_responses` 必须
 同时给 `base_url`（完整的 `…/v1/responses` 地址）和 `api_key`。不给 `api_key` 时，`anthropic` 读
 `ANTHROPIC_API_KEY`，`openai_compat` 读 `OPENAI_API_KEY`；`anthropic` 还接受
 `prompt_cache_ttl="1h"`。
@@ -30,7 +30,7 @@
 
 | 参数 | 含义 |
 |---|---|
-| `model` | 所有代理用的模型，除非代理文件另有指定（`model: inherit` 用任务的模型） |
+| `model` | 所有代理用的模型，除非代理文件另有指定；写了 `model: inherit`（或没写 `model`）的代理用它，作为子代理时用调用方的模型 |
 | `plugins` | 按插件名：它的参数（映射；`enabled: False` 表示关掉）、一个现成的 `Extension`，或 `False`（从所有代理里去掉）。`memory`、`mcp`、`repetition_guard` 要在这里写上设置才开 |
 | `add` | 按代理名（`"*"` 表示全部）：在文件自带的插件之后再加，写成 `(名字, 参数)` 对 |
 | `extensions` | 加给每个代理的 `Extension` 实例 |
@@ -40,7 +40,7 @@
 
 ### `noeta.parse_agent_file(text, *, source="", default_name="") -> AgentFile`
 
-读一个代理文件：YAML frontmatter 用 Claude Code 的字段（外加 `plugins` 和 `one_shot`），正文是系统
+读一个代理文件：YAML frontmatter 用 Claude Code 的字段（外加 `plugins`、`one_shot` 和 `identity`），正文是系统
 提示词。文件格式不对时抛 `AgentFileError`。
 
 ### `noeta.read_agent_dir(path) -> list[AgentFile]`
@@ -69,6 +69,9 @@
 | `allowed_tools` | `None` | 只提供这些工具名（`None` 表示全部） |
 | `denied_tools` | `()` | 永远不提供的工具名 |
 
+`all_extensions()` 返回任务实际运行的插件列表：`extensions`，前面再加上把 `tools` 包成的
+`ToolSet`；有两个插件同名或有插件没名字时抛 `ValueError`。
+
 ## 运行任务
 
 ### `noeta.Runtime`
@@ -96,6 +99,7 @@
 | `snapshot_every` | `100` | 每隔多少个事件写一次重放快照；`0` 表示不写 |
 | `agent_aliases` | `{}` | 代理的旧名字 -> 现在的名字，给用旧名记录的任务用 |
 | `roots` | `None` | 只服务这些任务树（一个集合，前端往里加）；`None` 表示服务所有任务 |
+| `sleep` | `asyncio.sleep` | 模型调用重试之间怎么等（测试里换成假的） |
 
 方法：
 
@@ -108,6 +112,8 @@
 | `await preview(task_id) -> ModelRequest \| None` | 任务下一次调用模型时的请求起点，不记录任何东西 |
 | `serve_root(root_id)` | 把一棵任务树加进 `roots`，并立刻找活干 |
 | `agent(name) -> Agent \| None` | 按名字或旧名字找代理 |
+| `provider_of(state, model) -> Provider` | 任务这次调用发给哪个 provider：设了 `task_provider` 就用它，否则用 `provider_for` |
+| `await run_claim(claim)` | 运行调用方已经拿到的一次认领，直到任务开始等待或结束 |
 
 ### `noeta.LocalApp(store, agents, provider, *, own_tasks_only=False, task_config=None, channels=(), **runtime_kw)`
 
@@ -121,20 +127,23 @@
 | `own_tasks_only` | 只服务自己创建或接手的任务树 |
 | `task_config` | 垫在每个新任务配置下面（`prompts` 按键合并） |
 | `channels` | 启动后一起运行的渠道（`Channel`） |
-| `**runtime_kw` | 传给 `Runtime`（`spill_root` 默认是一个临时目录） |
+| `**runtime_kw` | 传给 `Runtime`（`spill_root` 默认是系统临时目录下的 `noeta-<uid>/tool-results`；`poll_interval` 固定为 0.2，不能再传） |
 
 | 成员 | 说明 |
 |---|---|
-| `client` | 一个 `Client`，它创建的新任务由这个应用的 worker 执行 |
+| `client` | 一个 `LocalClient`（`Client` 的子类），它创建的新任务由这个应用的 worker 执行；它把 `task_config` 垫在每个新任务下面，并把代理文件的 `initialPrompt` 放在新对话第一条消息前面 |
 | `runtime`、`store` | 各个部分 |
 | `await start(worker=True)` / `await stop()`，或 `async with` | 在后台运行 worker 和渠道；停止时也会关闭存储 |
 | `deltas(sink) -> 取消订阅函数` | 实时输出：每个片段调用一次 `sink(task_id, Delta)`，用 Postgres 时也包括其他机器的 |
 | `await adopt(task_id)` | 接手一个已有任务的任务树（续聊时用）；这个应用没有那个代理时抛 `UnknownAgent` |
 | `replace_agents(agents)` | 从下一次接手任务起改用这些代理 |
+| `await agent_names()` | 所有代理的名字，排好序 |
 | `await commands(agent, ctx)`、`await run_command(agent, ctx, text)` | 某个代理的斜杠命令 |
 | `await context(task_id)` | 任务下一次请求里装了什么，按类别统计 |
 | `await summaries(limit=50, archived=None)`、`await archive(task_id, archived=True)` | 给续聊列表用的根任务 |
-| `notices`、`main_agent` | 前端该展示给人的提示；默认用的代理 |
+| `notices`、`main_agent` | 前端该展示给人的提示；默认用的代理（`"main"`） |
+| `channels` | 它运行的渠道 |
+| `reload_plugins`、`list_models`、`prepare_model` | 由宿主设置的回调（`noeta` 命令会设）：重新查找插件、列出各 provider 的模型、切换模型前先把它定下来；没设时为 `None` |
 
 ### `noeta.Client(store, *, poll_interval=0.5)`
 
@@ -153,12 +162,14 @@
 | `watch(task_id, after=0) -> AsyncIterator[Recorded]` | 从 `after` 开始实时吐出日志，任务结束为止 |
 | `await wait(task_id, *, timeout=None) -> TaskRow` | 等到任务开始等待或已结束 |
 
-`input` 是字符串，或一个 `noeta.core.types.Message`（由 `Text` 和 `Image` 块组成的用户发言）。
+`input` 是字符串，或一个 `noeta.core.types.Message`（由 `Text` 和 `Image` 块组成的用户发言）；
+图片在存下之前会缩到合适的大小。`history_from` 指向的任务不存在时抛 `UnknownTask`。
 
 ### `noeta.RemoteClient(url, *, token=None, transport=None)`
 
 方法和 `Client` 相同，走 `noeta serve` 服务端的 HTTP 接口（`noeta/host/remote.py`）；`watch` 会
-自动重连。`await close()` 关闭它的 HTTP 客户端。`transport` 是 `httpx` 的 transport（测试用）。
+自动重连。它还有 `await context(task_id)`（任务下一次请求里装了什么）和 `await close()`（关闭它的
+HTTP 客户端）。`transport` 是 `httpx` 的 transport（测试用）。
 
 ### `noeta.connect(url, *, token=None, **kw) -> Client | RemoteClient`
 

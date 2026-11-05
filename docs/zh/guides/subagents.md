@@ -14,7 +14,7 @@
 | `ListAgents` | `subtasks` | 列出本任务派出的子代理，以及存储里其他未结束的顶层任务。只在主对话里有。 |
 | `Workflow` | `workflow` | 跑一段 JavaScript 脚本，里面用 `agent()`、`parallel()`、`pipeline()`、`phase()` 派出多个子代理。立刻返回一个运行 id。 |
 | `TaskStop` | `shell`（按需加载） | 停掉后台 shell 命令、`Monitor`、本任务派出的子代理，或一次 `Workflow` 运行。 |
-| `Bash` 加 `run_in_background`、`Monitor` | `shell` | 后台命令；结束时（`Monitor` 是每输出一行）回一条通知。 |
+| `Bash` 加 `run_in_background`、`Monitor`（按需加载） | `shell` | 后台命令；结束时（`Monitor` 是每输出一行）回一条通知。 |
 | `ScheduleWakeup`、`CronCreate` / `CronList` / `CronDelete`、`/loop` | `schedule` | 过一会儿或按 cron 表达式触发的提示。 |
 
 "按需加载"的工具只把名字告诉模型，要用时再通过 `ToolSearch` 拿到完整定义（见[内置工具](../reference/tools.md)）。插件清单见[内置插件](../reference/plugins.md)。
@@ -49,7 +49,7 @@
 1. 从父任务配置里抄 `inherit_config` 列出的键。默认是 `cwd`、`model`、`effort`；内置 `main` 代理还多传一个 `permission_mode`。
 2. 代理定义里自己要求的：它自己的 `model`（除非写的是 `model: inherit`）、`effort`、`permissionMode`、`isolation: worktree`。
 3. 这次调用自己给的 `model` 和 `effort`。
-4. 父任务每个插件通过 `Extension.inherit` 往下传的东西：权限插件传它记住的规则，以及——如果这个任务中途切换过模式——当前模式；记忆、hooks、项目说明、环境信息和计划模式各传各的。
+4. 父任务每个插件通过 `Extension.inherit` 往下传的东西：权限插件传它记住的规则，以及——如果这个任务中途切换过模式——当前模式；记忆、hooks、项目说明、环境信息、计划模式和 `ask_user` 各传各的。
 
 `model: inherit` 的意思是"用调用方的模型"。内置 `Explore` 有个上限：最高到 Opus 这一档，调用方用 Fable 时它跑在 Opus 上，和 Claude Code 一样（`noeta/agents/agent_files.py` 里的 `BUILTIN_INHERIT_CAP`）。这个上限只管 Claude 官方的模型 id；别的 provider 的模型 id 原样继承。
 
@@ -68,7 +68,7 @@
 1. **报告。** 在 auto 模式下（看子代理继承到的权限模式；没装权限插件也当 auto），有这个工具的子代理会拿到 `SubagentHandback`。调用它就把报告当作一条带框的、来源为 `agent` 的消息（`Say`，`when="now"`）投给父任务，把父任务叫醒，同时结束子代理这次运行。报告超过 10 万字符时，全文存进子代理的长输出目录，父任务拿到的是一段预览和文件路径。
 2. **结束。** 每个任务结束时都会给父任务投一条 `ChildEnded`（状态、答案、token 用量、工具调用次数）（`noeta/core/runner/closing.py`）。`subtasks` 插件把它变成 Claude Code 的 `<task-notification>`：状态是 `completed`、`failed` 或 `killed`，带一句摘要、一个 `<usage>` 块；子代理留下了 worktree 的话，还有 `<worktree>`。
 
-交回过报告的，结束通知不会再叫醒父任务一次：它先压着，等模型回应完报告，再跟着下一次请求一起发出去。没有交回报告的（不在 auto 模式，或者代理的工具列表里去掉了它），子代理最后一条回复就是通知里的 `<result>`，通知自己叫醒父任务。给了 `SubagentHandback` 却没用就结束的子代理，不带回任何结果；通知会这么说，并建议用 `SendMessage` 去问它要报告。
+交回过报告的，结束通知不会再叫醒父任务一次：它先压着，等模型回应完报告，再跟着下一次请求一起发出去。没有交回报告的（不在 auto 模式，或者代理的工具列表里去掉了它），子代理最后一条回复就是通知里的 `<result>`，通知自己叫醒父任务。给了 `SubagentHandback` 却没用就结束的子代理，不带回任何结果；通知会这么说，并且（`Explore` 和 `Plan` 除外）建议用 `SendMessage` 去问它要报告。
 
 子代理的任务永远**只跑一轮**：这一轮结束任务就结束，不管它的代理文件怎么写（`TaskRun.one_shot`）。如果它自己也派了后台子代理，结束前会先等它们（`Waiting`，等的是 `children`），因为它们交回的报告可能再开一轮。
 
@@ -78,7 +78,7 @@
 
 ### 子代理里的审批和提问
 
-子任务需要审批或者要问人时，和任何任务一样先停下：记一条 `Waiting`，不占工人。前端会把整棵任务树都翻一遍（`noeta/host/pending.py` 的 `pending_tree`），所以人在主对话里就能看到并回答子代理的审批。配置里有 `unattended: true` 的任务（宿主给没人盯着的任务设的）遇到这种情况不等，直接以 `needs_human` 结束。
+子任务需要审批或者要问人时，和任何任务一样先停下：记一条 `Waiting`，不占工人。前端会把整棵任务树都翻一遍（`noeta/host/pending.py` 的 `pending_tree`），所以人在主对话里就能看到并回答子代理的审批。配置里有 `unattended: true` 的任务（宿主给没人盯着的任务设的）遇到这种情况不等，直接以 `needs_human` 失败：子代理就此结束；顶层任务则是这一轮失败，任务接着等下一条消息。
 
 ## 给子代理发消息
 

@@ -30,7 +30,8 @@
    `cwd` 的任务就在服务端的目录里跑。被拒时返回 `403` 和原因。
 
 其他错误：任务不存在返回 `404 {"error": "unknown task …"}`；请求体或查询参数有误返回 `400` 和原因。
-所有响应体都是 JSON。
+所有错误的响应体都是 JSON `{"error": …}`；不在本页列出的路径返回普通的 `404`（除非服务端还托管着
+网页文件，见下文）。
 
 token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时生成一个，只打印一次；
 `~/.noeta/server-token` 只存它的 SHA-256
@@ -45,7 +46,7 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 | `POST /tasks` | `{agent, input?, config?, queue?, dedupe_key?, history_from?, history_through?}` | `201 {"task_id": …}` |
 | `GET /tasks` | `?parent_id=&status=&limit=`（`status`：`ready`、`running`、`waiting`、`ended`；`limit` 默认 100） | 任务行的列表 |
 | `GET /tasks/{id}` | | 一个任务行 |
-| `GET /summaries` | `?limit=&archived=`（`limit` 默认 50；`archived=true` / `false` 只要归档的 / 只要没归档的） | 根任务列表，最新的在前，每个带 `title`、`cwd`、第一次提问 `prompt`（前 200 字符）、`archived`、状态和时间 |
+| `GET /summaries` | `?limit=&archived=`（`limit` 默认 50；`archived=true` / `false` 只要归档的 / 只要没归档的） | 根任务列表，最近更新的在前，每项 `{task_id, agent, status, waiting_on, end_status, created_at, updated_at, title, cwd, prompt, archived}`（`prompt` 是第一次提问，前 200 字符） |
 | `GET /tasks/{id}/events` | `?after=N` | 序号 `N` 之后的事件，每个是 `Recorded`（`seq`、`at`、`event`） |
 | `GET /tasks/{id}/watch` | `?after=N` | `text/event-stream`，见下 |
 
@@ -55,8 +56,9 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 - `history_from` / `history_through` 让新任务从另一个任务的对话出发，截到那个任务的第
   `history_through` 个事件（即分叉）。
 - 任务行包括 `task_id`、`root_id`、`parent_id`、`agent`、`queue`、`status`、`waiting_on`、
-  `end_status`、`last_seq`、`created_at`、`updated_at`、认领信息 `owner`、`owner_epoch`、
-  `lease_until`，以及收件箱计数 `inbox_seq` / `inbox_read_seq`。
+  `end_status`、`last_seq`、`created_at`、`updated_at`、`ready_at`、认领信息 `owner`、
+  `owner_epoch`、`lease_until`，以及收件箱计数 `inbox_seq` / `inbox_read_seq`。还是默认值
+  （`null`、`0`）的字段不会出现在 JSON 里。
 - 十种事件及其字段见[事件](./events.md)。
 
 ## 和任务交互
@@ -70,7 +72,7 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 | `POST /tasks/{id}/cancel` | `{reason?, turn_only?}` 或不带请求体 | `{"ok": true}` |
 
 **消息。** 以 `/name args` 开头的文字会先执行任务所用代理里同名的斜杠命令：提示词类命令展开后的
-文字才是真正发出去的；本地命令直接返回 `{output}`。
+文字才是真正发出去的；本地命令直接返回 `{output}`。对不上任何命令的文字原样发出。
 
 **待处理项。** 每一项有 `task_id`（提问的那个任务，可能是子代理）、`request_id`、`kind`
 （`approval` 或 `question`）、`tool`、`input`、`prompt`、`detail`、`agent`，一个用于卡片的
@@ -96,7 +98,7 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 | 方法与路径 | 返回 |
 |---|---|
 | `GET /tasks/{id}/usage` | 整个任务树的 `tasks`、`cost_usd`、`api_seconds`、`usage`，以及按模型分的 `by_model`（每个模型的 `usage`、`calls`、`cost_usd`、`api_seconds`） |
-| `GET /tasks/{id}/context` | 下一次请求里装了什么：按类别估算的 token 数（顺序同 Claude Code 的 `/context`）、`total`、`window`、`model`、`tools`。只有服务端进程里有 worker 在跑这个任务的代理时才有，否则返回 `501` |
+| `GET /tasks/{id}/context` | 下一次请求里装了什么：`{model, window, total, categories, deferred_tools, tools}`，其中 `categories` 是各部分估算的 token 数（`System prompt`、`System tools`、`MCP tools`、`Messages`、`Free space`，顺序同 Claude Code 的 `/context`）。只有服务端进程里有 worker 在跑这个任务的代理时才有（`--no-worker` 时没有），否则返回 `501` |
 | `GET /tasks/{id}/rewind` | 你的每一次提问，每项 `{index, task_id, seq, at, text, files}`（之后改过的文件） |
 | `POST /tasks/{id}/rewind` | `{index, conversation?, files?}`（两者默认都为 true）：回到第 `index` 次提问之前，恢复对话（在新任务里）、文件，或两者都恢复。返回 `{task_id, prompt, files}` |
 
@@ -142,8 +144,8 @@ data: {}
 - 15 秒没有消息时发一行注释 `: keep-alive`。
 - 任务结束且事件都已发完时发 `end` 并关闭；跟踪任务出错时 `end` 的内容是 `{"error": …}`。
 
-连接断了就用最后看到的 `seq` 作为 `after` 重新连。`RemoteClient.watch` 会自动重连（连续五次没收到
-事件就放弃）。
+连接断了就用最后看到的 `seq` 作为 `after` 重新连。`RemoteClient.watch` 会自动重连（中间没收到事件
+的话，最多连续重连五次）。
 
 ## Claude Code 的无界面协议：`/stream-json`
 
@@ -155,12 +157,12 @@ data: {}
 `stream_event`、系统通知、每个提示词一个 `result`，以及它自己的 `control_request`（`can_use_tool`：
 客户端在这条连接上回答权限确认）。查询参数：`resume`（任务 id）、`fork`、`agent`、`model`、`cwd`、
 `permission_mode`、`max_turns`、`include_partial_messages`、`replay_user_messages`，以及 `token`。
-被拒的连接以 `4403`（跨站，或服务端不允许的模式或 `cwd`）或 `4401`（token 无效）关闭；`resume`
-的任务不存在时发一条 `{"type": "error", …}` 后关闭。
+被拒的连接（跨站、token 无效，或服务端不允许的模式或 `cwd`）在握手完成前就被关掉，客户端看到的是
+握手返回 `HTTP 403`；`resume` 的任务不存在时发一条 `{"type": "error", …}` 后关闭。
 
 **POST** `/stream-json`：同样的协议，单向。请求体是逐行的 JSON 输入，响应是逐行的 JSON 输出
 （`application/x-ndjson`），直到活干完。POST 上没人能回答权限确认，所以凡是要问人的都直接拒绝，
-这一轮继续。
+这一轮继续。服务端不允许的模式或 `cwd` 在开跑前就返回 `403`。
 
 ```bash
 printf '%s\n' '{"type":"user","message":{"role":"user","content":"这个目录里有什么？"}}' |
@@ -208,6 +210,7 @@ curl -s -X POST $S/tasks/40efba61…/cancel -H "$H" -H 'content-type: applicatio
 用 Python 也一样：
 
 ```python
+import os
 import noeta
 client = noeta.connect("http://127.0.0.1:8642", token=os.environ["NOETA_SERVER_TOKEN"])
 task = await client.create("main", "列出所有 TODO", config={"permission_mode": "default"})

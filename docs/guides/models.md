@@ -70,7 +70,7 @@ window, 16,384 output tokens) and a warning, unless something tells noeta its re
 {"models": [
   {"id": "deepseek-chat", "context_window": 128000, "max_output_tokens": 8192},
   {"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct", "context_window": 262144,
-   "max_output_tokens": 65536, "supports_vision": false, "provider": "local"}
+   "max_output_tokens": 65536, "supports_vision": false}
 ]}
 ```
 
@@ -78,8 +78,9 @@ window, 16,384 output tokens) and a warning, unless something tells noeta its re
 export NOETA_MODELS_FILE=~/.noeta/models.json
 ```
 
-A row needs both limits to count; a row for a model the catalog knows changes nothing. `provider`
-names the provider table that serves the model.
+A row needs both limits to count; a row for a model the catalog knows changes nothing. A row may
+also say `"provider": "<table name>"`, the [provider table](#several-providers-at-once) that serves
+the model; that table must exist in `config.toml`, or noeta stops with a config error.
 
 A gateway that needs its own headers: `headers = {"X-Team" = "infra"}` in a provider table, or
 `extra_headers` for the default provider.
@@ -90,9 +91,14 @@ A gateway that needs its own headers: `headers = {"X-Team" = "infra"}` in a prov
 no key variable of its own: set `NOETA_API_KEY` or `api_key`.
 
 ```bash
-export NOETA_PROVIDER=openai_responses NOETA_BASE_URL=https://api.openai.com/v1/responses
+export NOETA_PROVIDER=openai_responses NOETA_BASE_URL=https://gateway.example.com/v1/responses
 export NOETA_MODEL=gpt-5.5-2026-04-24 NOETA_API_KEY=sk-...
 ```
+
+The key goes in an `api-key` header, as Azure OpenAI and gateways like it take it
+(`noeta/backends/providers/openai_responses.py`). OpenAI's own `api.openai.com` wants
+`Authorization: Bearer …` instead: add it with `extra_headers = {Authorization = "Bearer sk-..."}`
+in `config.toml` (or `headers` in a provider table).
 
 ## Several providers at once
 
@@ -101,7 +107,7 @@ More providers go in `config.toml` tables. The top-level settings stay the defau
 
 ```toml
 model = "claude-sonnet-5-5"            # the default provider: anthropic
-api_key = "{env:ANTHROPIC_API_KEY}"
+                                       # (its key: NOETA_API_KEY, else ANTHROPIC_API_KEY)
 
 [providers.deepseek]
 family = "openai_compat"               # anthropic | openai_compat | openai_responses
@@ -118,7 +124,8 @@ list_models = true                     # read its /models (the default); false s
 
 A table takes exactly `family`, `base_url`, `api_key`, `headers`, `models`, `list_models` and
 `prompt_cache_ttl`; anything else is a config error, and so is a table named `default` (that name
-is the top-level provider's). `{keyring:…}` needs the `keyring` extra.
+is the top-level provider's). `{env:…}` and `{keyring:…}` are read in a table's `api_key` and
+`headers` only: a top-level `api_key` is sent as written. `{keyring:…}` needs the `keyring` extra.
 
 Which provider a model id goes to:
 
@@ -131,7 +138,8 @@ With more than one provider, that choice is made once, when a task is started on
 switched to one, and recorded in the task's config (`model_route`) next to the model id. Every
 worker then sends the model to the recorded provider, whatever its own listings say, and fails the
 call if that provider is not configured on that worker, so give every worker the same
-`config.toml`. With one provider nothing is recorded.
+`config.toml`. With one provider nothing is recorded, unless its `/models` listing gave the model's
+limits (they are recorded, so every worker sizes requests alike).
 
 Mixing providers in one conversation works: reasoning a provider signed is replayed only to that
 provider, and tool-call ids another provider wrote are rewritten to the form Anthropic takes.
@@ -176,8 +184,8 @@ thinking is set by effort.
 
 ## Side models
 
-Some plugins call a model on the side, outside the task's own turn. Each uses the task's model
-unless you name a cheaper one; set them as plugin arguments in `config.toml`:
+Some plugins call a model on the side, outside the task's own turn. Most use the task's model
+unless you name a cheaper one (the table below has the exceptions); set them as plugin arguments in `config.toml`:
 
 ```toml
 [plugins.compaction]

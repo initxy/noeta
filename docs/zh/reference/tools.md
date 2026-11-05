@@ -18,7 +18,7 @@ noeta 里模型能调用的每个工具：由哪个插件提供、有哪些参�
 | [`Edit`](#edit) | `fs` | 总是 | | 同 `Write` |
 | [`NotebookEdit`](#notebookedit) | `fs` | 延迟 | | 同 `Write` |
 | [`Bash`](#bash) | `shell` | 总是 | | 只读命令放行；其他要问 |
-| [`Monitor`](#monitor) | `shell` | 延迟 | | 要问 |
+| [`Monitor`](#monitor) | `shell` | 延迟 | | 同 `Bash`；连 `ws` 的要问 |
 | [`TaskStop`](#taskstop) | `shell` | 延迟 | | 放行 |
 | [`EnterWorktree`](#enterworktree-exitworktree) | `shell` | 延迟 | | 要问 |
 | [`ExitWorktree`](#enterworktree-exitworktree) | `shell` | 延迟 | | 要问 |
@@ -38,10 +38,11 @@ noeta 里模型能调用的每个工具：由哪个插件提供、有哪些参�
 | [`Workflow`](#workflow) | `workflow` | 总是 | | 放行；auto 下交分类器 |
 | [`ReportFindings`](#reportfindings) | `findings` | 总是 | 是 | 放行 |
 | [`StructuredOutput`](#structuredoutput) | `structured_output` | 有答案格式时 | 是 | 放行 |
-| [`ToolSearch`](#toolsearch) | `tool_search` | 有延迟工具时 | | 放行 |
-| [`ListMcpResourcesTool`、`ReadMcpResourceTool`、`ReadMcpResourceDirTool`](#mcp-工具) | `mcp` | 延迟 | | 放行 |
-| [`mcp__<server>__<tool>`](#mcp-工具) | `mcp` | 延迟 | 看服务器怎么说 | 要问 |
-| `run_skill_script` | `skills` | 只在打开 `scripts` 时 | | 要问 |
+| [`ToolSearch`](#toolsearch) | `tool_search` | 有延迟工具时 | 是 | 放行 |
+| [`ListMcpResourcesTool`、`ReadMcpResourceTool`](#mcp-工具) | `mcp` | 延迟 | 是 | 放行 |
+| [`ReadMcpResourceDirTool`](#mcp-工具) | `mcp` | 延迟 | 是 | 要问 |
+| [`mcp__<server>__<tool>`](#mcp-工具) | `mcp` | 延迟 | | 要问 |
+| [`run_skill_script`](#run-skill-script) | `skills` | 只在打开 `scripts` 时 | | 要问 |
 
 `main` 代理带着上面所有插件；子代理带得少一些（见[代理文件](../guides/skills-and-agents.md#代理文件)）。关掉某个插件（`[plugins.web] enabled = false`）就拿掉了它的工具；`--tools`、`--disallowedTools`、代理文件的 `tools` / `disallowedTools`、权限插件的 `allowed_tools` / `disallowed_tools` 按名字筛选工具。拿掉 `Bash` 会顺带拿掉 `Monitor` 和 `TaskStop`。
 
@@ -109,17 +110,17 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 ### Bash
 
-执行一条 bash 命令，返回它的输出。shell 在两次调用之间保持当前目录。
+执行一条 bash 命令，返回它的输出。shell 在两次调用之间保持当前目录。结果超过 30,000 个字符时存成文件，模型只看到开头一段。
 
 | 参数 | 类型 | 含义 |
 |---|---|---|
 | **`command`** | string | 命令行 |
-| `timeout` | number | 毫秒；前台运行最多 600,000 |
+| `timeout` | number | 毫秒；默认 120,000（两分钟），前台运行最多 600,000 |
 | `description` | string | 用大白话说明它做什么，给人看的 |
 | `run_in_background` | boolean | 放到后台跑；模型马上拿到一个 id，跑完时会收到通知 |
 | `dangerouslyDisableSandbox` | boolean | 申请在沙箱外运行 |
 
-权限：每一段都是只读命令（`ls`、`cat`、`git log`、`rg` 等）、并且只读工作目录内东西的命令，放行；`acceptEdits` 下工作目录内的文件操作命令（`touch`、`mkdir`、`mv` 等）也放行；其他要问，并按命令的各段给出可记住的规则。`auto` 下由分类器回答。命令里提到 `.noeta` 的，除了 `bypassPermissions` 以外都要问；写受保护路径的在任何模式下都要问；要离开沙箱的总是要问。`Bash(...)` 规则逐段匹配（见[规则](../guides/permissions.md#规则)）。后台任务运行期间，所属任务会一直被跑它的那个工人认领着。
+权限：每一段都是只读命令（`ls`、`cat`、`git log`、`rg` 等）、并且只读工作目录内东西的命令，放行；`acceptEdits` 下工作目录内的文件操作命令（`touch`、`mkdir`、`mv` 等）也放行；其他要问，并按命令的各段给出可记住的规则。`auto` 下由分类器回答。命令里提到 `.noeta` 的，除了 `bypassPermissions` 以外都要问；写受保护路径的在任何模式下都要问，`bypassPermissions` 也不例外；要离开沙箱的，不管允许规则怎么写都要问（`bypassPermissions` 下直接跑）。打开沙箱且 `autoAllowBashIfSandboxed` 为默认的开时，在沙箱里跑的命令在 `plan` 以外的模式下放行。`Bash(...)` 规则逐段匹配（见[规则](../guides/permissions.md#规则)）。后台任务运行期间，所属任务会一直被跑它的那个工人认领着。
 
 ### Monitor
 
@@ -132,7 +133,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | **`description`** | string | 简短的标签，每条通知都带着 |
 | **`timeout_ms`** | number | 多久后停止（默认 300,000，最多 1,800,000） |
 
-权限：要问；`Bash(...)` 规则覆盖它的 `command`。
+权限：`command` 按 `Bash` 的规矩判（只读命令放行，其他要问；`Bash(...)` 规则覆盖它）；连 `ws` 的要问。
 
 ### TaskStop
 
@@ -151,8 +152,8 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 | 工具 | 参数 | 类型 | 含义 |
 |---|---|---|---|
-| `EnterWorktree` | `name` | string | 新 worktree 的名字（不给就随机起） |
-| | `path` | string | 改为进入这个已有的 worktree |
+| `EnterWorktree` | `name` | string | 新 worktree 的名字：字母、数字、`.`、`_`、`-`，可用 `/` 分段，最多 64 个字符（不给就随机起）；分支名是 `worktree-<name>` |
+| | `path` | string | 改为进入本仓库里这个已有的 worktree（不能和 `name` 同时给） |
 | `ExitWorktree` | **`action`** | string | `keep` 留在磁盘上；`remove` 连同分支一起删掉 |
 | | `discard_changes` | boolean | 有未提交的文件或未合并的提交也照删 |
 
@@ -171,8 +172,8 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | **`description`** | string | 3–5 个词的标签 |
 | **`prompt`** | string | 交给它的任务 |
 | `subagent_type` | string | 哪种代理（对话里有列表） |
-| `model` | string | 它用的模型，优先于它的定义（fork 不理会） |
-| `effort` | string | 它的推理强度（fork 不理会） |
+| `model` | string | `sonnet`、`opus`、`haiku` 或 `fable`，优先于它定义里的模型（fork 不理会） |
+| `effort` | string | 推理强度：`low`、`medium`、`high`、`xhigh` 或 `max`（fork 不理会） |
 | `isolation` | string | `worktree`：给它一个临时 git worktree；`remote`：在别处运行（有条件时） |
 
 权限：放行；`auto` 下交分类器判断。`Agent(Explore)` 这样的规则可以点名类型。
@@ -192,7 +193,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 ### ListAgents
 
-列出 `SendMessage` 能联系到的代理：这个任务启动的子代理，以及存储里其他开着的任务，每个都标明类别和状态。参数 `channel` 和 `q` 是为了和 Claude Code 的格式一致，不起作用。权限：放行。
+列出 `SendMessage` 能联系到的代理：这个任务启动的子代理，以及存储里其他开着的任务，每个都标明类别和状态。只提供给顶层任务。参数 `channel` 和 `q` 是为了和 Claude Code 的格式一致，不起作用。权限：放行。
 
 ### SubagentHandback
 
@@ -217,7 +218,17 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 权限：放行；`Skill(name)` 规则可以点名某个技能。技能生效期间，它的 `allowed-tools` 列出的工具事先批准。
 
-`run_skill_script`（运行技能目录里带的脚本）只在技能插件的 `scripts` 参数打开时提供；要问。
+### run_skill_script
+
+运行某个已生效技能目录里带的脚本，不经过 shell。只在技能插件的 `scripts` 参数打开时提供。
+
+| 参数 | 类型 | 含义 |
+|---|---|---|
+| **`skill`** | string | 带这个脚本的已生效技能 |
+| **`relpath`** | string | 脚本在该技能目录里的路径（如 `scripts/check.sh`） |
+| `args` | array | 脚本参数，每个一个字符串，不能有 shell 特殊字符 |
+
+权限：要问。
 
 ## 问人：`ask_user` 插件
 
@@ -227,7 +238,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 | 参数 | 类型 | 含义 |
 |---|---|---|
-| **`questions`** | array | 1–4 个问题，各带选项（单选或多选，可填"其他"） |
+| **`questions`** | array | 1–4 个问题；每个有 **`question`**、**`header`**（最多 12 个字符）、**`options`**（2–4 个，各有 **`label`**、**`description`**，可选 `preview`）和 **`multiSelect`**；"其他"选项总会自动加上 |
 | `answers`、`annotations` | object | 由前端填写 |
 | `metadata` | object | 只做统计用 |
 
@@ -239,7 +250,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 ### WebFetch
 
-抓一个网址，转成 Markdown，再用一个模型（`webfetch_model`，默认任务的模型）就 `prompt` 回答问题：模型拿到的是答案，不是整页内容。网页缓存 15 分钟；HTTP 自动升级为 HTTPS；跳转到别的主机时不跟过去，而是把跳转报告回来。
+抓一个网址，转成 Markdown，再用一个模型（`webfetch_model`，默认任务的模型）就 `prompt` 回答问题：模型拿到的是答案，不是整页内容。网页缓存 15 分钟；HTTP 自动升级为 HTTPS（本机回环地址除外）；跳转到别的主机时不跟过去，而是把跳转报告回来。
 
 | 参数 | 类型 | 含义 |
 |---|---|---|
@@ -255,9 +266,9 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 | 参数 | 类型 | 含义 |
 |---|---|---|
-| **`query`** | string | 搜什么 |
+| **`query`** | string | 搜什么（至少 2 个字符） |
 | `allowed_domains`、`blocked_domains` | array | 只要这些域名的结果，或排除这些域名 |
-| `mode` | string | `standard`（快）或 `extended`（彻底，更贵） |
+| `mode` | string | `standard`（快）或 `extended`（彻底，更贵；默认） |
 
 权限：要问。
 
@@ -275,7 +286,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 ## 任务清单工具
 
-`TaskCreate`、`TaskGet`、`TaskUpdate`、`TaskList`（`todos` 插件）把 Claude Code 的任务清单记在任务日志里。默认只提供给比 Claude Code 精简提示词更早的 Claude 模型，而且只给顶层任务（`[plugins.todos] all_models = true` 让所有模型都有；见[任务清单](../guides/memory-and-instructions.md#任务清单)）。
+`TaskCreate`、`TaskGet`、`TaskUpdate`、`TaskList`（`todos` 插件）把 Claude Code 的任务清单记在任务日志里。默认只提供给比 Claude Code 精简提示词更早的 Claude 模型（以及 Bedrock 的应用推理配置），而且只给顶层任务（`[plugins.todos] all_models = true` 让所有模型都有；见[任务清单](../guides/memory-and-instructions.md#任务清单)）。
 
 | 工具 | 参数 |
 |---|---|
@@ -308,11 +319,11 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 | 工具 | 参数 | 作用 |
 |---|---|---|
-| `CronCreate` | **`cron`**（5 个字段，按人所在的本地时间）、**`prompt`**、`recurring`（默认 true；循环任务 7 天后失效）、`durable`（接受；所有任务本来就持久保存） | 按计划排一句提问，或只排一次 |
+| `CronCreate` | **`cron`**（5 个字段，按跑这个任务的工人所在机器的本地时间）、**`prompt`**、`recurring`（默认 true；循环任务 7 天后失效）、`durable`（接受；所有任务本来就持久保存） | 按计划排一句提问，或只排一次 |
 | `CronList` | 无 | 这个任务的定时任务 |
 | `CronDelete` | **`id`** | 取消一个 |
 
-权限：三个在 `default` 下都要问（都不在权限插件的低风险列表里）。
+一个任务同时最多 50 个定时任务。权限：三个在 `default` 下都要问（都不在权限插件的低风险列表里）。
 
 ## 工作流：`workflow` 插件
 
@@ -339,7 +350,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 
 | 参数 | 类型 | 含义 |
 |---|---|---|
-| **`findings`** | array | 核实过的发现，最严重的在前 |
+| **`findings`** | array | 核实过的发现，最严重的在前，最多 32 条；每条有 **`file`**、**`summary`**、**`failure_scenario`**，可选 `line`、`short_summary`、`category`、`verdict`、`outcome` |
 | `level` | string | 这次审查用的推理强度 |
 
 权限：放行。
@@ -355,7 +366,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | 参数 | 类型 | 含义 |
 |---|---|---|
 | **`query`** | string | `select:WebFetch,NotebookEdit` 加载这几个；普通词语在名字和描述里搜；`+mcp resource` 只要名字里含 `mcp` 的 |
-| **`max_results`** | number | 搜索时最多加载几个 |
+| **`max_results`** | number | 按词语搜索时最多加载几个（默认 5） |
 
 加载过的工具在任务剩下的时间里一直可用，压缩后也是。权限：放行。
 
@@ -369,6 +380,6 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | `mcp__<server>__authenticate`、`mcp__<server>__complete_authentication` | 服务器需要登录时，代替它的工具出现 | 要问 |
 | `ListMcpResourcesTool` | 列出服务器的资源（`server` 可缩小范围） | 放行 |
 | `ReadMcpResourceTool` | 读一个资源（**`server`**、**`uri`**） | 放行 |
-| `ReadMcpResourceDirTool` | 读一个资源目录 | 放行 |
+| `ReadMcpResourceDirTool` | 列出一个目录资源下一层的内容（**`server`**、**`uri`**） | 要问（它不在低风险列表里） |
 
-服务器的工具排在内置工具后面。
+三个资源工具只提供给顶层任务，只要配置了服务器就有（服务器挂了也有）。服务器的工具一律不算只读，不管服务器怎么标。服务器的工具排在内置工具后面。

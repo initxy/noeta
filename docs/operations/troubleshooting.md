@@ -116,8 +116,9 @@ outcome up (`Tool.recover`) or says it is safe to repeat (`retry_safe`). The mod
 text and usually checks. Nothing needs fixing unless workers die often
 ([recovery](../how-it-works/recovery.md)).
 
-A background `Bash` job whose worker died is reported as `background job '…' was lost: the
-worker process running it stopped, so its further output and exit status are unknown`. A job
+A background `Bash` job whose worker died is reported as `Background command "…" was lost:
+the worker process running it stopped, so its further output and exit status are unknown`
+(`Monitor "…" was lost: …` for a monitor). A job
 lives in one worker process; there is no way to reattach to it.
 
 ## Plugins
@@ -127,7 +128,7 @@ lives in one worker process; there is no way to reattach to it.
 | `(failed) <path>: <error>; install it next to noeta: uv tool install --reinstall --with <module> '…'` (from `noeta plugins` or `/reload-plugins`) | A plugin file imports a module noeta's environment lacks. `noeta plugin add` installs no dependencies on purpose. | Run the printed line, naming every extra and `--with` you already use. |
 | `plugin file <path>: 'name' joins no agent; set add_to = ("main",) on its class, or [agents.main] add_plugins = ["name"] in config.toml` | The plugin loaded, but no agent runs it. | Do one of the two things the notice says ([write a plugin](../guides/plugins.md)). |
 | `<project>/.noeta/plugins was not loaded: this project is not trusted (run `noeta trust` in <project> to load its plugins)` | A project's `.noeta/plugins`, `.noeta/agents`, `.noeta/prompts`, `.noeta/skills` and `.agents/skills` load only once you trust it. | Run `noeta trust` in the project, or answer the terminal UI's trust question. |
-| A plugin never appears, with no error | The machine's `/etc/noeta/config.toml` `[policy]` blocks it (`blocked_plugins`), or `allowed_plugins` is set and does not name it. The policy wins over every user and project setting. | Ask whoever manages the machine. |
+| A plugin never appears, with no error | The machine's `/etc/noeta/config.toml` `[policy]` blocks it (`blocked_plugins`), or `allowed_plugins` is set and does not name it (it limits only plugins noeta does not ship). The policy wins over every user and project setting. | Ask whoever manages the machine. |
 | A task ends with `plugin_missing: this task runs with <names>, which the worker that claimed it does not have; install them there (or run the task where they are)` | See below. | Install the plugin on every worker. |
 
 ### A worker without a plugin the task needs
