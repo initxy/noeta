@@ -112,16 +112,17 @@ def approvals(waiting: Waiting, uses: Mapping[str, ToolUse], task_id: str = "",
 async def answer_choice(client: ClientAPI, task_id: str, request_id: str, choice: str,
                         message: str = "") -> None:
     """Answer an approval with one of its :func:`choices` (``message``: what
-    the person said when declining)."""
+    the person added — a no's reason, or words the model reads after a yes's
+    result)."""
+    said = {"message": message} if message else {}
     if choice == "deny":
-        await client.answer(task_id, request_id, "deny",
-                            data={"message": message} if message else None)
+        await client.answer(task_id, request_id, "deny", data=said or None)
     elif choice == "always":
-        await client.answer(task_id, request_id, "allow", always=True)
+        await client.answer(task_id, request_id, "allow", always=True, data=said or None)
     elif choice.startswith("mode:"):
-        await client.answer(task_id, request_id, "allow", data={"mode": choice[5:]})
+        await client.answer(task_id, request_id, "allow", data={"mode": choice[5:], **said})
     else:
-        await client.answer(task_id, request_id, "allow")
+        await client.answer(task_id, request_id, "allow", data=said or None)
 
 
 def always_option(detail: dict[str, Any]) -> str | None:

@@ -641,14 +641,10 @@ class NoetaApp(TranscriptView):
                      task_id: str = "") -> None:
         """Answer an approval. ``message``: what the person added to it — with
         a no, the reason the model reads in the refused call's result; with a
-        yes, a message to the task, taken in once the call's result lands
-        (Claude Code puts it beside that result)."""
+        yes, words the model reads beside the call's result."""
         self.waiting_for = ""
         task = task_id or self.task_id
-        await answer_choice(self.local.client, task, call_id, choice,
-                            message if choice == "deny" else "")
-        if message and choice != "deny":
-            await self.local.client.send(task, message, when="now")
+        await answer_choice(self.local.client, task, call_id, choice, message)
         self.update_status()
         self._box().focus()
 

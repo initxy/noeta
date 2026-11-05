@@ -93,6 +93,19 @@ def rejected_text(data: Any) -> str:
     return texts.REJECTED_BY_USER
 
 
+def approval_note(run: TaskRun, call_id: str) -> str | None:
+    """What the person added to their yes to this call (``Answer.data``
+    ``{"message": ...}``): it follows the reply's results in their message,
+    as Claude Code puts a yes's words beside the call's result."""
+    answer = run.state.answers.get(call_id)
+    if answer is None or answer.decision != "allow" or not isinstance(answer.data, dict):
+        return None
+    message = answer.data.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return message.strip()
+
+
 async def resolve(run: TaskRun, view: TaskView, use: ToolUse) -> tuple[ToolUse, Gate]:
     """The call that will run and its verdict: a rewritten call is gated
     again, so every guard sees (and a human approves) the call that runs."""
@@ -317,7 +330,7 @@ async def _finish(run: TaskRun, use: ToolUse, output: ToolOutput, records: list[
     finished = ToolFinished(result=ToolResult(call_id=use.id, content=output.content,
                                               is_error=output.is_error,
                                               block_list=output.block_list), meta=meta,
-                            end_turn=output.end_turn)
+                            end_turn=output.end_turn, note=approval_note(run, use.id))
     await run.append([*records, *view.pending, finished],
                      creates=[*creates, *run.staged(view)], posts=await run.enqueued(view))
 
@@ -382,7 +395,9 @@ async def recover_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         if tool is not None and tool_flags(tool).retry_safe and c.attempts < MAX_ATTEMPTS:
             again.append((use, tool))
             continue
-        await run.append([run.error_result(use.id, texts.INTERRUPTED_CALL_ERROR)])
+        await run.append([ToolFinished(result=ToolResult(
+            call_id=use.id, content=[Text(text=texts.INTERRUPTED_CALL_ERROR)], is_error=True),
+            note=approval_note(run, use.id))])
     budget = _reply_budget(run)
     for group in _groups(again):
         await run.append([ToolStarted(call=u) for u, _ in group])
