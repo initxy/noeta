@@ -241,6 +241,9 @@ async def test_requests_cannot_set_the_config_plugins_own(
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "config", "data": {"permission_rules": ["Bash"]}})
         assert refused.status_code == 403
+        error = refused.json()["error"]
+        assert error.endswith("; client_hooks may only be removed)")
+        assert "client_hooks," not in error and "max_budget_usd" in error
         # A headless client's hook record may be taken away, not set.
         refused = await http.post(f"/tasks/{task_id}/signals", json={
             "name": "config", "data": {"client_hooks": {"client": "x", "events": {}}}})

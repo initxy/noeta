@@ -113,8 +113,11 @@ class GuardedClient:
             raise ValueError("a task config is a JSON object")
         for key in config:
             if key not in allowed:
+                settable = ", ".join(k for k in allowed if k != CLIENT_HOOKS_KEY)
+                removable = (f"; {CLIENT_HOOKS_KEY} may only be removed"
+                             if CLIENT_HOOKS_KEY in allowed else "")
                 raise Refused(f"a request may not set the task config key {key!r} "
-                              f"(only {', '.join(allowed)})")
+                              f"(only {settable}{removable})")
         self._mode(config.get("permission_mode"))
         if config.get(CONTINUED_AS_KEY, "fork") not in CONTINUED_AS:
             raise ValueError(f"{CONTINUED_AS_KEY} is one of {', '.join(CONTINUED_AS)}")
