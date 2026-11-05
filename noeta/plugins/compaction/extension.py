@@ -222,8 +222,10 @@ class Compaction(Extension):
     def continue_state(self, state: Any) -> Any:
         """The ``threshold`` record went to the source's log; front ends
         follow the continuing task's own, so it is written there again. Where
-        the last compaction ran is a seq of the source's log."""
-        return replace(state, published=None, turn=-1, failed_at=None) \
+        the last compaction ran, and what it had seen, are seqs of the
+        source's log: every message of this task's own is newer (the carried
+        ones sit at seq 0)."""
+        return replace(state, published=None, turn=-1, failed_at=None, seen_through=0) \
             if isinstance(state, CompactionState) else state
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
