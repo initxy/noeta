@@ -49,6 +49,7 @@ __all__ = [
     "HOST_INJECTED_PREAMBLE",
     "ReasoningContinuation",
     "bounded_silence",
+    "context_overflow",
     "decode_tool_arguments",
     "describe_http_error",
     "encode_tool_arguments",
@@ -394,6 +395,46 @@ def error_dict_is_context_overflow(error: dict[str, Any]) -> bool:
     return indicates_context_overflow(str(error.get("message") or ""))
 
 
+#: Overflow wordings that say how long the input was and how large the window
+#: is, as ``(pattern, input group, limit group)``: Anthropic's
+#: "input length and `max_tokens` exceed context limit: 188240 + 21333 >
+#: 200000" (the pattern Claude Code parses), OpenAI's and older vLLM's
+#: "maximum context length is 8192 tokens. However, you requested 9000 tokens
+#: (7000 in the messages, 500 in the functions, 1500 in the completion)" (or
+#: "in your prompt"; every part but the completion is input), and newer vLLM's
+#: "maximum context length is 4096 tokens and your request has 3000 input
+#: tokens".
+_OVERFLOW_COUNTS: tuple[tuple[re.Pattern[str], int, int], ...] = (
+    (re.compile(r"input length and `max_tokens` exceed context limit: (\d+) \+ (\d+) > (\d+)"),
+     1, 3),
+    (re.compile(r"maximum context length is (\d+) tokens.{0,80}?\(((\d+) in (?:the messages"
+                r"|your prompt)[^)]*)\)", re.DOTALL), 2, 1),
+    (re.compile(r"maximum context length is (\d+) tokens and your request has (\d+) input "
+                r"tokens"), 2, 1),
+)
+_INPUT_PART = re.compile(r"(\d+) (?:in|for) (?:the |your )?(\w+)")
+
+
+def _input_tokens(stated: str) -> int:
+    """The input tokens a count says: a number, or OpenAI's parts ("7000 in
+    the messages, 500 in the functions, ...") summed but the completion."""
+    if stated.isdigit():
+        return int(stated)
+    return sum(int(n) for n, part in _INPUT_PART.findall(stated) if part != "completion")
+
+
+def context_overflow(message: str, *, text: str = "", **kw: Any) -> ContextOverflow:
+    """The :class:`ContextOverflow` for ``message``, with the input length and
+    the window when ``message`` or ``text`` (the raw body) says them."""
+    haystack = f"{message}\n{text}"
+    for pattern, input_group, limit_group in _OVERFLOW_COUNTS:
+        match = pattern.search(haystack)
+        if match:
+            return ContextOverflow(message, input_tokens=_input_tokens(match[input_group]),
+                                   context_limit=int(match[limit_group]), **kw)
+    return ContextOverflow(message, **kw)
+
+
 def http_error_is_context_overflow(response: httpx.Response) -> bool:
     """Is this 4xx response a context overflow?
 
@@ -441,7 +482,7 @@ def translate_http_error(response: httpx.Response) -> ModelError:
     if status >= 500:
         return Transient(message, status=status, body=body)
     if http_error_is_context_overflow(response):
-        return ContextOverflow(message, status=status, body=body)
+        return context_overflow(message, text=body, status=status, body=body)
     return Fatal(message, status=status, body=body)
 
 

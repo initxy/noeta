@@ -19,9 +19,13 @@ This helper is the one place that decides whether to try again:
 * :class:`~noeta.core.errors.MalformedToolArguments` — a tool call whose
   arguments did not parse — is asked for again once, as Claude Code falls
   back to one more request when a streamed reply cannot be read;
-* :class:`~noeta.core.errors.ContextOverflow` and :class:`~noeta.core.errors.Fatal`
-  surface at once — overflow's recovery is compaction, and re-sending a
-  refused request cannot help.
+* a :class:`~noeta.core.errors.ContextOverflow` that says the input length
+  and the window is made again once with the output cap the window leaves
+  (:func:`overflow_output_cap`), as Claude Code does: the input fits, only not
+  with the cap asked for;
+* every other :class:`~noeta.core.errors.ContextOverflow` and
+  :class:`~noeta.core.errors.Fatal` surface at once — overflow's recovery is
+  compaction, and re-sending a refused request cannot help.
 
 Cancellation is plain ``asyncio`` cancellation: a cancel during the call or
 during a backoff sleep propagates immediately.
@@ -33,7 +37,10 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 
+import msgspec
+
 from noeta.core.errors import (
+    ContextOverflow,
     MalformedToolArguments,
     ModelError,
     RateLimited,
@@ -44,7 +51,8 @@ from noeta.core.errors import (
 from noeta.core.provider import OnDelta, Provider
 from noeta.core.types import ModelRequest, ModelResponse
 
-__all__ = ["DEFAULT_MAX_ATTEMPTS", "backoff_delay", "complete_with_retries"]
+__all__ = ["DEFAULT_MAX_ATTEMPTS", "backoff_delay", "complete_with_retries",
+           "overflow_output_cap"]
 
 #: Total attempts (1 call + 8 retries). Sized so a persistent rate limit gets
 #: a real recovery window (~1+2+4+8+16+30+30+30 s ⇒ ~2 min of waiting at the
@@ -59,7 +67,25 @@ MALFORMED_RETRIES = 1
 _BACKOFF_BASE_SECONDS = 1.0
 _BACKOFF_CAP_SECONDS = 30.0
 
+#: What :func:`overflow_output_cap` leaves between the input and the window,
+#: and the smallest cap it retries with (Claude Code's 1,000 and 3,000).
+OVERFLOW_CAP_MARGIN = 1_000
+OVERFLOW_CAP_FLOOR = 3_000
+
 OnRetry = Callable[[int, float, ModelError], object]
+
+
+def overflow_output_cap(error: ContextOverflow, max_tokens: int | None) -> int | None:
+    """The output cap to retry an overflowed call with: the window less the
+    input less :data:`OVERFLOW_CAP_MARGIN`, or ``None`` when the error did not
+    say both numbers, the cap would be under :data:`OVERFLOW_CAP_FLOOR`, or it
+    is no smaller than the cap the call asked for."""
+    if error.input_tokens is None or error.context_limit is None:
+        return None
+    cap = error.context_limit - error.input_tokens - OVERFLOW_CAP_MARGIN
+    if cap < OVERFLOW_CAP_FLOOR or (max_tokens is not None and cap >= max_tokens):
+        return None
+    return cap
 
 
 def backoff_delay(
@@ -117,6 +143,8 @@ async def complete_with_retries(
     #: The call went in one piece once and timed out: it streams from then on.
     whole_timed_out = False
     streamed_again = 0
+    #: The output cap was lowered once after an overflow.
+    cap_lowered = False
     while True:
         try:
             if in_one_piece and whole is not None:
@@ -124,6 +152,17 @@ async def complete_with_retries(
                 return response
             return await provider.complete(request, on_delta)
         except ModelError as exc:
+            if isinstance(exc, ContextOverflow):
+                cap = None if cap_lowered else overflow_output_cap(exc, request.max_tokens)
+                if cap is None:
+                    raise
+                cap_lowered = True
+                request = msgspec.structs.replace(request, max_tokens=cap)
+                attempt += 1
+                if on_retry is not None:
+                    on_retry(attempt, 0.0, exc)
+                attempt = min(attempt, max_attempts - 1)
+                continue
             if in_one_piece and isinstance(exc, TimedOut):
                 in_one_piece = False
                 whole_timed_out = True

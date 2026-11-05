@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from noeta.backends.providers._common import indicates_context_overflow
+from noeta.backends.providers._common import context_overflow, indicates_context_overflow
 from noeta.core.errors import (
     ContextOverflow,
     Fatal,
@@ -217,7 +217,7 @@ def _translate_stream_error_event(payload: dict[str, Any]) -> ModelError:
         "invalid_request_error",
         "request_too_large",
     ) and indicates_context_overflow(message):
-        return ContextOverflow(described)
+        return context_overflow(described)
     return Fatal(described)
 
 

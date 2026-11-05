@@ -425,16 +425,20 @@ async def resume_calls(run: TaskRun, call_ids: Sequence[str], *, withdrawn: bool
         tool = tools.get(use.name)
         outcome = None if withdrawn else _outcome(run, c.parked or {}, use.id)
         resume = getattr(tool, "resume", None)
-        if resume is None:
+        if tool is None or resume is None:
             output = ToolOutput(content=[Text(text=texts.STOPPED_CALL_ERROR)], is_error=True)
         else:
+            ctx = _context(run, use, records, creates)
             try:
-                output = await resume(use.input, _context(run, use, records, creates), outcome)
+                output = await resume(use.input, ctx, outcome)
             except Exception as exc:
                 log.exception("tool %s resume failed", use.name)
                 output = ToolOutput(content=[Text(text=f"{type(exc).__name__}: {exc}")],
                                     is_error=True)
                 _drop_staged(records, creates)
+            # A resumed result (a child's answer among them) is held to the
+            # same limits as one the call returned at once.
+            output = await bound_result(output, tool, ctx, _reply_budget(run))
         if output.park is not None:  # a resume may not park again
             output = ToolOutput(content=[Text(text="the call could not finish")], is_error=True)
             _drop_staged(records, creates)

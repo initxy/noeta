@@ -420,6 +420,21 @@ async def test_a_tables_missing_secret_fails_only_its_calls(
         await router.provider_for("x-model").complete(ModelRequest(model="x-model"))
 
 
+def test_an_anthropic_provider_takes_the_one_hour_cache(home: Path) -> None:
+    (home / "config.toml").write_text(
+        'model = "claude-opus-5-5"\napi_key = "k"\nprompt_cache_ttl = "1h"\n'
+        '[providers.plain]\nfamily = "anthropic"\napi_key = "k"\n'
+        '[providers.hour]\nfamily = "anthropic"\napi_key = "k"\nprompt_cache_ttl = "1h"\n'
+        '[providers.gw]\nfamily = "openai_compat"\nbase_url = "https://x/v1"\napi_key = "k"\n'
+        'prompt_cache_ttl = "1h"\n')
+    s = load_settings()
+    assert s.make_provider()._cache_ttl == "1h"  # type: ignore[attr-defined]
+    assert s._table_provider("plain")._cache_ttl == "5m"  # type: ignore[attr-defined]
+    assert s._table_provider("hour")._cache_ttl == "1h"  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match="anthropic provider's setting"):
+        s._table_provider("gw")
+
+
 @pytest.mark.parametrize(("text", "match"), [
     ('[providers.a]\nbase_url = "x"\n', "family is required"),
     ('[providers.a]\nfamily = "openai_compat"\nkey = "x"\n', "unknown keys"),

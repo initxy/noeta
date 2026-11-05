@@ -37,6 +37,7 @@ log upload, no update check. A plugin you install can of course make its own req
 | start a child task, or post to an inbox | `view.spawn`, `view.post` / `view.enqueue` | `noeta/core/extension.py` |
 | use another plugin's tool | `view.find_tool(name)` | `noeta/core/extension.py` |
 | call the model from a hook or a tool | `view.complete`, `ctx.complete` (retried, not a step) | `noeta/core/extension.py`, `noeta/core/tool.py` |
+| run model work in the background and use it later | start it from a hook, post the outcome as an `External`, record it in `on_event` ([ADR-031](adr/031-background-plugin-work-returns-through-the-inbox.md)); `TaskState.model_called_at` and `view.next_request` for work between turns (as `noeta/plugins/compaction` does) | `noeta/core/extension.py` |
 | show a running call's progress | `ctx.progress(text)`: live only, never recorded | `noeta/core/tool.py` |
 | survive a crash in the middle of a call | `Tool.recover` (by `ctx.idempotency_key`) or `flags = ToolFlags(retry_safe=True)`; `ctx.keep()` for work that lives in one process | `noeta/core/tool.py` |
 | offer a tool only when the model asks for it | `flags = ToolFlags(deferred=True)` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |

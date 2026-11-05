@@ -10,9 +10,28 @@ All notable changes to Noeta are documented here. The format is based on
 ### Changed
 
 - **Pillow is a dependency.** Shrinking large images is no longer an extra to remember:
-  `uv tool install --with ./tui .` is the whole install line. The `images` extra is gone.
+  the `images` extra is gone. The terminal UI is the `tui` extra: from a checkout,
+  `uv tool install '.[tui]'` is the whole install line.
 
 ### Added
+
+- **An output cap the window cannot hold is lowered, not compacted.** A provider's "input
+  length and `max_tokens` exceed context limit" (Anthropic's, and OpenAI's and vLLM's forms
+  that state the input and the window) retries the call once with the cap the window leaves
+  (less 1,000 tokens, at least 3,000), as Claude Code does; other overflows still compact.
+- **A sub-agent's long result is saved, not inlined.** A result over 100,000 characters in its
+  completion notice, or a hand-back report that long, reaches the caller as a preview of the
+  file it was saved to (start and end without a spill directory). A parked tool's resumed
+  result is held to the same result limits as one returned at once.
+- **One-hour prompt cache for Anthropic**, off by default: `prompt_cache_ttl = "1h"` in
+  `config.toml` (top level or an `anthropic` `[providers.<name>]` table) marks every cache
+  breakpoint `{"type": "ephemeral", "ttl": "1h"}`; its replies carry
+  `ModelResponse.cache_ttl` (3600), folded into `TaskState.cache_ttl` for plugins.
+- **Long-context options of the compaction plugin** (Claude Code's): a summary written in the
+  background from 80% of the window and swapped in at the threshold (`auto_compact_precompute`,
+  on); older results of clearable tools cleared after an idle gap longer than the prompt
+  cache lives (`auto_compact_clear_results`, off); with the one-hour cache, a large idle task
+  compacted before its cache expires (`auto_compact_idle`, off).
 
 - **Session search and archive in the web and desktop apps.** The sidebar's search box narrows
   the sessions by title, first prompt or folder; a row's button archives a session, and the

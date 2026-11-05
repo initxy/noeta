@@ -1,6 +1,6 @@
 """The completion notice's fields, as Claude Code writes them: who stopped
 an agent, the step limit, the kept worktree, an empty result left out, the
-token count, and a hand-back auto mode flagged."""
+token count, a hand-back auto mode flagged, and a long result saved."""
 
 from __future__ import annotations
 
@@ -11,10 +11,13 @@ from typing import Any
 
 import pytest
 
+from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
+from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ChildEnded
 from noeta.core.extension import Extension, Gate, Rewrite, TaskView
+from noeta.core.runner import Runtime
 from noeta.core.runner.texts import STEP_LIMIT_HEAD
 from noeta.core.types import ToolUse, Usage
 from noeta.plugins.shell import Registry, Shell
@@ -24,7 +27,13 @@ from noeta.plugins.subtasks.extension import _outcome, subagent_tokens, task_not
 from noeta.plugins.subtasks.tool import agent_message, handback_flagged, handback_sender
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.notices import HANDBACK_REVIEW_KEY, STOPPED_BY_CALLER
-from tests.plugins.subtasks.test_agent_tool import agent, parent, runtime, worker
+from tests.plugins.subtasks.test_agent_tool import (
+    DefaultMode,
+    agent,
+    parent,
+    runtime,
+    worker,
+)
 
 HANDS_BACK = {"type": "scout", "description": "dig",
               "config": {"subagent_type": "scout", "subagent_handback": True}}
@@ -231,3 +240,67 @@ async def test_an_agent_stopped_with_task_stop_is_told_as_stopped_by_the_caller(
                   if "<task-notification>" in m.text)
     assert "<status>killed</status>" in notice
     assert '<summary>Agent "do it" was stopped by you</summary>' in notice
+
+
+# ---------------------------------------------------------------------------
+# A long result is saved and previewed, as a long tool result is
+# ---------------------------------------------------------------------------
+
+LONG = "x" * 99_000 + "\n" + "<tail & end>" * 1_000  # past RESULT_LIMIT_CHARS
+
+
+def _runtime(store: SqliteStore, providers: dict[str, ScriptedProvider], tmp_path: Path,
+             *agents: Agent, spill: bool) -> Runtime:
+    return Runtime(store=store, agents={a.name: a for a in agents},
+                   provider_for=lambda m: providers[m],  # type: ignore[arg-type,return-value]
+                   env_for=lambda s: LocalExecEnv(str(tmp_path)),
+                   spill_root=str(tmp_path / "spill") if spill else None)
+
+
+async def test_a_long_last_reply_reaches_the_caller_as_a_saved_preview(
+        store: SqliteStore, tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply(LONG)])
+    rt = _runtime(store, {"p": p, "c": c}, tmp_path, parent(DefaultMode()), worker(),
+                  spill=True)
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    notice = p.requests[2].messages[-1].text
+    saved = tmp_path / "spill" / tid / f"agent-{child.task_id}.txt"
+    assert "<result><persisted-output>\nOutput too large (" in notice
+    assert f"Full output saved to: {saved}\n" in notice
+    assert len(notice) < 5_000
+    assert saved.read_text() == LONG
+
+
+async def test_without_a_spill_dir_a_long_result_keeps_its_start_and_end(
+        store: SqliteStore, tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("x", "scout")), reply("launched"), reply("ok")])
+    c = ScriptedProvider([reply(LONG)])
+    rt = _runtime(store, {"p": p, "c": c}, tmp_path, parent(DefaultMode()), worker(),
+                  spill=False)
+    client = Client(store)
+    await client.create("main", "go")
+    await rt.run_until_idle()
+    notice = p.requests[2].messages[-1].text
+    result = notice.split("<result>", 1)[1].split("</result>", 1)[0]
+    assert result.startswith("<truncated-output>\n") and len(result) <= 100_000
+    assert result.endswith("&lt;tail &amp; end&gt;\n</truncated-output>")
+
+
+async def test_a_long_hand_back_reaches_the_caller_as_a_saved_preview(
+        store: SqliteStore, tmp_path: Path) -> None:
+    p = ScriptedProvider([reply("", agent("dig")), reply("launched"), reply("thanks")])
+    c = ScriptedProvider([reply("", ("SubagentHandback", {"message": LONG}))])
+    rt = _runtime(store, {"p": p, "c": c}, tmp_path, parent(), worker(), spill=True)
+    client = Client(store)
+    tid = await client.create("main", "go")
+    await rt.run_until_idle()
+    [child] = await client.tasks(parent_id=tid)
+    report = p.requests[2].messages[-1]
+    assert handback_sender(report) == child.task_id
+    assert "<persisted-output>" in report.text and len(report.text) < 5_000
+    [saved] = (tmp_path / "spill" / child.task_id).glob("*.txt")
+    assert saved.read_text() == LONG and f"Full output saved to: {saved}" in report.text

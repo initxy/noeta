@@ -41,10 +41,12 @@ from contextlib import aclosing
 from typing import Any
 
 import httpx
+import msgspec
 
 from noeta.backends.providers._anthropic_stream import StreamAccumulator, parse_message
 from noeta.backends.providers._anthropic_user_id import user_id
 from noeta.backends.providers._anthropic_wire import (
+    CACHE_TTLS,
     FAMILY,
     MIN_THINKING_BUDGET,
     apply_cache_control,
@@ -175,6 +177,7 @@ class AnthropicProvider:
         system_turns: bool = True,
         whole_timeout_seconds: float = WHOLE_TIMEOUT_SECONDS,
         first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
+        prompt_cache_ttl: str = "5m",
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment
         variable; an explicit argument still wins. Missing credentials raise
@@ -187,7 +190,14 @@ class AnthropicProvider:
         is for an endpoint without mid-conversation ``system`` turns: they go
         as ``<system-reminder>`` text in the user's turn instead.
         ``whole_timeout_seconds`` bounds a call answered in one piece
-        (:meth:`complete_whole`) from start to end."""
+        (:meth:`complete_whole`) from start to end. ``prompt_cache_ttl``
+        ``"1h"`` asks for the one-hour prompt cache (its writes are billed
+        higher; the cache outlasts longer breaks), and every reply says so
+        (``ModelResponse.cache_ttl``); ``"5m"`` is the API's default."""
+        if prompt_cache_ttl not in CACHE_TTLS:
+            raise ValueError(f"prompt_cache_ttl must be one of {sorted(CACHE_TTLS)}, "
+                             f"got {prompt_cache_ttl!r}")
+        self._cache_ttl = prompt_cache_ttl
         resolved_key = api_key if api_key is not None else os.environ.get(_API_KEY_ENV)
         if not resolved_key:
             raise ValueError(
@@ -278,7 +288,7 @@ class AnthropicProvider:
             silent = isinstance(exc, httpx.TimeoutException)
             raise StreamBroken(f"Anthropic stream broke: {type(exc).__name__}: {exc}",
                                stream_retries=1 if silent else None) from exc
-        return parse_message(accumulator.message_payload(), request.model)
+        return self._replied(parse_message(accumulator.message_payload(), request.model))
 
     async def complete_whole(self, request: ModelRequest) -> ModelResponse:
         """``request`` answered in one piece (no streaming), as Claude Code
@@ -319,7 +329,14 @@ class AnthropicProvider:
         if not isinstance(payload, dict):
             raise Fatal(_not_a_message(response), status=response.status_code,
                         body=response.text[:2000])
-        return parse_message(payload, request.model)
+        return self._replied(parse_message(payload, request.model))
+
+    def _replied(self, response: ModelResponse) -> ModelResponse:
+        """``response``, saying how long the cache it wrote lives when that
+        is not the API's default."""
+        if self._cache_ttl == "5m":
+            return response
+        return msgspec.structs.replace(response, cache_ttl=CACHE_TTLS[self._cache_ttl])
 
     async def count_tokens(self, model: str, text: str) -> int | None:
         """The exact input-token count of one user message holding ``text``
@@ -392,7 +409,7 @@ class AnthropicProvider:
         # as ``{"type": ...}``.
         if request.tool_choice is not None:
             body["tool_choice"] = {"type": request.tool_choice}
-        apply_cache_control(body, request, last_block, blocks_of)
+        apply_cache_control(body, request, last_block, blocks_of, ttl=self._cache_ttl)
         bare_strings(outbound)
         if request.stop_sequences:
             body["stop_sequences"] = list(request.stop_sequences)

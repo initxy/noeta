@@ -30,7 +30,7 @@ from noeta.plugins.subtasks.worktree import (
     worktree_exists,
 )
 from noeta.toolkit.notices import HANDBACK_REVIEW_KEY
-from noeta.toolkit.tools import SCHEMA_DIALECT, load_description, task_spill_dir
+from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, load_description, task_spill_dir
 
 if TYPE_CHECKING:
     from noeta.core.agent import Agent
@@ -56,6 +56,10 @@ UNATTENDED_KEY = "unattended"
 #: writes ``<dir>/<agent id>.output``; see ``transcript_file``).
 TRANSCRIPT_KEY = "transcript_dir"
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
+#: The most of an agent's result its caller is handed inline (Claude Code's
+#: cap on its agent tool's result); a longer one is saved to a file and
+#: previewed, as a tool's result is.
+RESULT_LIMIT_CHARS = 100_000
 DELEGATION_TOOLS = (texts.AGENT_TOOL, texts.LEGACY_AGENT_TOOL)
 
 
@@ -364,8 +368,9 @@ class HandbackTool:
                 HANDBACK_REVIEW_KEY):
             note = ""
         if parent and ctx.post is not None:
+            delivered = await limit_output(report, RESULT_LIMIT_CHARS, ctx)
             await ctx.post(Say(message=agent_message(
-                sender, report, note=note.strip()), when="now"),
+                sender, delivered, note=note.strip()), when="now"),
                 task_id=parent, dedupe_key=f"subtasks:handback:{ctx.idempotency_key}")
         return ToolOutput(content=text_output(texts.HANDBACK_DONE).content, end_turn=report)
 

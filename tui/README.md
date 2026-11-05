@@ -10,7 +10,7 @@ imports no plugin.
 ```bash
 uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
   'noeta @ git+https://github.com/initxy/noeta'
-# from a checkout:  uv tool install --with ./tui .
+# from a checkout:  uv tool install '.[tui]'
 ```
 
 `noeta` finds it through the entry-point group `noeta.frontends` (name `tui`) and prints

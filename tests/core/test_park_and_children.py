@@ -14,7 +14,15 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import ContextOverflow
-from noeta.core.events import Answer, ChildEnded, Compacted, TaskEnded, ToolFinished, Waiting
+from noeta.core.events import (
+    Answer,
+    ChildEnded,
+    Compacted,
+    ExtensionRecorded,
+    TaskEnded,
+    ToolFinished,
+    Waiting,
+)
 from noeta.core.extension import Extension, TaskView
 from noeta.core.runner import Runtime
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
@@ -128,6 +136,23 @@ async def test_delegation_parks_until_the_child_ends(store: SqliteStore) -> None
     assert (await client.get(tid)).waiting_on == "input"
 
 
+async def test_a_resumed_result_is_held_to_the_result_limit(store: SqliteStore) -> None:
+    """A child's long answer, returned when the parked call resumes, is cut
+    to the tool's limit as a result returned at once would be."""
+    answer = "y" * 60_000
+    provider = ScriptedProvider([reply("", ("Delegate", {"prompt": "write a lot"})),
+                                 reply(answer), reply("done")])
+    rt = runtime(store, provider, Agent(name="a", model="m", tools=[Delegate()]),
+                 Agent(name="worker", model="m", one_shot=True))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    [result] = [r.event.result for r in await client.events(tid)
+                if isinstance(r.event, ToolFinished)]
+    assert result.text.startswith("<truncated-output>\nOutput too large (58.6KB).")
+    assert len(result.text) <= 50_000
+
+
 @pytest.mark.parametrize(("asked", "lands"), [({}, "gpu"), ({"queue": "kids"}, "kids")])
 async def test_a_child_is_created_on_its_parents_queue_unless_one_is_named(
         store: SqliteStore, asked: dict[str, str], lands: str) -> None:
@@ -195,6 +220,42 @@ async def test_overflow_lets_an_extension_make_room(store: SqliteStore) -> None:
     second = provider.requests[1]
     assert second.messages[0].text == "(summary)"
     assert (await client.get(tid)).waiting_on == "input"
+
+
+async def test_an_overflow_of_the_output_cap_retries_with_a_smaller_cap(
+        store: SqliteStore) -> None:
+    """Claude Code's max-tokens overflow: the input fits, only not with the
+    cap asked for. The call is made again with the cap the window leaves, and
+    nothing is compacted."""
+    overflow = ContextOverflow("input length and `max_tokens` exceed context limit",
+                               input_tokens=150_000, context_limit=160_000)
+    provider = ScriptedProvider([overflow, reply("fits now")])
+    rt = runtime(store, provider, Agent(name="a", model="m", max_tokens=32_000,
+                                        extensions=[MakeRoom()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    first, second = provider.requests
+    assert (first.max_tokens, second.max_tokens) == (32_000, 9_000)
+    assert second.messages == first.messages  # no summary went in
+    events = [r.event for r in await client.events(tid)]
+    assert not any(isinstance(e, Compacted) for e in events)
+    assert [e.kind for e in events if isinstance(e, ExtensionRecorded)
+            and e.extension == "core"].count("retry") == 1
+    assert (await client.get(tid)).waiting_on == "input"
+
+
+async def test_an_overflow_a_smaller_cap_cannot_fix_still_compacts(store: SqliteStore) -> None:
+    overflow = ContextOverflow("input length and `max_tokens` exceed context limit",
+                               input_tokens=158_000, context_limit=160_000)  # 1,000 left
+    provider = ScriptedProvider([overflow, reply("fits now")])
+    rt = runtime(store, provider, Agent(name="a", model="m", max_tokens=32_000,
+                                        extensions=[MakeRoom()]))
+    client = Client(store)
+    await client.create("a", "go")
+    await rt.run_until_idle()
+    assert provider.requests[1].messages[0].text == "(summary)"
+    assert provider.requests[1].max_tokens == 32_000
 
 
 class OldMakeRoom(Extension):

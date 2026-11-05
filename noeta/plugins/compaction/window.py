@@ -21,6 +21,9 @@ from noeta.core.models import model_limits, resolve_alias
 OUTPUT_RESERVE_MAX_TOKENS = 20_000
 #: How far under the effective window auto-compaction fires.
 AUTOCOMPACT_BUFFER_TOKENS = 13_000
+#: The share of the effective window under which a summary starts being
+#: written ahead of the threshold (Claude Code's precomputed compaction).
+PRECOMPUTE_BUFFER_FRACTION = 0.2
 #: Claude Code's environment knobs under noeta's prefix, read when the plugin
 #: is not given one.
 WINDOW_ENV = "NOETA_AUTO_COMPACT_WINDOW"
@@ -37,6 +40,8 @@ class Window:
     effective: int
     #: Tokens at which auto-compaction fires.
     threshold: int
+    #: Tokens from which a summary is written ahead of the threshold.
+    precompute: int
 
 
 def check_positive(name: str, value: int | None) -> None:
@@ -89,5 +94,8 @@ def derive_window(model: str, *, auto_compact_window: int | None = None,
     threshold = effective - AUTOCOMPACT_BUFFER_TOKENS
     if auto_compact_percent is not None:
         threshold = min(int(effective * auto_compact_percent / 100), threshold)
+    threshold = max(1, threshold)
     return Window(context_window=context_window, max_output_tokens=max_output_tokens,
-                  effective=effective, threshold=max(1, threshold))
+                  effective=effective, threshold=threshold,
+                  precompute=min(effective - round(effective * PRECOMPUTE_BUFFER_FRACTION),
+                                 threshold))
