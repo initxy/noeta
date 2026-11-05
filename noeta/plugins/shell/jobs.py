@@ -160,13 +160,15 @@ _KEEP_HEAD = r"""keep_head() {
 #: line saying the middle was not kept, and its last quarter, and goes on
 #: growing (each cut copies at most ``$1`` bytes once ``$1 / 2`` came in).
 #: While reads come back full it takes up to 16 per size check (never past
-#: ``$1`` by more than one): a check costs two processes.
+#: ``$1`` by more than one): a check costs two processes. ``conv=notrunc``:
+#: uutils ``dd`` (Ubuntu 26.04's) truncates its stdout file when it reads
+#: nothing, so the read at the end would empty the log.
 _KEEP_TAIL = r"""keep_tail() {
   s=0
   q=$(($1 / 4))
   n=1
   while :; do
-    dd bs=65536 count="$n" 2>/dev/null >>"$2"
+    dd bs=65536 count="$n" conv=notrunc 2>/dev/null >>"$2"
     t=$(wc -c <"$2")
     [ "$t" -gt "$s" ] || return 0
     if [ $((t - s)) -gt $((n * 32768)) ]; then

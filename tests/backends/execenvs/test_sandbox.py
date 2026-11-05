@@ -442,10 +442,13 @@ async def test_an_agent_commits_in_its_worktree_but_cannot_touch_git_code(
     main, common, tree = _linked_worktree(tmp_path)
     env = LocalExecEnv(str(tree), sandbox={"enabled": True})
     git = "git -c user.name=t -c user.email=t@t"
-    code, out, _ = await _run(env, f"echo hi > f && {git} add f && {git} commit -qm x && "
-                                   f"{git} log --oneline | wc -l")
+    code, out, _ = await _run(env, f"echo hi > f && {git} add f && {git} commit -qm x")
     assert code == 0, out
-    assert out.split() == ["2"]
+    # Recent git also tries to lock packed-refs in the shared git directory,
+    # read-only here, says it could not, and commits anyway: only the
+    # count is checked.
+    code, out, _ = await _run(env, f"{git} log --oneline | wc -l")
+    assert code == 0 and out.split() == ["2"], out
     gitdir = common / "worktrees" / "agent-x"
     for command in (f"echo x >> {common}/config", f"echo x > {common}/hooks/pre-commit",
                     f"echo x > {gitdir}/config.worktree", f"echo {tmp_path} > {gitdir}/commondir",
