@@ -47,7 +47,7 @@ a `Say(when="now")` person message: it counts as a person turn for todos, compac
 
 ## Plan
 
-- [ ] H History out of the fold (D1, D2), snapshot version bumped, tests per reader.
+- [x] H History out of the fold (D1, D2), snapshot version bumped, tests per reader.
 - [ ] N Approval note beside the result (D3), TUI switched to it, web if it offers words.
 - [ ] Integrate, full gates, review.
 
@@ -64,3 +64,4 @@ a `Say(when="now")` person message: it counts as a person turn for todos, compac
 
 ## Progress log
 - 2026-11-05 Created; owner: "两个都做吧".
+- 2026-11-05 H done: `history` / `history_seqs` out of `TaskState`, snapshot `FORMAT` 2 (messages stored plainly). Readers: tool_search and memory record what a result loaded / read (`after_tool`, in the result's append); todos keys its reminder by log seq; checkpoints and compaction's turn use the kernel's `prompt_seq` (the person's newest message; one int, since a plugin cannot fold `InputTaken`); restore candidates from the compacted conversation; the saved transcript read from the log on demand (`compaction/transcript.py`); sub-agent "has replied" from messages or a compaction. 120-call test: snapshot after 14 compactions 255 KB before, 5.9 KB now (5.2 KB after the first). Left: `call_ids` still grows a few bytes per call; ADR-017 / ADR-026 still describe `history` (refine at review).

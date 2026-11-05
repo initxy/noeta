@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Literal
 
+import msgspec
 import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
@@ -540,6 +541,34 @@ async def test_a_continued_task_records_the_threshold_in_its_own_log(
     fork = await client.create("a", "go on", history_from=src)
     await runtime(store, a, model).run_until_idle()
     assert thresholds(await client.events(fork))
+
+
+async def test_a_long_tasks_snapshot_stays_bounded_across_compactions(
+        store: SqliteStore) -> None:
+    """The fold keeps the compacted conversation, not every message ever
+    added: the snapshot after the last of many compactions is about the size
+    of the one after the first, while the log grows with every call."""
+    from noeta.core import snapshots
+
+    a = agent()
+    model = Model([*(call() for _ in range(120)), answer("done")])
+    client, tid = await run(store, a, model)
+    log = await client.events(tid)
+    exts = a.all_extensions()
+    reducers = {e.name: e.reduce for e in exts}
+    state = fold([], reducers, {e.name: e.initial_state() for e in exts})
+    sizes = []
+    for rec in log:
+        fold([rec], reducers, state=state)
+        if isinstance(rec.event, Compacted):
+            data = snapshots.encode(state)
+            assert data is not None
+            sizes.append(len(data))
+    assert len(sizes) >= 10
+    whole = len(b"".join(msgspec.json.encode(r) for r in log))
+    # Bounded by the compacted conversation and the plugins' state (a few
+    # bytes per call id): no growth with the number of compactions.
+    assert max(sizes[-3:]) < 1.25 * max(sizes[:3]) and max(sizes) < whole / 5, (sizes, whole)
 
 
 async def test_the_saved_transcript_holds_the_whole_conversation(

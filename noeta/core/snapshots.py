@@ -31,10 +31,9 @@ import msgspec
 
 from noeta.core import registry
 from noeta.core.loop.state import TaskState
-from noeta.core.types import Message
 
 #: Bumped when the encoding below changes.
-FORMAT = 1
+FORMAT = 2
 
 #: The modules whose code decides what a log folds to.
 FOLD_MODULES = ("noeta.core.loop.state", "noeta.core.records", "noeta.core.events",
@@ -149,13 +148,10 @@ def version(agent: str, extensions: Sequence[Any]) -> str:
 
 
 class _Payload(msgspec.Struct):
-    #: Without ``messages`` and ``ext``, which follow.
+    #: Without ``ext``, which follows.
     state: TaskState
     #: Extension name -> its state, tagged (:func:`_tag`).
     ext: dict[str, Any]
-    #: ``state.messages``: each one that is also in ``state.history`` (all
-    #: of them until a compaction) as its index there, so it is kept once.
-    messages: list[int | Message] = []
 
 
 #: The key of an object standing for a value JSON has no shape for.
@@ -216,7 +212,6 @@ def decode(data: bytes) -> TaskState:
     payload = msgspec.json.decode(data, type=_Payload)
     state = payload.state
     state.ext = {name: _untag(value) for name, value in payload.ext.items()}
-    state.messages = [state.history[m] if isinstance(m, int) else m for m in payload.messages]
     return state
 
 
@@ -225,10 +220,7 @@ def encode(state: TaskState) -> bytes | None:
     equal to ``state``."""
     try:
         ext = {name: _tag(value) for name, value in state.ext.items()}
-        index = {id(m): i for i, m in enumerate(state.history)}
-        messages: list[int | Message] = [index.get(id(m), m) for m in state.messages]
-        data = msgspec.json.encode(_Payload(
-            state=dataclasses.replace(state, ext={}, messages=[]), ext=ext, messages=messages))
+        data = msgspec.json.encode(_Payload(state=dataclasses.replace(state, ext={}), ext=ext))
         same = decode(data) == state
     except (msgspec.MsgspecError, TypeError, ValueError):
         return None
