@@ -87,19 +87,25 @@ class StreamRoutes:
     async def stream_socket(self, ws: WebSocket) -> None:
         from noeta.host.stream_json import StreamJson, drive
 
+        # Another site's page (or a rebound name) is refused in the
+        # handshake: it gets no connection at all. A client of this server is
+        # let in and then closed with a code it can read (a browser sees no
+        # handshake status): 4401 without the token, 4403 for what it asked.
         if not self._guard.same_site(ws.headers):
             await ws.close(code=4403)
             return
         if not self._guard.authorized(ws.headers, ws.query_params):
-            await ws.close(code=4401)
+            await ws.accept()
+            await ws.close(code=4401, reason="unauthorized")
             return
         mine = self._guard.scope
         options = _options(ws.query_params, ask_client=True)
         try:
             mine.guarded.check_config({"permission_mode": options.permission_mode})
             options.cwd = mine.guarded.check_cwd(options.cwd)
-        except Refused:
-            await ws.close(code=4403)
+        except Refused as exc:
+            await ws.accept()
+            await ws.close(code=4403, reason=str(exc).encode()[:123].decode(errors="ignore"))
             return
         await ws.accept()
 

@@ -101,9 +101,12 @@ async def test_stream_json_over_a_websocket(served: tuple[str, ScriptedProvider]
             if message["type"] == "result":
                 break
         assert message["result"] == "echo done" and not message["is_error"]
-    with pytest.raises(websockets.InvalidStatus, match="403"):
-        async with websockets.connect(f"ws://{host}/stream-json"):
-            pass  # no token
+    # Refused after the handshake, with a code a client (a browser too) can read.
+    for query, code in (("", 4401), ("?token=wrong", 4401)):
+        async with websockets.connect(f"ws://{host}/stream-json{query}") as ws:
+            with pytest.raises(websockets.ConnectionClosed) as closed:
+                await asyncio.wait_for(ws.recv(), 10)
+        assert closed.value.rcvd is not None and closed.value.rcvd.code == code, query
 
 
 async def test_stream_json_init_names_the_directory_the_server_chose(
@@ -190,9 +193,11 @@ async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
         served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
     host, _ = served
     for query in ("permission_mode=bypassPermissions", "cwd=/"):
-        with pytest.raises(websockets.InvalidStatus, match="403"):
-            async with websockets.connect(f"ws://{host}/stream-json?token=secret&{query}"):
-                pass
+        async with websockets.connect(f"ws://{host}/stream-json?token=secret&{query}") as ws:
+            with pytest.raises(websockets.ConnectionClosed) as closed:
+                await asyncio.wait_for(ws.recv(), 10)
+        assert closed.value.rcvd is not None and closed.value.rcvd.code == 4403, query
+        assert closed.value.rcvd.reason, query  # what was refused
     async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
         assert (await http.post("/stream-json?cwd=/etc", content="")).status_code == 403
         for config in ({"permission_mode": "bypassPermissions"}, {"cwd": "/"},
