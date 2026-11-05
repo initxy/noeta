@@ -128,6 +128,7 @@ export function ToolCard({ t }: { t: Tool }) {
         {t.status === "waiting" && <span className="badge">waiting for you</span>}
       </div>
       {body && <div className="tool-body">{body}</div>}
+      {t.note && <div className="tool-note">⎿ {t.note}</div>}
     </div>
   );
 }

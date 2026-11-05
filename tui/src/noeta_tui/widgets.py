@@ -126,6 +126,11 @@ class ToolCall(Vertical):
         self.collapsed = True
         self._show()
 
+    async def set_note(self, note: str) -> None:
+        """What the person added to their yes, under the result, as the
+        model reads it beside the result."""
+        await self.mount(Static(Text.assemble(("  ⎿  ", "dim"), note), classes="tool-note"))
+
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
         if self.rows:

@@ -593,3 +593,22 @@ async def test_the_saved_transcript_holds_the_whole_conversation(
     assert len(uses) > 8 and uses == called[:len(uses)]
     assert not any(m["content"][0].get("text", "").startswith(SUMMARY_PREAMBLE)
                    for m in lines if m["content"])
+
+
+async def test_a_log_read_that_fails_leaves_no_transcript_and_no_failure(
+        tmp_path: Path) -> None:
+    """The saved transcript is incidental: a store error reading the log
+    costs the file, not the compaction."""
+    from types import SimpleNamespace
+
+    from noeta.core.loop.state import TaskState
+
+    work = tmp_path / "w"
+    work.mkdir()
+    ext = Compaction(home=str(tmp_path / "home"))
+
+    async def read_log(_task_id: str, after: int = 0) -> list[Any]:
+        raise records.NewerRecord("a newer worker wrote this log")
+
+    view = SimpleNamespace(env=LocalExecEnv(str(work)), task_id="t", read_log=read_log)
+    assert await ext._transcript(view, TaskState(task_id="t")) is None  # type: ignore[arg-type]

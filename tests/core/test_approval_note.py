@@ -15,11 +15,11 @@ from noeta.backends.providers.anthropic import AnthropicProvider
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import Event, InputTaken, Say, ToolFinished, ToolStarted, Waiting
-from noeta.core.extension import Ask, Extension, Gate, TaskView
+from noeta.core.extension import Ask, Deny, Extension, Gate, TaskView
 from noeta.core.runner import texts
 from noeta.core.store import Appended, Claim, NewTask, Patch, Post
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
-from noeta.core.types import ModelRequest, ToolUse
+from noeta.core.types import ModelRequest, ToolResult, ToolUse
 from noeta.host.pending import answer_choice, pending_tree
 from noeta.testing import ScriptedProvider, reply
 from tests.plugins.permissions.helpers import Fake, agent, events, runtime
@@ -82,6 +82,97 @@ async def test_a_yes_without_words_adds_nothing(store: SqliteStore) -> None:
     await answer_choice(client, tid, await asked(client, tid), "allow", "")
     await rt.run_until_idle()
     assert [b["type"] for b in last_user_blocks(provider)] == ["tool_result"]
+
+
+async def test_two_yeses_with_the_same_words_keep_both(store: SqliteStore) -> None:
+    """Each yes's words follow the batch's results, in the calls' order, as
+    Claude Code puts each beside its call's result: none is dropped as a
+    repeat."""
+    provider = ScriptedProvider([reply("", ("T", {}), ("T", {})), reply("done")])
+    rt = runtime(store, provider, agent([Asks()], [Fake("T")]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    for _ in range(2):
+        await answer_choice(client, tid, await asked(client, tid), "allow", "ok")
+        await rt.run_until_idle()
+    last = last_user_blocks(provider)
+    assert [b["type"] for b in last] == ["tool_result", "tool_result", "text", "text"]
+    assert [b["text"] for b in last[2:]] == ["ok", "ok"]
+
+
+class AsksThenRefuses(Extension):
+    """Asks about ``T``, then refuses it once asked: a check that changed
+    its mind between the prompt and the call."""
+
+    name = "asks"
+
+    def __init__(self) -> None:
+        self.asked = False
+
+    async def before_tool(self, view: TaskView, call: ToolUse) -> Gate | None:
+        if call.name != "T":
+            return None
+        if self.asked:
+            return Deny(reason="no longer allowed")
+        self.asked = True
+        return Ask(prompt="?")
+
+
+@pytest.mark.parametrize("refused", ["by a later check", "the tool is gone"])
+async def test_the_words_follow_a_refusal_after_the_yes(store: SqliteStore,
+                                                         refused: str) -> None:
+    gone = refused == "the tool is gone"
+    tool = Fake("T")
+    provider = ScriptedProvider([reply("", ("T", {})), reply("done")])
+    rt = runtime(store, provider, agent([Asks() if gone else AsksThenRefuses()],
+                                        [] if gone else [tool]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    await answer_choice(client, tid, await asked(client, tid), "allow", "then stop")
+    await rt.run_until_idle()
+    assert tool.runs == []
+    [finished] = [e for e in await events(client, tid) if isinstance(e, ToolFinished)]
+    assert finished.result.is_error and finished.note == "then stop"
+    last = last_user_blocks(provider)
+    assert [b["type"] for b in last] == ["tool_result", "text"]
+    assert last[1]["text"] == "then stop"
+
+
+class Question:
+    name = "Q"
+    description = "ask"
+    input_schema: dict[str, Any] = {"type": "object"}
+    read_only = False
+    clearable = False
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        return ToolOutput(park=Park(on="question"))
+
+    async def resume(self, input: dict[str, Any], ctx: ToolContext, outcome: Any) -> ToolOutput:
+        return text_output("withdrawn", is_error=True)
+
+
+async def test_a_turn_stopped_before_the_batch_lands_keeps_the_words(
+        store: SqliteStore) -> None:
+    """The stop answers the calls still open before the turn ends, so the
+    batch's message, words included, reaches the model."""
+    provider = ScriptedProvider([reply("", ("T", {}), ("Q", {})), reply("ok")])
+    rt = runtime(store, provider, agent([Asks()], [Fake("T"), Question()]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    await answer_choice(client, tid, await asked(client, tid), "allow", "mind the cache")
+    await rt.run_until_idle()
+    await client.cancel(tid, turn_only=True)
+    await rt.run_until_idle()
+    await client.send(tid, "go on")
+    await rt.run_until_idle()
+    answered = next(m for m in reversed(provider.requests[-1].messages)
+                    if any(isinstance(b, ToolResult) for b in m.content))
+    assert [type(b).__name__ for b in answered.content] == ["ToolResult", "ToolResult", "Text"]
+    assert answered.content[-1].text == "mind the cache"  # type: ignore[union-attr]
 
 
 class Crash(BaseException):

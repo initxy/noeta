@@ -222,8 +222,10 @@ class Compaction(Extension):
     def continue_state(self, state: Any) -> Any:
         """The ``threshold`` record went to the source's log; front ends
         follow the continuing task's own, so it is written there again. Where
-        the last compaction ran is a seq of the source's log."""
-        return replace(state, published=None, turn=-1, failed_at=None) \
+        the last compaction ran, and what it had seen, are seqs of the
+        source's log: every message of this task's own is newer (the carried
+        ones sit at seq 0)."""
+        return replace(state, published=None, turn=-1, failed_at=None, seen_through=0) \
             if isinstance(state, CompactionState) else state
 
     async def reminders(self, view: TaskView) -> Sequence[Reminder]:
@@ -514,7 +516,12 @@ class Compaction(Extension):
         if not self.transcripts or view.env is None or not is_local(view.env) \
                 or view.read_log is None:
             return None
-        messages = await full_conversation(view.read_log, view.task_id)
+        try:
+            messages = await full_conversation(view.read_log, view.task_id)
+        except Exception:  # the file is incidental: the compaction goes on without it
+            log.warning("task %s: could not read the log for the transcript", view.task_id,
+                        exc_info=True)
+            return None
         cwd = str(state.config.get("cwd") or view.env.cwd)
         name = file_name_part(view.task_id, "task")
         path = project_dir(cwd, self.home or noeta_home()) / f"{name}.jsonl"

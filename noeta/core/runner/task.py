@@ -439,7 +439,7 @@ class TaskRun:
         return continued(fold([r for r in source if through is None or r.seq <= through],
                               self.reducers, initial, state=base, also=self.also),
                          {e.name: e.continue_state for e in self.exts},
-                         started_by=_spawning_call(source, task_id))
+                         started_by=core_records.spawning_call(source, task_id))
 
     async def _keep_claim(self) -> None:
         interval = max(self.rt.lease_seconds / 3, 0.05)
@@ -791,9 +791,9 @@ class TaskRun:
         return self.tool_offer(view).tools
 
     @staticmethod
-    def error_result(call_id: str, text: str) -> ToolFinished:
+    def error_result(call_id: str, text: str, note: str | None = None) -> ToolFinished:
         return ToolFinished(result=ToolResult(call_id=call_id, content=[Text(text=text)],
-                                              is_error=True))
+                                              is_error=True), note=note)
 
     # ------------------------------------------------------------ the step
 
@@ -913,15 +913,3 @@ class TaskRun:
             await self.append([InputTaken(items=items, through=items[-1].seq)])
             if not self._enqueued:
                 return
-
-
-def _spawning_call(source: Sequence[Any], task_id: str) -> str:
-    """The id of the call in ``source`` (a task's records) that staged
-    ``task_id``, or ``""``."""
-    for r in source:
-        spawned = core_records.decode(r.event)
-        if isinstance(spawned, core_records.Spawned):
-            for child in spawned.children:
-                if child.get("id") == task_id:
-                    return str(child.get("call_id") or "")
-    return ""

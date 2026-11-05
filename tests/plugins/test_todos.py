@@ -209,6 +209,14 @@ def test_turns_count_content_blocks_and_skip_thinking() -> None:
     assert turns_since(messages[2:4], seqs[2:4], -1) == (2, 2)
     assert turns_since(messages[2:4], [0, 0], -1) == (2, 2)
     assert turns_since(messages[2:4], [0, 0], 0) == (2, 0)
+    # A /compact kept the last two turns (at seq 0); the reminder (after
+    # seq 4) went with what it folded (through seq 6): both count.
+    assert turns_since(messages[2:], [0, 0, 0, 0], 4, 6) == (3, 3)
+    # A reminder after the compaction counts from itself.
+    assert turns_since(messages[2:], [0, 0, 0, 0], 7, 6) == (3, 0)
+    # A continued task's carried turns (seq 0, reminder reset to 0) do not
+    # count, whatever compaction it carried.
+    assert turns_since(messages[2:], [0, 0, 0, 0], 0, 6) == (3, 0)
 
 
 async def test_input_repairs_and_hints() -> None:

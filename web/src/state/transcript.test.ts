@@ -66,6 +66,16 @@ describe("reduce", () => {
     expect(st.items[0]).toMatchObject({ status: "done", result: "ok", meta: { diff: "+y" }, progress: undefined });
   });
 
+  it("keeps a yes's words with the call's result, not a decline's marker", () => {
+    const st = run(
+      reply({ type: "tool_use", id: "c1", name: "Bash", input: {} }, { type: "tool_use", id: "c2", name: "Bash", input: {} }),
+      ev({ type: "ToolFinished", result: { call_id: "c1", content: [{ type: "text", text: "ok" }] }, note: "then run the tests" }),
+      ev({ type: "ToolFinished", result: { call_id: "c2", content: [{ type: "text", text: "no" }], is_error: true }, note: "[Request interrupted by user for tool use]\n" }),
+    );
+    expect(st.items[0]).toMatchObject({ note: "then run the tests" });
+    expect(st.items[1]).toMatchObject({ note: undefined });
+  });
+
   it("links an Agent call to its sub-agent and its end", () => {
     const st = run(
       reply({ type: "tool_use", id: "c1", name: "Agent", input: {} }),

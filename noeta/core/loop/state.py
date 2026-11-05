@@ -356,11 +356,13 @@ def _on_tool_finished(state: TaskState, ev: ToolFinished, seq: int) -> None:
 
 def _results_message(results: Sequence[ToolResult], notes: Sequence[str] = ()) -> Message:
     """The user message answering a batch of calls: their results, the
-    marker that follows a loaded tool, then each note once."""
+    marker that follows a loaded tool, then the notes in the calls' order
+    (each yes's words, even when two say the same; the decline's marker
+    comes once, since the calls after a decline are refused without it)."""
     content: list[Any] = list(results)
     if any(isinstance(b, ToolReference) for r in results for b in r.content):
         content.append(Text(text=TOOL_LOADED_TEXT))
-    content += [Text(text=n) for n in dict.fromkeys(notes)]
+    content += [Text(text=n) for n in notes]
     return Message(role="user", content=content)
 
 

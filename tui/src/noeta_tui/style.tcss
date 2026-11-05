@@ -17,6 +17,7 @@ Screen { layout: vertical; }
 .tool-call { height: auto; margin: 1 0 0 0; }
 .tool-head { height: auto; }
 .tool-body { height: auto; }
+.tool-note { height: auto; }
 .read-group { height: auto; }
 .read-head { height: auto; margin: 1 0 0 2; }
 .approval-diff { padding: 0 2 1 2; }

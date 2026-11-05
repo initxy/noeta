@@ -37,6 +37,7 @@ from noeta.core.events import (
     Waiting,
 )
 from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.runner.texts import REJECTED_MARKER
 from noeta.core.types import Delta
 from noeta.host.feed import failure_text
 from noeta.host.pending import (
@@ -363,6 +364,8 @@ class TranscriptView(App[None]):
             finished = self.calls.get(ev.result.call_id)
             if finished is not None:
                 finished.set_result(ev.result.text, is_error=ev.result.is_error, meta=ev.meta)
+                if ev.note and ev.note != REJECTED_MARKER:
+                    await finished.set_note(ev.note)
         elif isinstance(ev, ExtensionRecorded):
             await self._render_record(rec, ev, transcript)
         elif isinstance(ev, Waiting):
