@@ -178,6 +178,7 @@ async def test_a_pdf_over_100mb_is_refused(h: Harness, ws: Path) -> None:
         "Read: The PDF huge.pdf is over the 100MB that page rendering accepts.")
 
 
+@needs_poppler
 async def test_a_broken_pdf_reports_the_render_failure(h: Harness, ws: Path) -> None:
     (ws / "doc.pdf").write_bytes(b"%PDF-1.4\nnot really a pdf\n")
     out = await h.call(ReadTool(), file_path="doc.pdf")
