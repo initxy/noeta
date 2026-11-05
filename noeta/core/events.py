@@ -36,7 +36,9 @@ class Cancel(Struct, tag="cancel", tag_field="kind"):
 
 class Answer(Struct, tag="answer", tag_field="kind"):
     """A reply to something the task is waiting on: an approval (``allow`` /
-    ``deny``, optionally ``always``) or a question (``data``)."""
+    ``deny``, optionally ``always``; ``data`` ``{"message": ...}`` is what the
+    person added: a no's reason, or words that follow a yes's result) or a
+    question (``data``)."""
 
     request_id: str
     decision: Literal["allow", "deny"] | None = None
@@ -127,7 +129,7 @@ class ToolFinished(Struct, tag="ToolFinished", tag_field="type"):
     #: (``ToolOutput.end_turn``).
     end_turn: str | None = None
     #: Text that follows the reply's results in their message (the marker of
-    #: a call the person declined).
+    #: a call the person declined, the words they added to a yes).
     note: str | None = None
 
 

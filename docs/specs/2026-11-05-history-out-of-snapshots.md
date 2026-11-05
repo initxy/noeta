@@ -48,7 +48,7 @@ a `Say(when="now")` person message: it counts as a person turn for todos, compac
 ## Plan
 
 - [ ] H History out of the fold (D1, D2), snapshot version bumped, tests per reader.
-- [ ] N Approval note beside the result (D3), TUI switched to it, web if it offers words.
+- [x] N Approval note beside the result (D3), TUI switched to it, web if it offers words.
 - [ ] Integrate, full gates, review.
 
 ## Acceptance criteria
@@ -64,3 +64,12 @@ a `Say(when="now")` person message: it counts as a person turn for todos, compac
 
 ## Progress log
 - 2026-11-05 Created; owner: "两个都做吧".
+- 2026-11-05 N done: an approval's `Answer.data` `{"message": ...}` on a yes (the decline's
+  field) becomes that call's `ToolFinished.note`, so the words follow the batch's results in
+  their user message as a plain text block (Claude Code 2.1.318 pushes `acceptFeedback` as
+  `{type: "text"}` right after the `tool_result`, verbatim, with no framing; so do we, which
+  leaves no wording for the own-words check). Set in `_finish` and on a recovered "outcome
+  unknown" result, read from the logged answer, so a crash before or after the call starts
+  keeps it; a sub-agent's card answered at the root posts to the child as before.
+  `answer_choice` carries the message on every yes kind; the TUI no longer sends a
+  `Say(when="now")`. Web unchanged: its card has words on Deny only. `tests/core/test_approval_note.py`.

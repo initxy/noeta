@@ -116,7 +116,7 @@ def test_a_history_trim_uses_its_own_temp_file(tmp_path: Path) -> None:
 
 
 async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
-    from noeta.core.types import Text, ToolResult
+    from noeta.core.types import ToolResult
     from noeta_tui.widgets import ApprovalCard
 
     provider = ScriptedProvider([reply("", ("Bash", {"command": "rm -rf build", "n": 1})),
@@ -143,9 +143,12 @@ async def test_tab_amends_a_yes_or_a_no_with_what_to_do(tmp_path: Path) -> None:
     results = [b for m in asked for b in m.content if isinstance(b, ToolResult)]
     assert "use make clean" in results[0].text
     last = provider.requests[2].messages
-    i = next(i for i, m in enumerate(last) if any(isinstance(b, ToolResult) for b in m.content))
-    after = [b.text for m in last[i:] for b in m.content if isinstance(b, Text)]
-    assert "then stop" in after  # the yes's words come after the call's result
+    answered = [m for m in last if any(isinstance(b, ToolResult) for b in m.content)][-1]
+    # The yes's words follow the call's result in its message; no message of
+    # their own.
+    assert [type(b).__name__ for b in answered.content] == ["ToolResult", "Text"]
+    assert answered.text == "then stop"
+    assert sum("then stop" in m.text for m in last) == 1
 
 
 async def test_esc_in_the_amend_line_closes_it_and_keeps_the_turn(tmp_path: Path) -> None:
