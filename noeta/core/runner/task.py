@@ -695,7 +695,13 @@ class TaskRun:
                         count_tokens=self.counter(model), read_log=self._read_log,
                         child_tasks=self._child_ids,
                         spill_dir=self.rt.spill_root, identity=self.identity,
-                        effort=self.effort)
+                        effort=self.effort, next_request=self._next_request)
+
+    def _next_request(self) -> Any:
+        """``TaskView.next_request``."""
+        from noeta.core.runner.model import build_model_request
+
+        return build_model_request(self, final=False)
 
     async def _read_log(self, task_id: str, after: int = 0) -> Sequence[Recorded]:
         """``TaskView.read_log``: an unknown task reads as empty."""

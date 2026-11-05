@@ -319,6 +319,11 @@ class TaskView(records.CoreNotices):
     #: The task's effort (its config's, else its agent's); ``None`` for the
     #: provider's default.
     effort: Effort | None = None
+    #: ``next_request()``: the request the task's next model call would
+    #: start from (``Runtime.preview``'s: no reminder or ``before_model``
+    #: run), for model work between turns that shares the task's prompt
+    #: cache (a compaction while idle). ``None`` outside a runner.
+    next_request: Callable[[], ModelRequest] | None = None
 
     @property
     def task_id(self) -> str:

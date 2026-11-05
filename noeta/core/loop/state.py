@@ -98,6 +98,9 @@ class TaskState:
     #: Usage of the newest model reply; ``None`` before the first one and
     #: after a compaction (no recorded count describes the collapsed history).
     last_usage: Usage | None = None
+    #: When the newest ``ModelCalled`` landed (the store's clock, epoch
+    #: seconds), 0.0 before any: how long the prompt cache has gone unused.
+    model_called_at: float = 0.0
 
     #: Calls of the latest reply that are not all answered yet, in order.
     calls: list[Call] = field(default_factory=list)
@@ -256,6 +259,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer],
     elif isinstance(ev, InputTaken):
         _take(state, ev, rec.seq)
     elif isinstance(ev, ModelCalled):
+        state.model_called_at = rec.at
         state.model_attempts += 1
         state.steps_in_turn += 1
         state.waiting = None
