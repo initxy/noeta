@@ -195,13 +195,13 @@ def _pass_through(raw: bytes, media_type: str) -> FittedImage:
     if w > UNSHRUNK_MAX_SIDE or h > UNSHRUNK_MAX_SIDE:
         raise ImageTooLarge(
             f"at {w}x{h} px it is over the {UNSHRUNK_MAX_SIDE}x{UNSHRUNK_MAX_SIDE} px limit and "
-            "this host cannot shrink images (install noeta[images]); resize it to fit "
+            "this host cannot shrink images (install Pillow); resize it to fit "
             f"within {MAX_WIDTH}x{MAX_HEIGHT} px and try again")
     encoded = base64_size(len(raw))
     if encoded > MAX_BASE64_BYTES:
         raise ImageTooLarge(
             f"it is {_mb(encoded)} in base64, over the {_mb(MAX_BASE64_BYTES)} limit, and this "
-            "host cannot shrink images (install noeta[images]); make it smaller than "
+            "host cannot shrink images (install Pillow); make it smaller than "
             f"{_mb(TARGET_RAW_BYTES)} and try again")
     return FittedImage(raw, media_type, dims, dims)
 

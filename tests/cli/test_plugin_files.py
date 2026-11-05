@@ -124,11 +124,11 @@ def test_a_file_missing_a_package_says_how_to_install_it(home: Path) -> None:
 def test_a_module_of_an_extra_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     from noeta.cli import main as cli
 
-    monkeypatch.setattr(registry, "missing_modules", lambda: {"/p.py": "PIL"})
+    monkeypatch.setattr(registry, "missing_modules", lambda: {"/p.py": "keyring"})
     monkeypatch.setattr(registry, "broken_plugin_files",
-                        lambda: {"/p.py": "ModuleNotFoundError: No module named 'PIL'"})
+                        lambda: {"/p.py": "ModuleNotFoundError: No module named 'keyring'"})
     [line] = cli.broken_plugin_lines()
-    assert "the images extra" in line and "noeta[images] @ " in line
+    assert "the keyring extra" in line and "noeta[keyring] @ " in line
 
 
 def test_an_installed_plugin_wins_a_name_clash(home: Path) -> None:

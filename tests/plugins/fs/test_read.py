@@ -276,7 +276,7 @@ async def test_an_image_that_cannot_be_sent_never_reaches_the_history(
     (ws / "wide.png").write_bytes(png(9000, 10))
     out = await h.call(ReadTool(), file_path="wide.png")
     assert out.is_error and not images_of(out)
-    assert "9000x10 px" in text_of(out) and "noeta[images]" in text_of(out)
+    assert "9000x10 px" in text_of(out) and "install Pillow" in text_of(out)
     (ws / "corrupt.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
     out = await h.call(ReadTool(), file_path="corrupt.png")
     assert out.is_error and not images_of(out)

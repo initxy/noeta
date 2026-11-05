@@ -50,7 +50,7 @@ def test_a_command_names_its_missing_extra(argv: list[str], hidden: tuple[str, .
     source = f"'noeta[{extra}] @ {cli.SOURCE_URL}'"
     assert f"pip install {source}" in message
     # A reinstall keeps only the extras it names: the README's defaults stay.
-    wanted = ",".join(dict.fromkeys(("images", extra)))
+    wanted = ",".join(dict.fromkeys((*cli.README_EXTRAS, extra)))
     assert f"uv tool install --reinstall 'noeta[{wanted}] @ {cli.SOURCE_URL}'" in message
     assert "every extra" in message
     assert f"'noeta[{extra}]'" not in message  # not on PyPI: the name may be anyone's
