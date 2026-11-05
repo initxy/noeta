@@ -203,7 +203,9 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
             id=c.use.id, name=c.use.name, input=dict(checked))
         use, verdict = await resolve(run, view, call)
         if isinstance(verdict, Deny):
-            await run.append([run.error_result(use.id, verdict.reason or "denied")])
+            # A yes's words stay with the call when a later check refuses it.
+            await run.append([run.error_result(use.id, verdict.reason or "denied",
+                                               approval_note(run, use.id))])
             continue
         if isinstance(verdict, Ask):
             asked = (use.id, verdict)
@@ -211,7 +213,8 @@ async def run_calls(run: TaskRun, call_ids: Sequence[str]) -> bool:
         tool = tools.get(use.name)
         if tool is None:
             await run.append([run.error_result(
-                use.id, tool_use_error(NO_SUCH_TOOL.format(name=use.name)))])
+                use.id, tool_use_error(NO_SUCH_TOOL.format(name=use.name)),
+                approval_note(run, use.id))])
             continue
         if isinstance(verdict, Allow) and verdict.outright:
             outright.add(use.id)

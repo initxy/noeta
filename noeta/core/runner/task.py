@@ -791,9 +791,9 @@ class TaskRun:
         return self.tool_offer(view).tools
 
     @staticmethod
-    def error_result(call_id: str, text: str) -> ToolFinished:
+    def error_result(call_id: str, text: str, note: str | None = None) -> ToolFinished:
         return ToolFinished(result=ToolResult(call_id=call_id, content=[Text(text=text)],
-                                              is_error=True))
+                                              is_error=True), note=note)
 
     # ------------------------------------------------------------ the step
 
