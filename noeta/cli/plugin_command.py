@@ -104,8 +104,9 @@ def _checkout(url: str, commit: str, into: Path) -> str:
         raise PluginInstallError(f"{url!r} is not a git URL over an encrypted transport "
                                  "(https://, ssh://, user@host:path, or a local file://)")
     if not _FULL_COMMIT.match(commit):
-        raise PluginInstallError(f"{commit!r} is not a full commit id (40 hex digits): a "
-                                 "short one could match a commit pushed later")
+        raise PluginInstallError(f"{commit!r} is not a full commit id (40 hex digits, or 64 "
+                                 "in a SHA-256 repository): a short one could match a "
+                                 "commit pushed later")
     _git("clone", "--quiet", "--no-checkout", "--", url, str(into))
     _git("checkout", "--quiet", "--detach", commit, cwd=str(into))
     full = _git("rev-parse", "HEAD", cwd=str(into))

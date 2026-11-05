@@ -104,7 +104,7 @@ def test_a_pin_is_a_full_commit_over_an_encrypted_transport(home: Path,
     for short in (first[:7], first[:12], first[:39]):
         with pytest.raises(PluginInstallError, match="full commit id"):
             install(f"file://{src}@{short}")
-    with pytest.raises(PluginInstallError, match="full commit id"):
+    with pytest.raises(PluginInstallError, match=r"40 hex digits, or 64 in a SHA-256"):
         install(f"file://{src}", commit=first[:10])
     # Plain-text transports: anyone on the way could hand over other code.
     for url in ("http://example.invalid/p.git", "git://example.invalid/p.git"):
