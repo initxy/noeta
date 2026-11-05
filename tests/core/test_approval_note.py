@@ -84,6 +84,23 @@ async def test_a_yes_without_words_adds_nothing(store: SqliteStore) -> None:
     assert [b["type"] for b in last_user_blocks(provider)] == ["tool_result"]
 
 
+async def test_two_yeses_with_the_same_words_keep_both(store: SqliteStore) -> None:
+    """Each yes's words follow the batch's results, in the calls' order, as
+    Claude Code puts each beside its call's result: none is dropped as a
+    repeat."""
+    provider = ScriptedProvider([reply("", ("T", {}), ("T", {})), reply("done")])
+    rt = runtime(store, provider, agent([Asks()], [Fake("T")]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    for _ in range(2):
+        await answer_choice(client, tid, await asked(client, tid), "allow", "ok")
+        await rt.run_until_idle()
+    last = last_user_blocks(provider)
+    assert [b["type"] for b in last] == ["tool_result", "tool_result", "text", "text"]
+    assert [b["text"] for b in last[2:]] == ["ok", "ok"]
+
+
 class AsksThenRefuses(Extension):
     """Asks about ``T``, then refuses it once asked: a check that changed
     its mind between the prompt and the call."""
