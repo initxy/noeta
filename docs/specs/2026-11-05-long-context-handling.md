@@ -78,9 +78,9 @@ facts that drive the design:
 - [x] Max-tokens overflow retries with a smaller output cap (kernel / providers).
 - [x] Sub-agent result bound (subtasks).
 - [x] One-hour cache option (Anthropic provider).
-- [ ] Precomputed compaction (compaction).
-- [ ] Clearing old results after an idle gap (compaction).
-- [ ] Idle compaction (compaction).
+- [x] Precomputed compaction (compaction).
+- [x] Clearing old results after an idle gap (compaction).
+- [x] Idle compaction (compaction).
 - [ ] Docs: CONTEXT.md / plugin docs / ADR if a costly-to-reverse decision lands.
 - [ ] Review per docs/reviewing.md; gates; archive.
 
@@ -124,3 +124,14 @@ facts that drive the design:
   requests). Plugins read it from the log, not the provider: the reply says
   `ModelResponse.cache_ttl` (3600; `None` = the provider's default), folded into
   `TaskState.cache_ttl` (the newest reply's). Default off sends the same bytes (`make parity` 0).
+- 2026-11-05: (3) precomputed compaction, (4) clearing after an idle gap, (6) idle compaction
+  landed as compaction options `auto_compact_precompute` (on), `auto_compact_clear_results` /
+  `auto_compact_clear_idle_seconds` (off, 3,900 s), `auto_compact_idle` (off). The background
+  summary returns through the task's inbox as an `External` signal and is recorded when taken
+  (ADR-031); it is used only while its compaction count and the digest of the messages it
+  covers still match. Kernel additions: `TaskState.model_called_at` (the gap for clearing, the
+  idle timer's base) and `TaskView.next_request` (the idle compaction's request). Idle
+  compaction reads `TaskState.cache_ttl == 3600` (the provider item's field) defensively until
+  that lands. `make parity`: 0 mismatches; no scenario reaches 80% of the window.
+- 2026-11-05: cut: at the threshold with a summary still being written, the step summarizes as
+  before rather than waiting for it (the late result is then dropped as outdated).

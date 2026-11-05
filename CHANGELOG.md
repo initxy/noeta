@@ -27,6 +27,12 @@ All notable changes to Noeta are documented here. The format is based on
   `config.toml` (top level or an `anthropic` `[providers.<name>]` table) marks every cache
   breakpoint `{"type": "ephemeral", "ttl": "1h"}`; its replies carry
   `ModelResponse.cache_ttl` (3600), folded into `TaskState.cache_ttl` for plugins.
+- **Long-context options of the compaction plugin** (Claude Code's): a summary written in the
+  background from 80% of the window and swapped in at the threshold (`auto_compact_precompute`,
+  on); older results of clearable tools cleared after an idle gap longer than the prompt
+  cache lives (`auto_compact_clear_results`, off); with the one-hour cache, a large idle task
+  compacted before its cache expires (`auto_compact_idle`, off).
+
 - **Session search and archive in the web and desktop apps.** The sidebar's search box narrows
   the sessions by title, first prompt or folder; a row's button archives a session, and the
   "Archived" list brings one back. Archiving is the `archive` signal (`{"archived": bool}`,

@@ -232,10 +232,10 @@ def test_the_context_is_the_last_usage_plus_what_came_after() -> None:
     messages = [user(cjk), Message(role="assistant", content=[Text(text="ok")]), user("more")]
     request = ModelRequest(model="m", messages=messages)
     state = TaskState(messages=messages)
-    full, _ = Compaction._tokens(state, request, len(messages))
+    full, _ = Compaction()._tokens(state, request, len(messages))
     assert full >= 10_000
     state.last_usage = Usage(uncached=3_000, cache_read=1_000, output=20)
-    tokens, before = Compaction._tokens(state, request, len(messages))
+    tokens, before = Compaction()._tokens(state, request, len(messages))
     assert before == 4_020
     assert tokens == 4_020 + messages_tokens([user("more")])
 
