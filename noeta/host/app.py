@@ -107,6 +107,9 @@ class FrontEndStart:
     #: Set when the project at ``cwd`` is not trusted: trusts it and loads
     #: what only a trusted project loads (the front end asks first).
     trust: Callable[[], None] | None = None
+    #: The person's first message (``noeta "<prompt>"``), sent as if typed
+    #: once the task opens.
+    prompt: str | None = None
 
 
 async def change_config(client: ClientAPI, task_id: str, changes: Mapping[str, Any]) -> None:

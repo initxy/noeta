@@ -211,7 +211,9 @@ class NoetaApp(TranscriptView):
     async def _open_first(self) -> None:
         """The task the app starts on: ``--resume``'s, the picked one, the
         newest one started here (``-c``; with none, Claude Code's message and
-        exit code 1), or a new one."""
+        exit code 1), or a new one; the command line's prompt is then sent
+        as if typed (left in the input while the person picks a task)."""
+        prompt = self.start.prompt
         if self.resume:
             await self.open_task(self.resume)
         elif self.resume == "":
@@ -225,6 +227,10 @@ class NoetaApp(TranscriptView):
         else:
             await self.new_task()
         self.query_one(PromptInput).focus()
+        if prompt and self.resume == "":
+            self.query_one(PromptInput).text = prompt
+        elif prompt:
+            await self.submit(prompt)
 
     async def on_unmount(self) -> None:
         await self.local.stop()

@@ -413,7 +413,7 @@ def _front(argv: list[str]) -> None:
 
     common: dict[str, Any] = {"cwd": cwd, "resume": args.resume,
                               "continue_last": args.continue_last,
-                              "permission_mode": args.permission_mode,
+                              "permission_mode": args.permission_mode, "prompt": args.prompt,
                               "home": str(home_dir.HOME), "version": noeta_version()}
     backend: Any
     if args.server:

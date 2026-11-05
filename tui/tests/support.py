@@ -118,7 +118,7 @@ class AskBash(Extension):
 def make_app(tmp_path: Path, provider: Any, *exts: Extension, tools: Sequence[Any] = (),
              settings: Any = None, **start: Any) -> NoetaApp:
     """``start``: more of what the ``noeta`` command hands the app
-    (``FrontEndStart``'s ``permission_mode``, ``trust``)."""
+    (``FrontEndStart``'s ``permission_mode``, ``trust``, ``prompt``)."""
     work = tmp_path / "w"
     work.mkdir(exist_ok=True)
     agent = Agent(name="main", model=MODEL, tools=list(tools),
@@ -130,4 +130,5 @@ def make_app(tmp_path: Path, provider: Any, *exts: Extension, tools: Sequence[An
                           settings=settings or (lambda: [("store", "sqlite:///t.db")]),
                           **start)
     return NoetaApp(local, agent="main", model=MODEL, cwd=str(work),
-                    permission_mode=start.get("permission_mode"), start=front)
+                    permission_mode=start.get("permission_mode"),
+                    resume=start.get("resume"), start=front)
