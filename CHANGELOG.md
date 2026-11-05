@@ -57,6 +57,18 @@ All notable changes to Noeta are documented here. The format is based on
   The list is a fold of the task's log (any worker, after a compaction, in a fork); sub-agents
   get no task tools. Those models' system prompt gains Claude Code's one task-tools line.
 
+### Fixed
+
+- **`noeta worker` sweeps old saved tool outputs**, daily, as `noeta serve` does
+  (`LocalApp.run_until`); a worker-only deployment used to keep them forever.
+- **No permission asked for `CronCreate`, `CronList`, `CronDelete`, `EnterWorktree`,
+  `ExitWorktree` or `ReadMcpResourceDirTool`**, as in Claude Code (`CronCreate` still goes to
+  the auto-mode classifier).
+- **Skills in `~/.agents/skills`** (the directory coding agents share) reach the `noeta`
+  command, below `~/.noeta/skills`.
+- **Cron jobs run in the task's time zone** (task config `timezone`), not the worker
+  machine's; without one, the machine's as before.
+
 ### Changed
 
 - **Holds are gone; a task with a background job keeps its own claim** (ADR-029, spec

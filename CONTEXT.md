@@ -97,8 +97,9 @@ package's `add_to` is ignored). `noeta plugin add <git-url>@<commit>` installs o
 A task records the plugins it runs with (`records.Plugins`: each one's `registry.pin` — name,
 source, version or file hash, arguments hash) when it first starts and whenever a pickup finds
 them changed. A worker missing a recorded plugin never runs the task without it: it lets the
-lease run out, and fails the task with `plugin_missing` after `LOAD_ATTEMPTS` such claims in a
-row (`TaskRun._plugin_missing`). A reload (the TUI's
+lease run out, and fails the task with `plugin_missing` after `LOAD_ATTEMPTS` of its own claims
+in a row with the log unchanged: each worker counts in memory (`Runtime._plugin_missing`), so the
+limit is per worker and a restart starts it over. A reload (the TUI's
 `/reload-plugins`, `LocalApp.reload_plugins`; on servers a rolling restart) re-imports plugin
 files and remakes the agents: a task runs the new code from its next turn, recorded so.
 
@@ -181,7 +182,7 @@ calls are gated in order and gating stops at the first ask: the calls after it w
 
 ## origin
 
-A message's `origin` says who speaks in the user channel: `user`, `system` / `memory` for
+A message's `origin` says who speaks in the user channel: `human` (the person), `system` / `memory` for
 text the host or a plugin adds (reminders, notices, recalled memory), or `agent` for another
 agent's framed message (a sub-agent's hand-back, sent as plain text), or `inline` for host text
 joined into the person's turn as plain text (a typed command's skill body, the interrupted

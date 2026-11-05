@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -196,6 +197,35 @@ async def test_cron_jobs_create_list_fire_rearm_and_delete(store: SqliteStore) -
     assert results[-2:] == [texts.CRON_DELETED.format(id=recurring["id"]),
                             texts.CRON_UNKNOWN.format(id="nope")]
     assert recurring["id"] not in (await _state(client, tid, ext))["jobs"]
+
+
+def test_next_match_reads_the_expression_in_a_given_zone() -> None:
+    zone = ZoneInfo("Pacific/Kiritimati")  # UTC+14, rarely a machine's own
+    start = datetime(2026, 10, 28, 9, 7, 30, tzinfo=zone).timestamp()
+    nxt = cron.next_match("30 14 * * *", start, zone)
+    assert nxt is not None
+    assert datetime.fromtimestamp(nxt, zone) == datetime(2026, 10, 28, 14, 30, tzinfo=zone)
+
+
+async def test_a_cron_job_runs_in_the_tasks_time_zone(store: SqliteStore) -> None:
+    """The task config's ``timezone`` (the person's), not the worker's."""
+    provider = ScriptedProvider([
+        reply("", ("ToolSearch", {"query": "select:CronCreate"})),
+        reply("", (texts.CRON_CREATE_TOOL, {"cron": "1 9 * * *", "prompt": "standup",
+                                            "recurring": False})),
+        reply("scheduled"),
+    ])
+    ext = Schedule()
+    rt = runtime(store, provider, ext)
+    client = Client(store)
+    tid = await client.create("a", "remind me", config={"timezone": "Pacific/Kiritimati"})
+    await rt.run_until_idle()
+    jobs = (await _state(client, tid, ext))["jobs"]
+    assert isinstance(jobs, dict)
+    [job] = jobs.values()
+    at = datetime.fromtimestamp(job["next_at"], ZoneInfo("Pacific/Kiritimati"))
+    assert (at.hour, at.minute, at.second) == (9, 1, 0)
+    assert "+14" in _results([r.event for r in await client.events(tid)])[1]
 
 
 async def test_a_continued_task_does_not_inherit_its_sources_jobs(store: SqliteStore) -> None:

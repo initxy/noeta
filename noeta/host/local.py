@@ -285,6 +285,19 @@ class LocalApp:
             self._listening = asyncio.create_task(
                 run_channels(self.channels, self.client, self._stop))
 
+    async def run_until(self, stop: asyncio.Event) -> None:
+        """:meth:`start` the worker and the channels, run until ``stop`` is
+        set (or the worker fails, which is raised), then :meth:`stop`: a
+        process that only runs tasks (``noeta worker``)."""
+        await self.start()
+        assert self._serving is not None
+        stopping = asyncio.create_task(stop.wait())
+        try:
+            await asyncio.wait({stopping, self._serving}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopping.cancel()
+            await self.stop()
+
     async def stop(self) -> None:
         self._stop.set()
         for running in (self._listening, self._serving, self._publishing, self._sweeping):

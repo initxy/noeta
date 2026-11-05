@@ -10,6 +10,9 @@ import secrets
 from pathlib import Path
 
 HOME = Path(os.environ.get("NOETA_HOME") or Path.home() / ".noeta")
+#: The skills directory coding agents share (``~/.agents/skills``), not
+#: noeta's own: ``$NOETA_HOME`` does not move it.
+AGENTS_SKILLS = Path.home() / ".agents" / "skills"
 
 
 def ensure_home() -> Path:

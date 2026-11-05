@@ -521,11 +521,12 @@ SKILL_BUDGET_ENV = "NOETA_SLASH_COMMAND_TOOL_CHAR_BUDGET"
 
 
 def _skills_settings(found: FileSettings, additional: Sequence[str]) -> dict[str, Any]:
-    """The skills plugin's arguments: noeta's places (``~/.noeta/skills``
-    and ``commands``, the managed directory's), the additional directories,
-    and the listing settings."""
+    """The skills plugin's arguments: the user's places (``~/.noeta/skills``
+    and ``commands``, ``~/.agents/skills``), the managed directory's, the
+    additional directories, and the listing settings."""
     out: dict[str, Any] = {"trusted": project_trusted,
                            "global_dir": str(home_dir.HOME / "skills"),
+                           "global_agents_dir": str(home_dir.AGENTS_SKILLS),
                            "global_commands_dir": str(home_dir.HOME / "commands"),
                            "managed_dir": str(managed_dir()),
                            "additional_dirs": list(additional)}
