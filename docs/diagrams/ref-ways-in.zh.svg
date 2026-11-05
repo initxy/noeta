@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 444" role="img" aria-label="每个 noeta 命令运行什么：前端在自己进程里的 LocalApp 上，或通过 RemoteApp 连服务端；serve 和 worker 从共享存储里运行任务；trust、plugin、mcp 只改文件"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="ref-ways-in-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="ref-ways-in-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="ref-ways-in-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="ref-ways-in-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="ref-ways-in-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<text x="132" y="34" class="ntd-label" text-anchor="middle">命令</text>
+<text x="491" y="34" class="ntd-label" text-anchor="middle">运行的是什么</text>
+<text x="832" y="34" class="ntd-label" text-anchor="middle">任务存在哪</text>
+<rect x="16" y="48" width="232" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="132.0" y="75.0" class="ntd-code" text-anchor="middle">noeta</text>
+<path d="M 248 70 L 276 70" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="280" y="48" width="422" height="44" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="491.0" y="75.0" class="ntd-chiptext" text-anchor="middle">终端界面，跑在 LocalApp 上：只管自己的任务</text>
+<path d="M 702 70 L 738 70" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="16" y="104" width="232" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="132.0" y="131.0" class="ntd-code" text-anchor="middle">noeta --server URL</text>
+<path d="M 248 126 L 276 126" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="280" y="104" width="422" height="44" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="491.0" y="131.0" class="ntd-chiptext" text-anchor="middle">终端界面，跑在 RemoteApp 上：操作 noeta serve 的任务</text>
+<rect x="16" y="160" width="232" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="132.0" y="187.0" class="ntd-code" text-anchor="middle">noeta -p</text>
+<path d="M 248 182 L 276 182" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="280" y="160" width="422" height="44" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="491.0" y="187.0" class="ntd-chiptext" text-anchor="middle">Claude Code 的无界面模式，走标准输入输出</text>
+<path d="M 702 182 L 738 182" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="16" y="216" width="232" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="132.0" y="243.0" class="ntd-code" text-anchor="middle">noeta acp</text>
+<path d="M 248 238 L 276 238" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="280" y="216" width="422" height="44" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="491.0" y="243.0" class="ntd-chiptext" text-anchor="middle">在标准输入输出上说 ACP 协议（给编辑器用）</text>
+<path d="M 702 238 L 738 238" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="16" y="272" width="232" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="132.0" y="299.0" class="ntd-code" text-anchor="middle">noeta serve</text>
+<path d="M 248 294 L 276 294" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="280" y="272" width="422" height="44" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="491.0" y="299.0" class="ntd-chiptext" text-anchor="middle">HTTP / WebSocket 接口，默认也带 worker</text>
+<path d="M 702 294 L 738 294" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="16" y="328" width="232" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="132.0" y="355.0" class="ntd-code" text-anchor="middle">noeta worker</text>
+<path d="M 248 350 L 276 350" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="280" y="328" width="422" height="44" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="491.0" y="355.0" class="ntd-chiptext" text-anchor="middle">Runtime.serve：认领队列里的任意任务，跑渠道</text>
+<path d="M 702 350 L 738 350" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="16" y="384" width="232" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="132.0" y="411.0" class="ntd-code" text-anchor="middle">noeta trust · plugin(s) · mcp</text>
+<path d="M 248 406 L 276 406" class="ntd-line" marker-end="url(#ref-ways-in-arrow)"/>
+<rect x="280" y="384" width="422" height="44" rx="10" class="ntd-chip"/>
+<text x="491.0" y="411.0" class="ntd-chiptext" text-anchor="middle">只读写 ~/.noeta 和 .noeta/ 里的文件</text>
+<rect x="740" y="48" width="184" height="324" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="832.0" y="182.0" class="ntd-title" text-anchor="middle">存储</text>
+<text x="832.0" y="204.0" class="ntd-code" text-anchor="middle">--store · NOETA_STORE</text>
+<text x="832.0" y="226.0" class="ntd-code" text-anchor="middle">默认</text>
+<text x="832.0" y="248.0" class="ntd-code" text-anchor="middle">~/.noeta/tasks.db</text>
+</svg>

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 420" role="img" aria-label="插件的三种形态：插件文件和 Python 包按名字进注册表，Claude Code 插件的各部分由读这些格式的插件加载；代理按名字引用插件，每个任务启动时记下自己用的插件"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="guide2-plugin-shapes-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker></defs>
+<rect x="20" y="30" width="250" height="86" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="145.0" y="56" class="ntd-title" text-anchor="middle">插件文件</text>
+<text x="145.0" y="78" class="ntd-code" text-anchor="middle">~/.noeta/plugins/x.py</text>
+<text x="145.0" y="98" class="ntd-sub" text-anchor="middle">靠 add_to 自己加入代理</text>
+<rect x="20" y="166" width="250" height="86" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="145.0" y="192" class="ntd-title" text-anchor="middle">Python 包</text>
+<text x="145.0" y="214" class="ntd-code" text-anchor="middle">entry point noeta.plugins</text>
+<text x="145.0" y="234" class="ntd-sub" text-anchor="middle">被点名才加入</text>
+<rect x="20" y="302" width="250" height="86" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="145.0" y="328" class="ntd-title" text-anchor="middle">Claude Code 插件</text>
+<text x="145.0" y="350" class="ntd-code" text-anchor="middle">.claude-plugin/plugin.json</text>
+<text x="145.0" y="370" class="ntd-sub" text-anchor="middle">技能 · 代理 · 命令 · hooks</text>
+<rect x="345" y="80" width="215" height="100" rx="10" class="ntd-box"/>
+<text x="452.5" y="106" class="ntd-title" text-anchor="middle">注册表</text>
+<text x="452.5" y="128" class="ntd-code" text-anchor="middle">noeta/core/registry.py</text>
+<text x="452.5" y="148" class="ntd-sub" text-anchor="middle">所有插件按名字查找</text>
+<rect x="345" y="296" width="215" height="98" rx="10" class="ntd-box"/>
+<text x="452.5" y="322" class="ntd-title" text-anchor="middle">读这些格式的插件</text>
+<text x="452.5" y="342" class="ntd-sub" text-anchor="middle">skills · markdown_commands</text>
+<text x="452.5" y="362" class="ntd-sub" text-anchor="middle">hooks · mcp · 代理文件</text>
+<rect x="645" y="80" width="255" height="120" rx="10" class="ntd-box"/>
+<text x="772.5" y="106" class="ntd-title" text-anchor="middle">代理</text>
+<text x="772.5" y="126" class="ntd-sub" text-anchor="middle">main · general-purpose</text>
+<text x="772.5" y="146" class="ntd-sub" text-anchor="middle">Explore · Plan · 你自己的</text>
+<text x="772.5" y="166" class="ntd-sub" text-anchor="middle">plugins 列表 + add_plugins</text>
+<rect x="645" y="300" width="255" height="90" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="772.5" y="326" class="ntd-title" text-anchor="middle">每个任务的日志</text>
+<text x="772.5" y="348" class="ntd-code" text-anchor="middle">records.Plugins</text>
+<text x="772.5" y="368" class="ntd-sub" text-anchor="middle">名字 · 版本 · 参数哈希</text>
+<path d="M270,73 C305,73 310,112 343,112" class="ntd-line" marker-end="url(#guide2-plugin-shapes-arrow)"/>
+<text x="300" y="64" class="ntd-mini" text-anchor="middle">导入</text>
+<path d="M270,209 C305,209 310,150 343,150" class="ntd-line" marker-end="url(#guide2-plugin-shapes-arrow)"/>
+<text x="298" y="228" class="ntd-mini" text-anchor="middle">安装</text>
+<path d="M270,345 L343,345" class="ntd-line" marker-end="url(#guide2-plugin-shapes-arrow)"/>
+<text x="306" y="337" class="ntd-mini" text-anchor="middle">各部分</text>
+<path d="M560,130 L643,130" class="ntd-line" marker-end="url(#guide2-plugin-shapes-arrow)"/>
+<text x="601" y="122" class="ntd-mini" text-anchor="middle">按名字</text>
+<path d="M560,345 C600,345 600,180 643,180" class="ntd-line" marker-end="url(#guide2-plugin-shapes-arrow)"/>
+<text x="607" y="262" class="ntd-mini" text-anchor="start">&lt;插件&gt;:&lt;名字&gt;</text>
+<path d="M772,200 L772,298" class="ntd-line" marker-end="url(#guide2-plugin-shapes-arrow)"/>
+<text x="782" y="254" class="ntd-mini" text-anchor="start">启动时记下</text>
+</svg>

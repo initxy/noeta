@@ -47,4 +47,4 @@ disk (a project's own `.npmrc` is the tenant's).
 - Credentials kept under other names or outside home directories are readable unless the
   operator's `denyRead` names them.
 - Files the OS user can read outside the protected set are shared by all tenants;
-  `docs/server.md` ("What separates tenants") says so.
+  the server docs said so (since removed with tenants).

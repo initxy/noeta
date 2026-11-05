@@ -46,39 +46,9 @@ noeta -p --output-format stream-json --input-format stream-json --verbose
                                          # Claude Code's SDK protocol: point an Agent SDK at it
 ```
 
-More providers go in `config.toml` tables; the settings above stay the default provider, and
-`provider = "<table name>"` makes a table the default instead:
-
-```toml
-[providers.claude]
-family = "anthropic"                 # or openai_compat, openai_responses
-api_key = "{env:ANTHROPIC_API_KEY}"  # a literal, or {env:…} / {keyring:…}
-models = ["claude-opus-5-5"]         # optional; rows {id, context_window, max_output_tokens} too
-# base_url, headers = {…}, list_models = false (skip reading its /models)
-# prompt_cache_ttl = "1h" (anthropic: the one-hour prompt cache, billed higher per write)
-```
-
-A model id resolves to the provider whose table names it (or whose models-file row says
-`"provider"`; one model named for two providers is a config error), else the first provider
-whose `/models` listing has it (the default first), else the default. A model's context window
-comes from noeta's catalog, then a models file (`NOETA_MODELS_FILE`) or table rows, then its
-provider's `/models` listing when that publishes one (read from your endpoint only, kept a day in
-`~/.noeta/cache/models`), else default limits with a warning.
-
-What is deterministic, with more than one provider: when a task is started with a model or
-switched to one (`/model`, the SDK's `set_model`, an editor's pick), and when a sub-agent is
-spawned (on its parent's model or its own), that resolution is made once and recorded in the
-task's config (`model_route`: the provider, and limits a listing gave) beside the bare model id.
-Every worker sends that model to the recorded provider at those limits, whatever its own
-listings say, and fails the call if that provider is not configured there. Only the server
-records a route; a client (HTTP, stream-json, an editor) cannot set one. The exceptions, which
-resolve on the worker that runs them and are the same everywhere only when a table or models
-file names the model: a model a plugin calls on the side (`compaction_model`, a title or
-permission-classifier model, a skill's `model`), and the agent's own model after an editor
-picks "default". With one provider nothing is recorded (the log is as before); a model's
-listed limits are then looked up by each process. Reasoning a provider signed is replayed only to that provider, and tool-call ids
-another provider wrote are rewritten to the form Anthropic takes. `/model` alone lists every
-provider's models.
+More providers, models files, side models and how a model id picks its provider:
+[Models and providers](https://initxy.github.io/noeta/guides/models) and, for the design,
+[Providers and model routing](https://initxy.github.io/noeta/how-it-works/models).
 
 Tasks are kept in `~/.noeta/tasks.db`; `noeta -c` continues
 the newest conversation in this directory, `noeta -r` lists them. A project's own
@@ -86,7 +56,7 @@ the newest conversation in this directory, `noeta -r` lists them. A project's ow
 
 Project instructions come from `NOETA.md` (or, in a directory without one, the cross-tool
 `AGENTS.md`); skills from `.noeta/skills` and the cross-tool `.agents/skills`, in the project, the
-directories above it and `~/.noeta` / `~/.agents`.
+directories above it, and `~/.noeta/skills`.
 
 | Extra | For |
 |---|---|
@@ -138,7 +108,7 @@ A worker that dies leaves nothing behind: another claims its tasks where their l
 front end attached with `--server` needs the token in `NOETA_SERVER_TOKEN` and no model of its
 own: its tasks run on the server's model and in the server's directory unless `--model` or
 `--cwd PATH` (a directory on the server) say otherwise.
-Workspaces and the token: [docs/server.md](docs/server.md).
+Workspaces and the token: [Run it as a server](https://initxy.github.io/noeta/guides/server).
 
 ## Extend it
 
@@ -146,8 +116,8 @@ Everything outside the small kernel is a plugin behind one `Extension` interface
 through Python entry points or as a single file in `~/.noeta/plugins/` — the built-in ones
 exactly like yours. Agents are markdown files in Claude Code's format, prompts have names you
 can override, and Claude Code plugin directories load from noeta's own places. How to write and
-ship each kind, and how it compares with pi, DeepSeek Harness and Claude Code:
-[docs/extending.md](docs/extending.md).
+ship each kind: [Write a plugin](https://initxy.github.io/noeta/guides/plugins); how it compares with pi,
+DeepSeek Harness and Claude Code: [Compared with other agents](https://initxy.github.io/noeta/operations/comparison).
 
 ## Benchmarks
 
@@ -183,11 +153,13 @@ telemetry, no log upload, no update check. Tools reach out only when the model c
 
 ## Docs
 
-- [docs/architecture.md](docs/architecture.md) — the kernel, plugins, layers, ways in, many machines
-- [docs/extending.md](docs/extending.md) — writing and shipping plugins
-- [docs/server.md](docs/server.md) — workers, workspaces and the token
-- [CONTEXT.md](CONTEXT.md) — the vocabulary; [docs/adr/](docs/adr/index.md) — the decisions and why
-- [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md)
+**[initxy.github.io/noeta](https://initxy.github.io/noeta/)** (中文：[initxy.github.io/noeta/zh](https://initxy.github.io/noeta/zh/))
+— quickstart, guides, how every part is designed and why, and the full reference. The source
+is [docs/](docs/index.md); `make docs-dev` serves it locally.
+
+For contributors: [CONTEXT.md](CONTEXT.md) — the vocabulary; [docs/adr/](docs/adr/index.md) —
+the decisions and why; [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
+[CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

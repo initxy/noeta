@@ -51,8 +51,8 @@ The package is layered and imports only downward: `noeta/cli` > `noeta/agents` >
 `noeta/plugins/<name>` | `noeta/backends` | `noeta/host` > `noeta/toolkit` > `noeta/core`.
 The kernel (`core`) carries no capability; a plugin imports only `core` and `toolkit`; two
 plugins never import each other; front ends import no plugin. `CONTEXT.md` ("Layers", "Where
-code goes") is the rule, and the lints enforce it. [docs/architecture.md](docs/architecture.md)
-explains the design.
+code goes") is the rule, and the lints enforce it. [How it works](docs/how-it-works/index.md)
+on the docs site explains the design.
 
 ## How a change flows
 
@@ -71,7 +71,7 @@ explains the design.
 - **One fact, one home.** Docs link instead of repeating each other; when code and docs
   disagree, the code is right and the doc is fixed in the same change.
 
-Everything committed is English. Reviews follow [`docs/reviewing.md`](docs/reviewing.md).
+Everything committed is English, except the docs site's Chinese pages under `docs/zh/` (`AGENTS.md`, Language). Reviews follow [`docs/reviewing.md`](docs/reviewing.md).
 
 ## AI-assisted contributions
 

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" role="img" aria-label="A model request in order: tools, two system blocks, then the messages; three cache marks"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs></defs>
+<rect x="150" y="46" width="570" height="64" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="435" y="67" class="ntd-chiptext" text-anchor="middle">Tools, sorted by name</text>
+<text x="435" y="85" class="ntd-mini" text-anchor="middle">every plugin&#x27;s tools() plus tool_changes(); deferred ones carry defer_loading</text>
+<text x="435" y="100" class="ntd-mini" text-anchor="middle">listed_last tools at the end, DeferredToolPlaceholder second to last</text>
+<rect x="150" y="122" width="570" height="44" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="435" y="140.5" class="ntd-chiptext" text-anchor="middle">Identity line</text>
+<text x="435" y="158.5" class="ntd-mini" text-anchor="middle">identity/&lt;agent&gt;</text>
+<rect x="150" y="176" width="570" height="50" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="435" y="197.5" class="ntd-chiptext" text-anchor="middle">Agent prompt + ContextParts</text>
+<text x="435" y="215.5" class="ntd-mini" text-anchor="middle">system/&lt;agent&gt;, then each plugin&#x27;s context() text in order (memory, todos)</text>
+<rect x="150" y="250" width="570" height="60" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="435" y="269" class="ntd-chiptext" text-anchor="middle">Opening context (recorded at start)</text>
+<text x="435" y="287" class="ntd-mini" text-anchor="middle">project instructions (NOETA.md / AGENTS.md), memory index, git snapshot,</text>
+<text x="435" y="302" class="ntd-mini" text-anchor="middle">sent as &lt;system-reminder&gt;</text>
+<rect x="150" y="320" width="570" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="435" y="338.5" class="ntd-chiptext" text-anchor="middle">The person&#x27;s message</text>
+<text x="435" y="356.5" class="ntd-mini" text-anchor="middle">a Say from the inbox, taken as InputTaken</text>
+<rect x="150" y="374" width="570" height="46" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="435" y="393.5" class="ntd-chiptext" text-anchor="middle">Replies, tool calls, tool results</text>
+<text x="435" y="411.5" class="ntd-mini" text-anchor="middle">ModelReplied, ToolFinished; long results already replaced by a preview</text>
+<rect x="150" y="430" width="570" height="64" rx="10" class="ntd-chip ntd-chip-violet ntd-dash"/>
+<text x="435" y="451" class="ntd-chiptext" text-anchor="middle">This step&#x27;s reminders</text>
+<text x="435" y="469" class="ntd-mini" text-anchor="middle">recorded from reminders() now: role=user ones join the person&#x27;s turn,</text>
+<text x="435" y="484" class="ntd-mini" text-anchor="middle">role=system ones become system turns by order: environment, deferred, budget, date</text>
+<path d="M 136 50 L 128 50 L 128 106 L 136 106" class="ntd-line"/>
+<text x="116" y="82" class="ntd-label" text-anchor="end">tools</text>
+<path d="M 136 126 L 128 126 L 128 222 L 136 222" class="ntd-line"/>
+<text x="116" y="178" class="ntd-label" text-anchor="end">system</text>
+<path d="M 136 254 L 128 254 L 128 490 L 136 490" class="ntd-line"/>
+<text x="116" y="376" class="ntd-label" text-anchor="end">messages</text>
+<path d="M 726 144 L 738 138 L 738 150 z" class="ntd-arrowhead"/>
+<text x="744" y="142" class="ntd-code">cache_control</text>
+<text x="744" y="157" class="ntd-mini">breakpoint</text>
+<path d="M 726 201 L 738 195 L 738 207 z" class="ntd-arrowhead"/>
+<text x="744" y="199" class="ntd-code">cache_control</text>
+<text x="744" y="214" class="ntd-mini">breakpoint</text>
+<path d="M 726 462 L 738 456 L 738 468 z" class="ntd-arrowhead"/>
+<text x="744" y="460" class="ntd-code">cache_control</text>
+<text x="744" y="475" class="ntd-mini">breakpoint</text>
+<text x="450" y="540" class="ntd-mini" text-anchor="middle">The tools get no mark of their own: the first system block&#x27;s covers them (Anthropic&#x27;s prefix runs tools → system → messages).</text>
+</svg>

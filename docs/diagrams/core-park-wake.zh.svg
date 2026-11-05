@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 350" role="img" aria-label="工具调用停下来等提问的答复：任务写一条 Waiting 并交还认领；在人的答复到达之前没有工人占着它，到了之后任何工人都能认领并接着跑这次调用"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="core-park-wake-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="core-park-wake-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="core-park-wake-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="core-park-wake-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="core-park-wake-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<text x="20" y="55" class="ntd-title">工人 A</text>
+<text x="20" y="135" class="ntd-title">任务行</text>
+<path d="M 20 98 L 906 98" class="ntd-line ntd-dashed"/>
+<text x="20" y="215" class="ntd-title">人</text>
+<path d="M 20 178 L 906 178" class="ntd-line ntd-dashed"/>
+<text x="20" y="295" class="ntd-title">工人 B</text>
+<path d="M 20 258 L 906 258" class="ntd-line ntd-dashed"/>
+<rect x="130" y="30" width="120" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="190.0" y="54.5" class="ntd-mini" text-anchor="middle">工具返回 park</text>
+<rect x="258" y="30" width="120" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="318.0" y="54.5" class="ntd-mini" text-anchor="middle">Parked 记录</text>
+<rect x="386" y="30" width="120" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="446.0" y="54.5" class="ntd-mini" text-anchor="middle">追加 Waiting</text>
+<text x="524" y="55" class="ntd-mini">工人 A 去跑别的任务</text>
+<rect x="130" y="110" width="208" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="234.0" y="134.5" class="ntd-code" text-anchor="middle">running · A · epoch 4</text>
+<rect x="346" y="110" width="254" height="40" rx="8" class="ntd-chip ntd-chip-amber ntd-dash"/>
+<text x="473.0" y="134.5" class="ntd-mini" text-anchor="middle">waiting（等提问）· 无持有者 · 无租约</text>
+<rect x="606" y="110" width="50" height="40" rx="8" class="ntd-chip"/>
+<text x="631.0" y="134.5" class="ntd-code" text-anchor="middle">ready</text>
+<rect x="662" y="110" width="244" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="784.0" y="134.5" class="ntd-code" text-anchor="middle">running · B · epoch 5</text>
+<path d="M 446 70 L 446 108" class="ntd-line" marker-end="url(#core-park-wake-arrow)"/>
+<text x="473" y="166" class="ntd-mini" text-anchor="middle">几分钟或几天：不占任何资源</text>
+<rect x="360" y="190" width="160" height="40" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="440.0" y="214.5" class="ntd-mini" text-anchor="middle">前端显示问题</text>
+<rect x="528" y="190" width="128" height="40" rx="8" class="ntd-chip ntd-chip-amber"/>
+<text x="592.0" y="214.5" class="ntd-code" text-anchor="middle">client.answer</text>
+<path d="M 620 190 L 628 152" class="ntd-line" marker-end="url(#core-park-wake-arrow)"/>
+<text x="704" y="215" class="ntd-mini">投递 Answer · 唤醒</text>
+<rect x="662" y="270" width="64" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="694.0" y="294.5" class="ntd-mini" text-anchor="middle">认领</text>
+<rect x="734" y="270" width="172" height="40" rx="8" class="ntd-chip ntd-chip-green"/>
+<text x="820.0" y="294.5" class="ntd-code" text-anchor="middle">InputTaken(Answer)</text>
+<path d="M 694 150 L 694 268" class="ntd-line" marker-end="url(#core-park-wake-arrow)"/>
+<text x="906" y="332" class="ntd-code" text-anchor="end">→ tool.resume → ToolFinished → …</text>
+</svg>

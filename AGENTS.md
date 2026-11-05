@@ -7,7 +7,7 @@
 
 ## Language
 
-- All repository artifacts are written in English: docs (`CONTEXT.md`, `docs/adr/`, `docs/specs/`), code comments, and identifiers. There are no Chinese mirrors in the repo.
+- All repository artifacts are written in English: docs (`CONTEXT.md`, `docs/adr/`, `docs/specs/`), code comments, and identifiers. The one exception is the docs site: every page in `docs/` that the site serves (`docs/.vitepress/config.ts` lists them) has a Chinese page at the same path under `docs/zh/`, written as Chinese rather than translated, and a change to one updates both.
 - Keep technical terms in their canonical English form and spell them consistently throughout: code identifiers (function / class / file / variable names), API / library / tool / command names, file paths, and fixed architecture terms (module, interface, seam, adapter, deep module, etc.). Don't invent alternate names or switch between synonyms.
 - Write clear, idiomatic English prose — not word-for-word translation from another language.
 - Pick one spelling per term and use it everywhere; don't mix variants.
@@ -18,7 +18,7 @@
 - Read `CONTEXT.md` first whenever you touch domain concepts, system boundaries, or stable conventions. A package with its own `AGENTS.md` keeps its module-only concepts there.
 - Read `docs/adr/` (start at `docs/adr/index.md`) first whenever a long-term architecture trade-off is involved; never rely on an ADR marked `superseded`, and read the ADRs listed under its `Refined by`.
 - Code is the single source of truth for "what is." When docs and code disagree, trust the code and fix the docs.
-- One fact, one home: never state the same fact in two docs — link instead. A change that invalidates a `CONTEXT.md` entry or ADR updates it in the same task.
+- One fact, one home: never state the same fact in two docs — link instead. The docs site is the home of explanations for users; `CONTEXT.md` and ADRs are for contributors and the site links to them. A change that invalidates a `CONTEXT.md` entry or ADR updates it in the same task.
 - Write docs lean: a `CONTEXT.md` or `AGENTS.md` line exists only if code can't tell an agent the same thing quickly; point at code by repo path instead of restating it. An ADR only for a shipped decision that is costly to reverse; changing one is a new ADR that refines or supersedes it, never an amendment in place. `scripts/check-docs.sh` holds the budgets and formats — trim, don't raise them. When unsure, don't write it.
 - Code comments carry only constraints the code can't show — never a `docs/specs/` reference (one-shot artifacts). Code needn't cite ADRs; where a comment names one it is plain prose, not a contract.
 - Archived specs (`docs/specs/archive/`) are construction history — never read them as a description of the current system.
@@ -48,6 +48,7 @@
 - parity: `make parity` — noeta replayed offline through Claude Code's recorded scenarios, every request difference in `parity/report.md` (`scripts/parity/README.md`); never part of `check`
 - cluster: `make cluster` — worker processes on one Postgres (a throwaway `postgres:16` container, or `NOETA_TEST_POSTGRES_DSN`) under random SIGKILL / SIGSTOP with a scripted provider (`tests/cluster`); a known gap is an `xfail(strict=True)` there; `NOETA_CLUSTER_SEED` replays a run; never part of `check`
 - check: `make check` — ruff, mypy --strict, `scripts/lint-naming.py`, `scripts/lint-layout.py` (placement), `lint-imports` (layering), pytest with coverage ≥ 85, `make example` (the example plugins), `scripts/check-docs.sh`
+- docs: `make docs` — the docs site (VitePress in `docs/`, diagrams in `docs/diagrams/`, `npm run diagrams` restyles them); needs node, never part of `check`; `make docs-dev` previews it
 - frontends: `make frontends` — each front end's own checks (`web/`: npm typecheck, vitest, Playwright against a real `noeta serve` on a scripted provider); needs node and a browser, never part of `check`
 - release: tag push per `docs/releasing.md` — approval gate
 

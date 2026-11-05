@@ -39,7 +39,7 @@ the same. So "nothing crosses it" holds for the API only.
   `headers_helper`), whoever configured it; remote servers run in the tenant's own connection
   partition, so no connection or OAuth sign-in is shared.
 
-`docs/server.md` ("What separates tenants") lists, tool by tool, what is and is not a
+the server docs listed, tool by tool, what is and is not a
 boundary.
 
 ## Rationale

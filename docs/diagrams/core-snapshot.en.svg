@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 428" role="img" aria-label="A claim folds the task's snapshot of its own fold version plus the events after it; a snapshot of another version is ignored and the log is folded from the start"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="core-snapshot-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="core-snapshot-arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-green"/></marker><marker id="core-snapshot-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-violet"/></marker><marker id="core-snapshot-arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-amber"/></marker><marker id="core-snapshot-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<text x="20" y="30" class="ntd-label">task log</text>
+<rect x="20" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="41" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="62" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="83" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="104" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="125" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="146" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="167" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="188" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="209" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="230" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="251" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="272" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="293" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="314" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="335" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="356" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="377" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="398" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="419" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="440" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="461" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="482" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="503" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="524" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="545" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="566" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="587" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="608" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="629" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="650" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="671" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="692" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="713" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="734" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="755" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="776" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<rect x="797" y="40" width="18" height="26" rx="4" class="ntd-chip ntd-chip-violet"/>
+<path d="M 281.0 104 L 281.0 70" class="ntd-line-violet" marker-end="url(#core-snapshot-arrow-violet)"/>
+<rect x="211.0" y="106" width="140" height="30" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="281.0" y="126" class="ntd-chiptext" text-anchor="middle">snapshot @ seq 120</text>
+<path d="M 575.0 104 L 575.0 70" class="ntd-line-violet" marker-end="url(#core-snapshot-arrow-violet)"/>
+<rect x="505.0" y="106" width="140" height="30" rx="8" class="ntd-chip ntd-chip-violet"/>
+<text x="575.0" y="126" class="ntd-chiptext" text-anchor="middle">snapshot @ seq 260</text>
+<path d="M 587 74 L 587 80 L 815 80 L 815 74" class="ntd-line"/>
+<text x="701.0" y="98" class="ntd-mini" text-anchor="middle">events after it</text>
+<text x="826" y="58" class="ntd-mini">seq →</text>
+<text x="20" y="176" class="ntd-label">A claim folds:</text>
+<rect x="20" y="192" width="220" height="46" rx="10" class="ntd-chip"/>
+<text x="130.0" y="219.5" class="ntd-sub" text-anchor="middle">a snapshot of my fold version?</text>
+<path d="M 240 215 L 282 215" class="ntd-line" marker-end="url(#core-snapshot-arrow)"/>
+<text x="261" y="206" class="ntd-mini" text-anchor="middle">yes</text>
+<rect x="284" y="192" width="250" height="46" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="409.0" y="219.5" class="ntd-sub" text-anchor="middle">it + the events after it</text>
+<path d="M 130 238 L 130 282" class="ntd-line" marker-end="url(#core-snapshot-arrow)"/>
+<text x="140" y="264" class="ntd-mini">no</text>
+<rect x="20" y="284" width="220" height="46" rx="10" class="ntd-chip ntd-chip-green ntd-dash"/>
+<text x="130.0" y="311.5" class="ntd-sub" text-anchor="middle">fold the whole log</text>
+<text x="284" y="312" class="ntd-mini">slower, never wrong</text>
+<rect x="560" y="160" width="324" height="256" rx="10" class="ntd-box"/>
+<text x="574" y="186" class="ntd-sub">•</text>
+<text x="586" y="186" class="ntd-sub">version = hash of the fold code, the agent,</text>
+<text x="586" y="204" class="ntd-sub">each plugin's pin</text>
+<text x="574" y="230" class="ntd-sub">•</text>
+<text x="586" y="230" class="ntd-sub">written in the background, folded from stored</text>
+<text x="586" y="248" class="ntd-sub">events, kept only if it reads back equal</text>
+<text x="574" y="274" class="ntd-sub">•</text>
+<text x="586" y="274" class="ntd-sub">due once ≥ snapshot_every events (100) and ≥</text>
+<text x="586" y="292" class="ntd-sub">10% of its bytes have been added</text>
+<text x="574" y="318" class="ntd-sub">•</text>
+<text x="586" y="318" class="ntd-sub">TaskEnded deletes every snapshot of the task</text>
+<text x="586" y="336" class="ntd-sub">in the same transaction</text>
+<text x="574" y="362" class="ntd-sub">•</text>
+<text x="586" y="362" class="ntd-sub">at most 2 per task (one per fold version:</text>
+<text x="586" y="380" class="ntd-sub">rolling upgrades)</text>
+</svg>

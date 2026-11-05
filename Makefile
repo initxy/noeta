@@ -9,6 +9,7 @@
 #   make web        the web app: install, typecheck, unit and e2e tests (web/)
 #   make desktop    the desktop app: install, typecheck, unit and e2e tests (desktop/)
 #   make frontends  every front end's tests (tui/, web/, desktop/)
+#   make docs       build the docs site (docs/, VitePress); make docs-dev serves it live
 #   make e2e        live tests: real LLM / real container (needs credentials)
 #   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
 #   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
@@ -16,7 +17,7 @@
 #   make build      wheel + sdist into dist/
 
 .DEFAULT_GOAL := help
-.PHONY: help install check test lint example tui tui-screenshots web desktop frontends e2e eval eval-baseline \
+.PHONY: help install check test lint example tui tui-screenshots web desktop frontends docs docs-dev e2e eval eval-baseline \
 	parity cluster build
 
 help:
@@ -32,6 +33,7 @@ help:
 	@echo "  make web        web/: install, typecheck, unit tests, e2e against a real noeta serve"
 	@echo "  make desktop    desktop/: install, typecheck, unit tests, e2e of the built app (xvfb-run)"
 	@echo "  make frontends  every front end's tests (tui/, web/, desktop/)"
+	@echo "  make docs       build the docs site into docs/.vitepress/dist (docs-dev: live preview)"
 	@echo "  make e2e        live tests: real LLM / real container (needs credentials)"
 	@echo "  make eval       prompt-regression eval vs evals/baseline.json (needs credentials)"
 	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
@@ -54,7 +56,7 @@ lint:
 
 ## a third-party plugin end to end: built and installed from examples/hello-plugin
 ## (found through its entry point, nothing patched), in a throwaway environment;
-## then the single-file plugins of examples/ (docs/extending.md), loaded as plain files
+## then the single-file plugins of examples/ (docs/guides/plugins.md), loaded as plain files
 PLUGIN_FILE_EXAMPLES = examples/run-tests/tests examples/chat-bridge/tests \
 	examples/chat-approvals/tests examples/house-style/tests
 example:
@@ -71,6 +73,13 @@ tui-screenshots:
 
 ## every front end's own tests
 frontends: tui web desktop
+
+## the docs site: diagrams on the shared style, then a VitePress build (dead links fail it)
+docs:
+	cd docs && npm ci && npm run build
+
+docs-dev:
+	cd docs && npm ci && npm run dev
 
 ## the web app: typecheck, unit tests, Playwright against a real noeta serve
 web:

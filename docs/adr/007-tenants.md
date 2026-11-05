@@ -41,4 +41,4 @@ in the HTTP layer (a task's own `SendMessage` would cross the boundary).
 - The workspace bound is enforced where tasks come in (HTTP), not by the worker; host code
   with an unscoped client can still set any `cwd`.
 - A budget counts model calls from when it is set; a call that starts under it may end over.
-- `docs/server.md` documents the deployment.
+- `docs/guides/server.md` documents the deployment.

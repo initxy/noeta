@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" role="img" aria-label="一次模型请求按顺序由工具、系统提示和消息组成，三处打缓存标记"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs></defs>
+<rect x="150" y="46" width="570" height="64" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="435" y="67" class="ntd-chiptext" text-anchor="middle">工具，按名字排序</text>
+<text x="435" y="85" class="ntd-mini" text-anchor="middle">各插件的 tools() 加上 tool_changes()；延迟加载的带 defer_loading</text>
+<text x="435" y="100" class="ntd-mini" text-anchor="middle">listed_last 的排在最后，DeferredToolPlaceholder 在倒数第二</text>
+<rect x="150" y="122" width="570" height="44" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="435" y="140.5" class="ntd-chiptext" text-anchor="middle">身份行</text>
+<text x="435" y="158.5" class="ntd-mini" text-anchor="middle">identity/&lt;agent&gt;</text>
+<rect x="150" y="176" width="570" height="50" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="435" y="197.5" class="ntd-chiptext" text-anchor="middle">代理提示词 + 各插件的 ContextPart</text>
+<text x="435" y="215.5" class="ntd-mini" text-anchor="middle">system/&lt;agent&gt;，再按 order 接上各插件 context() 的文字（memory、todos）</text>
+<rect x="150" y="250" width="570" height="60" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="435" y="269" class="ntd-chiptext" text-anchor="middle">开头的背景（任务开始时记下）</text>
+<text x="435" y="287" class="ntd-mini" text-anchor="middle">项目说明（NOETA.md / AGENTS.md）、记忆索引、git 快照，</text>
+<text x="435" y="302" class="ntd-mini" text-anchor="middle">以 &lt;system-reminder&gt; 发出</text>
+<rect x="150" y="320" width="570" height="44" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="435" y="338.5" class="ntd-chiptext" text-anchor="middle">用户的消息</text>
+<text x="435" y="356.5" class="ntd-mini" text-anchor="middle">收件箱里的 Say，取出时记为 InputTaken</text>
+<rect x="150" y="374" width="570" height="46" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="435" y="393.5" class="ntd-chiptext" text-anchor="middle">回复、工具调用、工具结果</text>
+<text x="435" y="411.5" class="ntd-mini" text-anchor="middle">ModelReplied、ToolFinished；超长的结果早已换成预览</text>
+<rect x="150" y="430" width="570" height="64" rx="10" class="ntd-chip ntd-chip-violet ntd-dash"/>
+<text x="435" y="451" class="ntd-chiptext" text-anchor="middle">这一步的提醒（reminders）</text>
+<text x="435" y="469" class="ntd-mini" text-anchor="middle">这一步 reminders() 返回并记下的：role=user 的并进用户那一轮，</text>
+<text x="435" y="484" class="ntd-mini" text-anchor="middle">role=system 的按 order 排成系统轮：环境、延迟工具、预算、日期</text>
+<path d="M 136 50 L 128 50 L 128 106 L 136 106" class="ntd-line"/>
+<text x="116" y="82" class="ntd-label" text-anchor="end">工具</text>
+<path d="M 136 126 L 128 126 L 128 222 L 136 222" class="ntd-line"/>
+<text x="116" y="178" class="ntd-label" text-anchor="end">系统提示</text>
+<path d="M 136 254 L 128 254 L 128 490 L 136 490" class="ntd-line"/>
+<text x="116" y="376" class="ntd-label" text-anchor="end">消息</text>
+<path d="M 726 144 L 738 138 L 738 150 z" class="ntd-arrowhead"/>
+<text x="744" y="142" class="ntd-code">cache_control</text>
+<text x="744" y="157" class="ntd-mini">缓存断点</text>
+<path d="M 726 201 L 738 195 L 738 207 z" class="ntd-arrowhead"/>
+<text x="744" y="199" class="ntd-code">cache_control</text>
+<text x="744" y="214" class="ntd-mini">缓存断点</text>
+<path d="M 726 462 L 738 456 L 738 468 z" class="ntd-arrowhead"/>
+<text x="744" y="460" class="ntd-code">cache_control</text>
+<text x="744" y="475" class="ntd-mini">缓存断点</text>
+<text x="450" y="540" class="ntd-mini" text-anchor="middle">工具不单独打标记：第一个系统块的标记连工具一起缓存（Anthropic 的前缀顺序是 工具 → 系统 → 消息）</text>
+</svg>

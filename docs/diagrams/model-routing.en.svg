@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 440" role="img" aria-label="A model&#x27;s provider is resolved once when it is chosen and recorded in the task&#x27;s config; every worker follows the record"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="model-routing-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="model-routing-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<rect x="30" y="50" width="200" height="70" rx="10" class="ntd-chip ntd-chip-amber"/>
+<text x="130" y="74" class="ntd-chiptext" text-anchor="middle">A model is chosen</text>
+<text x="130" y="92" class="ntd-mini" text-anchor="middle">task start, /model, set_model,</text>
+<text x="130" y="107" class="ntd-mini" text-anchor="middle">an editor&#x27;s pick, a sub-agent</text>
+<rect x="260" y="36" width="280" height="100" rx="10" class="ntd-chip"/>
+<text x="400" y="58" class="ntd-code" text-anchor="middle">ProviderRouter.route_record</text>
+<text x="278" y="80" class="ntd-mini">1 the provider whose table names it</text>
+<text x="278" y="95" class="ntd-mini">2 the first whose /models lists it</text>
+<text x="278" y="110" class="ntd-mini">   (the default first)</text>
+<text x="278" y="125" class="ntd-mini">3 the default provider</text>
+<rect x="600" y="50" width="270" height="70" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="735" y="74" class="ntd-chiptext" text-anchor="middle">The task&#x27;s config</text>
+<text x="735" y="92" class="ntd-mini" text-anchor="middle">model + model_route</text>
+<text x="735" y="107" class="ntd-mini" text-anchor="middle">{model, provider, limits}</text>
+<path d="M 230 85 L 258 85" class="ntd-line" marker-end="url(#model-routing-arrow)"/>
+<path d="M 540 85 L 598 85" class="ntd-line" marker-end="url(#model-routing-arrow)"/>
+<text x="569" y="78" class="ntd-mini" text-anchor="middle">recorded</text>
+<rect x="260" y="164" width="610" height="150" rx="14" class="ntd-frame"/>
+<text x="274" y="184" class="ntd-label">Every worker</text>
+<rect x="280" y="196" width="250" height="56" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="405" y="218" class="ntd-code" text-anchor="middle">task_provider(state, model)</text>
+<text x="405" y="236" class="ntd-mini" text-anchor="middle">sends to the recorded provider</text>
+<path d="M 735 120 L 735 150 L 405 150 L 405 194" class="ntd-line" marker-end="url(#model-routing-arrow)"/>
+<rect x="560" y="196" width="290" height="56" rx="10" class="ntd-chip ntd-chip-red ntd-dash"/>
+<text x="705" y="220.5" class="ntd-chiptext" text-anchor="middle">Provider not configured here</text>
+<text x="705" y="238.5" class="ntd-mini" text-anchor="middle">Fatal: the call fails, never re-routed</text>
+<path d="M 530 224 L 558 224" class="ntd-line-red ntd-dashed" marker-end="url(#model-routing-arrow-red)"/>
+<text x="570" y="280" class="ntd-mini">signed reasoning is tagged family@endpoint</text>
+<text x="570" y="296" class="ntd-mini">and replayed only to that provider</text>
+<rect x="280" y="336" width="160" height="52" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="360" y="357" class="ntd-code" text-anchor="middle">[providers.claude]</text>
+<text x="360" y="374" class="ntd-mini" text-anchor="middle">family = anthropic</text>
+<rect x="460" y="336" width="180" height="52" rx="10" class="ntd-chip ntd-chip-cyan"/>
+<text x="550" y="357" class="ntd-code" text-anchor="middle">[providers.deepseek]</text>
+<text x="550" y="374" class="ntd-mini" text-anchor="middle">family = openai_compat</text>
+<path d="M 360 252 L 360 334" class="ntd-line" marker-end="url(#model-routing-arrow)"/>
+<path d="M 500 252 L 500 300 L 550 300 L 550 334" class="ntd-line ntd-dashed" marker-end="url(#model-routing-arrow)"/>
+<rect x="30" y="160" width="200" height="230" rx="10" class="ntd-chip ntd-dash"/>
+<text x="130" y="186" class="ntd-chiptext" text-anchor="middle">Side models resolve</text>
+<text x="130" y="204" class="ntd-chiptext" text-anchor="middle">on the worker</text>
+<text x="130" y="230" class="ntd-mini" text-anchor="middle">compaction_model,</text>
+<text x="130" y="246" class="ntd-mini" text-anchor="middle">a title, classifier or</text>
+<text x="130" y="262" class="ntd-mini" text-anchor="middle">WebFetch model,</text>
+<text x="130" y="278" class="ntd-mini" text-anchor="middle">a skill&#x27;s model.</text>
+<text x="130" y="294" class="ntd-mini" text-anchor="middle"></text>
+<text x="130" y="310" class="ntd-mini" text-anchor="middle">The same everywhere</text>
+<text x="130" y="326" class="ntd-mini" text-anchor="middle">only when a table or</text>
+<text x="130" y="342" class="ntd-mini" text-anchor="middle">models file names it.</text>
+</svg>

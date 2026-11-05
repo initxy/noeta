@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 340" role="img" aria-label="A tool result over its limit is saved whole in the exec env; the model sees a preview"><style data-ntd>svg{--ntd-bg:#ffffff;--ntd-panel:#f6f6f7;--ntd-border:#c2c2c4;--ntd-text1:#3c3c43;--ntd-text2:#67676c;--ntd-text3:#929295;--ntd-brand:#059669;--ntd-green:#10b981;--ntd-violet:#8b5cf6;--ntd-amber:#f59e0b;--ntd-cyan:#0891b2;--ntd-red:#e11d48;--ntd-green-soft:rgba(16,185,129,.14);--ntd-violet-soft:rgba(139,92,246,.13);--ntd-amber-soft:rgba(245,158,11,.14);--ntd-cyan-soft:rgba(8,145,178,.12);--ntd-red-soft:rgba(225,29,72,.10);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}@media (prefers-color-scheme:dark){svg{--ntd-bg:#1b1b1f;--ntd-panel:#202127;--ntd-border:#3c3f44;--ntd-text1:#dfdfd6;--ntd-text2:#98989f;--ntd-text3:#6a6a71;--ntd-brand:#34d399;--ntd-green:#10b981;--ntd-violet:#a78bfa;--ntd-amber:#fbbf24;--ntd-cyan:#22d3ee;--ntd-red:#fb7185;--ntd-green-soft:rgba(16,185,129,.18);--ntd-violet-soft:rgba(139,92,246,.20);--ntd-amber-soft:rgba(245,158,11,.18);--ntd-cyan-soft:rgba(34,211,238,.14);--ntd-red-soft:rgba(251,113,133,.14)}}.ntd-bg{fill:var(--ntd-panel)}.ntd-box{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-frame{fill:none;stroke:var(--ntd-green);stroke-width:1.4;stroke-dasharray:6 5}.ntd-dash{stroke-dasharray:5 4}.ntd-chip{fill:var(--ntd-bg);stroke:var(--ntd-border);stroke-width:1.2}.ntd-chip-green{fill:var(--ntd-green-soft);stroke:var(--ntd-green)}.ntd-chip-violet{fill:var(--ntd-violet-soft);stroke:var(--ntd-violet)}.ntd-chip-amber{fill:var(--ntd-amber-soft);stroke:var(--ntd-amber)}.ntd-chip-cyan{fill:var(--ntd-cyan-soft);stroke:var(--ntd-cyan)}.ntd-chip-red{fill:var(--ntd-red-soft);stroke:var(--ntd-red)}.ntd-title{fill:var(--ntd-text1);font-size:15px;font-weight:600}.ntd-label{fill:var(--ntd-brand);font-size:13px;font-weight:600}.ntd-sub{fill:var(--ntd-text2);font-size:12.5px}.ntd-mini{fill:var(--ntd-text2);font-size:11.5px}.ntd-strong{fill:var(--ntd-text1);font-weight:600}.ntd-em{font-style:italic}.ntd-chiptext{fill:var(--ntd-text1);font-size:13px;font-weight:500}.ntd-code{fill:var(--ntd-brand);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.ntd-red{fill:var(--ntd-red)}.ntd-line{stroke:var(--ntd-text3);stroke-width:1.4;fill:none}.ntd-dashed{stroke-dasharray:5 4}.ntd-line-green{stroke:var(--ntd-green);stroke-width:1.6;fill:none}.ntd-line-violet{stroke:var(--ntd-violet);stroke-width:1.6;fill:none}.ntd-line-amber{stroke:var(--ntd-amber);stroke-width:1.8;fill:none}.ntd-line-red{stroke:var(--ntd-red);stroke-width:1.6;fill:none}.ntd-arrowhead{fill:var(--ntd-text3)}.ntd-arrowhead-green{fill:var(--ntd-green)}.ntd-arrowhead-violet{fill:var(--ntd-violet)}.ntd-arrowhead-amber{fill:var(--ntd-amber)}.ntd-arrowhead-red{fill:var(--ntd-red)}</style>
+<defs><marker id="ctx-large-output-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead"/></marker><marker id="ctx-large-output-arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ntd-arrowhead-red"/></marker></defs>
+<rect x="30" y="50" width="160" height="76" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="110" y="77" class="ntd-chiptext" text-anchor="middle">Tool.run</text>
+<text x="110" y="95" class="ntd-mini" text-anchor="middle">returns a ToolOutput</text>
+<text x="110" y="110" class="ntd-mini" text-anchor="middle">(Bash cuts its own first)</text>
+<rect x="222" y="42" width="232" height="92" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="338" y="69.5" class="ntd-chiptext" text-anchor="middle">bound_result (runner)</text>
+<text x="338" y="87.5" class="ntd-mini" text-anchor="middle">over the tool&#x27;s max_result_chars</text>
+<text x="338" y="102.5" class="ntd-mini" text-anchor="middle">(at most 50,000)? or the reply&#x27;s</text>
+<text x="338" y="117.5" class="ntd-mini" text-anchor="middle">results past 200,000 chars?</text>
+<rect x="486" y="42" width="196" height="92" rx="10" class="ntd-chip ntd-chip-violet"/>
+<text x="584" y="69.5" class="ntd-chiptext" text-anchor="middle">Saved whole</text>
+<text x="584" y="87.5" class="ntd-mini" text-anchor="middle">through the task&#x27;s ExecEnv</text>
+<text x="584" y="102.5" class="ntd-mini" text-anchor="middle">&lt;spill root&gt;/&lt;task id&gt;/</text>
+<text x="584" y="117.5" class="ntd-mini" text-anchor="middle">&lt;call id&gt;.result.txt</text>
+<rect x="714" y="50" width="160" height="76" rx="10" class="ntd-chip"/>
+<text x="794" y="77" class="ntd-chiptext" text-anchor="middle">What the model sees</text>
+<text x="794" y="95" class="ntd-mini" text-anchor="middle">&lt;persisted-output&gt;:</text>
+<text x="794" y="110" class="ntd-mini" text-anchor="middle">size, path, 2 KB preview</text>
+<path d="M 190 88 L 220 88" class="ntd-line" marker-end="url(#ctx-large-output-arrow)"/>
+<path d="M 454 88 L 484 88" class="ntd-line" marker-end="url(#ctx-large-output-arrow)"/>
+<text x="469" y="80" class="ntd-mini" text-anchor="middle">over</text>
+<path d="M 682 88 L 712 88" class="ntd-line" marker-end="url(#ctx-large-output-arrow)"/>
+<rect x="222" y="196" width="232" height="62" rx="10" class="ntd-chip ntd-dash"/>
+<text x="338" y="216" class="ntd-chiptext" text-anchor="middle">No spill directory</text>
+<text x="338" y="234" class="ntd-mini" text-anchor="middle">&lt;truncated-output&gt;:</text>
+<text x="338" y="249" class="ntd-mini" text-anchor="middle">start and end kept, middle dropped</text>
+<rect x="486" y="196" width="196" height="62" rx="10" class="ntd-chip ntd-chip-red"/>
+<text x="584" y="216" class="ntd-chiptext" text-anchor="middle">The save failed</text>
+<text x="584" y="234" class="ntd-mini" text-anchor="middle">the result stays whole</text>
+<text x="584" y="249" class="ntd-mini" text-anchor="middle">(as Claude Code keeps it)</text>
+<rect x="714" y="196" width="160" height="62" rx="10" class="ntd-chip ntd-chip-green"/>
+<text x="794" y="216" class="ntd-chiptext" text-anchor="middle">Later, on any worker</text>
+<text x="794" y="234" class="ntd-mini" text-anchor="middle">the model Reads the path</text>
+<text x="794" y="249" class="ntd-mini" text-anchor="middle">through the same exec env</text>
+<path d="M 338 134 L 338 194" class="ntd-line ntd-dashed" marker-end="url(#ctx-large-output-arrow)"/>
+<text x="346" y="168" class="ntd-mini">no spill dir</text>
+<path d="M 584 134 L 584 194" class="ntd-line-red ntd-dashed" marker-end="url(#ctx-large-output-arrow-red)"/>
+<text x="592" y="168" class="ntd-mini">write fails</text>
+<path d="M 794 126 L 794 194" class="ntd-line ntd-dashed" marker-end="url(#ctx-large-output-arrow)"/>
+<text x="786" y="168" class="ntd-mini" text-anchor="end">when it needs more</text>
+<text x="450" y="298" class="ntd-mini" text-anchor="middle">Read is exempt (max_result_chars = None: it bounds its own output); errors and results with images pass unchanged.</text>
+</svg>
