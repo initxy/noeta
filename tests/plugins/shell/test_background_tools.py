@@ -339,6 +339,21 @@ async def test_a_foreground_command_returns_when_its_shell_exits(h: Harness) -> 
     assert h.registry.jobs == {} or all(not jobs for jobs in h.registry.jobs.values())
 
 
+async def test_a_child_left_running_keeps_printing_after_the_call_returns(h: Harness) -> None:
+    # `npm run dev &`: the call's log is removed once it returns, and the
+    # child, still writing to the inherited output, must not die of a broken
+    # pipe; nor is the removed log re-created.
+    out = await h.call("Bash", command=(
+        "(for i in $(seq 30); do echo tick $i; sleep 0.05; done; touch survived) & echo hi"))
+    assert not out.is_error and text(out).startswith("hi\ntick 1")
+    for _ in range(100):
+        if (h.tmp / "survived").exists():
+            break
+        await asyncio.sleep(0.05)
+    assert (h.tmp / "survived").exists()
+    assert list((h.tmp.parent / "logs" / f"w{os.getpid()}").iterdir()) == []
+
+
 async def test_a_command_using_fd_3_keeps_its_file_and_the_directory(h: Harness) -> None:
     (h.tmp / "sub").mkdir()
     out = await h.call("Bash", command="exec 3>notes.txt; echo mine >&3; cd sub")
