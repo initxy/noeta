@@ -566,6 +566,26 @@ class SqliteStore:
         if await self._write(tx):
             self._notify([(claim.task_id, "released")])
 
+    async def requeue(self, root_id: str, queue: str, to: str) -> bool:
+        def tx(conn: sqlite3.Connection) -> list[str] | None:
+            held = conn.execute(
+                "SELECT 1 FROM tasks WHERE root_id = ? AND lease_until >= ? LIMIT 1",
+                (root_id, time.time())).fetchone()
+            if held is not None:
+                return None
+            moved = [str(r[0]) for r in conn.execute(
+                "SELECT task_id FROM tasks WHERE root_id = ? AND queue = ?",
+                (root_id, queue)).fetchall()]
+            conn.execute("UPDATE tasks SET queue = ? WHERE root_id = ? AND queue = ?",
+                         (to, root_id, queue))
+            return moved
+
+        moved = await self._write(tx)
+        if moved is None:
+            return False
+        self._notify([(task_id, "released") for task_id in moved])
+        return True
+
 
 def open_url(url: str) -> SqliteStore:
     """``sqlite:///path`` -> a store at ``path`` (``~`` expanded, parent

@@ -230,7 +230,8 @@ any of them continues any task ([Many machines](../how-it-works/many-machines.md
 `LocalApp(…, own_tasks_only=True)` serves only the task trees it created or adopted, which is
 how the front ends share `~/.noeta/tasks.db` without picking up each other's tasks. It creates
 them on the `front-end` queue, which `noeta serve` and `noeta worker` don't take (unless told
-to with `--queue`), so such a task runs only in a front end that has it open.
+to with `--queue`), so such a task runs only in a front end that has it open, until a person
+acts on it through a server ([HTTP API](../reference/http-api.md#talking-to-a-task)).
 
 ## Connecting to an existing store or server
 

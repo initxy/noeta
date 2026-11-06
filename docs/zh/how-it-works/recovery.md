@@ -9,6 +9,7 @@
 - `claim(worker, queues, lease_seconds)` 取一个可认领的任务，置为 `running`，记下这个工人是持有者，**把任务的 epoch 加一**，并设一个租约（`lease_until`）。
 - `renew(claim, lease_seconds)` 延长租约。工人每过三分之一租期续一次（默认租期 30 秒；`noeta worker --lease`）。
 - `release(claim)` 交还认领但不结束任务（工人停机时）：running 的任务变回 `ready`。
+- `requeue(root_id, queue, to)` 把一整棵任务树从一个队列挪到另一个，但只要树里有任务的租约还没过期就不挪（服务端接手前端开的对话时用，见 [HTTP 接口](../reference/http-api.md#和任务交互)）。
 
 可认领的任务是：`ready`（且到点了）、`waiting` 且 `ready_at` 已到、或者 `running` / 保留着认领但租约已经过期（`noeta/core/store.py`，`Store.claim`）。
 

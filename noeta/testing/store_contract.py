@@ -391,6 +391,50 @@ async def test_claim_roots_serves_only_those_trees(store: Store) -> None:
     assert claim is not None and claim.task_id == "theirs"
 
 
+async def test_requeue_moves_a_tree_onto_another_queue(store: Store) -> None:
+    await store.create(new("r", queue="front-end"))
+    await store.create(NewTask(task_id="r.child", queue="front-end",
+                               created=TaskCreated(agent="a", parent_id="r", root_id="r")))
+    await store.create(new("other", queue="front-end"))
+    seen: list[tuple[str, str]] = []
+    store.on_change(lambda tid, kind: seen.append((tid, kind)))
+    assert await store.requeue("r", "front-end", "default")
+    assert {("r", "released"), ("r.child", "released")} <= set(seen)
+    got = set()
+    for _ in range(3):
+        claim = await store.claim("w", ["default"], 30)
+        if claim is not None:
+            assert claim.queue == "default"
+            got.add(claim.task_id)
+    assert got == {"r", "r.child"}
+    row = await store.get("other")
+    assert row is not None and row.queue == "front-end"
+
+
+async def test_requeue_leaves_a_tree_whose_task_is_held(store: Store) -> None:
+    await store.create(new("r", queue="front-end"))
+    await store.create(NewTask(task_id="r.child", queue="front-end",
+                               created=TaskCreated(agent="a", parent_id="r", root_id="r")))
+    claim = await store.claim("fe", ["front-end"], 30)
+    assert claim is not None
+    await store.append(claim, [Waiting(on="input")], expected_seq=1,
+                       patch=Patch(status="waiting", waiting_on="input", keep=True))
+    assert not await store.requeue("r", "front-end", "default")
+    assert {r.queue for r in (await store.get("r"), await store.get("r.child")) if r} \
+        == {"front-end"}
+    await store.release(claim)
+    assert await store.requeue("r", "front-end", "default")
+
+
+async def test_requeue_moves_a_tree_whose_lease_ran_out(store: Store) -> None:
+    await store.create(new("r", queue="front-end"))
+    assert await store.claim("gone", ["front-end"], 0.01) is not None
+    await asyncio.sleep(0.05)
+    assert await store.requeue("r", "front-end", "default")
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None and claim.task_id == "r"
+
+
 async def test_append_skips_a_post_to_an_unknown_task(store: Store) -> None:
     await store.create(new("parent"))
     await store.create(new("other"))
