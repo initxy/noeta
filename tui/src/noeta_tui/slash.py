@@ -23,7 +23,7 @@ from rich.text import Text
 from noeta.core import models
 from noeta.core.events import ExtensionRecorded
 from noeta.host.app import change_config, model_choices, prepare_model
-from noeta.host.rewind import RewindPoint, rewind, rewind_points
+from noeta.host.rewind import RewindPoint, rewind_points
 from noeta.host.usage import cost_text, tree_usage
 from noeta.toolkit.permission_modes import MODE_NAMES
 from noeta.toolkit.plugin_records import MEMORY
@@ -419,8 +419,8 @@ async def _rewind(app: NoetaApp, arg: str) -> None:
 
 async def rewind_to(app: NoetaApp, points: list[RewindPoint], n: int, what: str) -> None:
     point = points[n - 1]
-    done = await rewind(app.local.client, app.task_id, point,
-                        conversation=what != "code", files=what != "conversation")
+    done = await app.local.rewind(app.task_id, point,
+                                  conversation=what != "code", files=what != "conversation")
     if done.task_id != app.task_id:
         await app.open_task(done.task_id, resumed=False)
         app.prefill(done.prompt)

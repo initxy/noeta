@@ -40,6 +40,7 @@ from noeta.core.runner import Runtime
 from noeta.core.store import Store
 from noeta.core.types import Delta, Text
 from noeta.host.app import AppAPI, DeltaSink, agent_commands, agent_run_command, archive_task
+from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import Cache, root_summaries
 
 log = logging.getLogger("noeta.host.local")
@@ -270,6 +271,11 @@ class LocalApp:
 
     async def archive(self, task_id: str, archived: bool = True) -> None:
         await archive_task(self.client, task_id, archived)
+
+    async def rewind(self, task_id: str, point: RewindPoint, *, conversation: bool = True,
+                     files: bool = True) -> Rewound:
+        return await rewind(self.client, task_id, point, conversation=conversation,
+                            files=files)
 
     async def adopt(self, task_id: str) -> None:
         """Serve the tree of an existing task (one being resumed). Raises

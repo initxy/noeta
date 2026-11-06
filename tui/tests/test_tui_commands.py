@@ -128,6 +128,60 @@ async def test_rewind_restores_files_and_forks_the_conversation(tmp_path: Path) 
         assert "write notes" in texts and "change them" not in texts
 
 
+async def test_rewind_on_a_server(tmp_path: Path) -> None:
+    """With ``--server`` the rewind is the server's (``POST /tasks/{id}/rewind``):
+    the task's config holds keys the server wrote (``prompts``) that a
+    request may not set, so a fork the client made itself was refused."""
+    import asyncio
+
+    pytest.importorskip("starlette")
+    uvicorn = pytest.importorskip("uvicorn")
+    from noeta.host.http import create_app
+    from noeta.host.remote import RemoteApp
+
+    work = tmp_path / "w"
+    work.mkdir()
+    target = work / "notes.txt"
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": str(target), "content": "one\n"})), reply("wrote"),
+        reply("", ("Edit", {"file_path": str(target), "old_string": "one",
+                            "new_string": "two"})), reply("edited")])
+    agent = Agent(name="main", model=MODEL, extensions=[FileTools(), Checkpoints()])
+    server = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
+                      env_for=lambda _s: LocalExecEnv(str(work)),
+                      task_config={"prompts": {"system/main": "You help."}})
+    await server.start()
+    api = create_app(server.client, token="secret", app=server, cwd=str(work))
+    served = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=0, log_level="error"))
+    serving = asyncio.create_task(served.serve())
+    while not served.started:
+        await asyncio.sleep(0.01)
+    port = served.servers[0].sockets[0].getsockname()[1]
+    app = NoetaApp(RemoteApp(f"http://127.0.0.1:{port}", token="secret"), agent="main",
+                   model=MODEL, cwd=str(work), task_config={}, on_server=True)
+    try:
+        async with app.run_test(size=(110, 40)) as pilot:
+            await type_line(pilot, "write notes")
+            await settle(pilot, lambda: len(provider.requests) == 2 and not app.busy)
+            await type_line(pilot, "change them")
+            await settle(pilot, lambda: len(provider.requests) == 4 and not app.busy)
+            first = app.task_id
+            created = (await server.client.events(first))[0].event
+            assert isinstance(created, TaskCreated) and "prompts" in created.config
+            await type_line(pilot, "/rewind 2")
+            await settle(pilot, lambda: app.task_id != first and target.read_text() == "one\n")
+            await settle(pilot, lambda: "rewound to before prompt 2; 1 file(s) restored"
+                         in shown(app))
+            assert app.query_one(PromptInput).text == "change them"
+            fork = (await server.client.events(app.task_id))[0].event
+            assert isinstance(fork, TaskCreated) and fork.history_from == first
+            assert fork.config["continued_as"] == "rewind"
+    finally:
+        served.should_exit = True
+        await serving
+        await server.stop()
+
+
 async def test_mentions_images_clear_and_resume(tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("seen"), reply("new task")])
     app = make_app(tmp_path, provider)

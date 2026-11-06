@@ -86,6 +86,7 @@ from noeta.host._http_openapi import OPENAPI
 from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command, archive_task
+from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
 __all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "Refused", "create_app",
@@ -133,6 +134,11 @@ class _Front:
 
     async def archive(self, task_id: str, archived: bool = True) -> None:
         await archive_task(self.client, task_id, archived)
+
+    async def rewind(self, task_id: str, point: RewindPoint, *, conversation: bool = True,
+                     files: bool = True) -> Rewound:
+        return await rewind(self.client, task_id, point, conversation=conversation,
+                            files=files)
 
 
 #: A query parameter: its separator and key, and its value.

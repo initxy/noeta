@@ -142,6 +142,7 @@
 | `await commands(agent, ctx)`、`await run_command(agent, ctx, text)` | 某个代理的斜杠命令 |
 | `await context(task_id)` | 任务下一次请求里装了什么，按类别统计 |
 | `await summaries(limit=50, archived=None)`、`await archive(task_id, archived=True)` | 给续聊列表用的根任务 |
+| `await rewind(task_id, point, *, conversation=True, files=True) -> Rewound` | 回到某条用户提问之前（`point` 是 `noeta.host.rewind.rewind_points` 给出的 `RewindPoint`）：对话、文件，或者两样都回退。`RemoteApp` 也有这个方法，交给服务端去做（`POST /tasks/{id}/rewind`），所以 TUI 和 ACP 适配器连 `--server` 时回退走的是同一条路 |
 | `notices`、`main_agent` | 前端该展示给人的提示；默认用的代理（`"main"`） |
 | `channels` | 它运行的渠道 |
 | `reload_plugins`、`list_models`、`prepare_model` | 由宿主设置的回调（`noeta` 命令会设）：重新查找插件、列出各 provider 的模型、切换模型前先把它定下来；没设时为 `None` |
@@ -169,7 +170,7 @@
 ### `noeta.RemoteClient(url, *, token=None, transport=None)`
 
 方法和 `Client` 相同，走 `noeta serve` 服务端的 HTTP 接口（`noeta/host/remote.py`）；`watch` 会
-自动重连。它还有 `await context(task_id)`（任务下一次请求里装了什么）和 `await close()`（关闭它的
+自动重连。它还有 `await context(task_id)`（任务下一次请求里装了什么）、`await rewind(task_id, point, *, conversation=True, files=True)`（调服务端的 `POST /tasks/{id}/rewind`，新任务只带请求允许设置的配置）和 `await close()`（关闭它的
 HTTP 客户端）。`transport` 是 `httpx` 的 transport（测试用）。
 
 ### `noeta.connect(url, *, token=None, **kw) -> Client | RemoteClient`

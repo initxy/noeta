@@ -146,6 +146,7 @@ UI, `noeta acp`, `noeta -p` and `noeta worker` run on (`noeta/host/local.py`).
 | `await commands(agent, ctx)`, `await run_command(agent, ctx, text)` | an agent's slash commands |
 | `await context(task_id)` | what fills the task's next request, by category |
 | `await summaries(limit=50, archived=None)`, `await archive(task_id, archived=True)` | the root tasks for a resume list |
+| `await rewind(task_id, point, *, conversation=True, files=True) -> Rewound` | go back to before one of the person's prompts (a `RewindPoint` from `noeta.host.rewind.rewind_points`): the conversation, the files or both. `RemoteApp` has it too and runs it on the server (`POST /tasks/{id}/rewind`), so the TUI and the ACP adapter rewind the same way on `--server` |
 | `notices`, `main_agent` | what a front end should show; the agent to start with (`"main"`) |
 | `channels` | the channels it runs |
 | `reload_plugins`, `list_models`, `prepare_model` | hooks a host sets (the `noeta` command does): find the plugins again, list every provider's models, settle a model before a switch; `None` otherwise |
@@ -176,7 +177,8 @@ an image is shrunk to fit before it is stored. A `history_from` that is no task 
 
 The same methods as `Client`, over a `noeta serve` server's HTTP API
 (`noeta/host/remote.py`); `watch` reconnects by itself. It also has `await context(task_id)` (what fills the task's next
-request) and `await close()`, which closes its HTTP client.
+request), `await rewind(task_id, point, *, conversation=True, files=True)` (the server's
+`POST /tasks/{id}/rewind`: the new task gets only the config a request may set) and `await close()`, which closes its HTTP client.
 `transport` is an `httpx` transport (tests).
 
 ### `noeta.connect(url, *, token=None, **kw) -> Client | RemoteClient`
