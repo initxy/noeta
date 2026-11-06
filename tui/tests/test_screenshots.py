@@ -127,3 +127,25 @@ async def test_slash_menu_and_context(tmp_path: Path, shots: Path) -> None:
         save(app, shots, "slash-menu.svg")
 
 
+
+
+async def test_agents(tmp_path: Path, shots: Path) -> None:
+    from test_agents import listed, script
+    from test_agents import make_app as agents_app
+
+    from noeta_tui.agents import AgentsPanel, AgentView
+
+    provider = script(tmp_path)
+    app = agents_app(tmp_path, provider)
+    async with app.run_test(size=SIZE) as pilot:
+        await type_line(pilot, "explore it")
+        panel = app.query_one(AgentsPanel)
+        await settle(pilot, lambda: "Read(" in listed(panel))
+        await pilot.pause()
+        save(app, shots, "agents.svg")
+        await pilot.press("down", "enter")
+        await settle(pilot, lambda: "Reading the code first." in shown(app)
+                     and bool(app.query(AgentView)))
+        await pilot.pause()
+        save(app, shots, "agent-view.svg")
+        provider.release.set()

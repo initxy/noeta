@@ -34,7 +34,8 @@ from noeta.toolkit.permission_modes import (
 )
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta_tui import bash_mode, files, history, mentions, render, slash
-from noeta_tui.transcript import SERVER_DIRECTORY, TranscriptView, _short_path
+from noeta_tui.agents import MAIN, AgentsPanel, AgentView, WorkflowView
+from noeta_tui.transcript import SERVER_DIRECTORY, WORKFLOW_KEY, TranscriptView, _short_path
 from noeta_tui.widgets import (
     Completions,
     Notice,
@@ -71,7 +72,7 @@ class NoetaApp(TranscriptView):
     TITLE = "noeta"
     BINDINGS = [
         Binding("escape", "stop_turn", "Stop", show=False),
-        Binding("ctrl+b", "toggle_side", "Side panel", show=False),
+        Binding("ctrl+b", "agents", "Agents", show=False),
         Binding("shift+tab", "cycle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+v", "paste_image", "Paste image", show=False),
         Binding("ctrl+o", "toggle_verbose", "Verbose", show=False, priority=True),
@@ -88,7 +89,10 @@ class NoetaApp(TranscriptView):
         server's, so its tasks run in the server's directories, not ``cwd``
         on this machine. ``start``: what the ``noeta`` command said (the
         home directory, the settings shown, the version)."""
-        super().__init__()
+        # ANSI colours, as the terminal draws them: its background and
+        # text colour show through.
+        super().__init__(ansi_color=True)
+        self.theme = "ansi-light" if light_terminal() else "ansi-dark"
         self.on_server = on_server
         #: What each new task's config starts with (default: ``cwd`` and ``model``).
         self.task_config = {"cwd": cwd, "model": model} if task_config is None \
@@ -126,6 +130,10 @@ class NoetaApp(TranscriptView):
         self.thinking_now = False
         self.agents = {}
         self.workflows = {}
+        self.subagents = {}
+        self.workflow_calls = {}
+        self.listed_agents = []
+        self.agents_since = 0.0
         self.early_progress = {}
         #: The names of the images pasted for the next message.
         self.image_names: list[str] = []
@@ -184,11 +192,7 @@ class NoetaApp(TranscriptView):
     # ------------------------------------------------------------ layout
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="body"):
-            yield VerticalScroll(id="transcript")
-            with Vertical(id="side"):
-                yield Static("[b]Agents[/b]", id="side-title")
-                yield Static("", id="side-body")
+        yield VerticalScroll(id="transcript")
         yield Static("", id="spinner")
         yield Static("", id="tasks")
         yield Static("", id="queued")
@@ -202,15 +206,15 @@ class NoetaApp(TranscriptView):
         with Horizontal(id="footer"):
             yield Static("", id="hints")
             yield Static("", id="status")
+        yield AgentsPanel(self.open_agent, self._leave_agents)
 
     async def on_mount(self) -> None:
-        for hidden in ("#side", "#spinner", "#tasks", "#queued", "#completions",
+        for hidden in ("#agents", "#spinner", "#tasks", "#queued", "#completions",
                        "#shortcuts", "#attachments"):
             self.query_one(hidden).display = False
         await self.local.start()
         self.local.deltas(self._on_delta)
         self._pump_deltas()
-        self._refresh_side()
         self.set_interval(0.12, self._tick)
         if self.start.trust is not None:
             await slash.trust_picker(self, self._open_first)
@@ -312,6 +316,10 @@ class NoetaApp(TranscriptView):
         self.calls.clear()
         self.agents.clear()
         self.workflows.clear()
+        self.subagents.clear()
+        self.workflow_calls.clear()
+        self.listed_agents.clear()
+        self.agents_since = time.time()  # a resumed task's ended agents are not listed
         self.early_progress.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
@@ -392,6 +400,7 @@ class NoetaApp(TranscriptView):
             await self.answer_question(text)
             return
         images, self.images = self.images, []
+        self.agents_since = time.time()  # what ended before this leaves the agents' list
         self.image_names = []
         self._show_attachments()
         context, self.bash_context = self.bash_context, []
@@ -544,6 +553,10 @@ class NoetaApp(TranscriptView):
             shortcuts.display = not shortcuts.display
             self._sync_footer()
             return True
+        panel = self.query_one(AgentsPanel)
+        if key == "down" and not box.text and panel.agents:
+            panel.focus()  # Claude Code: ↓ from an empty prompt to the agents
+            return True
         if key in ("up", "down") and self.history:
             row = box.cursor_location[0]
             last = box.document.line_count - 1
@@ -630,7 +643,7 @@ class NoetaApp(TranscriptView):
     def _set_marker(self, marker: str) -> None:
         bash = marker == "!"
         self.query_one("#marker", Static).update(Text(marker or "❯",
-                                                      style="bold #fd5db1" if bash else ""))
+                                                      style=f"bold {render.BASH}" if bash else ""))
         self.query_one("#prompt-box").set_class(bash, "-bash")
 
     # ------------------------------------------------------------ keys
@@ -670,12 +683,57 @@ class NoetaApp(TranscriptView):
         self.flash = ""
         self.update_status()
 
-    def action_toggle_side(self) -> None:
-        side = self.query_one("#side")
-        side.display = not side.display
+    def action_agents(self) -> None:
+        """Ctrl+B: to the agents' list (back to the prompt when there)."""
+        panel = self.query_one(AgentsPanel)
+        if panel.has_focus:
+            self._leave_agents()
+        elif panel.agents:
+            panel.focus()
+
+    def _leave_agents(self) -> None:
+        self._box().focus()
+
+    async def open_agent(self, key: str) -> None:
+        """Show what the picked agent did in the transcript's place (main:
+        the transcript again); a workflow's line lists its agents first."""
+        if key == MAIN:
+            await self.close_agent()
+            return
+        view: AgentView | WorkflowView
+        if key.startswith(WORKFLOW_KEY):
+            call = self.workflow_calls.get(key[len(WORKFLOW_KEY):])
+            if call is None or call.workflow is None:
+                return
+            run = call.workflow
+            rows = [self._child_row(str(a["child_id"]), str(a.get("label") or a["key"]))
+                    for a in run["agents"].values() if a.get("child_id") in self.subagents]
+            view = WorkflowView(str(run.get("description") or call.title), rows,
+                                on_pick=self.open_agent, on_back=self.close_agent)
+        else:
+            c = self.subagents.get(key)
+            if c is None:
+                return
+            view = AgentView(key, c["name"] or "agent", kind=c.get("kind", ""), child=c,
+                             expanded=self.verbose, on_back=self.close_agent)
+        await self.query(".agent-view").remove()
+        self.query_one("#transcript").display = False
+        await self.mount(view, after="#transcript")
+        self.query_one(AgentsPanel).viewing = key
+        self._show_agents()
+
+    async def close_agent(self) -> None:
+        """Back to the transcript from an agent's view."""
+        await self.query(".agent-view").remove()
+        self.query_one("#transcript").display = True
+        self.query_one(AgentsPanel).viewing = MAIN
+        self._show_agents()
+        self._box().focus()
 
     def action_toggle_verbose(self) -> None:
         self.verbose = not self.verbose
+        for view in self.query(AgentView):
+            view.set_expanded(self.verbose)
         for call in self.query(ToolCall):
             call.set_expanded(self.verbose)
         for group in self.query(ReadGroup):
@@ -761,30 +819,13 @@ class NoetaApp(TranscriptView):
             return text
         return ", ".join(str(options[int(p) - 1].get("label", "")) for p in parts)
 
-    @work(exclusive=True, group="side", exit_on_error=False)
-    async def _refresh_side(self) -> None:
-        """Ctrl+B's panel: this task's agents, what each is doing or how it
-        ended (the newest first)."""
-        while True:
-            await asyncio.sleep(1)
-            side = self.query_one("#side")
-            if not side.display:
-                continue
-            out = Text()
-            calls = [c for c in self.query(ToolCall) if c.child is not None]
-            for call in reversed(calls):
-                c = call.child or {}
-                mark, style = {"done": ("✔", "green"), "failed": ("✘", "red"),
-                               "cancelled": ("✘", "red")}.get(c.get("status") or "",
-                                                              ("◼", "#d77757"))
-                out.append(f"{mark} ", style=style)
-                out.append(str(call.call.input.get("description") or "agent") + "\n",
-                           style="bold" if not c.get("status") else "")
-                doing = c.get("last") if not c.get("status") else c.get("status")
-                out.append(f"  {doing or 'starting'} · {c.get('tools', 0)} tools\n\n",
-                           style="dim")
-            self.query_one("#side-body", Static).update(out if calls else Text("(none)",
-                                                                               style="dim"))
+
+def light_terminal() -> bool:
+    """The terminal says its background is light (``COLORFGBG``'s last
+    part is 7 or 15, as rxvt, Konsole and iTerm2 set it)."""
+    import os
+
+    return os.environ.get("COLORFGBG", "").rsplit(";", 1)[-1] in ("7", "15")
 
 
 def first_prompt(events: list[Any]) -> str:

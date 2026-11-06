@@ -29,7 +29,7 @@ class UserMessage(Static):
 
     def __init__(self, text: str, *, marker: str = "❯") -> None:
         self.text = text
-        out = Text().append(f"{marker} ", style="bold #fd5db1" if marker == "!" else "dim")
+        out = Text().append(f"{marker} ", style=f"bold {render.BASH}" if marker == "!" else "dim")
         typed = parse_command_message(text)  # a prompt command reads as it was typed
         out.append(f"/{typed[0]} {typed[1]}".rstrip() if typed else text)
         super().__init__(out)
@@ -125,7 +125,7 @@ class ToolCall(Vertical):
 
     DEFAULT_CLASSES = "tool-call"
     STYLES = {"pending": "dim", "running": "dim", "waiting": "yellow", "done": "green",
-              "error": "red", "background": "#d77757"}
+              "error": "red", "background": render.WORKING}
 
     def __init__(self, call: ToolUse, *, expanded: bool = False) -> None:
         super().__init__()
@@ -153,13 +153,14 @@ class ToolCall(Vertical):
         yield self.head
         yield self.body
 
-    def _header(self, frame: int = -1) -> Text:
+    def _header(self, frame: int = -1) -> render.Hanging:
+        """``● Name(argument)``; a long one wraps under the name, not the bullet."""
         glyph = render.SPINNER_FRAMES[frame % len(render.SPINNER_FRAMES)] if frame >= 0 else "●"
         out = Text().append(f"{glyph} ", style=self.STYLES[self.state])
         out.append(render.tool_name(self.call), style="bold")
         arg = self.title[len(render.tool_name(self.call)):]
         out.append(arg)
-        return out
+        return render.Hanging(out, 2)
 
     def set_state(self, state: str) -> None:
         self.state = state
@@ -345,8 +346,8 @@ class Choices(Static, can_focus=True):
         for n, option in enumerate(self.options):
             here = n == self.index
             out.append("\n" if n else "")
-            out.append("❯ " if here else "  ", style="bold #b1b9f9")
-            out.append(f"{n + 1}. {option.label}", style="bold #b1b9f9" if here else "")
+            out.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
+            out.append(f"{n + 1}. {option.label}", style=f"bold {render.ACCENT}" if here else "")
             if option.detail:
                 out.append(f"  {option.detail}", style="dim")
         return out

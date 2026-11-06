@@ -72,16 +72,26 @@ from its first message).
 | `Esc` `Esc` | Clear the input; on an empty input, open `/rewind` |
 | `Ctrl+C` | Clear the input; on an empty input, press twice to quit |
 | `Shift+Tab` | Step to the next permission mode |
-| `↑` / `↓` | Earlier prompts (from the first or last line of the box) |
+| `↑` / `↓` | Earlier prompts (from the first or last line of the box); `↓` on an empty prompt moves to the agents' list |
 | `Ctrl+R` | Search earlier prompts; `Enter` puts the pick in the box, `Esc` leaves it empty |
 | `Ctrl+O` | Unfold every tool call's output (and fold it again) |
 | `Ctrl+T` | Show or hide the task list (the todos) |
-| `Ctrl+B` | Show or hide the side panel of background agents |
+| `Ctrl+B` | Move to the agents' list under the footer (again: back to the prompt) |
 | `Ctrl+V` | Attach the image on the clipboard (macOS as is; Linux needs `wl-paste` or `xclip`) |
 | `?` | Show the shortcuts (on an empty prompt) |
 
 Two presses count as a double press within 0.8 seconds (`DOUBLE_PRESS` in
 `tui/src/noeta_tui/app.py`).
+
+While sub-agents run, a list under the footer shows `● main` and one line per agent: its name,
+what it said or the tool it runs, how long it has run and its tokens; a workflow is one line,
+`(+N)` for its agents. Agents that ended stay listed until you send the next message. `↑` / `↓`
+pick a line, `Enter` (or a click) shows what that agent did in the transcript's place, following
+it while it runs; `Esc` goes back. A workflow's line lists its agents first. An approval or a
+question from any agent brings the transcript back.
+
+The UI draws in the terminal's own colours: its background (an image or transparency too) and
+text colour show through, borders use its grey, secondary text is dimmed.
 
 `Shift+Tab` steps through the modes the task's permissions plugin publishes, in Claude Code's
 order: `default` → `acceptEdits` → `plan` → `auto` → `bypassPermissions` (a server or worker

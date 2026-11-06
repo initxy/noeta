@@ -298,4 +298,5 @@ Keys in the terminal UI: Esc stops the turn; Esc Esc clears the input, or on an 
 opens `/rewind`; Shift+Tab cycles the permission mode; Ctrl+C clears the input (twice on an
 empty one quits); `!` at the start of the input runs a shell command (bash mode); Ctrl+R
 searches earlier prompts; Ctrl+O expands or folds the tool calls; Ctrl+T shows or hides the
-to-do list; Ctrl+B shows or hides the side panel; Ctrl+V pastes an image.
+to-do list; ↓ on an empty prompt (or Ctrl+B) moves to the running agents' list, where Enter
+shows what an agent did; Ctrl+V pastes an image.

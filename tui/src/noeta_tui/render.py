@@ -305,8 +305,8 @@ def spinner_line(frame: int, verb: str, elapsed: float, tokens: int, *,
     """``✻ Brewing… (12s · ↓ 1.2k tokens · thinking · esc to interrupt)``:
     the tokens count what streamed so far, reasoning included."""
     out = Text()
-    out.append(SPINNER_FRAMES[frame % len(SPINNER_FRAMES)] + " ", style="bold #d77757")
-    out.append(f"{verb}…", style="#d77757")
+    out.append(SPINNER_FRAMES[frame % len(SPINNER_FRAMES)] + " ", style=f"bold {WORKING}")
+    out.append(f"{verb}…", style=WORKING)
     detail = elapsed_text(elapsed)
     if tokens:
         detail += f" · ↓ {tokens_text(tokens)} tokens"
@@ -419,8 +419,13 @@ def logo() -> Text:
     return out
 
 
-#: The accent the app draws its own chrome in (the mark's green).
+#: The accent the app draws its own chrome in (the mark's green): the
+#: name, the picked line of a menu or list.
 ACCENT = "#10b981"
+#: What is working right now (the mark's amber): the spinner, a running agent.
+WORKING = "#f59e0b"
+#: Bash mode (Claude Code's pink).
+BASH = "#fd5db1"
 
 
 # ------------------------------------------------------------- agents and workflows
@@ -435,7 +440,7 @@ def agent_line(tools: int, tokens: int, seconds: float) -> str:
     return " · ".join(parts)
 
 
-WORKFLOW_MARKS = {"running": ("◼", "#d77757"), "done": ("✔", "green"),
+WORKFLOW_MARKS = {"running": ("◼", WORKING), "done": ("✔", "green"),
                   "failed": ("✘", "red")}
 
 

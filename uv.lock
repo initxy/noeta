@@ -1021,7 +1021,7 @@ wheels = [
 
 [[package]]
 name = "noeta"
-version = "1.0.2"
+version = "1.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1099,7 +1099,7 @@ dev = [
 
 [[package]]
 name = "noeta-tui"
-version = "1.0.2"
+version = "1.0.3"
 source = { editable = "tui" }
 dependencies = [
     { name = "noeta" },

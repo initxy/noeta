@@ -7,6 +7,26 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-05
+
+The terminal UI lists sub-agents as Claude Code does and draws in the terminal's own colours.
+
+### Changed
+
+- **The terminal UI lists sub-agents under the footer, as Claude Code does**: `● main`, then
+  one line per agent (a workflow is one line, `(+N)` for its agents) with what it said or the
+  tool it runs, how long it has run and its tokens; agents that ended stay until the next
+  message. `↓` from an empty prompt (or Ctrl+B, which replaces the side panel) picks one, and
+  `Enter` or a click shows what that agent did in the transcript's place, following it while
+  it runs; `Esc` goes back. An approval or question brings the transcript back.
+- **The terminal UI draws in the terminal's own colours**: its background (an image or
+  transparency too) and text colour show through instead of Textual's dark grey; borders use
+  the terminal's grey and secondary text its dim style. The light variant is picked when
+  `COLORFGBG` says the background is light. noeta's own colours come from its mark: green for
+  the name and what is picked, amber for what is working (the spinner, a running agent).
+- A tool call whose argument is too long for a line wraps under its name instead of leaving
+  the `●` alone on a line.
+
 ## [1.0.2] - 2026-11-05
 
 A reworked terminal UI, and the README and package pages written for an open-source audience.
