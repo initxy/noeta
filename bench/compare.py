@@ -61,8 +61,26 @@ DATASETS = {
     # The cheap loop: short tasks, for smoke and gateway-concurrency probes.
     "tb21": ("terminal-bench/terminal-bench-2-1", []),
 }
-# DeepSeek V4.1 Flash, under whatever id your provider or gateway gives it (NOETA_MODEL).
-DEFAULT_MODEL = os.environ.get("NOETA_MODEL", "deepseek-v4.1-flash")
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    for line in path.read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.removeprefix("export ").strip()] = value.strip().strip("'\"")
+    return out
+
+
+# DeepSeek V4.1 Flash, under whatever id your provider or gateway gives it: NOETA_MODEL, else
+# NOETA_MODEL / NOETA_LIVE_MODEL in the git-ignored .env (NOETA_ENV_FILE).
+_FILE_ENV = load_env_file(Path(os.environ.get("NOETA_ENV_FILE", REPO / ".env")))
+DEFAULT_MODEL = (os.environ.get("NOETA_MODEL") or _FILE_ENV.get("NOETA_MODEL")
+                 or _FILE_ENV.get("NOETA_LIVE_MODEL") or "deepseek-v4.1-flash")
 # Model limits: noeta's manifest and Claude Code's context / output caps.
 MODEL_LIMITS = {DEFAULT_MODEL: (1_000_000, 65_536)}
 CLAUDE_CODE_VERSION = "2.1.312"
@@ -106,19 +124,6 @@ TOOL_ENV = {"uv": "NOETA_UV_BIN", "rg": "NOETA_RG_BIN", "python-gnu": "NOETA_PYT
             "python-musl": "NOETA_PYTHON_MUSL"}
 
 REDACTED = "<redacted>"
-
-
-def load_env_file(path: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
-    if not path.is_file():
-        return out
-    for line in path.read_text("utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        out[key.removeprefix("export ").strip()] = value.strip().strip("'\"")
-    return out
 
 
 def docker_proxies() -> dict[str, str]:
