@@ -101,7 +101,8 @@ class Routes:
     async def list_tasks(self, request: Request) -> Response:
         q = request.query_params
         rows = await scope(request).client.tasks(
-            parent_id=q.get("parent_id"), status=q.get("status"), limit=int(q.get("limit", "100")))
+            parent_id=q.get("parent_id"), status=q.get("status"), limit=int(q.get("limit", "100")),
+            roots_only=q.get("roots_only") == "true")
         return _json(rows)
 
     async def summaries(self, request: Request) -> Response:

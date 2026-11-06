@@ -6,7 +6,7 @@ events; when this process also runs workers, live model output streams too.
                                       history_from?, history_through?} -> {task_id};
                                       config takes only the keys in _http_guard's
                                       REQUEST_CONFIG (any other: 403)
-    GET  /tasks?parent_id=&status=&limit=
+    GET  /tasks?parent_id=&status=&limit=&roots_only=
     GET  /summaries?limit=&archived=  the root tasks, each with its title, cwd, first
                                       prompt and ``archived`` (``noeta.host.summaries``);
                                       archived=true / false keeps only those / the others

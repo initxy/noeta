@@ -448,6 +448,7 @@ class SqliteStore:
         status: Status | None = None,
         limit: int = 100,
         owner: str | None = None,
+        roots_only: bool = False,
     ) -> list[TaskRow]:
         where, args = [], []
         if parent_id is not None:
@@ -459,6 +460,8 @@ class SqliteStore:
         if owner is not None:
             where.append("owner = ?")
             args.append(owner)
+        if roots_only:
+            where.append("parent_id IS NULL")
         sql = f"SELECT {TASK_COLUMNS} FROM tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)

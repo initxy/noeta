@@ -81,9 +81,11 @@ class RemoteClient:
         return msgspec.convert(await self._call("GET", f"/tasks/{task_id}"), TaskRow)
 
     async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
-                    limit: int = 100) -> list[TaskRow]:
+                    limit: int = 100, roots_only: bool = False) -> list[TaskRow]:
         params = {k: v for k, v in {"parent_id": parent_id, "status": status,
-                                    "limit": limit}.items() if v is not None}
+                                    "limit": limit,
+                                    "roots_only": "true" if roots_only else None}.items()
+                  if v is not None}
         return msgspec.convert(await self._call("GET", "/tasks", params=params), list[TaskRow])
 
     async def events(self, task_id: str, after: int = 0) -> list[Recorded]:

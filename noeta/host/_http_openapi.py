@@ -44,7 +44,7 @@ OPENAPI: dict[str, Any] = {
             "post": _op("Create a task", body=_props(
                 "agent", input="string", config="object", queue="string",
                 dedupe_key="string", history_from="string", history_through="integer")),
-            "get": _op("List tasks", query=("parent_id", "status", "limit"))},
+            "get": _op("List tasks", query=("parent_id", "status", "limit", "roots_only"))},
         "/summaries": {"get": _op("Root tasks with their titles, directories, first prompts "
                                   "and whether they are archived", query=("limit", "archived"))},
         "/files": {"get": _op("Paths under a task's or a directory's tree holding q",

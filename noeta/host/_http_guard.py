@@ -190,8 +190,9 @@ class GuardedClient:
         return await self._client.get(task_id)
 
     async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
-                    limit: int = 100) -> list[TaskRow]:
-        return await self._client.tasks(parent_id=parent_id, status=status, limit=limit)
+                    limit: int = 100, roots_only: bool = False) -> list[TaskRow]:
+        return await self._client.tasks(parent_id=parent_id, status=status, limit=limit,
+                                        roots_only=roots_only)
 
     async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
         return await self._client.events(task_id, after)
