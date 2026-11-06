@@ -1,11 +1,11 @@
 ---
 layout: home
-title: "noeta — an open-source Claude Code that runs on servers"
+title: "noeta — the open-source, Claude Code-compatible coding agent"
 titleTemplate: false
 
 hero:
   name: noeta
-  text: Claude Code's agent, on a server.
+  text: The coding agent that never loses its place.
   tagline: The model sees what Claude Code shows it. Underneath, every task is an append-only log with one writer, so it survives a crash, waits days for a person at no cost, and runs on one laptop or many machines unchanged.
   image:
     src: /logo.svg
@@ -96,9 +96,9 @@ model calls them, under your permission rules.
   <div class="nt-stat"><div class="num">3.7 %</div><div class="label">Terminal-Bench 4.0</div><div class="sub">54 of 66 tasks, 2 h cap, one run · Claude Code: 1.9 % · near zero for both on this model</div></div>
 </div>
 
-<p class="nt-muted">noeta 1.0.0.dev0 at 34f8acee and Claude Code 2.1.312 on the same model
-(<code>opensource/deepseek_v4_1_flash</code>, effort <code>high</code>), same tasks, caps and machine,
-through harbor. Cost per SWE-rebench run: noeta $5.01–$5.77, Claude Code $5.70–$6.25.
+<p class="nt-muted">noeta 1.0 and Claude Code 2.1.312 on the same model (DeepSeek V4.1 Flash,
+effort <code>high</code>), same tasks, caps and machine. noeta also cost less per run
+($5.01–$5.77 against $5.70–$6.25 on SWE-rebench).
 <a href="./benchmarks.html">Method, every run and the caveats →</a></p>
 
 ## Where to go next

@@ -69,7 +69,7 @@ tui:
 
 ## the screenshots tui/screenshots/README.md compares with Claude Code's
 tui-screenshots:
-	cd tui && NOETA_TUI_SCREENSHOTS=1 uv run pytest -q tests/test_screenshots.py
+	cd tui && rm -rf /tmp/noeta-demo && NOETA_TUI_SCREENSHOTS=1 uv run pytest -q --basetemp=/tmp/noeta-demo tests/test_screenshots.py
 
 ## every front end's own tests
 frontends: tui web desktop
@@ -97,8 +97,8 @@ e2e:
 
 ## prompt-regression eval against a real model (opt-in, never in check);
 ## exits 1 when a scenario falls below evals/baseline.json by more than its tolerance
-## the model the baseline is recorded on
-EVAL_MODEL ?= opensource/deepseek_v4_1_flash
+## the model the baseline is recorded on (DeepSeek V4.1 Flash; pass your provider's id)
+EVAL_MODEL ?= deepseek-v4.1-flash
 eval:
 	uv run python -m evals --model $(EVAL_MODEL)
 

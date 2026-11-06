@@ -5,13 +5,13 @@ servers — on the machine that runs them. We want security reports, and we want
 
 ## Supported versions
 
-One package, `noeta`. 1.0 is in development on `main` (`1.0.0.dev0`) and not yet on PyPI.
-Fixes land on `main`; there are no backports.
+`noeta` and its terminal UI `noeta-tui`, released together on PyPI at the same version.
+Fixes land on `main` and ship in the next release; there are no backports.
 
 | Version | Supported |
 |---|---|
 | latest `main` | yes |
-| the newest 1.x release, once published | yes |
+| the newest 1.x release | yes |
 | 0.x (`noeta-runtime` / `noeta-sdk`, up to `v0.6.42`) | no — a different codebase |
 
 ## Reporting a vulnerability

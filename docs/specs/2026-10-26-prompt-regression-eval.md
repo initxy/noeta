@@ -34,7 +34,7 @@ still owed. Today the only honest gate for such a change is the note `AGENTS.md`
   pytest never collects it. ruff lints it and mypy --strict checks it (`make check`).
 - Credentials come from `evals/live_env.py` (`NOETA_LIVE_*`, repo-root `.env`); `--provider`
   picks anthropic (default) / openai_compat / responses, `--model` overrides `NOETA_LIVE_MODEL`.
-- The eval model is DeepSeek V4.1 (`opensource/deepseek_v4_1_flash`, anthropic adapter): the
+- The eval model is DeepSeek V4.1 Flash (anthropic adapter): the
   baseline is recorded on it.
 - A trial is set up the way a host sets up a task, through public interfaces only: the default
   agents (`noeta.agents.default_agents`) with plugin settings by name (rules, hooks, MCP
@@ -144,7 +144,7 @@ still owed. Today the only honest gate for such a change is the note `AGENTS.md`
 - Cost per run; keep the set small.
 
 ## Progress log
-- 2026-10-26: harness, 14 scenarios, `make eval` / `make eval-baseline`, AGENTS.md verb + gate landed. Model `auto_model/alwaysday1_max` (anthropic adapter).
+- 2026-10-26: harness, 14 scenarios, `make eval` / `make eval-baseline`, AGENTS.md verb + gate landed. Model: a larger private model (anthropic adapter).
 - 2026-10-26: baseline 0.952 overall; reruns 0.929 / 0.976, no regression flagged. All scenarios 1.00 except `ask_before_ambiguous_delete` 0.89 (one trial deleted `settings.old.toml` unasked) and `todo_on_multistep` 0.44 (TodoWrite skipped in 5/9 — rule 11 is weakly followed on this model).
 - 2026-10-26: run cost ≈ 250–445 s wall, ~210–230 agent requests, 2.3–2.8M input tokens (~80 % cache reads), ~70K output, ~10 judge calls; the gateway model is uncatalogued, so no $ figure from the catalog.
 - 2026-10-26: degraded prompts — rule 10 removed: no change (0.952); rules 1/4/5/6/10/11/13 removed: no regression (0.949); rule 10 replaced with "work alone, never use Task, one tool call per response": `delegate_parallel_review` 1.00 → 0.00, flagged REGRESSED (parallel reads stayed 1.00 — the model still batched them). On this model, removing guidance doesn't move these scenarios: tool descriptions and model defaults already produce the behavior. The eval catches a prompt that turns behavior the wrong way, not one that drops a rule. Acceptance criterion 3 holds only in that weaker form — owner decides whether to accept it, add borderline scenarios, or run on a weaker model.

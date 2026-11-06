@@ -1,11 +1,11 @@
 ---
 layout: home
-title: "noeta：能跑在服务器上的开源 Claude Code"
+title: "noeta：兼容 Claude Code 的开源编程智能体"
 titleTemplate: false
 
 hero:
   name: noeta
-  text: 把 Claude Code 搬到服务器上。
+  text: 崩了、换机器了，任务照样接着干。
   tagline: 模型看到的和 Claude Code 给它的一样。底下每个任务都是一条只追加、只有一个写入者的日志：进程崩了能接着跑，等人回复几天也不占资源，一台笔记本和一群机器上跑法完全相同。
   image:
     src: /logo.svg
@@ -90,9 +90,9 @@ entry point 按名字找到，也可以是 `~/.noeta/plugins/` 里的单个文�
   <div class="nt-stat"><div class="num">3.7 %</div><div class="label">Terminal-Bench 4.0</div><div class="sub">66 题中的 54 题，限时 2 小时，一轮 · Claude Code：1.9 % · 这个模型上两边都接近零</div></div>
 </div>
 
-<p class="nt-muted">noeta 1.0.0.dev0（提交 34f8acee）和 Claude Code 2.1.312 用同一个模型
-（<code>opensource/deepseek_v4_1_flash</code>，effort <code>high</code>），同样的题目、限时和机器，
-通过 harbor 运行。每轮 SWE-rebench 的花费：noeta $5.01–$5.77，Claude Code $5.70–$6.25。
+<p class="nt-muted">noeta 1.0 和 Claude Code 2.1.312 用同一个模型（DeepSeek V4.1 Flash，
+effort <code>high</code>），同样的题目、限时和机器。每轮花费 noeta 也更低（SWE-rebench 上
+$5.01–$5.77，Claude Code $5.70–$6.25）。
 <a href="./benchmarks.html">方法、每一轮的数据和注意事项 →</a></p>
 
 ## 接下来看什么

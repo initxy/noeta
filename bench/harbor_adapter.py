@@ -32,8 +32,8 @@ from harbor.agents.installed.claude_code import ClaudeCode as HarborClaudeCode
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-# Default model; harbor's -m overrides it.
-_DEFAULT_MODEL = "opensource/deepseek_v4_1_flash"
+# Default model (NOETA_MODEL, else DeepSeek V4.1 Flash); harbor's -m overrides it.
+_DEFAULT_MODEL = os.environ.get("NOETA_MODEL", "deepseek-v4.1-flash")
 
 # The package to install: NOETA_WHEEL (a local wheel, uploaded — how unreleased
 # code is benchmarked) or else NOETA_SPEC from the index (e.g. "noeta==1.0.0").

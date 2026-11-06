@@ -6,8 +6,8 @@ noeta 1.0 在公开编程评测上和 Claude Code 比得怎么样：跑了什么
 
 ## 主要结果
 
-noeta 1.0.0.dev0（提交 `34f8acee`）和 Claude Code 2.1.312 用同一个模型
-（`opensource/deepseek_v4_1_flash`，effort `high`），同样的题目、限时和机器，2026-10-30 到
+noeta 1.0（提交 `34f8acee`）和 Claude Code 2.1.312 用同一个模型
+（DeepSeek V4.1 Flash，effort `high`），同样的题目、限时和机器，2026-10-30 到
 2026-11-01 期间通过 [harbor](https://github.com/harbor-framework/harbor) 运行：
 
 | 评测 | noeta | Claude Code | noeta − Claude Code（标准误） |
@@ -44,7 +44,7 @@ Terminal-Bench：noeta $5.23，Claude Code $6.50。花费按 DeepSeek 官方对 
   会在评分程序运行时继续改文件）。noeta 的适配器也这样做。
 - **noeta** 在每个题目容器里装进独立的虚拟环境，用
   `noeta -p "<题目>" --output-format stream-json --verbose --permission-mode bypassPermissions
-  --cwd "$(pwd)" --model <id> --effort <e>` 运行，并附一个模型描述文件，写明网关模型的真实上限。
+  --cwd "$(pwd)" --model <id> --effort <e>` 运行，并附一个模型描述文件，写明模型的真实上限。
 - **双方实际发出的请求**通过本地代理录过一次：`max_tokens`（65536）、`thinking`（`adaptive`）、
   `output_config.effort`（`high`）、`context_management` 都相同；双方都不发 `temperature` 和
   `top_p`。noeta 多一次调用：第一轮之前生成对话标题。
@@ -93,7 +93,7 @@ CUDA，8 道题自带的参考答案过不了它们自己的测试，还有 1 �
 
 ### 一个更大的私有模型（20 道 SWE-rebench 题）
 
-一个更大的私有网关模型（双方都是 1M 上下文、128K 输出上限），用种子 0 抽了 20 题，一次跑一个，
+一个更大的私有模型（双方都是 1M 上下文、128K 输出上限），用种子 0 抽了 20 题，一次跑一个，
 限时 50 分钟：
 
 | 轮次 | agent（noeta 提交） | 通过 | 50 分钟超时 |
@@ -157,8 +157,10 @@ NOETA_EFFORT=high bench/run_benchmark.sh tb4-full
 bench/summarize.py --dataset bench/datasets/terminal-bench-2-1 bench/jobs/<job>
 ```
 
-最好还是指定 effort：不指定时，请求带的是模型目录里这一行的默认值（没写默认值的就用 `high`），而 DeepSeek V4.1 不接受 `medium`。模型
-目录里没有的网关模型 id 需要一个模型描述文件（`NOETA_MODELS_CONFIG`，或者用
+模型用 `--model <model-id>`（`compare.py`）或 `NOETA_MODEL=<model-id>`（`run_benchmark.sh`）指定，
+填你的 provider 或网关给 DeepSeek V4.1 Flash 起的 id；脚本里的默认值是这几轮用的 id，换个环境多半没有。
+effort 也最好指定：不指定时，请求带的是模型目录里这一行的默认值（没写默认值的就用 `high`），而 DeepSeek V4.1 不接受 `medium`。模型
+目录里没有的模型 id 需要一个模型描述文件（`NOETA_MODELS_CONFIG`，或者用
 `NOETA_MODEL_CONTEXT_WINDOW` 和 `NOETA_MODEL_MAX_OUTPUT_TOKENS` 让适配器生成一个），否则按 128K /
 16K 运行。受限网络、Docker 清理、网关并发、固定 SWE-bench 子集等内容见
 [`bench/README.md`](https://github.com/initxy/noeta/blob/main/bench/README.md)。

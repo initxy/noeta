@@ -9,25 +9,25 @@ branch: bench-fixes
 ## Goal
 
 Find, from the trial logs of the running SWE-rebench comparison (noeta vs Claude Code 2.1.312,
-same gateway models, 50-minute cap), why noeta makes fewer model calls in the same time, why it
-emits more output per call on `auto_model/alwaysday1_max`, and why it lost two tasks; fix what
+same models, 50-minute cap), why noeta makes fewer model calls in the same time, why it
+emits more output per call on a larger private model, and why it lost two tasks; fix what
 is a noeta defect, copying Claude Code where noeta differs without a written reason.
 
 ## Non-goals
 
-- Changing the benchmark itself (`bench/`, the run on `gpu-cn`): the findings about its
+- Changing the benchmark itself (`bench/`, the run on the benchmark machine): the findings about its
   configuration are reported to its owner, not applied here.
 - Reversing ADR-004 (project trust) or the documented `WebSearch` deviation.
 - Running `Bash` calls concurrently by command (see Follow-ups).
 
 ## Context
 
-Evidence: copies of `jobs/rb-ds41` (30 noeta + 30 Claude Code trials, `opensource/deepseek_v4_1_flash`)
-and `jobs/rb-ad1max` (2 + 2 trials, `auto_model/alwaysday1_max`); Claude Code's session logs
+Evidence: copies of the SWE-rebench job on DeepSeek V4.1 Flash (30 noeta + 30 Claude Code trials)
+and the one on the larger private model (2 + 2 trials); Claude Code's session logs
 carry a timestamp per block, noeta's `stream-json` output carries none, so noeta's timing comes
 from the `result` line of the runs that finished (`duration_ms`, `duration_api_ms`). Request
 bodies were captured offline: Claude Code 2.1.312 and noeta `-p` against a local fake Messages
-endpoint, same flags as the benchmark (`--model auto_model/alwaysday1_max --effort high`,
+endpoint, same flags as the benchmark (`--model <larger-model-id> --effort high`,
 bypass permissions, the benchmark's models manifest for noeta).
 
 Findings:
@@ -59,10 +59,10 @@ Findings:
    (2.1.312 bundle; confirmed by capture: zero occurrences for the gateway model, see
    `2026-10-30-bench-findings-capture.json`, which also lists which selectors Claude Code
    treats as its own models). noeta sent
-   both to every model. A/B on `alwaysday1_max` through the live gateway (5 snapshots of the
+   both to every model. A/B on the larger model through the live endpoint (5 snapshots of the
    `nanobot-4129` trial, 4 samples each, with vs without the lines): mean output 1013 vs 1174
    tokens per call, within noise. So this is a parity defect, not the cause of finding 6.
-6. **2.5x output on `alwaysday1_max` is not explained.** Per-call output is heavy-tailed: the
+6. **2.5x output on the larger model is not explained.** Per-call output is heavy-tailed: the
    top 5 calls are 46–47% of each noeta run's output (6–11K-token thinking episodes, 29–46K
    characters of thinking); medians are close (376 vs 532, 562 vs 249). With identical
    parameters and history handling and two samples per arm, trajectory variance is the only
@@ -128,7 +128,7 @@ Findings:
 - For the benchmark owner: Claude Code's arm can fetch upstream fixes (finding 7) and loads the
   project's skills and `CLAUDE.md` while noeta's does not (finding 8); either disable web tools
   and `noeta trust` the task directory, or report those tasks separately. More samples on
-  `alwaysday1_max` before reading anything into the output ratio.
+  the larger model before reading anything into the output ratio.
 
 ## Risks
 
@@ -137,7 +137,7 @@ Findings:
 
 ## Progress log
 
-2026-10-30: findings from rb-ds41 / rb-ad1max; budget gating implemented; check green
+2026-10-30: findings from the two SWE-rebench jobs; budget gating implemented; check green
 (2579 passed, 88.75%); parity 0 mismatches; live A/B 20 vs 20 calls, no effect on output.
 2026-10-30: `make eval` (DeepSeek V4.1, 3 trials): 0.948 vs baseline 0.953, no regression.
 2026-10-30: review fixes: the prompt line is stripped wherever it sits; `gets_budget` matches Claude Code's id recognition (captured); capture summary committed.

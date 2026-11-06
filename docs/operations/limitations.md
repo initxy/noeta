@@ -10,9 +10,6 @@ page picks the ones you are most likely to notice.
 
 ## Status and platforms
 
-- **A development version.** The package is `1.0.0.dev0`. The 1.0 redesign spec is still
-  `active`
-  ([`docs/specs/2026-10-26-noeta-1-0-redesign.md`](https://github.com/initxy/noeta/blob/main/docs/specs/2026-10-26-noeta-1-0-redesign.md)).
 - **Linux and macOS only.** The package declares POSIX Linux and macOS; nothing is built or
   tested for Windows.
 - **Python 3.11 or newer.**

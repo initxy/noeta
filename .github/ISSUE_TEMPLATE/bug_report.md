@@ -28,7 +28,7 @@ the model sees is a bug.
 
 - OS:
 - Python version:
-- noeta version / commit: <!-- e.g. 1.0.0.dev0 @ <sha> -->
+- noeta version / commit: <!-- `noeta --version`, or the commit if built from source -->
 - Install: <!-- uv tool install from the repository / a checkout / pip -->
 - Provider and model: <!-- anthropic | openai_compat | openai_responses, model id -->
 - Store: <!-- sqlite (default) | postgres -->

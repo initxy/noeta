@@ -1,14 +1,14 @@
 [project]
 name = "noeta-tui"
 version = "1.0.1"
-description = "noeta's terminal UI, shaped after Claude Code's: `noeta` with no arguments opens it."
+description = "Terminal UI for noeta, the open-source Claude Code-compatible coding agent: `noeta` with no arguments opens it."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "The Noeta Authors", email = "initxy0@gmail.com" }]
-keywords = ["agent", "llm", "claude-code", "coding-agent", "tui", "textual"]
+keywords = ["ai-agent", "coding-agent", "ai-coding", "claude-code", "llm", "tui", "terminal", "textual", "cli"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: POSIX :: Linux",

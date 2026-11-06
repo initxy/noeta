@@ -299,7 +299,7 @@ async def test_the_selector_sends_no_thinking_field_to_an_uncatalogued_model(
     directory = Path(memory_dir_for(str(h.work), home))
     directory.mkdir(parents=True)
     _memory(directory, "tabs.md", "indent with tabs", "Use tabs.")
-    for model, thinking in (("opensource/deepseek_v4_1_flash", None),
+    for model, thinking in (("gateway/deepseek-v4.1-flash", None),
                             ("claude-haiku-4-5", False)):
         h.provider.add(reply("tabs.md"), reply("ok"))
         await h.start(agent(home, recall_model=model), goal="format this file")

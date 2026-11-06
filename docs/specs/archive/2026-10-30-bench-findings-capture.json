@@ -1,10 +1,10 @@
 {
- "what": "Main-loop request of `-p \"say ok\" --effort high --permission-mode bypassPermissions` against a local fake Messages endpoint, 2026-10-30. Claude Code 2.1.312 with CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000; noeta at bench-fixes with the benchmark's models manifest (alwaysday1_max: 1M window, 128000 output, efforts [high], family anthropic). Prompt texts, ids and keys left out.",
+ "what": "Main-loop request of `-p \"say ok\" --effort high --permission-mode bypassPermissions` against a local fake Messages endpoint, 2026-10-30. Claude Code 2.1.312 with CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000; noeta at bench-fixes with the benchmark's models manifest (the other model: 1M window, 128000 output, efforts [high], family anthropic). Prompt texts, ids and keys left out.",
  "requests": [
   {
    "client": "claude-code-2.1.312",
-   "selector": "auto_model/alwaysday1_max",
-   "model": "auto_model/alwaysday1_max",
+   "selector": "gateway/other-model",
+   "model": "gateway/other-model",
    "max_tokens": 128000,
    "thinking": {
     "type": "adaptive",
@@ -100,8 +100,8 @@
   },
   {
    "client": "noeta-bench-fixes",
-   "selector": "auto_model/alwaysday1_max",
-   "model": "auto_model/alwaysday1_max",
+   "selector": "gateway/other-model",
+   "model": "gateway/other-model",
    "max_tokens": 128000,
    "thinking": {
     "type": "adaptive",
@@ -201,8 +201,8 @@
  ],
  "noeta_before_fix": {
   "client": "noeta-54121930",
-  "selector": "auto_model/alwaysday1_max",
-  "model": "auto_model/alwaysday1_max",
+  "selector": "gateway/other-model",
+  "model": "gateway/other-model",
   "max_tokens": 128000,
   "thinking": {
    "type": "adaptive",
@@ -264,7 +264,7 @@
   "claude-opus-4-1": true,
   "claude-3-5-haiku": true,
   "claude-sonnet-4-20250514": true,
-  "auto_model/alwaysday1_max": false,
+  "gateway/other-model": false,
   "claude-foo-9": false,
   "claude-opus-9": false,
   "claude-3-opus": false,

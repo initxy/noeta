@@ -8,8 +8,6 @@
 
 ## 版本与平台
 
-- **还是开发版。** 包版本是 `1.0.0.dev0`，1.0 重做的规格仍是 `active` 状态
-  （[`docs/specs/2026-10-26-noeta-1-0-redesign.md`](https://github.com/initxy/noeta/blob/main/docs/specs/2026-10-26-noeta-1-0-redesign.md)）。
 - **只支持 Linux 和 macOS。** 包声明的平台就这两个，Windows 上没有构建也没有测试。
 - **需要 Python 3.11 或更新。**
 - **macOS 的沙箱比 Linux 的松。** Seatbelt 配置仍允许 `mach-lookup` 和 Apple Events（待办：需要一台 Mac 来测）。
