@@ -21,7 +21,7 @@
 
 | 步骤 | noeta | pi |
 |---|---|---|
-| 1. 安装 | `uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' 'noeta @ git+https://github.com/initxy/noeta'` | `npm install -g @earendil-works/pi-coding-agent` |
+| 1. 安装 | `uv tool install 'noeta[tui]'` | `npm install -g @earendil-works/pi-coding-agent` |
 | 2. 模型密钥 | `NOETA_API_KEY` / `ANTHROPIC_API_KEY`，或 `config.toml` 里的 `api_key` | `/login`，或 provider 的密钥环境变量 |
 | 3. 写一个文件 | `~/.noeta/plugins/x.py`：一个带 `add_to = ("main",)` 的 `Extension`，一行 `from noeta import …` | `~/.pi/agent/extensions/x.ts` |
 | 4. 运行 | `noeta`，已开着的输入 `/reload-plugins` | `pi`，或 `/reload` |

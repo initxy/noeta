@@ -64,8 +64,7 @@ npm run dist         # 安装包：macOS dmg、Linux AppImage 和 deb（未签�
 `noeta acp` 在 stdin 和 stdout 上提供 [Agent Client Protocol](https://agentclientprotocol.com)，Zed、JetBrains 系列 IDE、Neovim 等 ACP 客户端都能把 noeta 当作自己的代理。需要 `acp` 这个 extra：
 
 ```bash
-uv tool install --reinstall --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta[acp] @ git+https://github.com/initxy/noeta'
+uv tool install --reinstall 'noeta[tui,acp]'
 ```
 
 在 Zed 里，把它加进 `settings.json`：

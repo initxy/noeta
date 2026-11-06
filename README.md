@@ -7,19 +7,13 @@ it, every task is an append-only event log with exactly one writer, so a task su
 without re-running a tool, waits days for a person while holding no worker, and runs on one
 laptop or many machines unchanged.
 
-> 1.0.0rc1 is on PyPI as a pre-release (`uv tool install --prerelease=allow noeta`, or
-> `pip install --pre noeta`): `-p`, the server and the SDK. The terminal UI (`noeta-tui`) is not
-> on PyPI yet, so the install below takes both from the repository. (The 0.x releases were the
-> separate `noeta-runtime` / `noeta-sdk` packages.)
-
 ## Five-minute start
 
 You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta @ git+https://github.com/initxy/noeta'
-# or from a checkout:  git clone https://github.com/initxy/noeta && cd noeta && uv tool install '.[tui]'
+uv tool install 'noeta[tui]'     # or: pip install 'noeta[tui]'
+# from a checkout:  git clone https://github.com/initxy/noeta && cd noeta && uv tool install '.[tui]'
 ```
 
 Pick a model and a provider. With an Anthropic API key:
@@ -68,7 +62,7 @@ directories above it, `~/.noeta/skills` and `~/.agents/skills`.
 | `keyring` | `{keyring:service/user}` secret references in plugin settings |
 | `tui` | the terminal UI (`noeta-tui`, in `tui/`) |
 
-Install several at once: `'noeta[acp,server,postgres] @ git+…'`. The terminal UI (`noeta` without `-p`) is its own package, `noeta-tui` in `tui/` (`tui/README.md`).
+Install several at once: `uv tool install 'noeta[tui,server,postgres]'`. The terminal UI (`noeta` without `-p`) is its own package, `noeta-tui` in `tui/`, released with noeta at the same version; without it, `noeta` still runs `-p`, `serve`, `worker` and `acp`.
 
 ## Embed it in Python
 

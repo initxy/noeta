@@ -128,7 +128,7 @@ def test_a_module_of_an_extra_names_the_extra(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(registry, "broken_plugin_files",
                         lambda: {"/p.py": "ModuleNotFoundError: No module named 'keyring'"})
     [line] = cli.broken_plugin_lines()
-    assert "the keyring extra" in line and "noeta[keyring] @ " in line
+    assert "the keyring extra" in line and "pip install 'noeta[keyring]'" in line
 
 
 def test_an_installed_plugin_wins_a_name_clash(home: Path) -> None:

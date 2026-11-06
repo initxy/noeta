@@ -5,19 +5,11 @@ terminal UI and `noeta -p`, then come back to a conversation later.
 
 ## 1. Install
 
-You need Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). `noeta` 1.0.0rc1 is on PyPI
-as a pre-release; that is enough for `-p`, a server and the Python SDK:
+You need Python 3.11 or newer and [uv](https://docs.astral.sh/uv/). Install `noeta` with its
+terminal UI from PyPI:
 
 ```bash
-uv tool install --prerelease=allow noeta      # or: pip install --pre noeta
-```
-
-The terminal UI (`noeta-tui`) is not on PyPI yet. To get the `noeta` command with its terminal
-UI, install both from the repository:
-
-```bash
-uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta @ git+https://github.com/initxy/noeta'
+uv tool install 'noeta[tui]'      # or: pip install 'noeta[tui]'
 ```
 
 From a checkout instead:
@@ -29,8 +21,9 @@ uv tool install '.[tui]'
 
 Check it: `noeta --version`.
 
-The terminal UI is its own package, `noeta-tui` (in `tui/`); without it `noeta` still runs
-`-p`, `serve`, `worker` and `acp`, and tells you how to add the UI when you start it bare.
+The terminal UI is its own package, `noeta-tui` (in `tui/`), released with noeta at the same
+version; the `tui` extra pins it. Without it `noeta` still runs `-p`, `serve`, `worker` and
+`acp`, and tells you how to add the UI when you start it bare.
 Optional extras add the rest:
 
 | Extra | For |
@@ -41,7 +34,7 @@ Optional extras add the rest:
 | `postgres` | a Postgres store, for many workers |
 | `keyring` | `{keyring:service/user}` secrets in config |
 
-Several at once: `uv tool install 'noeta[acp,server,postgres] @ git+https://github.com/initxy/noeta'`.
+Several at once: `uv tool install 'noeta[tui,acp,server,postgres]'`.
 A `uv tool install --reinstall` keeps only the extras and `--with` packages it names, so name
 all of them each time. When a command needs an extra you do not have, noeta says which one
 and prints the install line.

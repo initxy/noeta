@@ -63,8 +63,8 @@ noeta 是一个开源的编程 agent：站在模型那边看，它的行为和 C
 - **不是 Claude Code 有的它都有。** Claude Code 插件里的 monitor、`bin/` 目录、LSP 服务器、主题和
   输出风格不会加载；有些 hook 事件属于 noeta 没有的 Claude Code 功能，会跳过并给出警告。完整清单见
   [和其他 agent 对比](./operations/comparison.md)和[已知限制](./operations/limitations.md)。
-- **还没上 PyPI。** 1.0 还在开发中，要从仓库安装（[快速上手](./start/quickstart.md)）。0.x 版本是
-  另外的 `noeta-runtime` / `noeta-sdk` 包，说的是另一套代码。
+- **还很新。** 1.0 是这套代码的第一个正式版本。0.x 版本是另外的 `noeta-runtime` / `noeta-sdk`
+  包，说的是另一套代码。
 
 ## 和 Claude Code 的关系
 

@@ -15,8 +15,7 @@ its tasks where their logs stop.
 The server and Postgres parts are extras:
 
 ```sh
-uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta[server,postgres] @ git+https://github.com/initxy/noeta'
+uv tool install 'noeta[tui,server,postgres]'
 ```
 
 `server` adds `noeta serve` (Starlette, uvicorn, websockets); `postgres` adds the Postgres store

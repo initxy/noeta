@@ -77,9 +77,8 @@ Two decisions shape everything else:
   noeta lacks and are skipped with a warning. The full list is in
   [Compared with other agents](./operations/comparison.md) and
   [Known limitations](./operations/limitations.md).
-- **Not on PyPI yet.** 1.0 is in development; install it from the repository
-  ([Quickstart](./start/quickstart.md)). The 0.x releases were the separate `noeta-runtime` /
-  `noeta-sdk` packages and describe a different codebase.
+- **Young.** 1.0 is the first release of this codebase. The 0.x releases were the separate
+  `noeta-runtime` / `noeta-sdk` packages and describe a different codebase.
 
 ## How it relates to Claude Code
 

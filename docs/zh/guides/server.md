@@ -11,8 +11,7 @@
 服务端和 Postgres 是两个可选依赖（extra）：
 
 ```sh
-uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta[server,postgres] @ git+https://github.com/initxy/noeta'
+uv tool install 'noeta[tui,server,postgres]'
 ```
 
 `server` 带来 `noeta serve`（Starlette、uvicorn、websockets），`postgres` 带来 Postgres 存储（psycopg）。缺了哪个，相关命令会停下来并打印安装它的那一行（`noeta/cli/main.py` 的 `missing_extra`）。

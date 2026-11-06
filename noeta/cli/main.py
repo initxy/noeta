@@ -33,13 +33,8 @@ from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
 
-#: Where an extra is installed from (README). noeta 1.0 is not on PyPI, and
-#: the bare name there may be someone else's package.
-SOURCE_URL = "git+https://github.com/initxy/noeta"
 #: The extras the README's install line names.
 README_EXTRAS: tuple[str, ...] = ()
-#: The terminal UI, its own package in this repository's ``tui/``.
-TUI_SOURCE = f"noeta-tui @ {SOURCE_URL}#subdirectory=tui"
 #: The top-level modules each optional extra installs (``pyproject.toml``).
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
@@ -51,7 +46,15 @@ EXTRA_MODULES = {
 def _noeta(*extras: str) -> str:
     """noeta's install requirement with ``extras``."""
     named = ",".join(dict.fromkeys(extras))
-    return f"noeta[{named}] @ {SOURCE_URL}" if named else f"noeta @ {SOURCE_URL}"
+    return f"noeta[{named}]" if named else "noeta"
+
+
+def _uv_reinstall(*extras: str, with_: str = "") -> str:
+    return f"uv tool install --reinstall{with_} '{_noeta(*README_EXTRAS, *extras)}'"
+
+
+def _pip(requirement: str) -> str:
+    return f"pip install '{requirement}'"
 
 
 def _common(ap: argparse.ArgumentParser) -> None:
@@ -313,14 +316,12 @@ def broken_plugin_lines() -> list[str]:
 def _install_hint(module: str) -> str:
     extra = EXTRA_MODULES.get(module)
     if extra is not None:
-        return (f"; it needs the {extra} extra: uv tool install --reinstall"
-                f" '{_noeta(*README_EXTRAS, extra)}' (name every extra and --with you use:"
-                " a reinstall drops the rest; from a checkout, its path instead of the URL), or"
-                f" pip install 'noeta[{extra}] @ {SOURCE_URL}'")
-    return (f"; install it next to noeta: uv tool install --reinstall --with {module}"
-            f" '{_noeta(*README_EXTRAS)}' (name every extra and --with"
-            f" you use: a reinstall drops the rest; from a checkout, its path instead of the"
-            f" URL), or pip install {module} in noeta's"
+        return (f"; it needs the {extra} extra: {_uv_reinstall(extra)} (name every extra and"
+                " --with you use: a reinstall drops the rest; from a checkout, its path instead"
+                f" of the name), or {_pip(_noeta(extra))}")
+    return (f"; install it next to noeta: {_uv_reinstall(with_=f' --with {module}')} (name"
+            " every extra and --with you use: a reinstall drops the rest; from a checkout, its"
+            f" path instead of the name), or pip install {module} in noeta's"
             " environment; the package's name may differ from the module's")
 
 
@@ -335,8 +336,7 @@ def main(argv: list[str] | None = None) -> None:
             raise
         # A uv tool reinstall keeps only the extras it names.
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
-                 f"pip install '{_noeta(extra)}' (or, for a uv tool install, "
-                 f"uv tool install --reinstall '{_noeta(*README_EXTRAS, extra)}', "
+                 f"{_pip(_noeta(extra))} (or, for a uv tool install, {_uv_reinstall(extra)}, "
                  "listing every extra you want: a reinstall drops the ones it does not name)")
 
 
@@ -506,10 +506,9 @@ def front_end(name: str) -> Any:
         return registry.load(registry.FRONTENDS, name)
     except registry.UnknownName:
         sys.exit(f"noeta: the terminal UI is its own package, noeta-tui, which is not "
-                 f"installed: uv tool install --reinstall --with '{TUI_SOURCE}' "
-                 f"'{_noeta(*README_EXTRAS)}' (name every extra and "
-                 "--with you use: a reinstall drops the rest; from a checkout, "
-                 f"--with ./tui and its path), or pip install '{TUI_SOURCE}'")
+                 f"installed: {_uv_reinstall('tui')} (name every extra and --with you use: a "
+                 "reinstall drops the rest; from a checkout, '.[tui]' in it), or "
+                 f"{_pip('noeta-tui')}")
 
 if __name__ == "__main__":
     main()

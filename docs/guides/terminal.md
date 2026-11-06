@@ -7,11 +7,11 @@ and its stream-json protocol. This page covers both.
 ## Install and start
 
 The terminal UI is its own package, `noeta-tui` (in `tui/`), found through the entry-point
-group `noeta.frontends` under the name `tui`. Install it with noeta:
+group `noeta.frontends` under the name `tui`. It is released with noeta at the same version,
+and the `tui` extra installs it:
 
 ```bash
-uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta @ git+https://github.com/initxy/noeta'
+uv tool install 'noeta[tui]'      # or: pip install 'noeta[tui]'
 # from a checkout:  uv tool install '.[tui]'
 ```
 
