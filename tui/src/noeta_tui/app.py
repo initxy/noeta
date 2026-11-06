@@ -126,6 +126,7 @@ class NoetaApp(TranscriptView):
         self.thinking_now = False
         self.agents = {}
         self.workflows = {}
+        self.early_progress = {}
         #: The names of the images pasted for the next message.
         self.image_names: list[str] = []
         #: The model call (its ``ModelCalled`` seq) and attempt being streamed.
@@ -311,6 +312,7 @@ class NoetaApp(TranscriptView):
         self.calls.clear()
         self.agents.clear()
         self.workflows.clear()
+        self.early_progress.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
         self.waiting_for = ""

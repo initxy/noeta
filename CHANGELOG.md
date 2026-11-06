@@ -37,6 +37,8 @@ A reworked terminal UI, and the README and package pages written for an open-sou
 - **The slash menu keeps one height** and cuts long descriptions to a line, so typing no longer
   moves the prompt; it takes the footer's place while open.
 - **Wrapped tool output lines up under its text**, not under the `⎿`.
+- **A running call's first output is no longer lost** when the tool reports it before the
+  terminal UI has shown the call.
 
 ## [1.0.1] - 2026-11-05
 

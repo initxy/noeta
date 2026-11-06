@@ -147,6 +147,8 @@ class TranscriptView(App[None]):
     #: Background agents' calls, by child task id; workflow calls by run id.
     agents: dict[str, ToolCall]
     workflows: dict[str, ToolCall]
+    #: A running call's output that came before its call was shown, by call id.
+    early_progress: dict[str, str]
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, message: str = "", *,
@@ -243,6 +245,8 @@ class TranscriptView(App[None]):
         if delta.kind == "tool":
             if (block := self.calls.get(delta.call_id)) is not None:
                 block.set_progress(delta.text)
+            else:  # the call runs before its reply is shown: shown with it
+                self.early_progress[delta.call_id] = delta.text
             return
         key = (delta.call_seq, delta.attempt)
         if delta.attempt < self.attempts.get(delta.call_seq, 1):
@@ -398,6 +402,8 @@ class TranscriptView(App[None]):
             for call in msg.tool_uses:
                 block = ToolCall(call, expanded=self.verbose)
                 self.calls[call.id] = block
+                if (early := self.early_progress.pop(call.id, None)) is not None:
+                    block.set_progress(early)
                 if call.name != "Read":
                     await transcript.mount(block)
                     continue
