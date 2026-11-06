@@ -44,6 +44,27 @@ MODE_STYLES = {"acceptEdits": "magenta", "plan": "cyan", "auto": "yellow",
 CONTEXT_COLOURS = {"System prompt": "bright_black", "System tools": "cyan",
                    "MCP tools": "magenta", "Messages": "bright_magenta"}
 _HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+#: A terminal control sequence (CSI, OSC, DCS / SOS / PM / APC, a two-byte
+#: escape) or any other control character but newline and tab, 8-bit ones
+#: included.
+_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]?"
+                      r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"
+                      r"|\x1b[PX^_][^\x1b]*(?:\x1b\\)?"
+                      r"|\x1b[ -~]?"
+                      r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean(text: str) -> str:
+    """``text`` as it may reach the terminal: without control sequences.
+    What a task recorded (a tool's output, the model's text, a hook's or a
+    provider's error) is shown through this: an escape in it would write
+    the clipboard (OSC 52), hide a link (OSC 8) or clear the screen."""
+    return _CONTROL.sub("", text)
+
+
+def plain(text: str, style: str = "") -> Text:
+    """``text`` cleaned, as plain text: never read as markup."""
+    return Text(clean(text), style=style)
 
 
 def _main_argument(call: ToolUse) -> str:
@@ -62,13 +83,13 @@ def tool_name(call: ToolUse) -> str:
     """``Update`` for ``Edit``; ``github - get_issue (MCP)`` for an MCP tool."""
     if call.name.startswith("mcp__"):
         server, _, tool = call.name[5:].partition("__")
-        return f"{server} - {tool} (MCP)" if tool else call.name
-    return DISPLAY_NAMES.get(call.name, call.name)
+        return clean(f"{server} - {tool} (MCP)" if tool else call.name)
+    return clean(DISPLAY_NAMES.get(call.name, call.name))
 
 
 def tool_header(call: ToolUse, limit: int = 100) -> str:
     """``Bash(ls -la)``: the name and the main argument's first line."""
-    arg = _main_argument(call)
+    arg = clean(_main_argument(call))
     lines = arg.splitlines()
     first = lines[0] if lines else ""
     if len(first) > limit or len(lines) > 1:
@@ -187,7 +208,7 @@ def result_block(rows: Iterable[tuple[str, str]]) -> Hanging:
     for n, (line, style) in enumerate(rows):
         out.append("\n" if n else "")
         out.append("  ⎿  " if n == 0 else "     ", style="dim")
-        out.append(line, style=style)
+        out.append(clean(line), style=style)
     return Hanging(out)
 
 
@@ -227,7 +248,7 @@ def rows_text(rows: Iterable[tuple[str, str]]) -> Text:
     out = Text()
     for n, (line, style) in enumerate(rows):
         out.append("\n" if n else "")
-        out.append(line, style=style)
+        out.append(clean(line), style=style)
     return out
 
 
@@ -266,7 +287,7 @@ def todo_block(items: Mapping[str, Mapping[str, Any]]) -> Hanging:
         mark, style = TODO_MARKS.get(str(item.get("status")), ("◻", ""))
         out.append("\n" if n else "")
         out.append(f"  {'⎿' if n == 0 else ' '}  {mark} ", style="dim")
-        out.append(str(item.get("subject") or ""), style=style)
+        out.append(clean(str(item.get("subject") or "")), style=style)
     return Hanging(out, 7)
 
 
@@ -274,7 +295,7 @@ def active_form(items: Mapping[str, Mapping[str, Any]]) -> str:
     """What the in-progress task says it is doing (``Running tests``), or ``""``."""
     for item in items.values():
         if item.get("status") == "in_progress":
-            return str(item.get("active_form") or item.get("subject") or "")
+            return clean(str(item.get("active_form") or item.get("subject") or ""))
     return ""
 
 

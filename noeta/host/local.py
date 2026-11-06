@@ -12,7 +12,9 @@ still reach everyone.
 A front end shares its store (``~/.noeta/tasks.db``) with every other noeta
 process on the machine, so it runs with ``own_tasks_only=True``: its worker
 serves only the task trees it created or resumed (``adopt``), never a task
-another front end or a host left in the store."""
+another front end or a host left in the store, and it creates its tasks on
+:data:`FRONT_END_QUEUE`, which no ``noeta serve`` or ``noeta worker`` takes,
+so they run only in the front end that has them open, with its settings."""
 
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ from noeta.core.runner import Runtime
 from noeta.core.store import Store
 from noeta.core.types import Delta, Text
 from noeta.host.app import AppAPI, DeltaSink, agent_commands, agent_run_command, archive_task
+from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import Cache, root_summaries
 
 log = logging.getLogger("noeta.host.local")
@@ -51,6 +54,26 @@ def default_spill_root() -> str:
     return os.path.join(tempfile.gettempdir(), f"noeta-{user}", "tool-results")
 
 
+#: The queue a front end's tasks (and their sub-agents) are created on: a
+#: worker serving the whole store takes ``default``, never this one.
+FRONT_END_QUEUE = "front-end"
+#: What an ``own_tasks_only`` worker takes: its own queue, and ``default`` for
+#: the tasks front ends created before they had one.
+FRONT_END_QUEUES = (FRONT_END_QUEUE, "default")
+
+
+async def take_over(store: Store, task_id: str, queue: str = "default") -> bool:
+    """Move the front end's task tree ``task_id`` belongs to onto ``queue``,
+    so a server's workers run it from now on: what a server does when a
+    person acts on such a task through it (their message would otherwise
+    wait for a front end to open the task again). A front end that holds a
+    task of the tree (a lease not run out) keeps it, and gets what was
+    posted; ``False`` then, or when ``task_id`` is unknown."""
+    row = await store.get(task_id)
+    if row is None:
+        return False
+    return await store.requeue(row.root_id, FRONT_END_QUEUE, queue)
+
 #: How long live output gathers before it is published to other processes.
 DELTA_BATCH_SECONDS = 0.03
 
@@ -62,13 +85,16 @@ class UnknownAgent(NoetaError):
 class LocalClient(Client):
     """A ``Client`` whose new tasks the in-process worker serves.
     ``task_config`` is laid under every new task's config (its ``prompts``
-    merged key by key)."""
+    merged key by key); ``queue`` is the one new tasks are created on unless
+    a call names one."""
 
     def __init__(self, store: Store, runtime: Runtime, *,
-                 task_config: dict[str, Any] | None = None, **kw: Any) -> None:
+                 task_config: dict[str, Any] | None = None, queue: str = "default",
+                 **kw: Any) -> None:
         super().__init__(store, **kw)
         self.runtime = runtime
         self.task_config = dict(task_config or {})
+        self.queue = queue
         #: ``route_model(model)``: what a task records with a model it is
         #: given (``MODEL_ROUTE``: its provider, its limits), or ``None``;
         #: blocking. Set by a host with several providers.
@@ -104,6 +130,7 @@ class LocalClient(Client):
                 merged[MODEL_ROUTE] = route
         if not kw.get("history_from"):
             input = self._initial_prompt(agent, input)
+        kw.setdefault("queue", self.queue)
         self.runtime.serve_root(tid)  # before it exists, so the first claim sees it
         created = await super().create(agent, input, task_id=tid, config=merged, **kw)
         if created != tid:  # a dedupe key named an existing task
@@ -154,6 +181,7 @@ class LocalApp:
         self._hearing: Callable[[], None] | None = None
         if own_tasks_only:
             runtime_kw.setdefault("roots", set())
+            runtime_kw.setdefault("queues", FRONT_END_QUEUES)
         runtime_kw.setdefault("spill_root", default_spill_root())
         runtime_kw.setdefault("agent_aliases", former_agent_names([a.name for a in agents]))
         runtime_kw.setdefault("poll_interval", 0.2)
@@ -161,6 +189,7 @@ class LocalApp:
                                provider_for=provider_for,  # type: ignore[arg-type]
                                on_delta=self._fan_out, **runtime_kw)
         self.client = LocalClient(store, self.runtime, task_config=task_config,
+                                  queue=FRONT_END_QUEUE if own_tasks_only else "default",
                                   poll_interval=runtime_kw["poll_interval"])
         #: Listeners letting outside conversations in (``noeta.core.channel``),
         #: run while the app is started.
@@ -255,6 +284,11 @@ class LocalApp:
 
     async def archive(self, task_id: str, archived: bool = True) -> None:
         await archive_task(self.client, task_id, archived)
+
+    async def rewind(self, task_id: str, point: RewindPoint, *, conversation: bool = True,
+                     files: bool = True) -> Rewound:
+        return await rewind(self.client, task_id, point, conversation=conversation,
+                            files=files)
 
     async def adopt(self, task_id: str) -> None:
         """Serve the tree of an existing task (one being resumed). Raises

@@ -48,6 +48,7 @@ import yaml
 from noeta.core import models, registry
 from noeta.core.agent import Agent
 from noeta.core.extension import Extension
+from noeta.toolkit import frontmatter
 from noeta.toolkit.hook_env import without_env
 
 __all__ = [
@@ -61,6 +62,8 @@ __all__ = [
     "parse_plugin_list",
     "plugin_overlays",
     "read_agent_dir",
+    "read_agent_file",
+    "read_file_text",
     "resolve_secrets",
 ]
 
@@ -260,16 +263,11 @@ def _lay_over(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, 
 def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> AgentFile:
     """Read one agent file. The body after the frontmatter is the system
     prompt, unchanged."""
-    if text.startswith("﻿"):
-        text = text[1:]
-    if not text.startswith("---\n"):
+    if not frontmatter.opens(text):
         raise AgentFileError(f"{source}: an agent file starts with '---' frontmatter")
-    end = text.find("\n---\n", 3)
-    if end < 0:
-        if not text.endswith("\n---") and not text.endswith("\n---\n"):
-            raise AgentFileError(f"{source}: the frontmatter has no closing '---'")
-        end = len(text) - 4
-    front, body = text[4:end], text[end + 5:]
+    front, body = frontmatter.split(text)
+    if front is None:
+        raise AgentFileError(f"{source}: the frontmatter has no closing '---'")
     try:
         data = yaml.safe_load(front) or {}
     except yaml.YAMLError as exc:
@@ -336,20 +334,37 @@ def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> 
     )
 
 
+def read_file_text(path: Path) -> str | None:
+    """``path``'s UTF-8 text, or ``None`` (logged) when it cannot be read (a
+    dangling link, not UTF-8, gone): a loader skips that one file and goes
+    on, as Claude Code does, so one bad file in a plugin stops nothing."""
+    try:
+        return path.read_text("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        log.warning("skipping %s: it cannot be read (%s)", path, exc)
+        return None
+
+
+def read_agent_file(file: Path) -> AgentFile | None:
+    """The agent file at ``file`` (named by its stem unless it names
+    itself), or ``None`` (logged) when it cannot be read or parsed."""
+    text = read_file_text(file)
+    if text is None:
+        return None
+    try:
+        return parse_agent_file(text, source=str(file), default_name=file.stem)
+    except AgentFileError as exc:
+        log.warning("skipping agent file %s: %s", file, exc)
+        return None
+
+
 def read_agent_dir(path: str | Path) -> list[AgentFile]:
     """Every ``*.md`` agent file in ``path`` (not recursive), by file name.
     A file that cannot be read is logged and skipped."""
     root = Path(path).expanduser()
-    out: list[AgentFile] = []
     if not root.is_dir():
-        return out
-    for file in sorted(root.glob("*.md")):
-        try:
-            out.append(parse_agent_file(file.read_text("utf-8"), source=str(file),
-                                        default_name=file.stem))
-        except (OSError, AgentFileError) as exc:
-            log.warning("skipping agent file %s: %s", file, exc)
-    return out
+        return []
+    return [f for file in sorted(root.glob("*.md")) if (f := read_agent_file(file)) is not None]
 
 
 def _freeze(value: Any) -> Any:

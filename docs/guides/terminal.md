@@ -239,7 +239,7 @@ available there; `/reload-plugins` says to restart the workers instead. See
 
 ```bash
 noeta -p "what does this repository do?"
-git diff | noeta -p "review this diff"        # the prompt from stdin
+git diff | noeta -p "review this diff"        # the prompt, then the diff piped on stdin
 noeta -p --output-format json "list the TODOs" | jq .result
 ```
 

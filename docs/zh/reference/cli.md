@@ -67,12 +67,14 @@ noeta mcp add|add-json|list|get|remove|login|logout
 |---|---|
 | `-c`、`--continue` | 打开本目录里最近开始的那场对话 |
 | `-r`、`--resume [ID]` | 打开任务 `ID`；不给 id 就从列表里挑 |
-| `--server URL` | 操作一台 `noeta serve` 服务端上的任务，而不是在本机跑（token 放在 `NOETA_SERVER_TOKEN`）。新任务用服务端的模型和目录，除非 `--model` / `--cwd` 另有指定。不能和 `--plugin-dir` 一起用 |
+| `--server URL` | 操作一台 `noeta serve` 服务端上的任务，而不是在本机跑（token 放在 `NOETA_SERVER_TOKEN`）。新任务用服务端的模型和目录，除非 `--model` / `--cwd` 另有指定。会影响本机所跑任务的参数（`--plugin-dir`，以及权限、设置、MCP、`--agents`、系统提示词文件这些参数）不能和它一起用 |
 | `--agent NAME` | 新任务用的代理（默认取设置文件里的 `agent`，没有就是 `main`） |
 | `--plugin-dir PATH` | 只在这次运行里加载某个插件文件、插件目录或一组插件目录（可重复） |
 | `-v`、`--version` | 打印版本号后退出 |
 
-下一节里只对无界面模式有意义的参数，在界面模式下也接受，只是不起作用。
+下一节里的权限、目录、设置、MCP、`--agents` 和系统提示词文件参数，在界面模式下和 `-p` 一样生效。
+只有无界面模式才用得上的参数（`--max-turns`、`--json-schema`、`--permission-prompt-tool` 等）
+也接受，但不起作用，界面的提示里会列出来。
 
 ## 无界面模式：`noeta -p` {#headless-noeta-p}
 
@@ -82,7 +84,7 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 | 参数 | 含义 |
 |---|---|
 | `-p`、`--print` | 不开界面，跑提示词并打印结果 |
-| `prompt` | 提示词；带 `-p` 又没给时从标准输入读 |
+| `prompt` | 提示词；带 `-p` 时，没给就从标准输入读，给了的话标准输入里管道送进来的内容另起一行接在后面 |
 | `--output-format {text,json,stream-json}` | `text`（默认）：只打印回答；`json`：一个结果对象；`stream-json`：每行一条 JSON 消息（需要 `--verbose`） |
 | `--input-format {text,stream-json}` | `stream-json`：从标准输入按行读用户消息和控制请求（需要 `--output-format stream-json`） |
 | `--include-partial-messages` | 模型生成过程中也输出 `stream_event` 消息 |

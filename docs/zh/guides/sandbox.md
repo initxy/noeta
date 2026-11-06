@@ -41,7 +41,7 @@
 
 沙箱里的命令能做的事：
 
-- **读**：什么都能读，除了家目录里的凭据（`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker/config.json`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.pypirc`、`~/.npmrc`、cargo 凭据、`~/.pgpass`、`~/.password-store`）、noeta 自己的家目录（`~/.noeta`，里面有访问令牌和任务存储；其中存下来的工具输出、项目记忆和粘贴的图片仍然能读）、`filesystem.denyRead`、`Read(...)` 拒绝规则和 `credentials.files` 里列的文件。`filesystem.allowRead` 可以在这些里面重新放开某个路径。
+- **读**：什么都能读，除了家目录里的凭据（`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker/config.json`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.pypirc`、`~/.npmrc`、cargo 凭据、`~/.pgpass`、`~/.password-store`）、noeta 自己的家目录（`~/.noeta`，里面有访问令牌和任务存储；其中存下来的工具输出、项目记忆和粘贴的图片仍然能读）、`filesystem.denyRead`、`Read(...)` 拒绝规则和 `credentials.files` 里列的文件。`filesystem.allowRead` 可以在这些里面重新放开某个路径。被拒读的目录里如果有可写目录（比如 `denyRead: ["~"]`，项目在 `~/proj`），这个目录照样读不了，只有里面那个可写目录能看到。
 - **写**：只能写工作目录、`filesystem.allowWrite`、`Edit(...)` 允许规则和 `additionalDirectories` 里的路径，以及一个私有的 `$TMPDIR`。`filesystem.denyWrite` 和**受保护路径**永远写不了。
 - **联网**：只能经过 noeta 在沙箱外跑的过滤代理，只能连 `network.allowedDomains` 里的主机（`*.example.com` 覆盖所有子域名，`host:port` 只开一个端口；`deniedDomains` 优先）。一个都没列，就哪儿都连不上。被拒的主机会附在命令输出后面的 `<sandbox_violations>` 里。允许的域名如果解析到回环、链路本地或云厂商元数据地址，同样拒绝。设了 `network.httpProxyPort` / `socksProxyPort` 就改走你自己的代理。
 - **环境变量**：`credentials.envVars` 里列的会被清掉。
@@ -83,7 +83,7 @@ Linux 上先装 bubblewrap（`apt install bubblewrap` 或 `dnf install bubblewra
 | `enabled` | `false` | 把 `Bash` 关进沙箱 |
 | `failIfUnavailable` | `false` | 沙箱起不来时拒绝执行命令 |
 | `autoAllowBashIfSandboxed` | `true` | 在沙箱里跑的命令不用审批（计划模式除外） |
-| `allowUnsandboxedCommands` | `true` | 调用可以设 `dangerouslyDisableSandbox: true` 出沙箱跑，但一定会问你（关掉后这个参数不起作用，命令照样在沙箱里跑） |
+| `allowUnsandboxedCommands` | `true` | 调用可以设 `dangerouslyDisableSandbox: true` 出沙箱跑。不管允许规则怎么写，这一步都要审批：`auto` 下由分类器判断，`bypassPermissions` 下直接跑，`dontAsk` 下直接拒绝（关掉后这个参数不起作用，命令照样在沙箱里跑） |
 | `excludedCommands` | `[]` | 这些命令模式（`docker *`、`Bash(npm *)`）总是在沙箱外跑 |
 | `filesystem.allowWrite` / `denyWrite` / `denyRead` / `allowRead` | `[]` | 上面说的路径名单 |
 | `filesystem.disabled` | `false` | 只管网络，不管文件 |

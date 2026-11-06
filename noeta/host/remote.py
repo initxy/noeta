@@ -20,6 +20,7 @@ from noeta.core.extension import Command, CommandContext
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta
 from noeta.host.app import AppAPI, archive_task
+from noeta.host.rewind import RewindPoint, Rewound
 
 #: Reconnects in a row (without an event in between) before ``watch`` gives up.
 WATCH_RETRIES = 5
@@ -81,9 +82,11 @@ class RemoteClient:
         return msgspec.convert(await self._call("GET", f"/tasks/{task_id}"), TaskRow)
 
     async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
-                    limit: int = 100) -> list[TaskRow]:
+                    limit: int = 100, roots_only: bool = False) -> list[TaskRow]:
         params = {k: v for k, v in {"parent_id": parent_id, "status": status,
-                                    "limit": limit}.items() if v is not None}
+                                    "limit": limit,
+                                    "roots_only": "true" if roots_only else None}.items()
+                  if v is not None}
         return msgspec.convert(await self._call("GET", "/tasks", params=params), list[TaskRow])
 
     async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
@@ -140,6 +143,21 @@ class RemoteClient:
         """What fills the task's next request (``GET /tasks/{id}/context``)."""
         got: dict[str, Any] = await self._call("GET", f"/tasks/{task_id}/context")
         return got
+
+    async def rewind(self, task_id: str, point: RewindPoint, *, conversation: bool = True,
+                     files: bool = True) -> Rewound:
+        """``POST /tasks/{id}/rewind``: the server makes the new task (with
+        only the config a request may set) and serves it. The point is
+        found among the server's list by its log and event."""
+        listed = await self._call("GET", f"/tasks/{task_id}/rewind")
+        index = next((p["index"] for p in listed
+                      if p["task_id"] == point.task_id and p["seq"] == point.seq), None)
+        if index is None:
+            raise NoetaError(f"the server lists no rewind point at {point.task_id}#{point.seq}")
+        got = await self._call("POST", f"/tasks/{task_id}/rewind", json={
+            "index": index, "conversation": conversation, "files": files})
+        return Rewound(task_id=str(got["task_id"]), prompt=str(got["prompt"]),
+                       files=tuple(got.get("files") or ()))
 
     async def wait(self, task_id: str, *, timeout: float | None = None) -> TaskRow:
         async def settled() -> TaskRow:
@@ -213,6 +231,10 @@ class RemoteApp:
 
     async def archive(self, task_id: str, archived: bool = True) -> None:
         await archive_task(self.client, task_id, archived)
+
+    async def rewind(self, task_id: str, point: RewindPoint, *, conversation: bool = True,
+                     files: bool = True) -> Rewound:
+        return await self.client.rewind(task_id, point, conversation=conversation, files=files)
 
     async def files(self, query: str, ctx: CommandContext, limit: int = 30) -> list[str]:
         """Paths under the task's (or ``ctx.cwd``'s) directory on the server

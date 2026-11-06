@@ -7,9 +7,11 @@ which holds this state and handles input."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 import time
+from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -66,7 +68,9 @@ from noeta_tui.agents import (
 from noeta_tui.widgets import (
     ApprovalCard,
     AssistantMessage,
+    CleanMarkdown,
     Notice,
+    PromptInput,
     QuestionCard,
     ReadGroup,
     ThinkingBlock,
@@ -85,6 +89,19 @@ WORKFLOW_KINDS = ("run", "agent", "result", "agent_failed", "ended")
 SPINNER_TICK = 0.12
 #: The agents' list key of a workflow run's line, before its run id.
 WORKFLOW_KEY = "workflow:"
+#: What the footer says while the task waits on one of its approval cards.
+WAITING_APPROVAL = "waiting for your approval"
+
+
+def failure_reason(exc: BaseException) -> str:
+    """What an error says: a server's own words for a request it refused
+    (its ``{"error": …}``), else the error's text."""
+    response = getattr(exc, "response", None)
+    try:
+        said = response.json().get("error") if response is not None else None
+    except (ValueError, AttributeError):  # not a JSON object: the error's own text
+        said = None
+    return str(said or exc or type(exc).__name__)
 
 
 def _short_path(path: str, width: int) -> str:
@@ -128,6 +145,8 @@ class TranscriptView(App[None]):
     question_detail: dict[str, Any]
     question_answers: dict[str, Any]
     shown_requests: set[tuple[str, str]]
+    #: The task's approval cards still open, by request id.
+    open_cards: dict[str, ApprovalCard]
     waiting_for: str
     _deltas: asyncio.Queue[Delta]
     #: The task list (the todos plugin's records), by id.
@@ -381,6 +400,17 @@ class TranscriptView(App[None]):
     async def say_notice(self, text: str) -> None:
         await self.query_one("#transcript").mount(Notice(text))
 
+    @contextlib.asynccontextmanager
+    async def failures_shown(self, what: str) -> AsyncIterator[None]:
+        """Around what the person asked for (a line sent, a key, a pick): a
+        failure — the server unreachable or refusing, a command's own error
+        — is shown as ``<what> failed: …``; raised, it would end the app."""
+        try:
+            yield
+        except Exception as exc:
+            log.warning("%s failed", what, exc_info=True)
+            await self.say_notice(f"{what} failed: {failure_reason(exc)}")
+
     async def render_event(self, rec: Recorded) -> None:
         ev = rec.event
         transcript = self.query_one("#transcript")
@@ -405,11 +435,13 @@ class TranscriptView(App[None]):
                     self.effort = item.body.data["effort"] or None
                 elif isinstance(item.body, ChildEnded):
                     self._agent_ended(item.body, rec.at)
-                elif isinstance(item.body, Answer) and \
-                        item.body.request_id == self.waiting_question and \
-                        self.question_task in ("", self.task_id):
-                    self._set_question("", "", {})
+                elif isinstance(item.body, Answer):
+                    await self._close_cards([item.body.request_id], item.body)
+                    if item.body.request_id == self.waiting_question and \
+                            self.question_task in ("", self.task_id):
+                        self._set_question("", "", {})
         elif isinstance(ev, ModelCalled):
+            await self._close_cards()
             self.called = rec.seq
             if not self.busy:  # a turn nobody typed: an agent's notice woke the task
                 self.set_busy(True)
@@ -442,9 +474,11 @@ class TranscriptView(App[None]):
             self.turn_tokens = self.turn_output
             self._refresh_cost(self.task_id)
         elif isinstance(ev, ToolStarted):
+            await self._close_cards([ev.call.id])
             if ev.call.id in self.calls:
                 self.calls[ev.call.id].set_state("running")
         elif isinstance(ev, ToolFinished):
+            await self._close_cards([ev.result.call_id])
             finished = self.calls.get(ev.result.call_id)
             if finished is not None:
                 finished.set_result(ev.result.text, is_error=ev.result.is_error, meta=ev.meta,
@@ -462,6 +496,7 @@ class TranscriptView(App[None]):
         elif isinstance(ev, Waiting):
             await self._render_waiting(ev, transcript)
         elif isinstance(ev, TaskEnded):
+            await self._close_cards()
             await self._turn_done()
             self._refresh_cost(self.task_id)
             await transcript.mount(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error
@@ -481,7 +516,7 @@ class TranscriptView(App[None]):
         # kind names (the hooks plugin's "retry") for something else.
         core = records.decode(ev)
         if ev.extension == TITLE and ev.kind == "title":
-            self.sub_title = str(data.get("title") or "")
+            self.sub_title = render.clean(str(data.get("title") or ""))
         elif ev.extension == "workflow" and ev.kind in WORKFLOW_KINDS:
             self._workflow_record(ev.kind, data, rec.at)
         elif ev.extension == "todos":
@@ -492,6 +527,7 @@ class TranscriptView(App[None]):
             await transcript.mount(Notice(f"retrying (attempt {core.attempt}): "
                                           f"{str(core.error or '')[:120]}"))
         elif isinstance(core, records.TurnStopped):
+            await self._close_cards()
             await self._end_stream()
             self._set_question("", "", {})
             await transcript.mount(Notice(Text("  ⎿  Interrupted · what should noeta do "
@@ -504,7 +540,7 @@ class TranscriptView(App[None]):
             return  # shown in the run's call
         elif isinstance(core, records.Notice):
             # Structured news (a review's findings) reads as a list.
-            await transcript.mount(Markdown(core.text, classes="notice")
+            await transcript.mount(CleanMarkdown(core.text, classes="notice")
                                    if core.notice_kind else Notice(core.text))
 
     def _agent_ended(self, ended: ChildEnded, at: float) -> None:
@@ -691,7 +727,7 @@ class TranscriptView(App[None]):
 
     def _show_queued(self) -> None:
         box = self.query_one("#queued", Static)
-        box.update(Text("\n".join(f"❯ {q}" for q in self.queued), style="dim"))
+        box.update(render.plain("\n".join(f"❯ {q}" for q in self.queued), "dim"))
         box.display = bool(self.queued)
 
     async def _back_to_transcript(self) -> None:
@@ -700,11 +736,29 @@ class TranscriptView(App[None]):
         if self.query(".agent-view"):
             await self.close_agent()
 
+    async def _close_cards(self, ids: Collection[str] | None = None,
+                           answer: Answer | None = None, *, keep: Collection[str] = ()) -> None:
+        """The task's approval cards whose requests are no longer open
+        (``ids``; ``None``: all but ``keep``) keep no choices: a reopened
+        task's old approvals, one answered in another window, one its turn
+        left behind. Only a request still open takes an answer."""
+        closing = [rid for rid in self.open_cards
+                   if (ids is None or rid in ids) and rid not in keep]
+        focused = False
+        for rid in closing:
+            card = self.open_cards.pop(rid)
+            focused = await card.close(card.label(answer)) or focused
+        if closing and not self.open_cards and self.waiting_for == WAITING_APPROVAL:
+            self.waiting_for = ""
+        if focused:
+            self.query_one(PromptInput).focus()
+
     async def _render_waiting(self, ev: Waiting, transcript: Any) -> None:
+        await self._close_cards(keep=ev.ids if ev.on == "approval" else ())
         await self._end_stream()
         if ev.on in ("approval", "question"):
             await self._back_to_transcript()
-        self.waiting_for = {"approval": "waiting for your approval",
+        self.waiting_for = {"approval": WAITING_APPROVAL,
                             "question": "waiting for your answer",
                             "children": ""}.get(ev.on, "")
         if ev.on == "approval":
@@ -712,9 +766,12 @@ class TranscriptView(App[None]):
             for p in approvals(ev, uses, self.task_id):
                 if p.request_id in self.calls:
                     self.calls[p.request_id].set_state("waiting")
-                await transcript.mount(ApprovalCard(
-                    p.request_id, card_title(p, self.task_id), card_prompt(p),
-                    self.decide, choices(p.detail), preview=self._preview(p)))
+                if p.request_id in self.open_cards:
+                    continue  # asked again (another worker took the task over): shown
+                card = ApprovalCard(p.request_id, card_title(p, self.task_id), card_prompt(p),
+                                    self.decide, choices(p.detail), preview=self._preview(p))
+                self.open_cards[p.request_id] = card
+                await transcript.mount(card)
         elif ev.on == "question":
             questions = [k for k, v in ev.detail.items()
                          if isinstance(v, dict) and v.get("on") == "question"]

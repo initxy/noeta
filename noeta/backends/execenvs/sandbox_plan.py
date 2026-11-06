@@ -340,8 +340,9 @@ def plan_paths(settings: SandboxSettings, root: str, tmpdir: str,
         deny_write += [os.path.join(w, p) for p in PROTECTED]
     allow_read = _expand(settings, [*(os.path.join(home, p) for p in HOME_ALLOW_READ),
                                     *settings.allow_read], base)
-    # A denied directory holding a writable one would hide it.
-    deny_read = [d for d in deny_read if not any(_within(w, d) for w in writes)]
+    # A denied directory holding a writable one stays denied, the writable
+    # one mounted again inside it; one that is itself writable is not denied.
+    deny_read = [d for d in deny_read if d not in writes]
     hidden = [d for d in deny_read if os.path.isdir(d)]
     rebound = [w for w in writes if any(_within(w, d) for d in hidden)]
     # A denied path inside a hidden directory is hidden already, unless a
@@ -413,8 +414,12 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
                 steps.append((path, 0, ["--tmpfs", path]))
             elif os.path.exists(path):
                 steps.append((path, 0, ["--ro-bind", "/dev/null", path]))
-        steps += [(path, 1, ["--ro-bind", path, path]) for path in plan.allow_read
-                  if os.path.exists(path) and any(_within(path, d) for d in hidden)]
+        # The bridge's Python (its installation, read-only) may lie in a
+        # hidden directory too (a denied home holding uv's or pyenv's).
+        shown = [*plan.allow_read, _PYTHON_HOME]
+        steps += [(path, 1, ["--ro-bind", path, path]) for path in dict.fromkeys(shown)
+                  if os.path.exists(path) and any(_within(path, d) for d in hidden)
+                  and (path != _PYTHON_HOME or not any(_within(path, w) for w in plan.writable))]
         steps += [(path, 2, ["--bind", path, path]) for path in plan.rebound]
         for _path, _kind, step in sorted(steps, key=lambda s: (s[0].count("/"), s[1])):
             args += step
@@ -440,7 +445,8 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
     for name in settings.deny_env:
         args += ["--unsetenv", name]
     args += ["--chdir", cwd, "--"]
-    inner = [sys.executable, "-I", "-S", bridge]
+    # The installation's own executable, not a virtual environment's link.
+    inner = [os.path.realpath(sys.executable), "-I", "-S", bridge]
     for kind, (path, port) in zip(("--http", "--socks"), relays, strict=False):
         inner += [kind, path, str(port)]
     if settings.allow_all_unix_sockets:
@@ -448,6 +454,10 @@ def bwrap_args(settings: SandboxSettings, plan: Plan, *, bwrap: str, cwd: str,
     if settings.nested_user_namespaces:
         inner.append("--allow-userns")
     return [*args, *inner, "--"]
+
+
+#: The Python installation the bridge runs on.
+_PYTHON_HOME = os.path.realpath(sys.base_prefix)
 
 
 def _sb_quote(path: str) -> str:

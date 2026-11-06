@@ -101,7 +101,8 @@ class Routes:
     async def list_tasks(self, request: Request) -> Response:
         q = request.query_params
         rows = await scope(request).client.tasks(
-            parent_id=q.get("parent_id"), status=q.get("status"), limit=int(q.get("limit", "100")))
+            parent_id=q.get("parent_id"), status=q.get("status"), limit=int(q.get("limit", "100")),
+            roots_only=q.get("roots_only") == "true")
         return _json(rows)
 
     async def summaries(self, request: Request) -> Response:
@@ -212,11 +213,14 @@ class Routes:
         await scope(request).client.get(task_id)
         points = await rewind_points(scope(request).client, task_id)
         point = points[int(body["index"])]
-        # The new task is a request's: the guard's checks, and only the
-        # config a request may set.
-        done = await rewind(scope(request).guarded, task_id, point,
+        # The new task is a request's: the guard's checks, only the config
+        # a request may set, and this server's queue (a front end's task
+        # rewound here runs here).
+        guarded = scope(request).guarded
+        done = await rewind(guarded, task_id, point,
                             conversation=bool(body.get("conversation", True)),
-                            files=bool(body.get("files", True)), config_keys=REQUEST_CONFIG)
+                            files=bool(body.get("files", True)), config_keys=REQUEST_CONFIG,
+                            queue=guarded.queue)
         if done.task_id != task_id and self._app is not None:
             await self._app.adopt(done.task_id)
         return _json({"task_id": done.task_id, "prompt": done.prompt, "files": list(done.files)})

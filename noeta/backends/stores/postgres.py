@@ -440,6 +440,7 @@ class PostgresStore:
         status: Status | None = None,
         limit: int = 100,
         owner: str | None = None,
+        roots_only: bool = False,
     ) -> list[TaskRow]:
         where: list[str] = []
         args: list[Any] = []
@@ -452,6 +453,8 @@ class PostgresStore:
         if owner is not None:
             where.append("owner = %s")
             args.append(owner)
+        if roots_only:
+            where.append("parent_id IS NULL")
         sql = f"SELECT {TASK_COLUMNS} FROM {{s}}.tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -530,6 +533,30 @@ class PostgresStore:
 
         if await self._conns.tx(tx):
             self._deliver([(claim.task_id, "released")])
+
+    async def requeue(self, root_id: str, queue: str, to: str) -> bool:
+        async def tx(conn: Conn) -> list[tuple[str, ChangeKind]] | None:
+            # The tree's rows locked first: a claim skips them meanwhile.
+            cur = await conn.execute(self._q(
+                f"SELECT task_id, queue, lease_until >= {_NOW} FROM {{s}}.tasks"
+                " WHERE root_id = %s FOR UPDATE"), (root_id,))
+            rows = await cur.fetchall()
+            if any(held for _, _, held in rows):
+                return None
+            changes: list[tuple[str, ChangeKind]] = [
+                (str(task_id), "released") for task_id, on, _ in rows if on == queue]
+            if changes:
+                await conn.execute(self._q(
+                    "UPDATE {s}.tasks SET queue = %s WHERE root_id = %s AND queue = %s"),
+                    (to, root_id, queue))
+                await self._notify(conn, changes)
+            return changes
+
+        changes = await self._conns.tx(tx)
+        if changes is None:
+            return False
+        self._deliver(changes)
+        return True
 
 
 def open_url(url: str) -> PostgresStore:

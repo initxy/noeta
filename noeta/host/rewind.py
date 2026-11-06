@@ -174,10 +174,12 @@ def diff_stats(plan: FilePlan) -> tuple[int, int]:
 
 
 async def rewind(client: ClientAPI, task_id: str, point: RewindPoint, *, conversation: bool = True,
-                 files: bool = True, config_keys: Sequence[str] | None = None) -> Rewound:
+                 files: bool = True, config_keys: Sequence[str] | None = None,
+                 queue: str | None = None) -> Rewound:
     """Rewind to before ``point``. With ``conversation`` a new task (same
     agent, queue and config, or only its ``config_keys`` when given: what a
-    request may set) continues the log up to just before the prompt; with
+    request may set; on ``queue`` when given) continues the log up to just
+    before the prompt; with
     ``files`` the files changed since (by the task or its sub-agents) are
     written back as they were, by the task to go on with — so the front end
     following it sees the restore's notice. The checkpoints plugin checks a
@@ -191,7 +193,7 @@ async def rewind(client: ClientAPI, task_id: str, point: RewindPoint, *, convers
             raise ValueError(f"task {point.task_id} has no creation event")
         config = {k: v for k, v in first.config.items()
                   if config_keys is None or k in config_keys}
-        queue = (await client.get(point.task_id)).queue
+        queue = queue or (await client.get(point.task_id)).queue
         config[CONTINUED_AS_KEY] = "rewind"
         target = await client.create(first.agent, None, config=config, queue=queue,
                                      history_from=point.task_id,

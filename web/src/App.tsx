@@ -250,8 +250,7 @@ function Workspace({
   const refreshPending = useCallback(() => {
     if (taskId) api.pending(taskId).then(setPending, fail);
   }, [api, taskId, fail]);
-  const childRunning = state.items.some((i) => i.kind === "tool" && !!i.child && !i.childStatus);
-  const asking = state.waitingOn === "approval" || state.waitingOn === "question" || childRunning;
+  const asking = state.waitingOn === "approval" || state.waitingOn === "question" || state.running.length > 0;
   useEffect(() => {
     if (!asking) return setPending([]);
     refreshPending();

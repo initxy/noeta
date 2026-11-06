@@ -166,3 +166,32 @@ async def test_acp_on_a_server_sends_neither_the_editors_directory_nor_a_model(
         "cwd": os.path.realpath(tmp_path / "sub"), "timezone": "Asia/Shanghai"}
     await acp_agent.app.stop()
     await named.app.stop()
+
+
+async def test_acp_rewind_on_a_server(
+        server: tuple[str, ScriptedProvider, LocalApp], tmp_path: Path) -> None:
+    """``/rewind`` is the server's ``POST /tasks/{id}/rewind``: the session's
+    config holds what the server wrote (``prompts``), which a request may
+    not set, so the adapter making the fork itself was refused (403)."""
+    from noeta.core.events import TaskCreated
+
+    url, provider, local = server
+    local.client.task_config = {"prompts": {"system/main": "You help."}}
+    provider.add(reply("hi"))
+    acp_agent = NoetaAcpAgent(RemoteApp(url, token="secret"))
+    editor = FakeEditor()
+    acp_agent.on_connect(editor)
+    await acp_agent.initialize(protocol_version=1)
+    session = await acp_agent.new_session(cwd=str(tmp_path))
+    await acp_agent.prompt(session.session_id, [schema.TextContentBlock(type="text",
+                                                                        text="hello")])
+    assert "prompts" in await _created_config(local, session.session_id)
+    editor.updates.clear()
+    await acp_agent.prompt(session.session_id, [
+        schema.TextContentBlock(type="text", text="/rewind 1 conversation")])
+    assert "goes on in session" in _text(editor) and "the prompt was: hello" in _text(editor)
+    [fork] = [r for r in await local.client.tasks() if r.task_id != session.session_id]
+    first = (await local.client.events(fork.task_id))[0].event
+    assert isinstance(first, TaskCreated) and first.history_from == session.session_id
+    assert first.config["continued_as"] == "rewind"
+    await acp_agent.app.stop()

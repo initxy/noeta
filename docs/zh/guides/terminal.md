@@ -175,7 +175,7 @@ noeta --server http://api.internal:8642
 
 ```bash
 noeta -p "what does this repository do?"
-git diff | noeta -p "review this diff"        # 提问从 stdin 读
+git diff | noeta -p "review this diff"        # 先是这句提问，再接上管道送进来的 diff
 noeta -p --output-format json "list the TODOs" | jq .result
 ```
 

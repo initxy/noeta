@@ -150,11 +150,11 @@ class AgentsPanel(Static, can_focus=True):
             name = Text()
             name.append(f"{mark} ", style=f"bold {render.ACCENT}" if here and focused
                         else mark_style or ("" if here else "dim"))
-            name.append(row.name, style=f"bold {render.ACCENT}" if here and focused
+            name.append(render.clean(row.name), style=f"bold {render.ACCENT}" if here and focused
                         else "bold" if row.state in ("", "running") else "")
             if row.extra:
                 name.append(f" {row.extra}", style="dim")
-            grid.add_row(name, Text(row.activity, style=row.activity_style),
+            grid.add_row(name, render.plain(row.activity, row.activity_style),
                          Text(row.stats, style="dim"))
         hidden = len(self.rows) - 1 - PANEL_ROWS
         if hidden > 0:
@@ -234,19 +234,20 @@ class AgentView(Vertical):
     def _head(self) -> None:
         out = Text()
         out.append("← ", style="dim")
-        out.append(self.title_text, style="bold")
+        out.append(render.clean(self.title_text), style="bold")
         if self.kind:
-            out.append(f"  {self.kind}", style="dim")
+            out.append(render.clean(f"  {self.kind}"), style="dim")
         c = self.child
         if c is not None:
             out.append("  ·  ", style="dim")
             if c["status"]:
-                out.append(*child_activity(c))
+                text, style = child_activity(c)
+                out.append(render.clean(text), style=style)
             else:
                 out.append("running", style=render.WORKING)
             out.append(f"  ·  {render.agent_line(c['tools'], c['tokens'], took(c))}", style="dim")
         elif self.ended:
-            out.append(f"  ·  {self.ended}", style="dim")
+            out.append(render.clean(f"  ·  {self.ended}"), style="dim")
         self.query_one(".agent-head", Static).update(out)
 
     async def action_back(self) -> None:
@@ -323,7 +324,7 @@ class WorkflowView(Vertical):
         self.on_back = on_back
 
     def compose(self) -> ComposeResult:
-        yield Static(Text.assemble(("← ", "dim"), (self.title_text, "bold"),
+        yield Static(Text.assemble(("← ", "dim"), (render.clean(self.title_text), "bold"),
                                    (f"  {len(self.rows)} agents", "dim")), classes="agent-head")
         with VerticalScroll(classes="agent-log"):
             yield Choices([Option(r.key, r.name, f"{r.activity}  ·  {r.stats}")

@@ -77,7 +77,7 @@ made again. You only see a failure when that cannot work:
 | Reason | Message | What to do |
 |---|---|---|
 | `context_overflow` | the provider's overflow text | No plugin could make room (compaction is off, or the agent does not run it). Turn compaction on, or start a new task. |
-| `autocompact_thrashing` | `Automatic compaction stopped: the context filled up again within 3 model calls of the previous compaction, 3 times in a row. A file or tool output is probably too large for the context window; read it in smaller parts, or start a new conversation.` | One file or output is close to the whole window. Ask for it in parts. |
+| `autocompact_thrashing` | `Automatic compaction stopped: the context filled up again within 3 model calls of the previous compaction, 3 times in a row. What a request still carries after a summary (the system prompt and tools, project instructions, files read again, the newest tool output) does not fit the model's context window. Read large files in smaller parts, check the model's context window is registered right, or start a new conversation.` | What stays after a summary leaves no room: one file or output is close to the whole window, or the model's real window is smaller than its catalog row (an uncatalogued model is taken as 128K). Ask for large files in parts, or register the model's real limits. |
 | `compaction_summary_failed` | why the summary call failed | The summarize call itself failed (it is retried up to three times when it is too long). After three failed automatic compactions in a row, automatic compaction is off for the task; `/compact` still works. |
 | `compaction_config_invalid` | the bad value | `autoCompactWindow` or `NOETA_AUTOCOMPACT_PCT_OVERRIDE` is not usable for this model. Fix the agent file or settings. |
 
@@ -179,7 +179,7 @@ it next reads the log. You may see the task pause for one lease (30 seconds by d
 | `a request may not set the task config key 'x' (only model, effort, …)` | Only some config keys may come from a client; the rest would loosen permission gates. | Set the key in the server's own config or agent file. |
 | `the request failed on the server; its log has the details` | An error raised outside noeta's own code. Its text is not sent, since it may name server paths. | Read the server's standard error. |
 | `noeta: -p runs its task here; --server attaches the terminal UI (or noeta acp --server) to a server` | `-p` always runs locally. | Drop `--server`, or use the terminal UI or `noeta acp --server`. |
-| `noeta: --plugin-dir loads plugins into this process; with --server the server's plugins run` | Plugins of a remote task run on the server's workers. | Install the plugin on the workers. |
+| `noeta: --plugin-dir, … apply to the tasks this process runs; with --server the server's settings and plugins run` | A remote task runs with the server's plugins, permission rules, settings and MCP servers. | Set them on the server, or drop `--server`. |
 
 Live text not appearing across machines while recorded events do: live output goes through
 Postgres notifications (`<schema>_deltas`), best effort and never stored. A front end that

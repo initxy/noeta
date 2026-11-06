@@ -209,14 +209,16 @@ worker、渠道和每天一次的清理，直到 `stop` 被设上；`noeta worke
 
 同一个存储可以同时由其他机器上的 `noeta worker` 进程服务；它们任何一个都能接着跑任何任务
 （[多机运行](../how-it-works/many-machines.md)）。`LocalApp(…, own_tasks_only=True)` 只服务自己
-创建或接手的任务树，前端们就是这样共用 `~/.noeta/tasks.db` 而不抢彼此的任务。
+创建或接手的任务树，前端们就是这样共用 `~/.noeta/tasks.db` 而不抢彼此的任务。它把任务建在
+`front-end` 队列上，`noeta serve` 和 `noeta worker` 不取这个队列（除非用 `--queue` 指定），所以
+这样的任务只在打开着它的前端里跑，除非有人通过服务端对它操作（见 [HTTP 接口](../reference/http-api.md#和任务交互)）。
 
 ## 连接已有的存储或服务端
 
 `noeta.connect(url)` 给你一个连向别处任务的客户端：
 
 ```python
-client = noeta.connect("sqlite:///home/me/.noeta/tasks.db")     # 这个存储上的 Client
+client = noeta.connect("sqlite:////home/me/.noeta/tasks.db")    # 这个存储上的 Client
 client = noeta.connect("postgres://noeta:…@db.internal/noeta")    # 同上
 client = noeta.connect("https://noeta.internal:8642", token=os.environ["NOETA_SERVER_TOKEN"])
 ```

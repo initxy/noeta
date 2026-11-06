@@ -248,9 +248,11 @@ class Store(Protocol):
         status: Status | None = None,
         limit: int = 100,
         owner: str | None = None,
+        roots_only: bool = False,
     ) -> list[TaskRow]:
         """The most recently updated rows first; ``owner`` keeps only those
-        whose claim that worker holds or held last."""
+        whose claim that worker holds or held last, ``roots_only`` only the
+        tasks no task started (no ``parent_id``)."""
         ...
 
     async def claim(
@@ -274,6 +276,14 @@ class Store(Protocol):
         running task becomes ``ready``; one waiting with its claim kept keeps
         its status, claimable again by the usual rules. A no-op when the
         claim was already lost."""
+        ...
+
+    async def requeue(self, root_id: str, queue: str, to: str) -> bool:
+        """Move the tasks of the tree ``root_id`` that are on ``queue`` onto
+        ``to`` (announced ``released``), so the workers of ``to`` take them;
+        each keeps its status, claim and inbox. Moves nothing and returns
+        ``False`` while a task of the tree has a lease that has not run out
+        (a running claim, or a kept one): its holder goes on serving it."""
         ...
 
     def on_change(self, callback: OnChange) -> Callable[[], None]:

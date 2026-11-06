@@ -24,6 +24,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from noeta.toolkit import frontmatter
+
 __all__ = ["KNOWN_KEYS", "FrontmatterError", "parse"]
 
 
@@ -97,38 +99,20 @@ def parse(text: str) -> tuple[dict[str, str], str, list[str]]:
     breaks a structural rule is ignored with a warning naming the rule (the
     file loads, as in Claude Code); warnings are non-fatal.
     """
-    if text.startswith("\ufeff"):
-        text = text[1:]
-    if not (text.startswith("---\n") or text.startswith("---\r\n")):
-        # No frontmatter: all of it is the body (Claude Code's).
-        return {}, text.replace("\r\n", "\n"), []
-
-    lines = [_strip_cr(line) for line in text.split("\n")]
-
-    end_idx = _find_terminator(lines)
-    if end_idx is None:
-        # No closing delimiter: no frontmatter, all of it is the body.
-        return {}, "\n".join(lines), ["no closing '---': read as having no frontmatter"]
-
-    body = "\n".join(lines[end_idx + 1:])
+    head, body = frontmatter.split(text)
+    body = body.replace("\r\n", "\n")
+    if head is None:
+        # No frontmatter, or no closing delimiter: all of it is the body
+        # (Claude Code's).
+        if frontmatter.opens(text):
+            return {}, body, ["no closing '---': read as having no frontmatter"]
+        return {}, body, []
     try:
-        fields, warnings = _parse_lines(lines[1:end_idx])
+        fields, warnings = _parse_lines(head.split("\n"))
     except FrontmatterError as exc:
         # Claude Code loads the skill with its frontmatter ignored.
         return {}, body, [f"invalid frontmatter ({exc}); ignored"]
     return fields, body, warnings
-
-
-def _strip_cr(line: str) -> str:
-    """Strip one trailing ``\\r`` so CRLF input collapses to LF on re-join."""
-    return line[:-1] if line.endswith("\r") else line
-
-
-def _find_terminator(lines: list[str]) -> int | None:
-    for i in range(1, len(lines)):
-        if lines[i] == "---":
-            return i
-    return None
 
 
 def _parse_lines(

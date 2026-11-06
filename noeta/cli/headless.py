@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import os
+import select
 import stat
 import sys
 from collections.abc import AsyncIterator
@@ -43,6 +44,8 @@ IGNORED_FLAGS = ("--include-hook-events", "--no-session-persistence",
                  "--session-mirror", "--bare", "--allow-dangerously-skip-permissions",
                  "--exclude-dynamic-system-prompt-sections", "--forward-subagent-text",
                  "--disable-slash-commands")
+#: Seconds ``-p "prompt"`` waits for piped stdin to start (Claude Code's).
+STDIN_WAIT = 3.0
 #: The short spellings of ignored flags.
 _IGNORED_SHORT = {"--debug": ("-d",)}
 
@@ -113,6 +116,38 @@ def _ignored(args: argparse.Namespace) -> list[str]:
         if getattr(args, f"ignored_{flag[2:].replace('-', '_')}", None):
             out.append(flag)
     return out
+
+
+#: Flags only headless mode uses, by ``args`` attribute.
+_PRINT_ONLY = {"--max-turns": "max_turns", "--max-budget-usd": "max_budget_usd",
+               "--json-schema": "json_schema",
+               "--include-partial-messages": "include_partial_messages",
+               "--replay-user-messages": "replay_user_messages", "--verbose": "verbose",
+               "--fork-session": "fork", "--session-id": "new_task_id",
+               "--permission-prompt-tool": "permission_prompt_tool"}
+#: Flags that shape the app this process runs (the terminal UI's and -p's).
+_LOCAL_APP = {"--plugin-dir": "plugin_dirs", "--allowedTools": "allowed_tools",
+              "--disallowedTools": "disallowed_tools", "--tools": "tools",
+              "--add-dir": "add_dir", "--settings": "settings_flag",
+              "--setting-sources": "setting_sources", "--mcp-config": "mcp_config",
+              "--strict-mcp-config": "strict_mcp_config", "--agents": "agents_json",
+              "--system-prompt-file": "system_prompt_file",
+              "--append-system-prompt-file": "append_system_prompt_file"}
+
+
+def _given(args: argparse.Namespace, flags: dict[str, str]) -> list[str]:
+    return [flag for flag, attr in flags.items() if getattr(args, attr) not in (None, False, [])]
+
+
+def unused_in_terminal(args: argparse.Namespace) -> list[str]:
+    """The flags given that the terminal UI has no use for."""
+    return [*_given(args, _PRINT_ONLY), *_ignored(args)]
+
+
+def local_app_flags(args: argparse.Namespace) -> list[str]:
+    """The flags given that shape the app this process runs (with
+    ``--server`` none runs here)."""
+    return _given(args, _LOCAL_APP)
 
 
 def permission_arguments(args: argparse.Namespace) -> dict[str, Any]:
@@ -280,10 +315,28 @@ def agent_files(args: argparse.Namespace) -> list[AgentFile]:
 
 
 def _prompt_text(args: argparse.Namespace) -> str | None:
-    if args.prompt is not None:
-        return str(args.prompt)
+    """The prompt argument, then what is piped on stdin, one line apart
+    (``git diff | noeta -p "review this"``), as Claude Code joins them."""
     if args.input_format == "stream-json" or sys.stdin.isatty():
-        return None
+        return None if args.prompt is None else str(args.prompt)
+    if args.prompt is None:
+        return sys.stdin.read()
+    return "\n".join(x for x in (str(args.prompt), _piped_stdin()) if x)
+
+
+def _piped_stdin() -> str:
+    """stdin read to its end once something comes within :data:`STDIN_WAIT`,
+    else ``""``: a launcher that leaves stdin open and silent does not hang
+    a run that has its prompt (Claude Code waits as long)."""
+    try:
+        ready = select.select([sys.stdin], [], [], STDIN_WAIT)[0]
+    except (OSError, ValueError):
+        # Not something to wait on (a Windows pipe, a replaced stdin).
+        return ""
+    if not ready:
+        print(f"noeta: no stdin data received in {STDIN_WAIT:g}s, proceeding without it "
+              "(redirect stdin from /dev/null to skip the wait)", file=sys.stderr)
+        return ""
     return sys.stdin.read()
 
 
@@ -341,8 +394,6 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str,
             print(f"noeta: {exc}", file=sys.stderr)
             return 1
     mode = args.permission_mode
-    if args.dangerously_skip_permissions:
-        mode = "bypassPermissions"
     agent = args.agent or getattr(app, "main_agent", "main")
     async with app:  # app.notices were logged to stderr when the app was made
         resume = args.resume or None

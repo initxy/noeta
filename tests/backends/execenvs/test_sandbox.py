@@ -697,6 +697,66 @@ async def test_credentials_are_hidden(tmp_path: Path, home: Path,
     assert "secret" not in out and "spilled" in out and "token=unset" in out
 
 
+def test_a_denied_directory_holding_the_working_one_stays_denied(tmp_path: Path,
+                                                                 home: Path) -> None:
+    # denyRead ["~"] with the project in ~/proj: the rest of ~ stays hidden
+    # and the project is shown (and writable) again inside it, for bwrap and
+    # Seatbelt alike; a denied directory that is itself writable is not denied.
+    user = tmp_path / "user"
+    ws = user / "proj"
+    ws.mkdir(parents=True)
+    settings = SandboxSettings.from_json({"enabled": True, "filesystem": {
+        "denyRead": [str(user), str(ws)]}})
+    plan = sb.plan_paths(settings, str(ws), str(tmp_path / "t"), ())
+    assert str(user) in plan.deny_read and str(ws) not in plan.deny_read
+    assert plan.rebound == [str(ws)]
+    joined = " ".join(sb.bwrap_args(settings, plan, bwrap="bwrap", cwd=str(ws), relays=[],
+                                    bridge="/b.py"))
+    assert joined.index(f"--tmpfs {user} ") < joined.rindex(f"--bind {ws} {ws} ")
+    profile = sb.seatbelt_profile(settings, plan, ())
+    assert profile.index(f'(deny file-read* (subpath "{user}"))') < \
+        profile.index(f'(allow file-read* (subpath "{ws}"))')
+
+
+def test_the_bridges_python_in_a_denied_directory_is_shown_read_only(
+        tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta.backends.execenvs import sandbox_plan
+
+    user = tmp_path / "user"
+    (user / "proj").mkdir(parents=True)
+    python = user / ".local" / "python"
+    python.mkdir(parents=True)
+    monkeypatch.setattr(sandbox_plan, "_PYTHON_HOME", str(python))
+    settings = SandboxSettings.from_json({"enabled": True,
+                                          "filesystem": {"denyRead": [str(user)]}})
+
+    def args(cwd: Path) -> str:
+        plan = sb.plan_paths(settings, str(cwd), str(tmp_path / "t"), ())
+        return " ".join(sb.bwrap_args(settings, plan, bwrap="bwrap", cwd=str(cwd), relays=[],
+                                      bridge="/b.py"))
+    assert f"--ro-bind {python} {python}" in args(user / "proj")
+    # In a writable directory it stays writable.
+    assert f"--ro-bind {python} {python}" not in args(user)
+
+
+@needs_bwrap
+async def test_a_denied_directory_holding_the_working_one_cannot_be_read(
+        tmp_path: Path, home: Path) -> None:
+    user = tmp_path / "user"
+    ws = user / "proj"
+    ws.mkdir(parents=True)
+    (user / "secrets").mkdir()
+    (user / "secrets" / "key.txt").write_text("TOPSECRET")
+    (ws / "mine.txt").write_text("mine")
+    env = LocalExecEnv(str(ws), sandbox={"enabled": True,
+                                         "filesystem": {"denyRead": [str(user)]}})
+    code, out, _ = await _run(env, f"cat {user}/secrets/key.txt; ls {user}")
+    assert "TOPSECRET" not in out and "No such file" in out and out.startswith("proj\n")
+    code, out, _ = await _run(env, f"cat {ws}/mine.txt && echo new > {ws}/new.txt")
+    assert code == 0 and out.strip() == "mine"
+    assert (ws / "new.txt").read_text() == "new\n"
+
+
 @needs_bwrap
 async def test_a_pasted_image_in_noetas_home_can_be_copied(tmp_path: Path, home: Path) -> None:
     (home / "image-cache" / "t").mkdir(parents=True)

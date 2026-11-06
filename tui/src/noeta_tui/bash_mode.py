@@ -26,7 +26,8 @@ CONTEXT_CHARS = 30000
 def _run(command: str, cwd: str) -> tuple[str, str, int]:
     try:
         done = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True,
-                              timeout=TIMEOUT, check=False, stdin=subprocess.DEVNULL)
+                              errors="replace", timeout=TIMEOUT, check=False,
+                              stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return "", f"timed out after {TIMEOUT}s", 124
     except OSError as exc:

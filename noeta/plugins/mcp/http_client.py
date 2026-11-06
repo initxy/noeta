@@ -192,9 +192,11 @@ class HttpClient(McpClient):
             headers[PROTOCOL_HEADER] = self.protocol_version
         data = json.dumps(body, separators=(",", ":")).encode("utf-8")
         try:
+            # The call's own timeout bounds it, not httpx's 5 s default
+            # (a host's client included): a slow tool is no broken session.
             async with asyncio.timeout(timeout):
                 async with self._client().stream("POST", self.url, content=data,
-                                                 headers=headers) as resp:
+                                                 headers=headers, timeout=timeout) as resp:
                     if resp.status_code == 401:
                         raise _Refused(resp.headers.get("WWW-Authenticate", ""))
                     if resp.status_code >= 400:

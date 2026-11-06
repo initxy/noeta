@@ -19,6 +19,7 @@ from noeta.core.commands import Typed, list_commands, run_typed
 from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta
+from noeta.host.rewind import RewindPoint, Rewound
 from noeta.toolkit.signals import ARCHIVE_SIGNAL
 
 DeltaSink = Callable[[str, Delta], None]
@@ -71,6 +72,14 @@ class AppAPI(Protocol):
     async def archive(self, task_id: str, archived: bool = True) -> None:
         """Archive the task (the session lists leave it out), or with
         ``archived=False`` bring it back (:func:`archive_task`)."""
+        ...
+
+    async def rewind(self, task_id: str, point: RewindPoint, *, conversation: bool = True,
+                     files: bool = True) -> Rewound:
+        """Rewind ``task_id`` to before ``point`` (``noeta.host.rewind``):
+        in process with :func:`noeta.host.rewind.rewind`, against a server
+        through its ``POST /tasks/{id}/rewind``, which makes the new task
+        with only the config a request may set."""
         ...
 
 

@@ -15,12 +15,13 @@ import pytest
 
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.core.execenv import RunResult
+from noeta.core.images import image_dimensions
 from noeta.plugins.fs.read import ReadTool
 from tests.plugins.conftest import Harness, images_of, text_of
 
 
-def _pdf(pages: int) -> bytes:
-    """A minimal valid PDF with ``pages`` blank pages."""
+def _pdf(pages: int, size: tuple[int, int] = (200, 200)) -> bytes:
+    """A minimal valid PDF with ``pages`` blank pages of ``size`` points."""
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         (
@@ -30,7 +31,8 @@ def _pdf(pages: int) -> bytes:
         ).encode(),
     ]
     objects += [
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>" for _ in range(pages)
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {size[0]} {size[1]}] >>".encode()
+        for _ in range(pages)
     ]
     out = bytearray(b"%PDF-1.4\n")
     offsets = []
@@ -64,6 +66,17 @@ async def test_a_short_pdf_is_read_whole_as_page_images(h: Harness, ws: Path) ->
     assert len(images) == 2
     assert all(img.media_type == "image/jpeg" for img in images)
     assert all(img.data.startswith(b"\xff\xd8\xff") for img in images)
+
+
+@needs_poppler
+async def test_large_pages_are_shrunk_to_the_image_limits(h: Harness, ws: Path) -> None:
+    # A slide deck sized 1920 x 1080 pt renders at 100 dpi to 2667 x 1500
+    # px, over the 2000 px a request with many images allows.
+    pytest.importorskip("PIL")
+    (ws / "deck.pdf").write_bytes(_pdf(2, size=(1920, 1080)))
+    out = await h.call(ReadTool(), file_path="deck.pdf")
+    assert not out.is_error, text_of(out)
+    assert [image_dimensions(img.data) for img in images_of(out)] == [(2000, 1125)] * 2
 
 
 @needs_poppler

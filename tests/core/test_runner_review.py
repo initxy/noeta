@@ -39,6 +39,7 @@ from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import (
     Delta,
     Message,
+    ModelRequest,
     ModelResponse,
     Text,
     Thinking,
@@ -792,6 +793,23 @@ def test_a_stop_recorded_before_thinking_was_kept_folds_to_its_text() -> None:
         ("assistant", [Text(text="Floating")]), ("user", [Text(text="[stopped]\n")])]
     kept = TurnStopped(partial="x", marker="m", thinking=[Thinking(text="t", signature="s")])
     assert TurnStopped.parse(kept.data()) == kept
+
+
+def test_a_reply_stopped_after_only_whitespace_leaves_no_assistant_turn() -> None:
+    """Only whitespace streamed (a model opening with "\\n\\n" before a long
+    tool call): no empty assistant turn, which every later request would
+    send and the provider refuse. A log that recorded one folds the same."""
+    from noeta.backends.providers.anthropic import AnthropicProvider
+
+    recs, _ = _running_call()
+    stopped = TurnStopped(partial="\n\n", marker="[stopped]\n",
+                          thinking=[Thinking(text="t", signature="s")])
+    st = fold([*recs[:2], _rec(3, ExtensionRecorded(
+        extension=CORE, kind=stopped.kind, data=stopped.data()))], {})
+    assert [(m.role, m.text) for m in st.messages] == [("user", "hi"), ("user", "[stopped]\n")]
+    body = AnthropicProvider(api_key="k").build_body(
+        ModelRequest(model="m", messages=st.messages, max_tokens=100))
+    assert all(m["content"] for m in body["messages"])
 
 
 class _DroppedFeed(SqliteStore):

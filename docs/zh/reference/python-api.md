@@ -124,7 +124,7 @@
 |---|---|
 | `agents` | `Agent` 列表 |
 | `provider` | 一个 `Provider`，或 `模型 -> Provider` 函数 |
-| `own_tasks_only` | 只服务自己创建或接手的任务树 |
+| `own_tasks_only` | 只服务自己创建或接手的任务树；新任务建在 `front-end` 队列上 |
 | `task_config` | 垫在每个新任务配置下面（`prompts` 按键合并） |
 | `channels` | 启动后一起运行的渠道（`Channel`） |
 | `**runtime_kw` | 传给 `Runtime`（`spill_root` 默认是系统临时目录下的 `noeta-<uid>/tool-results`；`poll_interval` 默认 0.2，客户端也按这个间隔轮询；调用方自己传的值优先） |
@@ -142,6 +142,7 @@
 | `await commands(agent, ctx)`、`await run_command(agent, ctx, text)` | 某个代理的斜杠命令 |
 | `await context(task_id)` | 任务下一次请求里装了什么，按类别统计 |
 | `await summaries(limit=50, archived=None)`、`await archive(task_id, archived=True)` | 给续聊列表用的根任务 |
+| `await rewind(task_id, point, *, conversation=True, files=True) -> Rewound` | 回到某条用户提问之前（`point` 是 `noeta.host.rewind.rewind_points` 给出的 `RewindPoint`）：对话、文件，或者两样都回退。`RemoteApp` 也有这个方法，交给服务端去做（`POST /tasks/{id}/rewind`），所以 TUI 和 ACP 适配器连 `--server` 时回退走的是同一条路 |
 | `notices`、`main_agent` | 前端该展示给人的提示；默认用的代理（`"main"`） |
 | `channels` | 它运行的渠道 |
 | `reload_plugins`、`list_models`、`prepare_model` | 由宿主设置的回调（`noeta` 命令会设）：重新查找插件、列出各 provider 的模型、切换模型前先把它定下来；没设时为 `None` |
@@ -158,7 +159,7 @@
 | `await signal(task_id, name, data=None, *, dedupe_key=None, wake=True) -> int` | 发一个带名字的信号给插件读（`permission_mode`、`config` 等） |
 | `await cancel(task_id, reason="", *, turn_only=False)` | 结束任务，或只停下当前这一轮 |
 | `await get(task_id) -> TaskRow` | 任务行；不存在时抛 `UnknownTask` |
-| `await tasks(*, parent_id=None, status=None, limit=100) -> list[TaskRow]` | 任务表里的行 |
+| `await tasks(*, parent_id=None, status=None, limit=100, roots_only=False) -> list[TaskRow]` | 任务表里的行，最近更新的在前（`roots_only`：只列没有父任务的任务） |
 | `await events(task_id, after=0) -> list[Recorded]` | 序号 `after` 之后的日志 |
 | `watch(task_id, after=0) -> AsyncIterator[Recorded]` | 从 `after` 开始实时吐出日志，任务结束为止 |
 | `await wait(task_id, *, timeout=None) -> TaskRow` | 等到任务开始等待或已结束 |
@@ -169,7 +170,7 @@
 ### `noeta.RemoteClient(url, *, token=None, transport=None)`
 
 方法和 `Client` 相同，走 `noeta serve` 服务端的 HTTP 接口（`noeta/host/remote.py`）；`watch` 会
-自动重连。它还有 `await context(task_id)`（任务下一次请求里装了什么）和 `await close()`（关闭它的
+自动重连。它还有 `await context(task_id)`（任务下一次请求里装了什么）、`await rewind(task_id, point, *, conversation=True, files=True)`（调服务端的 `POST /tasks/{id}/rewind`，新任务只带请求允许设置的配置）和 `await close()`（关闭它的
 HTTP 客户端）。`transport` 是 `httpx` 的 transport（测试用）。
 
 ### `noeta.connect(url, *, token=None, **kw) -> Client | RemoteClient`

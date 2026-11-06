@@ -162,14 +162,18 @@ _KEEP_HEAD = r"""keep_head() {
 #: While reads come back full it takes up to 16 per size check (never past
 #: ``$1`` by more than one): a check costs two processes. ``conv=notrunc``:
 #: uutils ``dd`` (Ubuntu 26.04's) truncates its stdout file when it reads
-#: nothing, so the read at the end would empty the log.
+#: nothing, so the read at the end would empty the log. A child the command
+#: left running (``cmd &``) outlives the job, whose file is then removed:
+#: from there its output is read away (written to a descriptor opened once,
+#: so the file is never re-created), else the child dies of a broken pipe.
 _KEEP_TAIL = r"""keep_tail() {
   s=0
   q=$(($1 / 4))
   n=1
+  exec 5>>"$2"
   while :; do
-    dd bs=65536 count="$n" conv=notrunc 2>/dev/null >>"$2"
-    t=$(wc -c <"$2")
+    dd bs=65536 count="$n" conv=notrunc 2>/dev/null >&5
+    t=$(wc -c <"$2" 2>/dev/null) || { exec 5>&-; cat >/dev/null; return 0; }
     [ "$t" -gt "$s" ] || return 0
     if [ $((t - s)) -gt $((n * 32768)) ]; then
       [ "$n" -ge 16 ] || n=$((n * 2))

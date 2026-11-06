@@ -49,9 +49,21 @@ def test_unknown_model_gets_the_conservative_window() -> None:
     assert w.threshold == 128_000 - 16_384 - 13_000
 
 
+def test_a_small_window_shrinks_the_reserves() -> None:
+    # A local model's 32K window with the default 16,384 output cap:
+    # Claude Code's 16,384 + 13,000 would leave a 3,384-token threshold,
+    # under the fixed prompt alone. Shrunk to half the window they keep
+    # their proportion.
+    w = derive_window("no-such-model", auto_compact_window=32_768)
+    assert (w.effective, w.threshold) == (32_768 - 9_135, 16_384)
+    # From 66K up the numbers are Claude Code's.
+    w = derive_window("claude-opus-5-5", auto_compact_window=66_000)
+    assert (w.effective, w.threshold) == (46_000, 33_000)
+    w = derive_window("claude-opus-5-5", auto_compact_window=20_000)
+    assert 0 < w.threshold < w.effective < 20_000
+
+
 def test_bad_settings() -> None:
-    with pytest.raises(ValueError, match="leaves no window"):
-        derive_window("claude-opus-5-5", auto_compact_window=20_000)
     with pytest.raises(ValueError, match="positive int"):
         derive_window("m", auto_compact_window=0)
     with pytest.raises(ValueError, match="auto_compact_percent"):

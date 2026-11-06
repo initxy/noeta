@@ -161,7 +161,8 @@ with the token and says what is wrong when it does not (`noeta/cli/server_token.
 A front end attached to a server needs no model of its own. A new task runs on the server's
 model and in the server's directory, unless `--model` names one or `--cwd PATH` names a
 directory on the server (the server refuses one outside its directory and its `--allow-root`
-paths). Plugins, agents, skills and settings are the server's: `--plugin-dir` is refused, and
+paths). Plugins, agents, skills and settings are the server's: `--plugin-dir` and the other flags
+that shape the tasks run here (`--settings`, `--mcp-config`, `--allowedTools`, …) are refused, and
 `/reload-plugins` asks you to restart the workers. A request may set only the task config a
 client may (model, effort, permission mode, …); `bypassPermissions` is refused unless the server
 was started with `--allow-bypass-permissions`. `noeta -p` always runs here and refuses

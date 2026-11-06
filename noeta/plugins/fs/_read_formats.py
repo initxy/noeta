@@ -10,6 +10,7 @@ to the converter's stdout, so no directory is made for it.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -18,6 +19,7 @@ import re
 from typing import Any
 
 from noeta.core.execenv import ExecEnv, RunResult
+from noeta.core.images import ImageTooLarge, fit_image
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Image, Text
 from noeta.toolkit.tools import format_size, input_error, tool_error
@@ -226,7 +228,12 @@ async def _render_pages(env: ExecEnv, path: str, cwd: str,
             return f"Could not render PDF: page {page} is over {format_size(_PDF_PAGE_CAP)}."
         if not outcome.stdout:
             break
-        images.append(Image(media_type="image/jpeg", data=outcome.stdout))
+        # A page enters the history like any image: shrunk to the image limits.
+        try:
+            fitted = await asyncio.to_thread(fit_image, outcome.stdout, "image/jpeg")
+        except ImageTooLarge as exc:
+            return f"Could not render PDF: page {page} cannot be sent as an image ({exc})."
+        images.append(Image(media_type=fitted.media_type, data=fitted.data))
         page += 1
     if not images:
         return "pdftoppm rendered no pages; the PDF is probably damaged."

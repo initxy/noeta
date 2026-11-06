@@ -119,7 +119,7 @@ noeta 不提供 `Glob`、`Grep`、`LS` 这几个工具：模型用 `Bash`（`rg`
 | `run_in_background` | boolean | 放到后台跑；模型马上拿到一个 id，跑完时会收到通知 |
 | `dangerouslyDisableSandbox` | boolean | 申请在沙箱外运行 |
 
-权限：每一段都是只读命令（`ls`、`cat`、`git log`、`rg` 等）、并且只读工作目录内东西的命令，放行；`acceptEdits` 下工作目录内的文件操作命令（`touch`、`mkdir`、`mv` 等）也放行；其他要问，并按命令的各段给出可记住的规则。`auto` 下由分类器回答。命令里提到 `.noeta` 的，除了 `bypassPermissions` 以外都要问；写受保护路径的在任何模式下都要问，`bypassPermissions` 也不例外；要离开沙箱的，不管允许规则怎么写都要问（`bypassPermissions` 下直接跑）。打开沙箱且 `autoAllowBashIfSandboxed` 为默认的开时，在沙箱里跑的命令在 `plan` 以外的模式下放行。`Bash(...)` 规则逐段匹配（见[规则](../guides/permissions.md#规则)）。后台任务运行期间，所属任务会一直被跑它的那个工人认领着。
+权限：每一段都是只读命令（`ls`、`cat`、`git log`、`rg` 等）、并且只读工作目录内东西的命令，放行；`acceptEdits` 下工作目录内的文件操作命令（`touch`、`mkdir`、`mv` 等）也放行；其他要问，并按命令的各段给出可记住的规则。`auto` 下由分类器回答。命令里提到 `.noeta` 的，除了 `bypassPermissions` 以外都要问；写受保护路径的在任何模式下都要问，`bypassPermissions` 也不例外；要离开沙箱的，不管允许规则怎么写都要问（`auto` 下由分类器判断，`bypassPermissions` 下直接跑）。打开沙箱且 `autoAllowBashIfSandboxed` 为默认的开时，在沙箱里跑的命令在 `plan` 以外的模式下放行。`Bash(...)` 规则逐段匹配（见[规则](../guides/permissions.md#规则)）。后台任务运行期间，所属任务会一直被跑它的那个工人认领着。
 
 ### Monitor
 

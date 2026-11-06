@@ -72,7 +72,7 @@ class ClientAPI(Protocol):
     async def get(self, task_id: str) -> TaskRow: ...
 
     async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
-                    limit: int = 100) -> list[TaskRow]: ...
+                    limit: int = 100, roots_only: bool = False) -> list[TaskRow]: ...
 
     async def events(self, task_id: str, after: int = 0) -> list[Recorded]: ...
 
@@ -181,8 +181,11 @@ class Client:
         return await self._row(task_id)
 
     async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
-                    limit: int = 100) -> list[TaskRow]:
-        return await self.store.tasks(parent_id=parent_id, status=status, limit=limit)
+                    limit: int = 100, roots_only: bool = False) -> list[TaskRow]:
+        """The most recently updated rows first; ``roots_only``: only the
+        tasks no task started (what a person resumes)."""
+        return await self.store.tasks(parent_id=parent_id, status=status, limit=limit,
+                                      roots_only=roots_only)
 
     async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
         return await self.store.read(task_id, after)

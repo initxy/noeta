@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 import yaml
 
 from noeta.core.execenv import ExecEnv
+from noeta.toolkit import frontmatter
 from noeta.toolkit.context import read_text
 from noeta.toolkit.tools import path_within
 
@@ -77,7 +78,6 @@ _INLINE_CODE = re.compile(r"`+[^`\n]*`+")
 _COMMENT_START = re.compile(r"^ {0,3}<!--")
 _LIST_ITEM = re.compile(r"^ {0,3}(?:[*+-]|\d{1,9}[.)])(?:[ \t]|$)")
 _IMPORT = re.compile(r"(?:^|\s)@((?:[^\s\\]|\\ )+)")
-_FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
 
 
 @dataclass
@@ -189,15 +189,15 @@ def clean(raw: str) -> tuple[str, tuple[str, ...]]:
     """The text a file contributes and its ``paths:`` globs."""
     text = raw
     globs: tuple[str, ...] = ()
-    m = _FRONTMATTER.match(text)
-    if m:
+    head, body = frontmatter.split(text)
+    if head is not None:
         try:
-            meta = yaml.safe_load(m.group(1))
+            meta = yaml.safe_load(head)
         except yaml.YAMLError:
             meta = None
         if isinstance(meta, dict):
             globs = _globs(meta.get("paths"))
-            text = text[m.end():]
+            text = body
     if "<!--" in text:
         text = _drop_comment_blocks(text)
     return text.strip(), globs

@@ -60,7 +60,7 @@ from noeta.host.pending import (
     pending_tree,
 )
 from noeta.host.questions import next_question, typed_answer
-from noeta.host.rewind import rewind, rewind_points
+from noeta.host.rewind import rewind_points
 from noeta.host.stream_json import noeta_version
 from noeta.host.usage import context_text, cost_text, tree_usage
 from noeta.toolkit.interactive import follow
@@ -448,9 +448,9 @@ class NoetaAcpAgent:
                           + (f" ({len(p.files)} file(s) changed since)" if p.files else "")
                           for n, p in enumerate(points, 1))
         what = words[1] if len(words) > 1 else "both"
-        done = await rewind(client, session_id, points[int(words[0]) - 1],
-                            conversation=what in ("both", "conversation"),
-                            files=what in ("both", "code"))
+        done = await self.app.rewind(session_id, points[int(words[0]) - 1],
+                                     conversation=what in ("both", "conversation"),
+                                     files=what in ("both", "code"))
         lines = [f"restored {len(done.files)} file(s)"] if done.files else []
         if done.task_id != session_id:
             await self._adopt(done.task_id)

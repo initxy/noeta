@@ -52,7 +52,7 @@ Host code that builds the app itself calls `noeta.host.http.create_app(client, t
 | Method and path | Body / query | Answers |
 |---|---|---|
 | `POST /tasks` | `{agent, input?, config?, queue?, dedupe_key?, history_from?, history_through?}` | `201 {"task_id": …}` |
-| `GET /tasks` | `?parent_id=&status=&limit=` (`status`: `ready`, `running`, `waiting`, `ended`; `limit` default 100) | a list of task rows |
+| `GET /tasks` | `?parent_id=&status=&limit=&roots_only=` (`status`: `ready`, `running`, `waiting`, `ended`; `limit` default 100; `roots_only=true`: only tasks without a parent) | a list of task rows |
 | `GET /tasks/{id}` | | one task row |
 | `GET /summaries` | `?limit=&archived=` (`limit` default 50; `archived=true` / `false` keeps only those / the others) | the root tasks, most recently updated first, each `{task_id, agent, status, waiting_on, end_status, created_at, updated_at, title, cwd, prompt, archived}` (`prompt`: the first one, 200 characters) |
 | `GET /tasks/{id}/events` | `?after=N` | the task's events after seq `N`, as `Recorded` objects (`seq`, `at`, `event`) |
@@ -107,6 +107,14 @@ renames or archives. `wake: false` leaves a waiting task waiting. A model's rout
 provider serves it) is recorded by the server, never taken from a request.
 
 **Cancel.** Ends the task, or with `turn_only: true` stops only the current turn.
+
+**A front end's task.** A conversation the TUI, `noeta -p` or an editor started is on the
+`front-end` queue, which a server's workers never take by themselves. A message, an answer, a
+cancel, a signal that wakes, or a rewind sent here for one makes the server take its task tree
+over: it moves to the server's queue and runs here from then on (a front end opening it later
+still can). While a front end is running it (or keeps its claim over a wait), nothing moves:
+what was sent reaches that front end, which handles it. A rewind's new task is always on the
+server's queue.
 
 ## Reading more about a task
 

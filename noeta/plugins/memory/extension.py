@@ -32,6 +32,7 @@ from noeta.core.extension import ContextPart, Extension, Reminder, TaskView
 from noeta.core.loop.state import TaskState
 from noeta.core.tool import ToolOutput
 from noeta.core.types import Message, ModelRequest, SystemPart, ToolResult, ToolUse, user
+from noeta.toolkit import frontmatter
 from noeta.toolkit.context import read_task_text, task_env, task_files
 from noeta.toolkit.local_env import is_local
 from noeta.toolkit.memory_index import (
@@ -135,9 +136,6 @@ def load_index(text: str) -> str:
 
 def memory_dir_for(root: str, home: Path | None = None) -> str:
     return str(project_dir(root, home or noeta_home()) / "memory") + "/"
-
-
-_FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*(\n|\Z)", re.S)
 
 
 def _field(head: str, key: str) -> str:
@@ -431,8 +429,7 @@ class Memory(Extension):
             text = await read_task_text(env, str(path))
             if text is None:
                 continue
-            m = _FRONTMATTER.match(text)
-            head = m.group(1) if m else ""
+            head = frontmatter.split(text)[0] or ""
             kind, desc = _field(head, "type"), _field(head, "description")
             when = datetime.fromtimestamp(mtime, tz=UTC).isoformat(timespec="seconds")
             line = f"- {f'[{kind}] ' if kind else ''}{path.name} ({when})"

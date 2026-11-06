@@ -71,13 +71,15 @@ asks whether to trust it; "No, exit" quits.
 |---|---|
 | `-c`, `--continue` | open the newest conversation started in this folder |
 | `-r`, `--resume [ID]` | open task `ID`; without an id, pick from a list |
-| `--server URL` | drive the tasks of a `noeta serve` server instead of running them here (token in `NOETA_SERVER_TOKEN`). New tasks run on the server's model and directory unless `--model` / `--cwd` name others. `--plugin-dir` is refused with it |
+| `--server URL` | drive the tasks of a `noeta serve` server instead of running them here (token in `NOETA_SERVER_TOKEN`). New tasks run on the server's model and directory unless `--model` / `--cwd` name others. The flags that shape the tasks this process runs (`--plugin-dir`, the permission, settings, MCP, `--agents` and system prompt file flags) are refused with it |
 | `--agent NAME` | the agent new tasks start with (default: the settings files' `agent`, else `main`) |
 | `--plugin-dir PATH` | load a plugin file, plugin folder or folder of them for this run only (repeatable) |
 | `-v`, `--version` | print the version and exit |
 
-Flags of the next section that only make sense headless are accepted and have no effect in
-the UI.
+The next section's permission, directory, settings, MCP, `--agents` and system prompt
+file flags apply in the UI as with `-p`. The ones only headless mode uses (`--max-turns`,
+`--json-schema`, `--permission-prompt-tool`, …) are accepted and named as ignored in
+the UI's notices.
 
 ## Headless: `noeta -p`
 
@@ -87,7 +89,7 @@ mode is on with `-p`, with `--input-format stream-json`, or with any `--output-f
 | Flag | Meaning |
 |---|---|
 | `-p`, `--print` | run the prompt without the UI and print the result |
-| `prompt` | the prompt; with `-p` and none given, read from stdin |
+| `prompt` | the prompt; with `-p` it is read from stdin when none is given, and what is piped on stdin goes on a line after it when one is |
 | `--output-format {text,json,stream-json}` | `text` (default): the answer; `json`: one result object; `stream-json`: one JSON message per line (needs `--verbose`) |
 | `--input-format {text,stream-json}` | `stream-json`: read user messages and control requests from stdin, one JSON object per line (needs `--output-format stream-json`) |
 | `--include-partial-messages` | also emit `stream_event` messages as the model streams |

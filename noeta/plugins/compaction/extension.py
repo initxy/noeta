@@ -83,17 +83,20 @@ log = logging.getLogger("noeta.compaction")
 #: (``Reminder.order``): first, ahead of the invoked skills and the lists.
 RESTORED_ORDER = 10
 
-#: Claude Code's rapid-refill breaker: an automatic compaction needed again
-#: within this many model calls of the previous one, in the same turn, is
-#: a refill; this many refills in a row stop the turn instead.
+#: Claude Code's rapid-refill breaker: a compaction (automatic, or after a
+#: context overflow) needed again within this many model calls of the
+#: previous one, in the same turn, is a refill; this many refills in a row
+#: stop the turn instead.
 RAPID_REFILL_CALLS = 3
 RAPID_REFILLS_TO_STOP = 3
 THRASHING_REASON = "autocompact_thrashing"
 THRASHING_DETAIL = (
     f"Automatic compaction stopped: the context filled up again within "
     f"{RAPID_REFILL_CALLS} model calls of the previous compaction, "
-    f"{RAPID_REFILLS_TO_STOP} times in a row. A file or tool output is probably too large "
-    "for the context window; read it in smaller parts, or start a new conversation.")
+    f"{RAPID_REFILLS_TO_STOP} times in a row. What a request still carries after a summary "
+    "(the system prompt and tools, project instructions, files read again, the newest tool "
+    "output) does not fit the model's context window. Read large files in smaller parts, "
+    "check the model's context window is registered right, or start a new conversation.")
 
 #: Claude Code's failure breaker: an automatic compaction whose summary
 #: fails lets the request go out as it is; after this many failures in a
@@ -425,11 +428,7 @@ class Compaction(Extension):
         if ready is None and (ext.failures >= AUTO_FAILURES_TO_STOP
                               or ext.failed_at == (state.prompt_seq, state.steps_in_turn)):
             return request
-        rapid = self._rapid_refills(state)
-        if rapid >= RAPID_REFILLS_TO_STOP:
-            log.warning("task %s: auto-compaction refilled %d times in a row; stopping",
-                        view.task_id, rapid)
-            raise TurnFailed(THRASHING_REASON, THRASHING_DETAIL)
+        rapid = self._refills_or_stop(view, state)
         if ready is not None:
             # The summary written ahead (its PreCompact hooks ran then).
             await self._compact(view, state, request, cut, reason="auto", estimated=tokens,
@@ -488,17 +487,22 @@ class Compaction(Extension):
         state = view.state
         n = len(state.messages)
         ready = self._ready(state)
+        if ready is None and self._through(state, n) is None:
+            return False
+        # What a compaction re-attaches can by itself overflow the window:
+        # the refill breaker stops that loop here too.
+        rapid = self._refills_or_stop(view, state)
         if ready is not None:
             await self._compact(view, state, request, ready.cut, reason="overflow",
-                                estimated=self._tokens(state, request, n)[0], ready=ready)
+                                estimated=self._tokens(state, request, n)[0],
+                                rapid_refills=rapid, ready=ready)
             return True
-        if self._through(state, n) is None:
-            return False
         extra = await self._instructions(view, "auto", "")
         if extra is None:
             return False
         await self._compact(view, state, request, n, reason="overflow",
-                            estimated=self._tokens(state, request, n)[0], extra=extra)
+                            estimated=self._tokens(state, request, n)[0], extra=extra,
+                            rapid_refills=rapid)
         return True
 
     # ------------------------------------------------------------ clearing
@@ -796,15 +800,20 @@ class Compaction(Extension):
             return n
         return last
 
-    def _rapid_refills(self, state: TaskState) -> int:
-        """The refill count an automatic compaction now would make: one more
-        than the last one's when that ran in this turn fewer than
-        ``RAPID_REFILL_CALLS`` model calls ago, else 0."""
+    def _refills_or_stop(self, view: TaskView, state: TaskState) -> int:
+        """The refill count a compaction now would make: one more than the
+        last one's when that ran in this turn fewer than
+        ``RAPID_REFILL_CALLS`` model calls ago, else 0. At
+        ``RAPID_REFILLS_TO_STOP`` the turn fails instead."""
         ext = self._ext(state)
-        if not ext.compactions or ext.turn != state.prompt_seq:
-            return 0
         calls = state.steps_in_turn - ext.step
-        return ext.rapid_refills + 1 if 0 <= calls < RAPID_REFILL_CALLS else 0
+        rapid = ext.rapid_refills + 1 if ext.compactions and ext.turn == state.prompt_seq \
+            and 0 <= calls < RAPID_REFILL_CALLS else 0
+        if rapid >= RAPID_REFILLS_TO_STOP:
+            log.warning("task %s: compaction refilled %d times in a row; stopping",
+                        view.task_id, rapid)
+            raise TurnFailed(THRASHING_REASON, THRASHING_DETAIL)
+        return rapid
 
     def _to_summarize(self, state: TaskState, request: ModelRequest, cut: int
                       ) -> list[Message]:
