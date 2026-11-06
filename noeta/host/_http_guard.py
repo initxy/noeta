@@ -1,6 +1,7 @@
 """What every ``noeta serve`` request passes before its handler runs: the
 bearer token, the ``Host`` and origin checks, and the client that refuses a
-``bypassPermissions`` mode or a ``cwd`` outside the server's directories."""
+``bypassPermissions`` mode or a ``cwd`` outside the server's directories and
+takes over the front end's task a request acts on."""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from noeta.core.events import Recorded
 from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL, MODEL_ROUTE
 from noeta.core.store import Status, TaskRow
 from noeta.host._errors import error_text
+from noeta.host.local import take_over
 from noeta.host.pending import pending
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
@@ -77,11 +79,19 @@ class GuardedClient:
     from the server's directory (not the process's) and passed on
     absolute, so every worker resolves it the same. A task created without a
     ``cwd`` runs in the server's directory (recorded, so every worker runs
-    it there)."""
+    it there).
+
+    What a request posts to a task created by a front end (the TUI, ``-p``,
+    ACP: on ``FRONT_END_QUEUE``, which no server takes by itself) makes the
+    server take its tree over (``noeta.host.local.take_over``) onto
+    :attr:`queue`, so it runs here, unless a front end holds it now."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
                  roots: Sequence[str] = ()) -> None:
         self._client = client
+        #: The queue this server's workers take: a front end's task a request
+        #: acts on is moved there, a rewind's new task is created there.
+        self.queue: str = getattr(client, "queue", "default")
         self._allow_bypass = allow_bypass
         self._cwd = os.path.realpath(cwd) if cwd else None
         self._roots = [r for r in (self._cwd, *(os.path.realpath(r) for r in roots)) if r]
@@ -149,7 +159,16 @@ class GuardedClient:
     async def send(self, task_id: str, input: Input, *,
                    when: Literal["now", "next_turn"] = "next_turn",
                    dedupe_key: str | None = None) -> int:
-        return await self._client.send(task_id, input, when=when, dedupe_key=dedupe_key)
+        seq = await self._client.send(task_id, input, when=when, dedupe_key=dedupe_key)
+        await self._take_over(task_id)
+        return seq
+
+    async def _take_over(self, task_id: str) -> None:
+        """After a post that should make ``task_id`` run: its tree moved onto
+        this server's queue if a front end made it (and holds it not)."""
+        store = getattr(self._client, "store", None)
+        if store is not None:
+            await take_over(store, task_id, self.queue)
 
     async def answer(self, task_id: str, request_id: str,
                      decision: Literal["allow", "deny"] | None = None, *,
@@ -163,8 +182,10 @@ class GuardedClient:
         if request_id not in open_ids:
             raise NotOpen(f"task {task_id} is not waiting on a request {request_id!r} "
                           "(unknown, or already answered)")
-        return await self._client.answer(task_id, request_id, decision, always=always,
-                                         data=data)
+        seq = await self._client.answer(task_id, request_id, decision, always=always,
+                                        data=data)
+        await self._take_over(task_id)
+        return seq
 
     async def signal(self, task_id: str, name: str, data: Any = None, *,
                      dedupe_key: str | None = None, wake: bool = True) -> int:
@@ -180,11 +201,15 @@ class GuardedClient:
                 # the task): the record keeps other workers from running
                 # what a headless client's hook callbacks would judge.
                 raise Refused(f"a request may only remove {CLIENT_HOOKS_KEY!r}")
-        return await self._client.signal(task_id, name, data, dedupe_key=dedupe_key, wake=wake)
+        seq = await self._client.signal(task_id, name, data, dedupe_key=dedupe_key, wake=wake)
+        if wake:
+            await self._take_over(task_id)
+        return seq
 
     async def cancel(self, task_id: str, reason: str = "", *,
                      turn_only: bool = False) -> None:
         await self._client.cancel(task_id, reason, turn_only=turn_only)
+        await self._take_over(task_id)
 
     async def get(self, task_id: str) -> TaskRow:
         return await self._client.get(task_id)

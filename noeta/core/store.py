@@ -278,6 +278,14 @@ class Store(Protocol):
         claim was already lost."""
         ...
 
+    async def requeue(self, root_id: str, queue: str, to: str) -> bool:
+        """Move the tasks of the tree ``root_id`` that are on ``queue`` onto
+        ``to`` (announced ``released``), so the workers of ``to`` take them;
+        each keeps its status, claim and inbox. Moves nothing and returns
+        ``False`` while a task of the tree has a lease that has not run out
+        (a running claim, or a kept one): its holder goes on serving it."""
+        ...
+
     def on_change(self, callback: OnChange) -> Callable[[], None]:
         """Call ``callback(task_id, kind)`` after each committed change this
         process makes (and, for shared backends, changes others make). Returns

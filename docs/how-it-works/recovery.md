@@ -15,6 +15,9 @@ Before running a task, a worker **claims** it from the store:
   third of the lease (default lease 30 s; `noeta worker --lease`).
 - `release(claim)` gives the claim back without ending the task (a worker shutting down): a
   running task becomes `ready`.
+- `requeue(root_id, queue, to)` moves a task tree from one queue to another, unless one of its
+  tasks has a lease that has not run out (a server taking over a front end's conversation,
+  [HTTP API](../reference/http-api.md#talking-to-a-task)).
 
 A task is claimable when it is `ready` (and due), `waiting` with a due `ready_at`, or `running`
 or kept with a lease that has run out (`noeta/core/store.py`, `Store.claim`).

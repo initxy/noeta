@@ -108,6 +108,14 @@ provider serves it) is recorded by the server, never taken from a request.
 
 **Cancel.** Ends the task, or with `turn_only: true` stops only the current turn.
 
+**A front end's task.** A conversation the TUI, `noeta -p` or an editor started is on the
+`front-end` queue, which a server's workers never take by themselves. A message, an answer, a
+cancel, a signal that wakes, or a rewind sent here for one makes the server take its task tree
+over: it moves to the server's queue and runs here from then on (a front end opening it later
+still can). While a front end is running it (or keeps its claim over a wait), nothing moves:
+what was sent reaches that front end, which handles it. A rewind's new task is always on the
+server's queue.
+
 ## Reading more about a task
 
 | Method and path | Answers |

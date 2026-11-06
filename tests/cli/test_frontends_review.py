@@ -154,6 +154,100 @@ async def test_a_store_wide_worker_never_runs_a_front_ends_task(tmp_path: Path) 
     await serve.store.close()
 
 
+def _front_end(path: str, provider: Any) -> LocalApp:
+    return LocalApp(SqliteStore(path), [Agent(name="main", model="m")], provider,
+                    env_for=lambda _s: None, own_tasks_only=True)
+
+
+def _server(path: str, provider: Any) -> tuple[LocalApp, httpx.AsyncClient]:
+    app = LocalApp(SqliteStore(path), [Agent(name="main", model="m")], provider,
+                   env_for=lambda _s: None)
+    api = create_app(app.client, auth=False, app=app)
+    return app, httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://t")
+
+
+async def test_a_message_sent_through_the_server_runs_a_front_ends_task(tmp_path: Path) -> None:
+    """The web app or the desktop app acting on a session the TUI made: the
+    server takes the task over and runs it; until then it stays the front
+    end's."""
+    path = str(tmp_path / "shared.db")
+    tui = _front_end(path, ScriptedProvider([reply("tui's answer")]))
+    await tui.start()
+    tid = await tui.client.create("main", "mine")
+    assert (await tui.client.wait(tid, timeout=5)).status == "waiting"
+    await tui.stop()  # the TUI quits
+    served = ScriptedProvider([reply("serve's answer"), reply("after the rewind")])
+    serve, http = _server(path, served)
+    await serve.start()
+    # A post that wakes nothing (archiving it) leaves it the front end's.
+    r = await http.post(f"/tasks/{tid}/signals",
+                        json={"name": "archive", "data": {"archived": True}, "wake": False})
+    assert r.status_code == 200
+    assert (await serve.client.get(tid)).queue == "front-end"
+    r = await http.post(f"/tasks/{tid}/messages", json={"input": "again"})
+    assert r.status_code == 200
+    row = await serve.client.wait(tid, timeout=5)
+    assert row.status == "waiting" and row.queue == "default" and len(served.requests) == 1
+    # A rewind through the server makes its new task on the server's queue.
+    r = await http.post(f"/tasks/{tid}/rewind", json={"index": 0, "files": False})
+    assert r.status_code == 200
+    assert (await serve.client.get(r.json()["task_id"])).queue == "default"
+    await http.aclose()
+    await serve.stop()
+    # A front end opening it again still runs it.
+    later = _front_end(path, ScriptedProvider([reply("tui again")]))
+    await later.start()
+    await later.adopt(tid)
+    await later.client.send(tid, "and more")
+    assert (await later.client.wait(tid, timeout=5)).status == "waiting"
+    await later.stop()
+
+
+class Gated:
+    """The first call waits for ``gate``: the front end is mid-turn."""
+
+    family = "x"
+
+    def __init__(self) -> None:
+        self.gate = asyncio.Event()
+        self.requests: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest, on_delta: Any = None) -> ModelResponse:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            await self.gate.wait()
+        return reply(f"answer {len(self.requests)}")
+
+
+async def test_a_server_never_takes_a_task_a_live_front_end_holds(tmp_path: Path) -> None:
+    """A message through the server reaches the front end running the task,
+    which answers it; the server runs nothing."""
+    path = str(tmp_path / "shared.db")
+    mine = Gated()
+    tui = _front_end(path, mine)
+    await tui.start()
+    tid = await tui.client.create("main", "mine")
+    for _ in range(100):
+        if mine.requests:
+            break
+        await asyncio.sleep(0.02)
+    served = ScriptedProvider([reply("serve's answer")])
+    serve, http = _server(path, served)
+    await serve.start()
+    r = await http.post(f"/tasks/{tid}/messages", json={"input": "also this"})
+    assert r.status_code == 200
+    assert (await serve.client.get(tid)).queue == "front-end"
+    mine.gate.set()
+    for _ in range(250):
+        if len(mine.requests) == 2 and (await tui.client.get(tid)).status == "waiting":
+            break
+        await asyncio.sleep(0.02)
+    assert len(mine.requests) == 2 and served.requests == []
+    await http.aclose()
+    await serve.stop()
+    await tui.stop()
+
+
 # ------------------------------------------------------------ #19 server / remote
 
 

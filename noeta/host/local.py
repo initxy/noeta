@@ -61,6 +61,19 @@ FRONT_END_QUEUE = "front-end"
 #: the tasks front ends created before they had one.
 FRONT_END_QUEUES = (FRONT_END_QUEUE, "default")
 
+
+async def take_over(store: Store, task_id: str, queue: str = "default") -> bool:
+    """Move the front end's task tree ``task_id`` belongs to onto ``queue``,
+    so a server's workers run it from now on: what a server does when a
+    person acts on such a task through it (their message would otherwise
+    wait for a front end to open the task again). A front end that holds a
+    task of the tree (a lease not run out) keeps it, and gets what was
+    posted; ``False`` then, or when ``task_id`` is unknown."""
+    row = await store.get(task_id)
+    if row is None:
+        return False
+    return await store.requeue(row.root_id, FRONT_END_QUEUE, queue)
+
 #: How long live output gathers before it is published to other processes.
 DELTA_BATCH_SECONDS = 0.03
 
