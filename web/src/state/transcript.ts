@@ -92,6 +92,9 @@ export interface TaskState {
   /** The highest inbox seq the task has taken: a send receipt at or below it
    * arrived after the stream showed the message taken. */
   taken: number;
+  /** Sub-agents the task started whose end it has not taken yet: whatever
+   * started them (an Agent call, a workflow's later agents with no call). */
+  running: string[];
 }
 
 export const emptyTask = (): TaskState => ({
@@ -114,6 +117,7 @@ export const emptyTask = (): TaskState => ({
   compaction: null,
   queued: [],
   taken: 0,
+  running: [],
 });
 
 export type Action =
@@ -147,6 +151,10 @@ function updateTool(items: Item[], id: string, patch: Partial<Extract<Item, { ki
 
 function updateChild(items: Item[], child: string, status: string): Item[] {
   return items.map((it) => (it.kind === "tool" && it.child === child ? { ...it, childStatus: status } : it));
+}
+
+function started(running: string[], ids: string[]): string[] {
+  return [...running, ...ids.filter((id) => !running.includes(id))];
 }
 
 function record(st: TaskState, seq: number, ev: Extract<Event, { type: "ExtensionRecorded" }>): TaskState {
@@ -196,13 +204,18 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
     case "todos/deleted":
       return { ...st, todos: st.todos.filter((t) => t.id !== String(data.id)) };
     case "subtasks/launched":
-      return { ...st, items: updateTool(st.items, String(data.call_id), { child: String(data.task_id) }) };
+      return {
+        ...st,
+        items: updateTool(st.items, String(data.call_id), { child: String(data.task_id) }),
+        running: started(st.running, [String(data.task_id)]),
+      };
     case "core/spawned": {
       let items = st.items;
-      for (const c of (data.children ?? []) as { id: string; call_id: string }[]) {
+      const children = (data.children ?? []) as { id: string; call_id: string }[];
+      for (const c of children) {
         items = updateTool(items, c.call_id, { child: c.id });
       }
-      return { ...st, items };
+      return { ...st, items, running: started(st.running, children.map((c) => c.id)) };
     }
     case "core/retry":
       return { ...notice(`Retrying (attempt ${data.attempt ?? "?"}): ${String(data.error ?? "").slice(0, 160)}`), live: null };
@@ -239,6 +252,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
       const taken = new Set<number>();
       let through = Math.max(st.taken, ev.through ?? 0);
       let answered = false;
+      let running = st.running;
       for (const item of ev.items) {
         taken.add(item.seq);
         through = Math.max(through, item.seq);
@@ -251,6 +265,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
           answered = true;
         } else if (body.kind === "child_ended") {
           items = updateChild(items, body.child_id, body.status);
+          running = running.filter((id) => id !== body.child_id);
         } else if (body.kind === "external" && body.name === "config") {
           const model = (body.data as Record<string, unknown> | null)?.model;
           if (typeof model === "string") st = { ...st, model };
@@ -260,7 +275,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
       // it is answered: a message taken meanwhile leaves it waiting.
       const asking = st.waitingOn === "approval" || st.waitingOn === "question";
       const waiting = asking && !answered ? { waitingOn: st.waitingOn, waitingIds: st.waitingIds } : { waitingOn: null, waitingIds: [] };
-      return { ...st, items, busy, ...waiting, taken: through, queued: st.queued.filter((q) => !taken.has(q.seq)) };
+      return { ...st, items, busy, ...waiting, running, taken: through, queued: st.queued.filter((q) => !taken.has(q.seq)) };
     }
     case "ModelCalled":
       return { ...st, called: seq, busy: true, waitingOn: null, waitingIds: [], model: ev.model || st.model };
@@ -357,6 +372,7 @@ function history(st: TaskState, rec: Recorded, from: string): TaskState {
     waitingIds: st.waitingIds,
     ended: st.ended,
     queued: st.queued,
+    running: st.running,
   };
 }
 
