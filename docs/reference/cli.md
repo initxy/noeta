@@ -71,13 +71,15 @@ asks whether to trust it; "No, exit" quits.
 |---|---|
 | `-c`, `--continue` | open the newest conversation started in this folder |
 | `-r`, `--resume [ID]` | open task `ID`; without an id, pick from a list |
-| `--server URL` | drive the tasks of a `noeta serve` server instead of running them here (token in `NOETA_SERVER_TOKEN`). New tasks run on the server's model and directory unless `--model` / `--cwd` name others. `--plugin-dir` is refused with it |
+| `--server URL` | drive the tasks of a `noeta serve` server instead of running them here (token in `NOETA_SERVER_TOKEN`). New tasks run on the server's model and directory unless `--model` / `--cwd` name others. The flags that shape the tasks this process runs (`--plugin-dir`, the permission, settings, MCP, `--agents` and system prompt file flags) are refused with it |
 | `--agent NAME` | the agent new tasks start with (default: the settings files' `agent`, else `main`) |
 | `--plugin-dir PATH` | load a plugin file, plugin folder or folder of them for this run only (repeatable) |
 | `-v`, `--version` | print the version and exit |
 
-Flags of the next section that only make sense headless are accepted and have no effect in
-the UI.
+The next section's permission, directory, settings, MCP, `--agents` and system prompt
+file flags apply in the UI as with `-p`. The ones only headless mode uses (`--max-turns`,
+`--json-schema`, `--permission-prompt-tool`, …) are accepted and named as ignored in
+the UI's notices.
 
 ## Headless: `noeta -p`
 

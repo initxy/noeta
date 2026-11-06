@@ -340,6 +340,26 @@ async def test_http_timeout_breaks_the_connection() -> None:
     await client.close()
 
 
+async def test_http_a_call_is_bounded_by_its_own_timeout_not_httpxs_default() -> None:
+    # httpx gives up on a read after 5 s by default: a slow tool failed and
+    # its session was dropped.
+    timeouts: dict[str, object] = {}
+    server = FakeHttp()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = json.loads(request.content).get("method")
+        timeouts[method] = request.extensions["timeout"]
+        return await server(request)
+
+    client = HttpClient("http://mcp.test/mcp", timeout=30, http=httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)))
+    await client.start()
+    await client.call_tool("t", {}, timeout=600)
+    await client.close()
+    assert timeouts["initialize"] == {"connect": 30, "read": 30, "write": 30, "pool": 30}
+    assert timeouts["tools/call"] == {"connect": 600, "read": 600, "write": 600, "pool": 600}
+
+
 # ---------------------------------------------------------------- pool
 
 

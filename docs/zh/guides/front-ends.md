@@ -105,6 +105,6 @@ noeta acp --server http://api.internal:8642     # 编辑器（写进 agent_serve
 
 `noeta serve` 总是要求 bearer 令牌（只有监听本机回环地址时才能用 `--no-token`）；没设 `NOETA_SERVER_TOKEN` 时，它第一次启动会生成一个、只打印这一次，`~/.noeta/server-token` 里只存它的 SHA-256。客户端启动前会带着令牌请求一次 `GET /agents`，不通就说清楚哪里不对（`noeta/cli/server_token.py`）。
 
-连到服务器的前端不需要自己的模型。新任务用服务器的模型、在服务器的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务器上的目录（不在服务器目录和它的 `--allow-root` 范围内的会被拒绝）。插件、代理、技能和设置都是服务器那边的：`--plugin-dir` 会被拒绝，`/reload-plugins` 会让你去重启工人。请求只能设置客户端被允许设置的那些任务配置（模型、推理强度、权限模式等）；服务器启动时没加 `--allow-bypass-permissions`，`bypassPermissions` 一律拒绝。`noeta -p` 总在本地跑，拒绝 `--server`；程序想对服务器用无界面协议，就连它的 `/stream-json` WebSocket。
+连到服务器的前端不需要自己的模型。新任务用服务器的模型、在服务器的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务器上的目录（不在服务器目录和它的 `--allow-root` 范围内的会被拒绝）。插件、代理、技能和设置都是服务器那边的：`--plugin-dir` 以及其他影响本机任务的参数（`--settings`、`--mcp-config`、`--allowedTools` 等）会被拒绝，`/reload-plugins` 会让你去重启工人。请求只能设置客户端被允许设置的那些任务配置（模型、推理强度、权限模式等）；服务器启动时没加 `--allow-bypass-permissions`，`bypassPermissions` 一律拒绝。`noeta -p` 总在本地跑，拒绝 `--server`；程序想对服务器用无界面协议，就连它的 `/stream-json` WebSocket。
 
 部署、工人、工作区和令牌的细节见[作为服务端运行](./server.md)；所有接口见 [HTTP / WebSocket 接口](../reference/http-api.md)。

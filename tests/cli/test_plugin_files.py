@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -318,6 +319,37 @@ def test_plugin_dir_is_a_flag_of_the_front_ends_not_an_ignored_one() -> None:
         ["-p", "--plugin-dir", "a.py", "--plugin-dir", "b", "hi"])
     assert args.plugin_dirs == ["a.py", "b"]
     assert "--plugin-dir" not in headless._ignored(args)
+
+
+async def test_the_terminal_ui_applies_the_command_lines_flags_as_print_mode_does(
+        home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (home / "config.toml").write_text(
+        f'model = "sonnet"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n')
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(main, "front_end",
+                        lambda _name: lambda app, start: seen.update(app=app, start=start))
+    main.main(["--cwd", str(tmp_path), "--disallowedTools", "Bash(rm *)",
+               "--add-dir", str(tmp_path / "more"), "--dangerously-skip-permissions",
+               "--agents", '{"helper": {"description": "d", "prompt": "Help."}}',
+               "--mcp-config", '{"mcpServers": {"api": {"url": "http://127.0.0.1:1/mcp"}}}',
+               "--max-turns", "3"])
+    app = seen["app"]
+    permissions = next(e for e in app.runtime.agents["main"].extensions
+                       if e.name == "permissions")
+    assert [r.text for r in permissions.deny_rules] == ["Bash(rm *)"]
+    assert permissions.additional_directories == (str(tmp_path / "more"),)
+    assert seen["start"].permission_mode == "bypassPermissions"
+    assert "helper" in app.runtime.agents
+    mcp = next(e for e in app.runtime.agents["main"].extensions if e.name == "mcp")
+    assert "api" in mcp._servers
+    assert "--max-turns is used only with -p; ignored here" in app.notices
+    await app.store.close()
+
+
+def test_flags_for_this_processs_tasks_are_refused_with_a_server() -> None:
+    with pytest.raises(SystemExit, match="--disallowedTools, --add-dir apply"):
+        main.main(["--server", "http://127.0.0.1:1", "--disallowedTools", "Bash",
+                   "--add-dir", "x"])
 
 
 def test_plugin_dir_with_server_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:

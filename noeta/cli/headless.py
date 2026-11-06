@@ -118,6 +118,38 @@ def _ignored(args: argparse.Namespace) -> list[str]:
     return out
 
 
+#: Flags only headless mode uses, by ``args`` attribute.
+_PRINT_ONLY = {"--max-turns": "max_turns", "--max-budget-usd": "max_budget_usd",
+               "--json-schema": "json_schema",
+               "--include-partial-messages": "include_partial_messages",
+               "--replay-user-messages": "replay_user_messages", "--verbose": "verbose",
+               "--fork-session": "fork", "--session-id": "new_task_id",
+               "--permission-prompt-tool": "permission_prompt_tool"}
+#: Flags that shape the app this process runs (the terminal UI's and -p's).
+_LOCAL_APP = {"--plugin-dir": "plugin_dirs", "--allowedTools": "allowed_tools",
+              "--disallowedTools": "disallowed_tools", "--tools": "tools",
+              "--add-dir": "add_dir", "--settings": "settings_flag",
+              "--setting-sources": "setting_sources", "--mcp-config": "mcp_config",
+              "--strict-mcp-config": "strict_mcp_config", "--agents": "agents_json",
+              "--system-prompt-file": "system_prompt_file",
+              "--append-system-prompt-file": "append_system_prompt_file"}
+
+
+def _given(args: argparse.Namespace, flags: dict[str, str]) -> list[str]:
+    return [flag for flag, attr in flags.items() if getattr(args, attr) not in (None, False, [])]
+
+
+def unused_in_terminal(args: argparse.Namespace) -> list[str]:
+    """The flags given that the terminal UI has no use for."""
+    return [*_given(args, _PRINT_ONLY), *_ignored(args)]
+
+
+def local_app_flags(args: argparse.Namespace) -> list[str]:
+    """The flags given that shape the app this process runs (with
+    ``--server`` none runs here)."""
+    return _given(args, _LOCAL_APP)
+
+
 def permission_arguments(args: argparse.Namespace) -> dict[str, Any]:
     """The permissions plugin's arguments the flags give."""
     out: dict[str, Any] = {}
@@ -362,8 +394,6 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str,
             print(f"noeta: {exc}", file=sys.stderr)
             return 1
     mode = args.permission_mode
-    if args.dangerously_skip_permissions:
-        mode = "bypassPermissions"
     agent = args.agent or getattr(app, "main_agent", "main")
     async with app:  # app.notices were logged to stderr when the app was made
         resume = args.resume or None

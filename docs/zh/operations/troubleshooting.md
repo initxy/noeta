@@ -158,7 +158,7 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 | `a request may not set the task config key 'x' (only model, effort, …)` | 客户端只能设一部分配置项，其余的会放松权限关卡。 | 把这一项写进服务端自己的配置或代理文件。 |
 | `the request failed on the server; its log has the details` | 出错的不是 noeta 自己的代码。原文可能带服务器路径，所以不发给客户端。 | 去看服务端的标准错误。 |
 | `noeta: -p runs its task here; --server attaches the terminal UI (or noeta acp --server) to a server` | `-p` 总是在本机跑。 | 去掉 `--server`，或改用终端界面、`noeta acp --server`。 |
-| `noeta: --plugin-dir loads plugins into this process; with --server the server's plugins run` | 远端任务的插件跑在服务端的工人上。 | 把插件装到工人上。 |
+| `noeta: --plugin-dir, … apply to the tasks this process runs; with --server the server's settings and plugins run` | 远端任务用的是服务端的插件、权限规则、设置和 MCP 服务器。 | 在服务端配好，或者去掉 `--server`。 |
 
 跨机器看不到实时输出、但记录的事件都在：实时输出走 Postgres 通知（`<schema>_deltas`），尽力而为，不落库。
 回复开始之后才连上的前端，等回复记进日志时会看到完整内容。用 sqlite 时，实时输出只留在跑任务的那个进程里。

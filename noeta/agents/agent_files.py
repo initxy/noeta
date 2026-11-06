@@ -62,6 +62,8 @@ __all__ = [
     "parse_plugin_list",
     "plugin_overlays",
     "read_agent_dir",
+    "read_agent_file",
+    "read_file_text",
     "resolve_secrets",
 ]
 
@@ -332,20 +334,37 @@ def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> 
     )
 
 
+def read_file_text(path: Path) -> str | None:
+    """``path``'s UTF-8 text, or ``None`` (logged) when it cannot be read (a
+    dangling link, not UTF-8, gone): a loader skips that one file and goes
+    on, as Claude Code does, so one bad file in a plugin stops nothing."""
+    try:
+        return path.read_text("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        log.warning("skipping %s: it cannot be read (%s)", path, exc)
+        return None
+
+
+def read_agent_file(file: Path) -> AgentFile | None:
+    """The agent file at ``file`` (named by its stem unless it names
+    itself), or ``None`` (logged) when it cannot be read or parsed."""
+    text = read_file_text(file)
+    if text is None:
+        return None
+    try:
+        return parse_agent_file(text, source=str(file), default_name=file.stem)
+    except AgentFileError as exc:
+        log.warning("skipping agent file %s: %s", file, exc)
+        return None
+
+
 def read_agent_dir(path: str | Path) -> list[AgentFile]:
     """Every ``*.md`` agent file in ``path`` (not recursive), by file name.
     A file that cannot be read is logged and skipped."""
     root = Path(path).expanduser()
-    out: list[AgentFile] = []
     if not root.is_dir():
-        return out
-    for file in sorted(root.glob("*.md")):
-        try:
-            out.append(parse_agent_file(file.read_text("utf-8"), source=str(file),
-                                        default_name=file.stem))
-        except (OSError, AgentFileError) as exc:
-            log.warning("skipping agent file %s: %s", file, exc)
-    return out
+        return []
+    return [f for file in sorted(root.glob("*.md")) if (f := read_agent_file(file)) is not None]
 
 
 def _freeze(value: Any) -> Any:
