@@ -106,6 +106,28 @@ async def test_a_claude_code_plugin_loads_through_noetas_plugins(home: Path,
     await app.store.close()
 
 
+async def test_a_bad_file_in_a_plugin_is_skipped_not_fatal(home: Path, tmp_path: Path) -> None:
+    # Not UTF-8, a dangling link, a hooks.json or .mcp.json of the wrong
+    # shape: each is left out with a warning, the rest of noeta starts.
+    root = make_plugin(home / "plugins" / "deploy")
+    (root / "agents" / "latin1.md").write_bytes(b"---\ndescription: caf\xe9\n---\nP\n")
+    (home / "agents").mkdir()
+    (home / "agents" / "latin1.md").write_bytes(b"\xff\xfe")
+    (root / "commands" / "gone.md").symlink_to(tmp_path / "nowhere.md")
+    (root / "hooks" / "hooks.json").write_text(json.dumps({"hooks": []}))
+    (root / ".mcp.json").write_text(json.dumps({"mcpServers": []}))
+    extra = make_plugin(tmp_path / "extra", manifest=False)
+    (extra / "hooks" / "hooks.json").write_text("[]")
+    app = from_settings(load_settings(), cwd=str(tmp_path), plugin_dirs=[str(extra)])
+    assert "deploy-tools:reviewer" in app.runtime.agents
+    assert "deploy-tools:latin1" not in app.runtime.agents
+    assert ext(app, "main", "markdown_commands").render("deploy-tools:status", "x")
+    assert ext(app, "main", "mcp")._servers == {"deploy-api": {
+        "command": "node", "args": [f"{extra.resolve()}/server.js"],
+        "env": {"CACHE": str(home / "plugin-data" / "extra")}}}
+    await app.store.close()
+
+
 async def test_a_project_plugin_loads_once_trusted_without_its_mcp_servers(
         home: Path, tmp_path: Path) -> None:
     project = tmp_path / "repo"

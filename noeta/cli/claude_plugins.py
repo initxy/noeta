@@ -37,8 +37,8 @@ import yaml
 
 from noeta.agents.agent_files import (
     AgentFile,
-    AgentFileError,
-    parse_agent_file,
+    read_agent_file,
+    read_file_text,
     resolve_secrets,
 )
 from noeta.cli import plugin_options
@@ -129,10 +129,22 @@ def _paths(root: Path, value: Any, key: str) -> list[Path]:
     return out
 
 
-def _json(path: Path) -> Any:
+def _object(value: Any, where: object) -> dict[str, Any]:
+    """``value`` when it is a JSON object, else ``{}`` (logged): a part of
+    the wrong shape is skipped, not fatal."""
+    if isinstance(value, dict):
+        return value
+    log.warning("plugin file %s: expected a JSON object, skipped", where)
+    return {}
+
+
+def _json(path: Path) -> dict[str, Any]:
+    text = read_file_text(path)
+    if text is None:
+        return {}
     try:
-        return json.loads(path.read_text("utf-8"))
-    except (OSError, ValueError) as exc:
+        return _object(json.loads(text), path)
+    except ValueError as exc:
         log.warning("plugin file %s could not be read: %s", path, exc)
         return {}
 
@@ -185,8 +197,7 @@ def _qualified(plugin: str, within: tuple[str, ...], name: str) -> str:
 
 def _manifest(root: Path) -> dict[str, Any]:
     path = root / ".claude-plugin" / "plugin.json"
-    manifest = _json(path) if path.is_file() else {}
-    return manifest if isinstance(manifest, dict) else {}
+    return _json(path) if path.is_file() else {}
 
 
 def _settings(root: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -330,11 +341,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
     agents = _md_files(_paths(root, manifest["agents"], "agents") if "agents" in manifest
                        else [root / "agents"])
     for file, within in agents:
-        try:
-            agent = parse_agent_file(file.read_text("utf-8"), source=str(file),
-                                     default_name=file.stem)
-        except (OSError, AgentFileError) as exc:
-            log.warning("skipping agent file %s: %s", file, exc)
+        if (agent := read_agent_file(file)) is None:
             continue
         plugin.agents.append(dataclasses.replace(
             agent, name=_qualified(name, within, agent.name), prompt=text(agent.prompt)))
@@ -342,7 +349,8 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
     sources = [] if isinstance(commands, dict) else \
         _paths(root, commands, "commands") if commands is not None else [root / "commands"]
     for file, within in _md_files(sources):
-        raw = file.read_text("utf-8")
+        if (raw := read_file_text(file)) is None:
+            continue
         front, body = _frontmatter(raw)
         # A ``SKILL.md`` among the commands is named by its directory.
         own = _qualified(name, within[:-1], within[-1]) \
@@ -360,8 +368,8 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
         files = _paths(root, entry.get("source"), "commands") if content is None else []
         front = {}
         for path in files:
-            if path.is_file():
-                front, content = _frontmatter(path.read_text("utf-8"))
+            if path.is_file() and (raw := read_file_text(path)) is not None:
+                front, content = _frontmatter(raw)
         if isinstance(content, str):
             allowed = entry.get("allowedTools", front.get("allowed-tools"))
             plugin.commands.append({"name": f"{name}:{key}", "body": text(content),
@@ -381,7 +389,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
         hook_sources += [item] if isinstance(item, dict) else _paths(root, item, "hooks")
     for source in hook_sources:
         events = source if isinstance(source, dict) else \
-            (_json(source).get("hooks") or {}) if source.is_file() else {}
+            _object(_json(source).get("hooks") or {}, source) if source.is_file() else {}
         for event, groups in _hooks_with_options(name, _substitute(events, names),
                                                  values, unreadable, plugin.notices).items():
             plugin.hooks.setdefault(event, []).extend(groups)
@@ -392,7 +400,7 @@ def read_claude_plugin(root: Path, data_home: Path, *, project: bool = False,
             else [p for p in _paths(root, item, "mcpServers") if p.suffix == ".json"]
     for source in mcp_sources:
         data = source if isinstance(source, dict) else _json(source) if source.is_file() else {}
-        servers = data.get("mcpServers", data) if isinstance(data, dict) else {}
+        servers = _object(data.get("mcpServers", data), source)
         for server, spec in _substitute(servers, names).items():
             problem = _foreign_secret(name, spec)
             if problem is None:
