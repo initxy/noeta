@@ -10,6 +10,8 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from rich.console import Console, ConsoleOptions, RenderResult
+from rich.measure import Measurement
 from rich.text import Text
 
 from noeta.core.types import ToolUse
@@ -179,14 +181,45 @@ def folded(rows: list[tuple[str, str]], *, diff: bool, expanded: bool,
     return [*rows[:keep], (f"… +{_plural(hidden, 'line')} (ctrl+o to expand)", "dim")]
 
 
-def result_block(rows: Iterable[tuple[str, str]]) -> Text:
+def result_block(rows: Iterable[tuple[str, str]]) -> Hanging:
     """Rows under a call: the first after ``⎿``, the rest indented."""
     out = Text()
     for n, (line, style) in enumerate(rows):
         out.append("\n" if n else "")
         out.append("  ⎿  " if n == 0 else "     ", style="dim")
         out.append(line, style=style)
-    return out
+    return Hanging(out)
+
+
+class Hanging:
+    """``text`` with each line's first :attr:`indent` cells (the ``  ⎿  ``
+    gutter) kept apart: a long line wraps under its own text, not under
+    the gutter. ``plain`` is the text's, as a ``Text``'s."""
+
+    def __init__(self, text: Text, indent: int = 5) -> None:
+        self.text = text
+        self.indent = indent
+
+    @property
+    def plain(self) -> str:
+        return self.text.plain
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        return Measurement.get(console, options, self.text)
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        width = max(options.max_width, self.indent + 8)
+        out: list[Text] = []
+        for line in self.text.split("\n", allow_blank=True):
+            head, rest = line[:self.indent], line[self.indent:]
+            if not rest.plain:
+                out.append(head)
+                continue
+            for n, part in enumerate(rest.wrap(console, width - self.indent)):
+                out.append(Text.assemble(head if n == 0 else " " * self.indent, part))
+        joined = Text("\n").join(out)
+        joined.no_wrap = True
+        yield joined
 
 
 def rows_text(rows: Iterable[tuple[str, str]]) -> Text:
@@ -198,7 +231,7 @@ def rows_text(rows: Iterable[tuple[str, str]]) -> Text:
     return out
 
 
-def progress_block(text: str) -> Text:
+def progress_block(text: str) -> Hanging:
     """A running call's latest output: its last lines, dim."""
     lines = text.rstrip("\n").splitlines()[-PROGRESS_LINES:]
     return result_block((line, "dim") for line in lines)
@@ -226,7 +259,7 @@ TODO_MARKS = {"pending": ("◻", ""), "in_progress": ("◼", "bold"),
               "completed": ("✔", "dim strike")}
 
 
-def todo_block(items: Mapping[str, Mapping[str, Any]]) -> Text:
+def todo_block(items: Mapping[str, Mapping[str, Any]]) -> Hanging:
     """The task list, Claude Code's marks: ``◻`` to do, ``◼`` doing, ``✔`` done."""
     out = Text()
     for n, item in enumerate(items.values()):
@@ -234,7 +267,7 @@ def todo_block(items: Mapping[str, Mapping[str, Any]]) -> Text:
         out.append("\n" if n else "")
         out.append(f"  {'⎿' if n == 0 else ' '}  {mark} ", style="dim")
         out.append(str(item.get("subject") or ""), style=style)
-    return out
+    return Hanging(out, 7)
 
 
 def active_form(items: Mapping[str, Mapping[str, Any]]) -> str:
@@ -267,14 +300,18 @@ def elapsed_text(seconds: float) -> str:
     return f"{s // 3600}h {s % 3600 // 60}m"
 
 
-def spinner_line(frame: int, verb: str, elapsed: float, tokens: int) -> Text:
-    """``✻ Thinking… (12s · ↓ 1.2k tokens · esc to interrupt)``."""
+def spinner_line(frame: int, verb: str, elapsed: float, tokens: int, *,
+                 thinking: bool = False) -> Text:
+    """``✻ Brewing… (12s · ↓ 1.2k tokens · thinking · esc to interrupt)``:
+    the tokens count what streamed so far, reasoning included."""
     out = Text()
     out.append(SPINNER_FRAMES[frame % len(SPINNER_FRAMES)] + " ", style="bold #d77757")
     out.append(f"{verb}…", style="#d77757")
     detail = elapsed_text(elapsed)
     if tokens:
         detail += f" · ↓ {tokens_text(tokens)} tokens"
+    if thinking:
+        detail += " · thinking"
     out.append(f" ({detail} · esc to interrupt)", style="dim")
     return out
 
@@ -295,7 +332,7 @@ def mode_hint(mode: str) -> Text:
     if line is None:
         return Text("? for shortcuts", style="dim")
     out = Text().append(line, style=MODE_STYLES.get(mode, ""))
-    out.append(" (shift+tab to cycle)", style="dim")
+    out.append(" · shift+tab", style="dim")
     return out
 
 
@@ -360,4 +397,90 @@ def context_grid(breakdown: Mapping[str, Any]) -> Text:
         if row < len(legend):
             out.append("  ")
             out.append(*legend[row])
+    return out
+
+
+# ------------------------------------------------------------- the logo
+
+#: The mark (docs/public/logo.svg), four rows of half blocks: an event log,
+#: bar by bar, folding into one state slice. ``(text, colour)`` per piece.
+LOGO = ((("▀" * 10, "#10b981"),),
+        (("▀" * 8, "#06b6d4"),),
+        (("▀" * 6, "#8b5cf6"), (" ", ""), ("▄" * 4, "#10b981")),
+        (("▀" * 4, "#f59e0b"), ("   ", ""), ("█" * 4, "#10b981")))
+
+
+def logo() -> Text:
+    out = Text()
+    for n, row in enumerate(LOGO):
+        out.append("\n" if n else "")
+        for piece, colour in row:
+            out.append(piece, style=colour)
+    return out
+
+
+#: The accent the app draws its own chrome in (the mark's green).
+ACCENT = "#10b981"
+
+
+# ------------------------------------------------------------- agents and workflows
+
+
+def agent_line(tools: int, tokens: int, seconds: float) -> str:
+    """``3 tool uses · 1.2k tokens · 12s``."""
+    parts = [_plural(tools, "tool use")]
+    if tokens:
+        parts.append(f"{tokens_text(tokens)} tokens")
+    parts.append(elapsed_text(seconds))
+    return " · ".join(parts)
+
+
+WORKFLOW_MARKS = {"running": ("◼", "#d77757"), "done": ("✔", "green"),
+                  "failed": ("✘", "red")}
+
+
+def workflow_rows(run: Mapping[str, Any], *, expanded: bool) -> list[tuple[str, str]]:
+    """A workflow run's rows under its call: its description, then per
+    phase how many of its agents are done, and (folded: the running ones
+    only) one line per agent."""
+    agents: list[Mapping[str, Any]] = list(run.get("agents", {}).values())
+    rows: list[tuple[str, str]] = []
+    if run.get("description"):
+        rows.append((str(run["description"]), ""))
+    done = sum(1 for a in agents if a.get("state") == "done")
+    failed = sum(1 for a in agents if a.get("state") == "failed")
+    head = f"{done}/{len(agents)} agents done" if agents else "starting…"
+    if failed:
+        head += f", {failed} failed"
+    rows.append((head, "dim"))
+    shown = agents if expanded else [a for a in agents if a.get("state") == "running"]
+    for a in shown[:12 if not expanded else None]:
+        mark, style = WORKFLOW_MARKS.get(str(a.get("state")), ("◻", "dim"))
+        label = str(a.get("label") or a.get("key") or "agent")
+        phase = f"{a['phase']} · " if a.get("phase") else ""
+        rows.append((f"{mark} {phase}{label}", style if a.get("state") != "done" else "dim"))
+    hidden = len(agents) - len(shown)
+    if hidden > 0 and not expanded:
+        rows.append((f"… {hidden} more (ctrl+o to expand)", "dim"))
+    status = run.get("status")
+    if status == "completed":
+        rows.append(("Completed", "green"))
+    elif status in ("failed", "killed"):
+        rows.append((f"{'Stopped' if status == 'killed' else 'Failed'}"
+                     + (f": {run['error']}" if run.get("error") else ""), "red"))
+    return rows
+
+
+# ------------------------------------------------------------- the footer
+
+
+def context_bar(fraction: float, cells: int = 8) -> Text:
+    """``▰▰▱▱▱▱▱▱ 23%``: how full the context window is, greener to redder."""
+    fraction = max(0.0, min(1.0, fraction))
+    full = round(fraction * cells)
+    colour = "green" if fraction < 0.5 else "yellow" if fraction < 0.8 else "red"
+    out = Text()
+    out.append("▰" * full, style=colour)
+    out.append("▱" * (cells - full), style="dim")
+    out.append(f" {fraction:.0%}", style="dim")
     return out

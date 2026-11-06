@@ -290,7 +290,7 @@ async def test_a_running_call_shows_its_latest_output_then_folds(tmp_path: Path)
         await pilot.press("enter")
         await settle(pilot, lambda: any(c.progressed for c in app.query(ToolCall)))
         [call] = list(app.query(ToolCall))
-        shown = str(call.body.render())
+        shown = plain(call.body)
         assert "step 8" in shown and "step 3" not in shown and not call.collapsed
         release.set()
         await settle(pilot, lambda: call.state == "done")

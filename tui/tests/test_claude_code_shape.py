@@ -27,8 +27,8 @@ async def test_welcome_footer_and_the_shortcuts_panel(tmp_path: Path) -> None:
     async with app.run_test(size=(120, 36)) as pilot:
         await settle(pilot, lambda: ready(app))
         welcome = plain(app.query_one(Welcome))
-        assert "Welcome to noeta 1.2.3" in welcome and f"model: {MODEL}" in welcome
-        assert "/help for help, /status for your current setup" in welcome
+        assert "noeta  v1.2.3" in welcome and f"model {MODEL}" in welcome
+        assert "/help for commands · ? for shortcuts" in welcome
         assert footer(app) == "? for shortcuts"
         await pilot.press("question_mark")
         assert app.query_one("#shortcuts").display
@@ -38,10 +38,10 @@ async def test_welcome_footer_and_the_shortcuts_panel(tmp_path: Path) -> None:
         assert not app.query_one("#shortcuts").display
         await pilot.press("shift+tab")
         await settle(pilot, lambda: "accept edits on" in footer(app))
-        assert footer(app) == "⏵⏵ accept edits on (shift+tab to cycle)"
+        assert footer(app) == "⏵⏵ accept edits on · shift+tab"
         await pilot.press("shift+tab")
         await settle(pilot, lambda: app.mode not in ("default", "acceptEdits"))
-        assert footer(app).endswith(" mode on (shift+tab to cycle)")
+        assert footer(app).endswith(" mode on · shift+tab")
 
 
 async def test_the_slash_menu_lists_and_completes_commands(tmp_path: Path) -> None:

@@ -51,7 +51,7 @@ noeta
 | 按键 | 作用 |
 |---|---|
 | `Enter` | 发送 |
-| `\` 再 `Enter`，或 `Ctrl+J` | 换行 |
+| `Shift+Enter`（能区分它的终端：Ghostty、kitty、iTerm2、WezTerm 等），`\` 再 `Enter`，或 `Ctrl+J` | 换行 |
 | `Esc` | 停止这一轮（已经说过的内容都保留） |
 | `Esc` `Esc` | 清空输入框；输入框已空时打开 `/rewind` |
 | `Ctrl+C` | 清空输入框；已空时连按两次退出 |
@@ -60,8 +60,8 @@ noeta
 | `Ctrl+R` | 搜索之前的提问；`Enter` 把选中的放进输入框，`Esc` 留空 |
 | `Ctrl+O` | 展开所有工具调用的输出（再按一次折叠） |
 | `Ctrl+T` | 显示或隐藏任务清单（todos） |
-| `Ctrl+B` | 显示或隐藏子代理侧栏 |
-| `Ctrl+V` | 贴上剪贴板里的图片（需要 `wl-paste`、`xclip` 或 `pngpaste`） |
+| `Ctrl+B` | 显示或隐藏后台子代理侧栏 |
+| `Ctrl+V` | 贴上剪贴板里的图片（macOS 直接可用；Linux 需要 `wl-paste` 或 `xclip`） |
 | `?` | 显示快捷键（输入框为空时） |
 
 两次按键间隔在 0.8 秒内算连按（`tui/src/noeta_tui/app.py` 里的 `DOUBLE_PRESS`）。
@@ -140,7 +140,7 @@ noeta
 
 ### 图片
 
-`Ctrl+V` 贴上剪贴板里的图片；粘贴一个图片文件的绝对路径，会把这个文件作为图片附上（PNG、JPEG、GIF、WebP）。输入框里显示 `[Image #1]`，图片随下一条消息发出。
+`Ctrl+V` 贴上剪贴板里的图片；把图片文件拖进终端（或粘贴它们的绝对路径），会把这些文件作为图片附上（PNG、JPEG、GIF、WebP）。输入框里显示 `[Image #1]`，上方一行列出已附上的图片，随下一条消息发出。通过 ssh 用时剪贴板在另一台机器上，改用拖文件。
 
 ## 输入历史、继续和恢复
 

@@ -62,16 +62,16 @@ async def test_the_effort_is_shown_and_set_with_slash_effort(tmp_path: Path) -> 
     app = make_app(tmp_path, provider)
     async with app.run_test(size=(120, 36)) as pilot:
         await settle(pilot, lambda: ready(app))
-        effort = app.query_one("#effort")
-        assert effort.display and plain(effort) == "◐ medium · /effort"  # the model's default
+        effort = app.query_one("#status")  # the footer shows it after the model
+        assert f"{MODEL} ◐ medium" in plain(effort)  # the model's default
         await type_line(pilot, "/effort high")  # before the task: it starts with it
-        await settle(pilot, lambda: plain(effort) == "● high · /effort")
+        await settle(pilot, lambda: "● high" in plain(effort))
         await type_line(pilot, "go")
         await settle(pilot, lambda: not app.busy and len(provider.requests) == 1)
         await type_line(pilot, "/effort")
         await settle(pilot, lambda: bool(app.query(Picker)))
         await pilot.press("1")  # low, from the next request on
-        await settle(pilot, lambda: plain(effort) == "○ low · /effort")
+        await settle(pilot, lambda: "○ low" in plain(effort))
         await type_line(pilot, "again")
         await settle(pilot, lambda: not app.busy and len(provider.requests) == 2)
         assert [r.effort for r in provider.requests] == ["high", "low"]
@@ -84,7 +84,7 @@ async def test_no_effort_for_a_model_not_known_to_take_one(tmp_path: Path) -> No
     app.model = "some-gateway-model"
     async with app.run_test(size=(120, 36)) as pilot:
         await settle(pilot, lambda: ready(app))
-        assert not app.query_one("#effort").display
+        assert "some-gateway-model  ·" in plain(app.query_one("#status"))  # no effort
 
 
 async def test_model_before_the_first_message_goes_into_the_new_task(tmp_path: Path) -> None:
@@ -188,7 +188,7 @@ async def test_continue_opens_the_newest_task_here_with_the_effort_it_runs_with(
     again.task_config["effort"] = "high"  # the command's, not the task's
     async with again.run_test(size=(120, 36)) as pilot:
         await settle(pilot, lambda: again.task_id == made and "hello" in shown(again))
-        assert plain(again.query_one("#effort")) == "◐ medium · /effort"  # the model's default
+        assert "◐ medium" in plain(again.query_one("#status"))  # the model's default
 
 
 async def test_the_command_lines_prompt_is_the_first_message(tmp_path: Path) -> None:

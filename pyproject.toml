@@ -1,6 +1,6 @@
 [project]
 name = "noeta"
-version = "1.0.1"
+version = "1.0.2"
 description = "Open-source, Claude Code-compatible coding agent: crash-proof tasks, free waits for approval, from one laptop to many servers. Terminal UI, CLI, ACP, HTTP API and Python SDK; Claude, DeepSeek or any OpenAI-compatible model."
 readme = "README.md"
 license = "Apache-2.0"
@@ -39,7 +39,7 @@ server = ["starlette>=0.40", "uvicorn>=0.30", "websockets>=12"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
 keyring = ["keyring>=24"]
 # Released together, at the same version (docs/releasing.md).
-tui = ["noeta-tui==1.0.1"]
+tui = ["noeta-tui==1.0.2"]
 
 [project.urls]
 Homepage = "https://github.com/initxy/noeta"
