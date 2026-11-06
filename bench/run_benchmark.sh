@@ -33,7 +33,7 @@
 #   swe-subset      SWE-bench Verified, SWE_INCLUDE_GLOBS or first-N
 #
 # ── Knobs (all optional; env vars) ────────────────────────────────────────────
-#   NOETA_MODEL       model id passed to -m  (default: deepseek-v4.1-flash; use your provider's id)
+#   NOETA_MODEL       model id passed to -m  (default: NOETA_LIVE_MODEL from .env, else deepseek-v4.1-flash)
 #   NOETA_EFFORT      reasoning effort, passed as harbor's --effort
 #                     (default: high; DeepSeek V4.1 takes low|high|xhigh|max)
 #   NOETA_CONCURRENCY --n-concurrent                  (default: 3)
@@ -79,7 +79,7 @@ export HARBOR_TELEMETRY=0
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 export PYTHONDONTWRITEBYTECODE=1
 
-MODEL="${NOETA_MODEL:-deepseek-v4.1-flash}"
+MODEL="${NOETA_MODEL:-${NOETA_LIVE_MODEL:-deepseek-v4.1-flash}}"
 EFFORT="${NOETA_EFFORT:-high}"
 AGENT="bench.harbor_adapter:Noeta"
 CONCURRENCY="${NOETA_CONCURRENCY:-3}"
