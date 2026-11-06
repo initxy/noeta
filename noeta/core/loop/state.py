@@ -380,8 +380,10 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
         if core.marker:
             # A reply stopped mid-stream keeps what streamed, after the
             # reasoning it finished; the marker (plain text) opens the
-            # person's next turn.
-            if core.partial:
+            # person's next turn. Only whitespace streamed is no reply: an
+            # assistant turn with no text is a provider 400 on every later
+            # request (logs that recorded one fold without it too).
+            if core.partial and str(core.partial).strip():
                 content: list[Block] = [*(core.thinking or []), Text(text=str(core.partial))]
                 state._add(Message(role="assistant", content=content), seq)
             state._add(Message(role="user", content=[Text(text=str(core.marker))],

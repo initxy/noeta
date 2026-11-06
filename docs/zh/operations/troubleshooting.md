@@ -64,7 +64,7 @@ noeta 把各家 provider 的错误归成几类（`noeta/core/errors.py`），值
 | 原因 | 报错 | 怎么办 |
 |---|---|---|
 | `context_overflow` | provider 原本的超长提示 | 没有插件能腾出空间（压缩关了，或者这个代理没带压缩插件）。打开压缩，或者开个新任务。 |
-| `autocompact_thrashing` | `Automatic compaction stopped: the context filled up again within 3 model calls of the previous compaction, 3 times in a row. A file or tool output is probably too large for the context window; read it in smaller parts, or start a new conversation.` | 某个文件或某段输出几乎占满了整个窗口。让模型分段读。 |
+| `autocompact_thrashing` | `Automatic compaction stopped: the context filled up again within 3 model calls of the previous compaction, 3 times in a row. What a request still carries after a summary (the system prompt and tools, project instructions, files read again, the newest tool output) does not fit the model's context window. Read large files in smaller parts, check the model's context window is registered right, or start a new conversation.` | 摘要之后留下的东西就把窗口占满了：要么某个文件或某段输出几乎和整个窗口一样大，要么模型实际的窗口比目录里登记的小（目录里没有的模型按 128K 算）。让模型分段读大文件，或者登记模型真实的上限。 |
 | `compaction_summary_failed` | 摘要调用失败的原因 | 做摘要的那次调用本身失败了（摘要请求太长时最多重试三次）。自动压缩连续失败三次后，这个任务就不再自动压缩，`/compact` 仍然能用。 |
 | `compaction_config_invalid` | 不合法的那个值 | `autoCompactWindow` 或 `NOETA_AUTOCOMPACT_PCT_OVERRIDE` 对这个模型不可用。改代理文件或设置。 |
 

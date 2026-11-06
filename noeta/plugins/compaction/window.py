@@ -5,7 +5,10 @@ The effective window is the model's window (or the ``auto_compact_window``
 cap, ``NOETA_AUTO_COMPACT_WINDOW``: Claude Code's knob, noeta's name) less
 ``min(output ceiling, 20_000)`` held back for the summary. The threshold is
 13,000 tokens under that, or ``auto_compact_percent`` of the effective
-window (``NOETA_AUTOCOMPACT_PCT_OVERRIDE``) when that is lower. An
+window (``NOETA_AUTOCOMPACT_PCT_OVERRIDE``) when that is lower. Those two
+reserves are Claude Code's numbers for windows of 66K and up; in a smaller
+window (a local model's 32K) they would leave less than the fixed prompt
+under the threshold, so they shrink in proportion to half the window. An
 uncatalogued model gets the catalog's conservative 128K / 16,384 pair,
 never "compaction off".
 """
@@ -15,12 +18,15 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from noeta.core.models import model_limits, resolve_alias
+from noeta.core.models import model_limits
 
 #: Most of the output ceiling held back under the window.
 OUTPUT_RESERVE_MAX_TOKENS = 20_000
 #: How far under the effective window auto-compaction fires.
 AUTOCOMPACT_BUFFER_TOKENS = 13_000
+#: The most of the window the output reserve and the buffer together hold
+#: back; past it both shrink in proportion.
+RESERVES_MAX_SHARE = 0.5
 #: The share of the effective window under which a summary starts being
 #: written ahead of the threshold (Claude Code's precomputed compaction).
 PRECOMPUTE_BUFFER_FRACTION = 0.2
@@ -78,20 +84,21 @@ def percent_from_env() -> float | None:
 
 def derive_window(model: str, *, auto_compact_window: int | None = None,
                   auto_compact_percent: float | None = None) -> Window:
-    """The compaction numbers for ``model``. Raises ``ValueError`` when the
-    cap leaves no window under the output reserve."""
+    """The compaction numbers for ``model``. Raises ``ValueError`` on a bad
+    setting."""
     check_positive("auto_compact_window", auto_compact_window)
     check_percent(auto_compact_percent)
     context_window, max_output_tokens = model_limits(model)
     if auto_compact_window is not None:
         context_window = min(context_window, auto_compact_window)
     reserve = min(max_output_tokens, OUTPUT_RESERVE_MAX_TOKENS)
+    buffer = AUTOCOMPACT_BUFFER_TOKENS
+    held = context_window * RESERVES_MAX_SHARE
+    if reserve + buffer > held:
+        reserve, buffer = (round(reserve * held / (reserve + buffer)),
+                           round(buffer * held / (reserve + buffer)))
     effective = context_window - reserve
-    if effective <= 0:
-        raise ValueError(
-            f"auto_compact_window {auto_compact_window} leaves no window under model "
-            f"{resolve_alias(model)!r}'s {reserve}-token summary reserve")
-    threshold = effective - AUTOCOMPACT_BUFFER_TOKENS
+    threshold = effective - buffer
     if auto_compact_percent is not None:
         threshold = min(int(effective * auto_compact_percent / 100), threshold)
     threshold = max(1, threshold)

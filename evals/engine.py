@@ -316,11 +316,17 @@ def _plugins(cfg: EvalConfig, sc: Scenario, dirs: TrialDirs) -> dict[str, Any]:
     if sc.small_window:
         from noeta.core.models import model_limits
         from noeta.plugins.compaction import Compaction
+        from noeta.plugins.compaction.window import (
+            AUTOCOMPACT_BUFFER_TOKENS,
+            OUTPUT_RESERVE_MAX_TOKENS,
+        )
 
         _, out = model_limits(cfg.model)
-        # The usable window (window - min(out, 20k) - 13k) is the scenario's.
+        # The threshold (the window less min(out, 20k) and 13k, the two
+        # shrunk to half a small window) is the scenario's usable window.
+        held = min(out, OUTPUT_RESERVE_MAX_TOKENS) + AUTOCOMPACT_BUFFER_TOKENS
         plugins["compaction"] = Compaction(
-            auto_compact_window=sc.usable_window + min(out, 20_000) + 13_000)
+            auto_compact_window=sc.usable_window + min(held, sc.usable_window))
     if sc.plugins is not None:
         for name, value in sc.plugins(dirs).items():
             prev = plugins.get(name)
