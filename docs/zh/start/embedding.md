@@ -216,7 +216,7 @@ worker、渠道和每天一次的清理，直到 `stop` 被设上；`noeta worke
 `noeta.connect(url)` 给你一个连向别处任务的客户端：
 
 ```python
-client = noeta.connect("sqlite:///home/me/.noeta/tasks.db")     # 这个存储上的 Client
+client = noeta.connect("sqlite:////home/me/.noeta/tasks.db")    # 这个存储上的 Client
 client = noeta.connect("postgres://noeta:…@db.internal/noeta")    # 同上
 client = noeta.connect("https://noeta.internal:8642", token=os.environ["NOETA_SERVER_TOKEN"])
 ```

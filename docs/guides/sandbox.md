@@ -143,7 +143,7 @@ unless `failIfUnavailable` is true: then they are refused.
 | `enabled` | `false` | confine `Bash` |
 | `failIfUnavailable` | `false` | refuse commands when the sandbox cannot start |
 | `autoAllowBashIfSandboxed` | `true` | a command that runs sandboxed needs no approval (except in plan mode) |
-| `allowUnsandboxedCommands` | `true` | a call may set `dangerouslyDisableSandbox: true` to leave the sandbox; that always asks you (off: the flag is ignored and the command stays inside) |
+| `allowUnsandboxedCommands` | `true` | a call may set `dangerouslyDisableSandbox: true` to leave the sandbox; that is asked about whatever the allow rules say: in `auto` the classifier answers, in `bypassPermissions` it runs, in `dontAsk` it is refused (off: the flag is ignored and the command stays inside) |
 | `excludedCommands` | `[]` | command patterns (`docker *`, `Bash(npm *)`) that always run outside |
 | `filesystem.allowWrite` / `denyWrite` / `denyRead` / `allowRead` | `[]` | the path lists above |
 | `filesystem.disabled` | `false` | network filtering only |

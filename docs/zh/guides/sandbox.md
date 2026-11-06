@@ -83,7 +83,7 @@ Linux 上先装 bubblewrap（`apt install bubblewrap` 或 `dnf install bubblewra
 | `enabled` | `false` | 把 `Bash` 关进沙箱 |
 | `failIfUnavailable` | `false` | 沙箱起不来时拒绝执行命令 |
 | `autoAllowBashIfSandboxed` | `true` | 在沙箱里跑的命令不用审批（计划模式除外） |
-| `allowUnsandboxedCommands` | `true` | 调用可以设 `dangerouslyDisableSandbox: true` 出沙箱跑，但一定会问你（关掉后这个参数不起作用，命令照样在沙箱里跑） |
+| `allowUnsandboxedCommands` | `true` | 调用可以设 `dangerouslyDisableSandbox: true` 出沙箱跑。不管允许规则怎么写，这一步都要审批：`auto` 下由分类器判断，`bypassPermissions` 下直接跑，`dontAsk` 下直接拒绝（关掉后这个参数不起作用，命令照样在沙箱里跑） |
 | `excludedCommands` | `[]` | 这些命令模式（`docker *`、`Bash(npm *)`）总是在沙箱外跑 |
 | `filesystem.allowWrite` / `denyWrite` / `denyRead` / `allowRead` | `[]` | 上面说的路径名单 |
 | `filesystem.disabled` | `false` | 只管网络，不管文件 |

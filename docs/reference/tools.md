@@ -150,7 +150,7 @@ only inside the working directories is allowed; in `acceptEdits` file commands (
 `mv`, …) inside them are too; any other asks, offering a rule for its parts. In `auto` the
 classifier answers. A command naming `.noeta` asks in every mode but `bypassPermissions`; one
 writing a protected path asks in every mode, `bypassPermissions` included; one leaving the
-sandbox asks whatever the allow rules say (`bypassPermissions` lets it run). With the sandbox on
+sandbox asks whatever the allow rules say (in `auto` the classifier answers; `bypassPermissions` lets it run). With the sandbox on
 and `autoAllowBashIfSandboxed` (the default), a command that runs inside the sandbox is allowed
 outside `plan` mode. `Bash(...)`
 rules are matched part by part ([rules](../guides/permissions.md#rules)). A background job keeps

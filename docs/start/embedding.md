@@ -235,7 +235,7 @@ how the front ends share `~/.noeta/tasks.db` without picking up each other's tas
 `noeta.connect(url)` gives a client for tasks somewhere else:
 
 ```python
-client = noeta.connect("sqlite:///home/me/.noeta/tasks.db")     # a Client on that store
+client = noeta.connect("sqlite:////home/me/.noeta/tasks.db")    # a Client on that store
 client = noeta.connect("postgres://noeta:…@db.internal/noeta")    # likewise
 client = noeta.connect("https://noeta.internal:8642", token=os.environ["NOETA_SERVER_TOKEN"])
 ```
