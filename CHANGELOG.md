@@ -7,6 +7,10 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-05
+
+The terminal UI lists sub-agents as Claude Code does and draws in the terminal's own colours.
+
 ### Changed
 
 - **The terminal UI lists sub-agents under the footer, as Claude Code does**: `● main`, then
