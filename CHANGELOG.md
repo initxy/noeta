@@ -7,6 +7,10 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-06
+
+Fixes from a full review: compaction that looped, small windows, workflow approvals, sessions taken by `noeta serve`, the terminal UI, sandbox `denyRead`, and more.
+
 ### Fixed
 
 - **Compaction stops instead of looping.** When what survives a compaction already overflows
