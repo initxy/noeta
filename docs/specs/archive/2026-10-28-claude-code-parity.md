@@ -37,7 +37,7 @@ server/remote surfaces, which stay noeta's own.
   rule, with no check that keeps them aligned; drift is found only by audits like the one above.
 - Claude Code reads `ANTHROPIC_BASE_URL`, so a local recording proxy sees the exact requests it
   sends (system blocks, tool list, reminders, compaction requests, cache breakpoints). Verified
-  2026-10-28: 2.1.312 recorded through a proxy in front of an internal gateway, the proxy
+  2026-10-28: 2.1.312 recorded through a proxy in front of a model gateway, the proxy
   swapping the model for a cheap one on the way out (Claude Code still believes it talks to
   Opus 5.5, so the request is the baseline's). Recordings live outside the repo (they contain
   Claude Code's text): `~/cc-recordings/<version>/`, one directory per session, `INDEX.md`.
@@ -285,7 +285,7 @@ Phase 5 — front ends
 - 2026-10-28: owner set the goal (parity with Claude Code; kernel/extensibility/distribution
   are noeta's own), behavior parity with our own wording, baseline = latest Claude Code default
   config.
-- 2026-10-28: recorded 2.1.312 on the owner's Mac through the internal gateway (no quota);
+- 2026-10-28: recorded 2.1.312 on a local machine through a model gateway (no quota);
   baseline narrowed to the API-key user. Owner: start. Phase 0 tooling and Phase 1 run in
   parallel.
 - 2026-10-28: Phase 0 tooling in `scripts/parity/` (README there): `record.py` (now also keeps

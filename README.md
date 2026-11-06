@@ -1,68 +1,152 @@
-# noeta
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/initxy/noeta/main/docs/assets/logo/noeta-logo-dark.svg">
+    <img alt="noeta" src="https://raw.githubusercontent.com/initxy/noeta/main/docs/assets/logo/noeta-logo-light.svg" height="88">
+  </picture>
+</p>
 
-**An open-source Claude Code that runs on servers.** The model sees what Claude Code shows it —
-the same tools, prompts' rules, reminders and request shape — and
-reads Claude Code's formats for settings, hooks, skills, agents, MCP servers and plugins. Under
-it, every task is an append-only event log with exactly one writer, so a task survives a crash
-without re-running a tool, waits days for a person while holding no worker, and runs on one
-laptop or many machines unchanged.
+<h3 align="center">The open-source coding agent that never loses its place.</h3>
 
-## Five-minute start
+<p align="center">
+  Claude Code–compatible · survives crashes · waits for free · one laptop or a fleet of servers
+</p>
 
-You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+<p align="center">
+  <a href="https://pypi.org/project/noeta/"><img alt="PyPI" src="https://img.shields.io/pypi/v/noeta?color=10b981"></a>
+  <a href="https://pypi.org/project/noeta/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/noeta"></a>
+  <a href="https://github.com/initxy/noeta/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/initxy/noeta/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/initxy/noeta/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <a href="https://initxy.github.io/noeta/"><img alt="Docs" src="https://img.shields.io/badge/docs-initxy.github.io%2Fnoeta-8b5cf6"></a>
+</p>
+
+<p align="center">
+  <a href="https://initxy.github.io/noeta/">Docs</a> ·
+  <a href="https://initxy.github.io/noeta/start/quickstart">Quickstart</a> ·
+  <a href="https://initxy.github.io/noeta/how-it-works/">How it works</a> ·
+  <a href="https://github.com/initxy/noeta/blob/main/docs/benchmarks.md">Benchmarks</a> ·
+  <a href="https://github.com/initxy/noeta/blob/main/README.zh-CN.md">中文</a>
+</p>
+
+---
+
+**noeta** is a coding agent you can run in your terminal, embed in Python, or deploy across many
+machines. To the model it looks exactly like Claude Code: same tools, same prompt rules, same
+reminders, same request shape. That means the habits models learned on Claude Code carry over
+unchanged, and your Claude Code settings, hooks, skills, agents, MCP servers and plugins work
+too. Underneath it is built like a database: every task is an append-only log, so nothing is
+ever lost.
+
+<p align="center">
+  <img alt="noeta's terminal UI fixing a failing test" src="https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/transcript.svg" width="760">
+</p>
+
+## Why noeta
+
+- 🧠 **Claude Code–compatible.** Tool names and schemas, prompt rules, reminders and context
+  compaction all match Claude Code, checked by replaying recorded Claude Code requests
+  against noeta. Settings, hooks, skills, agents, MCP servers and plugin folders use Claude
+  Code's formats.
+- 💥 **Crash-proof.** Kill the process, pull the plug, lose the machine: another worker picks
+  the task up where its log stops. A tool call that was in flight is reported as "outcome
+  unknown", never silently run twice.
+- ⏸️ **Waiting costs nothing.** An approval, a question for a person, a sub-agent or a timer
+  parks the task. It holds no process and no worker until the answer arrives, minutes or
+  weeks later.
+- 🌐 **Laptop to fleet, same code.** SQLite on one laptop; Postgres with any number of workers
+  behind an HTTP API in production. Any worker can continue any task.
+- 🔌 **Every way in.** A full-screen terminal UI, Claude Code's `-p` and `stream-json`
+  protocol (point an Agent SDK at it), ACP for Zed and other editors, an HTTP / WebSocket
+  API, a web app, a desktop app and a Python SDK.
+- 🤖 **Any model.** Claude, DeepSeek, or anything behind an OpenAI-compatible or Responses
+  endpoint, including your own vLLM or gateway.
+- 🧩 **Everything is a plugin.** Files, shell, permissions, hooks, skills, sub-agents, MCP,
+  memory and compaction all sit behind one `Extension` interface. The built-ins load exactly
+  like yours.
+- 🔒 **Nothing phones home.** No telemetry, no log upload, no update check. The only traffic is
+  to the model provider you configure, plus the tools the model calls under your permission
+  rules.
+
+## Benchmarks
+
+Same model (DeepSeek V4.1 Flash, effort `high`), same tasks, same limits, same machine:
+
+| Benchmark | noeta | Claude Code |
+|---|---|---|
+| SWE-rebench 07-2026 (111 tasks, 2 runs pooled) | **50.5 %** | 45.0 % |
+| Cost per run of the 111 tasks | **$5.01–5.77** | $5.70–6.25 |
+
+Every run, the standard errors, the retries and the tasks with leaked answers are in
+[the full benchmark report](https://github.com/initxy/noeta/blob/main/docs/benchmarks.md).
+
+## Quickstart
+
+You need Python 3.11+.
 
 ```bash
-uv tool install 'noeta[tui]'     # or: pip install 'noeta[tui]'
-# from a checkout:  git clone https://github.com/initxy/noeta && cd noeta && uv tool install '.[tui]'
+uv tool install 'noeta[tui]'          # or: pip install 'noeta[tui]'
+
+export ANTHROPIC_API_KEY=sk-ant-...   # or see "Other models" below
+export NOETA_MODEL=claude-sonnet-5-5
+
+noeta                                 # full-screen terminal UI in this directory
+noeta -p "what does this repository do?"   # one prompt, print the answer
 ```
 
-Pick a model and a provider. With an Anthropic API key:
+<details>
+<summary><b>Other models</b> (DeepSeek, OpenAI-compatible, your own gateway)</summary>
 
 ```bash
-export NOETA_MODEL=claude-sonnet-5-5 NOETA_API_KEY=sk-ant-...   # or ANTHROPIC_API_KEY
+export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1
+export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...
 ```
 
-With an OpenAI-compatible endpoint (vLLM, a gateway, DeepSeek, …), name the provider and the
-base URL. For `openai_compat` the base URL ends in `/v1` (noeta appends `/chat/completions`);
-for `anthropic` it is the host only (noeta appends `/v1/messages`); for `openai_responses` it is
-the whole `…/v1/responses` URL:
+For `openai_compat` the base URL ends in `/v1`; for `anthropic` it is the host only; for
+`openai_responses` it is the whole `…/v1/responses` URL. The same settings are flags
+(`--model`, `--provider`, `--base-url`) or keys in `~/.noeta/config.toml`. More in
+[Models and providers](https://initxy.github.io/noeta/guides/models).
 
-```bash
-export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://llm.example.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...       # or OPENAI_API_KEY
-```
+</details>
 
-The same settings are flags (`--model`, `--provider`, `--base-url`) or keys in
-`~/.noeta/config.toml` (`model`, `provider`, `base_url`, `api_key`). Then:
+<details>
+<summary><b>Day-to-day</b></summary>
 
-```bash
-noeta                                    # full-screen terminal UI in the current directory
-noeta -p "what does this repository do?" # one prompt, print the answer (Claude Code's -p)
-noeta -p --output-format stream-json --input-format stream-json --verbose
-                                         # Claude Code's SDK protocol: point an Agent SDK at it
-```
+- `noeta -c` continues the newest conversation in this directory; `noeta -r` lists them.
+- Project instructions come from `NOETA.md`, or `AGENTS.md` when there is none.
+- Skills load from `.noeta/skills` and `.agents/skills`, in the project and in your home.
+- A project's own `.noeta/` settings, agents, skills and plugins load only after `noeta trust`.
+- `noeta -p --output-format stream-json --input-format stream-json --verbose` speaks Claude
+  Code's SDK protocol, so a Claude Agent SDK can drive it.
 
-More providers, models files, side models and how a model id picks its provider:
-[Models and providers](https://initxy.github.io/noeta/guides/models) and, for the design,
-[Providers and model routing](https://initxy.github.io/noeta/how-it-works/models).
+</details>
 
-Tasks are kept in `~/.noeta/tasks.db`; `noeta -c` continues
-the newest conversation in this directory, `noeta -r` lists them. A project's own
-`.noeta/` settings, agents, skills and plugins load only after `noeta trust`.
+<details>
+<summary><b>Optional extras</b></summary>
 
-Project instructions come from `NOETA.md` (or, in a directory without one, the cross-tool
-`AGENTS.md`); skills from `.noeta/skills` and the cross-tool `.agents/skills`, in the project, the
-directories above it, `~/.noeta/skills` and `~/.agents/skills`.
-
-| Extra | For |
+| Extra | Adds |
 |---|---|
+| `tui` | the terminal UI (`noeta-tui`, released with noeta at the same version) |
 | `acp` | `noeta acp`: an Agent Client Protocol agent for Zed and other editors |
 | `server` | `noeta serve`: the HTTP / WebSocket API |
 | `postgres` | a Postgres store, for many workers |
 | `keyring` | `{keyring:service/user}` secret references in plugin settings |
-| `tui` | the terminal UI (`noeta-tui`, in `tui/`) |
 
-Install several at once: `uv tool install 'noeta[tui,server,postgres]'`. The terminal UI (`noeta` without `-p`) is its own package, `noeta-tui` in `tui/`, released with noeta at the same version; without it, `noeta` still runs `-p`, `serve`, `worker` and `acp`.
+Several at once: `uv tool install 'noeta[tui,server,postgres]'`.
+
+</details>
+
+## Run it on many machines
+
+One Postgres store, any number of workers, an HTTP API in front:
+
+```bash
+export NOETA_STORE=postgres://noeta:...@db.internal/noeta
+noeta worker --concurrency 16             # on every worker machine
+noeta serve --no-worker --host 0.0.0.0    # the API (bearer token required)
+noeta --server http://api.internal:8642   # the terminal UI against it
+```
+
+A worker that dies leaves nothing behind: another claims its tasks where their logs stop.
+See [Run it as a server](https://initxy.github.io/noeta/guides/server).
 
 ## Embed it in Python
 
@@ -74,7 +158,7 @@ from noeta.core.events import ModelReplied
 async def main() -> None:
     store = noeta.store("sqlite:///tasks.db")
     agents = {a.name: a for a in noeta.default_agents("claude-sonnet-5-5")}
-    model = noeta.provider("anthropic", api_key="sk-ant-...")   # base_url=... for a gateway
+    model = noeta.provider("anthropic", api_key="sk-ant-...")
     runtime = noeta.Runtime(store=store, agents=agents, provider_for=lambda _name: model)
     client = noeta.Client(store)
     task = await client.create("main", "What does this repository do?", config={"cwd": "."})
@@ -85,78 +169,43 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`noeta.LocalApp` is a store, a worker and a client in one process; `noeta.connect(url)` gives a
-client for a store URL or a `noeta serve` server. Everything an embedder needs is outside
-`noeta.cli`, which is the `noeta` command itself.
-
-## Serve it on many machines
-
-One Postgres store, any number of workers, an HTTP API in front:
-
-```bash
-export NOETA_STORE=postgres://noeta:...@db.internal/noeta
-noeta worker --concurrency 16             # on every worker machine
-noeta serve --no-worker --host 0.0.0.0    # the API; bearer token required
-noeta --server http://api.internal:8642   # the TUI against it (also: noeta acp --server URL)
-```
-
-A worker that dies leaves nothing behind: another claims its tasks where their logs stop. A
-front end attached with `--server` needs the token in `NOETA_SERVER_TOKEN` and no model of its
-own: its tasks run on the server's model and in the server's directory unless `--model` or
-`--cwd PATH` (a directory on the server) say otherwise.
-Workspaces and the token: [Run it as a server](https://initxy.github.io/noeta/guides/server).
+`noeta.LocalApp` puts a store, a worker and a client in one process; `noeta.connect(url)` gives
+a client for a store URL or a `noeta serve` server. See
+[Embedding](https://initxy.github.io/noeta/start/embedding).
 
 ## Extend it
 
-Everything outside the small kernel is a plugin behind one `Extension` interface, found by name
-through Python entry points or as a single file in `~/.noeta/plugins/` — the built-in ones
-exactly like yours. Agents are markdown files in Claude Code's format, prompts have names you
-can override, and Claude Code plugin directories load from noeta's own places. How to write and
-ship each kind: [Write a plugin](https://initxy.github.io/noeta/guides/plugins); how it compares with pi,
-DeepSeek Harness and Claude Code: [Compared with other agents](https://initxy.github.io/noeta/operations/comparison).
+Write a plugin in Python and ship it as an entry point, or drop a single file into
+`~/.noeta/plugins/`. Agents are markdown files in Claude Code's format, prompts have names you
+can override, and Claude Code plugin directories load as they are.
+[Write a plugin](https://initxy.github.io/noeta/guides/plugins) ·
+[Compared with Claude Code, pi and DeepSeek Harness](https://initxy.github.io/noeta/operations/comparison)
 
-## Benchmarks
+## How it works
 
-noeta 1.0.0.dev0 at commit 34f8acee next to Claude Code 2.1.312 on the same model
-(`opensource/deepseek_v4_1_flash`, effort `high`), same tasks, caps and machine, run through
-harbor (2026-10-30 to 2026-11-01). Each run is one graded attempt per task (harbor retried an
-attempt that ended without a grade, and some tasks passed only on that retry; bench/README.md lists them); cost is
-DeepSeek's list price (read 2026-10-30) per run, off-peak throughout:
+```
+ terminal UI · -p / stream-json · ACP · HTTP API · web · desktop · Python
+                              │  one client API
+                              ▼
+                ┌─────────────────────────────┐
+                │  store: one log per task     │   SQLite or Postgres
+                └─────────────────────────────┘
+                   ▲ claim · fold · step · append
+        worker  worker  worker …   (plugins build what the model sees)
+```
 
-| Benchmark | noeta | Claude Code | noeta − Claude Code (SE) |
-|---|---|---|---|
-| SWE-rebench 07-2026, 111 tasks, 50 min, 2 runs each pooled | 50.5 % | 45.0 % | +5.4 (3.6) |
-| same, 91 tasks without leaked answers | 51.1 % | 44.0 % | +7.1 (3.6) |
-| same, one same-time run | 49.5 % | 42.3 % | +7.2 (3.8) |
-| Terminal-Bench 4.0, 54 of 66 tasks, 2 h cap, 1 run | 3.7 % | 1.9 % | +1.9 (3.2) |
+A worker claims a task, replays its log into state, makes one model call, runs the tools and
+appends what happened. Every write names the position it expects and the claim it holds, so a
+frozen worker that lost its claim can never write again.
+[How it works](https://initxy.github.io/noeta/how-it-works/) explains every part and why.
 
-Cost per run of 111 SWE-rebench tasks: noeta $5.01–$5.77, Claude Code $5.70–$6.25; per
-Terminal-Bench run of 54 tasks: noeta $5.23, Claude Code $6.50.
+## Contributing
 
-The first run, at 54121930, scored −2.7 (SE 4.3) on SWE-rebench. 34f8acee differs in two
-ways the model sees: `Bash` keeps the image's environment variables (54121930 dropped
-`CARGO_HOME`, `JAVA_HOME`, …), and the token-budget notes go only to Claude models (784c0cd8);
-the gain is the two together. Terminal-Bench 4.0 is near zero for both on this model and does
-not separate them. Versions, every run, retries, the leaked-answer tasks, what each agent reads
-from the repo, and a second model:
-[bench/README.md](bench/README.md#results-2026-10-30-to-2026-11-01).
-
-## Privacy
-
-noeta sends nothing anywhere except requests to the model provider you configure: no
-telemetry, no log upload, no update check. Tools reach out only when the model calls them
-(`WebFetch`, `WebSearch`, MCP servers, your commands), under the permission rules you set.
-
-## Docs
-
-**[initxy.github.io/noeta](https://initxy.github.io/noeta/)** (中文：[initxy.github.io/noeta/zh](https://initxy.github.io/noeta/zh/))
-— quickstart, guides, how every part is designed and why, and the full reference. The source
-is [docs/](docs/index.md); `make docs-dev` serves it locally.
-
-For contributors: [CONTEXT.md](CONTEXT.md) — the vocabulary; [docs/adr/](docs/adr/index.md) —
-the decisions and why; [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
-[CHANGELOG.md](CHANGELOG.md).
+Issues and pull requests are welcome. Start with [CONTRIBUTING.md](https://github.com/initxy/noeta/blob/main/CONTRIBUTING.md); the
+vocabulary is in [CONTEXT.md](https://github.com/initxy/noeta/blob/main/CONTEXT.md) and the design decisions in
+[docs/adr/](https://github.com/initxy/noeta/blob/main/docs/adr/index.md). Security reports: [SECURITY.md](https://github.com/initxy/noeta/blob/main/SECURITY.md). Changes:
+[CHANGELOG.md](https://github.com/initxy/noeta/blob/main/CHANGELOG.md).
 
 ## License
 
-Apache-2.0
+[Apache-2.0](https://github.com/initxy/noeta/blob/main/LICENSE)

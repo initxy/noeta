@@ -69,7 +69,7 @@ tui:
 
 ## the screenshots tui/screenshots/README.md compares with Claude Code's
 tui-screenshots:
-	cd tui && NOETA_TUI_SCREENSHOTS=1 uv run pytest -q tests/test_screenshots.py
+	cd tui && rm -rf /tmp/noeta-demo && NOETA_TUI_SCREENSHOTS=1 uv run pytest -q --basetemp=/tmp/noeta-demo tests/test_screenshots.py
 
 ## every front end's own tests
 frontends: tui web desktop

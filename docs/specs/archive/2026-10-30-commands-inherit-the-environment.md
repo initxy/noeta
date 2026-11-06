@@ -131,7 +131,7 @@ What the others do (read from their code, 2026-10-30):
 ## Progress log
 2026-10-30 Claude Code 2.1.312 read from its bundle (`~/.local/share/claude/versions/2.1.312` strings): Bash/hooks/MCP env builders quoted in Context; pi-mono `utils/shell.ts`, DeepSeek Harness `subprocess/src/index.ts`.
 2026-10-30 Why the allowlist existed: initial commit (0e8165bb), docstring only ("so a child never picks up the host's credentials by accident"); no ADR or spec.
-2026-10-30 pydantic-ai-5842 (gpu-cn `jobs/rb-ds41/pydantic__pydantic-ai-5842__guPatib`): the stream ends with the final reply and the price warning, no `result`; harbor's `AgentSafetyRefusalError` is its regex matching the task's own text (`ContentFilterError` is a pydantic-ai class), not anything noeta printed. Race reproduced by a test with a 1.2 s usage read (fails before the fix).
+2026-10-30 pydantic-ai-5842 (trial `pydantic__pydantic-ai-5842__guPatib` of the first SWE-rebench run): the stream ends with the final reply and the price warning, no `result`; harbor's `AgentSafetyRefusalError` is its regex matching the task's own text (`ContentFilterError` is a pydantic-ai class), not anything noeta printed. Race reproduced by a test with a 1.2 s usage read (fails before the fix).
 2026-10-30 Container exec env unchanged in behaviour: its `docker` client now inherits the host environment (it is a command noeta starts), commands in the container still get only the image's plus explicit `-e`; `CLIENT_ENV` keeps the old names.
 2026-10-30 Gates: `make check` green (2596 passed, 89 %), `make parity` 0 mismatches, `make cluster` 14/14.
 2026-10-30 After `GIT_EDITOR`: `make check` green (2596 passed, 89 %), `make parity` 0 mismatches, `make cluster` 14/14; archived.

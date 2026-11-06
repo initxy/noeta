@@ -78,14 +78,15 @@ const nav = (zh: boolean) => {
 
 export default defineConfig({
   title: 'noeta',
-  description: 'An open-source Claude Code that runs on servers',
+  description: 'The open-source, Claude Code-compatible coding agent that never loses its place: crash-proof, free to wait, from one laptop to many servers.',
   base: '/noeta/',
   cleanUrls: true,
   lastUpdated: true,
   srcExclude: ['adr/**', 'specs/**', 'gc.md', 'releasing.md', 'reviewing.md', 'README.md'],
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/noeta/logo.svg' }],
-    ['meta', { property: 'og:image', content: '/noeta/og.png' }],
+    ['meta', { property: 'og:image', content: 'https://initxy.github.io/noeta/og.png' }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
   ],
   // CommonMark drops **bold** whose delimiter sits between CJK punctuation and a character
   // (`**做决定。**如果`); this plugin applies the CJK-friendly emphasis rules.

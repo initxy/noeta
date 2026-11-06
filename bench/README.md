@@ -11,8 +11,14 @@ the same model. Current targets:
 | Terminal-Bench 2.1 (cheap loop, smoke) | `terminal-bench/terminal-bench-2-1` | 89 | 10 min – 3 h |
 
 The reference agent is harbor's built-in `claude-code` agent pinned to Claude
-Code **2.1.312**; the default model is `opensource/deepseek_v4_1_flash` through
-the gateway's Anthropic Messages endpoint, effort `high`, for both agents.
+Code **2.1.312**; the model is DeepSeek V4.1 Flash through an Anthropic
+Messages endpoint, effort `high`, for both agents. Pass the model as
+`--model <model-id>` (`compare.py`) or `NOETA_MODEL=<model-id>`
+(`run_benchmark.sh`), where `<model-id>` is whatever id your provider or
+gateway uses for DeepSeek V4.1 Flash. The scripts' built-in default is the id
+the 2026-10 runs used; `compare.py` keys its price table and the 1M / 64K
+limits on that id, so with another id give the limits through a models file
+(below) and expect no cost estimate.
 
 ## Why these benchmarks (checked 2026-11-03, again 2026-11-04)
 
@@ -233,7 +239,7 @@ and whether the tree was dirty, the wheel's sha256, harbor's and Claude Code's
 versions, the uploaded tools' sha256s, the price used.
 
 One real request from each agent, recorded through a local proxy with these
-settings (2026-10-30, `opensource/deepseek_v4_1_flash`):
+settings (2026-10-30, DeepSeek V4.1 Flash):
 
 | Field | Claude Code 2.1.312 | noeta |
 |---|---|---|
@@ -260,7 +266,7 @@ bench/compare.py run swe-rebench --tasks open-jarvis__OpenJarvis-465 \
 # full runs: SWE-rebench at its real 50 min cap; TB4 with the agent capped
 # at 2 h of its 8 h (internal comparison, not board-comparable — say so);
 # the builder's state on the larger disk; concurrency sized to the free space
-S=/data00/.../bench/jobs/.buildkit
+S=/path/on/the/larger/disk/.buildkit
 bench/compare.py run swe-rebench --k 1 --concurrency 10 --builder-state-dir $S --harbor $H
 bench/compare.py run tb4 --k 1 --concurrency 8 --agent-max-timeout-sec 7200 --builder-state-dir $S --harbor $H
 
@@ -361,8 +367,8 @@ per agent:
 
 ### Gateway concurrency
 
-Measured 2026-10-30 (03:00 UTC) against `opensource/deepseek_v4_1_flash` on
-the gateway's Anthropic endpoint, effort `high`:
+Measured 2026-10-30 (03:00 UTC) against DeepSeek V4.1 Flash on the
+gateway's Anthropic endpoint, effort `high`:
 
 | Load | Requests | Errors | p50 / p90 latency |
 |---|---|---|---|
@@ -431,8 +437,8 @@ run in full, so it needs no subset.
 
 One machine (16 cores, 62 GB, an NVIDIA T4 the GPU tasks could not use), harbor 0.25.0,
 Claude Code **2.1.312** (harbor's `claude-code` agent, telemetry off, process
-tree stopped at the cap), model `opensource/deepseek_v4_1_flash` through the
-gateway's Anthropic endpoint for both agents, effort `high`, 1M context window
+tree stopped at the cap), model DeepSeek V4.1 Flash through an Anthropic
+Messages endpoint for both agents, effort `high`, 1M context window
 and 65,536 output tokens for both. Each run is one graded attempt per task
 (k=1; harbor may retry an attempt that ended without a grade, below);
 noeta and Claude Code trials of one job are interleaved, so they share the
@@ -509,10 +515,10 @@ Runs:
 
 | run | agents (noeta commit) | started (UTC) | wall | passed | 50-min timeouts | tokens in / cached / out | cost |
 |---|---|---|---|---|---|---|---|
-| 1 `rb-ds41` | noeta 54121930 | 10-30 14:37 | 11.6 h | 50 (45.0 %) | 59 | 326M / 317M / 5.4M | $5.58 |
+| 1 | noeta 54121930 | 10-30 14:37 | 11.6 h | 50 (45.0 %) | 59 | 326M / 317M / 5.4M | $5.58 |
 | | Claude Code | | | 53 (47.7 %) | 63 | 381M / 370M / 6.0M | $6.25 |
-| fix `rb-ds41-fix` | noeta 34f8acee | 10-31 03:52 | 5.4 h | 57 (51.4 %) | 43 | 390M / 381M / 5.5M | $5.77 |
-| r2 `rb-ds41-r2` | noeta 34f8acee | 10-31 21:29 | 11.6 h | 55 (49.5 %) | 49 | 300M / 292M / 4.9M | $5.01 |
+| fix | noeta 34f8acee | 10-31 03:52 | 5.4 h | 57 (51.4 %) | 43 | 390M / 381M / 5.5M | $5.77 |
+| r2 | noeta 34f8acee | 10-31 21:29 | 11.6 h | 55 (49.5 %) | 49 | 300M / 292M / 4.9M | $5.01 |
 | | Claude Code | | | 47 (42.3 %) | 66 | 319M / 309M / 5.6M | $5.70 |
 
 Concurrency 16 trials in each run; every trial was graded. Run 1 shared the gateway with the
@@ -584,9 +590,9 @@ Concurrency 8 trials, k=1.
 
 | run | agent (noeta commit) | wall | passed | 2-h timeouts | tokens in / cached / out | cost |
 |---|---|---|---|---|---|---|
-| `tb4-ds41` | noeta 54121930 | 28.3 h | 2 (3.7 %) | 39 | 308M / 303M / 9.1M | $7.10 |
+| 1 | noeta 54121930 | 28.3 h | 2 (3.7 %) | 39 | 308M / 303M / 9.1M | $7.10 |
 | | Claude Code | | 1 (1.9 %) | 41 | 287M / 283M / 8.3M | $6.50 |
-| `tb4-ds41-fix` | noeta 34f8acee | 13.8 h | 2 (3.7 %) | 37 | 176M / 172M / 6.9M | $5.23 |
+| rerun | noeta 34f8acee | 13.8 h | 2 (3.7 %) | 37 | 176M / 172M / 6.9M | $5.23 |
 
 Run 1 started 10-30 17:08 beside SWE-rebench run 1; the rerun started 10-31
 21:28 beside SWE-rebench run r2. Paired difference, run 1: +1.9 (SE 1.9); the
@@ -600,16 +606,16 @@ not); every scored task passes with its reference solution.
 
 ### A larger private model (20 SWE-rebench tasks)
 
-A larger private gateway model (1M window, 128K output cap for both), 20 tasks
+A larger private model (1M window, 128K output cap for both), 20 tasks
 drawn with seed 0 from the 104 SWE-rebench tasks whose image is not large,
 concurrency 1, 50-minute cap. No list price for this model; no leaked answers
 in either run.
 
 | run | agent (noeta commit) | started (UTC) | wall | passed | 50-min timeouts | tokens in / cached / out |
 |---|---|---|---|---|---|---|
-| 1 `rb-ad1max` | noeta 54121930 | 10-30 14:38 | 29.7 h | 6 (30 %) | 12 | 83M / 81M / 1.2M |
+| 1 | noeta 54121930 | 10-30 14:38 | 29.7 h | 6 (30 %) | 12 | 83M / 81M / 1.2M |
 | | Claude Code | | | 10 (50 %) | 8 | 107M / 103M / 0.8M |
-| fix `rb-ad1max-fix` | noeta 34f8acee | 11-01 09:11 | 11.1 h | 10 (50 %) | 5 | 114M / 110M / 0.8M |
+| fix | noeta 34f8acee | 11-01 09:11 | 11.1 h | 10 (50 %) | 5 | 114M / 110M / 0.8M |
 
 Paired difference against run 1's Claude Code: noeta 54121930 −20 points
 (SE 11.7), noeta 34f8acee 0 (SE 10.3; each passed 2 tasks the other did not);

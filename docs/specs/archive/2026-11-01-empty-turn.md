@@ -12,8 +12,8 @@ A model reply with no text and no tool call no longer loses the task. noeta hand
 as well as the best of Claude Code 2.1.312, pi and DeepSeek Harness (dsh), with the evidence
 below.
 
-Trigger: Terminal-Bench 4.0 on `opensource/deepseek_v4_1_flash` (the DeepSeek V4.1 gateway
-model). Three trials ended mid-task after 23, 45 and 54 rounds because one reply came back empty
+Trigger: Terminal-Bench 4.0 on DeepSeek V4.1 Flash. Three trials ended mid-task after 23, 45
+and 54 rounds because one reply came back empty
 (`end_turn`, nothing in it): `call_model` failed the turn with `llm_empty_response`, and `-p`
 exited 1. The same failure showed in an eval run (`hook_block_adapts` trial 8, on the first
 request).
@@ -183,7 +183,7 @@ tool/empty/text). The request layout then differed (nudge as its own user messag
 step's system note); fixed after review, see below.
 2026-11-01: gates. `make check` green (2606 passed, 60 skipped; coverage 89 %; mypy and lint
 clean; check-docs green). `make parity` 0 mismatches (11 accepted deviations), own-words none.
-`make cluster` 14 passed. Eval (`opensource/deepseek_v4_1_flash`, 9 trials, concurrency 8):
+`make cluster` 14 passed. Eval (DeepSeek V4.1 Flash, 9 trials, concurrency 8):
 overall 0.945 vs baseline 0.953, "no regression"; no trial ended on `llm_empty_response`.
 Moves beyond 0.06: `delegate_parallel_review` 0.00 vs 0.33 (4 timeouts; known-noisy),
 `compaction_resume_edits` 1.00 vs 0.78 (known-noisy), `compaction_continuity` 0.89 vs 1.00

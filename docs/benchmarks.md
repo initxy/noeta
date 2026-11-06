@@ -7,8 +7,8 @@ retries, the adapter, the Docker setup) is
 
 ## Headline
 
-noeta 1.0.0.dev0 at commit `34f8acee` next to Claude Code 2.1.312 on the same model
-(`opensource/deepseek_v4_1_flash`, effort `high`), same tasks, caps and machine, run through
+noeta 1.0 (commit `34f8acee`) next to Claude Code 2.1.312 on the same model
+(DeepSeek V4.1 Flash, effort `high`), same tasks, caps and machine, run through
 [harbor](https://github.com/harbor-framework/harbor) between 2026-10-30 and 2026-11-01:
 
 | Benchmark | noeta | Claude Code | noeta − Claude Code (SE) |
@@ -48,7 +48,7 @@ SWE-rebench run and 42.3 % in another), so read the pooled row.
 - **noeta** is installed into its own virtual environment in each task container and run as
   `noeta -p "<instruction>" --output-format stream-json --verbose --permission-mode
   bypassPermissions --cwd "$(pwd)" --model <id> --effort <e>`, with a models file giving the
-  gateway model's real limits.
+  model's real limits.
 - **The request each agent sends** was recorded once through a local proxy: the same
   `max_tokens` (65536), `thinking` (`adaptive`), `output_config.effort` (`high`),
   `context_management`; neither sends `temperature` or `top_p`. noeta makes one extra call,
@@ -107,7 +107,7 @@ them.
 
 ### A larger private model (20 SWE-rebench tasks)
 
-A larger private gateway model (1M window, 128K output cap for both), 20 tasks drawn with
+A larger private model (1M window, 128K output cap for both), 20 tasks drawn with
 seed 0, one at a time, 50-minute cap:
 
 | Run | Agent (noeta commit) | Passed | 50-min timeouts |
@@ -177,9 +177,12 @@ NOETA_EFFORT=high bench/run_benchmark.sh tb4-full
 bench/summarize.py --dataset bench/datasets/terminal-bench-2-1 bench/jobs/<job>
 ```
 
-Pin the effort anyway: unset, a request carries the model row's default effort (`high` for a
+Give the model as `--model <model-id>` to `compare.py` or `NOETA_MODEL=<model-id>` to
+`run_benchmark.sh`, using whatever id your provider or gateway gives DeepSeek V4.1 Flash; the
+built-in default is the id these runs used and is unlikely to exist elsewhere. Pin the effort
+too: unset, a request carries the model row's default effort (`high` for a
 model whose row names none), and DeepSeek V4.1 refuses `medium`. A
-gateway model id the catalog does not know needs a models file
+model id the catalog does not know needs a models file
 (`NOETA_MODELS_CONFIG`, or `NOETA_MODEL_CONTEXT_WINDOW` and `NOETA_MODEL_MAX_OUTPUT_TOKENS`
 for the adapter to write one), or it runs at 128K / 16K. Restricted networks, Docker cleanup,
 gateway concurrency and pinning a SWE-bench subset are covered in
