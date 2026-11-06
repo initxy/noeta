@@ -5,18 +5,10 @@
 
 ## 1. 安装
 
-需要 Python 3.11 或更新版本，以及 [uv](https://docs.astral.sh/uv/)。`noeta` 1.0.0rc1 已经作为预发布版
-上了 PyPI，只用 `-p`、服务端或 Python SDK 的话，这样装就够了：
+需要 Python 3.11 或更新版本，以及 [uv](https://docs.astral.sh/uv/)。从 PyPI 装 `noeta`，连同终端界面：
 
 ```bash
-uv tool install --prerelease=allow noeta      # 或者：pip install --pre noeta
-```
-
-终端界面（`noeta-tui`）还没上 PyPI。想要带终端界面的 `noeta` 命令，就两个都从仓库装：
-
-```bash
-uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta @ git+https://github.com/initxy/noeta'
+uv tool install 'noeta[tui]'      # 或者：pip install 'noeta[tui]'
 ```
 
 或者从本地仓库装：
@@ -28,8 +20,9 @@ uv tool install '.[tui]'
 
 装完跑一下 `noeta --version` 确认。
 
-终端界面是单独的包 `noeta-tui`（在 `tui/` 下）。不装它，`noeta` 照样能跑 `-p`、`serve`、
-`worker`、`acp`，直接敲 `noeta` 时会告诉你怎么补装。其他可选组件：
+终端界面是单独的包 `noeta-tui`（在 `tui/` 下），和 noeta 一起发布，版本号永远相同，`tui` 这个
+extra 会装上对应的版本。不装它，`noeta` 照样能跑 `-p`、`serve`、`worker`、`acp`，直接敲 `noeta`
+时会告诉你怎么补装。其他可选组件：
 
 | 组件（extra） | 用途 |
 |---|---|
@@ -39,7 +32,7 @@ uv tool install '.[tui]'
 | `postgres` | Postgres 存储，多台 worker 时用 |
 | `keyring` | 配置里的 `{keyring:service/user}` 密钥引用 |
 
-一次装多个：`uv tool install 'noeta[acp,server,postgres] @ git+https://github.com/initxy/noeta'`。
+一次装多个：`uv tool install 'noeta[tui,acp,server,postgres]'`。
 注意 `uv tool install --reinstall` 只保留这次写出来的 extra 和 `--with` 包，所以每次都要写全。
 某个命令缺组件时，noeta 会说缺哪个，并打印安装命令。
 

@@ -99,8 +99,7 @@ stdout, so Zed, JetBrains IDEs, Neovim and other ACP clients can run noeta as th
 needs the `acp` extra:
 
 ```bash
-uv tool install --reinstall --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta[acp] @ git+https://github.com/initxy/noeta'
+uv tool install --reinstall 'noeta[tui,acp]'
 ```
 
 In Zed, add it to `settings.json`:

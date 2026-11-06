@@ -26,7 +26,7 @@ One tool plus an event handler, from nothing:
 
 | Step | noeta | pi |
 |---|---|---|
-| 1. install | `uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' 'noeta @ git+https://github.com/initxy/noeta'` | `npm install -g @earendil-works/pi-coding-agent` |
+| 1. install | `uv tool install 'noeta[tui]'` | `npm install -g @earendil-works/pi-coding-agent` |
 | 2. model key | `NOETA_API_KEY` / `ANTHROPIC_API_KEY`, or `api_key` in `config.toml` | `/login`, or a provider key variable |
 | 3. write one file | `~/.noeta/plugins/x.py`: an `Extension` with `add_to = ("main",)`, one `from noeta import …` line | `~/.pi/agent/extensions/x.ts` |
 | 4. run it | `noeta`, or `/reload-plugins` in a running one | `pi`, or `/reload` |

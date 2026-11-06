@@ -7,6 +7,25 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-05
+
+The first stable 1.0 release. The terminal UI is on PyPI too: `noeta` and `noeta-tui` are
+released together, always at the same version, so `uv tool install 'noeta[tui]'` (or
+`pip install 'noeta[tui]'`) is the whole install.
+
+### Changed
+
+- **`noeta-tui` is published with `noeta`.** The release workflow builds both, checks that
+  both wheels carry the tag's version and install together, then publishes both. The `tui`
+  extra pins `noeta-tui` to noeta's own version and `noeta-tui` pins `noeta` back; a test keeps
+  the two `pyproject.toml` files in step.
+- **Install hints name PyPI.** A missing extra or terminal UI now prints
+  `uv tool install --reinstall 'noeta[<extra>]'` / `pip install 'noeta[<extra>]'` instead of a
+  `git+https` requirement.
+- **Docs install from PyPI.** README, the quickstart and the terminal, server, front-ends and
+  plugins guides use `noeta[...]` instead of `git+https` lines. The package's Documentation
+  link is the docs site.
+
 ## [1.0.0rc1] - 2026-11-05
 
 The first 1.0 release candidate, published as `noeta` (the 0.x packages were `noeta-runtime`

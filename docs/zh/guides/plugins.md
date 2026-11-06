@@ -200,9 +200,7 @@ hello = "noeta_hello:Hello"
 用 `uv tool install` 装的 noeta，用 `--with` 把包装进同一个环境：
 
 ```sh
-uv tool install --reinstall --with ./noeta-hello \
-  --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta @ git+https://github.com/initxy/noeta'
+uv tool install --reinstall --with ./noeta-hello 'noeta[tui]'
 ```
 
 重装会丢掉上次装时带的 `--with` 和 extras，所以要全部重新写上。

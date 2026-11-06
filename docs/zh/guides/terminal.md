@@ -4,11 +4,10 @@
 
 ## 安装和启动
 
-终端界面是单独的包 `noeta-tui`（在仓库的 `tui/` 里），noeta 通过入口点组 `noeta.frontends` 里名叫 `tui` 的条目找到它。和 noeta 一起装：
+终端界面是单独的包 `noeta-tui`（在仓库的 `tui/` 里），noeta 通过入口点组 `noeta.frontends` 里名叫 `tui` 的条目找到它。它和 noeta 一起发布、版本号相同，装 `tui` 这个 extra 就会带上：
 
 ```bash
-uv tool install --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta @ git+https://github.com/initxy/noeta'
+uv tool install 'noeta[tui]'      # 或者：pip install 'noeta[tui]'
 # 从源码目录装：  uv tool install '.[tui]'
 ```
 

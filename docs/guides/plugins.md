@@ -254,9 +254,7 @@ never changes your agents by being installed. Name it where you want it, in an a
 With `uv tool install`, a package goes into noeta's environment with `--with`:
 
 ```sh
-uv tool install --reinstall --with ./noeta-hello \
-  --with 'noeta-tui @ git+https://github.com/initxy/noeta#subdirectory=tui' \
-  'noeta @ git+https://github.com/initxy/noeta'
+uv tool install --reinstall --with ./noeta-hello 'noeta[tui]'
 ```
 
 A reinstall drops whatever `--with` and extras the last install had, so name them all again.
