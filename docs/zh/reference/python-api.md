@@ -124,7 +124,7 @@
 |---|---|
 | `agents` | `Agent` 列表 |
 | `provider` | 一个 `Provider`，或 `模型 -> Provider` 函数 |
-| `own_tasks_only` | 只服务自己创建或接手的任务树 |
+| `own_tasks_only` | 只服务自己创建或接手的任务树；新任务建在 `front-end` 队列上 |
 | `task_config` | 垫在每个新任务配置下面（`prompts` 按键合并） |
 | `channels` | 启动后一起运行的渠道（`Channel`） |
 | `**runtime_kw` | 传给 `Runtime`（`spill_root` 默认是系统临时目录下的 `noeta-<uid>/tool-results`；`poll_interval` 默认 0.2，客户端也按这个间隔轮询；调用方自己传的值优先） |

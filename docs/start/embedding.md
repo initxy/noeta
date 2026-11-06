@@ -228,7 +228,9 @@ what `noeta worker` does.
 The same store can be served by `noeta worker` processes on other machines at the same time;
 any of them continues any task ([Many machines](../how-it-works/many-machines.md)). A
 `LocalApp(…, own_tasks_only=True)` serves only the task trees it created or adopted, which is
-how the front ends share `~/.noeta/tasks.db` without picking up each other's tasks.
+how the front ends share `~/.noeta/tasks.db` without picking up each other's tasks. It creates
+them on the `front-end` queue, which `noeta serve` and `noeta worker` don't take (unless told
+to with `--queue`), so such a task runs only in a front end that has it open.
 
 ## Connecting to an existing store or server
 
