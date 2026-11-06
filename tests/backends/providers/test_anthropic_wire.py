@@ -273,7 +273,7 @@ async def test_output_cap_and_effort_default_to_claude_codes_catalog(
     ("claude-opus-5-5", True), ("claude-opus-5-5[1m]", True),
     ("us.anthropic.claude-sonnet-5-5-v1:0", True), ("claude-haiku-5-5", True),
     ("claude-fable-5-1", True), ("claude-opus-5", False), ("claude-sonnet-4-6", False),
-    ("auto_model/alwaysday1_max", False), ("gpt-5.4", False)])
+    ("gateway/other-model", False), ("gpt-5.4", False)])
 async def test_the_per_turn_beta_goes_only_with_models_that_have_per_turn_effort(
         model: str, sent: bool) -> None:
     from noeta.backends.providers.anthropic import DEFAULT_BETAS, PER_TURN_BETA

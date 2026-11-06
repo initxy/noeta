@@ -362,7 +362,7 @@ def test_the_fast_classifier_switches_thinking_off_only_on_a_known_model() -> No
                                     stage=1, fast=fast).thinking
 
     assert thinking(c.FAST_MODEL, True) is False
-    assert thinking("opensource/deepseek_v4_1_flash", True) is None
+    assert thinking("gateway/deepseek-v4.1-flash", True) is None
     assert thinking(c.FAST_MODEL, False) is None
 
 

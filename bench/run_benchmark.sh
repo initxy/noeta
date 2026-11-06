@@ -33,7 +33,7 @@
 #   swe-subset      SWE-bench Verified, SWE_INCLUDE_GLOBS or first-N
 #
 # ── Knobs (all optional; env vars) ────────────────────────────────────────────
-#   NOETA_MODEL       model id passed to -m  (default: opensource/deepseek_v4_1_flash)
+#   NOETA_MODEL       model id passed to -m  (default: deepseek-v4.1-flash; use your provider's id)
 #   NOETA_EFFORT      reasoning effort, passed as harbor's --effort
 #                     (default: high; DeepSeek V4.1 takes low|high|xhigh|max)
 #   NOETA_CONCURRENCY --n-concurrent                  (default: 3)
@@ -79,7 +79,7 @@ export HARBOR_TELEMETRY=0
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 export PYTHONDONTWRITEBYTECODE=1
 
-MODEL="${NOETA_MODEL:-opensource/deepseek_v4_1_flash}"
+MODEL="${NOETA_MODEL:-deepseek-v4.1-flash}"
 EFFORT="${NOETA_EFFORT:-high}"
 AGENT="bench.harbor_adapter:Noeta"
 CONCURRENCY="${NOETA_CONCURRENCY:-3}"
@@ -121,9 +121,13 @@ fi
 if [ -z "${NOETA_MODELS_CONFIG:-}" ] && [ -f "${REPO_ROOT}/models.json" ]; then
   export NOETA_MODELS_CONFIG="${REPO_ROOT}/models.json"
 fi
-if [ -z "${NOETA_MODELS_CONFIG:-}" ] && [ "${MODEL}" = "opensource/deepseek_v4_1_flash" ]; then
-  export NOETA_MODEL_CONTEXT_WINDOW="${NOETA_MODEL_CONTEXT_WINDOW:-1000000}"
-  export NOETA_MODEL_MAX_OUTPUT_TOKENS="${NOETA_MODEL_MAX_OUTPUT_TOKENS:-65536}"
+if [ -z "${NOETA_MODELS_CONFIG:-}" ]; then
+  case "${MODEL}" in
+    *deepseek*v4*1*flash*)
+      export NOETA_MODEL_CONTEXT_WINDOW="${NOETA_MODEL_CONTEXT_WINDOW:-1000000}"
+      export NOETA_MODEL_MAX_OUTPUT_TOKENS="${NOETA_MODEL_MAX_OUTPUT_TOKENS:-65536}"
+      ;;
+  esac
 fi
 # pip inside the sandbox needs a container-reachable proxy on a restricted
 # network: default to the one the Docker client hands containers.

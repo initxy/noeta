@@ -1,7 +1,7 @@
 {
   "recorded": "2026-10-30T08:29:35Z",
   "git": "bc170424",
-  "model": "opensource/deepseek_v4_1_flash",
+  "model": "deepseek-v4.1-flash",
   "provider": "anthropic",
   "trials": 9,
   "tolerance": {

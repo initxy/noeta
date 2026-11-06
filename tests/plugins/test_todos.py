@@ -79,7 +79,7 @@ def _view(model: str, parent: str | None = None) -> TaskView:
     ("claude-opus-4-0", True), ("anthropic.claude-opus-4-20250514-v1:0", True),
     ("us.anthropic.claude-sonnet-4-6", True), ("eu.anthropic.claude-haiku-4-5-20251001-v1:0", True),
     ("arn:aws:bedrock:us-east-1:1:application-inference-profile/x", True),
-    ("opensource/deepseek_v4_1_flash", False), ("gpt-5.5", False), ("deepseek-chat", False),
+    ("gateway/deepseek-v4.1-flash", False), ("gpt-5.5", False), ("deepseek-chat", False),
     ("claude-opus-5-5", False), ("opus", False), ("sonnet", False), ("claude-fable-5-1", False),
     ("claude-haiku-5-5", False), ("claude-opus-4-8", False), ("claude-sonnet-5", False)])
 def test_the_models_claude_code_gives_the_tools(model: str, gets: bool) -> None:

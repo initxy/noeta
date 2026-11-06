@@ -97,8 +97,8 @@ e2e:
 
 ## prompt-regression eval against a real model (opt-in, never in check);
 ## exits 1 when a scenario falls below evals/baseline.json by more than its tolerance
-## the model the baseline is recorded on
-EVAL_MODEL ?= opensource/deepseek_v4_1_flash
+## the model the baseline is recorded on (DeepSeek V4.1 Flash; pass your provider's id)
+EVAL_MODEL ?= deepseek-v4.1-flash
 eval:
 	uv run python -m evals --model $(EVAL_MODEL)
 

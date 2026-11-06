@@ -600,7 +600,7 @@ async def test_a_model_claude_code_tells_no_budget_gets_no_budget(tmp_path: Path
     ("us.anthropic.claude-opus-5-5-v1:0", True), ("anthropic/claude-opus-5-5", True),
     ("claude-opus-5-5-20260101", True), ("CLAUDE-OPUS-5-5", True),
     ("claude-opus-4-1", True), ("claude-3-5-haiku", True), ("claude-sonnet-4-20250514", True),
-    ("auto_model/alwaysday1_max", False), ("opensource/deepseek_v4_1_flash", False),
+    ("gateway/other-model", False), ("gateway/deepseek-v4.1-flash", False),
     ("claude-foo-9", False), ("claude-opus-9", False), ("claude-3-opus", False),
 ])
 def test_the_budget_goes_to_the_models_claude_code_knows(model: str, told: bool) -> None:

@@ -61,7 +61,8 @@ DATASETS = {
     # The cheap loop: short tasks, for smoke and gateway-concurrency probes.
     "tb21": ("terminal-bench/terminal-bench-2-1", []),
 }
-DEFAULT_MODEL = "opensource/deepseek_v4_1_flash"
+# DeepSeek V4.1 Flash, under whatever id your provider or gateway gives it (NOETA_MODEL).
+DEFAULT_MODEL = os.environ.get("NOETA_MODEL", "deepseek-v4.1-flash")
 # Model limits: noeta's manifest and Claude Code's context / output caps.
 MODEL_LIMITS = {DEFAULT_MODEL: (1_000_000, 65_536)}
 CLAUDE_CODE_VERSION = "2.1.312"

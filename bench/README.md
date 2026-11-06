@@ -12,13 +12,12 @@ the same model. Current targets:
 
 The reference agent is harbor's built-in `claude-code` agent pinned to Claude
 Code **2.1.312**; the model is DeepSeek V4.1 Flash through an Anthropic
-Messages endpoint, effort `high`, for both agents. Pass the model as
-`--model <model-id>` (`compare.py`) or `NOETA_MODEL=<model-id>`
-(`run_benchmark.sh`), where `<model-id>` is whatever id your provider or
-gateway uses for DeepSeek V4.1 Flash. The scripts' built-in default is the id
-the 2026-10 runs used; `compare.py` keys its price table and the 1M / 64K
-limits on that id, so with another id give the limits through a models file
-(below) and expect no cost estimate.
+Messages endpoint, effort `high`, for both agents. Set
+`NOETA_MODEL=<model-id>` to whatever id your provider or gateway uses for
+DeepSeek V4.1 Flash (default `deepseek-v4.1-flash`); `compare.py --model`
+overrides it per run. `compare.py` prices and sizes (1M context, 64K output)
+the model `NOETA_MODEL` names, so for any other model give the limits through a
+models file (below) and expect no cost estimate.
 
 ## Why these benchmarks (checked 2026-11-03, again 2026-11-04)
 
