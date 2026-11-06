@@ -25,6 +25,11 @@ All notable changes to Noeta are documented here. The format is based on
   a live worktree.
 - **`noeta serve` / `noeta worker` no longer pick up tasks created by the terminal UI, `-p` or
   ACP** on the same store; those go to a `front-end` queue that only their own front end runs.
+  When someone acts on such a session through the server (a message, an answer, a cancel, a
+  rewind) and no front end holds it, the server takes it over (`Store.requeue`, a new required
+  store method); a front end that holds it keeps it.
+- **`/rewind` works with `noeta --server` and over ACP to a server**: `AppAPI.rewind` goes
+  through the server's rewind endpoint instead of creating the task with server-only config.
 - **Children started with `&` in a foreground Bash call stay alive** after the call returns.
 - **Remote MCP requests use the call's own timeout**, not httpx's 5 seconds.
 - **One bad file in a plugin** (bad encoding, broken link, wrong-typed JSON) is skipped with a
