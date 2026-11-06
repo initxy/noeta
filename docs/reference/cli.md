@@ -87,7 +87,7 @@ mode is on with `-p`, with `--input-format stream-json`, or with any `--output-f
 | Flag | Meaning |
 |---|---|
 | `-p`, `--print` | run the prompt without the UI and print the result |
-| `prompt` | the prompt; with `-p` and none given, read from stdin |
+| `prompt` | the prompt; with `-p` it is read from stdin when none is given, and what is piped on stdin goes on a line after it when one is |
 | `--output-format {text,json,stream-json}` | `text` (default): the answer; `json`: one result object; `stream-json`: one JSON message per line (needs `--verbose`) |
 | `--input-format {text,stream-json}` | `stream-json`: read user messages and control requests from stdin, one JSON object per line (needs `--output-format stream-json`) |
 | `--include-partial-messages` | also emit `stream_event` messages as the model streams |

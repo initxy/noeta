@@ -187,3 +187,33 @@ def test_stream_json_input_reads_a_regular_file_on_stdin(tmp_path: Path) -> None
     out = [json.loads(x) for x in done.stdout.splitlines()]
     [response] = [x for x in out if x["type"] == "control_response"]
     assert response["response"]["request_id"] == "r1"
+
+
+def _piped(monkeypatch: pytest.MonkeyPatch, data: str | None) -> None:
+    """stdin as a pipe holding ``data`` and closed (``None``: left open, silent)."""
+    read, write = os.pipe()
+    if data is not None:
+        os.write(write, data.encode())
+        os.close(write)
+    monkeypatch.setattr(sys, "stdin", os.fdopen(read, "r"))
+
+
+def test_a_prompt_and_piped_stdin_are_joined(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``git diff | noeta -p "review this diff"``: the prompt, then the diff
+    (Claude Code's order)."""
+    _piped(monkeypatch, "diff --git a/x b/x\n")
+    assert headless._prompt_text(_parse()) == "go\ndiff --git a/x b/x\n"
+    _piped(monkeypatch, "")
+    assert headless._prompt_text(_parse()) == "go"
+    _piped(monkeypatch, "only stdin\n")
+    args = _parse()
+    args.prompt = None
+    assert headless._prompt_text(args) == "only stdin\n"
+
+
+def test_a_silent_open_stdin_does_not_hang_a_prompt(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    _piped(monkeypatch, None)
+    monkeypatch.setattr(headless, "STDIN_WAIT", 0.05)
+    assert headless._prompt_text(_parse()) == "go"
+    assert "no stdin data received" in capsys.readouterr().err

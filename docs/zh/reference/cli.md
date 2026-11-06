@@ -82,7 +82,7 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 | 参数 | 含义 |
 |---|---|
 | `-p`、`--print` | 不开界面，跑提示词并打印结果 |
-| `prompt` | 提示词；带 `-p` 又没给时从标准输入读 |
+| `prompt` | 提示词；带 `-p` 时，没给就从标准输入读，给了的话标准输入里管道送进来的内容另起一行接在后面 |
 | `--output-format {text,json,stream-json}` | `text`（默认）：只打印回答；`json`：一个结果对象；`stream-json`：每行一条 JSON 消息（需要 `--verbose`） |
 | `--input-format {text,stream-json}` | `stream-json`：从标准输入按行读用户消息和控制请求（需要 `--output-format stream-json`） |
 | `--include-partial-messages` | 模型生成过程中也输出 `stream_event` 消息 |

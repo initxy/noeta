@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import json
 import os
+import select
 import stat
 import sys
 from collections.abc import AsyncIterator
@@ -43,6 +44,8 @@ IGNORED_FLAGS = ("--include-hook-events", "--no-session-persistence",
                  "--session-mirror", "--bare", "--allow-dangerously-skip-permissions",
                  "--exclude-dynamic-system-prompt-sections", "--forward-subagent-text",
                  "--disable-slash-commands")
+#: Seconds ``-p "prompt"`` waits for piped stdin to start (Claude Code's).
+STDIN_WAIT = 3.0
 #: The short spellings of ignored flags.
 _IGNORED_SHORT = {"--debug": ("-d",)}
 
@@ -280,10 +283,28 @@ def agent_files(args: argparse.Namespace) -> list[AgentFile]:
 
 
 def _prompt_text(args: argparse.Namespace) -> str | None:
-    if args.prompt is not None:
-        return str(args.prompt)
+    """The prompt argument, then what is piped on stdin, one line apart
+    (``git diff | noeta -p "review this"``), as Claude Code joins them."""
     if args.input_format == "stream-json" or sys.stdin.isatty():
-        return None
+        return None if args.prompt is None else str(args.prompt)
+    if args.prompt is None:
+        return sys.stdin.read()
+    return "\n".join(x for x in (str(args.prompt), _piped_stdin()) if x)
+
+
+def _piped_stdin() -> str:
+    """stdin read to its end once something comes within :data:`STDIN_WAIT`,
+    else ``""``: a launcher that leaves stdin open and silent does not hang
+    a run that has its prompt (Claude Code waits as long)."""
+    try:
+        ready = select.select([sys.stdin], [], [], STDIN_WAIT)[0]
+    except (OSError, ValueError):
+        # Not something to wait on (a Windows pipe, a replaced stdin).
+        return ""
+    if not ready:
+        print(f"noeta: no stdin data received in {STDIN_WAIT:g}s, proceeding without it "
+              "(redirect stdin from /dev/null to skip the wait)", file=sys.stderr)
+        return ""
     return sys.stdin.read()
 
 
