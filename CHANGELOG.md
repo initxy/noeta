@@ -7,6 +7,45 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Compaction stops instead of looping.** When what survives a compaction already overflows
+  the window, the turn ends with `autocompact_thrashing` after three refills instead of
+  compacting forever; the overflow path and the automatic path share one guard.
+- **Small windows work.** The summary and buffer reserves shrink to half the window when they
+  would take more (windows above ~66K keep Claude Code's numbers), so a 32K model no longer
+  fails every turn. The error now says what didn't fit.
+- **A reply stopped after only whitespace** no longer leaves an empty assistant turn that made
+  every later request fail with 400; old logs that hold one replay without it.
+- **Read shrinks PDF pages** to the image limits, so reading many slide pages is not rejected.
+- **Approvals from later workflow stages show up** in the terminal UI, ACP, stream-json and the
+  web.
+- **A continued task (fork, /rewind, `--fork-session`) no longer inherits its source's
+  sub-agents**, which had made them look forever running, blocked new agents and could delete
+  a live worktree.
+- **`noeta serve` / `noeta worker` no longer pick up tasks created by the terminal UI, `-p` or
+  ACP** on the same store; those go to a `front-end` queue that only their own front end runs.
+- **Children started with `&` in a foreground Bash call stay alive** after the call returns.
+- **Remote MCP requests use the call's own timeout**, not httpx's 5 seconds.
+- **One bad file in a plugin** (bad encoding, broken link, wrong-typed JSON) is skipped with a
+  warning instead of stopping every entry point.
+- **The terminal UI honours `--settings`, `--add-dir`, `--mcp-config`, `--agents`,
+  `--allowedTools`, `--disallowedTools` and `--dangerously-skip-permissions`**; `-p`-only flags
+  are reported as ignored, and `--server` rejects flags that only shape a local task.
+- **Sandbox `denyRead` keeps a denied directory that contains a writable one** and re-binds the
+  writable directory inside it (the Python install is re-bound read-only so the sandbox starts).
+- **The terminal UI**: a reopened task shows answered approvals as history instead of live
+  cards that ate the next input; control sequences in tool output and model text are stripped
+  before they reach the terminal; text with `[/…]`, non-UTF-8 `!` output and server errors
+  (409, 403, connection) show a message instead of exiting; `/resume` lists every session,
+  however many sub-agents there are (`Store.tasks(roots_only=True)`, `GET /tasks?roots_only`).
+- **Frontmatter with CRLF line endings or a BOM** is read correctly everywhere (one parser in
+  `noeta/toolkit/frontmatter.py`); a rules file no longer loses its `paths:`.
+- **`git diff | noeta -p "review this diff"`** appends piped stdin to the prompt, as Claude Code
+  does.
+- Docs: what leaving the sandbox does in auto and bypass, the absolute sqlite URL in the
+  embedding guide.
+
 ## [1.0.4] - 2026-11-05
 
 ### Fixed
