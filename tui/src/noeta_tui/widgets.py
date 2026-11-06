@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from rich.markup import escape
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -17,6 +16,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Input, Markdown, Static, TextArea
 
+from noeta.core.events import Answer
 from noeta.core.types import ToolUse
 from noeta.toolkit.commands import parse_command_message
 from noeta_tui import render
@@ -31,11 +31,25 @@ class UserMessage(Static):
         self.text = text
         out = Text().append(f"{marker} ", style=f"bold {render.BASH}" if marker == "!" else "dim")
         typed = parse_command_message(text)  # a prompt command reads as it was typed
-        out.append(f"/{typed[0]} {typed[1]}".rstrip() if typed else text)
+        out.append(render.clean(f"/{typed[0]} {typed[1]}".rstrip() if typed else text))
         super().__init__(out)
 
 
-class AssistantMessage(Markdown):
+class CleanMarkdown(Markdown):
+    """Markdown of what a task recorded (the model's reply, a plugin's
+    notice), shown without the control sequences in it."""
+
+    def __init__(self, markdown: str | None = None, **kw: Any) -> None:
+        super().__init__(render.clean(markdown) if markdown else markdown, **kw)
+
+    def update(self, markdown: str) -> Any:
+        return super().update(render.clean(markdown))
+
+    def append(self, markdown: str) -> Any:
+        return super().append(render.clean(markdown))
+
+
+class AssistantMessage(CleanMarkdown):
     DEFAULT_CLASSES = "assistant-message"
 
 
@@ -46,7 +60,13 @@ def bulleted(widget: Any, *, classes: str = "") -> Horizontal:
 
 
 class Notice(Static):
+    """A line in the transcript; a string is shown as it is (never read as
+    markup: it may carry a provider's error or a hook's output)."""
+
     DEFAULT_CLASSES = "notice"
+
+    def __init__(self, content: Any = "", **kw: Any) -> None:
+        super().__init__(render.plain(content) if isinstance(content, str) else content, **kw)
 
 
 class Welcome(Horizontal):
@@ -114,7 +134,7 @@ class ThinkingBlock(Static):
                 out.append(" (ctrl+o to show)", style="dim")
         if self.expanded and self.text.strip():
             out.append("\n")
-            out.append(self.text.strip(), style="dim italic")
+            out.append(render.clean(self.text.strip()), style="dim italic")
         self.update(out)
 
 
@@ -213,7 +233,8 @@ class ToolCall(Vertical):
     async def set_note(self, note: str) -> None:
         """What the person added to their yes, under the result, as the
         model reads it beside the result."""
-        await self.mount(Static(render.Hanging(Text.assemble(("  ⎿  ", "dim"), note)),
+        await self.mount(Static(render.Hanging(Text.assemble(("  ⎿  ", "dim"),
+                                                             render.clean(note))),
                                 classes="tool-note"))
 
     def set_expanded(self, expanded: bool) -> None:
@@ -347,9 +368,10 @@ class Choices(Static, can_focus=True):
             here = n == self.index
             out.append("\n" if n else "")
             out.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
-            out.append(f"{n + 1}. {option.label}", style=f"bold {render.ACCENT}" if here else "")
+            out.append(f"{n + 1}. {render.clean(option.label)}",
+                       style=f"bold {render.ACCENT}" if here else "")
             if option.detail:
-                out.append(f"  {option.detail}", style="dim")
+                out.append(f"  {render.clean(option.detail)}", style="dim")
         return out
 
     def action_move(self, step: int) -> None:
@@ -427,9 +449,9 @@ class ApprovalCard(Vertical):
         self.amending = ""
 
     def compose(self) -> ComposeResult:
-        yield Static(Text(self.title_text, style="bold"), classes="approval-title")
+        yield Static(render.plain(self.title_text, "bold"), classes="approval-title")
         if self.prompt and self.prompt != self.title_text:
-            yield Static(Text(self.prompt), classes="approval-prompt")
+            yield Static(render.plain(self.prompt), classes="approval-prompt")
         if self.preview is not None:
             yield Static(self.preview, classes="approval-diff")
         yield Static("Do you want to proceed?", classes="approval-question")
@@ -486,10 +508,34 @@ class ApprovalCard(Vertical):
             return
         self.done = True
         await self.decide(self.call_id, choice, message)
+        await self._decided(picked["label"] + (f": {message}" if message else ""))
+
+    async def close(self, said: str) -> bool:
+        """The request is no longer open (answered elsewhere, or its turn
+        moved on): the card stays as history, its choices gone. Whether
+        they had the focus."""
+        if self.done:
+            return False
+        self.done = True
+        focused = any(w.has_focus for w in self.query("Choices, Input"))
+        await self._decided(said)
+        return focused
+
+    async def _decided(self, said: str) -> None:
         await self.query(".hint, Choices, Input").remove()
-        said = f": {message}" if message else ""
-        await self.mount(Static(render.Hanging(Text(f"  ⎿  {picked['label']}{said}",
-                                                    style="dim")), classes="approval-result"))
+        await self.mount(Static(render.Hanging(render.plain(f"  ⎿  {said}", "dim")),
+                                classes="approval-result"))
+
+    def label(self, answer: Answer | None) -> str:
+        """What the card says of ``answer`` (``None``: there was none)."""
+        if answer is None:
+            return "Not answered"
+        data = answer.data if isinstance(answer.data, dict) else {}
+        choice = "deny" if answer.decision == "deny" else "always" if answer.always \
+            else f"mode:{data['mode']}" if data.get("mode") else "allow"
+        found = next((o["label"] for o in self.options if o["id"] == choice),
+                     "No" if choice == "deny" else "Yes")
+        return found + (f": {data['message']}" if data.get("message") else "")
 
 
 class Picker(Vertical):
@@ -509,7 +555,7 @@ class Picker(Vertical):
         self.index = index
 
     def compose(self) -> ComposeResult:
-        yield Static(Text(self.title_text, style="bold"), classes="picker-title")
+        yield Static(render.plain(self.title_text, "bold"), classes="picker-title")
         yield Choices(self.options, self._picked, index=self.index)
         yield Static(self.hint, classes="hint")
 
@@ -533,19 +579,20 @@ class QuestionCard(Vertical):
         self.who = who
 
     def compose(self) -> ComposeResult:
-        asker = escape(f"[{self.who}]") if self.who else "The agent"
-        yield Static(f"[b]{asker} asks[/b] [dim](type a number, a label or your own answer; "
-                     "one line per question)[/dim]")
+        asker = render.plain(f"[{self.who}]" if self.who else "The agent", "bold")
+        yield Static(Text.assemble(asker, (" asks", "bold"),
+                                   (" (type a number, a label or your own answer; "
+                                    "one line per question)", "dim")))
         questions = self.detail.get("questions") or []
         if not questions:
-            yield Static(json.dumps(self.detail, ensure_ascii=False, indent=2))
+            yield Static(render.plain(json.dumps(self.detail, ensure_ascii=False, indent=2)))
         for q in questions:
-            yield Static(Text(f"☐ {q.get('header') or ''} {q.get('question', '')}".strip(),
-                              style="bold"))
+            yield Static(render.plain(f"☐ {q.get('header') or ''} {q.get('question', '')}".strip(),
+                                      "bold"))
             for n, opt in enumerate(q.get("options") or [], 1):
-                line = Text(f"  {n}. {opt.get('label', '')}")
+                line = render.plain(f"  {n}. {opt.get('label', '')}")
                 if opt.get("description"):
-                    line.append(f"  {opt['description']}", style="dim")
+                    line.append(render.clean(f"  {opt['description']}"), style="dim")
                 yield Static(line, classes="question-option")
 
 
@@ -590,10 +637,11 @@ class Completions(Static):
         for n, (_, label, description) in enumerate(self.items[start:start + self.ROWS], start):
             here = n == self.index
             out.append("\n" if n > start else "")
+            label = render.clean(label)
             shown = label if len(label) <= 32 else label[:31] + "…"
             out.append(("❯ " if here else "  ") + shown.ljust(width),
                        style=f"bold {render.ACCENT}" if here else "")
-            out.append(" ".join(description.split()), style="" if here else "dim")
+            out.append(render.clean(" ".join(description.split())), style="" if here else "dim")
         if len(self.items) > self.ROWS:
             out.append(f"  {self.index + 1}/{len(self.items)}", style="dim")
         self.update(out)
