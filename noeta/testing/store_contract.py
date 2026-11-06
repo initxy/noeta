@@ -261,13 +261,14 @@ async def test_releasing_a_kept_wait_leaves_it_waiting(store: Store) -> None:
 async def test_a_kept_wait_with_a_due_timer_is_claimable_only_once_its_lease_runs_out(
         store: Store) -> None:
     await store.create(new())
-    claim = await store.claim("w", ["default"], 0.05)
+    # A lease long enough that a slow store (Postgres on CI) can't outlive it before the check.
+    claim = await store.claim("w", ["default"], 1.0)
     assert claim is not None
     await store.append(claim, [Waiting(on="timer", until=0.0)], expected_seq=1,
                        patch=Patch(status="waiting", waiting_on="timer", ready_at=0.0,
                                    keep=True))
     assert await store.claim("w2", ["default"], 30) is None
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(1.1)
     assert await store.claim("w2", ["default"], 30) is not None
 
 
