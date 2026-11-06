@@ -1,10 +1,13 @@
 Screen { layout: vertical; }
 #body { height: 1fr; }
-#transcript { width: 1fr; padding: 0 1; }
+#transcript { width: 1fr; padding: 0 1; scrollbar-size-vertical: 1; scrollbar-color: $panel-lighten-2; scrollbar-color-hover: $panel-lighten-3; scrollbar-background: $background; scrollbar-background-hover: $background; }
 #side { width: 36; border-left: solid $panel; padding: 0 1; }
 
-.welcome { border: round #d77757; padding: 0 1; margin: 0 0 1 0; width: auto; max-width: 100%; }
-.user-message { margin: 1 0 0 0; padding: 0 1; background: $boost; color: $text-muted; }
+.welcome { border: round $panel-lighten-2; padding: 1 2; margin: 0 0 1 0; width: auto; max-width: 100%; height: auto; }
+.welcome-logo { width: auto; padding: 0 3 0 0; }
+.welcome-info { width: auto; }
+.user-message { margin: 1 0 0 0; padding: 0 1; background: $boost; }
+.thinking { margin: 1 0 0 2; height: auto; }
 .row { height: auto; margin: 1 0 0 0; }
 .bullet { width: 2; }
 .assistant-message { width: 1fr; margin: 0; padding: 0; }
@@ -40,13 +43,15 @@ Screen { layout: vertical; }
 #spinner { height: 1; padding: 0 1; margin: 1 0 0 0; }
 #tasks { height: auto; padding: 0 1; }
 #queued { height: auto; padding: 0 1; }
-#effort { height: 1; padding: 0 1; text-align: right; }
-#prompt-box { height: auto; border-top: solid $panel-lighten-2; border-bottom: solid $panel-lighten-2; }
-#prompt-box.-bash { border-top: solid #fd5db1; border-bottom: solid #fd5db1; }
+#attachments { height: 1; padding: 0 1; }
+#prompt-box { height: auto; border: round $panel-lighten-2; margin: 1 0 0 0; }
+#prompt-box.-bash { border: round #fd5db1; }
+#prompt-box:focus-within { border: round $panel-lighten-3; }
+#prompt-box.-bash:focus-within { border: round #fd5db1; }
 #marker { width: 2; padding: 0 0 0 1; }
 #prompt { height: auto; max-height: 10; min-height: 1; width: 1fr; border: none; background: transparent; }
-#completions { height: auto; padding: 0 1; }
+#completions { height: 8; padding: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }
 #shortcuts { height: auto; padding: 0 1; }
-#footer { height: 1; padding: 0 1; }
-#hints { width: 1fr; }
+#footer { height: 1; padding: 0 2; }
+#hints { width: 1fr; padding: 0 2 0 0; }
 #status { width: auto; }

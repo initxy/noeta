@@ -73,8 +73,10 @@ def test_spinner_footer_and_numbers() -> None:
     line = render.spinner_line(3, "Thinking", 65, 1234).plain
     assert line == "✶ Thinking… (1m 5s · ↓ 1.2k tokens · esc to interrupt)"
     assert render.spinner_line(0, "Working", 2, 0).plain == "· Working… (2s · esc to interrupt)"
-    assert render.mode_hint("acceptEdits").plain == "⏵⏵ accept edits on (shift+tab to cycle)"
-    assert render.mode_hint("plan").plain == "⏸ plan mode on (shift+tab to cycle)"
+    assert render.mode_hint("acceptEdits").plain == "⏵⏵ accept edits on · shift+tab"
+    assert render.mode_hint("plan").plain == "⏸ plan mode on · shift+tab"
+    assert render.spinner_line(0, "Working", 2, 9, thinking=True).plain == \
+        "· Working… (2s · ↓ 9 tokens · thinking · esc to interrupt)"
     assert render.mode_hint("default").plain == "? for shortcuts"
     assert [render.tokens_text(n) for n in (950, 46_800, 1_000_000)] == ["950", "46.8k", "1m"]
     assert render.elapsed_text(3700) == "1h 1m"

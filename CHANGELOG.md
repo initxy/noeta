@@ -7,6 +7,27 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The terminal UI, reworked.** The welcome box shows noeta's mark beside the version, model
+  and directory. Background agents show what they are doing (`Bash(ls)`, `3 tool uses · 1.2k
+  tokens · 12s`) and then how they ended, instead of the launch text written for the model;
+  a `Workflow` call shows its agents per phase and the run's end, not a notice per agent. The
+  model's reasoning streams into a `∴ Thinking…` line (ctrl+o shows it) and counts toward the
+  spinner's tokens. The footer carries the effort, a context bar, the cost and the directory
+  (what does not fit is left out) and how many agents run in the background; ctrl+b lists them.
+  The prompt sits in a box; shift+enter (in terminals that report it) adds a line; dropping
+  several image files attaches them all, listed over the prompt; ctrl+v reads the clipboard's
+  image on macOS without `pngpaste`.
+
+### Fixed
+
+- **The terminal UI's transcript no longer sinks to the bottom** of the screen when the first
+  reply streams in while it is shorter than the screen.
+- **The slash menu keeps one height** and cuts long descriptions to a line, so typing no longer
+  moves the prompt; it takes the footer's place while open.
+- **Wrapped tool output lines up under its text**, not under the `⎿`.
+
 ## [1.0.1] - 2026-11-05
 
 The first stable 1.0 release. The terminal UI is on PyPI too: `noeta` and `noeta-tui` are

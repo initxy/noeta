@@ -7,6 +7,7 @@ from __future__ import annotations
 import mimetypes
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from noeta.core.types import Image, Message, Text
@@ -30,8 +31,8 @@ def attach(text: str, images: list[Image]) -> Message:
 
 
 def clipboard_image() -> Image | None:
-    """The image on the clipboard (``wl-paste``, ``xclip`` or ``pngpaste``),
-    or ``None``."""
+    """The image on the clipboard (``wl-paste``, ``xclip``, ``pngpaste``, or
+    on macOS ``osascript``, which every Mac has), or ``None``."""
     for argv in (["wl-paste", "--type", "image/png"],
                  ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
                  ["pngpaste", "-"]):
@@ -43,4 +44,23 @@ def clipboard_image() -> Image | None:
             continue
         if done.returncode == 0 and done.stdout.startswith(b"\x89PNG"):
             return Image(media_type="image/png", data=done.stdout)
-    return None
+    return _osascript_image()
+
+
+def _osascript_image() -> Image | None:
+    """macOS without ``pngpaste``: AppleScript writes the clipboard's PNG to
+    a file."""
+    if shutil.which("osascript") is None:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp, "clip.png")
+        script = ["-e", "set png to (the clipboard as «class PNGf»)",
+                  "-e", f'set f to open for access POSIX file "{out}" with write permission',
+                  "-e", "write png to f", "-e", "close access f"]
+        try:
+            subprocess.run(["osascript", *script], capture_output=True, timeout=5,
+                           check=False)
+            data = out.read_bytes() if out.is_file() else b""
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return Image(media_type="image/png", data=data) if data.startswith(b"\x89PNG") else None

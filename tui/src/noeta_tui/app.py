@@ -33,7 +33,7 @@ from noeta.toolkit.permission_modes import (
     published_modes,
 )
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from noeta_tui import bash_mode, files, history, mentions, slash
+from noeta_tui import bash_mode, files, history, mentions, render, slash
 from noeta_tui.transcript import SERVER_DIRECTORY, TranscriptView, _short_path
 from noeta_tui.widgets import (
     Completions,
@@ -41,6 +41,7 @@ from noeta_tui.widgets import (
     PromptInput,
     QuestionCard,
     ReadGroup,
+    ThinkingBlock,
     ToolCall,
     UserMessage,
     Welcome,
@@ -51,8 +52,8 @@ log = logging.getLogger("noeta_tui")
 SHORTCUTS = """\
 [dim]! for bash mode        double tap esc to clear input     ctrl + c twice to exit
 / for commands         shift + tab to cycle modes        ctrl + v to paste images
-@ for file paths       ctrl + o for verbose output       ctrl + b for subtasks
-ctrl + r for history   ctrl + t to toggle tasks          \\⏎ or ctrl + j for newline
+@ for file paths       ctrl + o for verbose output       ctrl + b for agents
+ctrl + r for history   ctrl + t to toggle tasks          shift + ⏎ for newline
                        ↑ ↓ for earlier prompts           esc to interrupt[/dim]"""
 
 #: Seconds between two presses of Esc (or Ctrl+C) that count as a double press.
@@ -120,6 +121,13 @@ class NoetaApp(TranscriptView):
         self.calls: dict[str, ToolCall] = {}
         self.stream = None
         self.stream_widget = None
+        self.thinking = None
+        self.thinking_key = (0, 1)
+        self.thinking_now = False
+        self.agents = {}
+        self.workflows = {}
+        #: The names of the images pasted for the next message.
+        self.image_names: list[str] = []
         #: The model call (its ``ModelCalled`` seq) and attempt being streamed.
         self.stream_key = (0, 1)
         #: What was written to the stream so far.
@@ -178,13 +186,13 @@ class NoetaApp(TranscriptView):
         with Horizontal(id="body"):
             yield VerticalScroll(id="transcript")
             with Vertical(id="side"):
-                yield Static("[b]Subtasks[/b]", id="side-title")
+                yield Static("[b]Agents[/b]", id="side-title")
                 yield Static("", id="side-body")
         yield Static("", id="spinner")
         yield Static("", id="tasks")
         yield Static("", id="queued")
         yield Vertical(id="overlay")
-        yield Static("", id="effort")
+        yield Static("", id="attachments")
         with Horizontal(id="prompt-box"):
             yield Static("❯", id="marker")
             yield PromptInput(self.submit, self.add_image, self.prompt_key)
@@ -196,7 +204,7 @@ class NoetaApp(TranscriptView):
 
     async def on_mount(self) -> None:
         for hidden in ("#side", "#spinner", "#tasks", "#queued", "#completions",
-                       "#shortcuts"):
+                       "#shortcuts", "#attachments"):
             self.query_one(hidden).display = False
         await self.local.start()
         self.local.deltas(self._on_delta)
@@ -231,6 +239,9 @@ class NoetaApp(TranscriptView):
             self.query_one(PromptInput).text = prompt
         elif prompt:
             await self.submit(prompt)
+
+    def on_resize(self) -> None:
+        self.call_after_refresh(self.update_status)  # what fits in the footer changed
 
     async def on_unmount(self) -> None:
         await self.local.stop()
@@ -298,6 +309,8 @@ class NoetaApp(TranscriptView):
         self.context_tokens = 0
         self.compacts_at = None
         self.calls.clear()
+        self.agents.clear()
+        self.workflows.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
         self.waiting_for = ""
@@ -314,9 +327,10 @@ class NoetaApp(TranscriptView):
         self.echoed.clear()
         self._show_queued()
         transcript = self.query_one("#transcript")
+        transcript.anchor(False)  # a short transcript anchored sinks to the bottom
         await transcript.remove_children()
         await transcript.mount(Welcome(version=self.start.version, model=self.model,
-                                       cwd=_short_path(self.task_cwd, 1000) or SERVER_DIRECTORY,
+                                       cwd=_short_path(self.task_cwd, 72) or SERVER_DIRECTORY,
                                        task_id=task_id))
         for notice in getattr(self.local, "notices", ()):
             await transcript.mount(Notice(notice))
@@ -353,8 +367,8 @@ class NoetaApp(TranscriptView):
     # ------------------------------------------------------------ input
 
     async def submit(self, text: str) -> None:
-        self.query_one(Completions).hide()
         self.query_one("#shortcuts").display = False
+        self.query_one(Completions).hide()
         if not self.history or self.history[-1] != text:
             self.history.append(text)
             history.append(self._history_file, text)
@@ -376,6 +390,8 @@ class NoetaApp(TranscriptView):
             await self.answer_question(text)
             return
         images, self.images = self.images, []
+        self.image_names = []
+        self._show_attachments()
         context, self.bash_context = self.bash_context, []
         body = "\n\n".join([*context, text]) if context else text
         message = mentions.attach(body, images) if images else body
@@ -445,16 +461,29 @@ class NoetaApp(TranscriptView):
 
     async def add_image(self, image: Image, label: str = "") -> None:
         self.images.append(image)
+        self.image_names.append(label or "image")
         box = self.query_one(PromptInput)
-        box.insert(f"[Image #{len(self.images)}]")
-        await self.say_notice(f"image attached{f' ({label})' if label else ''}; it goes with "
-                              "the next message")
+        box.insert(f"[Image #{len(self.images)}] ")
+        self._show_attachments()
+
+    def _show_attachments(self) -> None:
+        """The images going with the next message, over the prompt."""
+        line = Text()
+        for n, name in enumerate(self.image_names, 1):
+            line.append(f" ▣ Image #{n} ", style=f"bold {render.ACCENT}")
+            line.append(f"{name}   ", style="dim")
+        if self.image_names:
+            line.append("(they go with the next message)", style="dim")
+        box = self.query_one("#attachments", Static)
+        box.update(line)
+        box.display = bool(self.image_names)
 
     async def action_paste_image(self) -> None:
         image = mentions.clipboard_image()
         if image is None:
-            await self.say_notice("no image on the clipboard (needs wl-paste, xclip or "
-                                  "pngpaste)")
+            await self.say_notice("no image on the clipboard (on Linux it needs wl-paste or "
+                                  "xclip; over ssh, drop the image file on the terminal "
+                                  "instead)")
             return
         await self.add_image(image, "clipboard")
 
@@ -511,6 +540,7 @@ class NoetaApp(TranscriptView):
         if key == "question_mark" and not box.text:
             shortcuts = self.query_one("#shortcuts")
             shortcuts.display = not shortcuts.display
+            self._sync_footer()
             return True
         if key in ("up", "down") and self.history:
             row = box.cursor_location[0]
@@ -570,10 +600,16 @@ class NoetaApp(TranscriptView):
         at = start + len(value) + 1
         box.move_cursor((box.text.count("\n", 0, at), at - box.text.rfind("\n", 0, at) - 1))
 
+    def _sync_footer(self) -> None:
+        """The menu and the shortcuts take the footer's place."""
+        covered = self.query_one(Completions).display or self.query_one("#shortcuts").display
+        self.query_one("#footer").display = not covered
+
     @on(TextArea.Changed, "#prompt")
     def _typed(self, event: TextArea.Changed) -> None:
         text = event.text_area.text
         self.query_one("#shortcuts").display = False
+        self._sync_footer()
         if self.searching:
             self._show_search(text)
             return
@@ -642,6 +678,8 @@ class NoetaApp(TranscriptView):
             call.set_expanded(self.verbose)
         for group in self.query(ReadGroup):
             group.set_expanded(self.verbose)
+        for block in self.query(ThinkingBlock):
+            block.set_expanded(self.verbose)
 
     def action_toggle_tasks(self) -> None:
         self.show_tasks = not self.show_tasks
@@ -723,19 +761,28 @@ class NoetaApp(TranscriptView):
 
     @work(exclusive=True, group="side", exit_on_error=False)
     async def _refresh_side(self) -> None:
+        """Ctrl+B's panel: this task's agents, what each is doing or how it
+        ended (the newest first)."""
         while True:
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
             side = self.query_one("#side")
-            if not side.display or not self.task_id:
+            if not side.display:
                 continue
-            try:
-                rows = await self.local.client.tasks(parent_id=self.task_id, limit=50)
-            except Exception:
-                log.exception("listing subtasks failed")
-                continue
-            body = "\n".join(f"{r.status:8} {r.agent} {r.task_id[-12:]}" for r in rows) \
-                or "(none)"
-            self.query_one("#side-body", Static).update(Text(body))
+            out = Text()
+            calls = [c for c in self.query(ToolCall) if c.child is not None]
+            for call in reversed(calls):
+                c = call.child or {}
+                mark, style = {"done": ("✔", "green"), "failed": ("✘", "red"),
+                               "cancelled": ("✘", "red")}.get(c.get("status") or "",
+                                                              ("◼", "#d77757"))
+                out.append(f"{mark} ", style=style)
+                out.append(str(call.call.input.get("description") or "agent") + "\n",
+                           style="bold" if not c.get("status") else "")
+                doing = c.get("last") if not c.get("status") else c.get("status")
+                out.append(f"  {doing or 'starting'} · {c.get('tools', 0)} tools\n\n",
+                           style="dim")
+            self.query_one("#side-body", Static).update(out if calls else Text("(none)",
+                                                                               style="dim"))
 
 
 def first_prompt(events: list[Any]) -> str:

@@ -4,6 +4,7 @@ approval and question cards, pickers, the completion menu and the prompt."""
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -48,20 +49,73 @@ class Notice(Static):
     DEFAULT_CLASSES = "notice"
 
 
-class Welcome(Static):
-    """The box a task opens with (Claude Code's welcome box)."""
+class Welcome(Horizontal):
+    """The box a task opens with: the mark beside the version, a line on
+    where to start, the model and the directory."""
 
     DEFAULT_CLASSES = "welcome"
 
     def __init__(self, *, version: str, model: str, cwd: str, task_id: str) -> None:
+        super().__init__()
         out = Text()
-        out.append("✻ ", style="bold #d77757")
-        out.append("Welcome to noeta", style="bold")
-        out.append(f" {version}" if version else "", style="dim")
-        out.append("\n\n  /help for help, /status for your current setup\n\n", style="dim")
-        out.append(f"  cwd: {cwd}\n  model: {model}" + (f"\n  task: {task_id}" if task_id else ""),
-                   style="dim")
-        super().__init__(out)
+        out.append("noeta", style=f"bold {render.ACCENT}")
+        out.append(f"  v{version}" if version else "", style="dim")
+        out.append("\n")
+        out.append("Welcome back! " if task_id else "Welcome! ")
+        out.append("/help for commands · ? for shortcuts", style="dim")
+        out.append("\n\n")
+        rows = [("model", model), ("cwd", cwd)] + ([("task", task_id)] if task_id else [])
+        for n, (key, value) in enumerate(rows):
+            out.append("\n" if n else "")
+            out.append(f"{key:<6}", style="dim")
+            out.append(value)
+        self.info = out
+
+    def compose(self) -> ComposeResult:
+        yield Static(render.logo(), classes="welcome-logo")
+        yield Static(self.info, classes="welcome-info")
+
+
+class ThinkingBlock(Static):
+    """The model's reasoning while it streams: ``∴ Thinking…``, then
+    ``∴ Thought for 4s``; ctrl+o shows what it thought."""
+
+    DEFAULT_CLASSES = "thinking"
+
+    def __init__(self, *, expanded: bool = False, started: float = 0.0) -> None:
+        super().__init__("")
+        self.text = ""
+        self.expanded = expanded
+        self.started = started
+        self.took: float | None = None
+        self._draw()
+
+    def add(self, text: str) -> None:
+        self.text += text
+        if self.expanded:
+            self._draw()
+
+    def finish(self, took: float) -> None:
+        if self.took is None:
+            self.took = took
+            self._draw()
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.expanded = expanded
+        self._draw()
+
+    def _draw(self) -> None:
+        out = Text()
+        if self.took is None:
+            out.append("∴ Thinking…", style="dim italic")
+        else:
+            out.append(f"∴ Thought for {render.elapsed_text(self.took)}", style="dim italic")
+            if not self.expanded and self.text.strip():
+                out.append(" (ctrl+o to show)", style="dim")
+        if self.expanded and self.text.strip():
+            out.append("\n")
+            out.append(self.text.strip(), style="dim italic")
+        self.update(out)
 
 
 class ToolCall(Vertical):
@@ -71,7 +125,7 @@ class ToolCall(Vertical):
 
     DEFAULT_CLASSES = "tool-call"
     STYLES = {"pending": "dim", "running": "dim", "waiting": "yellow", "done": "green",
-              "error": "red"}
+              "error": "red", "background": "#d77757"}
 
     def __init__(self, call: ToolUse, *, expanded: bool = False) -> None:
         super().__init__()
@@ -86,6 +140,10 @@ class ToolCall(Vertical):
         self.head = Static(self._header(), classes="tool-head")
         self.body = Static("", classes="tool-body")
         self.body.display = False  # until there is output
+        #: A background agent's progress (an ``Agent`` call's child), or ``None``.
+        self.child: dict[str, Any] | None = None
+        #: A ``Workflow`` call's run (its records folded), or ``None``.
+        self.workflow: dict[str, Any] | None = None
 
     @property
     def title(self) -> str:
@@ -95,8 +153,9 @@ class ToolCall(Vertical):
         yield self.head
         yield self.body
 
-    def _header(self) -> Text:
-        out = Text().append("● ", style=self.STYLES[self.state])
+    def _header(self, frame: int = -1) -> Text:
+        glyph = render.SPINNER_FRAMES[frame % len(render.SPINNER_FRAMES)] if frame >= 0 else "●"
+        out = Text().append(f"{glyph} ", style=self.STYLES[self.state])
         out.append(render.tool_name(self.call), style="bold")
         arg = self.title[len(render.tool_name(self.call)):]
         out.append(arg)
@@ -118,8 +177,32 @@ class ToolCall(Vertical):
         self.progressed = True
         self.collapsed = False
 
-    def set_result(self, text: str, *, is_error: bool, meta: dict[str, Any] | None = None
-                   ) -> None:
+    def pulse(self, frame: int) -> None:
+        """A frame of the bullet's spinner while its work runs in the background."""
+        if self.state == "background":
+            self.head.update(self._header(frame))
+
+    def set_result(self, text: str, *, is_error: bool, meta: dict[str, Any] | None = None,
+                   at: float | None = None) -> None:
+        """``at``: when the result was recorded (wall clock), a background
+        agent's start."""
+        meta = meta or {}
+        if not is_error and self.call.name == "Agent" and meta.get("child_id"):
+            # The model's bookkeeping about the launch is not for the person:
+            # the agent's progress shows instead.
+            self.child = {"id": str(meta["child_id"]), "tools": 0, "tokens": 0, "last": "",
+                          "started": at or time.time(), "status": "", "error": "",
+                          "answer": "", "took": None, "seq": 0}
+            self.set_state("background")
+            self.show_agent()
+            return
+        if not is_error and self.call.name == "Workflow" and meta.get("run_id"):
+            if self.workflow is None:
+                self.workflow = {"run_id": str(meta["run_id"]), "agents": {}}
+            if not self.workflow.get("status"):
+                self.set_state("background")
+            self.show_workflow()
+            return
         self.set_state("error" if is_error else "done")
         self.rows = render.result_rows(self.call, text, meta or {}, is_error=is_error)
         self.is_diff = isinstance((meta or {}).get("diff"), str) and not is_error
@@ -129,12 +212,62 @@ class ToolCall(Vertical):
     async def set_note(self, note: str) -> None:
         """What the person added to their yes, under the result, as the
         model reads it beside the result."""
-        await self.mount(Static(Text.assemble(("  ⎿  ", "dim"), note), classes="tool-note"))
+        await self.mount(Static(render.Hanging(Text.assemble(("  ⎿  ", "dim"), note)),
+                                classes="tool-note"))
 
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
-        if self.rows:
+        if self.child is not None:
+            self.show_agent()
+        elif self.workflow is not None:
+            self.show_workflow()
+        elif self.rows:
             self._show()
+
+    def show_agent(self) -> None:
+        """A background agent's rows: what it is doing and how far it got,
+        then how it ended."""
+        c = self.child
+        if c is None:
+            return
+        took = c["took"] if c["took"] is not None else time.time() - c["started"]
+        stats = render.agent_line(c["tools"], c["tokens"], took)
+        rows: list[tuple[str, str]] = []
+        if self.expanded:
+            rows.append((f"Prompt: {self.call.input.get('prompt', '')}", "dim"))
+        if c["status"] == "done":
+            rows.append((f"Done · {stats}", ""))
+            if self.expanded and c["answer"]:
+                rows += [(line, "") for line in str(c["answer"]).splitlines()]
+        elif c["status"] in ("failed", "cancelled"):
+            what = "Stopped" if c["status"] == "cancelled" else "Failed"
+            rows.append((f"{what}{': ' + c['error'] if c['error'] else ''} · {stats}", "red"))
+        else:
+            rows.append((c["last"] or "Starting…", ""))
+            rows.append((stats + " · in the background", "dim"))
+        self.body.update(render.result_block(rows))
+        self.body.display = True
+
+    def end_agent(self, status: str, *, answer: str = "", error: str = "", tools: int = 0,
+                  tokens: int = 0, at: float | None = None) -> None:
+        c = self.child
+        if c is None or c["status"]:
+            return
+        c.update(status=status, answer=answer, error=error,
+                 tools=max(tools, c["tools"]), tokens=max(tokens, c["tokens"]),
+                 took=max(0.0, (at or time.time()) - c["started"]))
+        self.set_state("done" if status == "done" else "error")
+        self.show_agent()
+
+    def show_workflow(self) -> None:
+        run = self.workflow
+        if run is None:
+            return
+        status = run.get("status")
+        if status and self.state == "background":
+            self.set_state("done" if status == "completed" else "error")
+        self.body.update(render.result_block(render.workflow_rows(run, expanded=self.expanded)))
+        self.body.display = True
 
     def _show(self) -> None:
         rows = render.folded(self.rows, diff=self.is_diff, expanded=self.expanded,
@@ -354,8 +487,8 @@ class ApprovalCard(Vertical):
         await self.decide(self.call_id, choice, message)
         await self.query(".hint, Choices, Input").remove()
         said = f": {message}" if message else ""
-        await self.mount(Static(Text(f"  ⎿  {picked['label']}{said}", style="dim"),
-                                classes="approval-result"))
+        await self.mount(Static(render.Hanging(Text(f"  ⎿  {picked['label']}{said}",
+                                                    style="dim")), classes="approval-result"))
 
 
 class Picker(Vertical):
@@ -431,7 +564,12 @@ class Completions(Static):
     def show(self, items: list[tuple[str, str, str]]) -> None:
         self.items, self.index = items, 0
         self.display = bool(items)
+        # As tall as it gets, whatever matches: typing does not move the prompt.
+        self.styles.height = self.ROWS
         self._draw()
+        sync = getattr(self.app, "_sync_footer", None) if self.is_attached else None
+        if sync is not None:
+            sync()
 
     def hide(self) -> None:
         self.show([])
@@ -446,14 +584,17 @@ class Completions(Static):
 
     def _draw(self) -> None:
         start = max(0, self.index - self.ROWS + 1)
-        width = max((len(label) for _, label, _ in self.items), default=0) + 4
-        out = Text()
+        width = min(max((len(label) for _, label, _ in self.items), default=0), 32) + 3
+        out = Text(no_wrap=True, overflow="ellipsis")
         for n, (_, label, description) in enumerate(self.items[start:start + self.ROWS], start):
             here = n == self.index
             out.append("\n" if n > start else "")
-            out.append(("❯ " if here else "  ") + label.ljust(width),
-                       style="bold #b1b9f9" if here else "")
-            out.append(description[:100], style="#b1b9f9" if here else "dim")
+            shown = label if len(label) <= 32 else label[:31] + "…"
+            out.append(("❯ " if here else "  ") + shown.ljust(width),
+                       style=f"bold {render.ACCENT}" if here else "")
+            out.append(" ".join(description.split()), style="" if here else "dim")
+        if len(self.items) > self.ROWS:
+            out.append(f"  {self.index + 1}/{len(self.items)}", style="dim")
         self.update(out)
 
 
@@ -469,8 +610,7 @@ class PromptInput(TextArea):
                  on_image: Callable[[Any, str], Awaitable[None]] | None = None,
                  on_key: KeyHook | None = None) -> None:
         super().__init__(id="prompt", soft_wrap=True, compact=True,
-                         placeholder='Try "fix the failing test" — / for commands, '
-                                     "@ for files, ! for bash, ? for shortcuts")
+                         placeholder='Try "fix the failing test"  ·  ? for shortcuts')
         self.on_submit_cb = on_submit
         self.on_image = on_image
         self.on_key_cb = on_key
@@ -482,18 +622,23 @@ class PromptInput(TextArea):
 
         from noeta_tui.mentions import image_file
 
-        raw = event.text.strip().strip("'\"")
-        if self.on_image is not None and raw and "\n" not in raw:
+        found: list[tuple[Any, str]] = []
+        for raw in dropped_paths(event.text) if self.on_image is not None else []:
             path = Path(raw).expanduser()
             try:
                 image = image_file(path) if path.is_absolute() else None
             except OSError:
                 image = None
-            if image is not None:
-                event.prevent_default()
-                event.stop()
-                await self.on_image(image, path.name)
-                return
+            if image is None:
+                found = []
+                break
+            found.append((image, path.name))
+        if found and self.on_image is not None:
+            event.prevent_default()
+            event.stop()
+            for image, name in found:
+                await self.on_image(image, name)
+            return
         await super()._on_paste(event)
 
     async def _on_key(self, event: events.Key) -> None:
@@ -513,9 +658,31 @@ class PromptInput(TextArea):
                 self.clear()
                 await self.on_submit_cb(text)
             return
-        if event.key == "ctrl+j":
+        if event.key in ("ctrl+j", "shift+enter", "alt+enter"):
             event.prevent_default()
             event.stop()
             self.insert("\n")
             return
         await super()._on_key(event)
+
+
+def dropped_paths(text: str) -> list[str]:
+    """The paths in what a terminal pastes for files dropped on it: one per
+    line or separated by spaces, each maybe quoted, with ``\\ `` for a space
+    or as a ``file://`` URL."""
+    import shlex
+    from urllib.parse import unquote, urlparse
+
+    text = text.strip()
+    if not text:
+        return []
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return []
+    out = []
+    for part in parts:
+        if part.startswith("file://"):
+            part = unquote(urlparse(part).path)
+        out.append(part)
+    return out

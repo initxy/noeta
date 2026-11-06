@@ -67,7 +67,7 @@ from its first message).
 | Key | What it does |
 |---|---|
 | `Enter` | Send |
-| `\` then `Enter`, or `Ctrl+J` | New line |
+| `Shift+Enter` (terminals that report it: Ghostty, kitty, iTerm2, WezTerm…), `\` then `Enter`, or `Ctrl+J` | New line |
 | `Esc` | Stop the turn (the task keeps everything said so far) |
 | `Esc` `Esc` | Clear the input; on an empty input, open `/rewind` |
 | `Ctrl+C` | Clear the input; on an empty input, press twice to quit |
@@ -76,8 +76,8 @@ from its first message).
 | `Ctrl+R` | Search earlier prompts; `Enter` puts the pick in the box, `Esc` leaves it empty |
 | `Ctrl+O` | Unfold every tool call's output (and fold it again) |
 | `Ctrl+T` | Show or hide the task list (the todos) |
-| `Ctrl+B` | Show or hide the side panel of sub-agents |
-| `Ctrl+V` | Attach the image on the clipboard (needs `wl-paste`, `xclip` or `pngpaste`) |
+| `Ctrl+B` | Show or hide the side panel of background agents |
+| `Ctrl+V` | Attach the image on the clipboard (macOS as is; Linux needs `wl-paste` or `xclip`) |
 | `?` | Show the shortcuts (on an empty prompt) |
 
 Two presses count as a double press within 0.8 seconds (`DOUBLE_PRESS` in
@@ -183,8 +183,10 @@ creates `bash_mode: true`, and only those get that line of the main prompt (not 
 
 ### Images
 
-`Ctrl+V` attaches the clipboard's image; pasting the absolute path of an image file attaches that file (PNG,
-JPEG, GIF, WebP). The box shows `[Image #1]` and the image goes with the next message.
+`Ctrl+V` attaches the clipboard's image; dropping image files on the terminal (or pasting their absolute
+paths) attaches them (PNG, JPEG, GIF, WebP). The box shows `[Image #1]`, the line over it lists what is
+attached, and the images go with the next message. Over ssh the clipboard is the other machine's: drop the
+file instead.
 
 ## History, continuing and resuming
 

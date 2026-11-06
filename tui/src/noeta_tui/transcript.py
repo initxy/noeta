@@ -23,6 +23,7 @@ from textual.widgets.markdown import MarkdownStream
 from noeta.core import models, records
 from noeta.core.events import (
     Answer,
+    ChildEnded,
     ExtensionRecorded,
     External,
     InputTaken,
@@ -59,6 +60,7 @@ from noeta_tui.widgets import (
     Notice,
     QuestionCard,
     ReadGroup,
+    ThinkingBlock,
     ToolCall,
     UserMessage,
     bulleted,
@@ -68,6 +70,8 @@ log = logging.getLogger("noeta_tui")
 
 
 SERVER_DIRECTORY = "the server's directory"
+#: The workflow plugin's records a run's call shows.
+WORKFLOW_KINDS = ("run", "agent", "result", "agent_failed", "ended")
 #: Seconds between two spinner frames.
 SPINNER_TICK = 0.12
 
@@ -135,6 +139,14 @@ class TranscriptView(App[None]):
     flash: str
     #: The effort the task's config names (``None``: the model's default).
     effort: str | None
+    #: The reasoning being streamed (shown above the reply), and its model call.
+    thinking: ThinkingBlock | None
+    thinking_key: tuple[int, int]
+    #: The model is streaming reasoning, not text, right now.
+    thinking_now: bool
+    #: Background agents' calls, by child task id; workflow calls by run id.
+    agents: dict[str, ToolCall]
+    workflows: dict[str, ToolCall]
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, message: str = "", *,
@@ -191,13 +203,16 @@ class TranscriptView(App[None]):
         if not found:  # the app is closing
             return
         spinner = found.first(Static)
+        frame = int(time.monotonic() / SPINNER_TICK)
+        for call in [*self.agents.values(), *self.workflows.values()]:
+            call.pulse(frame)
         show = self.busy and not self.waiting_for
         spinner.display = show
         if show:
             frame = int((time.monotonic() - self.turn_started) / SPINNER_TICK)
             verb = render.active_form(self.todos) or self.turn_verb
             spinner.update(render.spinner_line(frame, verb, time.monotonic() - self.turn_started,
-                                               self.turn_tokens))
+                                               self.turn_tokens, thinking=self.thinking_now))
 
     async def _turn_done(self) -> None:
         if self.busy and self.turn_started:
@@ -209,7 +224,7 @@ class TranscriptView(App[None]):
     # ------------------------------------------------------------ rendering
 
     def _on_delta(self, task_id: str, delta: Delta) -> None:
-        if task_id == self.task_id and delta.kind in ("text", "tool") and delta.text:
+        if task_id == self.task_id and delta.kind in ("text", "thinking", "tool") and delta.text:
             self._deltas.put_nowait(delta)
 
     @work(exclusive=False, group="deltas", exit_on_error=False)
@@ -232,22 +247,57 @@ class TranscriptView(App[None]):
         key = (delta.call_seq, delta.attempt)
         if delta.attempt < self.attempts.get(delta.call_seq, 1):
             return  # the tail of an attempt that failed
+        transcript = self.query_one("#transcript")
+        self.turn_tokens += estimate_tokens(delta.text)
+        if delta.kind == "thinking":
+            self.thinking_now = True
+            if self.thinking is not None and self.thinking_key != key:
+                await self._end_thinking(drop=self.thinking_key[0] == key[0])
+            if self.thinking is None:
+                self.thinking = ThinkingBlock(expanded=self.verbose, started=time.monotonic())
+                self.thinking_key = key
+                await transcript.mount(self.thinking)
+                self._follow_end()
+            self.thinking.add(delta.text)
+            return
+        self.thinking_now = False
+        await self._end_thinking()
         if self.stream is not None and key != self.stream_key:
             same_call = delta.call_seq == self.stream_key[0]
             await self._end_stream(drop=same_call)  # a retry replaces its failed attempt
         if self.stream is None:
             widget = AssistantMessage("")
-            await self.query_one("#transcript").mount(bulleted(widget))
-            self.query_one("#transcript").anchor()
+            await transcript.mount(bulleted(widget))
+            self._follow_end()
             self.stream, self.stream_widget, self.stream_key = \
                 Markdown.get_stream(widget), widget, key
         self.attempts[delta.call_seq] = delta.attempt
         self.streamed.add(delta.call_seq)
         self.stream_text += delta.text
-        self.turn_tokens += estimate_tokens(delta.text)
         await self.stream.write(delta.text)
 
+    def _follow_end(self) -> None:
+        """Keep the transcript at its end as live output grows — once it
+        fills the screen: Textual's anchor on a shorter one pushes it to the
+        bottom of the screen."""
+        transcript = self.query_one("#transcript")
+        if transcript.max_scroll_y > 0:
+            transcript.anchor()
+        else:
+            transcript.scroll_end(animate=False)
+
+    async def _end_thinking(self, *, drop: bool = False) -> None:
+        block, self.thinking = self.thinking, None
+        self.thinking_now = False
+        if block is None:
+            return
+        if drop:
+            await block.remove()
+        else:
+            block.finish(time.monotonic() - block.started)
+
     async def _end_stream(self, *, drop: bool = False) -> None:
+        await self._end_thinking(drop=drop)
         # Taken off the app before the first await: the delta pump and the
         # follower both end streams, and the other may start the next one
         # (the retry's) meanwhile.
@@ -325,12 +375,16 @@ class TranscriptView(App[None]):
                 elif isinstance(item.body, External) and item.body.name == CONFIG_SIGNAL \
                         and isinstance(item.body.data, dict) and "effort" in item.body.data:
                     self.effort = item.body.data["effort"] or None
+                elif isinstance(item.body, ChildEnded):
+                    self._agent_ended(item.body, rec.at)
                 elif isinstance(item.body, Answer) and \
                         item.body.request_id == self.waiting_question and \
                         self.question_task in ("", self.task_id):
                     self._set_question("", "", {})
         elif isinstance(ev, ModelCalled):
             self.called = rec.seq
+            if not self.busy:  # a turn nobody typed: an agent's notice woke the task
+                self.set_busy(True)
         elif isinstance(ev, ModelReplied):
             # Every delta written first (one taken off the queue may still be
             # mounting its widget), or the reply would be shown twice.
@@ -363,7 +417,13 @@ class TranscriptView(App[None]):
         elif isinstance(ev, ToolFinished):
             finished = self.calls.get(ev.result.call_id)
             if finished is not None:
-                finished.set_result(ev.result.text, is_error=ev.result.is_error, meta=ev.meta)
+                finished.set_result(ev.result.text, is_error=ev.result.is_error, meta=ev.meta,
+                                    at=rec.at)
+                if finished.child is not None and not finished.child["status"]:
+                    self.agents[finished.child["id"]] = finished
+                    self._watch_agents()
+                if finished.workflow is not None:
+                    self.workflows[finished.workflow["run_id"]] = finished
                 if ev.note and ev.note != REJECTED_MARKER:
                     await finished.set_note(ev.note)
         elif isinstance(ev, ExtensionRecorded):
@@ -391,6 +451,8 @@ class TranscriptView(App[None]):
         core = records.decode(ev)
         if ev.extension == TITLE and ev.kind == "title":
             self.sub_title = str(data.get("title") or "")
+        elif ev.extension == "workflow" and ev.kind in WORKFLOW_KINDS:
+            self._workflow_record(ev.kind, data)
         elif ev.extension == "todos":
             render.fold_todos(self.todos, ev.kind, data)
             self._show_todos()
@@ -406,10 +468,82 @@ class TranscriptView(App[None]):
         elif isinstance(core, records.TurnFailed):
             await transcript.mount(Notice(f"turn failed: {failure_text(data)}",
                                           classes="-error"))
+        elif isinstance(core, records.Notice) and core.notice_kind == "workflow" \
+                and str((core.notice_data or {}).get("run_id")) in self.workflows:
+            return  # shown in the run's call
         elif isinstance(core, records.Notice):
             # Structured news (a review's findings) reads as a list.
             await transcript.mount(Markdown(core.text, classes="notice")
                                    if core.notice_kind else Notice(core.text))
+
+    def _agent_ended(self, ended: ChildEnded, at: float) -> None:
+        call = self.agents.pop(ended.child_id, None)
+        if call is None:
+            return
+        call.end_agent(ended.status, answer=ended.answer, error=ended.error,
+                       tools=ended.tool_calls, tokens=ended.output_tokens, at=at)
+
+    @work(exclusive=True, group="agents", exit_on_error=False)
+    async def _watch_agents(self) -> None:
+        """While background agents run: what each is doing, read from its
+        own log (the tools it called, what it wrote) once a second."""
+        while self.agents:
+            for child_id, call in list(self.agents.items()):
+                c = call.child
+                if c is None:
+                    continue
+                try:
+                    events = await self.local.client.events(child_id, c["seq"])
+                except Exception:
+                    log.debug("reading agent %s failed", child_id, exc_info=True)
+                    continue
+                for r in events:
+                    c["seq"] = r.seq
+                    ev = r.event
+                    if isinstance(ev, ToolStarted):
+                        c["last"] = render.tool_header(ev.call, 80)
+                    elif isinstance(ev, ToolFinished):
+                        c["tools"] += 1
+                    elif isinstance(ev, ModelReplied):
+                        c["tokens"] += ev.response.usage.output
+                if not c["status"]:
+                    call.show_agent()
+            self.update_status()
+            await asyncio.sleep(1.0)
+
+    def _workflow_record(self, kind: str, data: dict[str, Any]) -> None:
+        """Fold one of the workflow plugin's records into its run's call."""
+        rid = str(data.get("run_id") or "")
+        if kind == "run":
+            call = self.calls.get(str(data.get("call_id") or ""))
+            if call is None:
+                return
+            call.workflow = {"run_id": rid, "description": data.get("description") or "",
+                             "agents": {}}
+            self.workflows[rid] = call
+            return
+        call = self.workflows.get(rid)
+        if call is None or call.workflow is None:
+            return
+        run = call.workflow
+        key = str(data.get("key") or "")
+        if kind == "agent":
+            run["agents"][key] = {"key": key, "label": data.get("label"),
+                                  "phase": data.get("phase"), "state": "running"}
+        elif kind in ("result", "agent_failed") and key in run["agents"]:
+            run["agents"][key]["state"] = "done" if kind == "result" else "failed"
+        elif kind == "ended":
+            run["status"], run["error"] = data.get("status"), data.get("error") or ""
+            self.workflows.pop(rid, None)
+        call.show_workflow()
+
+    def background_agents(self) -> int:
+        """Agents running in the background: the model's and its workflows'."""
+        running = len(self.agents)
+        for call in self.workflows.values():
+            running += sum(1 for a in (call.workflow or {}).get("agents", {}).values()
+                           if a.get("state") == "running")
+        return running
 
     def _show_todos(self) -> None:
         tasks = self.query_one("#tasks", Static)
@@ -472,30 +606,47 @@ class TranscriptView(App[None]):
         return self.effort or models.default_effort(self.model)
 
     def update_status(self) -> None:
+        """The footer: on the left the mode (or what waits on the person, or
+        a passing word) and the agents working in the background; on the
+        right the model and its effort, how full the context is, the cost
+        and the directory."""
         spec = models.find_spec(self.model)
         window = spec.context_window if spec else models.UNKNOWN_MODEL_CONTEXT_WINDOW
-        used = f"{self.context_tokens / window:.0%}" if self.context_tokens else "0%"
-        cost = f" · ${self.cost_usd:.2f}" if self.cost_usd else ""
         at = self.compacts_at
         left = render.context_left(self.context_tokens, at.threshold, at.window, at.auto) \
             if at is not None else None
-        hints = self.query_one("#hints", Static)
+        hints = Text()
         if self.flash:
-            hints.update(Text(self.flash, style="dim"))
+            hints.append(self.flash, style="dim")
         elif self.waiting_for:
-            hints.update(Text(self.waiting_for, style="yellow"))
+            hints.append(self.waiting_for, style="yellow")
         else:
-            hints.update(render.mode_hint(self.mode or self.permission_mode or ""))
-        width = max(self.size.width // 2 - len(self.model) - 24, 12)
-        status = Text(f"{self.model} · ", style="dim")
-        status.append_text(left if left is not None else Text(f"context {used}", style="dim"))
-        status.append(f"{cost} · {_short_path(self.task_cwd or SERVER_DIRECTORY, width)}",
-                      style="dim")
-        self.query_one("#status", Static).update(status)
+            hints.append_text(render.mode_hint(self.mode or self.permission_mode or ""))
+        running = self.background_agents()
+        if running and not self.flash:
+            hints.append("  ·  ", style="dim")
+            hints.append(f"◆ {running} agent{'s' if running > 1 else ''} running",
+                         style="#d77757")
+        self.query_one("#hints", Static).update(hints)
+        sep = ("  ·  ", "dim")
+        status = Text(self.model, style="dim")
         level = self.effort_level()
-        effort = self.query_one("#effort", Static)
-        effort.update(render.effort_line(level) if level else "")
-        effort.display = level is not None
+        if level:
+            status.append(f" {render.EFFORT_GLYPHS.get(level, '●')} {level}", style="dim")
+        status.append(*sep)
+        status.append_text(left if left is not None
+                           else render.context_bar(self.context_tokens / window))
+        # What does not fit beside the left side is left out: the directory
+        # first, then the cost.
+        room = self.size.width - 6 - len(hints.plain)
+        if self.cost_usd and len(status.plain) + 12 <= room:
+            status.append(*sep)
+            status.append(f"${self.cost_usd:.2f}", style="dim")
+        width = room - len(status.plain) - 5
+        if width >= 16:
+            status.append(*sep)
+            status.append(_short_path(self.task_cwd or SERVER_DIRECTORY, width), style="dim")
+        self.query_one("#status", Static).update(status)
         self._tick()
 
     @work(exclusive=True, group="cost", exit_on_error=False)

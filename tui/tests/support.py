@@ -60,6 +60,9 @@ def ready(app: Any) -> bool:
 
 def plain(widget: Any) -> str:
     shown = widget.render()
+    shown = getattr(shown, "_renderable", shown)  # Textual's wrapper of a Rich renderable
+    if hasattr(widget, "info") and not hasattr(shown, "plain"):  # the welcome box
+        shown = widget.info
     return str(getattr(shown, "plain", shown))
 
 
