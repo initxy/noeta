@@ -40,12 +40,13 @@ async def test_default_agents_residents_follow_every_summary(
     work = tmp_path / "work"
     work.mkdir()
     (work / "AGENTS.md").write_text("RULE: always say hi")
-    # main's prompt and tools take ~8K tokens: a 40K cap leaves the same
-    # few-thousand-token working window the other compaction tests use.
+    # main's prompt and tools take ~8K tokens: a 29K cap (threshold 14,616)
+    # leaves the same few-thousand-token working window the other
+    # compaction tests use.
     [main, *_] = default_agents(
         "m", tools=[Probe(size=2000)], plugins={
             "permissions": Permissions(mode="bypassPermissions"),
-            "compaction": Compaction(auto_compact_window=44_000)})
+            "compaction": Compaction(auto_compact_window=29_232)})
     model = Model([*(call() for _ in range(40)), answer("done")])
     _client, tid = await run(store, main, model, env_for=lambda _s: LocalExecEnv(str(work)))
     assert len(model.summarize_requests) >= 2
@@ -78,7 +79,7 @@ class Nudge(Extension):
 
 async def test_a_reminder_survives_a_compaction(store: SqliteStore) -> None:
     a = Agent(name="a", model="m", tools=[Probe(size=2000), Small(size=10)],
-              extensions=(Compaction(auto_compact_window=32_000), Nudge()))
+              extensions=(Compaction(auto_compact_window=5_232), Nudge()))
     model = Model([*(call() for _ in range(8)), *(call("Small") for _ in range(14)),
                    answer("done")])
     await run(store, a, model)

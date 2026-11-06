@@ -220,8 +220,10 @@ first request after a compaction always goes as it is.
 The numbers derive from the model catalog, as Claude Code derives them. A summary needs room
 to be written, so the effective window holds back `min(output cap, 20,000)` tokens. The
 threshold sits 13,000 tokens under that, or at `auto_compact_percent` of the effective window
-when that is lower. A summary starts being written in the background at 80% of the effective
-window. `auto_compact_window` caps the window the numbers start from. The two knobs read
+when that is lower. Where those two would hold back more than half the window (windows under
+about 66K, such as a local model's 32K), both shrink in proportion to half of it, so the
+threshold stays above the fixed prompt. A summary starts being written in the background at
+80% of the effective window. `auto_compact_window` caps the window the numbers start from. The two knobs read
 `NOETA_AUTO_COMPACT_WINDOW` and `NOETA_AUTOCOMPACT_PCT_OVERRIDE` when the plugin is given
 neither (Claude Code's knobs, under noeta's prefix). A model the catalog does not know gets a
 conservative 128,000-token window and 16,384-token output cap, so it still compacts.
@@ -273,8 +275,11 @@ ahead of the summary, and ends the turn without another model call (`TurnDone`).
 uncompacted (an overflow then compacts after it); three failures in a row turn automatic
 compaction off for the task, while `/compact` and compaction after an overflow still run. If the
 context fills up again within three model calls of the previous compaction in the same turn,
-three times in a row, the turn stops with `autocompact_thrashing`: a single file or output is too big for the
-window, and the person is told to read it in parts. A compaction restarted by a crash builds the
+three times in a row, the turn stops with `autocompact_thrashing`; a compaction after an
+overflow counts too, so a window that what a compaction re-attaches already overflows ends
+the turn instead of compacting forever. What stays after a summary (the fixed prompt, the
+instructions, the files read again, the newest output) does not fit the window, and the person
+is told to read large files in parts or check the model's window. A compaction restarted by a crash builds the
 same summary request again from the log, since nothing of it was recorded yet.
 
 ### Writing the summary ahead {#writing-the-summary-ahead}

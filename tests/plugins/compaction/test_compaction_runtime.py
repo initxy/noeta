@@ -20,7 +20,7 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.errors import ContextOverflow, Transient
 from noeta.core.events import Compacted, ExtensionRecorded, ModelReplied, Waiting
-from noeta.core.extension import Deny, Extension, TaskView
+from noeta.core.extension import Deny, Extension, Reminder, TaskView
 from noeta.core.loop.state import fold
 from noeta.core.types import (
     Message,
@@ -49,9 +49,10 @@ from noeta.toolkit import plugin_records as pr
 
 from ._harness import FORMATTED, Model, Probe, answer, call, note_reply, rebuilt, run, runtime
 
-#: Unknown model "m": 128K window, 16,384 output. A 34K cap leaves an
-#: effective 17,616 and a threshold of 4,616 tokens: about eight probes.
-SMALL = 34_000
+#: Unknown model "m": 128K window, 16,384 output. A 9,232-token cap holds
+#: back half of it (the two reserves shrunk to fit): a threshold of 4,616
+#: tokens, about eight probes.
+SMALL = 9_232
 
 
 @pytest.fixture
@@ -188,6 +189,31 @@ async def test_overflow_compacts_and_retries(store: SqliteStore) -> None:
     recorded = [e for e in evs if isinstance(e, ExtensionRecorded) and e.kind == "compacted"]
     assert recorded[0].data["reason"] == "overflow"
     await assert_rebuilds(store, a, tid)
+
+
+async def test_an_overflow_right_after_each_compaction_stops_after_three_refills(
+        store: SqliteStore) -> None:
+    """What a compaction re-attaches can by itself overflow the real window
+    (a model whose catalog window is larger): the rapid-refill breaker ends
+    that overflow -> compact -> overflow loop as it ends the automatic one."""
+
+    class Note(Extension):
+        """A note with every request: something new to summarize each time."""
+
+        name = "note"
+
+        async def reminders(self, view: TaskView) -> list[Reminder]:
+            return [Reminder(text=f"Step {view.state.steps_in_turn}.")]
+
+    a = agent(auto_compact_window=None, extensions=[Note()])
+    model = Model([call(), call(), *(ContextOverflow("prompt is too long") for _ in range(20))])
+    client, tid = await run(store, a, model)
+    evs = await events(client, tid)
+    assert evs[-1].detail["turn_failed"].startswith("autocompact_thrashing: ")
+    recorded = [e.data for e in evs if isinstance(e, ExtensionRecorded) and e.kind == "compacted"]
+    assert [d["reason"] for d in recorded] == ["overflow"] * 3
+    assert [d["rapid_refills"] for d in recorded] == [0, 1, 2]
+    assert len(model.requests) == 6
 
 
 async def test_overflow_summarizes_the_request_as_it_was_sent(store: SqliteStore) -> None:
