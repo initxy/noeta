@@ -213,6 +213,36 @@ def _app(s: Settings, **kw: Any) -> Any:
     return from_settings(s, **kw)
 
 
+def _local_app(args: argparse.Namespace, cwd: str) -> tuple[Any, Settings, Any]:
+    """The app the terminal UI and ``-p`` run here, with Claude Code's
+    command-line flags (settings layers, permission rules, directories, MCP
+    servers, agents, system prompt files, plugin directories) applied the
+    same way in both; and the hooks plugin's client callbacks."""
+    from noeta.cli import headless
+
+    try:
+        layers: dict[str, Any] = {
+            "sources": headless.setting_sources(args),
+            "flag": headless.settings_layer(args, home_dir.HOME / "flag-settings")}
+        mcp = headless.mcp_arguments(args)
+        hooks = headless.hooks_arguments(args)
+        agent_files = headless.agent_files(args)
+    except headless.FlagError as exc:
+        sys.exit(f"noeta: {exc}")
+    s = _settings(args, **layers)
+    if args.system_prompt_file:
+        s.prompts["system/main"] = Path(args.system_prompt_file).read_text("utf-8")
+    if args.append_system_prompt_file:
+        s.prompts["system/main.append"] = Path(
+            args.append_system_prompt_file).read_text("utf-8")
+    app = _app(s, cwd=cwd, own_tasks_only=True,
+               permissions=headless.permission_arguments(args),
+               plugins={"hooks": hooks, **({"mcp": mcp} if mcp is not None else {})},
+               setting_sources=layers["sources"], flag_settings=layers["flag"],
+               agent_files=agent_files, plugin_dirs=args.plugin_dirs)
+    return app, s, hooks["callbacks"]
+
+
 def _allowed_hosts(args: argparse.Namespace) -> list[str] | None:
     """The ``Host`` names ``noeta serve`` answers: the loopback names on a
     loopback bind, plus ``--allow-host``; any on another bind without it."""
@@ -416,32 +446,15 @@ def _front(argv: list[str]) -> None:
     cwd = os.path.abspath(args.cwd or os.getcwd())
     if args.permission_mode in MODE_ALIASES:
         args.permission_mode = MODE_ALIASES[args.permission_mode]
+    if args.dangerously_skip_permissions:
+        args.permission_mode = "bypassPermissions"
     if headless.headless(args):
         if args.server:
             sys.exit("noeta: -p runs its task here; --server attaches the terminal UI "
                      "(or noeta acp --server) to a server")
-        try:
-            layers: dict[str, Any] = {
-                "sources": headless.setting_sources(args),
-                "flag": headless.settings_layer(args, home_dir.HOME / "flag-settings")}
-            mcp = headless.mcp_arguments(args)
-            hooks = headless.hooks_arguments(args)
-            agent_files = headless.agent_files(args)
-        except headless.FlagError as exc:
-            sys.exit(f"noeta: {exc}")
-        s = _settings(args, **layers)
-        if args.system_prompt_file:
-            s.prompts["system/main"] = Path(args.system_prompt_file).read_text("utf-8")
-        if args.append_system_prompt_file:
-            s.prompts["system/main.append"] = Path(
-                args.append_system_prompt_file).read_text("utf-8")
-        app = _app(s, cwd=cwd, own_tasks_only=True,
-                   permissions=headless.permission_arguments(args),
-                   plugins={"hooks": hooks, **({"mcp": mcp} if mcp is not None else {})},
-                   setting_sources=layers["sources"], flag_settings=layers["flag"],
-                   agent_files=agent_files, plugin_dirs=args.plugin_dirs)
+        app, s, hook_callbacks = _local_app(args, cwd)
         sys.exit(asyncio.run(headless.run(app, s, args, cwd=cwd,
-                                          hook_callbacks=hooks["callbacks"])))
+                                          hook_callbacks=hook_callbacks)))
     run = front_end("tui")
     from noeta.cli.config import settings_rows
     from noeta.host.app import FrontEndStart
@@ -453,9 +466,9 @@ def _front(argv: list[str]) -> None:
                               "home": str(home_dir.HOME), "version": noeta_version()}
     backend: Any
     if args.server:
-        if args.plugin_dirs:
-            sys.exit("noeta: --plugin-dir loads plugins into this process; with --server "
-                     "the server's plugins run")
+        if local := headless.local_app_flags(args):
+            sys.exit(f"noeta: {', '.join(local)} apply to the tasks this process runs; with "
+                     "--server the server's settings and plugins run")
         from noeta.cli.server_token import server_problem, server_token
         from noeta.host.remote import RemoteApp
 
@@ -472,11 +485,12 @@ def _front(argv: list[str]) -> None:
                               task_config=config, on_server=True,
                               settings=lambda: settings_rows(s, cwd), **common)
     else:
-        from noeta.cli.config import from_settings
         from noeta.cli.trust import project_trusted
 
-        s = _settings(args)
-        backend = from_settings(s, cwd=cwd, own_tasks_only=True, plugin_dirs=args.plugin_dirs)
+        unused = headless.unused_in_terminal(args)
+        args.permission_prompt_tool = None
+        backend, s, _ = _local_app(args, cwd)
+        backend.notices += [f"{flag} is used only with -p; ignored here" for flag in unused]
         start = FrontEndStart(agent=args.agent or backend.main_agent, model=s.model,
                               task_config={"cwd": cwd, "model": s.model,
                                            **({"effort": s.effort} if s.effort else {})},
