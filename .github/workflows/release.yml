@@ -77,3 +77,24 @@ jobs:
         with: { name: dist, path: dist/ }
       - uses: astral-sh/setup-uv@v6
       - run: uv publish --trusted-publishing always dist/*
+
+  # The GitHub Release, its notes the tagged version's CHANGELOG section. Skipped when it exists
+  # (a re-run after a hang).
+  github-release:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release from the changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists"; exit 0
+          fi
+          awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" --title "noeta $VERSION" --notes-file notes.md --latest
