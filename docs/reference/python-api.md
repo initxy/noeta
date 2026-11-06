@@ -128,7 +128,7 @@ UI, `noeta acp`, `noeta -p` and `noeta worker` run on (`noeta/host/local.py`).
 |---|---|
 | `agents` | a list of `Agent` |
 | `provider` | a `Provider`, or a `model -> Provider` function |
-| `own_tasks_only` | serve only the task trees this app created or adopted |
+| `own_tasks_only` | serve only the task trees this app created or adopted; new tasks go on the `front-end` queue |
 | `task_config` | laid under every new task's config (`prompts` merged key by key) |
 | `channels` | `Channel`s to run while started |
 | `**runtime_kw` | passed to `Runtime` (`spill_root` defaults to `noeta-<uid>/tool-results` in the system temp directory; `poll_interval` defaults to 0.2 and the client polls at the same interval; a caller's own value wins) |

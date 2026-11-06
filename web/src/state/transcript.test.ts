@@ -85,6 +85,21 @@ describe("reduce", () => {
     expect(st.items[0]).toMatchObject({ child: "t.c1.1", childStatus: "done" });
   });
 
+  it("counts a workflow's sub-agents as running until each one's end is taken", () => {
+    const ended = (child: string, inbox: number): Action =>
+      ev({ type: "InputTaken", through: inbox, items: [{ seq: inbox, at: 0, body: { kind: "child_ended", child_id: child, status: "done" } }] });
+    const first = run(
+      reply({ type: "tool_use", id: "w1", name: "Workflow", input: {} }),
+      record("core", "spawned", { children: [{ id: "t.a", call_id: "w1" }, { id: "t.b", call_id: "w1" }] }),
+      ended("t.b", 1),
+    );
+    expect(first.running).toEqual(["t.a"]);
+    // A later stage's agent is started with no call to show it on.
+    const later = [record("core", "spawned", { children: [{ id: "t.c", call_id: "" }] }), ended("t.a", 2)].reduce(reduce, first);
+    expect(later.running).toEqual(["t.c"]);
+    expect(reduce(later, ended("t.c", 3)).running).toEqual([]);
+  });
+
   it("reads the plugins' records: title, mode, modes and the task list", () => {
     const st = run(
       record("title", "title", { title: "Fix it" }),

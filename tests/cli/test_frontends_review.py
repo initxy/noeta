@@ -26,6 +26,7 @@ from noeta.core.events import (
     TaskCreated,
     Waiting,
 )
+from noeta.core.runner import Runtime
 from noeta.core.tool import Park, ToolContext, ToolOutput, text_output
 from noeta.core.types import Delta, ModelRequest, ModelResponse
 from noeta.host.http import create_app
@@ -128,6 +129,29 @@ async def test_a_front_end_serves_only_its_own_tasks(tmp_path: Path) -> None:
     assert (await me.client.wait(left, timeout=5)).status == "waiting"
     await me.stop()
     await other.store.close()
+
+
+async def test_a_store_wide_worker_never_runs_a_front_ends_task(tmp_path: Path) -> None:
+    """``noeta serve`` / ``noeta worker`` on the same store would run it with
+    their own settings; the front end that opens it again runs it."""
+    path = str(tmp_path / "shared.db")
+    served = ScriptedProvider([reply("serve's answer")])
+    serve = Runtime(store=SqliteStore(path), agents={"main": Agent(name="main", model="m")},
+                    provider_for=lambda _m: served, env_for=lambda _s: None)
+    gone = LocalApp(SqliteStore(path), [Agent(name="main", model="m")], ScriptedProvider([]),
+                    env_for=lambda _s: None, own_tasks_only=True)
+    tid = await gone.client.create("main", "mine")  # its process quits before running it
+    await gone.store.close()
+    assert not await serve.run_once() and served.requests == []
+    mine = ScriptedProvider([reply("my answer")])
+    later = LocalApp(SqliteStore(path), [Agent(name="main", model="m")], mine,
+                     env_for=lambda _s: None, own_tasks_only=True)
+    await later.start()
+    await later.adopt(tid)
+    assert (await later.client.wait(tid, timeout=5)).status == "waiting"
+    assert len(mine.requests) == 1
+    await later.stop()
+    await serve.store.close()
 
 
 # ------------------------------------------------------------ #19 server / remote

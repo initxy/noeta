@@ -209,7 +209,9 @@ worker、渠道和每天一次的清理，直到 `stop` 被设上；`noeta worke
 
 同一个存储可以同时由其他机器上的 `noeta worker` 进程服务；它们任何一个都能接着跑任何任务
 （[多机运行](../how-it-works/many-machines.md)）。`LocalApp(…, own_tasks_only=True)` 只服务自己
-创建或接手的任务树，前端们就是这样共用 `~/.noeta/tasks.db` 而不抢彼此的任务。
+创建或接手的任务树，前端们就是这样共用 `~/.noeta/tasks.db` 而不抢彼此的任务。它把任务建在
+`front-end` 队列上，`noeta serve` 和 `noeta worker` 不取这个队列（除非用 `--queue` 指定），所以
+这样的任务只在打开着它的前端里跑。
 
 ## 连接已有的存储或服务端
 

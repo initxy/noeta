@@ -426,6 +426,31 @@ async def test_an_agent_mention_in_a_forks_prompt_is_noted(store: SqliteStore) -
     assert any(note in t for t in texts_[at:])
 
 
+async def test_a_continuation_does_not_take_over_its_sources_agents(store: SqliteStore) -> None:
+    """The source's agents end to the source, and the kernel carries no
+    children: copied, each would read as running for good (listed so,
+    counted against ``max_background``)."""
+    p = ScriptedProvider([reply("", agent("a"), agent("b")), reply("launched"),
+                          reply("noted"), reply("noted"), reply("noted")])
+    c = ScriptedProvider([reply("did a"), reply("did b")])
+    rt = runtime(store, {"p": p, "c": c}, parent(max_background=2), worker())
+    client = Client(store)
+    src = await client.create("main", "go")
+    await rt.run_until_idle()
+    assert {k.status for k in await client.tasks(parent_id=src)} == {"ended"}
+    p.steps.clear()
+    p.add(reply("", ("ListAgents", {}), agent("c")), reply("end"))
+    cont = await client.create("main", "more work", history_from=src)
+    await rt.run_until_idle()
+    out = dict(await results(client, cont))
+    [listed] = [t for t in out if t.startswith(texts.LIST_HEAD)]
+    assert "sub-agent" not in listed
+    [launched] = [t for t in out if t != listed]
+    assert not out[launched] and "agentId:" in launched
+    [child] = await client.tasks(parent_id=cont)
+    assert child.agent == "worker"
+
+
 async def test_list_agents_shows_launched_agents(store: SqliteStore) -> None:
     p = ScriptedProvider([reply("", ("ListAgents", {})), reply("", agent("dig", "scout")),
                           reply("", ("ListAgents", {})), reply("listed")])
