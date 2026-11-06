@@ -48,6 +48,7 @@ import yaml
 from noeta.core import models, registry
 from noeta.core.agent import Agent
 from noeta.core.extension import Extension
+from noeta.toolkit import frontmatter
 from noeta.toolkit.hook_env import without_env
 
 __all__ = [
@@ -260,16 +261,11 @@ def _lay_over(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, 
 def parse_agent_file(text: str, *, source: str = "", default_name: str = "") -> AgentFile:
     """Read one agent file. The body after the frontmatter is the system
     prompt, unchanged."""
-    if text.startswith("﻿"):
-        text = text[1:]
-    if not text.startswith("---\n"):
+    if not frontmatter.opens(text):
         raise AgentFileError(f"{source}: an agent file starts with '---' frontmatter")
-    end = text.find("\n---\n", 3)
-    if end < 0:
-        if not text.endswith("\n---") and not text.endswith("\n---\n"):
-            raise AgentFileError(f"{source}: the frontmatter has no closing '---'")
-        end = len(text) - 4
-    front, body = text[4:end], text[end + 5:]
+    front, body = frontmatter.split(text)
+    if front is None:
+        raise AgentFileError(f"{source}: the frontmatter has no closing '---'")
     try:
         data = yaml.safe_load(front) or {}
     except yaml.YAMLError as exc:

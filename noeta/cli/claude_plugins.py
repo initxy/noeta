@@ -42,6 +42,7 @@ from noeta.agents.agent_files import (
     resolve_secrets,
 )
 from noeta.cli import plugin_options
+from noeta.toolkit import frontmatter
 
 __all__ = ["ClaudePlugin", "find_claude_plugins", "is_claude_plugin", "plugin_settings",
            "read_claude_plugin", "read_plugin_dir", "ships_parts"]
@@ -149,15 +150,14 @@ def _substitute(value: Any, names: Mapping[str, str]) -> Any:
 
 
 def _frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    if text.startswith("---\n"):
-        end = text.find("\n---", 4)
-        if end > 0:
-            try:
-                data = yaml.safe_load(text[4:end]) or {}
-            except yaml.YAMLError:
-                data = {}
-            return (data if isinstance(data, dict) else {}), text[end + 4:].lstrip("\n")
-    return {}, text
+    head, body = frontmatter.split(text)
+    if head is None:
+        return {}, body
+    try:
+        data = yaml.safe_load(head) or {}
+    except yaml.YAMLError:
+        data = {}
+    return (data if isinstance(data, dict) else {}), body.lstrip("\n")
 
 
 def _allowed(value: Any, names: Mapping[str, str]) -> str:
