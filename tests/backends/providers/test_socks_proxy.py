@@ -13,7 +13,6 @@ from noeta.backends.providers.anthropic import AnthropicProvider
 from noeta.backends.providers.openai_compat import OpenAICompatProvider
 from noeta.backends.providers.openai_responses import OpenAIResponsesProvider
 
-
 URL = "https://models.example.com"
 ADAPTERS: list[Callable[[], Any]] = [
     lambda: AnthropicProvider("key", base_url=URL),
