@@ -1,18 +1,18 @@
-Screen { layout: vertical; }
-#body { height: 1fr; }
-#transcript { width: 1fr; padding: 0 1; scrollbar-size-vertical: 1; scrollbar-color: $panel-lighten-2; scrollbar-color-hover: $panel-lighten-3; scrollbar-background: $background; scrollbar-background-hover: $background; }
-#side { width: 36; border-left: solid $panel; padding: 0 1; }
+/* The terminal's own background and text colour show through (an ANSI
+   theme); lines and the scrollbar are its grey. */
+Screen { layout: vertical; background: transparent; }
+#transcript, .agent-log { height: 1fr; padding: 0 1; scrollbar-size-vertical: 1; scrollbar-color: ansi_bright_black; scrollbar-color-hover: ansi_white; scrollbar-color-active: ansi_white; scrollbar-background: transparent; scrollbar-background-hover: transparent; scrollbar-background-active: transparent; }
 
-.welcome { border: round $panel-lighten-2; padding: 1 2; margin: 0 0 1 0; width: auto; max-width: 100%; height: auto; }
+.welcome { border: round ansi_bright_black; padding: 1 2; margin: 0 0 1 0; width: auto; max-width: 100%; height: auto; }
 .welcome-logo { width: auto; padding: 0 3 0 0; }
 .welcome-info { width: auto; }
-.user-message { margin: 1 0 0 0; padding: 0 1; background: $boost; }
+.user-message { margin: 1 0 0 0; padding: 0 1 0 0; }
 .thinking { margin: 1 0 0 2; height: auto; }
 .row { height: auto; margin: 1 0 0 0; }
 .bullet { width: 2; }
 .assistant-message { width: 1fr; margin: 0; padding: 0; }
 .assistant-message MarkdownParagraph { margin: 0; }
-.notice { color: $text-muted; margin: 1 0 0 0; }
+.notice { text-style: dim; margin: 1 0 0 0; }
 .notice.-error { color: $error; }
 .worked { margin: 1 0 0 0; }
 .command-output { margin: 1 0 0 2; height: auto; }
@@ -28,12 +28,12 @@ Screen { layout: vertical; }
 .approval { border-top: solid $warning; padding: 0 1; margin: 1 0; height: auto; }
 .approval-title { color: $warning; }
 .approval-prompt { padding: 1 2; }
-.approval-result { color: $text-muted; }
+.approval-result { text-style: dim; }
 .choices { height: auto; margin: 1 0 0 0; }
-.hint { color: $text-muted; margin: 1 0 0 0; }
+.hint { text-style: dim; margin: 1 0 0 0; }
 
 .question { border-top: solid $accent; padding: 0 1; margin: 1 0; height: auto; }
-.question.-answered { border-top: solid $panel; }
+.question.-answered { border-top: solid ansi_bright_black; }
 .question-option { padding: 0 1; }
 
 #overlay { height: auto; }
@@ -44,14 +44,21 @@ Screen { layout: vertical; }
 #tasks { height: auto; padding: 0 1; }
 #queued { height: auto; padding: 0 1; }
 #attachments { height: 1; padding: 0 1; }
-#prompt-box { height: auto; border: round $panel-lighten-2; margin: 1 0 0 0; }
-#prompt-box.-bash { border: round #fd5db1; }
-#prompt-box:focus-within { border: round $panel-lighten-3; }
-#prompt-box.-bash:focus-within { border: round #fd5db1; }
+#prompt-box { height: auto; border: round ansi_bright_black; margin: 1 0 0 0; }
+#prompt-box.-bash, #prompt-box.-bash:focus-within { border: round #fd5db1; }
 #marker { width: 2; padding: 0 0 0 1; }
 #prompt { height: auto; max-height: 10; min-height: 1; width: 1fr; border: none; background: transparent; }
+#prompt .text-area--cursor-line { background: transparent; }
+#prompt .text-area--placeholder { color: ansi_default; text-style: dim; }
+#prompt .text-area--cursor { background: ansi_default; color: ansi_default; text-style: reverse; }
 #completions { height: 8; padding: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }
 #shortcuts { height: auto; padding: 0 1; }
 #footer { height: 1; padding: 0 2; }
 #hints { width: 1fr; padding: 0 2 0 0; }
 #status { width: auto; }
+#agents { height: auto; padding: 0 2; margin: 1 0 0 0; }
+#agents:focus { background: transparent; }
+
+.agent-view { height: 1fr; }
+.agent-head { height: auto; padding: 0 1; border-bottom: solid ansi_bright_black; }
+.agent-hint { height: 1; padding: 0 1; }

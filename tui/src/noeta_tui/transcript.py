@@ -54,6 +54,15 @@ from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
 from noeta.toolkit.plugin_records import TITLE, AutoCompact, auto_compact
 from noeta.toolkit.tokens import estimate_tokens
 from noeta_tui import render
+from noeta_tui.agents import (
+    AgentsPanel,
+    Row,
+    agent_call_title,
+    child_activity,
+    new_child,
+    stats_text,
+    took,
+)
 from noeta_tui.widgets import (
     ApprovalCard,
     AssistantMessage,
@@ -74,6 +83,8 @@ SERVER_DIRECTORY = "the server's directory"
 WORKFLOW_KINDS = ("run", "agent", "result", "agent_failed", "ended")
 #: Seconds between two spinner frames.
 SPINNER_TICK = 0.12
+#: The agents' list key of a workflow run's line, before its run id.
+WORKFLOW_KEY = "workflow:"
 
 
 def _short_path(path: str, width: int) -> str:
@@ -149,10 +160,22 @@ class TranscriptView(App[None]):
     workflows: dict[str, ToolCall]
     #: A running call's output that came before its call was shown, by call id.
     early_progress: dict[str, str]
+    #: Every sub-agent seen (the model's and its workflows'), by child task
+    #: id: what it is doing, its counts, how it ended (``agents.new_child``).
+    subagents: dict[str, dict[str, Any]]
+    #: Every workflow call, by run id (``workflows`` keeps the running ones).
+    workflow_calls: dict[str, ToolCall]
+    #: The agents' list, in the order they started: child ids, and
+    #: ``workflow:<run id>`` for a run.
+    listed_agents: list[str]
+    #: The list keeps what ended after this (wall clock): the person's last send.
+    agents_since: float
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, message: str = "", *,
                          task_id: str = "") -> None: ...
+
+        async def close_agent(self) -> None: ...
 
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
         self.waiting_question = call_id
@@ -171,6 +194,7 @@ class TranscriptView(App[None]):
             if p.kind == "question" and self.waiting_question:
                 continue  # one question at a time
             self.shown_requests.add(key)
+            await self._back_to_transcript()
             who = p.agent or "sub-agent"
             if p.kind == "approval":
                 self.waiting_for = f"{who} waits for your approval"
@@ -427,9 +451,10 @@ class TranscriptView(App[None]):
                                     at=rec.at)
                 if finished.child is not None and not finished.child["status"]:
                     self.agents[finished.child["id"]] = finished
+                    self._track_agent(finished)
                     self._watch_agents()
                 if finished.workflow is not None:
-                    self.workflows[finished.workflow["run_id"]] = finished
+                    self._track_workflow(finished, rec.at)
                 if ev.note and ev.note != REJECTED_MARKER:
                     await finished.set_note(ev.note)
         elif isinstance(ev, ExtensionRecorded):
@@ -458,7 +483,7 @@ class TranscriptView(App[None]):
         if ev.extension == TITLE and ev.kind == "title":
             self.sub_title = str(data.get("title") or "")
         elif ev.extension == "workflow" and ev.kind in WORKFLOW_KINDS:
-            self._workflow_record(ev.kind, data)
+            self._workflow_record(ev.kind, data, rec.at)
         elif ev.extension == "todos":
             render.fold_todos(self.todos, ev.kind, data)
             self._show_todos()
@@ -484,20 +509,53 @@ class TranscriptView(App[None]):
 
     def _agent_ended(self, ended: ChildEnded, at: float) -> None:
         call = self.agents.pop(ended.child_id, None)
-        if call is None:
+        if call is not None:
+            call.end_agent(ended.status, answer=ended.answer, error=ended.error,
+                           tools=ended.tool_calls, tokens=ended.output_tokens, at=at)
+        self._end_child(ended.child_id, ended.status, error=ended.error, at=at,
+                        tools=ended.tool_calls, tokens=ended.output_tokens)
+
+    def _end_child(self, child_id: str, status: str, *, error: str = "", at: float | None = None,
+                   tools: int = 0, tokens: int = 0) -> None:
+        c = self.subagents.get(child_id)
+        if c is None:
             return
-        call.end_agent(ended.status, answer=ended.answer, error=ended.error,
-                       tools=ended.tool_calls, tokens=ended.output_tokens, at=at)
+        if not c["status"]:
+            at = at or time.time()
+            c.update(status=status, error=error, took=max(0.0, at - c["started"]))
+        c["ended_at"] = c["ended_at"] or at or time.time()
+        c["tools"], c["tokens"] = max(tools, c["tools"]), max(tokens, c["tokens"])
+
+    def _track_agent(self, call: ToolCall) -> None:
+        """An ``Agent`` call's agent, into the agents' list."""
+        c = call.child
+        if c is None:
+            return
+        c.setdefault("ended_at", None)
+        c["name"], c["kind"] = agent_call_title(call.call)
+        self.subagents[c["id"]] = c
+        if c["id"] not in self.listed_agents:
+            self.listed_agents.append(c["id"])
+
+    def _track_workflow(self, call: ToolCall, at: float | None = None) -> None:
+        run = call.workflow
+        if run is None:
+            return
+        rid = str(run["run_id"])
+        run.setdefault("started", at or time.time())
+        self.workflow_calls[rid] = call
+        if not run.get("status"):
+            self.workflows[rid] = call
+        if WORKFLOW_KEY + rid not in self.listed_agents:
+            self.listed_agents.append(WORKFLOW_KEY + rid)
 
     @work(exclusive=True, group="agents", exit_on_error=False)
     async def _watch_agents(self) -> None:
         """While background agents run: what each is doing, read from its
         own log (the tools it called, what it wrote) once a second."""
-        while self.agents:
-            for child_id, call in list(self.agents.items()):
-                c = call.child
-                if c is None:
-                    continue
+        while running := {cid: c for cid, c in self.subagents.items() if not c["status"]}:
+            for child_id, c in running.items():
+                call = self.agents.get(child_id)
                 try:
                     events = await self.local.client.events(child_id, c["seq"])
                 except Exception:
@@ -512,12 +570,15 @@ class TranscriptView(App[None]):
                         c["tools"] += 1
                     elif isinstance(ev, ModelReplied):
                         c["tokens"] += ev.response.usage.output
-                if not c["status"]:
+                        said = ev.response.message.text.strip()
+                        if said:  # what it said last, as Claude Code's list shows
+                            c["last"] = said.splitlines()[0]
+                if not c["status"] and call is not None:
                     call.show_agent()
             self.update_status()
             await asyncio.sleep(1.0)
 
-    def _workflow_record(self, kind: str, data: dict[str, Any]) -> None:
+    def _workflow_record(self, kind: str, data: dict[str, Any], at: float | None = None) -> None:
         """Fold one of the workflow plugin's records into its run's call."""
         rid = str(data.get("run_id") or "")
         if kind == "run":
@@ -526,7 +587,7 @@ class TranscriptView(App[None]):
                 return
             call.workflow = {"run_id": rid, "description": data.get("description") or "",
                              "agents": {}}
-            self.workflows[rid] = call
+            self._track_workflow(call, at)
             return
         call = self.workflows.get(rid)
         if call is None or call.workflow is None:
@@ -534,12 +595,24 @@ class TranscriptView(App[None]):
         run = call.workflow
         key = str(data.get("key") or "")
         if kind == "agent":
+            child_id = str(data.get("child_id") or "")
             run["agents"][key] = {"key": key, "label": data.get("label"),
-                                  "phase": data.get("phase"), "state": "running"}
+                                  "phase": data.get("phase"), "state": "running",
+                                  "child_id": child_id}
+            if child_id:
+                c = new_child(child_id, name=str(data.get("label") or key), started=at)
+                c["kind"] = str(data.get("phase") or "")
+                self.subagents[child_id] = c
+                self._watch_agents()
         elif kind in ("result", "agent_failed") and key in run["agents"]:
-            run["agents"][key]["state"] = "done" if kind == "result" else "failed"
+            agent = run["agents"][key]
+            agent["state"] = "done" if kind == "result" else "failed"
+            self._end_child(str(agent.get("child_id") or ""),
+                            "done" if kind == "result" else "failed",
+                            error=str(data.get("error") or ""), at=at)
         elif kind == "ended":
             run["status"], run["error"] = data.get("status"), data.get("error") or ""
+            run["ended_at"] = at or time.time()
             self.workflows.pop(rid, None)
         call.show_workflow()
 
@@ -551,6 +624,66 @@ class TranscriptView(App[None]):
                            if a.get("state") == "running")
         return running
 
+    def _child_row(self, child_id: str, name: str = "") -> Row:
+        c = self.subagents[child_id]
+        text, style = child_activity(c)
+        state = "running" if not c["status"] else "done" if c["status"] == "done" else "failed"
+        return Row(child_id, name or c["name"] or "agent", activity=text, activity_style=style,
+                   stats=stats_text(took(c), c["tokens"]), state=state)
+
+    def _workflow_row(self, rid: str) -> Row | None:
+        call = self.workflow_calls.get(rid)
+        run = call.workflow if call is not None else None
+        if run is None or call is None:
+            return None
+        agents = list(run.get("agents", {}).values())
+        children = [self.subagents[a["child_id"]] for a in agents
+                    if a.get("child_id") in self.subagents]
+        done = sum(1 for a in agents if a.get("state") == "done")
+        status = run.get("status")
+        state = "" if not status else "done" if status == "completed" else "failed"
+        if state == "failed":
+            activity = "Stopped" if status == "killed" else "Failed"
+            activity += f": {run['error']}" if run.get("error") else ""
+            style = "red"
+        elif state == "done":
+            activity, style = "Done", "dim"
+        else:
+            last = next((c["last"] for c in reversed(children) if not c["status"] and c["last"]),
+                        "")
+            activity = f"{done}/{len(agents)} agents done" + (f" · {last}" if last else "")
+            style = "dim"
+        end = run.get("ended_at") or time.time()
+        tokens = sum(int(c["tokens"]) for c in children)
+        name = str(run.get("description") or call.title)
+        return Row(WORKFLOW_KEY + rid, name, extra=f"(+{len(agents)})" if agents else "",
+                   activity=activity, activity_style=style,
+                   stats=stats_text(max(0.0, end - float(run.get("started") or end)), tokens),
+                   state=state or "running")
+
+    def agent_rows(self) -> list[Row]:
+        """The agents' list: what runs, and what ended since the person last sent."""
+        rows: list[Row] = []
+        for key in self.listed_agents:
+            if key.startswith(WORKFLOW_KEY):
+                row = self._workflow_row(key[len(WORKFLOW_KEY):])
+                call = self.workflow_calls.get(key[len(WORKFLOW_KEY):])
+                ended = (call.workflow or {}).get("ended_at") if call is not None else None
+                running = call is not None and not (call.workflow or {}).get("status")
+            else:
+                c = self.subagents.get(key)
+                row = self._child_row(key) if c is not None else None
+                ended = c["ended_at"] if c is not None else None
+                running = c is not None and not c["status"]
+            if row is not None and (running or (ended or 0) >= self.agents_since):
+                rows.append(row)
+        return rows
+
+    def _show_agents(self) -> None:
+        found = self.query("#agents")
+        if found:
+            found.first(AgentsPanel).show(self.agent_rows())
+
     def _show_todos(self) -> None:
         tasks = self.query_one("#tasks", Static)
         tasks.update(render.todo_block(self.todos))
@@ -561,8 +694,16 @@ class TranscriptView(App[None]):
         box.update(Text("\n".join(f"❯ {q}" for q in self.queued), style="dim"))
         box.display = bool(self.queued)
 
+    async def _back_to_transcript(self) -> None:
+        """What waits on the person is in the transcript: an agent's view
+        in its place closes."""
+        if self.query(".agent-view"):
+            await self.close_agent()
+
     async def _render_waiting(self, ev: Waiting, transcript: Any) -> None:
         await self._end_stream()
+        if ev.on in ("approval", "question"):
+            await self._back_to_transcript()
         self.waiting_for = {"approval": "waiting for your approval",
                             "question": "waiting for your answer",
                             "children": ""}.get(ev.on, "")
@@ -632,7 +773,9 @@ class TranscriptView(App[None]):
         if running and not self.flash:
             hints.append("  ·  ", style="dim")
             hints.append(f"◆ {running} agent{'s' if running > 1 else ''} running",
-                         style="#d77757")
+                         style=render.WORKING)
+            hints.append(" · ↓ to view", style="dim")
+        self._show_agents()
         self.query_one("#hints", Static).update(hints)
         sep = ("  ·  ", "dim")
         status = Text(self.model, style="dim")

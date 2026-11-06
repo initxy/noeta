@@ -101,12 +101,12 @@ async def _help(app: NoetaApp, arg: str) -> None:
     out.append(Text.from_markup(_shortcuts()))
     out.append("\n\nCommands\n", style="bold")
     for name, help_ in COMMANDS.items():
-        out.append(f"  /{name:<16}", style="#b1b9f9")
+        out.append(f"  /{name:<16}", style=render.ACCENT)
         out.append(f"{help_}\n", style="dim")
     if app.plugin_commands:
         out.append("\nFrom plugins\n", style="bold")
         for c in app.plugin_commands:
-            out.append(f"  /{c.name:<16}", style="#b1b9f9")
+            out.append(f"  /{c.name:<16}", style=render.ACCENT)
             out.append(f"{c.description}"
                        + (f" {c.argument_hint}" if c.argument_hint else "") + "\n", style="dim")
     await app.say_text(out)

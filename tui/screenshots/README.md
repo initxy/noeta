@@ -13,6 +13,8 @@ with a scripted model.
 | `approval.svg` | an edit's approval dialog: title, the call, the numbered diff it would make, `Do you want to proceed?`, `❯ 1. Yes`, the switch to accept edits, `No (esc)`, `Esc to cancel` | the same layout; Claude Code asks `Do you want to make this edit to calc.py?` and offers `Tab to amend` |
 | `context.svg` | `/context`: the 10x10 `⛁`/`⛶` grid with the categories beside it | the same grid; Claude Code also lists memory files, skills and the autocompact buffer |
 | `slash-menu.svg` | the slash-command menu under the prompt, filtered as you type, with descriptions | the same |
+| `agents.svg` | a background agent running: `◆ 1 agent running · ↓ to view` in the footer and the list under it, `● main` then `○ explore the repo  Read(…)  1s · ↓ 5 tokens` | the same list under the footer; Claude Code groups a workflow's agents as `name (+14)` too |
+| `agent-view.svg` | that agent picked: its name, type, state and counts over what it did (its prompt, what it said, its calls), in the transcript's place, `Esc to go back` | Claude Code shows the agent's transcript the same way |
 
 Not shown: Ctrl+R lists the earlier prompts of this run under the prompt, filtered as you
 type (Claude Code's searches every session's). Claude Code's footer also counts down `N% until
