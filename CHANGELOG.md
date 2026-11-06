@@ -7,6 +7,10 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-05
+
+A reworked terminal UI, and the README and package pages written for an open-source audience.
+
 ### Changed
 
 - **The terminal UI, reworked.** The welcome box shows noeta's mark beside the version, model
@@ -19,6 +23,12 @@ All notable changes to Noeta are documented here. The format is based on
   The prompt sits in a box; shift+enter (in terminals that report it) adds a line; dropping
   several image files attaches them all, listed over the prompt; ctrl+v reads the clipboard's
   image on macOS without `pngpaste`.
+- **README and package metadata for an open-source audience.** The README opens with the logo,
+  a screenshot, the headline features and a short benchmark table, with a Chinese edition
+  (`README.zh-CN.md`); links are absolute so PyPI renders it. The PyPI description, keywords and
+  classifiers say "Claude Code-compatible".
+- **Bench and eval read their model from a git-ignored `.env`**, with no internal model id as
+  the default.
 
 ### Fixed
 
