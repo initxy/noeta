@@ -22,7 +22,8 @@ from noeta.toolkit.signals import ARCHIVE_SIGNAL
 
 __all__ = ["archived_in", "root_summaries", "task_summary"]
 
-#: Rows read to find the roots among them (children are listed too).
+#: Root rows read, at most, to find ``limit`` of them that pass the
+#: ``archived`` filter.
 SCAN_ROWS = 500
 #: The characters of a first prompt a summary keeps.
 PROMPT_CHARS = 200
@@ -83,7 +84,9 @@ async def root_summaries(client: ClientAPI, limit: int = 50, cache: Cache | None
     (``True``) or only the others (``False``). ``cache`` (at most
     :data:`CACHE_ROOTS` of them) spares reading the log and inbox of a task
     that has not moved, and of one that has, all but what was added since."""
-    rows = [r for r in await client.tasks(limit=SCAN_ROWS) if r.parent_id is None]
+    # Filtered by ``archived`` after: more rows read than are listed.
+    scan = limit if archived is None else max(limit, SCAN_ROWS)
+    rows = await client.tasks(roots_only=True, limit=scan)
     out: list[dict[str, Any]] = []
     for row in rows:
         if len(out) >= limit:

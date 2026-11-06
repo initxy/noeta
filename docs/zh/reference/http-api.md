@@ -46,7 +46,7 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 | 方法与路径 | 请求体 / 查询参数 | 返回 |
 |---|---|---|
 | `POST /tasks` | `{agent, input?, config?, queue?, dedupe_key?, history_from?, history_through?}` | `201 {"task_id": …}` |
-| `GET /tasks` | `?parent_id=&status=&limit=`（`status`：`ready`、`running`、`waiting`、`ended`；`limit` 默认 100） | 任务行的列表 |
+| `GET /tasks` | `?parent_id=&status=&limit=&roots_only=`（`status`：`ready`、`running`、`waiting`、`ended`；`limit` 默认 100；`roots_only=true` 只列没有父任务的任务） | 任务行的列表 |
 | `GET /tasks/{id}` | | 一个任务行 |
 | `GET /summaries` | `?limit=&archived=`（`limit` 默认 50；`archived=true` / `false` 只要归档的 / 只要没归档的） | 根任务列表，最近更新的在前，每项 `{task_id, agent, status, waiting_on, end_status, created_at, updated_at, title, cwd, prompt, archived}`（`prompt` 是第一次提问，前 200 字符） |
 | `GET /tasks/{id}/events` | `?after=N` | 序号 `N` 之后的事件，每个是 `Recorded`（`seq`、`at`、`event`） |

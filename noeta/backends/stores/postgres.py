@@ -440,6 +440,7 @@ class PostgresStore:
         status: Status | None = None,
         limit: int = 100,
         owner: str | None = None,
+        roots_only: bool = False,
     ) -> list[TaskRow]:
         where: list[str] = []
         args: list[Any] = []
@@ -452,6 +453,8 @@ class PostgresStore:
         if owner is not None:
             where.append("owner = %s")
             args.append(owner)
+        if roots_only:
+            where.append("parent_id IS NULL")
         sql = f"SELECT {TASK_COLUMNS} FROM {{s}}.tasks"
         if where:
             sql += " WHERE " + " AND ".join(where)

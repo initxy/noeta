@@ -91,7 +91,7 @@ def _rows(title: str, rows: list[tuple[str, str]]) -> Text:
     width = max((len(k) for k, _ in rows), default=0)
     for k, v in rows:
         out.append(f"  {k.ljust(width)}  ", style="dim")
-        out.append(f"{v}\n")
+        out.append(render.clean(f"{v}") + "\n")
     return out
 
 
@@ -107,8 +107,9 @@ async def _help(app: NoetaApp, arg: str) -> None:
         out.append("\nFrom plugins\n", style="bold")
         for c in app.plugin_commands:
             out.append(f"  /{c.name:<16}", style=render.ACCENT)
-            out.append(f"{c.description}"
-                       + (f" {c.argument_hint}" if c.argument_hint else "") + "\n", style="dim")
+            out.append(render.clean(f"{c.description}"
+                                    + (f" {c.argument_hint}" if c.argument_hint else "")) + "\n",
+                       style="dim")
     await app.say_text(out)
 
 
@@ -141,9 +142,9 @@ async def _plugin_panel(app: NoetaApp, name: str, empty: str) -> None:
         await app.say_notice(f"/{name} failed: {exc}")
         return
     title, _, rest = (typed.text if typed is not None else empty).partition("\n")
-    out = Text().append(title + "\n", style="bold")
+    out = Text().append(render.clean(title) + "\n", style="bold")
     for line in rest.splitlines():
-        out.append(f"  {line}\n", style=PANEL_MARKS.get(line[:1], ""))
+        out.append(render.clean(f"  {line}") + "\n", style=PANEL_MARKS.get(line[:1], ""))
     await app.say_text(out)
 
 
@@ -189,7 +190,7 @@ async def _model(app: NoetaApp, arg: str) -> None:
             await set_model(app, model)
 
     await _picker(app, Picker(f"Select model (now {app.model})", options, picked,
-                              index=current))
+                              index=current), "/model")
 
 
 async def set_model(app: NoetaApp, name: str) -> None:
@@ -220,7 +221,7 @@ async def _effort(app: NoetaApp, arg: str) -> None:
             await set_effort(app, level)
 
     await _picker(app, Picker(f"Select effort (now {current or 'the model default'})", options,
-                              picked, index=index))
+                              picked, index=index), "/effort")
 
 
 async def set_effort(app: NoetaApp, level: str) -> None:
@@ -241,7 +242,16 @@ async def _change(app: NoetaApp, changes: dict[str, str]) -> None:
         app.task_config = {**app.task_config, **changes}
 
 
-async def _picker(app: NoetaApp, picker: Picker) -> None:
+async def _picker(app: NoetaApp, picker: Picker, what: str = "that") -> None:
+    """``picker`` in place of the prompt; a failure of what its pick does
+    is shown as ``<what> failed: …``."""
+    picked = picker.on_pick_cb
+
+    async def shown(choice: str) -> None:
+        async with app.failures_shown(what):
+            await picked(choice)
+
+    picker.on_pick_cb = shown
     overlay = app.query_one("#overlay")
     await overlay.remove_children()
     await overlay.mount(picker)
@@ -390,10 +400,11 @@ async def _rewind(app: NoetaApp, arg: str) -> None:
                     await rewind_to(app, points, int(n), what)
 
             await _picker(app, Picker(f"Rewind to before: {_point_label(points[int(n) - 1])}",
-                                      REWIND_WHAT, picked_what))
+                                      REWIND_WHAT, picked_what), "/rewind")
 
         await _picker(app, Picker("Rewind — restore the code and/or conversation to before "
-                                  "a prompt", options, picked_point, index=len(options) - 1))
+                                  "a prompt", options, picked_point, index=len(options) - 1),
+                      "/rewind")
         return
     n = int(words[0])
     if not 1 <= n <= len(points):
@@ -443,7 +454,7 @@ async def resume_picker(app: NoetaApp, rows: list[Any]) -> None:
         if task_id and task_id != app.task_id:
             await app.open_task(task_id)
 
-    await _picker(app, Picker("Resume a task", options, picked))
+    await _picker(app, Picker("Resume a task", options, picked), "/resume")
 
 
 #: Claude Code's question on first opening a folder.

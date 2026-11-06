@@ -52,7 +52,7 @@ Host code that builds the app itself calls `noeta.host.http.create_app(client, t
 | Method and path | Body / query | Answers |
 |---|---|---|
 | `POST /tasks` | `{agent, input?, config?, queue?, dedupe_key?, history_from?, history_through?}` | `201 {"task_id": …}` |
-| `GET /tasks` | `?parent_id=&status=&limit=` (`status`: `ready`, `running`, `waiting`, `ended`; `limit` default 100) | a list of task rows |
+| `GET /tasks` | `?parent_id=&status=&limit=&roots_only=` (`status`: `ready`, `running`, `waiting`, `ended`; `limit` default 100; `roots_only=true`: only tasks without a parent) | a list of task rows |
 | `GET /tasks/{id}` | | one task row |
 | `GET /summaries` | `?limit=&archived=` (`limit` default 50; `archived=true` / `false` keeps only those / the others) | the root tasks, most recently updated first, each `{task_id, agent, status, waiting_on, end_status, created_at, updated_at, title, cwd, prompt, archived}` (`prompt`: the first one, 200 characters) |
 | `GET /tasks/{id}/events` | `?after=N` | the task's events after seq `N`, as `Recorded` objects (`seq`, `at`, `event`) |

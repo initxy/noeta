@@ -37,6 +37,7 @@ from noeta_tui import bash_mode, files, history, mentions, render, slash
 from noeta_tui.agents import MAIN, AgentsPanel, AgentView, WorkflowView
 from noeta_tui.transcript import SERVER_DIRECTORY, WORKFLOW_KEY, TranscriptView, _short_path
 from noeta_tui.widgets import (
+    CleanMarkdown,
     Completions,
     Notice,
     PromptInput,
@@ -61,6 +62,8 @@ ctrl + r for history   ctrl + t to toggle tasks          shift + ⏎ for newline
 DOUBLE_PRESS = 0.8
 #: Seconds the mode key waits for a new task's start to record its mode.
 MODE_WAIT = 2.0
+#: The tasks ``/resume`` offers: the most recently updated roots.
+RESUME_ROWS = 10
 
 
 #: What ``-c`` says, before it exits, when nothing was started here.
@@ -162,6 +165,7 @@ class NoetaApp(TranscriptView):
         self.question_answers: dict[str, Any] = {}
         #: Sub-agent requests already shown, by (task id, request id).
         self.shown_requests: set[tuple[str, str]] = set()
+        self.open_cards = {}
         #: The task's agent is not one this app has: history only, no input.
         self.read_only = False
         self.waiting_for = ""
@@ -239,7 +243,8 @@ class NoetaApp(TranscriptView):
             return
         else:
             await self.new_task()
-        self.query_one(PromptInput).focus()
+        if not self.open_cards:  # a reopened task's open approval keeps the keys
+            self.query_one(PromptInput).focus()
         if prompt and self.resume == "":
             self.query_one(PromptInput).text = prompt
         elif prompt:
@@ -323,6 +328,7 @@ class NoetaApp(TranscriptView):
         self.early_progress.clear()
         self._set_question("", "", {})
         self.shown_requests.clear()
+        self.open_cards.clear()
         self.waiting_for = ""
         self.busy = False
         self.mode, self.modes, self.modes_published = "", Modes(), False
@@ -355,14 +361,13 @@ class NoetaApp(TranscriptView):
 
     async def pick_task(self) -> None:
         """Open the latest task and offer the others (``/resume``'s picker)."""
-        rows = await self.local.client.tasks(limit=20)
-        roots = [r for r in rows if r.parent_id is None]
+        roots = await self.local.client.tasks(roots_only=True, limit=RESUME_ROWS)
         if not roots:
             await self.new_task()
             return
         await self.open_task(roots[0].task_id)
-        self.listed = [r.task_id for r in roots[:10]]
-        await slash.resume_picker(self, roots[:10])
+        self.listed = [r.task_id for r in roots]
+        await slash.resume_picker(self, roots)
 
     @work(exclusive=True, group="commands", exit_on_error=False)
     async def _load_commands(self) -> None:
@@ -385,12 +390,15 @@ class NoetaApp(TranscriptView):
         self.history_at = len(self.history)
         self._set_marker("")
         if text.startswith("/"):
-            await self.command(text)
+            async with self.failures_shown(text.split()[0]):
+                await self.command(text)
             return
         if text.startswith("!") and not self.waiting_question:
-            await bash_mode.run(self, text[1:].strip())
+            async with self.failures_shown("the command"):
+                await bash_mode.run(self, text[1:].strip())
             return
-        await self.send(text)
+        async with self.failures_shown("sending it"):
+            await self.send(text)
 
     async def send(self, text: str) -> None:
         if self.read_only:
@@ -445,16 +453,13 @@ class NoetaApp(TranscriptView):
         elif arg:
             await self.open_task(arg)
         else:
-            rows = await self.local.client.tasks(limit=20)
-            roots = [r for r in rows if r.parent_id is None][:10]
+            roots = await self.local.client.tasks(roots_only=True, limit=RESUME_ROWS)
             self.listed = [r.task_id for r in roots]
             await slash.resume_picker(self, roots)
 
     async def say_markdown(self, text: str) -> None:
-        from textual.widgets import Markdown
-
         transcript = self.query_one("#transcript")
-        await transcript.mount(Markdown(text, classes="notice"))
+        await transcript.mount(CleanMarkdown(text, classes="notice"))
         transcript.scroll_end(animate=False)
 
     async def say_text(self, text: Text) -> None:
@@ -650,8 +655,9 @@ class NoetaApp(TranscriptView):
 
     async def action_stop_turn(self) -> None:
         if self.task_id and self.busy:
-            await self.local.client.cancel(self.task_id, "stopped from the terminal",
-                                           turn_only=True)
+            async with self.failures_shown("stopping"):
+                await self.local.client.cancel(self.task_id, "stopped from the terminal",
+                                               turn_only=True)
             return
         now = time.monotonic()
         double = now - self._last_escape <= DOUBLE_PRESS
@@ -752,7 +758,8 @@ class NoetaApp(TranscriptView):
         yes, words the model reads beside the call's result."""
         self.waiting_for = ""
         task = task_id or self.task_id
-        await answer_choice(self.local.client, task, call_id, choice, message)
+        async with self.failures_shown("answering"):
+            await answer_choice(self.local.client, task, call_id, choice, message)
         self.update_status()
         self._box().focus()
 
@@ -760,16 +767,17 @@ class NoetaApp(TranscriptView):
         """Step to the next permission mode (Claude Code's shift+tab)."""
         if self.read_only:
             return
-        await self.ensure_task()
-        if not self.mode or not self.modes_published:
-            await self._modes_from_log()
-        current = self.mode or self.permission_mode
-        if not current:
-            await self.say_notice("the task has not recorded a permission mode yet")
-            return
-        mode = next_mode(current, self.modes.cycle)
-        await self.local.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
-        self.mode = mode
+        async with self.failures_shown("switching the mode"):
+            await self.ensure_task()
+            if not self.mode or not self.modes_published:
+                await self._modes_from_log()
+            current = self.mode or self.permission_mode
+            if not current:
+                await self.say_notice("the task has not recorded a permission mode yet")
+                return
+            mode = next_mode(current, self.modes.cycle)
+            await self.local.client.signal(self.task_id, MODE_SIGNAL, {"mode": mode})
+            self.mode = mode
         self.update_status()
 
     async def _modes_from_log(self) -> None:

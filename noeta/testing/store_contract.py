@@ -65,6 +65,17 @@ async def test_lists_filter_by_the_claims_owner(store: Store) -> None:
     assert await store.tasks(owner="w3") == []
 
 
+async def test_lists_only_the_roots_however_many_children_are_newer(store: Store) -> None:
+    await store.create(new("old"))
+    await store.create(new("root"))
+    for n in range(3):
+        await store.create(NewTask(task_id=f"root.{n}", created=TaskCreated(
+            agent="a", parent_id="root", root_id="root")))
+    assert [r.task_id for r in await store.tasks(limit=2)] == ["root.2", "root.1"]
+    assert [r.task_id for r in await store.tasks(roots_only=True, limit=2)] == ["root", "old"]
+    assert await store.tasks(roots_only=True, parent_id="root") == []
+
+
 async def test_create_dedupe_key_returns_first_task(store: Store) -> None:
     assert await store.create(new("a", dedupe_key="k")) == ("a", True)
     assert await store.create(new("b", dedupe_key="k")) == ("a", False)

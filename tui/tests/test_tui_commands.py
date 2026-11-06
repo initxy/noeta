@@ -1,5 +1,5 @@
 """The TUI's slash commands with a mechanism behind them (/model, /cost,
-/context, /memory, /config, /rewind and Esc Esc, /clear, /resume <n>),
+/context, /memory, /config, /rewind and Esc Esc, /clear, /resume and its list),
 ``@`` mentions, pasted images and local plugin commands."""
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ pytest.importorskip("textual")
 from noeta.backends.execenvs.local import LocalExecEnv
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
-from noeta.core.events import External
+from noeta.core.events import External, TaskCreated
 from noeta.core.extension import Command, CommandContext, Extension
+from noeta.core.store import NewTask
 from noeta.core.types import Image, Message, Text
 from noeta.host.local import LocalApp
 from noeta.plugins.checkpoints import Checkpoints
@@ -220,3 +221,21 @@ async def test_a_task_a_headless_run_resumed_is_interactive_again_in_the_tui(
     assert "AskUserQuestion" in names[0]
     assert "AskUserQuestion" not in names[1]
     assert "AskUserQuestion" in names[2]
+
+
+async def test_resume_lists_the_roots_past_many_sub_agents(tmp_path: Path) -> None:
+    app = make_app(tmp_path, ScriptedProvider([reply("one"), reply("two")]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await type_line(pilot, "first task")
+        await settle(pilot, lambda: not app.busy and "one" in shown(app))
+        first = app.task_id
+        await type_line(pilot, "/clear")
+        await type_line(pilot, "second task")
+        await settle(pilot, lambda: not app.busy and "two" in shown(app))
+        second = app.task_id
+        for n in range(30):  # its sub-agents, all updated after both roots
+            await app.local.store.create(NewTask(task_id=f"{second}.{n}", created=TaskCreated(
+                agent="main", parent_id=second, root_id=second)))
+        await type_line(pilot, "/resume")
+        await settle(pilot, lambda: len(app.query(Picker)) == 1)
+        assert app.listed == [second, first]
