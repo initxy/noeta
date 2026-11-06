@@ -7,6 +7,14 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-05
+
+### Fixed
+
+- **noeta starts behind a SOCKS proxy.** With `ALL_PROXY=socks5://…` in the environment (Clash
+  and similar tools set it), `noeta` failed at start with `Using SOCKS proxy, but the 'socksio'
+  package is not installed`: noeta now depends on `httpx[socks]`.
+
 ## [1.0.3] - 2026-11-05
 
 The terminal UI lists sub-agents as Claude Code does and draws in the terminal's own colours.
