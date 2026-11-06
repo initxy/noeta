@@ -14,7 +14,8 @@ tag is the maintainer's sign-off.
    separate steps.
 4. `git tag vX.Y.Z && git push origin vX.Y.Z`. The workflow runs `make check` on the tagged
    commit, builds both packages, checks both wheels' versions equal the tag and that they install
-   together, and publishes both.
+   together, publishes both, then creates the GitHub Release with that version's CHANGELOG
+   section as its notes.
 5. Verify: `uv pip install 'noeta[tui]==X.Y.Z'` in a fresh venv (the index lags the publish by a minute
    or two).
 
