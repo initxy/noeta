@@ -82,6 +82,8 @@ PROGRESS_MIN_MESSAGES = 3
 PROGRESS_SIGNAL = "subtasks.progress"
 #: Tasks whose transcript progress a process remembers at most.
 TRANSCRIBED_KEEP = 256
+#: The state a continuing task keeps (``Subtasks.continue_state``).
+CARRIED_STATE = ("listed", "held_list", "types", "reminded")
 #: The permission mode in which agents hand back with ``SubagentHandback``.
 AUTO_MODE = "auto"
 #: Agent types whose missing report gets no hint to ask for it (Claude
@@ -251,12 +253,16 @@ class Subtasks(Extension):
         return idle.reduce(st, kind, data) or st
 
     def continue_state(self, state: Any) -> Any:
-        """A continuing task (a fork, a resumed sub-agent) starts its own
-        mention count: ``mentions_through`` is a seq of the source's log,
-        and the new log's prompts start below it."""
+        """A continuing task (a fork, a resumed sub-agent, a rewind, a
+        channel's next task) keeps only what its carried conversation told
+        the model: the agent types listed and the hand-back reminder. The
+        source's agents and what waits on them stay the source's: their ends
+        go to it and the kernel carries no children, so here every one would
+        read as running for good. Its mention count starts over too
+        (``mentions_through`` is a seq of the source's log)."""
         if not isinstance(state, dict):
             return state
-        return {**state, "mentions_through": 0}
+        return {**self.initial_state(), **{k: state[k] for k in CARRIED_STATE if k in state}}
 
     def _state(self, state: TaskState) -> dict[str, Any]:
         st = state.ext.get(self.name)
