@@ -77,7 +77,9 @@ What a sandboxed command may do:
   `~/.pgpass`, `~/.password-store`), noeta's own home directory (`~/.noeta`: the token, the task
   store; its saved tool outputs, project memory and pasted images stay readable),
   `filesystem.denyRead`, `Read(...)` deny rules and `credentials.files` entries.
-  `filesystem.allowRead` opens a path inside one of them again.
+  `filesystem.allowRead` opens a path inside one of them again. A denied directory holding a
+  writable one (`denyRead: ["~"]` with the project in `~/proj`) stays denied, the writable one
+  shown inside it.
 - **Write** only in the working directory, `filesystem.allowWrite`, the paths of `Edit(...)`
   allow rules and `additionalDirectories`, and a private `$TMPDIR`. Never in
   `filesystem.denyWrite`, and never in the **protected paths**.

@@ -41,7 +41,7 @@
 
 沙箱里的命令能做的事：
 
-- **读**：什么都能读，除了家目录里的凭据（`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker/config.json`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.pypirc`、`~/.npmrc`、cargo 凭据、`~/.pgpass`、`~/.password-store`）、noeta 自己的家目录（`~/.noeta`，里面有访问令牌和任务存储；其中存下来的工具输出、项目记忆和粘贴的图片仍然能读）、`filesystem.denyRead`、`Read(...)` 拒绝规则和 `credentials.files` 里列的文件。`filesystem.allowRead` 可以在这些里面重新放开某个路径。
+- **读**：什么都能读，除了家目录里的凭据（`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.azure`、`~/.config/gcloud`、`~/.kube`、`~/.docker/config.json`、`~/.config/gh`、`~/.netrc`、`~/.git-credentials`、`~/.pypirc`、`~/.npmrc`、cargo 凭据、`~/.pgpass`、`~/.password-store`）、noeta 自己的家目录（`~/.noeta`，里面有访问令牌和任务存储；其中存下来的工具输出、项目记忆和粘贴的图片仍然能读）、`filesystem.denyRead`、`Read(...)` 拒绝规则和 `credentials.files` 里列的文件。`filesystem.allowRead` 可以在这些里面重新放开某个路径。被拒读的目录里如果有可写目录（比如 `denyRead: ["~"]`，项目在 `~/proj`），这个目录照样读不了，只有里面那个可写目录能看到。
 - **写**：只能写工作目录、`filesystem.allowWrite`、`Edit(...)` 允许规则和 `additionalDirectories` 里的路径，以及一个私有的 `$TMPDIR`。`filesystem.denyWrite` 和**受保护路径**永远写不了。
 - **联网**：只能经过 noeta 在沙箱外跑的过滤代理，只能连 `network.allowedDomains` 里的主机（`*.example.com` 覆盖所有子域名，`host:port` 只开一个端口；`deniedDomains` 优先）。一个都没列，就哪儿都连不上。被拒的主机会附在命令输出后面的 `<sandbox_violations>` 里。允许的域名如果解析到回环、链路本地或云厂商元数据地址，同样拒绝。设了 `network.httpProxyPort` / `socksProxyPort` 就改走你自己的代理。
 - **环境变量**：`credentials.envVars` 里列的会被清掉。
