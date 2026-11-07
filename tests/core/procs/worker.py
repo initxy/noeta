@@ -80,8 +80,12 @@ async def main(db: str, journal: str, schema: str | None) -> None:
 
         store = PostgresStore(db, schema=schema)
     agent = Agent(name="a", model="m", tools=[Effect(journal)])
+    # SIGKILLs every 0.05-0.25 s can hit one task four times with no step
+    # between, which the restart limit would end (tests/core/test_restart_limit.py
+    # covers it); this test is about recovery, so no limit.
     rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: ByProgress(),
-                 env_for=lambda _s: None, lease_seconds=0.5, poll_interval=0.05)  # type: ignore[arg-type,return-value]
+                 env_for=lambda _s: None, lease_seconds=0.5, poll_interval=0.05,
+                 restart_limit=0)  # type: ignore[arg-type,return-value]
     await rt.serve(asyncio.Event())
 
 
