@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: active
 created: 2026-11-07
 branch: spec/unified-plugins
 ---
@@ -80,14 +80,18 @@ in a separate repository, the official marketplace on by default, the TUI code p
   (path to a built ES module). No manifest = backend only, exactly today's behaviour. The
   manifest names no host dependencies: `ui_api` is the one compatibility number and the host
   supports a range of it.
-- D2 One switch, two scopes. The machine default stays `[plugins.<name>] enabled`. A task's
-  own switch is a signal (`Client.signal(task_id, "plugins", {"off": [...]})`) folded into
-  task state; the runner leaves those plugins out when it builds `self.exts`
-  (`noeta/core/runner/task.py:412`), so every worker runs the same set and the pin is
-  recorded again as today. Sub-agents inherit the parent's off-set. Front ends offer a switch
-  only for installed (non-built-in) plugins and the built-ins safe to drop: `web`, `workflow`,
-  `schedule`, `todos`, `findings`, `title`, `quiet_nudge`, `memory`, `mcp`, `checkpoints`,
-  `skills`, `ask_user`. Others are switched in `config.toml` only.
+- D2 One switch, three scopes. `[plugins.<name>] enabled = false` in `config.toml` still
+  removes a plugin from the agents (the hard switch). A task's own switch is a new
+  `CHANGEABLE_CONFIG` key, `plugins_off: list[str]`, sent with the existing `config` signal
+  (`noeta/core/loop/state.py`): a plugin named there keeps folding its records (state,
+  snapshots and the fold version do not change) but offers nothing and is asked nothing
+  (tools, context parts, reminders, gates, commands, `ui`, `on_event`) from the next turn on,
+  on whichever worker runs the task. Sub-agents inherit the parent's `plugins_off`. The
+  machine default for new tasks is `~/.noeta/plugin-switches.json` (`{"off": [...]}`),
+  written by `PUT /plugins/{name}`, and joins every new task's `plugins_off`. Front ends offer
+  a switch only for installed (non-built-in) plugins and the built-ins safe to drop: `web`,
+  `workflow`, `schedule`, `todos`, `findings`, `title`, `quiet_nudge`, `memory`, `mcp`,
+  `checkpoints`, `skills`, `ask_user`.
 - D3 UI data part (all front ends). New optional `Extension.ui(view) -> Sequence[UiItem]`,
   computed from the folded view like reminders: `StatusItem(key, text)`, `Widget(key,
   markdown, placement="above"|"below")`, `Notice(text, level)`. Dialogs stay the existing
@@ -139,8 +143,62 @@ in a separate repository, the official marketplace on by default, the TUI code p
   line. `hello-plugin`, `run-tests` and `house-style` stay in `examples/`, joined by a web-part
   example. `web/sdk` (`@noeta/web-sdk`: `ctx` types, slot names, a build template) and `web/ui`
   (`@noeta/ui`) are published to npm at noeta's version.
-- Open: `examples/chat-approvals` — delete, or move to `noeta-plugins` with `chat-bridge`
-  (it was already on the owner's deletion shortlist). Open: the npm scope name.
+- Owner, 2026-11-07 (follow the recommendations): `examples/chat-approvals` moves to
+  `noeta-plugins` with `chat-bridge`, the only plugin it works with. The npm scope is
+  `@noeta-ai` (`@noeta` is taken). Creating the GitHub repository and publishing to npm wait
+  for the owner; until then `noeta-plugins` is a local repository beside this one.
+
+## Interfaces (v1)
+
+Python (`noeta/core/extension.py`, exported from `noeta`):
+
+```python
+@dataclass(frozen=True)
+class StatusItem: key: str; text: str; tone: str = "normal"      # normal | ok | warn | error
+@dataclass(frozen=True)
+class Widget: key: str; markdown: str; placement: str = "above"  # above | below the composer
+@dataclass(frozen=True)
+class Notice: key: str; text: str; level: str = "info"           # info | warn | error
+UiItem = StatusItem | Widget | Notice
+
+class Extension:
+    async def ui(self, view: TaskView) -> Sequence[UiItem]: return ()
+    async def ui_call(self, ctx: CommandContext, name: str, args: Any) -> Any:
+        raise LookupError(name)
+```
+
+`AppAPI` (`noeta/host/app.py`; `LocalApp`, `RemoteApp`):
+
+- `plugins(agent, cwd) -> list[PluginInfo]`; `set_plugin_default(name, enabled)`;
+  `ui(task_id) -> list[UiEntry]`; `plugin_call(task_id, plugin, name, args) -> Any`;
+  `install_plugin(source, marketplace=None, commit=None) -> PluginInfo`;
+  `remove_plugin(name)`; `market() -> list[MarketEntry]`. A task's switch is
+  `change_config(client, task_id, {"plugins_off": [...]})`.
+- `PluginInfo`: `{name, version, description, source, builtin, enabled, switchable, broken,
+  parts, ui_api, web}`; `parts` ⊂ `backend, ui, web, skills, agents, commands, hooks, mcp`;
+  `web` is `{"entry": "/plugins/<name>/web/<file>?v=<hash>"}` or `null`.
+- `UiEntry`: `{plugin, type: "status"|"widget"|"notice", key, text|markdown,
+  tone|placement|level}`.
+- `MarketEntry`: `{marketplace, name, description, version, source, commit, parts, ui_api,
+  installed}`.
+
+HTTP (`noeta/host/http.py`; token as today unless noted):
+
+| Route | Body / answer |
+|---|---|
+| `GET /plugins?agent=&cwd=` | `{"plugins": [PluginInfo], "ui_api": [min, max]}` |
+| `PUT /plugins/{name}` | `{"enabled": bool}` → machine default for new tasks |
+| `POST /plugins/{name}/call` | `{"task_id", "name", "args"}` → `{"result": ...}` |
+| `GET /plugins/{name}/web/{path}` | the plugin's built web files, **no token** (an ES module import sends no header; the files hold no secret), only for an enabled plugin |
+| `GET /tasks/{id}/ui` | `{"items": [UiEntry]}` |
+| `GET /market` | `{"entries": [MarketEntry]}` |
+| `POST /plugins/install`, `DELETE /plugins/{name}` | loopback or `--allow-plugin-install` only (403 otherwise) |
+
+Web (`@noeta-ai/web-sdk`): a plugin's module exports
+`activate(ctx: PluginContext): void | (() => void)`. `ctx.slots.add(slot, {key?, order?,
+mount?}, Component)` returns a remover; `ctx.slots.wait(slot, timeoutMs = 5000)`. The page's
+import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
+`@noeta-ai/web-sdk`, `@noeta-ai/ui` as the page's own single instances.
 
 ## Plan
 
@@ -213,3 +271,4 @@ in a separate repository, the official marketplace on by default, the TUI code p
 ## Progress log
 
 - 2026-11-07 Written after reading pi, DeepSeek Harness and five community plugins; proposed.
+- 2026-11-07 Owner: start, following every recommendation; active. D2 moved onto the `config` signal (`plugins_off`); interfaces fixed for parallel work.
