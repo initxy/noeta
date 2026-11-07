@@ -26,6 +26,11 @@ A new outside protocol is another translation in `noeta/host`, never a second AP
 
 ## The web app
 
+**Experimental.** The web and desktop apps are built from source: they are not published
+(no npm package, no installers in the releases), CI does not run their tests (`make frontends`
+runs them locally), and the desktop installers are not signed. The terminal UI, `noeta -p`,
+ACP and the HTTP API are the supported ways in.
+
 The web app is a React page over `noeta serve`'s HTTP API (the same calls `RemoteClient`
 makes). It has a sidebar of conversations grouped by directory, a streamed markdown transcript, tool
 cards (Bash output, edits as diffs, sub-agents nested), approval cards with Claude Code's
@@ -59,6 +64,8 @@ server's directories), a terminal pane and a file tree. A conversation cannot be
 store keeps every task's log; archive hides it.
 
 ## The desktop app
+
+**Experimental**, like the web app: build it from source; its installers are not signed.
 
 The desktop app is the web app in an Electron window over a local `noeta serve` it starts and
 stops. Nothing to connect or paste: on launch it finds `noeta`, picks a free loopback port,

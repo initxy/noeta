@@ -29,6 +29,7 @@ const tree: [string, string, [string, string, string][]][] = [
     ['/guides/memory-and-instructions', 'Instructions and memory', '项目说明与记忆'],
     ['/guides/plugins', 'Write a plugin', '写一个插件'],
     ['/guides/server', 'Run it as a server', '作为服务端运行'],
+    ['/guides/docker', 'Deploy with Docker', '用 Docker 部署'],
     ['/guides/sandbox', 'Where commands run', '命令在哪里执行'],
   ]],
   ['How it works', '设计与原理', [
@@ -78,7 +79,7 @@ const nav = (zh: boolean) => {
 
 export default defineConfig({
   title: 'noeta',
-  description: 'The open-source, Claude Code-compatible coding agent that never loses its place: crash-proof, free to wait, from one laptop to many servers.',
+  description: 'The open-source, Claude Code-compatible coding agent you can self-host on many workers: one Postgres store, any worker continues any task, waiting holds no process.',
   base: '/noeta/',
   cleanUrls: true,
   lastUpdated: true,

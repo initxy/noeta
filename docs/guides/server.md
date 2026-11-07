@@ -3,7 +3,8 @@
 This page shows how to run noeta for other people and programs: `noeta serve` for the
 HTTP / WebSocket API, `noeta worker` processes that run the tasks, one Postgres store they
 share, the bearer token, the web app, and channels that let a chat app in. How the pieces stay
-correct across machines is on [Many machines](../how-it-works/many-machines.md).
+correct across machines is on [Many machines](../how-it-works/many-machines.md). A ready
+Docker image and compose file for all of this are on [Deploy with Docker](./docker.md).
 
 Every task is a log in the store. A worker that dies leaves nothing behind: another one claims
 its tasks where their logs stop.

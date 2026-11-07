@@ -5,16 +5,18 @@
 ## 它是什么
 
 noeta 是一个开源的编程 agent：站在模型那边看，它的行为和 Claude Code 一样；站在运维那边看，
-它是按服务端程序的路子造的。它是一个 Python 包（`noeta`），上面有终端界面（`noeta-tui`）、
-网页和桌面端，用的都是同一套接口。
+它是按服务端程序的路子造的。它是一个 Python 包（`noeta`），上面有终端界面（`noeta-tui`），
+另有还在实验阶段、需要从源码构建的网页版和桌面版，用的都是同一套接口。它和别的 agent 不一样的地方
+在于这两点同时成立：对模型守着 Claude Code 的约定；你又可以自己部署任意多个 worker，大家共用一个
+Postgres 存储，哪个 worker 都能接着跑任何任务。
 
 两个决定定下了其余的一切：
 
 1. **模型看到的东西照 Claude Code 来。** 模型最熟悉的是最常用的那个编程 agent 的工具和提示词。
    noeta 发同样的工具名和参数格式，保留 Claude Code 提示词各部分的规则和顺序（但用自己的话写），
    发同样的提醒和通知，用同样的方式压缩上下文，发给 provider 的请求结构也一样。任何差异都算 bug，
-   除非它连同理由一起登记在案
-   （[ADR-003](https://github.com/initxy/noeta/blob/main/docs/adr/003-claude-code-is-the-model-visible-contract.md)、
+   除非它连同理由一起登记在案；`make parity` 会重放录下来的 Claude Code 真实会话来核对
+   （[如何对齐 Claude Code](./how-it-works/parity.md)、[ADR-003](https://github.com/initxy/noeta/blob/main/docs/adr/003-claude-code-is-the-model-visible-contract.md)、
    [`parity/deviations.md`](https://github.com/initxy/noeta/blob/main/parity/deviations.md)）。
 2. **底下，一个任务就是一条只追加、只有一个写入者的日志。** 正在跑的任务没有任何东西只活在某个
    进程里。worker 认领任务，重放日志得到状态，走一步，再把发生的事追加进去。任何 worker 都能接手
@@ -24,12 +26,13 @@ noeta 是一个开源的编程 agent：站在模型那边看，它的行为和 C
 
 ## 适合用来做什么
 
-- **无人值守的编程 agent。** 一个任务可以跑好几个小时，worker 被杀掉或重新部署也不怕，换一台
-  机器从日志断的地方接着跑。
-- **需要等人的 agent。** 审批和提问会让任务挂起。你可以在终端、网页、编辑器或自己的服务里回复，
-  几分钟后或几天后都行。
 - **多台机器。** 让任意多个 `noeta worker` 进程连同一个 Postgres 存储，前面放 `noeta serve`；
-  前端连哪台服务端都行（[作为服务端运行](./guides/server.md)、[多机运行](./how-it-works/many-machines.md)）。
+  前端连哪台服务端都行（[作为服务端运行](./guides/server.md)、[用 Docker 部署](./guides/docker.md)、
+  [多机运行](./how-it-works/many-machines.md)）。
+- **无人值守的编程 agent。** 一个任务可以跑好几个小时；它所在的 worker 被杀掉或重新部署了，
+  别的 worker 会从日志断的地方接着跑。
+- **需要等人的 agent。** 审批和提问会让任务挂起，不占任何进程。你可以在终端、编辑器、HTTP 接口
+  或自己的服务里回复，几分钟后或几天后都行。
 - **嵌进你的程序。** 同一个内核也是 Python 库：在你的程序里创建任务、跟踪事件、回答它的提问
   （[在 Python 里嵌入](./start/embedding.md)）。
 - **任何模型。** Anthropic 的 API、任何兼容 OpenAI 的接口（vLLM、各种网关、DeepSeek）、OpenAI 的

@@ -1,0 +1,10 @@
+# deploy/Dockerfile copies only these; the rest (node_modules, virtualenvs, .git) stays
+# out of the build context.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!tui/pyproject.toml
+!noeta/
+**/__pycache__
