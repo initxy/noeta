@@ -19,6 +19,7 @@ export const SHARED_MODULES = [
   "react-dom",
   "react-dom/client",
   "react/jsx-runtime",
+  "react/jsx-dev-runtime",
   "@noeta-ai/web-sdk",
   "@noeta-ai/ui",
 ] as const;

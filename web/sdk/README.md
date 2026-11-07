@@ -31,7 +31,7 @@ added to slots goes then too, what it subscribed to through `ctx` (`client.watch
 
 ## Building
 
-The page provides `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
+The page provides `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime`,
 `@noeta-ai/web-sdk` and `@noeta-ai/ui` itself (its import map), so a build marks them
 external and bundles everything else. `template/` is a starting point: `npm install`, then
 `npm run build` writes `dist/index.js`. The plugin's `.noeta-plugin/plugin.json` names it:

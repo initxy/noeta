@@ -1,4 +1,4 @@
-import { SlotRegistry, WAIT_TIMEOUT_MS, type PluginContext } from "@noeta-ai/web-sdk";
+import { SHARED_MODULES, SlotRegistry, WAIT_TIMEOUT_MS, type PluginContext } from "@noeta-ai/web-sdk";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../api/client";
@@ -6,7 +6,7 @@ import type { PluginInfo, Recorded } from "../api/types";
 import { pluginContext, ThemeSource } from "./context";
 import { TaskEvents } from "./events";
 import { PluginHost } from "./host";
-import { provideSharedModules } from "./shared";
+import { devRuntime, provideSharedModules } from "./shared";
 import { uiApiProblem, useUiItems, webParts } from "./usePlugins";
 
 afterEach(() => vi.useRealTimers());
@@ -318,9 +318,22 @@ describe("ctx", () => {
   it("the shared modules are the page's own", async () => {
     provideSharedModules();
     const shared = globalThis.__noetaShared!;
-    expect(Object.keys(shared).sort()).toEqual(["@noeta-ai/ui", "@noeta-ai/web-sdk", "react", "react-dom", "react-dom/client", "react/jsx-runtime"]);
+    expect(Object.keys(shared).sort()).toEqual([...SHARED_MODULES].sort());
     const sdk = await import("@noeta-ai/web-sdk");
     expect((shared["@noeta-ai/web-sdk"] as typeof sdk).SlotRegistry).toBe(sdk.SlotRegistry);
+    expect(typeof (shared["react/jsx-dev-runtime"] as { jsxDEV: unknown }).jsxDEV).toBe("function");
+  });
+
+  it("a part built in development mode runs on a production page: jsxDEV is then the production jsx", () => {
+    const jsx = vi.fn(() => "one");
+    const prod = { jsx, jsxs: vi.fn(() => "many") } as unknown as NonNullable<Parameters<typeof devRuntime>[1]>;
+    const runtime = devRuntime({ Fragment: "F", jsxDEV: undefined }, prod) as { Fragment: unknown; jsxDEV: (...a: unknown[]) => unknown };
+    expect(runtime.Fragment).toBe("F");
+    expect(runtime.jsxDEV("div", { children: "a" }, "k", false, { fileName: "x" }, null)).toBe("one");
+    expect(runtime.jsxDEV("div", { children: ["a", "b"] }, undefined, true)).toBe("many");
+    expect(jsx).toHaveBeenCalledWith("div", { children: "a" }, "k");
+    const dev = { Fragment: "F", jsxDEV: () => "dev" };
+    expect(devRuntime(dev, prod)).toBe(dev);
   });
 });
 
