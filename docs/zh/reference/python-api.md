@@ -6,6 +6,24 @@
 命令本身，不属于 SDK。完整示例见[在 Python 里嵌入](../start/embedding.md)；写插件那一侧见
 [Extension 接口](./extension.md)。
 
+## 哪些接口是稳定的
+
+noeta 遵循[语义化版本](https://semver.org/lang/zh-CN/)。下面这些是公开接口，次版本和补丁版本都不会破坏它们：
+
+- 能从 `noeta` 直接导入的所有名字（`noeta.__all__`，也就是本页列的）；
+- [`noeta` 之外常用的模块](#noeta-之外常用的模块)里列出的模块和名字；
+- [Extension 接口](./extension.md)里的插件接口，以及[事件](./events.md)里的事件类型；
+- 这几个 entry point 组：`noeta.plugins`、`noeta.providers`、`noeta.execenvs`、`noeta.stores`、
+  `noeta.channels`、`noeta.frontends`。
+
+`noeta` 下的其余部分（`noeta.core` 的其他模块、`noeta.toolkit`、`noeta.plugins`、`noeta.host`、
+`noeta.agents`、`noeta.backends`，以及 `noeta.cli`）都是内部实现：能导入，但任何版本都可能改；
+以 `_` 开头的名字也一样。后端要实现的协议（`Store`、`Provider`、`ExecEnv`）还没定死：次版本可能给它们加必须实现的成员，
+changelog 里会写明。
+
+要去掉的公开名字先标为弃用：照常能用，但会发出 `DeprecationWarning`，并在 changelog 的
+*Deprecated* 一节里至少挂一个次版本；只有主版本才会真正删掉它。
+
 ## 构建各个部分
 
 ### `noeta.store(url) -> Store`
@@ -217,4 +235,6 @@ HTTP 客户端）。`transport` 是 `httpx` 的 transport（测试用）。
 | `noeta.host.pending` | `pending_tree`、`choices`、`answer_choice`：一棵任务树在等人处理什么 |
 | `noeta.host.questions` | `answer_question`：校验后回答提问 |
 | `noeta.host.http` | `create_app`：把 HTTP 接口作为 Starlette 应用嵌进你自己的服务 |
-| `noeta.testing` | `ScriptedProvider`、`reply`：测试用的按脚本回复的模型 |
+| `noeta.testing` | `ScriptedProvider`、`reply`：测试用的按脚本回复的模型；`noeta.testing.store_contract`：每种存储都要通过的那套测试 |
+| `noeta.core.registry` | `load_plugin_files`、`load`、`available` 和各个组名（`PLUGINS` 等）：entry point 和插件文件 |
+| `noeta.backends.stores.sqlite`、`noeta.backends.execenvs.local`、`noeta.backends.execenvs.container` | `SqliteStore`、`LocalExecEnv`、`ContainerExecEnv` 和 `start_container`：按类名直接用自带的存储和执行环境 |
