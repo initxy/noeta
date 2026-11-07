@@ -21,7 +21,7 @@ def _diff(a: TaskState, b: TaskState) -> list[str]:
 
 async def _fresh(run: Any, records: list[Any]) -> TaskState:
     first = records[0].event if records else None
-    initial = {e.name: e.initial_state() for e in run.exts}
+    initial = {e.name: e.initial_state() for e in run.all_exts}
     base = await run._history(first, initial) or new_state(initial)
     base.task_id = run.task_id
     return base
