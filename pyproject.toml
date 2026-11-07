@@ -8,7 +8,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "The Noeta Authors", email = "initxy0@gmail.com" }]
 keywords = ["ai-agent", "coding-agent", "ai-coding", "claude-code", "llm", "agentic-ai", "agent-sdk", "cli", "tui", "mcp", "acp", "anthropic", "claude", "deepseek", "openai", "self-hosted", "durable-execution", "event-sourcing", "human-in-the-loop", "multi-agent"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
