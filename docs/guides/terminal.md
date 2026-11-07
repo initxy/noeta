@@ -141,6 +141,7 @@ highlighted one. The terminal UI's own commands (`tui/src/noeta_tui/slash.py`):
 | `/clear`, `/new` | Start a new task |
 | `/resume [n\|id]` | Pick a task to resume |
 | `/stop` | Stop the turn (as `Esc`) |
+| `/plugins [discover]` | Switch plugins for this task or for new tasks, remove them, install from the marketplaces ([below](#plugins)) |
 | `/reload-plugins` | Load plugin, agent and settings files again, in effect from the next turn (a changed `env`, `model`, `agent` or `sandbox` needs a restart, and the UI says so) |
 | `/exit`, `/quit` | Quit |
 
@@ -198,6 +199,42 @@ paths) attaches them (PNG, JPEG, GIF, WebP). The box shows `[Image #1]`, the lin
 attached, and the images go with the next message. Over ssh the clipboard is the other machine's: drop the
 file instead.
 
+## Plugins
+
+`/plugins` lists every plugin the agent runs and the installed ones it does not, each with its
+switch for this task and for new tasks, its version and its parts (`backend`, `ui`, `web`,
+`skills`, …), or why it cannot be used. `Enter` on one offers what can be done with it:
+
+- **Turn off (or on) for this task**: the task runs without it from its next turn on (the
+  `config` signal's `plugins_off`, so it holds on whichever worker runs the task, and its
+  sub-agents inherit it). On a new screen this starts the task.
+- **Turn off (or on) for new tasks**: the machine's default (`~/.noeta/plugin-switches.json`;
+  on a server, the server's). Tasks already started keep their own switch.
+- **Remove**: uninstall it, after a confirmation.
+
+Only plugins a task can run without have the two switches: every installed one and the
+built-ins `web`, `workflow`, `schedule`, `todos`, `findings`, `title`, `quiet_nudge`, `memory`,
+`mcp`, `checkpoints`, `skills` and `ask_user`. `[plugins.<name>] enabled = false` in
+`config.toml` still turns one off for good ([plugins](./plugins.md)).
+
+`Discover plugins…` (or `/plugins discover`) lists the plugins of the configured marketplaces.
+Picking one shows its source, the commit it is pinned to and its parts before anything is
+fetched; installing runs nothing from the plugin, and tasks load it from their next turn on.
+Attached to a server, installing and removing work only on a server that allows them over
+HTTP (loopback, or `--allow-plugin-install`); otherwise the UI shows the server's reason.
+
+![The plugins menu](https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/plugins.svg)
+
+What a task's plugins show (their `ui` hook, [the Extension reference](../reference/extension.md#front-ends))
+is fetched again shortly after the task's log advances:
+
+- **status items** in a line under the footer, one per plugin and key, coloured by tone
+  (`ok` green, `warn` yellow, `error` red);
+- **widgets**, short markdown, over the prompt (`above`) or under it (`below`);
+- **notices** in the transcript, once per text, named after their plugin.
+
+All of it is shown as plain text: no terminal control sequence or markup in it reaches the screen.
+
 ## History, continuing and resuming
 
 Every prompt you send is added to the project's history file,
@@ -232,7 +269,8 @@ noeta --server http://api.internal:8642
 The UI then drives that server's tasks over HTTP. It needs no model of its own: a new task runs on
 the server's model and in the server's directory, unless `--model` names a model or `--cwd PATH`
 names a directory on the server. `--plugin-dir`, `!` bash mode and `@` completion are not
-available there; `/reload-plugins` says to restart the workers instead. See
+available there; `/reload-plugins` says to restart the workers instead, and `/plugins` switches
+the server's plugins. See
 [the server guide](./server.md) and [front ends](./front-ends.md).
 
 ## `-p`: one prompt, no UI

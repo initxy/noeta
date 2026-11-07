@@ -62,3 +62,10 @@ Screen { layout: vertical; background: transparent; }
 .agent-view { height: 1fr; }
 .agent-head { height: auto; padding: 0 1; border-bottom: solid ansi_bright_black; }
 .agent-hint { height: 1; padding: 0 1; }
+
+.notice.-warn { color: $warning; }
+.plugin-widgets { height: auto; max-height: 12; padding: 0 2; }
+#widgets-above { margin: 1 0 0 0; }
+.plugin-widget { margin: 0; }
+.plugin-widget MarkdownParagraph { margin: 0; }
+#plugin-status { height: 1; padding: 0 2; text-wrap: nowrap; text-overflow: ellipsis; }

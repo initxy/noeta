@@ -17,6 +17,7 @@ from textual.widgets import Static, TextArea
 
 from noeta.core.events import InputTaken, Say, Waiting
 from noeta.core.extension import Command, CommandContext
+from noeta.core.loop.state import off_names
 from noeta.core.types import Delta, Image
 from noeta.host.app import FrontEndStart
 from noeta.host.local import UnknownAgent
@@ -192,6 +193,10 @@ class NoetaApp(TranscriptView):
         self._creating = asyncio.Lock()
         #: Ctrl+R: the prompt filters the history menu.
         self.searching = False
+        self.plugins_off = off_names(self.task_config)
+        self.ui_notices = {}
+        self.ui_widgets = {}
+        self._ui_wanted = asyncio.Event()
 
     # ------------------------------------------------------------ layout
 
@@ -202,23 +207,27 @@ class NoetaApp(TranscriptView):
         yield Static("", id="queued")
         yield Vertical(id="overlay")
         yield Static("", id="attachments")
+        yield Vertical(id="widgets-above", classes="plugin-widgets")
         with Horizontal(id="prompt-box"):
             yield Static("❯", id="marker")
             yield PromptInput(self.submit, self.add_image, self.prompt_key)
         yield Completions()
         yield Static(SHORTCUTS, id="shortcuts")
+        yield Vertical(id="widgets-below", classes="plugin-widgets")
         with Horizontal(id="footer"):
             yield Static("", id="hints")
             yield Static("", id="status")
+        yield Static("", id="plugin-status")
         yield AgentsPanel(self.open_agent, self._leave_agents)
 
     async def on_mount(self) -> None:
         for hidden in ("#agents", "#spinner", "#tasks", "#queued", "#completions",
-                       "#shortcuts", "#attachments"):
+                       "#shortcuts", "#attachments", ".plugin-widgets", "#plugin-status"):
             self.query_one(hidden).display = False
         await self.local.start()
         self.local.deltas(self._on_delta)
         self._pump_deltas()
+        self._fetch_ui()
         self.set_interval(0.12, self._tick)
         if self.start.trust is not None:
             await slash.trust_picker(self, self._open_first)
@@ -332,6 +341,8 @@ class NoetaApp(TranscriptView):
         self.waiting_for = ""
         self.busy = False
         self.mode, self.modes, self.modes_published = "", Modes(), False
+        self.plugins_off = off_names(self.task_config)
+        await self.clear_ui()
         await self._end_stream()
         self.streamed.clear()
         self.attempts.clear()
@@ -621,9 +632,13 @@ class NoetaApp(TranscriptView):
         box.move_cursor((box.text.count("\n", 0, at), at - box.text.rfind("\n", 0, at) - 1))
 
     def _sync_footer(self) -> None:
-        """The menu and the shortcuts take the footer's place."""
+        """The menu and the shortcuts take the footer's place (and the
+        plugins' line and widgets under the prompt)."""
         covered = self.query_one(Completions).display or self.query_one("#shortcuts").display
         self.query_one("#footer").display = not covered
+        for under in ("#widgets-below", "#plugin-status", "#widgets-above"):
+            box = self.query_one(under)
+            box.display = box.has_class("-shown") and (under == "#widgets-above" or not covered)
 
     @on(TextArea.Changed, "#prompt")
     def _typed(self, event: TextArea.Changed) -> None:

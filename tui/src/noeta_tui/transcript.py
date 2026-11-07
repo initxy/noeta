@@ -39,7 +39,7 @@ from noeta.core.events import (
     ToolStarted,
     Waiting,
 )
-from noeta.core.loop.state import CONFIG_SIGNAL
+from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF, off_names
 from noeta.core.runner.texts import REJECTED_MARKER
 from noeta.core.types import Delta
 from noeta.host.feed import failure_text
@@ -55,7 +55,7 @@ from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
 from noeta.toolkit.plugin_records import TITLE, AutoCompact, auto_compact
 from noeta.toolkit.tokens import estimate_tokens
-from noeta_tui import render
+from noeta_tui import plugin_ui, render
 from noeta_tui.agents import (
     AgentsPanel,
     Row,
@@ -91,6 +91,9 @@ SPINNER_TICK = 0.12
 WORKFLOW_KEY = "workflow:"
 #: What the footer says while the task waits on one of its approval cards.
 WAITING_APPROVAL = "waiting for your approval"
+#: Seconds the plugins' UI is fetched after the task's log advanced: the
+#: records of a busy stretch are one fetch.
+UI_DEBOUNCE = 0.3
 
 
 def failure_reason(exc: BaseException) -> str:
@@ -189,6 +192,15 @@ class TranscriptView(App[None]):
     listed_agents: list[str]
     #: The list keeps what ended after this (wall clock): the person's last send.
     agents_since: float
+    #: The plugins the task runs without (its config's ``plugins_off``, as
+    #: last seen or switched here).
+    plugins_off: list[str]
+    #: The notices the task's plugins showed, by (plugin, key): their text.
+    ui_notices: dict[tuple[str, str], str]
+    #: The plugins' widgets drawn over (``above``) and under (``below``) the prompt.
+    ui_widgets: dict[str, list[str]]
+    #: The task's log advanced since its plugins' UI was last fetched.
+    _ui_wanted: asyncio.Event
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, message: str = "", *,
@@ -387,6 +399,7 @@ class TranscriptView(App[None]):
                         await self.show_requests(rec)
                     else:
                         await self.render_event(rec)
+                        self._ui_wanted.set()
                 except Exception:
                     log.exception("rendering %s failed", type(getattr(rec, "event", rec)).__name__)
         except asyncio.CancelledError:
@@ -418,6 +431,7 @@ class TranscriptView(App[None]):
             self.task_cwd = str(ev.config.get("cwd") or self.task_cwd)
             # What the task runs with: its config's effort, else the model's default.
             self.effort = ev.config.get("effort") or None
+            self.plugins_off = off_names(ev.config)
         elif isinstance(ev, InputTaken):
             for item in ev.items:
                 if isinstance(item.body, Say) and item.body.message.origin in (None, "human"):
@@ -431,8 +445,11 @@ class TranscriptView(App[None]):
                         await transcript.mount(UserMessage(text))
                     self.set_busy(True)
                 elif isinstance(item.body, External) and item.body.name == CONFIG_SIGNAL \
-                        and isinstance(item.body.data, dict) and "effort" in item.body.data:
-                    self.effort = item.body.data["effort"] or None
+                        and isinstance(item.body.data, dict):
+                    if "effort" in item.body.data:
+                        self.effort = item.body.data["effort"] or None
+                    if PLUGINS_OFF in item.body.data:
+                        self.plugins_off = off_names(item.body.data)
                 elif isinstance(item.body, ChildEnded):
                     self._agent_ended(item.body, rec.at)
                 elif isinstance(item.body, Answer):
@@ -854,6 +871,66 @@ class TranscriptView(App[None]):
             status.append(_short_path(self.task_cwd or SERVER_DIRECTORY, width), style="dim")
         self.query_one("#status", Static).update(status)
         self._tick()
+
+    @work(exclusive=True, group="plugin-ui", exit_on_error=False)
+    async def _fetch_ui(self) -> None:
+        """While the app runs: the task's plugins' UI fetched again
+        :data:`UI_DEBOUNCE` after its log advanced. A failure is logged and
+        what was shown stays."""
+        while True:
+            await self._ui_wanted.wait()
+            await asyncio.sleep(UI_DEBOUNCE)
+            self._ui_wanted.clear()  # what came meanwhile is in this fetch
+            task_id = self.task_id
+            if not task_id:
+                continue
+            try:
+                items = await self.local.ui(task_id)
+                if task_id == self.task_id:
+                    await self.show_ui(items)
+            except Exception:
+                log.warning("fetching the plugins' UI of %s failed", task_id, exc_info=True)
+
+    async def show_ui(self, items: list[Any]) -> None:
+        """What the task's plugins show now: status items under the footer,
+        widgets over and under the prompt (redrawn only when they changed), a
+        notice in the transcript when its text is new."""
+        items = plugin_ui.keyed(i for i in items if isinstance(i, dict))
+        status = self.query_one("#plugin-status", Static)
+        statuses = [i for i in items if i.get("type") == "status"]
+        status.update(plugin_ui.status_line(statuses))
+        status.set_class(bool(statuses), "-shown")
+        for where in ("above", "below"):
+            box = self.query_one(f"#widgets-{where}")
+            widgets = [i for i in items if i.get("type") == "widget"
+                       and (i.get("placement") == "below") == (where == "below")]
+            drawn = [str(w.get("markdown") or "") for w in widgets]
+            if drawn != self.ui_widgets.get(where, []):
+                self.ui_widgets[where] = drawn
+                await box.remove_children()
+                await box.mount_all(CleanMarkdown(m, classes="plugin-widget") for m in drawn)
+                box.set_class(bool(drawn), "-shown")
+        transcript = self.query_one("#transcript")
+        for i in items:
+            key, text = (str(i.get("plugin") or ""), str(i.get("key") or "")), \
+                str(i.get("text") or "")
+            if i.get("type") != "notice" or not text or self.ui_notices.get(key) == text:
+                continue
+            self.ui_notices[key] = text
+            level = str(i.get("level") or "")
+            await transcript.mount(Notice(f"{key[0]}: {text}", classes=f"-{level}"
+                                          if level in ("warn", "error") else ""))
+            transcript.scroll_end(animate=False)
+        self._sync_footer()
+
+    async def clear_ui(self) -> None:
+        """Nothing of a plugin shown (another task's screen)."""
+        self.ui_notices.clear()
+        self._ui_wanted.clear()
+        await self.show_ui([])
+
+    if TYPE_CHECKING:
+        def _sync_footer(self) -> None: ...
 
     @work(exclusive=True, group="cost", exit_on_error=False)
     async def _refresh_cost(self, task_id: str) -> None:

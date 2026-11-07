@@ -149,3 +149,29 @@ async def test_agents(tmp_path: Path, shots: Path) -> None:
         await pilot.pause()
         save(app, shots, "agent-view.svg")
         provider.release.set()
+
+
+async def test_plugins(tmp_path: Path, shots: Path) -> None:
+    from collections.abc import Sequence
+
+    from noeta.core.extension import Extension, StatusItem, TaskView, UiItem, Widget
+
+    class Lint(Extension):
+        """Shows the linter's state."""
+
+        name = "lint-bar"
+
+        async def ui(self, view: TaskView) -> Sequence[UiItem]:
+            return [StatusItem(key="lint", text="✔ lint clean", tone="ok"),
+                    StatusItem(key="ci", text="CI running", tone="warn"),
+                    Widget(key="pr", markdown="**PR #12** waits for review")]
+
+    app = make_app(tmp_path, ScriptedProvider([reply("Done.")]), Todos(), Lint())
+    async with app.run_test(size=SIZE) as pilot:
+        await type_line(pilot, "hi")
+        await settle(pilot, lambda: "lint clean" in plain(app.query_one("#plugin-status"))
+                     and not app.busy)
+        await type_line(pilot, "/plugins")
+        await settle(pilot, lambda: bool(app.query(Picker)))
+        await pilot.pause()
+        save(app, shots, "plugins.svg")

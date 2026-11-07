@@ -27,6 +27,10 @@ this repository. Their versions are listed on PyPI.
   at `/plugins/{name}/web/` without a token. `POST /plugins/install`, `DELETE /plugins/{name}`
   and `GET /market` install, remove and discover plugins; installing and removing over HTTP
   are allowed only on a loopback server or with `noeta serve --allow-plugin-install`.
+- **The terminal UI's `/plugins`** switches a plugin for this task (from its next turn on) or
+  for new tasks, removes one, and installs one from the marketplaces after showing its source,
+  commit and parts. Plugins' status items show in a line under the footer, their widgets over
+  or under the prompt and their notices in the transcript.
 
 ## [1.0.6] - 2026-11-07
 

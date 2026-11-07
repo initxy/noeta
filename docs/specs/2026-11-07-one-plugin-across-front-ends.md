@@ -207,12 +207,14 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
       enabled, switchable, broken reason, parts.
 - [x] The `plugins` task signal, folded off-set, the runner filter, sub-agent inheritance,
       pins recorded again; tests across two workers.
-- [ ] TUI `/plugins` menu; web settings page "Plugins" › Installed; desktop gets it for free.
+- [x] TUI `/plugins` menu.
+- [ ] Web settings page "Plugins" › Installed; desktop gets it for free.
 - [ ] Docs (en + zh): front ends guide, plugins guide, HTTP API reference.
 
 ### 2. UI data part
 - [x] `UiItem` types, `Extension.ui`, `GET /tasks/{id}/ui`, `AppAPI.ui`.
-- [ ] Renderers: TUI status line and widgets; web status bar, widgets, notices.
+- [x] Renderers: TUI status line, widgets and notices.
+- [ ] Renderers: web status bar, widgets, notices.
 - [ ] `examples/hello-plugin` shows a status item; docs.
 
 ### 3. Web code part
@@ -273,3 +275,4 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 - 2026-11-07 Written after reading pi, DeepSeek Harness and five community plugins; proposed.
 - 2026-11-07 Owner: start, following every recommendation; active. D2 moved onto the `config` signal (`plugins_off`); interfaces fixed for parallel work.
 - 2026-11-07 Kernel and host half: `plugins_off` (folded as `TaskState.plugins_off`, taken from the config only while no turn is open; `TaskRun.exts` is the filtered list, `all_exts` folds and pins), `UiItem`s, `ui`/`ui_call`, the `AppAPI` plugin methods with `LocalApp`/`RemoteApp`, the plugin routes (`noeta/host/_http_plugins.py`, listing in `noeta/host/plugins.py`), machine switches and install/remove/market wiring (`noeta/cli/plugin_switches.py`), `noeta serve --allow-plugin-install`, hello-plugin's status item, HTTP and Extension reference (en + zh). Open: a manifest beside a single-file plugin (only directories and packages read one); Claude Code plugins are listed but not switchable per task; a request's `plugins_off` may not name a built-in outside D2's list (403); with `--no-worker` `/tasks/{id}/ui` is empty and switches are 501; guides still to write.
+- 2026-11-07 TUI half: `/plugins` (`tui/src/noeta_tui/plugin_ui.py`: both switches, remove, Discover with a source/commit/parts confirmation; a refusing server's reason shown), status items under the footer, widgets over and under the prompt, notices, fetched 0.3 s after the log advances; `tui/screenshots/plugins.svg`; terminal guide (en + zh). The two Plan boxes that named TUI and web together were split. Open: Discover is empty until the marketplaces land (section 5).

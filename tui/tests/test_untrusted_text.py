@@ -7,13 +7,15 @@ ended the app, on every reopening of the task too)."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.errors import Transient
-from noeta.core.extension import Extension, TaskView
+from noeta.core.extension import Extension, StatusItem, TaskView, UiItem, Widget
+from noeta.core.extension import Notice as UiNotice
 from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.core.types import ToolUse
 from noeta.host.local import LocalApp
@@ -127,3 +129,27 @@ async def test_brackets_in_recorded_text_are_shown_as_written(tmp_path: Path) ->
 
 async def _no_sleep(_: float) -> None:
     return None
+
+
+class Loud(Extension):
+    """Shows what a plugin may say: escapes and markup in its UI items."""
+
+    name = "loud"
+
+    async def ui(self, view: TaskView) -> Sequence[UiItem]:
+        return [StatusItem(key="s", text=f"[/b] [red]lint{OSC52}", tone="[bold]"),
+                Widget(key="w", markdown=f"**see** {OSC8}{CLEAR}"),
+                UiNotice(key="n", text=f"[/x] done{OSC52}", level="error")]
+
+
+async def test_a_plugins_ui_is_shown_as_written(tmp_path: Path) -> None:
+    app = make_app(tmp_path, ScriptedProvider([reply("ok")]), Loud())
+    async with app.run_test(size=(110, 30)) as pilot:
+        await type_line(pilot, "hi")
+        status = app.query_one("#plugin-status")
+        await settle(pilot, lambda: plain(status) == "[/b] [red]lint")
+        await settle(pilot, lambda: "loud: [/x] done" in shown(app) and not app.busy)
+        await pilot.pause(0.2)
+        out = _terminal(app)
+        assert not _escapes(out) and "**see** docs" in shown(app)
+        assert app.return_code is None

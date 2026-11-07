@@ -14,6 +14,7 @@ with a scripted model.
 | `context.svg` | `/context`: the 10x10 `⛁`/`⛶` grid with the categories beside it | the same grid; Claude Code also lists memory files, skills and the autocompact buffer |
 | `slash-menu.svg` | the slash-command menu under the prompt, filtered as you type, with descriptions | the same |
 | `agents.svg` | a background agent running: `◆ 1 agent running · ↓ to view` in the footer and the list under it, `● main` then `○ explore the repo  Read(…)  1s · ↓ 5 tokens` | the same list under the footer; Claude Code groups a workflow's agents as `name (+14)` too |
+| `plugins.svg` | `/plugins`: each plugin with its switch for this task and for new tasks and its parts, `Discover plugins…` last; a plugin's widget over the prompt and its status items (`✔ lint clean · CI running`) under the footer | Claude Code's `/plugin` manages installed plugins and marketplaces; a plugin's only UI there is the `statusLine` command |
 | `agent-view.svg` | that agent picked: its name, type, state and counts over what it did (its prompt, what it said, its calls), in the transcript's place, `Esc to go back` | Claude Code shows the agent's transcript the same way |
 
 Not shown: Ctrl+R lists the earlier prompts of this run under the prompt, filtered as you
