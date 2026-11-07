@@ -172,8 +172,23 @@ def _plugins(cwd: str) -> None:
     notices += more
     for line in broken_plugin_lines():
         print(f"(failed) {line}", file=sys.stderr)
+    for line in plugin_extra_lines():
+        print(f"(missing) {line}", file=sys.stderr)
     for notice in notices:
         print(notice, file=sys.stderr)
+
+
+QUICKSTART_URL = "https://initxy.github.io/noeta/start/quickstart"
+#: What a start with no model says: a model and a key for its provider.
+NO_MODEL = (
+    "noeta: no model configured. noeta needs a model and an API key for its provider:\n"
+    "  Anthropic:\n"
+    "    export NOETA_MODEL=sonnet ANTHROPIC_API_KEY=sk-ant-...\n"
+    "  an OpenAI-compatible API (DeepSeek here):\n"
+    "    export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1\n"
+    "    export NOETA_MODEL=deepseek-flash NOETA_API_KEY=sk-...\n"
+    "Flags (--model, --provider, --base-url) and ~/.noeta/config.toml work too. "
+    f"Quickstart: {QUICKSTART_URL}")
 
 
 def _settings(args: argparse.Namespace, *, need_model: bool = True,
@@ -184,7 +199,7 @@ def _settings(args: argparse.Namespace, *, need_model: bool = True,
                       model=args.model, provider=args.provider, base_url=args.base_url,
                       store=args.store, effort=args.effort, **layers)
     if need_model and not s.model:
-        sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
+        sys.exit(NO_MODEL)
     if args.system_prompt is not None:
         s.prompts["system/main"] = args.system_prompt
     if args.append_system_prompt is not None:

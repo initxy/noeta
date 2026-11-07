@@ -229,6 +229,22 @@ def test_an_announced_unknown_model_is_not_announced_again_for_its_price(
     assert caplog.records == []
 
 
+def test_deepseeks_current_models_are_catalogued() -> None:
+    """The README's DeepSeek example starts without the unknown-model notice,
+    and its cost is counted; the wire stays an uncatalogued id's (no family,
+    no reasoning row: no explicit thinking switch, no xhigh effort)."""
+    for model_id, vision in (("deepseek-flash", True), ("deepseek-v4-pro", False)):
+        assert models.unknown_model_notice(model_id) is None
+        spec = spec_for(model_id)
+        assert models.model_limits(model_id) == (1_000_000, 384_000)
+        assert spec.output_default == 64_000
+        assert spec.supports_vision is vision
+        assert models.model_family(model_id) is None and not spec.is_reasoning
+        assert is_priced(spec)
+    assert models.price("deepseek-flash", Usage(uncached=1_000_000, output=1_000_000)) == (
+        pytest.approx(1.50))
+
+
 def test_superseded_rows_stay_addressable_by_full_id() -> None:
     for model_id in ("claude-opus-4-8", "claude-sonnet-4-6"):
         spec = spec_for(model_id)

@@ -52,7 +52,7 @@ export NOETA_API_KEY=sk-ant-...          # 或者 ANTHROPIC_API_KEY
 ```bash
 export NOETA_PROVIDER=openai_compat
 export NOETA_BASE_URL=https://llm.example.com/v1
-export NOETA_MODEL=deepseek-chat
+export NOETA_MODEL=deepseek-flash
 export NOETA_API_KEY=...                 # 或者 OPENAI_API_KEY
 ```
 

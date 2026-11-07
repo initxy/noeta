@@ -56,7 +56,7 @@ base URL too.
 ```bash
 export NOETA_PROVIDER=openai_compat
 export NOETA_BASE_URL=https://llm.example.com/v1
-export NOETA_MODEL=deepseek-chat
+export NOETA_MODEL=deepseek-flash
 export NOETA_API_KEY=...                 # or OPENAI_API_KEY
 ```
 

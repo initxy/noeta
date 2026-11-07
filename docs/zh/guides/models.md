@@ -37,12 +37,14 @@ noeta
 ```bash
 # DeepSeek
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=sk-...
+export NOETA_MODEL=deepseek-flash NOETA_API_KEY=sk-...
 
 # 本地的 vLLM
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=http://localhost:8000/v1
 export NOETA_MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct NOETA_API_KEY=unused
 ```
+
+DeepSeek 现在的两个模型 `deepseek-flash` 和 `deepseek-v4-pro` 已经在模型目录里，窗口和标价都填好了；旧名字 `deepseek-chat`、`deepseek-reasoner` 已在 2026-07-24 被 DeepSeek 停用。
 
 noeta 自带的模型目录不认识的模型，会按保守的默认上限跑（上下文窗口 128,000 token，输出 16,384 token），并给一句警告，除非有地方告诉 noeta 它的真实上限：
 
@@ -52,7 +54,6 @@ noeta 自带的模型目录不认识的模型，会按保守的默认上限跑�
 
 ```json
 {"models": [
-  {"id": "deepseek-chat", "context_window": 128000, "max_output_tokens": 8192},
   {"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct", "context_window": 262144,
    "max_output_tokens": 65536, "supports_vision": false}
 ]}
@@ -89,12 +90,13 @@ model = "claude-sonnet-5-5"            # 默认 provider：anthropic
 family = "openai_compat"               # anthropic | openai_compat | openai_responses
 base_url = "https://api.deepseek.com/v1"
 api_key = "{env:DEEPSEEK_API_KEY}"     # 直接写值，或 {env:NAME}、{keyring:service/user}
-models = ["deepseek-chat", {id = "deepseek-reasoner", context_window = 128000, max_output_tokens = 64000}]
+models = ["deepseek-flash", "deepseek-v4-pro"]
 
 [providers.local]
 family = "openai_compat"
 base_url = "http://localhost:8000/v1"
 api_key = "unused"
+models = [{id = "Qwen/Qwen3-Coder-30B-A3B-Instruct", context_window = 262144, max_output_tokens = 65536}]
 list_models = true                     # 读它的 /models（默认）；false 不读
 ```
 
@@ -112,7 +114,7 @@ list_models = true                     # 读它的 /models（默认）；false �
 
 ## 切换模型
 
-- **终端界面里**：`/model` 列出别名和每个 provider 的模型，并标出来自哪个 provider；`/model deepseek-chat` 直接切换。切换从下一次请求起生效，并记进日志，恢复任务时依然有效。
+- **终端界面里**：`/model` 列出别名和每个 provider 的模型，并标出来自哪个 provider；`/model deepseek-flash` 直接切换。切换从下一次请求起生效，并记进日志，恢复任务时依然有效。
 - **网页版和编辑器里**：用模型选择器；ACP 里也可以用 `/model [name]`。
 - **无界面模式**：`--model`，或 SDK 的 `set_model` 控制请求。
 - **单个子代理**：代理文件里的 `model:`（`inherit`、别名或 id），或模型调用 `Agent` 时传的 `model` 参数；否则子代理用调用者的模型（见[子代理](./subagents.md)）。

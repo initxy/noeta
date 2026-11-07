@@ -78,8 +78,7 @@ prompt_cache_ttl = "1h"
 family = "openai_compat"
 base_url = "https://api.deepseek.com/v1"
 api_key = "{env:DEEPSEEK_API_KEY}"
-models = ["deepseek-chat", {id = "deepseek-reasoner", context_window = 128000,
-                            max_output_tokens = 64000}]
+models = ["deepseek-flash", "deepseek-v4-pro"]
 list_models = true            # read its /models for more models and their windows
 ```
 
