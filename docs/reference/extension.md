@@ -11,6 +11,7 @@ The names a plugin usually needs import from the package root:
 ```python
 from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChanges, ToolUse,
                    ContextPart, Reminder, Command, CommandContext, Allow, Deny, Ask, Rewrite,
+                   StatusItem, Widget, Notice, UiItem,
                    Recorded, TaskState, ask, read_answer, text_output, function_tool)
 ```
 
@@ -83,6 +84,18 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `async commands(self, ctx: CommandContext)` | `Sequence[Command]` | When a front end lists slash commands. |
 | `async run_command(self, ctx: CommandContext, name: str, args: str)` | `str` | `/name args` for one of this plugin's commands whose `template` is empty: the message text. |
 
+### Front ends
+
+| Method | Returns | Called |
+|---|---|---|
+| `async ui(self, view: TaskView)` | `Sequence[UiItem]` | Whenever a front end asks what the task shows (`GET /tasks/{id}/ui`, `AppAPI.ui`), again each time the watched log advances: computed from the folded state like `reminders`, cheap, recording nothing. |
+| `async ui_call(self, ctx: CommandContext, name: str, args)` | JSON | The plugin's own front-end code calls it (`POST /plugins/{name}/call`, `AppAPI.plugin_call`) with `ctx.task_id` set. What it changes for good goes into the task's log (a signal, a record), never into the plugin's memory. Raise `LookupError` for a `name` it does not answer (the default). |
+
+A plugin named in a task's `plugins_off` config (the `config` signal) keeps folding its records
+(`initial_state`, `reduce`, `continue_state`: its state, the task's snapshots and fold version
+stay as they are), but from the next turn on none of its other methods is called for that task,
+on whichever worker runs it; a child task starts with its parent's `plugins_off`.
+
 `ToolSet(tools, name="tools")` wraps a plain list of tools as an `Extension`.
 
 ## Gates
@@ -104,6 +117,9 @@ The answers of `before_tool` and `resolve_ask`; `Gate = Allow | Deny | Ask | Rew
 | `Reminder` | `text: str`, `kind: str = "reminder"`, `data = None`, `origin: "system" \| "memory" = "system"`, `role: "user" \| "system" = "user"`, `order: int = 100` | Recorded as `(extension, kind, data)` with its message. `role="user"` rides in the person's turn; `role="system"` is a system turn after it. User ones first, then system ones by `order`. |
 | `Command` | `name`, `description`, `template = ""`, `argument_hint = ""`, `local = False` | A slash command. `template` with `{args}` is the message sent; empty means `run_command` gives it. A `local` command's text is shown to the person and never reaches the model. |
 | `CommandContext` | `cwd: str`, `task_id: str \| None = None` | Where a command is listed or run. |
+| `StatusItem` | `key: str`, `text: str`, `tone: str = "normal"` | A short line in front ends' status bars; `tone` is `normal`, `ok`, `warn` or `error`. |
+| `Widget` | `key: str`, `markdown: str`, `placement: str = "above"` | A markdown block `above` or `below` the composer. |
+| `Notice` | `key: str`, `text: str`, `level: str = "info"` | A message shown once per `key`; `level` is `info`, `warn` or `error`. |
 | `ToolChanges` | `add: Sequence[Tool] = ()`, `withhold: Mapping[str, str] = {}`, `entries: Sequence[ToolEntry] = ()` | Tools offered besides the plugins' own; offered tools left out of the request, each with the error a call to it gets (answered before any gate); request entries that are no tool. |
 | `ToolEntry` | `spec: ToolSpec`, `before: str = ""` | A tool-list entry that is never called (a vendor's mode switch), placed right before the tool named `before`, else after the tools that are not `listed_last`. |
 
@@ -123,7 +139,7 @@ Records made during a hook are appended by the runner right after the hook retur
 | `count_tokens` | `async (text) -> int \| None`, or `None` | The provider's exact count of one user message holding `text`. |
 | `read_log` | `async (task_id, after=0) -> Sequence[Recorded]`, or `None` | Another task's log, read only; an unknown task reads as empty. |
 | `child_tasks` | `async (task_id) -> list[str]`, or `None` | The ids of a task's children. |
-| `extensions` | `Sequence[Extension]` | The task's plugins, in the agent's order. |
+| `extensions` | `Sequence[Extension]` | The task's plugins, in the agent's order, less the ones switched off for it (`plugins_off`). |
 | `model` | `str` | The model the task runs on. |
 | `agents` | `Mapping[str, Agent]` | Every agent this worker can run. |
 | `allowed_tools` | `Sequence[str] \| None` | The agent's tool allowlist (`None`: every tool). |

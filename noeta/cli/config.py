@@ -628,6 +628,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     this process only, read after the others."""
     from noeta.agents import default_agents
     from noeta.agents.agent_files import read_agent_dir
+    from noeta.cli.plugin_switches import make_admin
     from noeta.core.client import Client
     from noeta.host.local import LocalApp
 
@@ -716,11 +717,14 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         # the Claude Code plugins').
         add["*"] = (*add.get("*", ()), ("markdown_commands", {}))
         agents = default_agents(model, plugins=table, add=add, extra_files=files, made=made)
+        turned_off[:] = sorted(name for name, setting in table.items() if setting is False or (
+            isinstance(setting, Mapping) and setting.get("enabled") is False))
         unjoined[:] = _unjoined_notices(agents, table)
         notices.extend(n for n in unjoined if n not in notices)
         return agents
 
     unjoined: list[str] = []
+    turned_off: list[str] = []
     agents = make_agents()
     for notice in unjoined:
         log.warning("%s", notice)
@@ -790,6 +794,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                 *loaded, *unjoined, *restart]
 
     app.reload_plugins = reload_plugins
+    app.plugin_admin = make_admin(cwd, plugin_dirs, lambda: turned_off)
     return app
 
 

@@ -41,6 +41,17 @@ events; when this process also runs workers, live model output streams too.
     GET  /commands?agent=&task_id=&cwd=  slash commands an agent's plugins offer
     POST /commands/run                {text, agent?, task_id?, cwd?} -> {text, local} or null:
                                       a "/name args" run as the agent's command, nothing sent
+    GET  /plugins?agent=&cwd=         {plugins, ui_api}: the agent's plugins and the installed
+                                      ones it does not run (``noeta.host.plugins``)
+    PUT  /plugins/{name}              {enabled}: the plugin on or off for new tasks
+    POST /plugins/{name}/call         {task_id, name, args?} -> {result}: the plugin's
+                                      ``ui_call``
+    GET  /plugins/{name}/web/{path}   an enabled plugin's built web files, without a token
+    GET  /tasks/{id}/ui               {items}: what the task's plugins show now
+    GET  /market                      {entries}: the configured marketplaces' plugins
+    POST /plugins/install             {source, marketplace?, commit?} -> the plugin; with
+                                      DELETE /plugins/{name}, only on a loopback server or
+                                      with allow_plugin_install (403 otherwise)
     GET  /agents                      the agents this server runs
     GET  /models                      the model catalog and its aliases
     GET  /openapi.json                this API as an OpenAPI 3.1 document
@@ -83,9 +94,11 @@ from noeta.core.commands import Typed
 from noeta.core.extension import Command, CommandContext
 from noeta.host._http_guard import LOOPBACK_HOSTS, Guard, Refused, token_digest
 from noeta.host._http_openapi import OPENAPI
+from noeta.host._http_plugins import PluginRoutes
 from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command, archive_task
+from noeta.host.plugins import MarketEntry, PluginAdmin, PluginInfo, UiEntry, plugin_infos
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
@@ -102,6 +115,7 @@ class _Front:
     client: Any
     agents: Mapping[str, Agent]
     live: Any = None
+    admin: PluginAdmin = dataclasses.field(default_factory=PluginAdmin)
 
     def deltas(self, sink: Any) -> Any:
         return self.live(sink) if self.live is not None else (lambda: None)
@@ -126,6 +140,28 @@ class _Front:
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
         return None
+
+    async def plugins(self, agent: str, cwd: str = "") -> list[PluginInfo]:
+        return plugin_infos(self.agents.get(agent), self.admin, cwd)
+
+    async def set_plugin_default(self, name: str, enabled: bool) -> None:
+        raise NotImplementedError("the plugin switches are kept where the workers run")
+
+    async def ui(self, task_id: str) -> list[UiEntry]:
+        return []  # no worker here folds the task
+
+    async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
+        raise LookupError(f"no worker in this server process runs {plugin!r}")
+
+    async def install_plugin(self, source: str, marketplace: str | None = None,
+                             commit: str | None = None) -> PluginInfo:
+        raise NotImplementedError("plugins are installed where the workers run")
+
+    async def remove_plugin(self, name: str) -> None:
+        raise NotImplementedError("plugins are removed where the workers run")
+
+    async def market(self) -> list[MarketEntry]:
+        return []
 
     async def summaries(self, limit: int = 50, *,
                         archived: bool | None = None) -> list[dict[str, Any]]:
@@ -208,7 +244,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
                cwd: str | None = None, roots: Sequence[str] = (),
-               web_dir: str | None = None) -> Starlette:
+               web_dir: str | None = None, allow_plugin_install: bool = False,
+               plugin_admin: PluginAdmin | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -225,7 +262,10 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     server's own; ``allow_bypass``: requests may ask for
     ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
     below it, or below one of ``roots`` (anywhere when ``None``); ``web_dir``:
-    a directory of static files served at every other path (a web app)."""
+    a directory of static files served at every other path (a web app);
+    ``allow_plugin_install``: requests may install and remove plugins (the
+    ``noeta`` command allows it on a loopback bind); ``plugin_admin``: the
+    machine's plugins as an API-only server (no ``app``) lists them."""
     if auth and not token and not token_sha256:
         raise ValueError("create_app needs a bearer token (token= or token_sha256=); pass "
                          "auth=False to serve every request without one")
@@ -233,13 +273,16 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         token_sha256 = token_digest(token)
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
-    serving: AppAPI = app if app is not None else _Front(client=client, agents=agents or {},
-                                                          live=deltas)
+    serving: AppAPI = app if app is not None else _Front(
+        client=client, agents=agents or {}, live=deltas, admin=plugin_admin or PluginAdmin())
     guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
                   cwd=cwd, roots=roots)
     r = Routes(serving, app, agents)
     s = StreamRoutes(guard, deltas)
+    running = agents or {}
+    p = PluginRoutes(serving, lambda: running, guard, allow_install=allow_plugin_install,
+                     headers=WEB_HEADERS)
     routes: list[BaseRoute] = [
         Route("/tasks", guard(r.create), methods=["POST"]),
         Route("/tasks", guard(r.list_tasks), methods=["GET"]),
@@ -259,6 +302,14 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         Route("/tasks/{task_id}/rewind", guard(r.rewind_post), methods=["POST"]),
         Route("/commands", guard(r.commands), methods=["GET"]),
         Route("/commands/run", guard(r.run_command), methods=["POST"]),
+        Route("/tasks/{task_id}/ui", guard(p.ui), methods=["GET"]),
+        Route("/plugins", guard(p.list), methods=["GET"]),
+        Route("/plugins/install", guard(p.install), methods=["POST"]),
+        Route("/plugins/{name}", guard(p.put), methods=["PUT"]),
+        Route("/plugins/{name}", guard(p.remove), methods=["DELETE"]),
+        Route("/plugins/{name}/call", guard(p.call), methods=["POST"]),
+        Route("/plugins/{name}/web/{path:path}", p.web, methods=["GET"]),
+        Route("/market", guard(p.market), methods=["GET"]),
         Route("/agents", guard(r.list_agents), methods=["GET"]),
         Route("/models", guard(r.list_models), methods=["GET"]),
         Route("/openapi.json", guard(r.openapi), methods=["GET"]),

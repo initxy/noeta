@@ -11,7 +11,7 @@ the front end.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
 from noeta.core.agent import Agent
@@ -49,8 +49,9 @@ def parse_command(text: str) -> tuple[str, str] | None:
     return (name, args.strip()) if name else None
 
 
-async def _owned(agent: Agent, ctx: CommandContext) -> list[tuple[Extension, Command]]:
-    return await _offered(agent.all_extensions(), ctx)
+async def _owned(agent: Agent, ctx: CommandContext,
+                 off: Collection[str] = ()) -> list[tuple[Extension, Command]]:
+    return await _offered([e for e in agent.all_extensions() if e.name not in off], ctx)
 
 
 async def _offered(extensions: Sequence[Extension], ctx: CommandContext
@@ -77,9 +78,11 @@ async def offered_commands(extensions: Sequence[Extension], ctx: CommandContext
     return [c for _e, c in await _offered(extensions, ctx)]
 
 
-async def list_commands(agent: Agent, ctx: CommandContext) -> list[Command]:
-    """Every command ``agent``'s extensions offer, sorted by name."""
-    return sorted((c for _e, c in await _owned(agent, ctx)), key=lambda c: c.name)
+async def list_commands(agent: Agent, ctx: CommandContext,
+                        off: Collection[str] = ()) -> list[Command]:
+    """Every command ``agent``'s extensions offer, sorted by name; none of
+    the extensions named in ``off`` (switched off for the task)."""
+    return sorted((c for _e, c in await _owned(agent, ctx, off)), key=lambda c: c.name)
 
 
 async def expand_command(agent: Agent, ctx: CommandContext, text: str) -> str | None:

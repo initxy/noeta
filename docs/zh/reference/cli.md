@@ -166,6 +166,7 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 | `--allow-origin ORIGIN` | 无 | 允许调用接口的网页来源（`https://host:port`，可重复） |
 | `--allow-bypass-permissions` | 关 | 允许请求让任务以 `bypassPermissions` 启动或切换过去 |
 | `--allow-root PATH` | 无 | 除服务端自己的目录外，任务还可以在哪个目录里跑（可重复） |
+| `--allow-plugin-install` | 关（`--host` 是回环地址时开） | 允许请求安装和删除插件（`POST /plugins/install`、`DELETE /plugins/{name}`） |
 | `--web DIR` | 无 | 在其余路径上提供这个目录里的文件（构建好的网页，`web/dist`） |
 
 token 取自 `NOETA_SERVER_TOKEN`；没有的话，第一次启动时生成一个，只打印这一次。

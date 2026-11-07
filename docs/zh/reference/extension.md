@@ -7,6 +7,7 @@
 ```python
 from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChanges, ToolUse,
                    ContextPart, Reminder, Command, CommandContext, Allow, Deny, Ask, Rewrite,
+                   StatusItem, Widget, Notice, UiItem,
                    Recorded, TaskState, ask, read_answer, text_output, function_tool)
 ```
 
@@ -79,6 +80,17 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `async commands(self, ctx: CommandContext)` | `Sequence[Command]` | 前端列出斜杠命令时。 |
 | `async run_command(self, ctx: CommandContext, name: str, args: str)` | `str` | 执行本插件某个 `template` 为空的命令 `/name args`：返回要发出的消息文字。 |
 
+### 前端
+
+| 方法 | 返回 | 什么时候调用 |
+|---|---|---|
+| `async ui(self, view: TaskView)` | `Sequence[UiItem]` | 前端来问任务此刻要显示什么时（`GET /tasks/{id}/ui`、`AppAPI.ui`），跟踪的日志每往前走一次就再问一次。和 `reminders` 一样从折叠后的状态算出来，要便宜，不能写记录。 |
+| `async ui_call(self, ctx: CommandContext, name: str, args)` | JSON | 插件自己的前端代码来调（`POST /plugins/{name}/call`、`AppAPI.plugin_call`），`ctx.task_id` 一定有值。要长期留下的改动写进任务日志（发信号或写记录），不能只存在插件自己的内存里。不认识的 `name` 抛 `LookupError`（默认就是这样）。 |
+
+任务配置的 `plugins_off`（通过 `config` 信号改）里点了名的插件，照样折叠自己的记录（`initial_state`、
+`reduce`、`continue_state` 照常调用，它的状态、任务的快照和折叠版本都不变），但从下一轮起，这个任务不
+再调用它的其他任何方法，不管是哪个 worker 在跑；子任务创建时带上父任务的 `plugins_off`。
+
 `ToolSet(tools, name="tools")` 把一组普通的工具包成一个 `Extension`。
 
 ## 放行结论（Gate）
@@ -100,6 +112,9 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `Reminder` | `text: str`、`kind: str = "reminder"`、`data = None`、`origin: "system" \| "memory" = "system"`、`role: "user" \| "system" = "user"`、`order: int = 100` | 作为 `(extension, kind, data)` 连同消息一起记下。`role="user"` 的放进用户那一轮；`role="system"` 的是后面的一个系统轮。先放 user 的，再按 `order` 放 system 的。 |
 | `Command` | `name`、`description`、`template = ""`、`argument_hint = ""`、`local = False` | 一个斜杠命令。`template` 里的 `{args}` 换掉后就是发出的消息；为空时由 `run_command` 给出。`local` 命令的文字只显示给用户，不会到模型那里。 |
 | `CommandContext` | `cwd: str`、`task_id: str \| None = None` | 命令在哪里被列出或执行。 |
+| `StatusItem` | `key: str`、`text: str`、`tone: str = "normal"` | 前端状态栏里的一小行；`tone` 取 `normal`、`ok`、`warn`、`error`。 |
+| `Widget` | `key: str`、`markdown: str`、`placement: str = "above"` | 一块 markdown，放在输入框上面（`above`）或下面（`below`）。 |
+| `Notice` | `key: str`、`text: str`、`level: str = "info"` | 给人看的提示，同一个 `key` 只显示一次；`level` 取 `info`、`warn`、`error`。 |
 | `ToolChanges` | `add: Sequence[Tool] = ()`、`withhold: Mapping[str, str] = {}`、`entries: Sequence[ToolEntry] = ()` | 插件自己的工具之外再提供的工具；从请求里扣下的工具，各带一个调用时返回的错误（在任何检查之前就答复）；不是工具的请求条目。 |
 | `ToolEntry` | `spec: ToolSpec`、`before: str = ""` | 工具清单里一个永远不会被调用的条目（厂商的模式开关），放在名为 `before` 的工具前面，否则放在不是 `listed_last` 的工具后面。 |
 
@@ -118,7 +133,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `count_tokens` | `async (text) -> int \| None`，或 `None` | provider 对"一条只含 `text` 的用户消息"的精确 token 数。 |
 | `read_log` | `async (task_id, after=0) -> Sequence[Recorded]`，或 `None` | 另一个任务的日志，只读；不存在的任务读出来是空的。 |
 | `child_tasks` | `async (task_id) -> list[str]`，或 `None` | 某个任务的子任务编号。 |
-| `extensions` | `Sequence[Extension]` | 任务的插件，按代理里的顺序。 |
+| `extensions` | `Sequence[Extension]` | 任务的插件，按代理里的顺序；这个任务关掉的（`plugins_off`）不在里面。 |
 | `model` | `str` | 任务用的模型。 |
 | `agents` | `Mapping[str, Agent]` | 这台工人能跑的所有代理。 |
 | `allowed_tools` | `Sequence[str] \| None` | 代理的工具白名单（`None`：所有工具）。 |

@@ -17,6 +17,7 @@ from noeta.core.client import Client
 from noeta.core.commands import expand_command
 from noeta.core.events import ExtensionRecorded, ToolFinished
 from noeta.host.pending import pending
+from noeta.host.plugins import task_ui
 from noeta.host.questions import answer_question
 from noeta.testing import ScriptedProvider, reply
 
@@ -58,6 +59,8 @@ async def test_an_agent_file_runs_the_plugin(tmp_path: Path) -> None:
                 if isinstance(r.event, ExtensionRecorded) and r.event.kind == "notice"]
     assert notice == "hello: 3 greetings, asked the agent to stop"
     assert all(notice not in m.text for m in last.messages)  # the model never sees it
+    assert await task_ui(rt, tid) == [{"plugin": "hello", "type": "status", "key": "greeted",
+                                       "text": "greeted 3", "tone": "warn"}]
     await store.close()
 
 

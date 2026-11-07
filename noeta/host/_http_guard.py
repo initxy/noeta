@@ -19,11 +19,12 @@ from starlette.responses import JSONResponse, Response
 from noeta.core.client import CONTINUED_AS, CONTINUED_AS_KEY, ClientAPI, Input
 from noeta.core.errors import UnknownTask
 from noeta.core.events import Recorded
-from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL, MODEL_ROUTE
+from noeta.core.loop.state import CHANGEABLE_CONFIG, CONFIG_SIGNAL, MODEL_ROUTE, PLUGINS_OFF
 from noeta.core.store import Status, TaskRow
 from noeta.host._errors import error_text
 from noeta.host.local import take_over
 from noeta.host.pending import pending
+from noeta.host.plugins import switchable
 from noeta.host.rewind import RESTORE_SIGNAL
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY
 from noeta.toolkit.interactive import BASH_MODE_KEY
@@ -55,7 +56,7 @@ _BYPASS = "bypassPermissions"
 #: request they would loosen the permission gates.
 REQUEST_CONFIG = ("model", "effort", "max_turns", "cwd", "permission_mode", "output_schema",
                   "timezone", "interactive", "permission_prompt_tool", "ultracode",
-                  BUDGET_KEY, CONTINUED_AS_KEY, BASH_MODE_KEY)
+                  BUDGET_KEY, CONTINUED_AS_KEY, BASH_MODE_KEY, PLUGINS_OFF)
 
 #: The signals a request may post: the ones front ends send. The others
 #: (a background job's end, a sub-agent's idle subscription …) are posted
@@ -132,6 +133,14 @@ class GuardedClient:
         self._mode(config.get("permission_mode"))
         if config.get(CONTINUED_AS_KEY, "fork") not in CONTINUED_AS:
             raise ValueError(f"{CONTINUED_AS_KEY} is one of {', '.join(CONTINUED_AS)}")
+        off = config.get(PLUGINS_OFF)
+        if off is not None:
+            if not isinstance(off, list) or not all(isinstance(n, str) for n in off):
+                raise ValueError(f"{PLUGINS_OFF} is a list of plugin names")
+            # The permission gate and the tools a task is built on stay: a
+            # request switching them off would loosen what the server allows.
+            if fixed := sorted(n for n in off if not switchable(n)):
+                raise Refused(f"a request may not switch off the plugins {', '.join(fixed)}")
         budget = config.get(BUDGET_KEY)
         if budget is not None and (isinstance(budget, bool) or not isinstance(budget, (int, float))
                                    or not budget > 0):
