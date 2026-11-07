@@ -514,3 +514,37 @@ async def test_a_sub_agent_plans_as_its_parent_does(
                  if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
     assert entered["plan"]["pre_mode"] == pre
     assert entered["plan"][AUTO_DURING_PLAN] is classify
+
+
+async def test_a_resumed_conversation_keeps_the_mode_an_approved_plan_switched_to(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """The web app continues an ended session with the mode its page last
+    saw (``plan`` here, stale): the mode the source switched to when its
+    plan was approved wins, so the edit runs without asking."""
+    write = Fake("Write")
+    perms = Permissions(mode="default", plans_dir=str(tmp_path / "plans"))
+    provider = ScriptedProvider([reply("", LOAD), reply("", ("ExitPlanMode", {}))])
+    rt = runtime(store, provider, agent(with_plans(perms), [write]))
+    client = Client(store)
+    src = await client.create("a", "add caching",
+                              config={"cwd": str(tmp_path), "permission_mode": "plan"})
+    await rt.run_until_idle()
+    [entered] = [e.data for e in await events(client, src)
+                 if isinstance(e, ExtensionRecorded) and e.kind == "mode"]
+    Path(entered["plan"]["path"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(entered["plan"]["path"]).write_text("# Plan\n\n1. cache\n")
+    [question] = [p for p in pending(await client.events(src), src) if p.kind == "question"]
+    provider.add(reply("approved"))
+    await client.answer(src, question.request_id,
+                        data={"answers": {"0": {"selected": [pl.CHOICE_ACCEPT_EDITS]}}})
+    await rt.run_until_idle()
+    await client.cancel(src)
+    await rt.run_until_idle()
+    assert (await client.get(src)).status == "ended"
+
+    provider.add(reply("", ("Write", {"file_path": str(tmp_path / "a.py")})), reply("done"))
+    resumed = await client.create("a", "go", history_from=src, config={
+        "cwd": str(tmp_path), "permission_mode": "plan", "continued_as": "resume"})
+    await rt.run_until_idle()
+    assert [r["file_path"] for r in write.runs] == [str(tmp_path / "a.py")]
+    assert not [p for p in pending(await client.events(resumed), resumed)]
