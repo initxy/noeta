@@ -2,8 +2,8 @@
 tool call — modes, ``allow`` / ``deny`` / ``ask`` rules, the working
 directories, protected paths, the auto-mode classifier and what plan mode
 may run (plan mode itself is the plan-mode plugin's) — plus noeta's own
-guards (host PreToolUse rules, ``can_use_tool``). The budget caps and the
-repetition guard are plugins of their own."""
+guards (host PreToolUse rules, ``can_use_tool``). The budget caps are a
+plugin of their own."""
 
 from __future__ import annotations
 

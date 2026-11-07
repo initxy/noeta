@@ -201,7 +201,7 @@ the process running the task.
 | `The 'x' MCP server needs a sign-in. …` (to the model), `△ x · needs sign-in` | An HTTP server wants OAuth. | `noeta mcp login x`, or follow the link the model gives you. |
 | A server's tools are missing from requests | MCP tools are deferred: the model loads them with `ToolSearch` when it needs them. A tool whose name passes 128 characters is never offered (logged once per listing). | Set `alwaysLoad: true` on the server to send its tools from the first request. |
 | A call or listing times out | Listing, prompts and resources have 30 s (`NOETA_MCP_TIMEOUT`, ms); tool calls have no practical limit unless the server's `timeout` (ms) or `NOETA_MCP_TOOL_TIMEOUT` sets one. | Set the server's `timeout` or the variable. |
-| No MCP tools at all from an SDK host using `default_agents` | The built-in agents keep MCP, memory and the repetition guard off until a setting names them (`OFF_UNLESS_SET`, `noeta/agents/__init__.py`). The `noeta` command sets them for you. | Pass a setting for `mcp` (`plugins={"mcp": {...}}`). |
+| No MCP tools at all from an SDK host using `default_agents` | The built-in agents keep MCP and memory off until a setting names them (`OFF_UNLESS_SET`, `noeta/agents/__init__.py`). The `noeta` command sets them for you. | Pass a setting for `mcp` (`plugins={"mcp": {...}}`). |
 
 More in [MCP servers](../guides/mcp.md).
 

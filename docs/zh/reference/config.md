@@ -129,8 +129,10 @@ token = "{env:CHAT_TOKEN}"
 4. 前端自己传的（`-p` 的 `--mcp-config`、`--allowedTools` 等）。
 
 后面的层按键覆盖前面的；实例或开 / 关则整体替换。代理文件里对某个插件写的参数
-（`plugins: [{shell: {background: true}}]`）会叠在宿主给的参数之上。内置代理默认关掉 `memory`、
-`mcp` 和 `repetition_guard`，要有设置点名它们才开；`noeta` 命令会把前两个打开。
+（`plugins: [{shell: {background: true}}]`）会叠在宿主给的参数之上。内置代理默认关掉 `memory` 和
+`mcp`，要有设置点名它们才开；`noeta` 命令会把两个都打开。`[plugins.<name>]` 写了一个本机没装的插件，
+启动时会提示一句；如果是从 noeta 里搬出去的插件，还会给出安装命令（`repetition_guard` 就是
+`noeta plugin add repetition_guard`）。
 
 参数里的密钥写成引用（`{env:NAME}`、`{keyring:service/user}`），创建插件时才解析；配置文件和任务
 日志里只存引用。

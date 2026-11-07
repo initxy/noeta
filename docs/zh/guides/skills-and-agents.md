@@ -137,7 +137,7 @@ noeta 不处理的字段（`cacheTtl`、`observer` 等）会记一次日志。�
 
 ```toml
 [agents.main]
-add_plugins = ["repetition_guard", {my_plugin = {level = 2}}]
+add_plugins = ["house_style", {my_plugin = {level = 2}}]
 
 [agents."*"]
 add_plugins = ["run_tests"]
@@ -146,7 +146,7 @@ add_plugins = ["run_tests"]
 enabled = false          # 对所有代理关掉
 ```
 
-内置代理列出的插件里，`memory`、`mcp` 和 `repetition_guard` 要等宿主程序设置后才开；`noeta` 命令会打开记忆和 MCP。怎么写插件见[写一个插件](./plugins.md)。
+内置代理列出的插件里，`memory` 和 `mcp` 要等宿主程序设置后才开；`noeta` 命令会把它们都打开。怎么写插件见[写一个插件](./plugins.md)。
 
 ## 斜杠命令
 

@@ -136,8 +136,10 @@ same shape is used at every level (`noeta/agents/agent_files.py`):
 
 Later levels lay over earlier ones key by key; an instance or an on/off replaces. An agent
 file's own arguments for a plugin (`plugins: [{shell: {background: true}}]`) are laid over
-the host's. The built-in agents keep `memory`, `mcp` and `repetition_guard` off until a
-setting names them; the `noeta` command sets the first two.
+the host's. The built-in agents keep `memory` and `mcp` off until a setting names them; the
+`noeta` command sets both. A `[plugins.<name>]` table naming a plugin not installed here is a
+notice at the start, with how to install it when it is one that left noeta
+(`repetition_guard`: `noeta plugin add repetition_guard`).
 
 Secrets in arguments are written as references (`{env:NAME}`, `{keyring:service/user}`),
 resolved only when the plugin is made; config files and task logs hold only the reference.

@@ -229,12 +229,12 @@ allow_senders = ["U123"]
 url = "https://chat.example/hooks/{env:CHAT_HOOK_TOKEN}"
 ```
 
-That is the [`examples/chat-bridge`](https://github.com/initxy/noeta/tree/main/examples/chat-bridge)
-channel (copy `chat_bridge.py` into `~/.noeta/plugins/`): a chat app posts each message to
-`POST /chat` on port 8788 with the shared secret, every thread becomes one task, and the
-`chat_reply` plugin inside the task posts answers back.
-[`examples/chat-approvals`](https://github.com/initxy/noeta/tree/main/examples/chat-approvals)
-adds Allow / Deny buttons for the approvals a task waits on (port 8789).
+That is the [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge)
+channel from the official marketplace (`noeta plugin add chat-bridge`): a chat app posts each
+message to `POST /chat` on port 8788 with the shared secret, every thread becomes one task, and
+the `chat_reply` plugin inside the task posts answers back.
+[`chat-approvals`](https://github.com/initxy/noeta-plugins/tree/main/chat-approvals) adds
+Allow / Deny buttons for the approvals a task waits on (port 8789).
 
 How channels stay correct on several replicas:
 

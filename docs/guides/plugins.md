@@ -144,7 +144,7 @@ need.
 | add skills | `SKILL.md` folders in `~/.noeta/skills`, `~/.agents/skills`, a project's `.noeta/skills` or `.agents/skills`, or a plugin's `skills/`; `*.md` files in `~/.noeta/commands` or a project's `.noeta/commands` | `noeta/plugins/skills` |
 | connect MCP servers | `.noeta/mcp.json`, settings `mcpServers`, a plugin's `.mcp.json` | `noeta/plugins/mcp` |
 | let a chat app or webhook in | a `Channel` (`run(client, stop)`), posting with `deliver()` | `noeta/core/channel.py` |
-| send replies back out | `on_event` in an `Extension` inside the task | `examples/chat-bridge` |
+| send replies back out | `on_event` in an `Extension` inside the task | [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) |
 | a new model API | a provider in the `noeta.providers` entry-point group; a `[providers.<name>]` table with `family = "<its name>"` runs it beside the others, routed by model id | `noeta/backends/providers`, `noeta/backends/providers/routing.py` |
 | run commands somewhere else (a container) | an exec env in `noeta.execenvs` | `noeta/backends/execenvs` |
 | store tasks elsewhere | a store in `noeta.stores`, checked by `noeta.testing.store_contract` | `noeta/backends/stores` |
@@ -309,6 +309,7 @@ and records where it came from in `~/.noeta/plugin-sources.json`.
 ```sh
 noeta plugin add https://github.com/you/your-plugin@<full commit>   # https, ssh, user@host:path or file://
 noeta plugin add ./my_plugin.py                                     # a file or directory, copied
+noeta plugin add repetition_guard                                   # by name, from a configured marketplace
 noeta plugin add --marketplace ./team-marketplace formatter         # a Claude Code marketplace.json
 noeta plugin add --marketplace https://github.com/team/market@<commit> formatter --commit <sha>
 noeta plugin configure formatter --config API_URL=https://example.com
@@ -328,16 +329,43 @@ noeta plugin remove your-plugin
 - **A marketplace is only read**, to find where a plugin comes from. An entry fetched from a
   repository installs at its `sha`, or at `--commit <sha>` when it pins none. An entry with only
   a `ref` (a branch or tag) is refused as pinning no commit, and the error names the ref: a
-  branch or tag can move, and noeta installs only pinned commits. A marketplace that
-  is itself a repository needs `<url>@<commit>`. `github`, `url`, `git-subdir` and path sources
-  are supported.
+  branch or tag can move, and noeta installs only pinned commits. A path entry is pinned by its
+  marketplace: one on disk, or a repository named `<url>@<commit>`; in a repository read at its
+  default branch it is refused. `github`, `url`, `git-subdir` and path sources are supported.
 - **A plugin with `userConfig`** is configured as it is added. If configuring fails it is not
   left installed half-configured; `--config` given to a plugin that declares no options is
   refused too.
-- The plugin's name is its file's stem, else the manifest's `name`, else the directory's name.
+- The plugin's name is its file's stem, else the manifest's `name`, else the name its
+  marketplace lists it by, else the directory's name.
   A name already in `~/.noeta/plugins/` is refused until you `noeta plugin remove` it.
 
 Running front ends pick up an install or a removal with `/reload-plugins`.
+
+### Marketplaces
+
+A marketplace is Claude Code's `.claude-plugin/marketplace.json`; `noeta plugin add <name>`
+looks the name up in the marketplaces configured in `~/.noeta/marketplaces.json`. The
+official one, [`initxy/noeta-plugins`](https://github.com/initxy/noeta-plugins), is configured
+until you remove it; it holds the optional plugins that are not part of noeta
+(`repetition_guard`, `chat-bridge`, `chat-approvals`).
+
+```sh
+noeta plugin marketplace add ./team-marketplace                  # a directory on disk
+noeta plugin marketplace add https://github.com/team/market       # read at its default branch
+noeta plugin marketplace add https://github.com/team/market@<commit>
+noeta plugin marketplace list                                     # each one and what it lists
+noeta plugin marketplace remove team
+```
+
+- A marketplace read at its default branch is data: the listing may change, but each entry
+  still installs only the commit it pins, so nothing installed changes until you install again.
+  The listing is kept for an hour (`~/.noeta/marketplace-cache/`); `add` reads it again.
+- A marketplace is known by the `name` in its `marketplace.json`; adding one under a name
+  already configured replaces it (to point `noeta-plugins` at a local checkout, say).
+- Two marketplaces listing the same name: `noeta plugin add <name> --marketplace <one>`.
+- A marketplace that cannot be read is named, and the others still work.
+- An entry may add a `noeta` object for noeta's front ends, `{"ui_api": 1, "parts":
+  ["backend", "web"]}`; Claude Code ignores it.
 
 ### The machine's policy
 
@@ -463,13 +491,17 @@ Each is one file (hello-plugin a package), a short README and a test `make examp
 - [`examples/house-style`](https://github.com/initxy/noeta/tree/main/examples/house-style) —
   prompt and reminder text: an output style captured when the task starts, so a resumed task
   sends identical bytes; joins every agent (`add_to = ("*",)`).
-- [`examples/chat-bridge`](https://github.com/initxy/noeta/tree/main/examples/chat-bridge) — a
-  channel: a chat thread becomes a task, requests carry a shared secret, senders are
-  allowlisted, replies relayed from the task.
-- [`examples/chat-approvals`](https://github.com/initxy/noeta/tree/main/examples/chat-approvals) —
-  a second channel next to chat-bridge: an approval the task waits on is posted to its thread,
-  and the chat app's Allow or Deny press answers it.
 - [`examples/hello-plugin`](https://github.com/initxy/noeta/tree/main/examples/hello-plugin) —
   the same kind of plugin as a package with an entry point.
+
+The official marketplace's plugins are worked examples too, each a plugin directory with its
+tests: [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) (a
+channel: a chat thread becomes a task, requests carry a shared secret, senders are
+allowlisted, replies relayed from the task),
+[`chat-approvals`](https://github.com/initxy/noeta-plugins/tree/main/chat-approvals) (a second
+channel next to it: an approval the task waits on is posted to its thread, and the chat app's
+Allow or Deny press answers it) and
+[`repetition_guard`](https://github.com/initxy/noeta-plugins/tree/main/repetition_guard) (a
+`before_tool` gate).
 
 The built-in plugins are listed with their settings in [Built-in plugins](../reference/plugins.md).

@@ -114,7 +114,7 @@ plugins:
 | 加技能 | `~/.noeta/skills`、`~/.agents/skills`、项目的 `.noeta/skills` 或 `.agents/skills`、插件的 `skills/` 下的 `SKILL.md` 目录；`~/.noeta/commands` 或项目 `.noeta/commands` 下的 `*.md` | `noeta/plugins/skills` |
 | 接 MCP 服务器 | `.noeta/mcp.json`、settings 的 `mcpServers`、插件的 `.mcp.json` | `noeta/plugins/mcp` |
 | 让聊天软件或 webhook 进来 | 一个渠道 `Channel`（`run(client, stop)`），用 `deliver()` 投递 | `noeta/core/channel.py` |
-| 把回复送出去 | 任务里某个 `Extension` 的 `on_event` | `examples/chat-bridge` |
+| 把回复送出去 | 任务里某个 `Extension` 的 `on_event` | [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) |
 | 接一种新的模型 API | `noeta.providers` 组里的一个 provider；写一个 `family = "<它的名字>"` 的 `[providers.<name>]` 表，就能和其他 provider 并存、按模型 id 分流 | `noeta/backends/providers`、`noeta/backends/providers/routing.py` |
 | 让命令在别处跑（容器） | `noeta.execenvs` 组里的一个执行环境 | `noeta/backends/execenvs` |
 | 把任务存到别处 | `noeta.stores` 组里的一个存储，用 `noeta.testing.store_contract` 检查 | `noeta/backends/stores` |
@@ -235,6 +235,7 @@ Python 插件目录（带 `__init__.py` 的）也可以在代码旁边放 `skill
 ```sh
 noeta plugin add https://github.com/you/your-plugin@<完整提交号>   # https、ssh、user@host:path 或 file://
 noeta plugin add ./my_plugin.py                                    # 文件或目录，复制过去
+noeta plugin add repetition_guard                                  # 只写名字，从配好的插件市场里找
 noeta plugin add --marketplace ./team-marketplace formatter        # Claude Code 的 marketplace.json
 noeta plugin add --marketplace https://github.com/team/market@<提交号> formatter --commit <sha>
 noeta plugin configure formatter --config API_URL=https://example.com
@@ -246,11 +247,29 @@ noeta plugin remove your-plugin
 
 - **git 来源必须给完整提交号**（40 位十六进制；SHA-256 仓库是 64 位）。短提交号会被拒：以后推上来的提交可能和它前缀相同。明文的 `http://` 和 `git://` 也会被拒：中间人可以换掉代码。
 - **安装时插件里的东西一行都不执行**：clone 时设 `core.hooksPath=/dev/null`，不拉子模块，不跑安装脚本，不装依赖；检出后删掉 `.git`。插件如果导入了 noeta 环境里没有的包，会被列为坏的（`noeta plugins`、`/reload-plugins`），并给出安装那个包的命令。
-- **marketplace 只读**，只用来找插件的来源。从仓库取的条目装在它的 `sha` 上；条目没固定版本时，用 `--commit <sha>`。只写了 `ref`（分支或标签）的条目照样被拒，算作没固定提交，报错里会点出这个 ref：分支和标签会变，noeta 只装固定下来的提交。marketplace 本身是个仓库时，要写 `<url>@<提交号>`。支持 `github`、`url`、`git-subdir` 和路径这几种来源。
+- **marketplace 只读**，只用来找插件的来源。从仓库取的条目装在它的 `sha` 上；条目没固定版本时，用 `--commit <sha>`。只写了 `ref`（分支或标签）的条目照样被拒，算作没固定提交，报错里会点出这个 ref：分支和标签会变，noeta 只装固定下来的提交。写成路径的条目靠 marketplace 本身固定：marketplace 在本地磁盘上，或者是写了 `<url>@<提交号>` 的仓库，都可以；仓库按默认分支读的话，这种条目会被拒。支持 `github`、`url`、`git-subdir` 和路径这几种来源。
 - **带 `userConfig` 的插件**在安装时一起配置。配置失败，插件不会以半配置状态留在那里；对不声明任何选项的插件传 `--config`，也会拒绝安装。
-- 插件名取文件名（去掉后缀），否则取 manifest 的 `name`，再否则取目录名。`~/.noeta/plugins/` 里已有同名的，要先 `noeta plugin remove`。
+- 插件名取文件名（去掉后缀），否则取 manifest 的 `name`，再否则取 marketplace 里给它的名字，最后才取目录名。`~/.noeta/plugins/` 里已有同名的，要先 `noeta plugin remove`。
 
 已经开着的前端，用 `/reload-plugins` 载入新装或删掉的插件。
+
+### 插件市场
+
+插件市场就是 Claude Code 的 `.claude-plugin/marketplace.json`。`noeta plugin add <名字>` 会去 `~/.noeta/marketplaces.json` 里配好的市场挨个找这个名字。官方市场 [`initxy/noeta-plugins`](https://github.com/initxy/noeta-plugins) 默认就配着，不想要可以删掉；不属于 noeta 本体的可选插件都在那里（`repetition_guard`、`chat-bridge`、`chat-approvals`）。
+
+```sh
+noeta plugin marketplace add ./team-marketplace                  # 本地目录
+noeta plugin marketplace add https://github.com/team/market       # 按默认分支读
+noeta plugin marketplace add https://github.com/team/market@<提交号>
+noeta plugin marketplace list                                     # 每个市场和它列出的插件
+noeta plugin marketplace remove team
+```
+
+- 按默认分支读的市场只当数据用：清单可以变，但每个条目照样只装它固定的那个提交，所以你不重新安装，装好的东西就不会变。清单读一次缓存一小时（`~/.noeta/marketplace-cache/`），`add` 时会重新读。
+- 市场的名字取它 `marketplace.json` 里的 `name`。加一个和已有市场同名的，就是把那个换掉（比如把 `noeta-plugins` 指到本地的一份检出）。
+- 两个市场都列了同一个名字时，用 `noeta plugin add <名字> --marketplace <其中一个>` 指定。
+- 某个市场读不出来，会说清是哪个，其余的照常可用。
+- 条目里可以多写一个给 noeta 前端看的 `noeta` 对象，比如 `{"ui_api": 1, "parts": ["backend", "web"]}`；Claude Code 不认它，也不受影响。
 
 ### 机器级策略
 
@@ -328,8 +347,8 @@ async def test_word_count(tmp_path):                 # pytest-asyncio，asyncio_
 
 - [`examples/run-tests`](https://github.com/initxy/noeta/tree/main/examples/run-tests)：一个工具。在任务跑命令的地方执行测试命令，从日志里算出上次结果，改过文件后提醒模型一次。配置 `[plugins.run_tests] command = "uv run pytest -q"`。
 - [`examples/house-style`](https://github.com/initxy/noeta/tree/main/examples/house-style)：提示词和提醒。任务开始时抓一次输出风格，任务恢复后发的字节不变；加入所有代理（`add_to = ("*",)`）。
-- [`examples/chat-bridge`](https://github.com/initxy/noeta/tree/main/examples/chat-bridge)：一个渠道。聊天里的一个话题对应一个任务，请求带共享密钥，发送者按名单放行，回复从任务里转发出去。
-- [`examples/chat-approvals`](https://github.com/initxy/noeta/tree/main/examples/chat-approvals)：和 chat-bridge 并列的第二个渠道。任务在等的审批会发到对应话题里，聊天软件里点"允许"或"拒绝"就是回答。
 - [`examples/hello-plugin`](https://github.com/initxy/noeta/tree/main/examples/hello-plugin)：同类插件的 Python 包版本，带 entry point。
+
+官方市场里的插件也可以当例子看，每个都是一个插件目录，带自己的测试：[`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) 是一个渠道，聊天里的一个话题对应一个任务，请求带共享密钥，发送者按名单放行，回复从任务里转发出去；[`chat-approvals`](https://github.com/initxy/noeta-plugins/tree/main/chat-approvals) 是和它配套的第二个渠道，任务在等的审批会发到对应话题里，聊天软件里点"允许"或"拒绝"就是回答；[`repetition_guard`](https://github.com/initxy/noeta-plugins/tree/main/repetition_guard) 是一道 `before_tool` 关卡。
 
 内置插件和它们的配置项列在[内置插件](../reference/plugins.md)。

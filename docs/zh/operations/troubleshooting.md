@@ -178,7 +178,7 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 | 模型收到 `The 'x' MCP server needs a sign-in. …`，`/mcp` 显示 `△ x · needs sign-in` | HTTP 服务器要 OAuth 登录。 | `noeta mcp login x`，或者打开模型给你的链接。 |
 | 请求里没有某个服务器的工具 | MCP 工具默认延迟加载：模型需要时用 `ToolSearch` 载入。名字超过 128 个字符的工具永远不提供（每次列工具时记一条日志）。 | 在服务器上设 `alwaysLoad: true`，从第一个请求起就带上它的工具。 |
 | 调用或列工具超时 | 列工具、prompts、resources 的时限是 30 秒（`NOETA_MCP_TIMEOUT`，毫秒）；工具调用实际上不限时，除非服务器的 `timeout`（毫秒）或 `NOETA_MCP_TOOL_TIMEOUT` 设了。 | 设服务器的 `timeout` 或这个环境变量。 |
-| 用 `default_agents` 的 SDK 宿主里一个 MCP 工具都没有 | 内置代理在没有对应设置前，MCP、记忆和重复检测都是关的（`OFF_UNLESS_SET`，`noeta/agents/__init__.py`）。`noeta` 命令会替你设好。 | 给 `mcp` 传一个设置（`plugins={"mcp": {...}}`）。 |
+| 用 `default_agents` 的 SDK 宿主里一个 MCP 工具都没有 | 内置代理在没有对应设置前，MCP 和记忆都是关的（`OFF_UNLESS_SET`，`noeta/agents/__init__.py`）。`noeta` 命令会替你设好。 | 给 `mcp` 传一个设置（`plugins={"mcp": {...}}`）。 |
 
 更多见 [MCP 服务器](../guides/mcp.md)。
 

@@ -229,13 +229,13 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
       outside `web/src/plugins/`.
 
 ### 5. Marketplace
-- [ ] `noeta plugin marketplace add|list|remove`, the default official marketplace, `noeta`
+- [x] `noeta plugin marketplace add|list|remove`, the default official marketplace, `noeta`
       entry fields.
 - [ ] Plugins page › Discover; install and remove endpoints with the loopback /
       `--allow-plugin-install` guard.
 
 ### 6. `noeta-plugins` repository
-- [ ] Create it with `marketplace.json` and CI; move `repetition_guard` and `chat-bridge`;
+- [x] Create it with `marketplace.json` and CI; move `repetition_guard` and `chat-bridge`;
       settle `chat-approvals`; CHANGELOG note for the move.
 
 ### 7. Wrap-up
@@ -273,3 +273,4 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 - 2026-11-07 Written after reading pi, DeepSeek Harness and five community plugins; proposed.
 - 2026-11-07 Owner: start, following every recommendation; active. D2 moved onto the `config` signal (`plugins_off`); interfaces fixed for parallel work.
 - 2026-11-07 Kernel and host half: `plugins_off` (folded as `TaskState.plugins_off`, taken from the config only while no turn is open; `TaskRun.exts` is the filtered list, `all_exts` folds and pins), `UiItem`s, `ui`/`ui_call`, the `AppAPI` plugin methods with `LocalApp`/`RemoteApp`, the plugin routes (`noeta/host/_http_plugins.py`, listing in `noeta/host/plugins.py`), machine switches and install/remove/market wiring (`noeta/cli/plugin_switches.py`), `noeta serve --allow-plugin-install`, hello-plugin's status item, HTTP and Extension reference (en + zh). Open: a manifest beside a single-file plugin (only directories and packages read one); Claude Code plugins are listed but not switchable per task; a request's `plugins_off` may not name a built-in outside D2's list (403); with `--no-worker` `/tasks/{id}/ui` is empty and switches are 501; guides still to write.
+- 2026-11-07 Marketplace CLI (`noeta plugin marketplace`, `market_entries()`, install by name) and the move-out done: `repetition_guard`, `chat-bridge`, `chat-approvals` live in the local `noeta-plugins` repository (no remote yet), whose entries pin `git-subdir` commits of `https://github.com/initxy/noeta-plugins.git`, so installing from it works once that repository is pushed (verified end to end with a copy of the listing pointing at the local clone). `market_entries(notices)` takes an optional list for the unreadable-marketplace notices; `plugin_command.install(name, marketplace=, commit=)` refuses a commit other than the entry's pin (what `install_plugin` can pass from Discover).

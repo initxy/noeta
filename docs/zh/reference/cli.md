@@ -15,7 +15,7 @@ noeta serve [参数]              HTTP / WebSocket 接口，默认同时跑 work
 noeta worker [参数]             从存储里认领并运行任务，直到被停止
 noeta trust                     信任当前目录
 noeta plugins                   列出所有插件及其来源
-noeta plugin add|configure|list|remove
+noeta plugin add|configure|list|remove|marketplace
 noeta mcp add|add-json|list|get|remove|login|logout
 ```
 
@@ -206,14 +206,18 @@ Code 插件目录（带版本号）。加载失败的插件文件打印到 stder
 | 命令 | 含义 |
 |---|---|
 | `noeta plugin add SOURCE` | 从 `<git-url>@<commit>`（https 或 ssh，完整的提交号：40 位十六进制，SHA-256 仓库是 64 位）安装，或复制一个本地路径 |
-| `noeta plugin add --marketplace MARKETPLACE NAME` | 从 Claude Code 的 `marketplace.json`（本地路径或 `<git-url>@<commit>`）安装 `NAME`；只读取 marketplace，不执行 |
-| `  --commit SHA` | marketplace 条目没固定提交时，用这个提交（条目里的 `ref`，也就是分支或标签，不会去跟） |
+| `noeta plugin add NAME` | 从配好的插件市场里装名叫 `NAME` 的插件（好几个市场都有时，用 `--marketplace` 指定一个） |
+| `noeta plugin add --marketplace MARKETPLACE NAME` | 从配好的某个市场（写它的名字），或某个 Claude Code `marketplace.json`（本地路径、`<git-url>@<commit>`，或按默认分支读的 git 地址）安装 `NAME`；只读取 marketplace，不执行 |
+| `  --commit SHA` | marketplace 条目没固定提交时，用这个提交（条目里的 `ref`，也就是分支或标签，不会去跟）；和条目固定的提交不一致就拒绝 |
 | `  --config KEY=VALUE` | Claude Code 插件的 `userConfig` 值（可重复）；没给的在终端上逐个问 |
 | `noeta plugin configure NAME [--config KEY=VALUE]` | 重新设置 Claude Code 插件的 `userConfig` |
 | `noeta plugin list` | 用 `noeta plugin add` 装的插件 |
 | `noeta plugin remove NAME` | 删掉一个 |
+| `noeta plugin marketplace add SOURCE` | 加一个插件市场：本地路径、`<git-url>@<commit>`，或按默认分支读的 git 地址；名字取它 `marketplace.json` 里的 `name`，和已有的重名就替换掉 |
+| `noeta plugin marketplace list` | 列出每个市场和它里面的插件（版本、固定的提交、装没装）；读不出来的市场在 stderr 上说明 |
+| `noeta plugin marketplace remove NAME` | 删掉一个市场（从它装的插件留着） |
 
-`userConfig` 的值存在 `~/.noeta/settings.json` 的 `pluginConfigs` 里，敏感的存进系统钥匙串。详见
+插件市场的列表存在 `~/.noeta/marketplaces.json`；这个文件还不存在时，只有官方市场 `noeta-plugins`（`https://github.com/initxy/noeta-plugins`）。`userConfig` 的值存在 `~/.noeta/settings.json` 的 `pluginConfigs` 里，敏感的存进系统钥匙串。详见
 [写一个插件](../guides/plugins.md)。
 
 ## `noeta mcp`
