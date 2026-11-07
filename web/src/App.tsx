@@ -13,6 +13,7 @@ import { attentionChanges, desktop } from "./desktop";
 import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
 import { usePlugins, useUiItems } from "./plugins/usePlugins";
+import { continuationConfig, newSessionConfig } from "./state/newTask";
 import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask } from "./state/useTask";
 
@@ -292,16 +293,10 @@ function Workspace({
    * one has ended) a new one continuing its conversation. */
   const target = async (): Promise<string> => {
     if (taskId && !ended) return taskId;
-    const config: Record<string, unknown> = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-    if (taskId) {
-      Object.assign(config, { permission_mode: state.mode || "default", continued_as: "resume" });
-      if (state.model) config.model = state.model;
-      if (state.cwd) config.cwd = state.cwd;
-    } else {
-      config.permission_mode = newMode;
-      if (newModel) config.model = newModel;
-      if (desk && project) config.cwd = project;
-    }
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const config = taskId
+      ? continuationConfig({ model: state.model, cwd: state.cwd }, timezone)
+      : newSessionConfig({ mode: newMode, model: newModel, project: desk ? project : "" }, timezone);
     const id = await api.create(null, config, "main", taskId ?? undefined);
     if (taskId) replace(taskId);
     open(id);

@@ -28,7 +28,7 @@ describe("reduce", () => {
       ev({ type: "Waiting", on: "input" }),
     );
     expect(st.items.map((i) => i.kind)).toEqual(["user", "thinking", "assistant"]);
-    expect(st).toMatchObject({ cwd: "/w", mode: "plan", model: "m1", busy: false, waitingOn: "input", contextTokens: 120 });
+    expect(st).toMatchObject({ cwd: "/w", model: "m1", busy: false, waitingOn: "input", contextTokens: 120 });
   });
 
   it("streams live text for the current call and drops it once the reply is recorded", () => {
@@ -102,12 +102,10 @@ describe("reduce", () => {
     expect(reduce(later, ended("t.c", 3)).running).toEqual([]);
   });
 
-  it("keeps the mode the task was made with or last sent, not what a plugin records", () => {
-    const signal = (mode: string, inbox: number): Action =>
-      ev({ type: "InputTaken", through: inbox, items: [{ seq: inbox, at: 0, body: { kind: "external", name: "permission_mode", data: { mode } } }] });
-    const st = run(ev({ type: "TaskCreated", agent: "main", config: { permission_mode: "plan" } }), record("permissions", "mode", { mode: "acceptEdits" }));
-    expect(st.mode).toBe("plan");
-    expect(reduce(st, signal("auto", 1)).mode).toBe("auto");
+  it("keeps no permission mode of its own: the permissions plugin shows it, and a continuation is the server's to carry", () => {
+    const signal: Action = ev({ type: "InputTaken", through: 1, items: [{ seq: 1, at: 0, body: { kind: "external", name: "permission_mode", data: { mode: "auto" } } }] });
+    const st = run(ev({ type: "TaskCreated", agent: "main", config: { permission_mode: "plan" } }), record("permissions", "mode", { mode: "acceptEdits" }), signal);
+    expect("mode" in st).toBe(false);
   });
 
   it("marks interrupts, failures, compaction and the end", () => {

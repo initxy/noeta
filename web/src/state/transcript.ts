@@ -46,9 +46,6 @@ export interface TaskState {
   ended: string | null;
   cwd: string;
   model: string;
-  /** The permission mode the task started in or was last sent (a mode a
-   * plugin switched to is the plugin's to show). */
-  mode: string;
   contextTokens: number;
   /** Inbox seqs of messages sent but not taken yet (queued), with their text. */
   queued: { seq: number; text: string }[];
@@ -74,7 +71,6 @@ export const emptyTask = (): TaskState => ({
   ended: null,
   cwd: "",
   model: "",
-  mode: "",
   contextTokens: 0,
   queued: [],
   taken: 0,
@@ -94,9 +90,6 @@ export type Action =
 /** The note a declined call's result carries (noeta.core.runner.texts.REJECTED_MARKER):
  * the decline already shows as the call's error. */
 const REJECTED_MARKER = "[Request interrupted by user for tool use]\n";
-
-/** The signal that switches a task's permission mode (noeta.toolkit.permission_modes.MODE_SIGNAL). */
-export const MODE_SIGNAL = "permission_mode";
 
 const text = (blocks: Block[]): string =>
   blocks.map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -176,7 +169,6 @@ function event(st: TaskState, rec: Recorded): TaskState {
         ...st,
         cwd: String(ev.config.cwd ?? ""),
         model: String(ev.config.model ?? st.model),
-        mode: String(ev.config.permission_mode ?? st.mode),
         pluginsOff: names(ev.config.plugins_off),
       };
     case "InputTaken": {
@@ -203,9 +195,6 @@ function event(st: TaskState, rec: Recorded): TaskState {
           const config = (body.data ?? {}) as Record<string, unknown>;
           if (typeof config.model === "string") st = { ...st, model: config.model };
           if ("plugins_off" in config) st = { ...st, pluginsOff: names(config.plugins_off) };
-        } else if (body.kind === "external" && body.name === MODE_SIGNAL) {
-          const mode = (body.data as { mode?: unknown } | null)?.mode;
-          if (typeof mode === "string" && mode) st = { ...st, mode };
         }
       }
       // Taking input ends a wait, but an approval or a question stands until
