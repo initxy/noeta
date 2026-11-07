@@ -197,6 +197,6 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 ## 某些工具没出现
 
 - **`WebSearch`** 要有搜索后端的 key（`NOETA_WEB_SEARCH_API_KEY`，Tavily）才提供。
-- **`Workflow`** 在 `mini-racer` 包内嵌的 V8 里跑脚本。没有它时工具会拒绝，报
-  `the mini-racer package is not installed (…)` 或 `mini-racer's V8 library does not load here (…)`，什么都不启动。
+- **`Workflow`** 在 `mini-racer` 包内嵌的 V8 里跑脚本，这个包随 `workflow` 这个 extra 一起装（`pip install 'noeta[workflow]'`）。没装时工具会拒绝，报
+  `the mini-racer package is not installed (…)` 并附上安装命令，或报 `mini-racer's V8 library does not load here (…)`，什么都不启动；`noeta plugins` 也会指出缺哪个 extra。
 - **任务清单工具**（`TaskCreate` 等）只提供给 Claude Code 也会给的那些模型，除非设了 `[plugins.todos] all_models = true`。

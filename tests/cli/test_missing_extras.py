@@ -64,6 +64,20 @@ def test_a_postgres_store_names_the_postgres_extra(tmp_path: Path,
     assert "pip install 'noeta[postgres]'" in message
 
 
+def test_noeta_plugins_names_the_workflow_extra_when_its_engine_is_missing(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setenv("NOETA_HOME", str(tmp_path / "home"))
+    cli.main(["--cwd", str(tmp_path), "plugins"])
+    assert "(missing)" not in capsys.readouterr().err
+    monkeypatch.setattr(cli.importlib.util, "find_spec",
+                        lambda name: None if name == "py_mini_racer" else object())
+    cli.main(["--cwd", str(tmp_path), "plugins"])
+    err = capsys.readouterr().err
+    assert "(missing) workflow: the py_mini_racer module is not installed" in err
+    assert "pip install 'noeta[workflow]'" in err
+
+
 def test_another_missing_module_is_not_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only the extras' own modules are translated; a bug importing
     something else still raises."""

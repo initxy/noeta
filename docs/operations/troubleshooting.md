@@ -221,8 +221,9 @@ with the notice above at start. See [where commands run](../guides/sandbox.md).
 ## Optional tools that do not appear
 
 - **`WebSearch`** is offered only with a search backend key, `NOETA_WEB_SEARCH_API_KEY` (Tavily).
-- **`Workflow`** runs scripts in an embedded V8 from the `mini-racer` package. Without it the tool
-  refuses with `the mini-racer package is not installed (…)` or `mini-racer's V8 library does not
-  load here (…)` and starts nothing.
+- **`Workflow`** runs scripts in an embedded V8 from the `mini-racer` package, which comes with the
+  `workflow` extra (`pip install 'noeta[workflow]'`). Without it the tool refuses with
+  `the mini-racer package is not installed (…)` and the install line, or `mini-racer's V8 library
+  does not load here (…)`, and starts nothing; `noeta plugins` names the missing extra too.
 - **The task tools** (`TaskCreate` and the rest) are offered only to the models Claude Code gives
   them to, unless `[plugins.todos] all_models = true`.

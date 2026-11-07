@@ -33,6 +33,7 @@ Optional extras add the rest:
 | `acp` | `noeta acp`, the Agent Client Protocol for Zed and other editors |
 | `postgres` | a Postgres store, for many workers |
 | `keyring` | `{keyring:service/user}` secrets in config |
+| `workflow` | the `Workflow` tool's script engine (`mini-racer`, an embedded V8 of about 80 MB) |
 
 Several at once: `uv tool install 'noeta[tui,acp,server,postgres]'`.
 A `uv tool install --reinstall` keeps only the extras and `--with` packages it names, so name
@@ -56,7 +57,7 @@ base URL too.
 ```bash
 export NOETA_PROVIDER=openai_compat
 export NOETA_BASE_URL=https://llm.example.com/v1
-export NOETA_MODEL=deepseek-chat
+export NOETA_MODEL=deepseek-flash
 export NOETA_API_KEY=...                 # or OPENAI_API_KEY
 ```
 

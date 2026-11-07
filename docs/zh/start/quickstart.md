@@ -31,6 +31,7 @@ extra 会装上对应的版本。不装它，`noeta` 照样能跑 `-p`、`serve`
 | `acp` | `noeta acp`，给 Zed 等编辑器用的 Agent Client Protocol |
 | `postgres` | Postgres 存储，多台 worker 时用 |
 | `keyring` | 配置里的 `{keyring:service/user}` 密钥引用 |
+| `workflow` | `Workflow` 工具跑脚本用的引擎（`mini-racer`，内嵌的 V8，装好约 80 MB） |
 
 一次装多个：`uv tool install 'noeta[tui,acp,server,postgres]'`。
 注意 `uv tool install --reinstall` 只保留这次写出来的 extra 和 `--with` 包，所以每次都要写全。
@@ -52,7 +53,7 @@ export NOETA_API_KEY=sk-ant-...          # 或者 ANTHROPIC_API_KEY
 ```bash
 export NOETA_PROVIDER=openai_compat
 export NOETA_BASE_URL=https://llm.example.com/v1
-export NOETA_MODEL=deepseek-chat
+export NOETA_MODEL=deepseek-flash
 export NOETA_API_KEY=...                 # 或者 OPENAI_API_KEY
 ```
 

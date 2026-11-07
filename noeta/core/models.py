@@ -307,6 +307,42 @@ CATALOG: dict[str, ModelSpec] = {
         is_reasoning=False,
         supports_vision=True,
     ),
+    # --- DeepSeek -----------------------------------------------------------
+    # api-docs.deepseek.com/quick_start/pricing (read 2026-11-06): both 1M
+    # window, 384K output ceiling, thinking on by default. The rates are the
+    # peak ones (off-peak is half); this table has no time dimension, and
+    # over-reporting is the safe direction for a budget ceiling. No
+    # cache-write tier → = input. ``deepseek-chat`` / ``deepseek-reasoner``
+    # were discontinued on 2026-07-24 and are not catalogued. ``vendor`` stays
+    # unset and ``is_reasoning`` off, so the wire is what an uncatalogued id
+    # gets: a declared family would switch thinking off explicitly on side
+    # calls (a gateway serving DeepSeek on the Messages wire refuses that),
+    # and a reasoning row would ask for adaptive thinking and ``xhigh``
+    # effort, which DeepSeek's low / high / max levels do not include.
+    "deepseek-flash": ModelSpec(
+        real_model_id="deepseek-flash",
+        context_window=1_000_000,
+        max_output_tokens=384_000,
+        # Sending the whole ceiling would leave a nearly full window no room
+        # on an endpoint that checks input + max_tokens against it.
+        default_output_tokens=64_000,
+        input_price_per_mtok=0.30,
+        output_price_per_mtok=1.20,
+        cache_read_price_per_mtok=0.006,
+        cache_write_price_per_mtok=0.30,
+        supports_vision=True,
+    ),
+    "deepseek-v4-pro": ModelSpec(
+        real_model_id="deepseek-v4-pro",
+        context_window=1_000_000,
+        max_output_tokens=384_000,
+        default_output_tokens=64_000,
+        input_price_per_mtok=1.32,
+        output_price_per_mtok=3.96,
+        cache_read_price_per_mtok=0.044,
+        cache_write_price_per_mtok=1.32,
+        supports_vision=False,
+    ),
     # --- OpenAI Responses gateway models (reasoning + vision) ---------------
     # Served by an internal gateway that publishes no pricing, so every rate is
     # left ABSENT (``None``) rather than faked as 0.0: price() then reports

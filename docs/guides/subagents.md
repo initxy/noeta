@@ -170,7 +170,8 @@ run id (`wf_…`) at once and the run goes on in the background.
 
 How it survives restarts (`noeta/plugins/workflow/__init__.py`, `engine.py`):
 
-- The script runs in an embedded V8 (the `mini-racer` package), in a fresh context with no
+- The script runs in an embedded V8 (the `mini-racer` package, installed by the `workflow`
+  extra: `uv tool install --reinstall 'noeta[tui,workflow]'`), in a fresh context with no
   module loader, process, network, file API, clock or randomness, a 30 s time limit and a
   256 MB heap limit per replay.
 - A replay is a pure function of the script, its `args` and the results recorded so far. An

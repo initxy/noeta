@@ -39,6 +39,11 @@ MAX_MEMORY_BYTES = 256 * 1024 * 1024
 MAX_ITEMS = 4096
 #: Process-wide V8 flags: no eval() or Function() from strings in any context.
 V8_FLAGS = ("--disallow-code-generation-from-strings",)
+#: How to install the engine (the ``workflow`` extra), as the ``noeta``
+#: command words its other extras' install lines.
+INSTALL_LINE = ("pip install 'noeta[workflow]', or for a uv tool install uv tool install "
+                "--reinstall 'noeta[workflow]', naming every extra you use (a reinstall drops "
+                "the rest)")
 
 
 class EngineMissing(Exception):
@@ -68,7 +73,9 @@ def _mini_racer() -> ModuleType:
     try:
         import py_mini_racer
     except ImportError as exc:
-        raise EngineMissing(f"the mini-racer package is not installed ({exc})") from exc
+        raise EngineMissing(
+            f"the mini-racer package is not installed ({exc}); it comes with noeta's workflow "
+            f"extra: {INSTALL_LINE}") from exc
     try:
         py_mini_racer.init_mini_racer(flags=(*py_mini_racer.DEFAULT_V8_FLAGS, *V8_FLAGS),
                                       ignore_duplicate_init=True)

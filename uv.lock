@@ -1030,7 +1030,6 @@ version = "1.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "httpx", extra = ["socks"] },
-    { name = "mini-racer" },
     { name = "msgspec" },
     { name = "pillow" },
     { name = "pyyaml" },
@@ -1054,10 +1053,14 @@ server = [
 tui = [
     { name = "noeta-tui" },
 ]
+workflow = [
+    { name = "mini-racer" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "import-linter" },
+    { name = "mini-racer" },
     { name = "mypy" },
     { name = "noeta-tui" },
     { name = "pytest" },
@@ -1075,7 +1078,7 @@ requires-dist = [
     { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = ">=0.12,<0.13" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "keyring", marker = "extra == 'keyring'", specifier = ">=24" },
-    { name = "mini-racer", specifier = ">=0.14,<0.15" },
+    { name = "mini-racer", marker = "extra == 'workflow'", specifier = ">=0.14,<0.15" },
     { name = "msgspec", specifier = ">=0.19" },
     { name = "noeta-tui", marker = "extra == 'tui'", editable = "tui" },
     { name = "pillow", specifier = ">=10.4" },
@@ -1085,11 +1088,12 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
     { name = "websockets", marker = "extra == 'server'", specifier = ">=12" },
 ]
-provides-extras = ["postgres", "server", "acp", "keyring", "tui"]
+provides-extras = ["postgres", "server", "acp", "keyring", "workflow", "tui"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "import-linter", specifier = ">=2.0" },
+    { name = "mini-racer", specifier = ">=0.14,<0.15" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "noeta-tui", editable = "tui" },
     { name = "pytest", specifier = ">=8.0" },

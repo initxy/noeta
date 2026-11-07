@@ -7,6 +7,31 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **`mini-racer` is optional: install `noeta[workflow]` for the `Workflow` tool.** The embedded
+  V8 (about 80 MB) was a hard dependency used only by Workflow scripts. Without it the tool
+  refuses and names the install line, and `noeta plugins` names the missing extra. The `tui`
+  extra does not pull it.
+- **A first run says what is missing.** With no model, noeta names a model and an API key, the
+  minimal variables for Anthropic and for an OpenAI-compatible provider, and the quickstart. A
+  missing key now stops the start before any request (it used to read the Anthropic model
+  listing with an empty key and print a 401 first), and a model that does not look like Claude
+  on the default provider gets the `NOETA_PROVIDER=openai_compat` / `NOETA_BASE_URL` hint.
+- **Development status is Beta** (`4 - Beta`) on PyPI, for `noeta` and `noeta-tui`.
+
+### Added
+
+- **DeepSeek's current models in the catalog**: `deepseek-flash` and `deepseek-v4-pro` (1M
+  window, 384K output, list prices), so they start without the unknown-model warning and their
+  cost is counted. DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on 2026-07-24; the
+  docs' examples use the new names.
+- **The Python API reference says what semver covers**: the top-level `noeta` names, the modules
+  it lists, the plugin interface, the event types and the entry-point groups; everything else is
+  internal. A public name is deprecated with a `DeprecationWarning` for at least one minor
+  release, and only a major release removes it.
+- **CI runs the test suite on macOS** (Python 3.12).
+
 ## [1.0.5] - 2026-11-06
 
 Fixes from a full review: compaction that looped, small windows, workflow approvals, sessions taken by `noeta serve`, the terminal UI, sandbox `denyRead`, and more.
