@@ -325,12 +325,29 @@ class Plugins(Struct):
         return cls(pins=[p for p in _fields(data).get("pins") or [] if isinstance(p, dict)])
 
 
+class Reclaimed(Struct):
+    """This claim took the task over from one that was never given back
+    (``Claim.reclaimed``: its worker died, froze or walked away mid-run).
+    The fold counts these until the task finishes a step after one
+    (``TaskState.reclaims``); the runner ends a task that reaches its
+    restart limit instead of running it again."""
+
+    kind: ClassVar[str] = "reclaimed"
+
+    def data(self) -> dict[str, Any]:
+        return {}
+
+    @classmethod
+    def parse(cls, data: Any) -> Reclaimed:
+        return cls()
+
+
 CoreRecord = Union[Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Spent, Erased,
-                   Parked, Spawned, Timer, TimerCleared, Prompts, Plugins]
+                   Parked, Spawned, Timer, TimerCleared, Prompts, Plugins, Reclaimed]
 
 _KINDS: dict[str, Any] = {cls.kind: cls for cls in (
     Notice, Retry, Continue, TurnStopped, TurnFailed, TurnDone, Spent, Erased, Parked,
-    Spawned, Timer, TimerCleared, Prompts, Plugins)}
+    Spawned, Timer, TimerCleared, Prompts, Plugins, Reclaimed)}
 
 
 def event(record: CoreRecord, *, message: Message | None = None) -> ExtensionRecorded:

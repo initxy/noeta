@@ -33,8 +33,9 @@ from typing import Any
 
 import pytest
 
-from noeta.core.events import ToolFinished, ToolStarted
+from noeta.core.events import TaskEnded, ToolFinished, ToolStarted
 from tests.cluster.harness import (
+    ROOT_AGENT,
     SPILL_AGENT,
     Cluster,
     Faults,
@@ -285,6 +286,63 @@ async def test_retry_safe_call_runs_again_after_its_worker_dies(tmp_path: Path,
     (starts, text), = outcome.lookups().values()
     assert (starts, text) == (2, "found r00-l"), fail(outcome, [f"{starts} starts: {text!r}"])
     assert len(runs) == 2 and len({line.split()[1] for line in runs}) == 1, runs
+
+
+async def test_a_task_that_kills_every_worker_ends_after_the_restart_limit(
+        tmp_path: Path, pg_url: str) -> None:
+    """A task whose pickup kills its worker every time ends ``failed`` with
+    ``restart_limit`` at the fourth crash (three restarts), while a healthy task beside it
+    loses its worker once (mid-``Lookup``) and still finishes."""
+    cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
+    await cluster.start()
+    spec = Spec(id="r00", effects=1, lookup=4.0)
+    faults = Faults()
+    stop = asyncio.Event()
+
+    async def respawn() -> None:
+        while not stop.is_set():
+            for i, p in enumerate(cluster.procs):
+                if p.poll() is not None:
+                    cluster.kill(i)
+            await asyncio.sleep(0.2)
+
+    respawner = asyncio.create_task(respawn())
+    try:
+        tid = await cluster.create(spec)
+        poison = await cluster.client.create(ROOT_AGENT, "CLUSTER-POISON p1",
+                                             config={"cwd": str(cluster.work)})
+
+        async def looking() -> bool:
+            row = await cluster.client.get(tid)
+            records = await cluster.client.events(tid)
+            return row.status == "running" and row.owner is not None and any(
+                isinstance(r.event, ToolStarted) and r.event.call.name == "Lookup"
+                for r in records)
+
+        assert await wait_until(looking, 30), "the lookup never started"
+        row = await cluster.client.get(tid)
+        assert cluster.kill_pid(int(str(row.owner).split(":")[1]))
+        faults.kills += 1
+
+        async def poison_ended() -> bool:
+            return (await cluster.client.get(poison)).status == "ended"
+
+        assert await wait_until(poison_ended, 30 * LEASE + 20.0), "the poisoned task runs on"
+        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 8.0)
+        ended = (await cluster.client.events(poison))[-1].event
+        stop.set()
+        await respawner
+        outcome = await _outcome(cluster, tid, spec, faults)
+        crashes = Path(cluster.arm + ".poison").read_text().splitlines()
+    finally:
+        stop.set()
+        await respawner
+        await cluster.close()
+    assert_invariants(outcome)
+    assert_all_done(outcome)
+    assert isinstance(ended, TaskEnded) and ended.status == "failed", ended
+    assert ended.error.startswith("restart_limit:"), ended.error
+    assert len(crashes) == 4 and len({line.split()[0] for line in crashes}) == 4, crashes
 
 
 # ------------------------------------------------------------------ one gap each

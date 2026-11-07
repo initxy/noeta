@@ -61,13 +61,18 @@ async def close_calls(run: TaskRun, call_ids: Sequence[str], error: str, closing
 
 
 async def end(run: TaskRun, status: str, answer: str = "", error: str = "",
-              *, decide_again: bool = False) -> bool:
+              *, decide_again: bool = False, close_open: str | None = None) -> bool:
     """End the task, unless its inbox got something it has not taken:
     the end never lands over an unread message (it would otherwise be
     heard by no one). The input is taken first; with
     ``decide_again`` that returns ``False`` so the caller decides anew,
-    otherwise (an end that stands whatever arrived) it ends after it."""
+    otherwise (an end that stands whatever arrived) it ends after it.
+    With ``close_open``, the calls still open are answered in the same
+    append (a started one "outcome unknown", the rest ``close_open``)."""
     while True:
+        results: list[Event] = [] if close_open is None else [
+            run.error_result(c.use.id, texts.INTERRUPTED_CALL_ERROR if c.started else close_open)
+            for c in run.state.open_calls]
         # Children die with their parent.
         posts: list[Post] = [Post(task_id=c, body=Cancel(reason=f"parent task {status}"))
                              for c in run.state.live_children()]
@@ -82,8 +87,8 @@ async def end(run: TaskRun, status: str, answer: str = "", error: str = "",
                 dedupe_key=f"child:{run.task_id}",
             ))
         try:
-            await run.append([TaskEnded(status=status, answer=answer, error=error)],  # type: ignore[arg-type]
-                             posts=posts)
+            await run.append([*results, TaskEnded(status=status, answer=answer,  # type: ignore[arg-type]
+                                                  error=error)], posts=posts)
             return True
         except InboxUnread:
             await run.take_input()

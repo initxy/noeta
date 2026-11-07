@@ -10,7 +10,9 @@ event handler.
 Before running a task, a worker **claims** it from the store:
 
 - `claim(worker, queues, lease_seconds)` takes one claimable task, sets it `running`, names the
-  worker as owner, **adds one to the task's epoch**, and sets a lease (`lease_until`).
+  worker as owner, **adds one to the task's epoch**, and sets a lease (`lease_until`). Its
+  `reclaimed` says whether the claim before still held a lease, never given back
+  ([a task that keeps killing its worker](#a-task-that-keeps-killing-its-worker)).
 - `renew(claim, lease_seconds)` extends the lease. The runner's lease keeper does it every
   third of the lease (default lease 30 s; `noeta worker --lease`).
 - `release(claim)` gives the claim back without ending the task (a worker shutting down): a
@@ -146,6 +148,38 @@ should make its side effect idempotent on the event's seq). A `Waiting` hands th
 after every `on_event` for it ran and its records landed, so a crash in between leaves the task
 claimable, and the wait is not written twice.
 
+### A task that keeps killing its worker
+
+The bounds above are per call. A run can also kill its worker somewhere else: a plugin hook
+that runs out of memory, a native library that segfaults while the request is built, a model
+that calls a process-killing command again after reading "outcome unknown", a hang that stops
+the lease from being renewed. Each pickup would then crash again, and with several workers
+the task would take them down one after another.
+
+The store tells a claim whether the claim before it was given back: `Claim.reclaimed` is true
+when the row still had a lease (nobody released it and no append handed the task back), read in
+the claim's own transaction. A release on shutdown is not counted. The worker that will run the
+task (after the plugin check, so a worker that leaves the task to another writes nothing) records
+`core/reclaimed` before the plugins' `on_start`. The count lives in the log, so it is written by
+the next worker, never by the dying one, and its append is fenced by the claim's epoch like any
+other: two workers racing for the task cannot both count.
+
+The fold counts these records in `TaskState.reclaims` until the task **finishes a step after
+one**: a model reply recorded after the latest `reclaimed` whose calls all have results (a reply
+with no calls is finished at once). Finishing the call that was cut short does not count, since it
+started before the crash. Parking does not reset the count either: a crash can come right after
+the `Waiting` is written, before the claim is handed back. A healthy task that loses its machine
+once records one `reclaimed` and resets at its next step.
+
+A task gets `Runtime.restart_limit` such restarts in a row (default 3;
+`noeta worker --restart-limit`, `0` no limit). The pickup after one more crash ends it `failed`
+instead of running it, its open calls answered, with
+`restart_limit: the task's run stopped without handing it back 4 times in a row ...` as its error.
+That is an ordinary `TaskEnded`: front ends show it like any failure, and a sub-agent's parent
+gets it as a failed `ChildEnded`. The default sits above the per-call bounds above, so a model
+call or a `retry_safe` call that keeps dying is stopped by its own bound first and the model can
+go on.
+
 ## Plugin pins
 
 A task records the plugins it runs with when it first starts, and again whenever a pickup finds
@@ -188,6 +222,7 @@ Recovery never loops forever. The bounds, all in `noeta/core/`:
 | A bug in the runner or a plugin hook | 2 in a row | the first fails the turn `internal_error`, the second ends the task `failed` |
 | A log that cannot be read, or a missing plugin | 3 claims in a row on one worker (`task.LOAD_ATTEMPTS`) | the task ends `failed` |
 | Output cut at the limit, empty replies | 3 in a row each | the turn fails `llm_truncated` / ends without an answer |
+| A restart after a claim that was never given back, with no step finished | 3 in a row (`Runtime.restart_limit`) | the next crash ends the task `failed` `restart_limit` |
 
 ## The proof: `make cluster`
 

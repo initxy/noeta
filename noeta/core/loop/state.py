@@ -118,6 +118,14 @@ class TaskState:
     #: Consecutive ``ModelCalled`` without a reply (crash/retry loop guard);
     #: a deliberate ``continue`` (output cap, empty reply) starts it again.
     model_attempts: int = 0
+    #: Claims in a row that took the task over from a claim never given
+    #: back (``core/reclaimed`` records) with no step finished since: a
+    #: model reply recorded after the latest of them whose calls all have
+    #: results. Parking does not reset it: a crash can come right after.
+    reclaims: int = 0
+    #: A model reply landed since the latest ``core/reclaimed``; its batch
+    #: finishing resets :attr:`reclaims`.
+    replied_since_reclaim: bool = False
     #: The turn went on after an empty reply (a ``continue`` with reason
     #: ``empty_reply``) and the model has not replied since, nor has a new
     #: message come in (``Extension.on_empty_reply`` reads it).
@@ -328,6 +336,12 @@ def _on_model_replied(state: TaskState, ev: ModelReplied, seq: int) -> None:
     else:
         state.answer_parts = [resp.message.text]
     uses = resp.message.tool_uses
+    if state.reclaims:
+        # A reply with no calls is a finished step; one with calls once
+        # they all have results.
+        state.replied_since_reclaim = bool(uses)
+        if not uses:
+            state.reclaims = 0
     state.continuing = resp.stop_reason == "max_tokens" and not uses
     state.calls = [Call(use=u) for u in uses]
     state.call_ids.update(u.id for u in uses)
@@ -348,6 +362,8 @@ def _on_tool_finished(state: TaskState, ev: ToolFinished, seq: int) -> None:
     if ev.note:
         state.notes.append(ev.note)
     if state.calls and not state.open_calls:
+        if state.replied_since_reclaim:
+            state.reclaims, state.replied_since_reclaim = 0, False
         results = [c.result for c in state.calls if c.result is not None]
         state._add(_results_message(results, state.notes), seq)
         state.notes = []
@@ -405,6 +421,9 @@ def _on_core_record(state: TaskState, core: records.CoreRecord, seq: int) -> Non
         state.prompt_files = core.files
     elif isinstance(core, records.Plugins):
         state.plugins = core.pins
+    elif isinstance(core, records.Reclaimed):
+        state.reclaims += 1
+        state.replied_since_reclaim = False
     elif isinstance(core, records.Continue):
         state.model_attempts = 0
         if core.usage is not None:

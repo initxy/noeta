@@ -7,8 +7,33 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **A task whose run keeps killing its worker ends instead of taking down every worker.** A
+  pickup after a claim that was never given back (its worker died, was killed or lost its
+  lease mid-run) is recorded in the task's log (`core/reclaimed`); after three such restarts in a
+  row with no step finished in between, the next crash ends the task `failed` with
+  `restart_limit`, which front ends show like
+  any failure and a sub-agent's parent hears as a failed child. A healthy task that loses its
+  machine once resets at its next step; a worker shutting down cleanly is not counted.
+  `noeta worker --restart-limit N` (`Runtime.restart_limit`, `0` for no limit) changes it.
+  Workers older than this release leave a task with such a record to newer workers.
+- **DeepSeek's current models in the catalog**: `deepseek-flash` and `deepseek-v4-pro` (1M
+  window, 384K output, list prices), so they start without the unknown-model warning and their
+  cost is counted. DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on 2026-07-24; the
+  docs' examples use the new names.
+- **The Python API reference says what semver covers**: the top-level `noeta` names, the modules
+  it lists, the plugin interface, the event types and the entry-point groups; everything else is
+  internal. A public name is deprecated with a `DeprecationWarning` for at least one minor
+  release, and only a major release removes it.
+- **CI runs the test suite on macOS** (Python 3.12).
+
 ### Changed
 
+- **Store adapters: `Store.claim` reports `Claim.reclaimed`**, true when the claimed row still
+  had a lease (the claim before was neither released nor handed back by an append), read in
+  the claim's transaction. A third-party store that does not set it keeps working, without the
+  restart limit; the store contract tests check it.
 - **`mini-racer` is optional: install `noeta[workflow]` for the `Workflow` tool.** The embedded
   V8 (about 80 MB) was a hard dependency used only by Workflow scripts. Without it the tool
   refuses and names the install line, and `noeta plugins` names the missing extra. The `tui`
@@ -19,18 +44,6 @@ All notable changes to Noeta are documented here. The format is based on
   listing with an empty key and print a 401 first), and a model that does not look like Claude
   on the default provider gets the `NOETA_PROVIDER=openai_compat` / `NOETA_BASE_URL` hint.
 - **Development status is Beta** (`4 - Beta`) on PyPI, for `noeta` and `noeta-tui`.
-
-### Added
-
-- **DeepSeek's current models in the catalog**: `deepseek-flash` and `deepseek-v4-pro` (1M
-  window, 384K output, list prices), so they start without the unknown-model warning and their
-  cost is counted. DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on 2026-07-24; the
-  docs' examples use the new names.
-- **The Python API reference says what semver covers**: the top-level `noeta` names, the modules
-  it lists, the plugin interface, the event types and the entry-point groups; everything else is
-  internal. A public name is deprecated with a `DeprecationWarning` for at least one minor
-  release, and only a major release removes it.
-- **CI runs the test suite on macOS** (Python 3.12).
 
 ## [1.0.5] - 2026-11-06
 

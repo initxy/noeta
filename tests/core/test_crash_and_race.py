@@ -383,7 +383,8 @@ async def test_a_failure_after_the_log_loaded_is_not_an_unreadable_log(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Failing the turn can itself fail (a store hiccup, a bug in an end
     hook); the log read fine, so the task is not ended ``unreadable_log``
-    however often that happens."""
+    however often that happens (with no restart limit: with one, such a
+    loop ends ``restart_limit``)."""
     from noeta.core.runner import closing
     from noeta.core.runner.task import LOAD_ATTEMPTS, TaskRun
 
@@ -397,7 +398,8 @@ async def test_a_failure_after_the_log_loaded_is_not_an_unreadable_log(
     monkeypatch.setattr(closing, "fail_turn", broken_fail_turn)
     store = SqliteStore(str(tmp_path / "t.db"))
     rt = Runtime(store=store, agents={"a": Agent(name="a", model="m")},
-                 provider_for=lambda _m: None, lease_seconds=0.1)  # type: ignore[arg-type,return-value]
+                 provider_for=lambda _m: None, lease_seconds=0.1,  # type: ignore[arg-type,return-value]
+                 restart_limit=0)
     try:
         await store.create(NewTask(task_id="t", created=TaskCreated(agent="a")))
         for attempt in range(LOAD_ATTEMPTS + 1):

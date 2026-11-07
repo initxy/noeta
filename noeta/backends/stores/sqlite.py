@@ -485,7 +485,7 @@ class SqliteStore:
         def tx(conn: sqlite3.Connection) -> Claim | None:
             now = time.time()
             row = conn.execute(
-                "SELECT task_id, owner_epoch, queue FROM tasks"
+                "SELECT task_id, owner_epoch, queue, lease_until FROM tasks"
                 f" WHERE queue IN ({marks}){in_roots} AND ("
                 " (status = 'ready' AND (ready_at IS NULL OR ready_at <= ?))"
                 " OR (status = 'waiting' AND (ready_at <= ? OR lease_until IS NOT NULL))"
@@ -505,7 +505,7 @@ class SqliteStore:
                 (worker, epoch, until, now, task_id),
             )
             return Claim(task_id=task_id, worker=worker, epoch=epoch, lease_until=until,
-                         queue=str(row[2]))
+                         queue=str(row[2]), reclaimed=row[3] is not None)
 
         return await self._write(tx)
 

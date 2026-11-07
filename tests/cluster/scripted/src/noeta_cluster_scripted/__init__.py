@@ -12,7 +12,9 @@
   that runs a minute behind, so a ``ScheduleWakeup`` (clamped to at least
   60 s) fires a few seconds later instead of a minute.
 * ``cluster_crash`` (plugin): when armed, kills its worker right after a
-  take is committed and before the plugins after it react to it.
+  take is committed and before the plugins after it react to it; and
+  kills it at every pickup of a task whose conversation holds
+  ``CLUSTER-POISON`` (a run that crashes its worker every time).
 
 The conversation script. A root task starts from::
 
@@ -59,7 +61,7 @@ import shlex
 import time
 from typing import Any
 
-from noeta.core.events import External, InputTaken, Recorded
+from noeta.core.events import External, InputTaken, Recorded, Say
 from noeta.core.extension import Extension, TaskView
 from noeta.core.tool import Tool, ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse, Usage
@@ -67,6 +69,7 @@ from noeta.core.types import Message, ModelRequest, ModelResponse, Text, ToolUse
 ROOT = "CLUSTER-ROOT "
 CHILD = "CLUSTER-CHILD "
 SPILL = "CLUSTER-SPILL "
+POISON = "CLUSTER-POISON"
 PING = re.compile(r"CLUSTER-PING (\S+) (\d+)")
 CHILD_AGENT = "cluster-child"
 
@@ -144,17 +147,29 @@ class CrashPlugin(Extension):
     """Kills its worker process right after a take of ``External(<name>)``
     is committed, before any plugin listed after it decides what follows
     from it, once: when the file ``arm`` holds ``<name>``. The file is
-    removed first (so one worker dies), and ``<arm>.done`` written."""
+    removed first (so one worker dies), and ``<arm>.done`` written. A task
+    whose conversation holds ``CLUSTER-POISON`` kills every worker that
+    picks it up (``<arm>.poison`` gets a line each time)."""
 
     name = "cluster_crash"
 
     def __init__(self, *, arm: str) -> None:
         self.arm = arm
 
+    async def on_start(self, view: TaskView) -> None:
+        if any(POISON in m.text for m in view.state.messages):
+            self._die(view.task_id)
+
+    def _die(self, task_id: str) -> None:
+        journal_line(self.arm + ".poison", f"{os.getpid()} {task_id}")
+        os._exit(71)
+
     async def on_event(self, view: TaskView, recorded: Recorded) -> None:
         ev = recorded.event
         if not isinstance(ev, InputTaken):
             return
+        if any(isinstance(i.body, Say) and POISON in i.body.message.text for i in ev.items):
+            self._die(view.task_id)
         try:
             with open(self.arm) as f:
                 want = f.read().strip()

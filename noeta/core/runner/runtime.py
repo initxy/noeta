@@ -100,6 +100,14 @@ class Runtime:
     #: hold a share of its bytes (``noeta.core.runner.snapshotting.SNAPSHOT_GROWTH``);
     #: ``0`` never reads or writes snapshots.
     snapshot_every: int = 100
+    #: Restarts in a row a task gets after a claim that was never given
+    #: back (``Claim.reclaimed``: its worker died, froze or walked away)
+    #: with no step finished in between; the next such pickup ends it
+    #: ``failed`` (``restart_limit``), so a run that kills its worker cannot
+    #: take down every worker in turn. Above the per-call bounds
+    #: (``MAX_MODEL_ATTEMPTS``, ``tool.MAX_ATTEMPTS``), so those act first;
+    #: ``0`` never ends one.
+    restart_limit: int = 3
     #: An agent's former name -> its name now, for the tasks a log records
     #: under the former one (a host that renamed agents, e.g. a Claude Code
     #: plugin's ``<agent>`` that is now ``<plugin>:<agent>``). Never offered

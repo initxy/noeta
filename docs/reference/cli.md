@@ -194,6 +194,7 @@ Claims and runs tasks from the store until SIGINT or SIGTERM, with the channels
 | `--concurrency N` | `8` | tasks run at once |
 | `--lease SECONDS` | `30` | how long a claim lasts without renewal; a dead worker's tasks wait about this long before another takes them |
 | `--snapshot-every EVENTS` | `100` | write a task's fold snapshot at most every this many events; `0` never |
+| `--restart-limit N` | `3` | restarts in a row a task gets after its worker died mid-run, with no step finished in between; the next crash ends it `failed` (`restart_limit`); `0` no limit ([why](../how-it-works/recovery.md#a-task-that-keeps-killing-its-worker)) |
 | `--allow-bypass-permissions` | off | let tasks run in `bypassPermissions` |
 
 A worker also runs the daily sweep of old saved tool outputs on its machine

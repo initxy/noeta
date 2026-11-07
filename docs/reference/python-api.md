@@ -123,6 +123,7 @@ A worker: claims tasks from the store and runs them, many at once. A dataclass:
 | `on_delta` | `None` | `(task_id, Delta) -> None` for live output |
 | `output_ceiling` | the catalog's | `model -> max_tokens` when the agent sets none |
 | `snapshot_every` | `100` | events between fold snapshots; `0` never |
+| `restart_limit` | `3` | restarts in a row after a claim never given back, with no step finished; the next crash ends the task `failed`; `0` no limit |
 | `agent_aliases` | `{}` | a former agent name -> its name now, for tasks recorded under the former |
 | `roots` | `None` | serve only these task trees (a set the front end adds to); `None` serves every task |
 | `sleep` | `asyncio.sleep` | how it waits between model retries (tests pass a fake) |

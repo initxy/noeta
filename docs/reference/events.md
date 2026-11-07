@@ -182,6 +182,7 @@ kernel does not know. Front ends read `notice`, `retry`, `turn_failed`, `turn_st
 | `timer_cleared` | `name` | A timer is cleared. |
 | `prompts` | name → text | The prompt override files read when the task first started. |
 | `plugins` | `pins`: each `{"name", "source", "version", "arguments"}` | The plugins the task runs with, on first start and whenever a pickup finds them changed. |
+| `reclaimed` | — | A pickup took the task over from a claim that was never given back (its worker died mid-run); counted toward the [restart limit](../how-it-works/recovery.md#a-task-that-keeps-killing-its-worker). |
 
 ## Who writes what
 

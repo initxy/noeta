@@ -137,6 +137,29 @@ async def test_expired_lease_is_reclaimed_and_old_owner_loses(store: Store) -> N
     assert (await store.append(fresh, [Waiting(on="input")], expected_seq=1)).seq == 2
 
 
+async def test_a_claim_says_whether_the_one_before_was_given_back(store: Store) -> None:
+    await store.create(new())
+    first = await store.claim("w1", ["default"], -1)  # its worker dies
+    assert first is not None and not first.reclaimed
+    taken = await store.claim("w2", ["default"], 30)
+    assert taken is not None and taken.reclaimed
+    await store.release(taken)  # a worker shutting down
+    again = await store.claim("w3", ["default"], 30)
+    assert again is not None and not again.reclaimed
+    await store.append(again, [Waiting(on="input")], expected_seq=1,
+                       patch=Patch(status="waiting", waiting_on="input"))
+    await store.post(Post(task_id="t1", body=say("hi")))
+    woken = await store.claim("w4", ["default"], 0.05)
+    assert woken is not None and not woken.reclaimed
+    # A kept wait whose worker went silent was never given back either.
+    await store.append(woken, [Waiting(on="input")], expected_seq=2,
+                       patch=Patch(status="waiting", waiting_on="input", inbox_read_seq=1,
+                                   keep=True))
+    await asyncio.sleep(0.1)
+    kept = await store.claim("w5", ["default"], 30)
+    assert kept is not None and kept.reclaimed
+
+
 async def test_two_racing_runners_never_both_append(store: Store) -> None:
     await store.create(new())
     first = await store.claim("w1", ["default"], -1)
