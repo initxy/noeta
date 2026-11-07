@@ -145,6 +145,14 @@ test("task list, questions and a sub-agent", async ({ page }) => {
   await expect(agent.locator(".nested .tool[data-tool='Glob']")).toBeVisible();
   await expect(agent.locator(".nested")).toContainText("explored");
   await shot(page, "10-subagent");
+
+  // The task list is the todos plugin's: switched off for the session, it goes.
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Plugins" });
+  await dialog.locator('.plugin-row[data-plugin="todos"]').getByRole("switch", { name: "This session" }).uncheck();
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("complementary", { name: "Tasks" })).toHaveCount(0);
+  await expect(agent).toContainText("Explore"); // the other plugins' views stay
 });
 
 test("slash commands and file mentions complete in the composer", async ({ page }) => {
@@ -262,13 +270,13 @@ test("sessions are searched, archived and brought back", async ({ page }) => {
   await expect(nav.locator(".session-row").nth(1)).toBeVisible();
 });
 
-test("near the auto-compact threshold the header counts down to it", async ({ page }) => {
+test("near the auto-compact threshold the status bar counts down to it", async ({ page }) => {
   await newSession(page, "acceptEdits");
   await say(page, "hello, a crowded context");
   await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
-  // The compaction plugin's threshold record against the reply's 90,000 tokens.
-  await expect(page.locator(".usage")).toContainText(/· \d+% until auto-compact/);
-  await expect(page.locator(".usage")).not.toContainText("% context");
+  // The compaction plugin's web part: its threshold record against the reply's 90,000 tokens.
+  await expect(page.locator(".pickers [data-plugin=compaction]")).toHaveText(/^\d+% until auto-compact$/);
+  await expect(page.locator(".usage")).not.toContainText("auto-compact");
 });
 
 // Last: the plugin it installs stays in the server's home.

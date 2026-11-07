@@ -1,38 +1,24 @@
 import { useEffect, useState } from "react";
 import type { Api } from "../api/client";
 import type { ModelInfo, RewindPoint, TreeUsage } from "../api/types";
-import { contextLeft, type AutoCompact, type Modes } from "../state/transcript";
 
-/** Claude Code's modes when the task has not published its own (a new session). */
-export const DEFAULT_MODES: Modes = {
-  modes: ["default", "acceptEdits", "plan", "auto"],
-  cycle: ["default", "acceptEdits", "plan", "auto"],
-  names: {
-    default: "Ask before edits",
-    acceptEdits: "Accept edits",
-    plan: "Plan mode",
-    auto: "Auto",
-    bypassPermissions: "Bypass permissions",
-  },
-};
+/** The permission modes a new session can start in (its `permission_mode`
+ * config, Claude Code's), in Shift+Tab's order. Once the session runs, the
+ * permissions plugin shows and switches its mode. */
+export const NEW_SESSION_MODES: [string, string][] = [
+  ["default", "Ask before edits"],
+  ["acceptEdits", "Accept edits"],
+  ["plan", "Plan mode"],
+  ["auto", "Auto"],
+];
 
-const SHORT: Record<string, string> = {
-  default: "Ask before edits",
-  acceptEdits: "Accept edits",
-  plan: "Plan mode",
-  auto: "Auto",
-  dontAsk: "Don't ask",
-  bypassPermissions: "Bypass permissions",
-};
-
-export function ModePicker({ mode, modes, onChange }: { mode: string; modes: Modes | null; onChange: (m: string) => void }) {
-  const offered = (modes ?? DEFAULT_MODES).cycle;
-  const list = offered.includes(mode) || !mode ? offered : [mode, ...offered];
+/** The mode a new session starts in. */
+export function NewSessionMode({ mode, onChange }: { mode: string; onChange: (m: string) => void }) {
   return (
     <select className={`picker mode-${mode}`} aria-label="Permission mode" value={mode || "default"} onChange={(e) => onChange(e.target.value)}>
-      {list.map((m) => (
-        <option key={m} value={m} title={modes?.names[m]}>
-          {SHORT[m] ?? m}
+      {NEW_SESSION_MODES.map(([m, name]) => (
+        <option key={m} value={m}>
+          {name}
         </option>
       ))}
     </select>
@@ -55,36 +41,17 @@ export function ModelPicker({ model, models, onChange }: { model: string; models
 
 const fmt = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 
-/** Tokens and cost of the session and its sub-agents, and how full the context is. */
-/** Tokens and cost; then the context's share of the window, or (near the
- * auto-compact threshold, as Claude Code's footer does) how far it is left. */
-export function UsageBadge({
-  usage,
-  contextTokens,
-  window,
-  compaction = null,
-}: {
-  usage: TreeUsage | null;
-  contextTokens: number;
-  window: number;
-  compaction?: AutoCompact | null;
-}) {
-  const left = contextLeft(contextTokens, compaction);
-  if (!usage) return left ? <span className={left.low ? "usage context-low" : "usage"}>{left.text}</span> : null;
+/** Tokens and cost of the session and its sub-agents, and the context's
+ * share of the model's window. */
+export function UsageBadge({ usage, contextTokens, window }: { usage: TreeUsage | null; contextTokens: number; window: number }) {
+  if (!usage) return null;
   const u = usage.usage;
   const total = (u.uncached ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0) + (u.output ?? 0);
   const pct = window && contextTokens ? Math.round((contextTokens / window) * 100) : 0;
   return (
     <span className="usage" title={Object.entries(usage.by_model).map(([m, v]) => `${m}: ${v.calls} calls, $${v.cost_usd.toFixed(4)}`).join("\n")}>
       {fmt(total)} tokens · ${usage.cost_usd.toFixed(2)}
-      {left ? (
-        <>
-          {" · "}
-          <span className={left.low ? "context-low" : undefined}>{left.text}</span>
-        </>
-      ) : (
-        pct > 0 && ` · ${pct}% context`
-      )}
+      {pct > 0 && ` · ${pct}% context`}
     </span>
   );
 }
