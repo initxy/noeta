@@ -300,9 +300,11 @@ async def test_retry_safe_call_runs_again_after_its_worker_dies(tmp_path: Path,
 
 async def test_a_task_that_kills_every_worker_ends_after_the_restart_limit(
         tmp_path: Path, pg_url: str) -> None:
-    """A task whose pickup kills its worker every time ends ``failed`` with
-    ``restart_limit`` at the fourth crash (three restarts), while a healthy task beside it
-    loses its worker once (mid-``Lookup``) and still finishes."""
+    """A healthy task that loses its worker once (mid-``Lookup``) still
+    finishes; then a task whose pickup kills its worker every time ends
+    ``failed`` with ``restart_limit`` at the fourth crash (three restarts).
+    One after the other: run together, the poison's kills also hit the
+    healthy task's worker at random, which made the run flaky on CI."""
     cluster = Cluster(tmp_path, pg_url, workers=3, lease=LEASE)
     await cluster.start()
     spec = Spec(id="r00", effects=1, lookup=4.0)
@@ -319,8 +321,6 @@ async def test_a_task_that_kills_every_worker_ends_after_the_restart_limit(
     respawner = asyncio.create_task(respawn())
     try:
         tid = await cluster.create(spec)
-        poison = await cluster.client.create(ROOT_AGENT, "CLUSTER-POISON p1",
-                                             config={"cwd": str(cluster.work)})
 
         async def looking() -> bool:
             row = await cluster.client.get(tid)
@@ -333,12 +333,15 @@ async def test_a_task_that_kills_every_worker_ends_after_the_restart_limit(
         row = await cluster.client.get(tid)
         assert cluster.kill_pid(int(str(row.owner).split(":")[1]))
         faults.kills += 1
+        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 8.0)
+
+        poison = await cluster.client.create(ROOT_AGENT, "CLUSTER-POISON p1",
+                                             config={"cwd": str(cluster.work)})
 
         async def poison_ended() -> bool:
             return (await cluster.client.get(poison)).status == "ended"
 
         assert await wait_until(poison_ended, 30 * LEASE + 20.0), "the poisoned task runs on"
-        await wait_until(lambda: root_finished(cluster, tid, spec), 10 * LEASE + 8.0)
         ended = (await cluster.client.events(poison))[-1].event
         stop.set()
         await respawner
