@@ -1,8 +1,8 @@
 # noeta-hello
 
 An example noeta plugin, packaged on its own: a `Greet` tool, state folded from the task log,
-a question to the person (`Greet` with no name), a reminder with a notice for the person, and a
-`/greet` slash command. See `src/noeta_hello/__init__.py`.
+a question to the person (`Greet` with no name), a reminder with a notice for the person, a
+`/greet` slash command, and a status item front ends show (`ui`). See `src/noeta_hello/__init__.py`.
 
 The entry point in `pyproject.toml` is what makes it a plugin:
 

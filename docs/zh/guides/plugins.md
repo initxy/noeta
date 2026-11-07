@@ -18,6 +18,8 @@ noeta 除了"按日志跑任务"这一件事，其余能力全是插件，内置
 
 先从单文件写起。等它需要自己的依赖，或者要在很多机器上共用，再打成包。
 
+不管哪种形态，一个插件就是一个名字、一个开关，最多带这几部分：它的 `Extension`（后端：工具、提示词、关卡、状态），每个前端都会显示的界面数据（`Extension.ui`：状态项、小部件、提示），以及给网页版和桌面版用的[网页部分](#网页部分)；Claude Code 插件带的技能、代理、命令、hook 和 MCP 服务器也都算它的部分。在终端界面里跑的代码现在还不算一个部分，终端里只显示插件的界面数据。关掉一个插件，它的所有部分一起拿掉（见[关掉插件](../reference/plugins.md#switching-a-plugin-off)）。
+
 ## 插件文件：两步
 
 1. 写 `~/.noeta/plugins/<名字>.py`，定义一个有 `name` 的 `Extension` 子类。写上 `add_to = ("main",)`（或者 `("*",)` 表示所有代理），它就会自己加入这些代理。
@@ -89,7 +91,7 @@ plugins:
   - word_count: {timeout: 60}
 ```
 
-同一个插件的参数表在各层之间按键合并（`build_agents`、`default_agents`、`from_settings`、`config.toml`）。全部配置项见[配置项](../reference/config.md)。
+同一个插件的参数表在各层之间按键合并（`build_agents`、`default_agents`、`from_settings`、`config.toml`）。全部配置项见[配置项](../reference/config.md)。`enabled = false` 是彻底关掉；前端还可以只在一个任务里关，或者让以后的新任务都不带它（见[关掉插件](../reference/plugins.md#switching-a-plugin-off)）。
 
 密钥写成引用：`"{env:NAME}"` 或 `"{keyring:service/user}"`，只在构造插件的那一刻才解析（`noeta/agents/agent_files.py` 的 `resolve_secrets`）。这样点名的环境变量，不会传给 noeta 启动的任何命令、hook 或 MCP 服务器。
 
@@ -114,7 +116,7 @@ plugins:
 | 加技能 | `~/.noeta/skills`、`~/.agents/skills`、项目的 `.noeta/skills` 或 `.agents/skills`、插件的 `skills/` 下的 `SKILL.md` 目录；`~/.noeta/commands` 或项目 `.noeta/commands` 下的 `*.md` | `noeta/plugins/skills` |
 | 接 MCP 服务器 | `.noeta/mcp.json`、settings 的 `mcpServers`、插件的 `.mcp.json` | `noeta/plugins/mcp` |
 | 让聊天软件或 webhook 进来 | 一个渠道 `Channel`（`run(client, stop)`），用 `deliver()` 投递 | `noeta/core/channel.py` |
-| 把回复送出去 | 任务里某个 `Extension` 的 `on_event` | `examples/chat-bridge` |
+| 把回复送出去 | 任务里某个 `Extension` 的 `on_event` | [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) |
 | 接一种新的模型 API | `noeta.providers` 组里的一个 provider；写一个 `family = "<它的名字>"` 的 `[providers.<name>]` 表，就能和其他 provider 并存、按模型 id 分流 | `noeta/backends/providers`、`noeta/backends/providers/routing.py` |
 | 让命令在别处跑（容器） | `noeta.execenvs` 组里的一个执行环境 | `noeta/backends/execenvs` |
 | 把任务存到别处 | `noeta.stores` 组里的一个存储，用 `noeta.testing.store_contract` 检查 | `noeta/backends/stores` |
@@ -131,6 +133,8 @@ plugins:
 | 工具等模型要用时才发给它 | `flags = ToolFlags(deferred=True)`（经 `ToolSearch` 加载） | `noeta/plugins/tool_search` |
 | 文字在压缩后保留，或者参与压缩 | `resident` / `lead_resident`；`before_compact`；`on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | 把结果以数据形式给前端展示 | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/tool.py`、`noeta/core/types.py` |
+| 在每个前端里显示状态项、小部件或提示 | `ui(view)` → `StatusItem` / `Widget` / `Notice`，从折叠出来的状态算 | `noeta/core/extension.py` |
+| 往网页版和桌面版里放自己的组件 | 一个[网页部分](#网页部分)，通过 `ui_call` 回调自己的插件 | `web/sdk` |
 | 模型回了个既没文字也没工具调用的空回复时继续（否则这一轮就结束了） | `on_empty_reply(view, response)` → 用来继续的那条消息，或 `None`（参考 `noeta/plugins/empty_reply.py`） | `noeta/core/extension.py` |
 | 拦下一条用户输入，或让一轮继续下去（就像 UserPromptSubmit 和 Stop hook） | `reminders` + `view.erase_messages` + 抛 `TurnFailed`；在 `on_event` 里看到 `ModelReplied` 就投一条 `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
@@ -235,6 +239,7 @@ Python 插件目录（带 `__init__.py` 的）也可以在代码旁边放 `skill
 ```sh
 noeta plugin add https://github.com/you/your-plugin@<完整提交号>   # https、ssh、user@host:path 或 file://
 noeta plugin add ./my_plugin.py                                    # 文件或目录，复制过去
+noeta plugin add repetition_guard                                  # 只写名字，从配好的插件市场里找
 noeta plugin add --marketplace ./team-marketplace formatter        # Claude Code 的 marketplace.json
 noeta plugin add --marketplace https://github.com/team/market@<提交号> formatter --commit <sha>
 noeta plugin configure formatter --config API_URL=https://example.com
@@ -246,11 +251,29 @@ noeta plugin remove your-plugin
 
 - **git 来源必须给完整提交号**（40 位十六进制；SHA-256 仓库是 64 位）。短提交号会被拒：以后推上来的提交可能和它前缀相同。明文的 `http://` 和 `git://` 也会被拒：中间人可以换掉代码。
 - **安装时插件里的东西一行都不执行**：clone 时设 `core.hooksPath=/dev/null`，不拉子模块，不跑安装脚本，不装依赖；检出后删掉 `.git`。插件如果导入了 noeta 环境里没有的包，会被列为坏的（`noeta plugins`、`/reload-plugins`），并给出安装那个包的命令。
-- **marketplace 只读**，只用来找插件的来源。从仓库取的条目装在它的 `sha` 上；条目没固定版本时，用 `--commit <sha>`。只写了 `ref`（分支或标签）的条目照样被拒，算作没固定提交，报错里会点出这个 ref：分支和标签会变，noeta 只装固定下来的提交。marketplace 本身是个仓库时，要写 `<url>@<提交号>`。支持 `github`、`url`、`git-subdir` 和路径这几种来源。
+- **marketplace 只读**，只用来找插件的来源。从仓库取的条目装在它的 `sha` 上；条目没固定版本时，用 `--commit <sha>`。只写了 `ref`（分支或标签）的条目照样被拒，算作没固定提交，报错里会点出这个 ref：分支和标签会变，noeta 只装固定下来的提交。写成路径的条目靠 marketplace 本身固定：marketplace 在本地磁盘上，或者是写了 `<url>@<提交号>` 的仓库，都可以；仓库按默认分支读的话，这种条目会被拒。支持 `github`、`url`、`git-subdir` 和路径这几种来源。
 - **带 `userConfig` 的插件**在安装时一起配置。配置失败，插件不会以半配置状态留在那里；对不声明任何选项的插件传 `--config`，也会拒绝安装。
-- 插件名取文件名（去掉后缀），否则取 manifest 的 `name`，再否则取目录名。`~/.noeta/plugins/` 里已有同名的，要先 `noeta plugin remove`。
+- 插件名取文件名（去掉后缀），否则取 manifest 的 `name`，再否则取 marketplace 里给它的名字，最后才取目录名。`~/.noeta/plugins/` 里已有同名的，要先 `noeta plugin remove`。
 
 已经开着的前端，用 `/reload-plugins` 载入新装或删掉的插件。
+
+### 插件市场
+
+插件市场就是 Claude Code 的 `.claude-plugin/marketplace.json`。`noeta plugin add <名字>` 会去 `~/.noeta/marketplaces.json` 里配好的市场挨个找这个名字。官方市场 [`initxy/noeta-plugins`](https://github.com/initxy/noeta-plugins) 默认就配着，不想要可以删掉；不属于 noeta 本体的可选插件都在那里（`repetition_guard`、`chat-bridge`、`chat-approvals`）。
+
+```sh
+noeta plugin marketplace add ./team-marketplace                  # 本地目录
+noeta plugin marketplace add https://github.com/team/market       # 按默认分支读
+noeta plugin marketplace add https://github.com/team/market@<提交号>
+noeta plugin marketplace list                                     # 每个市场和它列出的插件
+noeta plugin marketplace remove team
+```
+
+- 按默认分支读的市场只当数据用：清单可以变，但每个条目照样只装它固定的那个提交，所以你不重新安装，装好的东西就不会变。清单读一次缓存一小时（`~/.noeta/marketplace-cache/`），`add` 时会重新读。
+- 市场的名字取它 `marketplace.json` 里的 `name`。加一个和已有市场同名的，就是把那个换掉（比如把 `noeta-plugins` 指到本地的一份检出）。
+- 两个市场都列了同一个名字时，用 `noeta plugin add <名字> --marketplace <其中一个>` 指定。
+- 某个市场读不出来，会说清是哪个，其余的照常可用。
+- 条目里可以多写一个给 noeta 前端看的 `noeta` 对象，比如 `{"ui_api": 1, "parts": ["backend", "web"]}`；Claude Code 不认它，也不受影响。
 
 ### 机器级策略
 
@@ -316,20 +339,43 @@ async def test_word_count(tmp_path):                 # pytest-asyncio，asyncio_
 - **只活在一个进程里的东西**（一个子进程、一条打开的连接），用 `ctx.keep()` 让任务一直留在这个工人上；工人挂了，下一个认领者会告诉模型这份工作丢了（见[单写者与崩溃恢复](../how-it-works/recovery.md)）。
 - **策略。** `/etc/noeta/config.toml` 的 `[policy]` 优先于所有用户和项目设置（见上文）。
 
+## 网页部分
+
+插件目录（或 Python 包）还可以带一段给网页版和桌面版用的代码：一个构建好的 ES 模块，由插件代码旁边的 `.noeta-plugin/plugin.json` 指明。
+
+```json
+{ "name": "my-plugin", "version": "0.1.0", "ui_api": 1, "web": "web/dist/index.js" }
+```
+
+模块导出 `activate(ctx)`，把 React 组件放进页面预留的位置（slot）：
+
+```tsx
+import { SLOTS, type PluginContext } from "@noeta-ai/web-sdk";
+
+export function activate(ctx: PluginContext) {
+  return ctx.slots.add(SLOTS.sidebar, { key: "files", mount: "keyed" }, () => (
+    <button onClick={() => ctx.call("workspace")}>Look</button>
+  ));
+}
+```
+
+`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 和 `ctx.allRecords()` 读插件自己的记录（组件里用 `useRecords`/`useAllRecords`，记录有新的就跟着刷新），`<ctx.Transcript taskId=…/>` 显示另一个任务的对话，比如某个子代理的。内置插件自己的界面（noeta 仓库里的 `web/src/plugins/<name>/`）也是这样写的。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@noeta-ai/web-sdk`、`@noeta-ai/ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。`ctx` 的每个成员、所有位置和挂载方式见 [`web/sdk` 的 README](https://github.com/initxy/noeta/blob/main/web/sdk/README.md)；[`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) 是一个带网页部分的完整插件。每个位置在页面上的哪里、页面拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
+
 ## 替换内置插件
 
-把内置插件关掉（`[plugins.<name>] enabled = false`），加上你自己的。替换前端会读取的那几个插件时，要保留原来的名字和记录：`permissions`（`mode`、`modes`：前端显示和切换的模式）和 `checkpoints`（`snapshot`：回退）。`plan_mode` 把它的切换写成 `permissions` 名下的 `mode` / `plan_exit` 记录并读回来（`folds`），所以关掉权限插件计划模式也能用（这时除了写计划文件，凡是既不只读、也不是 `safe_while_planning` 的调用都会询问）；而关掉 `plan_mode` 后，权限插件不提供 `plan` 模式。因此替换 `permissions` 的插件，绝不能用别的含义去写这些记录类型：`mode`、`plan_exit`、`modes`（前端、`plan_mode` 在读），`plan_name`、`noted`、`compacted`、`plan_file`、`plan_file_sent`（`plan_mode`，拆分之前的日志里有），`step`、`tool_call`、`cost`（`budget`，同理）。
+把内置插件关掉（`[plugins.<name>] enabled = false`），加上你自己的。网页版里内置插件的界面就是它的网页部分，会跟着一起关掉，替换的插件自己带界面。终端界面和编辑器（ACP）会按名字读几个插件的记录，替换这几个时要保留原来的名字和记录：`permissions`（`mode`、`modes`：前端显示和切换的模式）和 `checkpoints`（`snapshot`：回退）。`plan_mode` 把它的切换写成 `permissions` 名下的 `mode` / `plan_exit` 记录并读回来（`folds`），所以关掉权限插件计划模式也能用（这时除了写计划文件，凡是既不只读、也不是 `safe_while_planning` 的调用都会询问）；而关掉 `plan_mode` 后，权限插件不提供 `plan` 模式。因此替换 `permissions` 的插件，绝不能用别的含义去写这些记录类型：`mode`、`plan_exit`、`modes`（前端、`plan_mode` 在读），`plan_name`、`noted`、`compacted`、`plan_file`、`plan_file_sent`（`plan_mode`，拆分之前的日志里有），`step`、`tool_call`、`cost`（`budget`，同理）。
 
 谁读哪条记录，统一登记在 `noeta/toolkit/plugin_records.py`。
 
 ## 现成的例子
 
-每个都是一个文件（hello-plugin 是一个包）、一份简短 README，外加一个 `make example` 会跑的测试：
+每个都是一个文件（hello-plugin 是一个包，web-panel 是一个目录）、一份简短 README，外加一个 `make example` 会跑的测试：
 
 - [`examples/run-tests`](https://github.com/initxy/noeta/tree/main/examples/run-tests)：一个工具。在任务跑命令的地方执行测试命令，从日志里算出上次结果，改过文件后提醒模型一次。配置 `[plugins.run_tests] command = "uv run pytest -q"`。
 - [`examples/house-style`](https://github.com/initxy/noeta/tree/main/examples/house-style)：提示词和提醒。任务开始时抓一次输出风格，任务恢复后发的字节不变；加入所有代理（`add_to = ("*",)`）。
-- [`examples/chat-bridge`](https://github.com/initxy/noeta/tree/main/examples/chat-bridge)：一个渠道。聊天里的一个话题对应一个任务，请求带共享密钥，发送者按名单放行，回复从任务里转发出去。
-- [`examples/chat-approvals`](https://github.com/initxy/noeta/tree/main/examples/chat-approvals)：和 chat-bridge 并列的第二个渠道。任务在等的审批会发到对应话题里，聊天软件里点"允许"或"拒绝"就是回答。
 - [`examples/hello-plugin`](https://github.com/initxy/noeta/tree/main/examples/hello-plugin)：同类插件的 Python 包版本，带 entry point。
+- [`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel)：带网页部分的插件目录。一个状态项，外加侧栏里一块会调用自己后端的面板。
+
+官方市场里的插件也可以当例子看，每个都是一个插件目录，带自己的测试：[`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) 是一个渠道，聊天里的一个话题对应一个任务，请求带共享密钥，发送者按名单放行，回复从任务里转发出去；[`chat-approvals`](https://github.com/initxy/noeta-plugins/tree/main/chat-approvals) 是和它配套的第二个渠道，任务在等的审批会发到对应话题里，聊天软件里点"允许"或"拒绝"就是回答；[`repetition_guard`](https://github.com/initxy/noeta-plugins/tree/main/repetition_guard) 是一道 `before_tool` 关卡。
 
 内置插件和它们的配置项列在[内置插件](../reference/plugins.md)。

@@ -91,6 +91,17 @@
 
 **安装。** `noeta plugin add <git-url>@<commit>`（也可以是一个文件，或者 Claude Code `marketplace.json` 里的一项，后者只读不执行）把插件复制进 `~/.noeta/plugins`，钉在那个提交上。安装时不执行插件里的任何东西：没有安装脚本、没有 git hooks、不装依赖。
 
+## 前端部分
+
+插件还带着前端要显示的那部分，所以一个开关就能把它的工具和界面一起拿掉（[ADR-033](https://github.com/initxy/noeta/blob/main/docs/adr/033-one-plugin-carries-its-front-end-parts-and-is-switched-per-task.md)）：
+
+- **界面数据**（`Extension.ui`）和提醒一样，从折叠出来的状态算出来。每个前端都画它，终端界面也一样，前端里不用跑插件的任何代码。
+- **网页部分**是一个构建好的模块，网页版和桌面版运行时从服务器上导入。React 和 noeta 的网页 SDK 由页面通过 import map 提供，所有插件和页面共用同一份，插件自己不用声明依赖宿主的哪些包。
+- **内置插件的界面也是网页部分**（`web/src/plugins/<name>/`），走的是同一套位置（slot）。内置后端证明了 `Extension` 够用，内置界面也就证明了这套位置够用。
+- **一个任务的开关记在它自己的日志里**，就是配置项 `plugins_off`。名字在里面的插件从下一轮起什么都不会被问到，但记录照样折叠，所以任务的状态和快照不受它影响，重新打开也什么都不丢。
+
+没采用的做法：每个前端各搞一套插件体系、插件各自打包一份 React、用 iframe 隔离、托管一个插件市场服务（插件市场就是一个静态文件，每一项钉死一个提交）。
+
 ## 插件设置
 
 宿主程序对某个插件说的话，按名字：它的参数、一个已经建好的 `Extension`，或者开还是关。每一层都是同一种表（`build_agents`、`default_agents`、`from_settings`、`config.toml` 的 `[plugins.<name>]`），同一个插件的参数表逐个键合并：
@@ -106,7 +117,7 @@ enabled = false               # 所有代理都关掉
 add_plugins = ["my_plugin", {hooks = {}}]   # 加在代理文件自己的插件后面；"*" 表示所有代理
 ```
 
-- 代理文件在 frontmatter 里列出自己的插件，写名字或 `name: {参数}`（`noeta/agents/agent_files.py`）。所有从代理文件建出来的代理都会额外带上 `tool_search` 和 `structured_output`（`ALWAYS_PLUGINS`）。内置代理默认不开 `memory`、`mcp` 和 `repetition_guard`，设了才开。
+- 代理文件在 frontmatter 里列出自己的插件，写名字或 `name: {参数}`（`noeta/agents/agent_files.py`）。所有从代理文件建出来的代理都会额外带上 `tool_search` 和 `structured_output`（`ALWAYS_PLUGINS`）。内置代理默认不开 `memory` 和 `mcp`，设了才开。
 - 同名同参数的插件只建一个实例，所有用到它的代理共用。
 - 密钥写成引用：`{env:NAME}` 或 `{keyring:service/user}`，只在建插件实例时才解析；插件版本记录里哈希的是这个引用，不是密钥本身。
 - 机器上 `/etc/noeta/config.toml` 的 `[policy]`（`allowed_plugins`、`blocked_plugins`）优先于所有用户和项目的设置。

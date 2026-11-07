@@ -39,16 +39,38 @@ interface Props {
   placeholder?: string;
   /** Text put in the box (a rewound prompt to edit and send again); `n` tells two apart. */
   draft?: { text: string; n: number };
+  /** Where the box keeps what is typed in it, so a remount (a plugin's
+   * `wrap` of the composer coming or going) loses none of it. */
+  keep?: ComposerKeep;
 }
+
+/** What the composer holds, kept outside it (`useState(newComposerKeep)` in its owner). */
+export interface ComposerKeep {
+  text: string;
+  images: Attachment[];
+  /** The `draft.n` last put in the box. */
+  draft?: number;
+}
+
+export const newComposerKeep = (): ComposerKeep => ({ text: "", images: [] });
 
 /** The prompt box: Enter sends (Shift+Enter a new line), `/` lists the
  * commands, `@` the files, pasted or dropped images go with the message,
  * Esc or the stop button interrupts. Sent while the model works, a message
  * waits in the queue for its next turn. */
-export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, onCycleMode, placeholder, draft }: Props) {
-  const [text, setText] = useState("");
-  const [images, setImages] = useState<Attachment[]>([]);
-  const [caret, setCaret] = useState(0);
+export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, onCycleMode, placeholder, draft, keep }: Props) {
+  const [text, setTextState] = useState(keep?.text ?? "");
+  const [images, setImagesState] = useState<Attachment[]>(keep?.images ?? []);
+  // Kept as set, not once rendered: the box can be remounted before then.
+  const setText = (t: string) => {
+    if (keep) keep.text = t;
+    setTextState(t);
+  };
+  const setImages = (i: Attachment[]) => {
+    if (keep) keep.images = i;
+    setImagesState(i);
+  };
+  const [caret, setCaret] = useState(text.length);
   const [files, setFiles] = useState<string[]>([]);
   const [active, setActive] = useState(0);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -56,12 +78,13 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
   const query = menuQuery(text, caret);
 
   useEffect(() => {
-    if (!draft) return;
+    if (!draft || keep?.draft === draft.n) return; // put in already, before a remount
+    if (keep) keep.draft = draft.n;
     placeCaret.current = draft.text.length;
     setText(draft.text);
     setCaret(draft.text.length);
     box.current?.focus();
-  }, [draft]);
+  }, [draft, keep]);
 
   useLayoutEffect(() => {
     if (placeCaret.current !== null) box.current?.setSelectionRange(placeCaret.current, placeCaret.current);

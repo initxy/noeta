@@ -3,7 +3,7 @@
 // screenshots/ (the README there) only with NOETA_SCREENSHOTS=1.
 import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { TOKEN } from "../playwright.config";
 
 const SHOTS = process.env.NOETA_SCREENSHOTS ? "screenshots" : "test-results/screenshots";
@@ -145,6 +145,14 @@ test("task list, questions and a sub-agent", async ({ page }) => {
   await expect(agent.locator(".nested .tool[data-tool='Glob']")).toBeVisible();
   await expect(agent.locator(".nested")).toContainText("explored");
   await shot(page, "10-subagent");
+
+  // The task list is the todos plugin's: switched off for the session, it goes.
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Plugins" });
+  await dialog.locator('.plugin-row[data-plugin="todos"]').getByRole("switch", { name: "This session" }).uncheck();
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(page.getByRole("complementary", { name: "Tasks" })).toHaveCount(0);
+  await expect(agent).toContainText("Explore"); // the other plugins' views stay
 });
 
 test("slash commands and file mentions complete in the composer", async ({ page }) => {
@@ -262,11 +270,49 @@ test("sessions are searched, archived and brought back", async ({ page }) => {
   await expect(nav.locator(".session-row").nth(1)).toBeVisible();
 });
 
-test("near the auto-compact threshold the header counts down to it", async ({ page }) => {
+test("near the auto-compact threshold the status bar counts down to it", async ({ page }) => {
   await newSession(page, "acceptEdits");
   await say(page, "hello, a crowded context");
   await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
-  // The compaction plugin's threshold record against the reply's 90,000 tokens.
-  await expect(page.locator(".usage")).toContainText(/· \d+% until auto-compact/);
-  await expect(page.locator(".usage")).not.toContainText("% context");
+  // The compaction plugin's web part: its threshold record against the reply's 90,000 tokens.
+  await expect(page.locator(".pickers [data-plugin=compaction]")).toHaveText(/^\d+% until auto-compact$/);
+  await expect(page.locator(".usage")).not.toContainText("auto-compact");
+});
+
+// Last: the plugin it installs stays in the server's home.
+test("a plugin installed from the plugins page adds its panel and status item, and is switched off per session", async ({ page }) => {
+  const plugin = resolve(import.meta.dirname, "../../examples/web-panel");
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Plugins" });
+  await expect(dialog.locator('.plugin-row[data-plugin="todos"]')).toBeVisible();
+  await dialog.getByRole("tab", { name: "Discover" }).click();
+  await dialog.getByLabel("Install from a source").fill(plugin);
+  await dialog.getByRole("button", { name: "Review…" }).click();
+  const confirm = dialog.getByRole("dialog", { name: "Install web-panel" });
+  await expect(confirm).toContainText(plugin);
+  await expect(confirm).toContainText("none (a local path)");
+  await shot(page, "17-plugin-install");
+  await confirm.getByRole("button", { name: "Install", exact: true }).click();
+  const row = dialog.locator('.plugin-row[data-plugin="web-panel"]');
+  await expect(row).toContainText("web");
+  await expect(row.locator(".notice.error")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Close" }).click();
+
+  await newSession(page, "acceptEdits");
+  await say(page, "hello, plugins");
+  await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
+  const panel = page.getByTestId("web-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId("web-panel-host")).toHaveText("in a browser");
+  await panel.getByRole("button", { name: "Look" }).click();
+  await expect(panel.getByTestId("web-panel-count")).toContainText("entr");
+  await expect(page.getByLabel("Status")).toContainText("messages");
+  await shot(page, "18-plugin-panel");
+
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  await row.getByRole("switch", { name: "This session" }).uncheck();
+  await expect(row.getByRole("switch", { name: "This session" })).not.toBeChecked();
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByLabel("Status")).not.toContainText("messages");
 });

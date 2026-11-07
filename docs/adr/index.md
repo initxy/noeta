@@ -27,7 +27,8 @@ and describe a different codebase.
 ## Extensibility and behavior
 
 - [002](002-one-extension-interface-and-entry-points.md) Every capability is a plugin behind one Extension interface, found through entry points
-  (refined by 017, 026)
+  (refined by 017, 026, 033)
+- [033](033-one-plugin-carries-its-front-end-parts-and-is-switched-per-task.md) One plugin carries its front-end parts and is switched per task
 - [017](017-deferred-tool-loading-is-a-plugin.md) Deferred tool loading is a plugin; extensions change the tool list through tool_changes
   (refined by 030)
 - [026](026-a-blocked-prompt-is-erased-by-a-core-record.md) A blocked prompt is erased by a core record, and plugin state follows it

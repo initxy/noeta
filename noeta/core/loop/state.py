@@ -58,9 +58,15 @@ CONFIG_SIGNAL = "config"
 #: limits the catalog may not know), recorded with the model so every worker
 #: that runs the task reads the same; the kernel only keeps it.
 MODEL_ROUTE = "model_route"
+#: Config key: the names of the plugins the task runs without. Such a
+#: plugin still folds its records (its state, the task's snapshots and fold
+#: version stay as they are) but is asked nothing and offers nothing, from
+#: the next turn on (:attr:`TaskState.plugins_off`). A child task starts
+#: with its parent's.
+PLUGINS_OFF = "plugins_off"
 CHANGEABLE_CONFIG = ("model", "effort", "max_turns", "output_schema", "interactive",
                      "permission_prompt_tool", "client_hooks", "ultracode", "max_budget_usd",
-                     MODEL_ROUTE)
+                     MODEL_ROUTE, PLUGINS_OFF)
 
 
 @dataclass
@@ -167,9 +173,10 @@ class TaskState:
     spawned: dict[str, dict[str, Any]] = field(default_factory=dict)
     children: dict[str, ChildEnded | None] = field(default_factory=dict)
     #: Timers set and not yet fired or cleared, by name: ``{"at": epoch
-    #: seconds, "text": message or "", "seq": the log seq that set it}``. A
-    #: due timer fires while the task is idle; its text arrives as a
-    #: message, as if sent for the next turn.
+    #: seconds, "text": message or "", "seq": the log seq that set it,
+    #: "held": the seq of a firing taken while its plugin was off}``. A due
+    #: timer fires while the task is idle (unless :func:`timer_held`); its
+    #: text arrives as a message, as if sent for the next turn.
     timers: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiting: Waiting | None = None
     #: The log seq of the last ``Waiting``.
@@ -185,6 +192,10 @@ class TaskState:
     #: The plugins the task last recorded running with
     #: (``noeta.core.registry.pin``); ``None`` until first recorded.
     plugins: list[dict[str, str]] | None = None
+    #: The plugins switched off for the turn open now (or the next one):
+    #: the config's :data:`PLUGINS_OFF` as it stood when no turn was open,
+    #: so a switch sent mid-turn applies from the next turn on.
+    plugins_off: list[str] = field(default_factory=list)
 
     usage: Usage = field(default_factory=Usage)
     #: Tool calls this task finished (a continued task counts its own).
@@ -265,6 +276,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer],
     if isinstance(ev, TaskCreated):
         state.agent = ev.agent
         state.config = dict(ev.config)
+        state.plugins_off = off_names(state.config)
         state.parent_id = ev.parent_id
         state.root_id = ev.root_id
     elif isinstance(ev, InputTaken):
@@ -543,11 +555,31 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
         else:
             if isinstance(body, External) and body.name == CONFIG_SIGNAL:
                 _configure(state, body.data)
-            timer = state.timers.pop(body.name, None) if isinstance(body, TimerFired) else None
-            if timer and timer["text"]:
-                _say(state, user(timer["text"]), seq)
+            if isinstance(body, TimerFired):
+                _timer_fired(state, body.name, seq)
     if said_now and state.stop_turn_requested is not None:
         state.reopen_after_stop = True
+
+
+def _timer_fired(state: TaskState, name: str, seq: int) -> None:
+    timer = state.timers.get(name)
+    if timer is not None and timer_held(state, name):
+        # Posted before its plugin was switched off: it stays, and fires
+        # again (under a new dedupe key) once the plugin is back.
+        timer["held"] = seq
+        return
+    state.timers.pop(name, None)
+    if timer and timer["text"]:
+        _say(state, user(timer["text"]), seq)
+
+
+def timer_held(state: TaskState, name: str) -> bool:
+    """Whether the timer ``name`` waits for its plugin: a timer named
+    ``<plugin>.<rest>`` belongs to that plugin, and while the task runs
+    without it (:attr:`TaskState.plugins_off`) it neither fires nor wakes
+    the task; one due meanwhile fires (once) when the plugin is back, and
+    the plugin hears it (``TimerFired``) as it would a late one."""
+    return any(name.startswith(f"{plugin}.") for plugin in state.plugins_off)
 
 
 def _configure(state: TaskState, data: Any) -> None:
@@ -561,6 +593,16 @@ def _configure(state: TaskState, data: Any) -> None:
             else:
                 config[key] = data[key]
     state.config = config
+    if not state.turn_open:
+        state.plugins_off = off_names(config)
+
+
+def off_names(config: Mapping[str, Any]) -> list[str]:
+    """The plugin names ``config``'s :data:`PLUGINS_OFF` holds, sorted."""
+    value = config.get(PLUGINS_OFF)
+    if not isinstance(value, (list, tuple)):
+        return []
+    return sorted({n for n in value if isinstance(n, str) and n})
 
 
 def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> bool:
@@ -644,6 +686,7 @@ def _erase(state: TaskState, seqs: set[int]) -> None:
 
 def _close_turn(state: TaskState, seq: int) -> None:
     state.turn_open = False
+    state.plugins_off = off_names(state.config)
     state.model_attempts = 0
     state.empty_replies = 0
     state.continuing = False

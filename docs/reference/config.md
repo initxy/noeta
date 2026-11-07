@@ -136,11 +136,22 @@ same shape is used at every level (`noeta/agents/agent_files.py`):
 
 Later levels lay over earlier ones key by key; an instance or an on/off replaces. An agent
 file's own arguments for a plugin (`plugins: [{shell: {background: true}}]`) are laid over
-the host's. The built-in agents keep `memory`, `mcp` and `repetition_guard` off until a
-setting names them; the `noeta` command sets the first two.
+the host's. The built-in agents keep `memory` and `mcp` off until a setting names them; the
+`noeta` command sets both. A `[plugins.<name>]` table naming a plugin not installed here is a
+notice at the start, with how to install it when it is one that left noeta
+(`repetition_guard`: `noeta plugin add repetition_guard`).
 
 Secrets in arguments are written as references (`{env:NAME}`, `{keyring:service/user}`),
 resolved only when the plugin is made; config files and task logs hold only the reference.
+
+Besides `enabled = false`, a plugin is switched off for one task by the task config key
+`plugins_off` (a list of names), and for new tasks by `~/.noeta/plugin-switches.json`
+(`{"off": [...]}`), which the front ends' plugin menus write
+([Switching a plugin off](./plugins.md#switching-a-plugin-off)). `switchable = false` in a
+plugin's table keeps it out of both: no request and no menu can switch it off (for a gate a
+server must keep). The marketplaces `noeta plugin
+add <name>` looks in are kept in `~/.noeta/marketplaces.json`, written by `noeta plugin
+marketplace` ([the noeta command](./cli.md)).
 
 A task records the plugins it runs with (name, source, version or file hash, a hash of the
 arguments). A worker that lacks one never runs the task without it

@@ -1,13 +1,19 @@
+import { Slot, SLOTS, SlotsContext } from "@noeta-ai/web-sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, TaskSummary, TreeUsage } from "./api/types";
-import { Composer, type Attachment } from "./components/Composer";
-import { DEFAULT_MODES, ModePicker, ModelPicker, RewindDialog, UsageBadge } from "./components/Controls";
+import { Composer, newComposerKeep, type Attachment } from "./components/Composer";
+import { ModelPicker, NEW_SESSION_MODES, NewSessionMode, RewindDialog, UsageBadge } from "./components/Controls";
 import { PendingCards } from "./components/PendingCard";
+import { PluginsDialog } from "./components/PluginsDialog";
+import { Notices, StatusBar, Widgets } from "./components/PluginUi";
 import { Sidebar, type SessionStatus } from "./components/Sidebar";
-import { TodoPanel } from "./components/TodoPanel";
 import { Transcript } from "./components/Transcript";
 import { attentionChanges, desktop } from "./desktop";
+import { ThemeSource } from "./plugins/context";
+import { TaskEvents } from "./plugins/events";
+import { usePlugins, useUiItems } from "./plugins/usePlugins";
+import { continuationConfig, newSessionConfig } from "./state/newTask";
 import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask } from "./state/useTask";
 
@@ -17,6 +23,7 @@ const PAGE_COMMANDS: Command[] = [
   { name: "rename", description: "Rename this session", argument_hint: "<title>", local: true },
   { name: "model", description: "Switch the model", argument_hint: "<model>", local: true },
   { name: "rewind", description: "Go back to before a prompt", argument_hint: "", local: true },
+  { name: "plugins", description: "Switch, install and remove plugins", argument_hint: "", local: true },
 ];
 
 function useTheme(): [string, () => void] {
@@ -165,7 +172,8 @@ function Workspace({
 }) {
   const [sessions, setSessions] = useState<TaskSummary[]>([]);
   const [taskId, setTaskId] = useState<string | null>(sessionFromHash);
-  const [state, dispatch] = useTask(api, taskId);
+  const events = useMemo(() => (taskId ? new TaskEvents(taskId) : null), [taskId]);
+  const [state, dispatch] = useTask(api, taskId, events ? (rec, from) => (from ? events.keep(rec) : events.emit(rec)) : undefined);
   const [pending, setPending] = useState<Pending[]>([]);
   const [commands, setCommands] = useState<Command[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -173,7 +181,9 @@ function Workspace({
   const [newMode, setNewMode] = useState("default");
   const [newModel, setNewModel] = useState("");
   const [rewinding, setRewinding] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
   const [draft, setDraft] = useState<{ text: string; n: number } | undefined>();
+  const [composerKeep] = useState(newComposerKeep);
   const [replaced, setReplaced] = useState(loadReplaced);
   const [navOpen, setNavOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -183,6 +193,13 @@ function Workspace({
   const [project, setProject] = useState("");
   const listed = useRef<TaskSummary[] | null>(null);
   const pinned = useRef(true); // the view follows new output while it is at the bottom
+  const [themeSource] = useState(() => new ThemeSource(theme === "dark" ? "dark" : "light"));
+  useEffect(() => themeSource.set(theme === "dark" ? "dark" : "light"), [theme, themeSource]);
+  // A task's web parts start once its log is read (what it runs without is known then).
+  const plugins = usePlugins(api, state.lastSeq ? events : null, state.pluginsOff, themeSource, state.cwd || (desk ? project : ""));
+  const uiItems = useUiItems(api, taskId, state.lastSeq);
+  // The title as the server lists it; the title plugin shows it live.
+  const title = sessions.find((s) => s.task_id === taskId)?.title ?? "";
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -243,7 +260,7 @@ function Workspace({
   // is read again when the stream shows it changed.
   useEffect(() => {
     if (taskId) void refreshSessions();
-  }, [taskId, state.title, state.busy, state.ended, refreshSessions]);
+  }, [taskId, state.busy, state.ended, refreshSessions]);
 
   // Cards are asked for only while the session waits on a person, or a
   // sub-agent (whose own approvals surface here) runs.
@@ -276,16 +293,10 @@ function Workspace({
    * one has ended) a new one continuing its conversation. */
   const target = async (): Promise<string> => {
     if (taskId && !ended) return taskId;
-    const config: Record<string, unknown> = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-    if (taskId) {
-      Object.assign(config, { permission_mode: state.mode || "default", continued_as: "resume" });
-      if (state.model) config.model = state.model;
-      if (state.cwd) config.cwd = state.cwd;
-    } else {
-      config.permission_mode = newMode;
-      if (newModel) config.model = newModel;
-      if (desk && project) config.cwd = project;
-    }
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const config = taskId
+      ? continuationConfig({ model: state.model, cwd: state.cwd }, timezone)
+      : newSessionConfig({ mode: newMode, model: newModel, project: desk ? project : "" }, timezone);
     const id = await api.create(null, config, "main", taskId ?? undefined);
     if (taskId) replace(taskId);
     open(id);
@@ -300,6 +311,7 @@ function Workspace({
       if (name === "clear" || name === "new") return open(null);
       if (name === "model" && arg) return changeModel(arg);
       if (name === "rewind") return taskId ? setRewinding(true) : setError("Nothing to rewind to yet.");
+      if (name === "plugins") return setPluginsOpen(true);
       if (name === "rename" && !taskId) return setError("Nothing to rename yet.");
       if (name === "rename" && !arg) return rename();
       if (name && (!taskId || ended)) {
@@ -326,32 +338,29 @@ function Workspace({
     }
   };
 
-  const changeMode = (mode: string) => {
-    if (!taskId) return setNewMode(mode);
-    api.signal(taskId, "permission_mode", { mode }).catch(fail);
-  };
   const changeModel = (model: string) => {
     if (!taskId) return setNewModel(model);
     api.signal(taskId, "config", { model }).catch(fail);
   };
+  // A new session's mode; a running one's is the permissions plugin's to show and switch.
   const cycleMode = () => {
-    const cycle = (taskId ? state.modes : null)?.cycle ?? DEFAULT_MODES.cycle;
-    const now = taskId ? state.mode : newMode;
-    changeMode(cycle[(cycle.indexOf(now) + 1) % cycle.length]);
+    const modes = NEW_SESSION_MODES.map(([m]) => m);
+    setNewMode(modes[(modes.indexOf(newMode) + 1) % modes.length]);
   };
   const rename = () => {
     if (!taskId) return;
-    const title = window.prompt("Rename the session", state.title);
-    if (title?.trim()) api.signal(taskId, "rename", { title: title.trim() }).then(refreshSessions, fail);
+    const named = window.prompt("Rename the session", title);
+    if (named?.trim()) api.signal(taskId, "rename", { title: named.trim() }).then(refreshSessions, fail);
   };
 
   const window_ = models.find((m) => m.id === state.model)?.context_window ?? 0;
   return (
+    <SlotsContext.Provider value={plugins.registry}>
     <div className={navOpen ? "layout nav-open" : "layout"}>
       <Sidebar
         sessions={sessions.filter((s) => !replaced.has(s.task_id))}
         current={taskId}
-        live={taskId && state.lastSeq ? { title: state.title, status: liveStatus(state) } : undefined}
+        live={taskId && state.lastSeq ? { title, status: liveStatus(state) } : undefined}
         onOpen={open}
         onNew={() => open(null)}
         archived={showArchived}
@@ -369,17 +378,22 @@ function Workspace({
             ☰
           </button>
           <div className="heading">
-            <button className="title" onClick={rename} title="Rename" disabled={!taskId}>
-              {taskId ? state.title || "Untitled session" : "New session"}
-            </button>
+            <Slot name={SLOTS.sessionHeader} props={{ title }}>
+              <button className="title" onClick={rename} title="Rename" disabled={!taskId}>
+                {taskId ? title || "Untitled session" : "New session"}
+              </button>
+            </Slot>
             {state.cwd && <span className="cwd muted">{state.cwd}</span>}
           </div>
-          <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} compaction={state.compaction} />
+          <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} />
           {taskId && (
             <button className="icon-button" title="Rewind" aria-label="Rewind" onClick={() => setRewinding(true)}>
               ↶
             </button>
           )}
+          <button className="icon-button" aria-label="Plugins" title="Plugins" onClick={() => setPluginsOpen(true)}>
+            ⧉
+          </button>
           <button className="icon-button" aria-label="Toggle theme" title="Toggle theme" onClick={toggleTheme}>
             {theme === "dark" ? "☀" : "☾"}
           </button>
@@ -416,7 +430,9 @@ function Workspace({
             <Transcript state={state} />
             <PendingCards pending={pending} api={api} answered={refreshPending} />
           </div>
-          <TodoPanel todos={state.todos} />
+          <aside className="side-panels" aria-label="Plugin panels">
+            <Slot name={SLOTS.sidebar} />
+          </aside>
         </div>
         {error && (
           <div className="notice error banner" onClick={() => setError("")}>
@@ -424,19 +440,27 @@ function Workspace({
           </div>
         )}
         <footer className="footer">
+          <Notices items={uiItems} />
+          <Widgets items={uiItems} placement="above" />
+          <Slot name={SLOTS.composer}>
           <Composer
             busy={state.busy}
             commands={commands}
             findFiles={findFiles}
             onSend={send}
             onStop={() => taskId && api.cancel(taskId, true).catch(fail)}
-            onCycleMode={cycleMode}
+            onCycleMode={taskId ? undefined : cycleMode}
             placeholder={ended ? "This session has ended. Send a message to continue it." : undefined}
             draft={draft}
+            keep={composerKeep}
           />
+          </Slot>
+          <Widgets items={uiItems} placement="below" />
           <div className="pickers">
-            <ModePicker mode={taskId ? state.mode : newMode} modes={taskId ? state.modes : null} onChange={changeMode} />
-            <ModelPicker model={taskId ? state.model : newModel} models={models} onChange={changeModel} />
+            {!taskId && <NewSessionMode mode={newMode} onChange={setNewMode} />}
+            <StatusBar items={uiItems} context={{ tokens: state.contextTokens, window: window_ }}>
+              <ModelPicker model={taskId ? state.model : newModel} models={models} onChange={changeModel} />
+            </StatusBar>
           </div>
         </footer>
       </main>
@@ -457,6 +481,25 @@ function Workspace({
           }}
         />
       )}
+      {pluginsOpen && (
+        <PluginsDialog
+          api={api}
+          listing={plugins.listing}
+          refresh={async () => {
+            await plugins.refresh();
+            api.commands(taskId).then((c) => setCommands([...PAGE_COMMANDS, ...c]), () => undefined);
+          }}
+          taskId={taskId && !ended ? taskId : null}
+          taskOff={state.pluginsOff}
+          status={plugins.status}
+          registry={plugins.registry}
+          onClose={() => setPluginsOpen(false)}
+        />
+      )}
+      <div hidden>
+        <Slot name={SLOTS.theme} />
+      </div>
     </div>
+    </SlotsContext.Provider>
   );
 }

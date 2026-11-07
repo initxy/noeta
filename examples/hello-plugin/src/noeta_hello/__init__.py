@@ -11,6 +11,7 @@ It shows the parts most plugins use:
 * a reminder: after three greetings the model is told, once, to stop, and
   the person gets a notice the model never sees;
 * a slash command (``/greet <name>``) front ends offer;
+* a status item every front end shows (``ui``): how many were greeted;
 * arguments, from an agent file (``- hello: {greeting: Hi}``) or
   ``config.toml`` (``[plugins.hello] greeting = "Hi"``).
 
@@ -30,6 +31,7 @@ from noeta import (
     CommandContext,
     Extension,
     Reminder,
+    StatusItem,
     TaskView,
     Tool,
     ToolContext,
@@ -100,6 +102,13 @@ class Hello(Extension):
         text = view.prompt("hello/enough", "You have greeted enough people; stop greeting.")
         view.notify(f"hello: {len(state['greeted'])} greetings, asked the agent to stop")
         return [Reminder(text=text, kind="enough")]
+
+    async def ui(self, view: TaskView) -> Sequence[StatusItem]:
+        greeted = (view.ext_state(self.name) or self.initial_state())["greeted"]
+        if not greeted:
+            return ()
+        return [StatusItem(key="greeted", text=f"greeted {len(greeted)}",
+                           tone="warn" if len(greeted) >= LIMIT else "normal")]
 
     async def commands(self, ctx: CommandContext) -> Sequence[Command]:
         return [Command(name="greet", description="Ask the agent to greet someone",

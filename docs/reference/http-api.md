@@ -2,7 +2,8 @@
 
 Every endpoint `noeta serve` answers, its authentication, and the two streaming formats: the
 event stream of `/tasks/{id}/watch` and Claude Code's headless protocol at `/stream-json`.
-The code is `noeta/host/http.py`, `_http_routes.py`, `_http_stream.py` and `_http_guard.py`;
+The code is `noeta/host/http.py`, `_http_routes.py`, `_http_plugins.py`, `_http_stream.py` and
+`_http_guard.py`;
 `GET /openapi.json` returns the same API as an OpenAPI 3.1 document. Running the server is
 covered in [Run it as a server](../guides/server.md).
 
@@ -28,8 +29,10 @@ app and the desktop app all use it.
 3. **What a request may ask for** (`GuardedClient`). A request may set only these task config
    keys when it creates a task: `model`, `effort`, `max_turns`, `cwd`, `permission_mode`,
    `output_schema`, `timezone`, `interactive`, `permission_prompt_tool`, `ultracode`,
-   `max_budget_usd`, `continued_as`, `bash_mode`. `max_budget_usd` must be a number above 0 (not a bool or
-   a string), here and in a `config` signal; anything else is `400`. Keys the server runs
+   `max_budget_usd`, `continued_as`, `bash_mode`, `plugins_off`. `max_budget_usd` must be a number above 0 (not a bool or
+   a string), here and in a `config` signal; anything else is `400`. `plugins_off` is a list of
+   plugin names; it may not name a built-in plugin a task is built on (the ones it may name:
+   [Switching a plugin off](./plugins.md#switching-a-plugin-off)): `403`. Keys the server runs
    with (`--effort`, `--permission-mode`) are laid under the request's, which win. It may post only the signals front ends send: `permission_mode`, `config`,
    `resumed`, `restore_files`, `rename`, `archive`. It may not start or switch a task into
    `bypassPermissions` unless the server runs with `--allow-bypass-permissions`. A `cwd` must
@@ -99,7 +102,7 @@ still succeeds, and a second answer to the same request is ignored.
 
 **Signals.** `permission_mode` with `{mode}` switches the permission mode; `config` with any of
 `model`, `effort`, `max_turns`, `output_schema`, `interactive`, `permission_prompt_tool`,
-`ultracode`, `max_budget_usd` changes the task's config (a `null` value removes the key; a
+`ultracode`, `max_budget_usd`, `plugins_off` changes the task's config (a `null` value removes the key; a
 request may only remove `client_hooks`, never set it, and `max_budget_usd` must be a number
 above 0); `resumed`, `restore_files`, `rename`
 `{title}` and `archive` `{archived}` are what front ends send when a person reopens, rewinds,
@@ -138,6 +141,45 @@ server's queue.
 
 With a `task_id`, commands are listed and run in that task's own agent and directory; with a
 `cwd`, the directory is checked as a new task's would be.
+
+## Plugins
+
+| Method and path | Query / body | Answers |
+|---|---|---|
+| `GET /plugins` | `?agent=&cwd=` (`agent` default `main`) | `{"plugins": [PluginInfo], "ui_api": [min, max]}` |
+| `PUT /plugins/{name}` | `{enabled}` | `{"ok": true}`: the plugin on or off for tasks created from now on |
+| `GET /tasks/{id}/ui` | | `{"items": [UiEntry]}`: what the task's plugins show now |
+| `POST /plugins/{name}/call` | `{task_id, name, args?}` | `{"result": …}`, the plugin's `ui_call` answer; `404` when the task does not run the plugin or it raises `UnknownUiCall`; `500` when the plugin fails |
+| `GET /plugins/{name}/web/{path}` | | a file of the plugin's web part, **without a token** |
+| `GET /market` | | `{"entries": [MarketEntry], "notices": [str]}`: the configured marketplaces' plugins, and why a marketplace could not be read (its last listing is shown then) |
+| `POST /plugins/install` | `{source, marketplace?, commit?}` | `201` with the installed plugin's `PluginInfo` |
+| `DELETE /plugins/{name}` | | `{"ok": true}` |
+
+- A `PluginInfo` is `{name, version, description, source, builtin, enabled, switchable,
+  broken, parts, ui_api, web}`. `enabled`: in the agent and on for new tasks; `switchable`:
+  front ends may switch it (an installed plugin, or a built-in a task may run without); `broken`: why it, or its web part, cannot be used (`null` when
+  nothing is wrong); `parts` among `backend`, `ui`, `web`, `skills`, `agents`, `commands`,
+  `hooks`, `mcp`; `web`: `{"entry": "/plugins/<name>/web/<file>?v=<hash>"}` or `null`. The
+  listing names the agent's plugins first, then installed ones it does not run, plugin files
+  that failed to load and Claude Code plugins.
+- A task's own switch is the `config` signal with `plugins_off`; `PUT /plugins/{name}` changes
+  only the machine's default for new tasks (`~/.noeta/plugin-switches.json`, joined into
+  every new task's `plugins_off`). A plugin a task may not run without is `400`; with
+  `--no-worker` the switches stay with the workers (`501`).
+- A `UiEntry` is `{plugin, type, key, …}`: `type` `status` with `text` and `tone`, `widget`
+  with `markdown` and `placement`, `notice` with `text` and `level`. Front ends fetch it
+  again when the watched log advances. With `--no-worker` it is always empty.
+- Web files are served only for a plugin an agent here runs whose manifest's `ui_api` is in
+  the server's range, from the directory of its `web` module and never outside it, with the
+  web app's headers (a JavaScript file as `text/javascript`). The `Host` and origin checks
+  still apply.
+- A `MarketEntry` is `{marketplace, name, description, version, source, commit, parts,
+  ui_api, installed}`.
+- Installing and removing run what `noeta plugin add` and `noeta plugin remove` run, then
+  reload the plugins as `/reload-plugins` does. They are allowed only on a server listening on
+  a loopback address (the desktop app's) with no `--allow-host` or `--allow-origin` (a proxy
+  in front), or started with `--allow-plugin-install`; elsewhere they are `403`. A plugin with options to set (`userConfig`) is refused over HTTP (`400`):
+  install it from a terminal.
 
 ## The event stream: `GET /tasks/{id}/watch`
 

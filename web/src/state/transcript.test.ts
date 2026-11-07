@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Api } from "../api/client";
 import type { Event, Recorded } from "../api/types";
-import { contextLeft, emptyTask, reduce, sessionStatus, type Action, type TaskState } from "./transcript";
+import { emptyTask, reduce, sessionStatus, shownRecords, type Action, type TaskState } from "./transcript";
 import { earlierLogs } from "./useTask";
 
 let seq = 0;
@@ -28,7 +28,7 @@ describe("reduce", () => {
       ev({ type: "Waiting", on: "input" }),
     );
     expect(st.items.map((i) => i.kind)).toEqual(["user", "thinking", "assistant"]);
-    expect(st).toMatchObject({ cwd: "/w", mode: "plan", model: "m1", busy: false, waitingOn: "input", contextTokens: 120 });
+    expect(st).toMatchObject({ cwd: "/w", model: "m1", busy: false, waitingOn: "input", contextTokens: 120 });
   });
 
   it("streams live text for the current call and drops it once the reply is recorded", () => {
@@ -76,13 +76,15 @@ describe("reduce", () => {
     expect(st.items[1]).toMatchObject({ note: undefined });
   });
 
-  it("links an Agent call to its sub-agent and its end", () => {
+  it("links a call to the tasks it started (the kernel's spawned record) and their ends", () => {
     const st = run(
       reply({ type: "tool_use", id: "c1", name: "Agent", input: {} }),
-      record("subtasks", "launched", { call_id: "c1", task_id: "t.c1.1" }),
+      record("core", "spawned", { children: [{ id: "t.c1.1", call_id: "c1", background: true }] }),
+      record("core", "spawned", { children: [{ id: "t.c1.1", call_id: "c1", background: true }] }),
       ev({ type: "InputTaken", through: 3, items: [{ seq: 3, at: 0, body: { kind: "child_ended", child_id: "t.c1.1", status: "done" } }] }),
     );
-    expect(st.items[0]).toMatchObject({ child: "t.c1.1", childStatus: "done" });
+    expect(st.items[0]).toMatchObject({ children: [{ id: "t.c1.1", status: "done" }] });
+    expect(st.running).toEqual([]);
   });
 
   it("counts a workflow's sub-agents as running until each one's end is taken", () => {
@@ -100,20 +102,10 @@ describe("reduce", () => {
     expect(reduce(later, ended("t.c", 3)).running).toEqual([]);
   });
 
-  it("reads the plugins' records: title, mode, modes and the task list", () => {
-    const st = run(
-      record("title", "title", { title: "Fix it" }),
-      record("permissions", "modes", { modes: ["default", "plan"], cycle: ["default", "plan"], names: {} }),
-      record("permissions", "mode", { mode: "acceptEdits" }),
-      record("todos", "created", { id: "1", subject: "Read", active_form: "Reading" }),
-      record("todos", "created", { id: "2", subject: "Write" }),
-      record("todos", "updated", { id: "1", fields: { status: "in_progress" } }),
-      record("todos", "deleted", { id: "2" }),
-    );
-    expect(st.title).toBe("Fix it");
-    expect(st.mode).toBe("acceptEdits");
-    expect(st.modes?.cycle).toEqual(["default", "plan"]);
-    expect(st.todos).toEqual([{ id: "1", subject: "Read", activeForm: "Reading", status: "in_progress" }]);
+  it("keeps no permission mode of its own: the permissions plugin shows it, and a continuation is the server's to carry", () => {
+    const signal: Action = ev({ type: "InputTaken", through: 1, items: [{ seq: 1, at: 0, body: { kind: "external", name: "permission_mode", data: { mode: "auto" } } }] });
+    const st = run(ev({ type: "TaskCreated", agent: "main", config: { permission_mode: "plan" } }), record("permissions", "mode", { mode: "acceptEdits" }), signal);
+    expect("mode" in st).toBe(false);
   });
 
   it("marks interrupts, failures, compaction and the end", () => {
@@ -177,10 +169,50 @@ describe("reduce", () => {
       old({ type: "ExtensionRecorded", extension: "title", kind: "title", data: { title: "Old title" } }, 4),
       old({ type: "TaskEnded", status: "completed" }, 5),
     );
-    expect(st).toMatchObject({ lastSeq: 0, taken: 0, busy: false, ended: null, title: "Old title", cwd: "/w" });
-    expect(st.items).toEqual([{ kind: "user", id: "old:u2.9", text: "first", images: [] }]);
+    expect(st).toMatchObject({ lastSeq: 0, taken: 0, busy: false, ended: null, cwd: "/w" });
+    expect(st.items.map((i) => i.kind)).toEqual(["user"]);
+    expect(st.items[0]).toEqual({ kind: "user", id: "old:u2.9", text: "first", images: [] });
+    st = reduce(st, record("title", "title", { title: "New title" }));
     st = reduce(st, person("second", 1));
     expect(st.items.map((i) => (i.kind === "user" ? i.text : i.kind))).toEqual(["first", "second"]);
+    const shown = shownRecords(st, () => true);
+    expect([...shown.entries()].map(([at, rs]) => [at, rs.map((r) => r.id)])).toEqual([[1, ["old:r4", expect.stringMatching(/^r\d+$/)]]]);
+  });
+});
+
+describe("a task's plugins", () => {
+  it("follows what the task runs without, from its config and config signals", () => {
+    const config = (data: unknown, inbox: number): Action =>
+      ev({ type: "InputTaken", through: inbox, items: [{ seq: inbox, at: 0, body: { kind: "external", name: "config", data } }] });
+    expect(run(ev({ type: "TaskCreated", agent: "main", config: { plugins_off: ["web"] } })).pluginsOff).toEqual(["web"]);
+    const st = run(ev({ type: "TaskCreated", agent: "main", config: {} }), config({ plugins_off: ["panel", 3] }, 1));
+    expect(st.pluginsOff).toEqual(["panel"]);
+    expect(reduce(st, config({ model: "m" }, 2)).pluginsOff).toEqual(["panel"]);
+    expect(reduce(st, config({ plugins_off: null }, 2)).pluginsOff).toEqual([]);
+  });
+
+  it("keeps a plugin's record apart from the items, where it was recorded, never a core one", () => {
+    const st = run(record("panel", "note", { text: "a" }), person("hi", 1), record("core", "unknown_kind"), record("title", "title", { title: "T" }));
+    expect(st.items.map((i) => i.kind)).toEqual(["user"]);
+    const all = shownRecords(st, () => true);
+    expect([...all.entries()]).toEqual([
+      [0, [{ id: expect.any(String), seq: expect.any(Number), plugin: "panel", kind: "note", data: { text: "a" }, at: 0, n: 0 }]],
+      [1, [{ id: expect.any(String), seq: expect.any(Number), plugin: "title", kind: "title", data: { title: "T" }, at: 1, n: 1 }]],
+    ]);
+    expect([...shownRecords(st, (slot) => slot === "record:title/title").values()].flat().map((r) => r.plugin)).toEqual(["title"]);
+  });
+
+  it("adds a record without copying the items, and walks only the kinds a slot shows", () => {
+    let st = run(person("hi", 1));
+    const items = st.items;
+    for (let i = 0; i < 20000; i++) st = reduce(st, record("noisy", "tick", { i }));
+    st = reduce(st, record("panel", "note", { text: "shown" }));
+    expect(st.items).toBe(items);
+    expect(st.recordCount).toBe(20001);
+    const asked: string[] = [];
+    const shown = shownRecords(st, (slot) => (asked.push(slot), slot === "record:panel/note"));
+    expect(asked.sort()).toEqual(["record:noisy/tick", "record:panel/note"]);
+    expect([...shown.values()].flat().map((r) => r.data)).toEqual([{ text: "shown" }]);
   });
 });
 
@@ -209,26 +241,5 @@ describe("earlierLogs", () => {
       ["t1", null],
       ["t2", logs.t2],
     ]);
-  });
-});
-
-describe("the auto-compact warning", () => {
-  it("reads the compaction plugin's threshold record, the last valid one", () => {
-    expect(run(record("compaction", "threshold", { threshold: 100_000, window: 120_000, auto: true })).compaction).toEqual({ threshold: 100_000, window: 120_000, auto: true });
-    const off = run(record("compaction", "threshold", { threshold: 100_000, window: 120_000, auto: false }), record("compaction", "threshold", { threshold: 0, window: 1 }));
-    expect(off.compaction).toEqual({ threshold: 100_000, window: 120_000, auto: false });
-    expect(run(record("compaction", "threshold", { threshold: 100_000, window: 120_000 })).compaction?.auto).toBe(true);
-  });
-
-  it("counts down only within 20K tokens of the point, as the TUI does", () => {
-    const at = { threshold: 100_000, window: 120_000, auto: true };
-    expect(contextLeft(10_000, at)).toBeNull();
-    expect(contextLeft(79_999, at)).toBeNull();
-    expect(contextLeft(90_000, at)).toEqual({ text: "10% until auto-compact", low: false });
-    expect(contextLeft(130_000, at)?.text).toBe("0% until auto-compact");
-    const off = contextLeft(108_000, { ...at, auto: false });
-    expect(off?.low).toBe(true);
-    expect(off?.text).toBe("Context low (10% remaining) · Run /compact to compact & continue");
-    expect(contextLeft(90_000, null)).toBeNull();
   });
 });

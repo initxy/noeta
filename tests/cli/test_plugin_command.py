@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import home_dir, main
+from noeta.cli import home_dir, main, plugin_command
 from noeta.cli.config import from_settings, load_settings
 from noeta.cli.plugin_command import PluginInstallError, install
 from noeta.core import registry
@@ -173,3 +173,213 @@ def test_a_marketplace_url_that_is_not_a_git_url_is_refused(home: Path,
         with pytest.raises(PluginInstallError, match="not a git URL"):
             install(name, marketplace=str(market))
     assert not pwned.exists()
+
+
+def _market(path: Path, entries: list[dict[str, object]], files: dict[str, str] | None = None,
+            name: str = "team") -> str:
+    """A marketplace repository listing ``entries``; returns its commit."""
+    path.mkdir(exist_ok=True)
+    listing = {"name": name, "owner": {"name": "t"}, "plugins": entries}
+    return repo(path, {".claude-plugin/marketplace.json": json.dumps(listing), **(files or {})})
+
+
+def _configure(home: Path, table: dict[str, str]) -> None:
+    (home / "marketplaces.json").write_text(json.dumps(
+        {"marketplaces": {n: {"source": s} for n, s in table.items()}}))
+
+
+def test_the_official_marketplace_is_configured_until_removed(
+        home: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert plugin_command.marketplaces() == {"noeta-plugins": plugin_command.OFFICIAL_SOURCE}
+    market = tmp_path / "market"
+    _market(market, [{"name": "local-one", "source": "./local-one", "version": "1.2.0"}],
+            {"local-one/__init__.py": PLUGIN})
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "remove", "noeta-plugins"])
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "add", str(market)])
+    assert f"added marketplace team from {market} (1 plugins)" in capsys.readouterr().out
+    assert plugin_command.marketplaces() == {"team": str(market)}
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "list"])
+    assert capsys.readouterr().out == (f"team\t{market}\n"
+                                       "  local-one\t1.2.0\t(pins no commit)\n")
+    with pytest.raises(SystemExit, match="1"):
+        main.main(["plugin", "marketplace", "remove", "nope"])
+    with pytest.raises(SystemExit, match="1"):
+        main.main(["plugin", "marketplace", "add", str(tmp_path)])
+    assert "no .claude-plugin/marketplace.json" in capsys.readouterr().err
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "remove", "team"])
+    assert plugin_command.marketplaces() == {}
+
+
+def test_market_entries_read_every_marketplace(home: Path, tmp_path: Path) -> None:
+    other = tmp_path / "formatter"
+    other.mkdir()
+    sha = repo(other, {"__init__.py": PLUGIN})
+    market = tmp_path / "market"
+    commit = _market(market, [
+        {"name": "local-one", "source": "local-one", "description": "d",
+         "noeta": {"ui_api": 1, "parts": ["backend", "web", 3]}},
+        {"name": "formatter", "source": {"source": "git-subdir", "url": f"file://{other}",
+                                         "path": "sub", "sha": sha.upper()}},
+        {"name": "npm-one", "source": {"source": "npm", "package": "x"}},
+        {"source": "./nameless"}])
+    _configure(home, {"local": str(market), "pinned": f"file://{market}@{commit}",
+                      "branch": f"file://{market}", "broken": str(tmp_path / "nowhere")})
+    (home / "plugins").mkdir()
+    (home / "plugins" / "formatter").mkdir()
+    notices: list[str] = []
+    entries = plugin_command.market_entries(notices)
+    [notice] = notices
+    assert notice.startswith(f"marketplace broken ({tmp_path / 'nowhere'}) could not be read")
+    by = {(e["marketplace"], e["name"]): e for e in entries}
+    assert sorted(by) == sorted((m, n) for m in ("local", "pinned", "branch")
+                                for n in ("local-one", "formatter", "npm-one"))
+    assert by["local", "local-one"] == {
+        "marketplace": "local", "name": "local-one", "description": "d", "version": "",
+        "source": str(market / "local-one"), "commit": None, "parts": ["backend", "web"],
+        "ui_api": 1, "installed": False}
+    assert by["pinned", "local-one"]["source"] == f"file://{market}#local-one"
+    assert by["pinned", "local-one"]["commit"] == commit
+    assert by["branch", "local-one"]["commit"] is None  # a branch can move: no pin
+    assert by["branch", "formatter"] == {
+        "marketplace": "branch", "name": "formatter", "description": "", "version": "",
+        "source": f"file://{other}#sub", "commit": sha, "parts": [], "ui_api": None,
+        "installed": True}
+    assert by["local", "npm-one"]["source"] == "a 'npm' source (not supported)"
+
+
+def test_a_marketplace_at_its_branch_is_kept_for_a_while(home: Path, tmp_path: Path,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    market = tmp_path / "market"
+    _market(market, [{"name": "one", "source": "./one"}])
+    _configure(home, {"team": f"file://{market}"})
+    assert [e["name"] for e in plugin_command.market_entries()] == ["one"]
+    listing = {"name": "team", "plugins": [{"name": "two", "source": "./two"}]}
+    (market / ".claude-plugin" / "marketplace.json").write_text(json.dumps(listing))
+    git(market, "commit", "-qam", "two")
+    assert [e["name"] for e in plugin_command.market_entries()] == ["one"]
+    assert [e["name"] for e in plugin_command.market_entries(refresh=True)] == ["two"]
+    monkeypatch.setattr(plugin_command, "MARKET_TTL", 0.0)
+    shutil.rmtree(market)
+    # Unreadable now: its listing as last read, and why.
+    notices: list[str] = []
+    assert [e["name"] for e in plugin_command.market_entries(notices)] == ["two"]
+    [notice] = notices
+    assert "git clone failed" in notice and "its listing as read at" in notice
+    plugin_command._cache_file(f"file://{market}").unlink()
+    notices.clear()
+    assert plugin_command.market_entries(notices) == [] and "git clone failed" in notices[0]
+
+
+def test_an_unreadable_marketplaces_file_is_the_official_one_and_a_notice(
+        home: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (home / "marketplaces.json").write_text("{not json")
+    notices: list[str] = []
+    assert plugin_command.marketplaces(notices) == {
+        "noeta-plugins": plugin_command.OFFICIAL_SOURCE}
+    assert "marketplaces.json is unreadable" in notices[0]
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "list"])
+    assert "marketplaces.json is unreadable" in capsys.readouterr().err
+    market = tmp_path / "market"
+    _market(market, [{"name": "one", "source": "./one"}])
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "add", str(market)])
+    assert plugin_command.marketplaces() == {
+        "noeta-plugins": plugin_command.OFFICIAL_SOURCE, "team": str(market)}
+
+
+def test_another_marketplace_cannot_take_the_official_ones_name(
+        home: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    market = tmp_path / "market"
+    _market(market, [{"name": "guard", "source": "./guard"}], name="noeta-plugins")
+    with pytest.raises(SystemExit, match="1"):
+        main.main(["plugin", "marketplace", "add", str(market)])
+    assert "the official marketplace's name" in capsys.readouterr().err
+    assert plugin_command.marketplaces() == {"noeta-plugins": plugin_command.OFFICIAL_SOURCE}
+    assert plugin_command._official(plugin_command.OFFICIAL_SOURCE + ".git@" + "a" * 40)
+
+
+def test_installs_at_once_each_keep_their_record(home: Path, tmp_path: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two installs over HTTP run in two threads: the record file is read,
+    changed and written under its lock, whole."""
+    import threading
+    import time
+
+    read = plugin_command._records
+
+    def slow() -> dict[str, object]:
+        found = read()
+        time.sleep(0.05)  # the other install reads now, without the lock
+        return found
+
+    monkeypatch.setattr(plugin_command, "_records", slow)
+    sources = []
+    for name in ("one", "two"):
+        (tmp_path / f"{name}.py").write_text(PLUGIN.replace("pinned", name))
+        sources.append(str(tmp_path / f"{name}.py"))
+    threads = [threading.Thread(target=install, args=(s,)) for s in sources]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(json.loads((home / "plugin-sources.json").read_text())) == ["one", "two"]
+    with pytest.raises(TypeError):
+        plugin_command._save({"bad": object()})
+    assert sorted(json.loads((home / "plugin-sources.json").read_text())) == ["one", "two"]
+    assert [p.name for p in home.iterdir() if p.name.startswith(".plugin-sources")] == []
+
+
+def test_a_bare_name_installs_from_the_marketplace_listing_it(home: Path,
+                                                              tmp_path: Path) -> None:
+    plugins = tmp_path / "plugins-repo"
+    plugins.mkdir()
+    sha = repo(plugins, {"guard/__init__.py": PLUGIN, "other/__init__.py": PLUGIN})
+    entry = {"name": "guard", "source": {"source": "git-subdir", "url": f"file://{plugins}",
+                                         "path": "guard", "sha": sha}}
+    first, second = tmp_path / "first", tmp_path / "second"
+    _market(first, [entry, {"name": "loose", "source": "./other"}])
+    _market(second, [entry, {"name": "solo", "source": {"source": "url",
+                                                        "url": f"file://{plugins}",
+                                                        "sha": sha}}], name="more")
+    _configure(home, {"team": f"file://{first}", "more": str(second)})
+    with pytest.raises(PluginInstallError, match=r"several marketplaces list 'guard' \(more, "
+                                                 r"team\)"):
+        install("guard")
+    with pytest.raises(PluginInstallError, match="no configured marketplace lists a plugin "
+                                                 "'nope'"):
+        install("nope")
+    with pytest.raises(PluginInstallError, match="read at its default branch"):
+        install("loose")
+    with pytest.raises(PluginInstallError, match=f"pins {sha}, not {'b' * 40}"):
+        install("guard", marketplace="team", commit="b" * 40)
+    name, path = install("guard", marketplace="team", commit=sha)
+    assert name == "guard" and (path / "__init__.py").read_text() == PLUGIN
+    assert json.loads((home / "plugin-sources.json").read_text())["guard"] == {
+        "marketplace": "team", "plugin": "guard", "commit": sha, "path": str(path)}
+    name, path = install("solo")
+    assert name == "solo" and (path / "guard" / "__init__.py").is_file()
+    installed = {e["name"]: e["installed"] for e in plugin_command.market_entries()}
+    assert installed == {"guard": True, "loose": False, "solo": True}
+
+
+async def test_a_config_naming_a_plugin_that_left_noeta_says_how_to_get_it(
+        home: Path, tmp_path: Path) -> None:
+    with (home / "config.toml").open("a") as f:
+        f.write('[plugins.repetition_guard]\nthreshold = 4\n'
+                '[plugins.gone_plugin]\nx = 1\n[plugins.off_one]\nenabled = false\n'
+                '[agents.main]\nadd_plugins = ["repetition_guard"]\n')
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    line = ("repetition_guard is no longer part of noeta; it is in the noeta-plugins "
+            "marketplace: noeta plugin add repetition_guard")
+    assert [n for n in app.notices if n.startswith("config.toml")] == [
+        f"config.toml [plugins.repetition_guard]: {line}",
+        "config.toml [plugins.gone_plugin]: no plugin gone_plugin is installed here "
+        "(noeta plugins lists them)",
+        f"config.toml [agents.main] add_plugins: {line}"]
+    assert not any(e.name == "repetition_guard" for e in app.runtime.agents["main"].extensions)
+    await app.store.close()

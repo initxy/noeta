@@ -59,6 +59,40 @@ describe("Api", () => {
   });
 });
 
+describe("Api plugins", () => {
+  it("lists, switches, calls, installs and removes plugins on their routes", async () => {
+    const answers = [{ plugins: [], ui_api: [1, 1] }, { ok: true }, { ok: true, inbox_seq: 4 }, { items: [{ plugin: "p", type: "status", key: "k", text: "t", tone: "ok" }] }, { result: { n: 2 } }, { entries: [] }, { name: "p" }, { ok: true }];
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(answers.shift()))));
+    vi.stubGlobal("fetch", fetch);
+    const api = new Api({ server: "http://h:1", token: "tok" });
+    expect(await api.plugins("/w")).toEqual({ plugins: [], ui_api: [1, 1] });
+    await api.setPluginDefault("a b", false);
+    await api.setTaskPluginsOff("t1", ["panel"]);
+    expect(await api.ui("t1")).toHaveLength(1);
+    expect(await api.pluginCall("t1", "panel", "look")).toEqual({ n: 2 });
+    expect(await api.market()).toEqual({ entries: [], notices: [] });
+    await api.installPlugin("p", "official", "abc1234");
+    await api.removePlugin("p");
+    const calls = fetch.mock.calls.map(([url, init]) => [init.method, url, init.body && JSON.parse(init.body)]);
+    expect(calls).toEqual([
+      ["GET", "http://h:1/plugins?agent=main&cwd=%2Fw", undefined],
+      ["PUT", "http://h:1/plugins/a%20b", { enabled: false }],
+      ["POST", "http://h:1/tasks/t1/signals", { name: "config", data: { plugins_off: ["panel"] } }],
+      ["GET", "http://h:1/tasks/t1/ui", undefined],
+      ["POST", "http://h:1/plugins/panel/call", { task_id: "t1", name: "look", args: null }],
+      ["GET", "http://h:1/market", undefined],
+      ["POST", "http://h:1/plugins/install", { source: "p", marketplace: "official", commit: "abc1234" }],
+      ["DELETE", "http://h:1/plugins/p", undefined],
+    ]);
+    expect(api.webEntry("/plugins/p/web/index.js?v=1")).toBe("http://h:1/plugins/p/web/index.js?v=1");
+  });
+
+  it("names a refused install by its status", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "not over HTTP" }), { status: 403 })));
+    await expect(new Api({ server: "", token: "" }).installPlugin("/x")).rejects.toEqual(new ApiError(403, "not over HTTP"));
+  });
+});
+
 describe("Api.watch reconnecting", () => {
   const event = (seq: number) => `event: event\ndata: {"seq":${seq},"at":0,"event":{"type":"Waiting","on":"input"}}\n\n`;
 

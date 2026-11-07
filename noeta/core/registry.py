@@ -65,6 +65,7 @@ __all__ = [
     "note_arguments",
     "pin",
     "plugin_files",
+    "plugin_root",
     "provider",
     "sources",
     "store",
@@ -148,6 +149,28 @@ def added_by_files() -> dict[str, list[str]]:
 def plugin_files() -> dict[str, str]:
     """The plugins plugin files registered: name -> path."""
     return {name: path for name, (path, _cls) in sorted(_files.items())}
+
+
+def plugin_root(name: str) -> Path | None:
+    """The directory the plugin ``name``'s code is in: a plugin directory,
+    or the package directory holding an installed plugin's entry-point
+    module (found without importing that module). ``None`` for a
+    single-file plugin, a top-level module, or an unknown name."""
+    found = _files.get(name)
+    if found is not None:
+        path = Path(found[0])
+        return path if path.is_dir() else None
+    ep = _group(PLUGINS).get(name)
+    if ep is None:
+        return None
+    try:
+        spec = importlib.util.find_spec(ep.module)
+    except (ImportError, ValueError):
+        return None
+    origin = spec.origin if spec is not None else None
+    if not origin or (Path(origin).name != "__init__.py" and "." not in ep.module):
+        return None
+    return Path(origin).parent
 
 
 def load(group: str, name: str) -> Any:

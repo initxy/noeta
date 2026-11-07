@@ -5,6 +5,9 @@ the built bundle served beside the API."""
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -19,7 +22,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.extension import CommandContext
 from noeta.host.files import file_matches
-from noeta.host.http import create_app
+from noeta.host.http import WEB_HEADERS, WEB_IMPORT_MAP_SHA256, create_app
 from noeta.host.local import LocalApp
 from noeta.host.pending import Pending, pending_tree
 from noeta.host.remote import RemoteApp
@@ -190,6 +193,16 @@ async def test_the_web_bundle_is_served_without_a_token_beside_the_api(
         assert (await http.get("/assets/app.js")).text == "console.log(1)"
         assert (await http.get("/tasks")).status_code == 401
         assert (await http.get("/nothing-here")).status_code == 404
+
+
+def test_the_policy_allows_the_web_apps_import_map_by_its_hash() -> None:
+    page = (Path(__file__).parents[2] / "web" / "index.html").read_text("utf-8")
+    found = re.search(r'<script type="importmap">(.*?)</script>', page, re.S)
+    assert found is not None
+    digest = base64.b64encode(hashlib.sha256(found.group(1).encode()).digest())
+    assert digest == WEB_IMPORT_MAP_SHA256
+    csp = dict(WEB_HEADERS)[b"content-security-policy"]
+    assert b"script-src 'self' 'sha256-" + digest + b"'" in csp
 
 
 async def test_pending_rereads_only_the_logs_that_moved(

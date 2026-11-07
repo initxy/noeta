@@ -3,12 +3,16 @@ import type {
   Command,
   Delta,
   Input,
+  MarketEntry,
   ModelInfo,
   Pending,
+  PluginInfo,
+  PluginListing,
   Recorded,
   RewindPoint,
   TaskSummary,
   TreeUsage,
+  UiEntry,
 } from "./types";
 
 /** Where the server is and its bearer token. `server` "" is this page's own origin. */
@@ -164,6 +168,54 @@ export class Api {
 
   files(q: string, taskId: string | null): Promise<string[]> {
     return this.call("GET", `/files${query({ q, task_id: taskId, limit: 12 })}`);
+  }
+
+  /** The agent's plugins, then the installed ones it does not run. */
+  plugins(cwd?: string, agent = "main"): Promise<PluginListing> {
+    return this.call("GET", `/plugins${query({ agent, cwd })}`);
+  }
+
+  /** A plugin on or off for tasks created from now on (the machine's default). */
+  setPluginDefault(name: string, enabled: boolean): Promise<unknown> {
+    return this.call("PUT", `/plugins/${enc(name)}`, { enabled });
+  }
+
+  /** The task runs without `off` from its next turn on (the `config` signal's `plugins_off`). */
+  setTaskPluginsOff(taskId: string, off: string[]): Promise<unknown> {
+    return this.signal(taskId, "config", { plugins_off: off });
+  }
+
+  /** What the task's plugins show now: status items, widgets, notices. */
+  async ui(taskId: string): Promise<UiEntry[]> {
+    return (await this.call<{ items: UiEntry[] }>("GET", `/tasks/${enc(taskId)}/ui`)).items;
+  }
+
+  /** The plugin's `ui_call(name, args)` for the task. */
+  async pluginCall<T = unknown>(taskId: string, plugin: string, name: string, args?: unknown): Promise<T> {
+    const got = await this.call<{ result: T }>("POST", `/plugins/${enc(plugin)}/call`, { task_id: taskId, name, args: args ?? null });
+    return got.result;
+  }
+
+  /** The configured marketplaces' plugins, and why a marketplace could not
+   * be read (its last listing is in `entries` then). */
+  async market(): Promise<{ entries: MarketEntry[]; notices: string[] }> {
+    const got = await this.call<{ entries: MarketEntry[]; notices?: string[] }>("GET", "/market");
+    return { entries: got.entries, notices: got.notices ?? [] };
+  }
+
+  /** Install as `noeta plugin add` does: `source` is a git URL with
+   * `@<commit>` or a path, or with `marketplace` the plugin's name there. */
+  installPlugin(source: string, marketplace?: string, commit?: string): Promise<PluginInfo> {
+    return this.call("POST", "/plugins/install", { source, marketplace: marketplace ?? null, commit: commit ?? null });
+  }
+
+  removePlugin(name: string): Promise<unknown> {
+    return this.call("DELETE", `/plugins/${enc(name)}`);
+  }
+
+  /** The URL a page imports a plugin's web part from (`PluginInfo.web.entry`). */
+  webEntry(entry: string): string {
+    return this.url(entry);
   }
 
   /** Follows the task's events from `after` until the server ends the

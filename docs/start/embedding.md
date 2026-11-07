@@ -254,8 +254,8 @@ The command builds its agents from `~/.noeta` (settings files, agent files, plug
 `config.toml`) in `noeta.cli.config.from_settings`. A program that builds agents with
 `default_agents` gets only what it passes:
 
-- The memory and MCP plugins and the repetition guard stay off until `plugins` has a setting
-  for them: `default_agents(model, plugins={"mcp": {"servers": {...}}, "memory": {"home": …}})`.
+- The memory and MCP plugins stay off until `plugins` has a setting for them:
+  `default_agents(model, plugins={"mcp": {"servers": {...}}, "memory": {"home": …}})`.
 - No settings files are read: pass permission rules as the permissions plugin's arguments,
   `plugins={"permissions": {"allow": ["Bash(git *)"], "mode": "acceptEdits"}}`.
 - `plugins={"title": False}` turns a plugin off. The title plugin makes one small model call

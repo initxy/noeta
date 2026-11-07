@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -19,6 +19,7 @@ from noeta.core.commands import Typed, list_commands, run_typed
 from noeta.core.extension import Command, CommandContext
 from noeta.core.loop.state import CONFIG_SIGNAL
 from noeta.core.types import Delta
+from noeta.host.plugins import MarketEntry, PluginInfo, UiEntry
 from noeta.host.rewind import RewindPoint, Rewound
 from noeta.toolkit.signals import ARCHIVE_SIGNAL
 
@@ -48,12 +49,50 @@ class AppAPI(Protocol):
 
     async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
         """The slash commands ``agent``'s plugins offer (none for an agent
-        this side does not run)."""
+        this side does not run); with ``ctx.task_id``, only the plugins
+        that task runs with now."""
         ...
 
     async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
         """``text`` (``/name args``) run as ``agent``'s command; ``None``
         when no plugin of it offers that name."""
+        ...
+
+    async def plugins(self, agent: str, cwd: str = "") -> list[PluginInfo]:
+        """The plugins ``agent`` runs here and the installed ones it does
+        not (``noeta.host.plugins.plugin_infos``)."""
+        ...
+
+    async def set_plugin_default(self, name: str, enabled: bool) -> None:
+        """Switch the plugin ``name`` on or off for the tasks created from
+        now on (a task's own switch is ``change_config`` with
+        ``plugins_off``). Raises ``ValueError`` for a plugin no task may
+        run without."""
+        ...
+
+    async def ui(self, task_id: str) -> list[UiEntry]:
+        """What the task's plugins show now (``Extension.ui``)."""
+        ...
+
+    async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
+        """``plugin``'s answer to its front-end code (``Extension.ui_call``);
+        raises ``UnknownUiCall`` when the task does not run it or it has no
+        such call."""
+        ...
+
+    async def install_plugin(self, source: str, marketplace: str | None = None,
+                             commit: str | None = None) -> PluginInfo:
+        """Install a plugin as ``noeta plugin add`` does, then load it."""
+        ...
+
+    async def remove_plugin(self, name: str) -> None:
+        """Remove a plugin as ``noeta plugin remove`` does, then reload."""
+        ...
+
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
+        """The configured marketplaces' plugins; a marketplace that could not
+        be read (left out, or listed as last read) adds a line to
+        ``notices``."""
         ...
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
@@ -133,16 +172,19 @@ async def archive_task(client: ClientAPI, task_id: str, archived: bool = True) -
     await client.signal(task_id, ARCHIVE_SIGNAL, {"archived": archived}, wake=False)
 
 
-async def agent_commands(agents: Mapping[str, Agent], agent: str,
-                         ctx: CommandContext) -> list[Command]:
+async def agent_commands(agents: Mapping[str, Agent], agent: str, ctx: CommandContext,
+                         off: Collection[str] = ()) -> list[Command]:
+    """``agent``'s commands, less the ones of the plugins in ``off``."""
     found = agents.get(agent)
-    return await list_commands(found, ctx) if found is not None else []
+    return await list_commands(found, ctx, off) if found is not None else []
 
 
 async def agent_run_command(agents: Mapping[str, Agent], agent: str, ctx: CommandContext,
-                            text: str) -> Typed | None:
+                            text: str, off: Collection[str] = ()) -> Typed | None:
     found = agents.get(agent)
-    return await run_typed(found.all_extensions(), ctx, text) if found is not None else None
+    if found is None:
+        return None
+    return await run_typed([e for e in found.all_extensions() if e.name not in off], ctx, text)
 
 
 async def model_choices(app: Any, *, catalog: bool = True) -> list[tuple[str, str]]:

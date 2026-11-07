@@ -149,7 +149,7 @@ async def test_a_snapshot_that_cannot_be_read_is_ignored(store: Counting) -> Non
     rt = _runtime(store, Note(), every=1000)
     tid = await _turns(store, rt, 1)
     good = await _loaded(store, rt, tid)
-    version = snapshots.version("a", good.exts)
+    version = snapshots.version("a", good.all_exts)
     await store.put_snapshot(tid, Snapshot(seq=3, version=version, data=b"{not json"))
     assert (await _loaded(store, rt, tid)).state == good.state
 

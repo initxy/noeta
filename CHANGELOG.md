@@ -8,6 +8,84 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+One plugin across the kernel and every front end: a plugin is one name and one switch, and may
+carry UI data every front end shows and a web part the web and desktop apps load; it can be
+switched off for one task or for new tasks from the terminal, web and desktop apps; plugins
+install from marketplaces, the official one configured by default.
+
+### Added
+
+- **A plugin can be switched off for one task.** The task config key `plugins_off` (set when
+  the task is created or with the `config` signal) names plugins the task runs without from
+  its next turn on, on whichever worker runs it: they keep folding their records but offer no
+  tools, context, reminders, gates, commands or UI, and their timers (`<plugin>.<rest>`) wait
+  until they are back on. Sub-agents start with what their parent's turn runs with; a fork, a
+  rewind or a conversation continued as a new task keeps its source's switches.
+  `~/.noeta/plugin-switches.json` (`{"off": [...]}`, written by `PUT /plugins/{name}` and the
+  front ends' plugin menus) is the machine's default for new tasks. A request may not switch
+  off a built-in plugin a task is built on (the permission gate, the file and shell tools), nor
+  one whose `config.toml` table says `switchable = false`.
+- **Plugins show UI in every front end.** `Extension.ui(view)` returns `StatusItem`, `Widget`
+  and `Notice` items (exported from `noeta`), served by `GET /tasks/{id}/ui` and `AppAPI.ui`;
+  `Extension.ui_call` answers a plugin's own front-end code (`POST /plugins/{name}/call`,
+  `AppAPI.plugin_call`); a call it does not answer raises `UnknownUiCall` (`404`), any other
+  error is `500`. `examples/hello-plugin` shows a status item.
+- **Plugins are listed and managed over the API.** `GET /plugins` (`AppAPI.plugins`) lists
+  each plugin's source, version, parts, switch and why it is broken; a plugin's
+  `.noeta-plugin/plugin.json` manifest may name a built web module (`ui_api`, `web`), served
+  at `/plugins/{name}/web/` without a token. `POST /plugins/install`, `DELETE /plugins/{name}`
+  and `GET /market` install, remove and discover plugins; installing and removing over HTTP
+  are allowed only on a loopback server with no `--allow-host` / `--allow-origin` (a proxy in
+  front) or with `noeta serve --allow-plugin-install`. `GET /market` also says why a
+  marketplace could not be read, and lists its last reading then.
+- **Plugins' web parts in the web and desktop apps.** A web part is a built ES module
+  exporting `activate(ctx)` that adds React components to the page's slots (`statusbar`,
+  `sidebar`, `settings`, `session.header`, `composer`, `tool:<Tool>`, `request:<Tool>`,
+  `record:<plugin>/<kind>`, `codeblock:<language>`, `theme`); the page provides `react`,
+  `react-dom` and `@noeta-ai/*` through an import map, which the server's content security
+  policy allows by hash. A part that throws or waits in vain for a slot is named in the
+  plugins dialog and leaves the page working. `web/sdk` (`@noeta-ai/web-sdk`: `ctx` types,
+  slot names, a build template) and `web/ui` (`@noeta-ai/ui`) are the packages a part builds
+  against (not yet published to npm); `examples/web-panel` is a plugin with one. In the desktop
+  app `ctx.desktop` is its bridge. `activate` may be async; what a part subscribed to through
+  `ctx` ends with it, and a rebuilt part (a new entry hash) is loaded again.
+- **The web and desktop apps' plugins dialog** (the header button or `/plugins`): Installed
+  switches a plugin for this session or for new ones and removes it; Discover installs from the
+  marketplaces, or from a typed-in path or pinned repository URL, after showing its source,
+  commit and parts. Plugins' status items, widgets and notices show around the composer.
+- **The terminal UI's `/plugins`** switches a plugin for this task (from its next turn on) or
+  for new tasks, removes one, and installs one from the marketplaces after showing its source,
+  commit and parts. Plugins' status items show in a line under the footer, their widgets over
+  or under the prompt and their notices in the transcript.
+- **Marketplaces you configure once.** `noeta plugin marketplace add|list|remove` keeps a list
+  in `~/.noeta/marketplaces.json`: a path, `<git-url>@<commit>`, or a git URL read at its
+  default branch (the listing is data; each entry still installs only the commit it pins). The
+  official marketplace, `noeta-plugins` (`https://github.com/initxy/noeta-plugins`), is
+  configured until removed. `noeta plugin add <name>` installs a plugin a configured
+  marketplace lists; `--marketplace` also takes a configured marketplace's name. An entry may
+  carry a `noeta` object (`ui_api`, `parts`). `noeta.cli.plugin_command.market_entries()` lists
+  every entry for front ends. A broken `marketplaces.json` is a notice (the official marketplace
+  is used), install records are written atomically under a lock, and no other marketplace may
+  take the name `noeta-plugins`.
+- A `config.toml` `[plugins.<name>]` table naming a plugin not installed here is a notice at the
+  start.
+
+### Changed
+
+- **The web app's views of built-in plugins are those plugins' web parts**
+  (`web/src/plugins/<name>/`), loaded through the same `ctx` and slots a third-party part gets:
+  the task list, the permission mode picker and Shift+Tab, plan review, the auto-compact
+  countdown (now in the status bar), the title, the file and shell tool cards, sub-agents,
+  workflow runs, findings, and the Settings tab's memory, MCP and hooks sections. Switching one
+  off for a session takes its view away; a tool no plugin shows gets a plain card.
+- **`repetition_guard`, `examples/chat-bridge` and `examples/chat-approvals` moved to the
+  official marketplace** (`initxy/noeta-plugins`). A `config.toml` that sets
+  `[plugins.repetition_guard]` or adds it to an agent now starts with a notice naming
+  `noeta plugin add repetition_guard`; installed, the guard joins every agent with its arguments
+  from that table, as before. A copied `chat_bridge.py` / `chat_approvals.py` keeps working.
+- A marketplace install without a plugin manifest is named by its marketplace entry (it was the
+  fetched directory's name).
+
 ## [1.0.6] - 2026-11-07
 
 Open-source readiness: a restart limit for tasks that keep killing their worker, a Docker image for many workers, requests that no longer present noeta as Claude Code, a clearer first run, and DeepSeek's current models.

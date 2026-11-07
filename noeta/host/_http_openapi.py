@@ -86,6 +86,28 @@ OPENAPI: dict[str, Any] = {
             "Run a slash command without sending it: the message it stands for, or a local "
             "command's output", body=_props("text", agent="string", task_id="string",
                                              cwd="string"))},
+        "/tasks/{task_id}/ui": {"get": _op("What the task's plugins show now", params=_TASK)},
+        "/plugins": {"get": _op("The agent's plugins and the installed ones it does not run",
+                                query=("agent", "cwd"))},
+        "/plugins/install": {"post": _op(
+            "Install a plugin (a loopback server, or one allowing it)",
+            body=_props("source", marketplace="string", commit="string"))},
+        "/plugins/{name}": {
+            "put": _op("Switch a plugin on or off for new tasks", params=("name",),
+                       body={"properties": {"enabled": {"type": "boolean"}},
+                             "required": ["enabled"]}),
+            "delete": _op("Remove a plugin (a loopback server, or one allowing it)",
+                          params=("name",))},
+        "/plugins/{name}/call": {"post": _op(
+            "Call a plugin's backend from its front-end code", params=("name",),
+            body=_props("task_id", "name", args="object"))},
+        "/plugins/{name}/web/{path}": {"get": {
+            "summary": "A file of an enabled plugin's web part (no token)", "security": [],
+            "parameters": [{"name": p, "in": "path", "required": True,
+                            "schema": {"type": "string"}} for p in ("name", "path")],
+            "responses": {"200": {"description": "The file"},
+                          "404": {"description": "No such file or plugin"}}}},
+        "/market": {"get": _op("The configured marketplaces' plugins")},
         "/agents": {"get": _op("The agents this server runs")},
         "/models": {"get": _op("The model catalog")},
         "/openapi.json": {"get": _op("This document")},

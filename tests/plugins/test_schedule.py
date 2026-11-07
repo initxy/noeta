@@ -17,8 +17,10 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import Event, ExtensionRecorded, InputTaken, TimerFired, ToolFinished
+from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF
 from noeta.core.runner import Runtime
 from noeta.core.store import Appended, Claim, NewTask, Patch, Post
+from noeta.core.tool import ToolContext, ToolOutput, text_output
 from noeta.plugins.schedule import JOB_TIMER, WAKEUP_TIMER, Schedule, cron, texts
 from noeta.testing import ScriptedProvider, reply
 
@@ -357,3 +359,59 @@ async def test_a_crash_after_a_loop_wakeup_fires_keeps_its_fallback(tmp_path: Pa
     assert provider.requests[3].messages[-1].text == texts.DYNAMIC_TICK
     assert not provider.steps
     await store.close()
+
+
+class _SwitchScheduleOff:
+    name = "SwitchOff"
+    description = "Switches the schedule plugin off for the task."
+    input_schema = {"type": "object"}
+    read_only = True
+    clearable = False
+
+    def __init__(self, client: Client) -> None:
+        self.client = client
+
+    async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+        await self.client.signal(ctx.task_id, CONFIG_SIGNAL, {PLUGINS_OFF: ["schedule"]})
+        return text_output("off")
+
+
+async def test_a_job_due_while_schedule_is_off_waits_and_rearms_once_back(
+        store: SqliteStore) -> None:
+    """A switched-off schedule's timers neither run their prompt nor wake
+    the task, also one already posted; switched back on, the due job runs
+    once and is re-armed as a late firing would be."""
+    clock = [time.time() - 10_000]  # the job's first firing is long due
+    client = Client(store)
+    provider = ScriptedProvider([
+        reply("", ("ToolSearch", {"query": "select:CronCreate"})),
+        reply("", (texts.CRON_CREATE_TOOL, {"cron": "*/5 * * * *", "prompt": "check CI"}),
+              ("SwitchOff", {})),
+        reply("scheduled"),
+    ])
+    ext = Schedule(clock=lambda: clock[0])
+    agent = Agent(name="a", model="m", extensions=[ext], tools=[_SwitchScheduleOff(client)])
+    rt = Runtime(store=store, agents={"a": agent}, provider_for=lambda _m: provider,  # type: ignore[arg-type,return-value]
+                 env_for=lambda _s: None, sleep=_no_sleep)  # type: ignore[arg-type,return-value]
+    tid = await client.create("a", "set it up")
+    await rt.run_until_idle()
+    jobs = (await _state(client, tid, ext))["jobs"]
+    assert isinstance(jobs, dict)
+    [job] = jobs.values()
+    assert job["next_at"] < time.time() and len(provider.requests) == 3
+    row = await client.get(tid)
+    assert row.status == "waiting" and row.ready_at is None
+    # A firing posted before the switch is taken while it is off: held too.
+    await store.post(Post(task_id=tid, body=TimerFired(name=JOB_TIMER + job["id"])))
+    await rt.run_until_idle()
+    assert len(provider.requests) == 3
+    clock[0] = time.time()
+    provider.add(reply("checked"))
+    await client.signal(tid, CONFIG_SIGNAL, {PLUGINS_OFF: None})
+    await rt.run_until_idle()
+    assert len(provider.requests) == 4
+    assert provider.requests[3].messages[-1].text == "check CI"
+    jobs = (await _state(client, tid, ext))["jobs"]
+    assert isinstance(jobs, dict) and jobs[job["id"]]["next_at"] > time.time()
+    row = await client.get(tid)
+    assert row.ready_at is not None and row.ready_at > time.time()

@@ -106,6 +106,7 @@ noeta
 | `/clear`、`/new` | 开一个新任务 |
 | `/resume [n\|id]` | 挑一个任务接着做 |
 | `/stop` | 停止这一轮（同 `Esc`） |
+| `/plugins [discover]` | 给这个任务或以后的新任务开关插件、卸载插件、从插件市场安装（见[下文](#插件)） |
 | `/reload-plugins` | 重新加载插件、代理和设置文件，从下一轮起生效（`env`、`model`、`agent`、`sandbox` 变了要重启，界面会提示） |
 | `/exit`、`/quit` | 退出 |
 
@@ -146,6 +147,28 @@ noeta
 
 `Ctrl+V` 贴上剪贴板里的图片；把图片文件拖进终端（或粘贴它们的绝对路径），会把这些文件作为图片附上（PNG、JPEG、GIF、WebP）。输入框里显示 `[Image #1]`，上方一行列出已附上的图片，随下一条消息发出。通过 ssh 用时剪贴板在另一台机器上，改用拖文件。
 
+## 插件
+
+`/plugins` 列出代理在用的所有插件，以及装了但没用上的插件。每一行写着它在这个任务里开没开、新任务里开没开、版本、包含哪些部分（`backend`、`ui`、`web`、`skills` 等）；用不了的会写明原因。选中一个按 `Enter`，可以：
+
+- **这个任务里关掉（或打开）**：从下一轮起，这个任务就不带它跑了。开关走的是 `config` 信号里的 `plugins_off`，所以不管任务换到哪个工人上都算数，子代理也跟着一样。新开的界面还没有任务，这一步会先把任务建出来。
+- **新任务里关掉（或打开）**：改的是这台机器的默认值（`~/.noeta/plugin-switches.json`；连着服务器时改的是服务器上的）。已经开始的任务还按自己的开关来。
+- **卸载**：确认之后删掉。
+
+只有任务离了它也能跑的插件才有这两个开关。具体是哪些内置插件，以及怎么在 `config.toml` 里彻底关掉一个插件，见[内置插件](../reference/plugins.md#switching-a-plugin-off)。
+
+`Discover plugins…`（或者直接 `/plugins discover`）列出已配置的插件市场里的插件。选中一个，会先给你看它从哪来、钉在哪个提交、包含哪些部分，确认了才去下载；安装过程不会执行插件里的任何代码，任务从下一轮起加载它。连着服务器时，只有允许通过 HTTP 装卸插件的服务器（监听本机回环地址，或带了 `--allow-plugin-install`）才能装和卸，否则界面会把服务器给的理由显示出来。
+
+![插件菜单](https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/plugins.svg)
+
+任务的插件要显示的东西（插件的 `ui` 方法，见 [Extension 参考](../reference/extension.md#前端)），在任务记录往前走之后很快会重新取一次：
+
+- **状态项**：底栏下面单独一行，每个插件的每个 key 占一项，按语气上色（`ok` 绿、`warn` 黄、`error` 红）；
+- **小部件**：一小段 markdown，放在输入框上面（`above`）或下面（`below`）；
+- **提示**：出现在对话记录里，同样的文字只出一次，前面带插件名。
+
+这些内容一律按纯文本显示，里面的终端控制序列和标记都不会生效。
+
 ## 输入历史、继续和恢复
 
 你发出的每句提问都会记进这个项目的历史文件 `~/.noeta/projects/<project>/history.jsonl`（每行一个 `{"text", "at"}`，和 Claude Code 保存历史的方式一样；只保留最新的 100 条；`tui/src/noeta_tui/history.py`）。`↑` 和 `Ctrl+R` 读的就是它，所以以前几次运行里的提问也翻得到。
@@ -169,7 +192,7 @@ export NOETA_SERVER_TOKEN=...             # noeta serve 打印出来的令牌
 noeta --server http://api.internal:8642
 ```
 
-这时界面通过 HTTP 操作服务器上的任务。本机不需要配模型：新任务用服务器的模型、在服务器的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务器上的某个目录。`--plugin-dir`、`!` 命令和 `@` 补全在这种模式下都不可用；`/reload-plugins` 会提示你去重启工人。详见[作为服务端运行](./server.md)和[网页、桌面与编辑器](./front-ends.md)。
+这时界面通过 HTTP 操作服务器上的任务。本机不需要配模型：新任务用服务器的模型、在服务器的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务器上的某个目录。`--plugin-dir`、`!` 命令和 `@` 补全在这种模式下都不可用；`/reload-plugins` 会提示你去重启工人，`/plugins` 开关的是服务器上的插件。详见[作为服务端运行](./server.md)和[网页、桌面与编辑器](./front-ends.md)。
 
 ## `-p`：只问一句，不开界面
 

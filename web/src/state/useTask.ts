@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useReducer } from "react";
+import { createContext, useContext, useEffect, useReducer, useRef } from "react";
 import type { Api } from "../api/client";
 import type { Recorded } from "../api/types";
 import { emptyTask, reduce, type Action, type TaskState } from "./transcript";
@@ -34,9 +34,12 @@ export async function earlierLogs(api: Api, first: Recorded | undefined): Promis
 }
 
 /** A task's state, followed live: the conversations it continues, its own
- * log, then what it records and streams from then on. */
-export function useTask(api: Api, taskId: string | null): [TaskState, (a: Action) => void] {
+ * log, then what it records and streams from then on. `tap` is handed each
+ * event as it is folded, `from` naming the earlier conversation it is of. */
+export function useTask(api: Api, taskId: string | null, tap?: (rec: Recorded, from?: string) => void): [TaskState, (a: Action) => void] {
   const [state, dispatch] = useReducer(reduce, undefined, emptyTask);
+  const tapped = useRef(tap);
+  tapped.current = tap;
   useEffect(() => {
     dispatch({ type: "reset" });
     if (!taskId) return;
@@ -48,11 +51,19 @@ export function useTask(api: Api, taskId: string | null): [TaskState, (a: Action
       const own = await api.events(taskId, 0);
       for (const [from, log] of await earlierLogs(api, own[0])) {
         if (!log) live({ type: "notice", text: "An earlier part of this conversation could not be loaded.", tone: "error" });
-        for (const rec of log ?? []) live({ type: "history", rec, from });
+        for (const rec of log ?? []) {
+          live({ type: "history", rec, from });
+          if (!ctl.signal.aborted) tapped.current?.(rec, from);
+        }
       }
-      for (const rec of own) live({ type: "event", rec });
+      const recorded = (rec: Recorded) => {
+        if (ctl.signal.aborted) return;
+        dispatch({ type: "event", rec });
+        tapped.current?.(rec);
+      };
+      for (const rec of own) recorded(rec);
       const after = own.length ? own[own.length - 1].seq : 0;
-      await api.watch(taskId, after, { event: (rec) => live({ type: "event", rec }), delta: (delta) => live({ type: "delta", delta }) }, ctl.signal);
+      await api.watch(taskId, after, { event: recorded, delta: (delta) => live({ type: "delta", delta }) }, ctl.signal);
     };
     follow().catch((err: unknown) => {
       if (!ctl.signal.aborted) live({ type: "notice", text: `Lost the session's event stream: ${err instanceof Error ? err.message : String(err)}`, tone: "error" });

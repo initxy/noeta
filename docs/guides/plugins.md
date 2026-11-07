@@ -24,6 +24,14 @@ A plugin comes in one of three shapes. All three end up in the same registry
 Start with a file. Turn it into a package when it needs dependencies of its own or is shared by
 many machines.
 
+Whatever its shape, a plugin is one name with one switch, and may carry up to these parts: its
+`Extension` (the backend: tools, prompt text, gates, state), UI data every front end shows
+(`Extension.ui`: status items, widgets, notices), and a [web part](#a-web-part) for the web
+and desktop apps; a Claude Code plugin's skills, agents, commands, hooks and MCP servers are
+parts too. Code that runs inside the terminal UI is not a part yet: there a plugin shows its
+UI data. Switching the plugin off takes all of its parts away together
+([Switching a plugin off](../reference/plugins.md#switching-a-plugin-off)).
+
 ## A plugin file, in two steps
 
 1. Write `~/.noeta/plugins/<name>.py` defining an `Extension` subclass with a `name`. Set
@@ -116,7 +124,9 @@ plugins:
 
 Argument tables of one plugin merge key by key across the levels (`build_agents`,
 `default_agents`, `from_settings`, `config.toml`). The full list of keys is in
-[Configuration keys](../reference/config.md).
+[Configuration keys](../reference/config.md). `enabled = false` removes a plugin for good;
+front ends also switch one off for a single task or for new tasks
+([Switching a plugin off](../reference/plugins.md#switching-a-plugin-off)).
 
 A secret is written as a reference, `"{env:NAME}"` or `"{keyring:service/user}"`, resolved only
 when the plugin is made (`noeta/agents/agent_files.py` `resolve_secrets`). A variable named this
@@ -144,7 +154,7 @@ need.
 | add skills | `SKILL.md` folders in `~/.noeta/skills`, `~/.agents/skills`, a project's `.noeta/skills` or `.agents/skills`, or a plugin's `skills/`; `*.md` files in `~/.noeta/commands` or a project's `.noeta/commands` | `noeta/plugins/skills` |
 | connect MCP servers | `.noeta/mcp.json`, settings `mcpServers`, a plugin's `.mcp.json` | `noeta/plugins/mcp` |
 | let a chat app or webhook in | a `Channel` (`run(client, stop)`), posting with `deliver()` | `noeta/core/channel.py` |
-| send replies back out | `on_event` in an `Extension` inside the task | `examples/chat-bridge` |
+| send replies back out | `on_event` in an `Extension` inside the task | [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) |
 | a new model API | a provider in the `noeta.providers` entry-point group; a `[providers.<name>]` table with `family = "<its name>"` runs it beside the others, routed by model id | `noeta/backends/providers`, `noeta/backends/providers/routing.py` |
 | run commands somewhere else (a container) | an exec env in `noeta.execenvs` | `noeta/backends/execenvs` |
 | store tasks elsewhere | a store in `noeta.stores`, checked by `noeta.testing.store_contract` | `noeta/backends/stores` |
@@ -161,6 +171,8 @@ need.
 | offer a tool only when the model asks for it | `flags = ToolFlags(deferred=True)` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
 | keep text across a compaction, or take part in one | `resident` / `lead_resident`; `before_compact`; `on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/tool.py`, `noeta/core/types.py` |
+| show a status item, a widget or a notice in every front end | `ui(view)` → `StatusItem` / `Widget` / `Notice`, computed from the folded state | `noeta/core/extension.py` |
+| put your own components into the web and desktop apps | a [web part](#a-web-part), calling back into your plugin through `ui_call` | `web/sdk` |
 | go on after a reply with no text and no tool call (the turn ends otherwise) | `on_empty_reply(view, response)` → the message to go on with, or `None` (as `noeta/plugins/empty_reply.py` does) | `noeta/core/extension.py` |
 | block a prompt, or keep a turn going (as UserPromptSubmit and Stop hooks do) | `reminders` + `view.erase_messages` + raise `TurnFailed`; `on_event` on `ModelReplied` posting `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
@@ -309,6 +321,7 @@ and records where it came from in `~/.noeta/plugin-sources.json`.
 ```sh
 noeta plugin add https://github.com/you/your-plugin@<full commit>   # https, ssh, user@host:path or file://
 noeta plugin add ./my_plugin.py                                     # a file or directory, copied
+noeta plugin add repetition_guard                                   # by name, from a configured marketplace
 noeta plugin add --marketplace ./team-marketplace formatter         # a Claude Code marketplace.json
 noeta plugin add --marketplace https://github.com/team/market@<commit> formatter --commit <sha>
 noeta plugin configure formatter --config API_URL=https://example.com
@@ -328,16 +341,43 @@ noeta plugin remove your-plugin
 - **A marketplace is only read**, to find where a plugin comes from. An entry fetched from a
   repository installs at its `sha`, or at `--commit <sha>` when it pins none. An entry with only
   a `ref` (a branch or tag) is refused as pinning no commit, and the error names the ref: a
-  branch or tag can move, and noeta installs only pinned commits. A marketplace that
-  is itself a repository needs `<url>@<commit>`. `github`, `url`, `git-subdir` and path sources
-  are supported.
+  branch or tag can move, and noeta installs only pinned commits. A path entry is pinned by its
+  marketplace: one on disk, or a repository named `<url>@<commit>`; in a repository read at its
+  default branch it is refused. `github`, `url`, `git-subdir` and path sources are supported.
 - **A plugin with `userConfig`** is configured as it is added. If configuring fails it is not
   left installed half-configured; `--config` given to a plugin that declares no options is
   refused too.
-- The plugin's name is its file's stem, else the manifest's `name`, else the directory's name.
+- The plugin's name is its file's stem, else the manifest's `name`, else the name its
+  marketplace lists it by, else the directory's name.
   A name already in `~/.noeta/plugins/` is refused until you `noeta plugin remove` it.
 
 Running front ends pick up an install or a removal with `/reload-plugins`.
+
+### Marketplaces
+
+A marketplace is Claude Code's `.claude-plugin/marketplace.json`; `noeta plugin add <name>`
+looks the name up in the marketplaces configured in `~/.noeta/marketplaces.json`. The
+official one, [`initxy/noeta-plugins`](https://github.com/initxy/noeta-plugins), is configured
+until you remove it; it holds the optional plugins that are not part of noeta
+(`repetition_guard`, `chat-bridge`, `chat-approvals`).
+
+```sh
+noeta plugin marketplace add ./team-marketplace                  # a directory on disk
+noeta plugin marketplace add https://github.com/team/market       # read at its default branch
+noeta plugin marketplace add https://github.com/team/market@<commit>
+noeta plugin marketplace list                                     # each one and what it lists
+noeta plugin marketplace remove team
+```
+
+- A marketplace read at its default branch is data: the listing may change, but each entry
+  still installs only the commit it pins, so nothing installed changes until you install again.
+  The listing is kept for an hour (`~/.noeta/marketplace-cache/`); `add` reads it again.
+- A marketplace is known by the `name` in its `marketplace.json`; adding one under a name
+  already configured replaces it (to point `noeta-plugins` at a local checkout, say).
+- Two marketplaces listing the same name: `noeta plugin add <name> --marketplace <one>`.
+- A marketplace that cannot be read is named, and the others still work.
+- An entry may add a `noeta` object for noeta's front ends, `{"ui_api": 1, "parts":
+  ["backend", "web"]}`; Claude Code ignores it.
 
 ### The machine's policy
 
@@ -438,10 +478,45 @@ kernel adds:
 - **Policy.** `/etc/noeta/config.toml` `[policy]` wins over every user and project setting
   (above).
 
+## A web part
+
+A plugin directory (or package) can also carry code for the web and desktop apps: a built ES
+module named by `.noeta-plugin/plugin.json` beside the plugin's code.
+
+```json
+{ "name": "my-plugin", "version": "0.1.0", "ui_api": 1, "web": "web/dist/index.js" }
+```
+
+The module exports `activate(ctx)` and puts React components into the page's slots:
+
+```tsx
+import { SLOTS, type PluginContext } from "@noeta-ai/web-sdk";
+
+export function activate(ctx: PluginContext) {
+  return ctx.slots.add(SLOTS.sidebar, { key: "files", mount: "keyed" }, () => (
+    <button onClick={() => ctx.call("workspace")}>Look</button>
+  ));
+}
+```
+
+`ctx.call(name, args)` reaches the plugin's own `Extension.ui_call`; `ctx.client` acts on the
+open session's task, `ctx.records(kind)` and `ctx.allRecords()` read the plugin's records
+(`useRecords`/`useAllRecords` keep a component current), and `<ctx.Transcript taskId=…/>`
+shows another task's conversation, such as a sub-agent's. The built-in plugins' own views
+(`web/src/plugins/<name>/` in noeta's repository) are written this way. Build it as one ES module
+with `react`, `react-dom`, `react/jsx-runtime`, `@noeta-ai/web-sdk` and `@noeta-ai/ui` left
+external (the page provides its own; `web/sdk/template` has the build script) and commit the
+built file: installing runs no build. Every `ctx` member, the slots and their mounts are in
+[`web/sdk`'s README](https://github.com/initxy/noeta/blob/main/web/sdk/README.md);
+[`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) is a
+complete plugin with one. Where the page puts each slot and what it does with a web part are
+in [Web, desktop and editors](./front-ends.md#plugins-in-the-web-and-desktop-apps).
+
 ## Replacing a built-in plugin
 
-Switch the built-in off (`[plugins.<name>] enabled = false`) and add yours. A plugin that
-replaces one front ends read keeps its name and records: `permissions` (`mode`, `modes`: the
+Switch the built-in off (`[plugins.<name>] enabled = false`) and add yours. In the web app a
+built-in's view is its web part and goes with it; a replacement brings its own. A plugin that
+replaces one the terminal UI and editors (ACP) read keeps its name and records: `permissions` (`mode`, `modes`: the
 mode shown and cycled) and `checkpoints` (`snapshot`: rewind). `plan_mode` writes its switches
 as `permissions` `mode` / `plan_exit` records and folds them back (`folds`), so plan mode works
 with the permissions plugin off (it then asks about every call that is neither read-only nor
@@ -455,7 +530,7 @@ Who reads which record is held in one place, `noeta/toolkit/plugin_records.py`.
 
 ## Worked examples
 
-Each is one file (hello-plugin a package), a short README and a test `make example` runs:
+Each is one file (hello-plugin a package, web-panel a directory), a short README and a test `make example` runs:
 
 - [`examples/run-tests`](https://github.com/initxy/noeta/tree/main/examples/run-tests) — a tool:
   runs the test command where the task's commands run, folds the last result from the log,
@@ -463,13 +538,19 @@ Each is one file (hello-plugin a package), a short README and a test `make examp
 - [`examples/house-style`](https://github.com/initxy/noeta/tree/main/examples/house-style) —
   prompt and reminder text: an output style captured when the task starts, so a resumed task
   sends identical bytes; joins every agent (`add_to = ("*",)`).
-- [`examples/chat-bridge`](https://github.com/initxy/noeta/tree/main/examples/chat-bridge) — a
-  channel: a chat thread becomes a task, requests carry a shared secret, senders are
-  allowlisted, replies relayed from the task.
-- [`examples/chat-approvals`](https://github.com/initxy/noeta/tree/main/examples/chat-approvals) —
-  a second channel next to chat-bridge: an approval the task waits on is posted to its thread,
-  and the chat app's Allow or Deny press answers it.
 - [`examples/hello-plugin`](https://github.com/initxy/noeta/tree/main/examples/hello-plugin) —
   the same kind of plugin as a package with an entry point.
+- [`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) — a
+  plugin directory with a web part: a status item, and a sidebar panel that calls its backend.
+
+The official marketplace's plugins are worked examples too, each a plugin directory with its
+tests: [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) (a
+channel: a chat thread becomes a task, requests carry a shared secret, senders are
+allowlisted, replies relayed from the task),
+[`chat-approvals`](https://github.com/initxy/noeta-plugins/tree/main/chat-approvals) (a second
+channel next to it: an approval the task waits on is posted to its thread, and the chat app's
+Allow or Deny press answers it) and
+[`repetition_guard`](https://github.com/initxy/noeta-plugins/tree/main/repetition_guard) (a
+`before_tool` gate).
 
 The built-in plugins are listed with their settings in [Built-in plugins](../reference/plugins.md).

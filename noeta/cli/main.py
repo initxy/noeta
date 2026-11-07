@@ -120,6 +120,9 @@ def _parser() -> argparse.ArgumentParser:
                     help="let requests start or switch tasks into bypassPermissions")
     sv.add_argument("--allow-root", action="append", default=[], metavar="PATH",
                     help="a directory besides the server's own tasks may run in")
+    sv.add_argument("--allow-plugin-install", action="store_true",
+                    help="let requests install and remove plugins (always allowed on a "
+                         "loopback address without --allow-host or --allow-origin)")
     sv.add_argument("--web", metavar="DIR",
                     help="also serve this directory's files (the built web app, web/dist) "
                          "at the server's other paths")
@@ -280,7 +283,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
     from noeta.cli.home_dir import HOME
     from noeta.cli.server_token import server_token_digest
-    from noeta.host.http import create_app, redact_token_logs
+    from noeta.host.http import LOOPBACK_HOSTS, create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
     server = None if args.no_token else server_token_digest()
@@ -304,7 +307,13 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
-                     web_dir=os.path.abspath(args.web) if args.web else None)
+                     web_dir=os.path.abspath(args.web) if args.web else None,
+                     # A Host or origin named besides the loopback ones: a
+                     # reverse proxy may bring anyone to the loopback bind.
+                     allow_plugin_install=args.allow_plugin_install
+                     or (host in LOOPBACK_HOSTS and not args.allow_host
+                         and not args.allow_origin),
+                     plugin_admin=app.plugin_admin)
     if args.web:
         print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)

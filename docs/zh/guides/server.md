@@ -130,7 +130,7 @@ allow_senders = ["U123"]
 url = "https://chat.example/hooks/{env:CHAT_HOOK_TOKEN}"
 ```
 
-这是 [`examples/chat-bridge`](https://github.com/initxy/noeta/tree/main/examples/chat-bridge) 渠道（把 `chat_bridge.py` 复制到 `~/.noeta/plugins/`）：聊天应用把每条消息连同共享密钥发到 8788 端口的 `POST /chat`，每个聊天串对应一个任务，任务里的 `chat_reply` 插件把回答发回去。[`examples/chat-approvals`](https://github.com/initxy/noeta/tree/main/examples/chat-approvals) 在此基础上加了“允许 / 拒绝”按钮，用来审批任务正在等的工具调用（8789 端口）。
+这是官方插件市场里的 [`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) 渠道（`noeta plugin add chat-bridge` 装上）：聊天应用把每条消息连同共享密钥发到 8788 端口的 `POST /chat`，每个聊天串对应一个任务，任务里的 `chat_reply` 插件把回答发回去。[`chat-approvals`](https://github.com/initxy/noeta-plugins/tree/main/chat-approvals) 在此基础上加了“允许 / 拒绝”按钮，用来审批任务正在等的工具调用（8789 端口）。
 
 渠道跑多个副本时怎样保持正确：
 

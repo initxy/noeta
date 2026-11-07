@@ -19,54 +19,59 @@ export type Item =
       progress?: string;
       /** What the person added to their yes; the model reads it beside the result. */
       note?: string;
-      /** The sub-agent task an `Agent` call started. */
-      child?: string;
-      childStatus?: string;
+      /** The tasks the call started (the kernel's `spawned` records), each with how it ended. */
+      children?: { id: string; status?: string }[];
     }
   | { kind: "notice"; id: string; text: string; tone: "info" | "error" }
   | { kind: "compaction"; id: string; summary: string };
 
-export interface Todo {
+/** A plugin's record, shown (by a `record:<plugin>/<kind>` contribution, if
+ * any) after the first `at` items; `n` orders it among all records. */
+export interface PluginRecordAt {
   id: string;
-  subject: string;
-  activeForm?: string;
-  status: string;
+  seq: number;
+  plugin: string;
+  kind: string;
+  data: unknown;
+  at: number;
+  n: number;
 }
 
-export interface Modes {
-  modes: string[];
-  cycle: string[];
-  names: Record<string, string>;
+/** Records of one plugin and kind, newest first. */
+export interface RecordList {
+  record: PluginRecordAt;
+  before: RecordList | null;
 }
 
-/** The compaction plugin's `threshold` record (noeta.toolkit.plugin_records.auto_compact). */
-export interface AutoCompact {
-  /** Context tokens at which automatic compaction fires. */
-  threshold: number;
-  /** The window less the summary's reserve. */
-  window: number;
-  /** Whether it compacts automatically (`/compact` only when not). */
-  auto: boolean;
+/** The records whose `record:<plugin>/<kind>` slot `shows`, by the number
+ * of items they come after, in the order recorded. Walks only those kinds. */
+export function shownRecords(st: TaskState, shows: (slot: string) => boolean): Map<number, PluginRecordAt[]> {
+  const found: PluginRecordAt[] = [];
+  for (const [key, list] of Object.entries(st.records)) {
+    if (!shows(`record:${key}`)) continue;
+    for (let node: RecordList | null = list; node; node = node.before) found.push(node.record);
+  }
+  found.sort((a, b) => a.n - b.n);
+  const byPlace = new Map<number, PluginRecordAt[]>();
+  for (const r of found) {
+    const here = byPlace.get(r.at);
+    if (here) here.push(r);
+    else byPlace.set(r.at, [r]);
+  }
+  return byPlace;
 }
 
-/** How far under the point it counts down to the warning starts. */
-export const CONTEXT_WARN_TOKENS = 20_000;
-
-/** Claude Code's warning once the context is within CONTEXT_WARN_TOKENS of
- * the auto-compact threshold (of the window when automatic compaction is
- * off); null before that. */
-export function contextLeft(tokens: number, at: AutoCompact | null): { text: string; low: boolean } | null {
-  if (!at) return null;
-  const limit = at.auto ? at.threshold : at.window;
-  if (limit <= 0 || tokens < limit - CONTEXT_WARN_TOKENS) return null;
-  const left = Math.max(0, Math.round(((limit - tokens) / limit) * 100));
-  return at.auto
-    ? { text: `${left}% until auto-compact`, low: false }
-    : { text: `Context low (${left}% remaining) · Run /compact to compact & continue`, low: true };
-}
+// What plugins record (the task list, the title, the mode a plugin switched
+// to …) is theirs to show (web/src/plugins/<name>/): this fold reads the
+// kernel's own events and records only.
 
 export interface TaskState {
   items: Item[];
+  /** The plugins' records by `<plugin>/<kind>`, apart from the items (the
+   * `record:` slots'): adding one costs the same in a long session as in a
+   * new one, and the page walks only the kinds a contribution shows. */
+  records: Readonly<Record<string, RecordList>>;
+  recordCount: number;
   /** Text and thinking of the model call streaming now (not yet recorded). */
   live: { callSeq: number; attempt: number; text: string; thinking: string } | null;
   /** The seq of the last `ModelCalled` and of the last call that replied. */
@@ -78,15 +83,9 @@ export interface TaskState {
   /** The calls (approval) or requests (question) the wait is on. */
   waitingIds: string[];
   ended: string | null;
-  title: string;
   cwd: string;
   model: string;
-  mode: string;
-  modes: Modes | null;
-  todos: Todo[];
   contextTokens: number;
-  /** When the compaction plugin compacts (its `threshold` record), if it said. */
-  compaction: AutoCompact | null;
   /** Inbox seqs of messages sent but not taken yet (queued), with their text. */
   queued: { seq: number; text: string }[];
   /** The highest inbox seq the task has taken: a send receipt at or below it
@@ -95,10 +94,14 @@ export interface TaskState {
   /** Sub-agents the task started whose end it has not taken yet: whatever
    * started them (an Agent call, a workflow's later agents with no call). */
   running: string[];
+  /** The plugins the task runs without (its config's `plugins_off`). */
+  pluginsOff: string[];
 }
 
 export const emptyTask = (): TaskState => ({
   items: [],
+  records: {},
+  recordCount: 0,
   live: null,
   called: 0,
   replied: 0,
@@ -107,17 +110,13 @@ export const emptyTask = (): TaskState => ({
   waitingOn: null,
   waitingIds: [],
   ended: null,
-  title: "",
   cwd: "",
   model: "",
-  mode: "",
-  modes: null,
-  todos: [],
   contextTokens: 0,
-  compaction: null,
   queued: [],
   taken: 0,
   running: [],
+  pluginsOff: [],
 });
 
 export type Action =
@@ -145,12 +144,22 @@ export function shownPrompt(t: string): string {
   return m ? [m[1], (m[2] ?? "").trim()].filter(Boolean).join(" ") : t;
 }
 
+const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
 function updateTool(items: Item[], id: string, patch: Partial<Extract<Item, { kind: "tool" }>>): Item[] {
   return items.map((it) => (it.kind === "tool" && it.id === id ? { ...it, ...patch } : it));
 }
 
+function addChild(items: Item[], callId: string, child: string): Item[] {
+  return items.map((it) =>
+    it.kind === "tool" && it.id === callId && !it.children?.some((c) => c.id === child) ? { ...it, children: [...(it.children ?? []), { id: child }] } : it,
+  );
+}
+
 function updateChild(items: Item[], child: string, status: string): Item[] {
-  return items.map((it) => (it.kind === "tool" && it.child === child ? { ...it, childStatus: status } : it));
+  return items.map((it) =>
+    it.kind === "tool" && it.children?.some((c) => c.id === child) ? { ...it, children: it.children.map((c) => (c.id === child ? { ...c, status } : c)) } : it,
+  );
 }
 
 function started(running: string[], ids: string[]): string[] {
@@ -165,55 +174,11 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
     items: [...st.items, { kind: "notice", id: `n${seq}`, text: t, tone }],
   });
   switch (key) {
-    case "title/title":
-      return { ...st, title: String(data.title ?? "") };
-    case "permissions/mode":
-    case "permissions/plan_exit":
-      return data.mode ? { ...st, mode: String(data.mode) } : st;
-    case "compaction/threshold": {
-      const { threshold, window } = data;
-      const whole = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
-      return whole(threshold) && whole(window) ? { ...st, compaction: { threshold, window, auto: data.auto !== false } } : st;
-    }
-    case "permissions/modes":
-      return { ...st, modes: data as unknown as Modes };
-    case "todos/created":
-      return {
-        ...st,
-        todos: [
-          ...st.todos.filter((t) => t.id !== String(data.id)),
-          { id: String(data.id), subject: String(data.subject ?? ""), activeForm: data.active_form as string | undefined, status: "pending" },
-        ],
-      };
-    case "todos/updated": {
-      const f = (data.fields ?? {}) as Record<string, unknown>;
-      return {
-        ...st,
-        todos: st.todos.map((t) =>
-          t.id === String(data.id)
-            ? {
-                ...t,
-                subject: (f.subject as string) ?? t.subject,
-                activeForm: (f.active_form as string) ?? t.activeForm,
-                status: (f.status as string) ?? t.status,
-              }
-            : t,
-        ),
-      };
-    }
-    case "todos/deleted":
-      return { ...st, todos: st.todos.filter((t) => t.id !== String(data.id)) };
-    case "subtasks/launched":
-      return {
-        ...st,
-        items: updateTool(st.items, String(data.call_id), { child: String(data.task_id) }),
-        running: started(st.running, [String(data.task_id)]),
-      };
     case "core/spawned": {
       let items = st.items;
       const children = (data.children ?? []) as { id: string; call_id: string }[];
       for (const c of children) {
-        items = updateTool(items, c.call_id, { child: c.id });
+        if (c.call_id) items = addChild(items, c.call_id, c.id);
       }
       return { ...st, items, running: started(st.running, children.map((c) => c.id)) };
     }
@@ -230,7 +195,15 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
     case "core/notice":
       return notice(String(data.text ?? ""));
     default:
-      return st;
+      if (ev.extension === "core") return st;
+      return {
+        ...st,
+        records: {
+          ...st.records,
+          [key]: { record: { id: `r${seq}`, seq, plugin: ev.extension, kind: ev.kind, data: ev.data, at: st.items.length, n: st.recordCount }, before: st.records[key] ?? null },
+        },
+        recordCount: st.recordCount + 1,
+      };
   }
 }
 
@@ -244,7 +217,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
         ...st,
         cwd: String(ev.config.cwd ?? ""),
         model: String(ev.config.model ?? st.model),
-        mode: String(ev.config.permission_mode ?? st.mode),
+        pluginsOff: names(ev.config.plugins_off),
       };
     case "InputTaken": {
       let items = st.items;
@@ -267,8 +240,9 @@ function event(st: TaskState, rec: Recorded): TaskState {
           items = updateChild(items, body.child_id, body.status);
           running = running.filter((id) => id !== body.child_id);
         } else if (body.kind === "external" && body.name === "config") {
-          const model = (body.data as Record<string, unknown> | null)?.model;
-          if (typeof model === "string") st = { ...st, model };
+          const config = (body.data ?? {}) as Record<string, unknown>;
+          if (typeof config.model === "string") st = { ...st, model: config.model };
+          if ("plugins_off" in config) st = { ...st, pluginsOff: names(config.plugins_off) };
         }
       }
       // Taking input ends a wait, but an approval or a question stands until
@@ -352,16 +326,23 @@ function delta(st: TaskState, d: Delta): TaskState {
   return { ...st, live, busy: true };
 }
 
-/** An earlier conversation's event: its items and what it set (title, mode,
- * todos …), but not the state of its turn (busy, waiting, ended) nor its
+/** An earlier conversation's event: its items, its plugins' records and
+ * what it set (the model, the cwd …), but not the state of its turn (busy, waiting, ended) nor its
  * seqs, which are another log's. */
 function history(st: TaskState, rec: Recorded, from: string): TaskState {
   if (rec.event.type === "TaskEnded" || rec.event.type === "Waiting") return st;
   const next = event(st, rec);
   const added = next.items.slice(st.items.length).map((it) => (it.kind === "tool" ? it : { ...it, id: `${from}:${it.id}` }));
+  let records = next.records;
+  if (next.recordCount > st.recordCount && rec.event.type === "ExtensionRecorded") {
+    const key = `${rec.event.extension}/${rec.event.kind}`;
+    const added = records[key];
+    records = { ...records, [key]: { record: { ...added.record, id: `${from}:${added.record.id}` }, before: added.before } };
+  }
   return {
     ...next,
-    items: [...next.items.slice(0, st.items.length), ...added],
+    items: added.length ? [...next.items.slice(0, st.items.length), ...added] : next.items,
+    records,
     lastSeq: st.lastSeq,
     taken: st.taken,
     called: st.called,

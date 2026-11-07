@@ -20,6 +20,7 @@ from noeta.core.events import (
     TaskCreated,
 )
 from noeta.core.images import fit_message
+from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF, fold, off_names
 from noeta.core.store import NewTask, Post, Status, Store, TaskRow, pin_history
 from noeta.core.types import Image, Message, user
 
@@ -112,12 +113,17 @@ class Client:
         each message with its own ``dedupe_key``.
         ``history_from`` starts it from another task's conversation, up to
         that task's event ``history_through`` (a fork, a rewind); a source
-        that is no task raises ``UnknownTask``."""
+        that is no task raises ``UnknownTask``. Unless ``config`` names
+        its own, such a task runs without the plugins its source runs
+        without now (``plugins_off``)."""
+        config = dict(config or {})
         if history_from is not None:
             await self.get(history_from)
+            if PLUGINS_OFF not in config and (off := await self._plugins_off(history_from)):
+                config[PLUGINS_OFF] = off
         tid = task_id or uuid.uuid4().hex
         created = await pin_history(self.store, TaskCreated(
-            agent=agent, config=dict(config or {}), root_id=tid,
+            agent=agent, config=config, root_id=tid,
             history_from=history_from, history_through=history_through))
         task = NewTask(
             task_id=tid,
@@ -128,6 +134,19 @@ class Client:
         )
         created_id, _ = await self.store.create(task)
         return created_id
+
+    async def _plugins_off(self, task_id: str) -> list[str]:
+        """The plugins ``task_id`` runs without as last asked: its config's,
+        then the ones of config signals it has not taken yet (an ended
+        task never takes them)."""
+        state = fold(await self.store.read(task_id), {})
+        off = off_names(state.config)
+        for item in await self.store.inbox(task_id, after=state.inbox_read):
+            body = item.body
+            if isinstance(body, External) and body.name == CONFIG_SIGNAL \
+                    and isinstance(body.data, dict) and PLUGINS_OFF in body.data:
+                off = off_names(body.data)
+        return off
 
     async def send(
         self,

@@ -129,11 +129,19 @@ token = "{env:CHAT_TOKEN}"
 4. 前端自己传的（`-p` 的 `--mcp-config`、`--allowedTools` 等）。
 
 后面的层按键覆盖前面的；实例或开 / 关则整体替换。代理文件里对某个插件写的参数
-（`plugins: [{shell: {background: true}}]`）会叠在宿主给的参数之上。内置代理默认关掉 `memory`、
-`mcp` 和 `repetition_guard`，要有设置点名它们才开；`noeta` 命令会把前两个打开。
+（`plugins: [{shell: {background: true}}]`）会叠在宿主给的参数之上。内置代理默认关掉 `memory` 和
+`mcp`，要有设置点名它们才开；`noeta` 命令会把两个都打开。`[plugins.<name>]` 写了一个本机没装的插件，
+启动时会提示一句；如果是从 noeta 里搬出去的插件，还会给出安装命令（`repetition_guard` 就是
+`noeta plugin add repetition_guard`）。
 
 参数里的密钥写成引用（`{env:NAME}`、`{keyring:service/user}`），创建插件时才解析；配置文件和任务
 日志里只存引用。
+
+除了 `enabled = false`，还能用任务配置项 `plugins_off`（一串插件名）只在一个任务里关掉插件，用
+`~/.noeta/plugin-switches.json`（`{"off": [...]}`）让以后的新任务都不带它；这个文件由前端的插件菜单来写
+（见[关掉插件](./plugins.md#switching-a-plugin-off)）。插件表里写 `switchable = false`，这两种都关不掉它：
+请求和菜单都动不了，适合服务器必须留着的关卡类插件。`noeta plugin add <名字>` 去哪些插件市场里找，
+记在 `~/.noeta/marketplaces.json`，由 `noeta plugin marketplace` 来改（见 [noeta 命令](./cli.md)）。
 
 任务会记下它用了哪些插件（名字、来源、版本或文件哈希、参数的哈希）。缺了其中某个插件的 worker
 绝不会在少了它的情况下跑这个任务（[插件体系](../how-it-works/plugins.md)）。

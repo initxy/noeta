@@ -16,10 +16,11 @@ from noeta.core.client import ClientAPI, Input
 from noeta.core.commands import Typed
 from noeta.core.errors import NoetaError, UnknownTask
 from noeta.core.events import Recorded
-from noeta.core.extension import Command, CommandContext
+from noeta.core.extension import Command, CommandContext, UnknownUiCall
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta
 from noeta.host.app import AppAPI, archive_task
+from noeta.host.plugins import MarketEntry, PluginInfo, UiEntry
 from noeta.host.rewind import RewindPoint, Rewound
 
 #: Reconnects in a row (without an event in between) before ``watch`` gives up.
@@ -219,6 +220,43 @@ class RemoteApp:
         got = await self.client._call("POST", "/commands/run", json={
             "text": text, "agent": agent, "task_id": ctx.task_id, "cwd": ctx.cwd})
         return None if got is None else Typed(str(got["text"]), bool(got.get("local")))
+
+    async def plugins(self, agent: str, cwd: str = "") -> list[PluginInfo]:
+        params = {k: v for k, v in {"agent": agent, "cwd": cwd}.items() if v}
+        got = await self.client._call("GET", "/plugins", params=params)
+        found: list[PluginInfo] = got["plugins"]
+        return found
+
+    async def set_plugin_default(self, name: str, enabled: bool) -> None:
+        await self.client._call("PUT", f"/plugins/{name}", json={"enabled": enabled})
+
+    async def ui(self, task_id: str) -> list[UiEntry]:
+        items: list[UiEntry] = (await self.client._call("GET", f"/tasks/{task_id}/ui"))["items"]
+        return items
+
+    async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
+        resp = await self.client.http.post(f"/plugins/{plugin}/call", json={
+            "task_id": task_id, "name": name, "args": args})
+        if resp.status_code == 404:
+            raise UnknownUiCall(resp.json().get("error") or name)
+        resp.raise_for_status()
+        return resp.json()["result"]
+
+    async def install_plugin(self, source: str, marketplace: str | None = None,
+                             commit: str | None = None) -> PluginInfo:
+        found: PluginInfo = await self.client._call("POST", "/plugins/install", json={
+            "source": source, "marketplace": marketplace, "commit": commit})
+        return found
+
+    async def remove_plugin(self, name: str) -> None:
+        await self.client._call("DELETE", f"/plugins/{name}")
+
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
+        got = await self.client._call("GET", "/market")
+        if notices is not None:
+            notices += [str(n) for n in got.get("notices") or []]
+        entries: list[MarketEntry] = got["entries"]
+        return entries
 
     async def summaries(self, limit: int = 50, *,
                         archived: bool | None = None) -> list[dict[str, Any]]:

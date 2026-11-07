@@ -141,6 +141,47 @@ class CommandContext:
 
 
 @dataclass(frozen=True)
+class StatusItem:
+    """A short line front ends keep in their status bar while the plugin
+    returns it from ``Extension.ui``; ``key`` tells one item from another."""
+
+    key: str
+    text: str
+    #: ``normal``, ``ok``, ``warn`` or ``error``.
+    tone: str = "normal"
+
+
+@dataclass(frozen=True)
+class Widget:
+    """A block of markdown front ends show next to the composer."""
+
+    key: str
+    markdown: str
+    #: ``above`` or ``below`` the composer.
+    placement: str = "above"
+
+
+@dataclass(frozen=True)
+class Notice:
+    """A message front ends show the person once per ``key``."""
+
+    key: str
+    text: str
+    #: ``info``, ``warn`` or ``error``.
+    level: str = "info"
+
+
+#: What ``Extension.ui`` returns: data every front end renders its own way.
+UiItem = Union[StatusItem, Widget, Notice]
+
+
+class UnknownUiCall(LookupError):
+    """A plugin's front-end call no plugin of the task answers: the task
+    does not run that plugin now, or its ``Extension.ui_call`` has no call
+    of that name (``POST /plugins/{name}/call`` answers 404)."""
+
+
+@dataclass(frozen=True)
 class ToolEntry:
     """An entry of a request's tool list that is no tool: sent, never
     called (a vendor's mode switch). It goes right before the sent tool
@@ -453,10 +494,18 @@ def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], 
                config: Mapping[str, Any] | None, *, history_from: str | None = None,
                history_through: int | None = None) -> TaskCreated:
     """The ``TaskCreated`` of a child the task ``task_id`` stages: ``config``
-    with what every extension passes on (``Extension.inherit``) laid over it."""
+    with what every extension passes on (``Extension.inherit``) laid over it,
+    and the plugins the task's turn runs without (``TaskState.plugins_off``,
+    not a switch sent since, which is the task's from its next turn on)
+    switched off for it too."""
+    from noeta.core.loop.state import PLUGINS_OFF, off_names
+
     child_config = dict(config or {})
     for ext in extensions:
         child_config.update(ext.inherit(state))
+    off = sorted({*off_names(child_config), *state.plugins_off})
+    if off:
+        child_config[PLUGINS_OFF] = off
     return TaskCreated(agent=agent, config=child_config, parent_id=task_id,
                        root_id=state.root_id or task_id, history_from=history_from,
                        history_through=history_through)
@@ -532,6 +581,21 @@ class Extension:
         """The message text for one of this extension's commands whose
         ``template`` is empty."""
         raise NotImplementedError(f"{self.name} has no command {name!r}")
+
+    async def ui(self, view: TaskView) -> Sequence[UiItem]:
+        """What front ends show for the task now (status items, widgets,
+        notices), computed from its folded state like ``reminders``; asked
+        again whenever the task's log advances, so it must be cheap and
+        record nothing."""
+        return ()
+
+    async def ui_call(self, ctx: CommandContext, name: str, args: Any) -> Any:
+        """Answer the plugin's own front-end code (``POST
+        /plugins/{name}/call``) with JSON. What it changes for good goes into
+        the task's log (a signal, a record), never into the plugin's own
+        memory. Raises :class:`UnknownUiCall` for a ``name`` it does not
+        answer (``super().ui_call``); any other error is the plugin's bug."""
+        raise UnknownUiCall(f"plugin {self.name!r} answers no call {name!r}")
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """Content a compaction re-attaches after the messages it keeps (a

@@ -232,7 +232,7 @@ client = noeta.connect("https://noeta.internal:8642", token=os.environ["NOETA_SE
 `noeta` 命令在 `noeta.cli.config.from_settings` 里根据 `~/.noeta`（设置文件、代理文件、插件文件、
 `config.toml`）构建代理。用 `default_agents` 构建代理的程序只拿到你传进去的东西：
 
-- 记忆插件、MCP 插件和重复检测插件（`repetition_guard`）默认关闭，要在 `plugins` 里写上设置才开：
+- 记忆插件和 MCP 插件默认关闭，要在 `plugins` 里写上设置才开：
   `default_agents(model, plugins={"mcp": {"servers": {...}}, "memory": {"home": …}})`。
 - 不读任何设置文件：权限规则作为权限插件的参数传进去，
   `plugins={"permissions": {"allow": ["Bash(git *)"], "mode": "acceptEdits"}}`。

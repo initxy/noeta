@@ -1,0 +1,43 @@
+{
+  "name": "@noeta-ai/ui",
+  "version": "1.0.6",
+  "description": "The noeta web app's own components (markdown, buttons, switches, panels) for a plugin's web part; the page provides this module at run time.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/initxy/noeta.git",
+    "directory": "web/ui"
+  },
+  "homepage": "https://initxy.github.io/noeta/guides/plugins",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.tsx",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "!src/**/*.test.*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@noeta-ai/web-sdk": "1.0.6",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

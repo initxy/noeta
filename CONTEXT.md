@@ -51,8 +51,8 @@ plugins share) > `noeta/core`. `|` siblings never import each other, nor do two 
 inherited config (`Extension.inherit`), runnable agents (`TaskView.agents`), or what a plugin publishes, read
 only through a typed reader in `toolkit`: `plugin_records.py` (plugin names, each record and who reads it, the
 methods a plugin keeps for others; `tests/toolkit/test_plugin_records.py` holds writers to readers),
-`background_tasks.py`, `structured_output.py`, `permission_modes.py`. Front ends import no plugin; they read
-permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title`, compaction's `threshold`, todos' records (kept by a replacement). SDK = all but `noeta/cli`.
+`background_tasks.py`, `structured_output.py`, `permission_modes.py`. Front ends import no plugin; the TUI and ACP
+read permissions' `mode` / `modes`, checkpoints' `snapshot`s, memory's `dir`, title's `title`, compaction's `threshold`, todos' records (kept by a replacement); the web app reads none (Plugin parts). SDK = all but `noeta/cli`.
 
 ## Ways in
 
@@ -90,7 +90,18 @@ is its `Extension.name`. A plugin (or channel) can also be a plain file in `~/.n
 trusted project's `.noeta/plugins` or a `--plugin-dir` for one run
 (`registry.load_plugin_files`); an installed plugin wins a name clash. Such a file joins the agents its `Extension.add_to` names by itself (an installed
 package's `add_to` is ignored). `noeta plugin add <git-url>@<commit>` installs one there pinned
-(also from a Claude Code `marketplace.json`, only read), running nothing from it.
+(also by name from a Claude Code `marketplace.json`, only read: `~/.noeta/marketplaces.json`, the official `noeta-plugins` by default), running nothing from it.
+
+## Plugin parts
+
+One plugin name, one switch, up to these parts (ADR-033): its `Extension`; UI data every front end
+draws (`Extension.ui`, `GET /tasks/{id}/ui`); a web part named by `.noeta-plugin/plugin.json` beside
+its code (`noeta/host/plugins.py`), imported by the web page with React and `@noeta-ai/*` taken from
+its import map (`web/index.html`, `web/shared-modules.ts`). A built-in's web view is its part in
+`web/src/plugins/<name>/` (`builtin.ts`), through the same slots; `web/src/plugins/boundary.test.ts`
+fails a page file that reads a plugin's records or names its tool. Task config `plugins_off` (taken
+only between turns, inherited by children): those plugins still fold their records but are asked
+nothing else; requests may name only non-shipped plugins and `SWITCHABLE_BUILTINS`.
 
 ## Plugin pin
 
@@ -109,7 +120,7 @@ What a host says about one plugin, by name: its arguments (`enabled: false` amon
 it off), a ready `Extension`, or on/off. One table at every level (`build_agents`,
 `default_agents`, `from_settings`, `config.toml` `[plugins.<name>]`); argument tables of one
 plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
-to an agent without copying its file. The built-in agents keep memory, MCP and the repetition guard off until set.
+to an agent without copying its file. The built-in agents keep memory and MCP off until set.
 A secret is written as a reference, `{env:NAME}` or `{keyring:service/user}`, resolved only when
 the plugin is made (`agent_files.resolve_secrets`).
 

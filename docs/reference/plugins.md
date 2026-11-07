@@ -34,7 +34,6 @@ The built-in agents are the files in `noeta/agents/files/`. A plugin file's `add
 | `permissions` | ✓ | ✓ | ✓ | |
 | `plan_mode` | ✓ | ✓ | ✓ | |
 | `quiet_nudge` | ✓ | | | only some Claude models get the nudge |
-| `repetition_guard` | ✓ | ✓ | ✓ | off until `[plugins.repetition_guard]` is set |
 | `schedule` | ✓ | | | |
 | `shell` | ✓ | ✓ | ✓ | |
 | `skills` | ✓ | ✓ | ✓ | |
@@ -47,10 +46,10 @@ The built-in agents are the files in `noeta/agents/files/`. A plugin file's `add
 | `workflow` | ✓ | | | |
 
 "Off until set" (`noeta/agents/__init__.py` `OFF_UNLESS_SET`): `memory` writes under a
-directory, `mcp` starts the servers it is given, and the repetition guard is not Claude Code's,
-so `default_agents` keeps them off until the host passes a setting for them. The `noeta`
-command passes one for `memory` and `mcp` (`noeta/cli/config.py`), so in the terminal, `-p`,
-`noeta worker` and `noeta serve` both are on; `repetition_guard` stays off. An agent file
+directory and `mcp` starts the servers it is given, so `default_agents` keeps them off until
+the host passes a setting for them. The `noeta` command passes one for both
+(`noeta/cli/config.py`), so in the terminal, `-p`, `noeta worker` and `noeta serve` both are
+on. An agent file
 that names no `plugins` (a plain Claude Code agent file) gets `general-purpose`'s set
 (`DEFAULT_PLUGINS`). `tool_search` and `structured_output` are added to every agent built from
 agent files that does not name them (`ALWAYS_PLUGINS`).
@@ -61,6 +60,23 @@ directories and listing budget, `instructions.user_dir` and `managed_dir`, the `
 rules and mode, `plan_mode`'s settings, `fs.write_roots` (the additional directories), and
 `environment.language` and the attribution lines. Your `config.toml` table is merged over
 those, key by key.
+
+## Switching a plugin off {#switching-a-plugin-off}
+
+| Scope | How | Takes effect |
+|---|---|---|
+| every agent, for good | `[plugins.<name>] enabled = false` | when the agents are made again (`/reload-plugins`, a restart) |
+| one task | the task config's `plugins_off`: `/plugins` in the terminal UI, the plugins dialog in the web and desktop apps, or the `config` signal | from the task's next turn on, on every worker; its sub-agents inherit it |
+| new tasks on this machine | `~/.noeta/plugin-switches.json` (`{"off": [...]}`), written by the same menus and `PUT /plugins/{name}` | for tasks created afterwards |
+
+A plugin switched off for a task keeps folding its records, so switching it back on loses
+nothing. Every installed plugin can be switched per task, and of the built-ins only those a
+task runs well without (`noeta/host/plugins.py` `SWITCHABLE_BUILTINS`): `ask_user`,
+`checkpoints`, `findings`, `mcp`, `memory`, `quiet_nudge`, `schedule`, `skills`, `title`,
+`todos`, `web`, `workflow`. The others (the permission gate, the file and shell tools, …) a
+task is built on; only `enabled = false` removes them. A Claude Code plugin's parts belong to
+the plugins that load them and are not switched on their own. A built-in's view in the web
+app is its web part in `web/src/plugins/<name>/`, and goes with it.
 
 ## Tools and commands at a glance
 
@@ -372,21 +388,6 @@ Hooks: `reminders`.
 | `steps` | `5` | tool-only steps in a row before each nudge |
 | `most` | `3` | nudges per quiet stretch |
 
-### `repetition_guard`
-
-`noeta/plugins/repetition_guard.py` — a call identical to the ones right before it (same tool,
-same arguments), `threshold` times in a row counting itself, is asked about or refused. It reads
-the conversation, so any worker sees the same run of calls. Claude Code has no such guard, so it
-is off until `[plugins.repetition_guard]` is set.
-
-Hooks: `before_tool`.
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `threshold` | `3` | identical calls in a row; `<= 0` is off |
-| `action` | `"require_approval"` | `require_approval` asks the person, `deny` refuses |
-| `window` | `8` | the recent calls looked at |
-
 ### `schedule`
 
 `noeta/plugins/schedule` — scheduled prompts as Claude Code has them: `ScheduleWakeup` paces a
@@ -562,4 +563,4 @@ the others:
 | `noeta.execenvs` | `local`, `container` | where commands run ([Where commands run](../guides/sandbox.md)) |
 | `noeta.stores` | `sqlite`, `postgres` (also `postgresql`) | where tasks are stored ([Run it as a server](../guides/server.md)) |
 | `noeta.frontends` | `tui` (from the `noeta-tui` package) | the terminal UI |
-| `noeta.channels` | none built in | outside conversations; `examples/chat-bridge` is one |
+| `noeta.channels` | none built in | outside conversations; `chat-bridge` in the [official marketplace](https://github.com/initxy/noeta-plugins) is one |

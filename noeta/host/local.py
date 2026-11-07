@@ -34,12 +34,14 @@ from noeta.core.client import Client, Input
 from noeta.core.commands import Typed
 from noeta.core.errors import NoetaError
 from noeta.core.extension import Command, CommandContext
-from noeta.core.loop.state import CONFIG_SIGNAL, MODEL_ROUTE
+from noeta.core.loop.state import CONFIG_SIGNAL, MODEL_ROUTE, PLUGINS_OFF, off_names
 from noeta.core.provider import Provider
 from noeta.core.runner import Runtime
 from noeta.core.store import Store
 from noeta.core.types import Delta, Text
+from noeta.host import plugins as host_plugins
 from noeta.host.app import AppAPI, DeltaSink, agent_commands, agent_run_command, archive_task
+from noeta.host.plugins import MarketEntry, PluginAdmin, PluginInfo, UiEntry
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import Cache, root_summaries
 
@@ -86,7 +88,8 @@ class LocalClient(Client):
     """A ``Client`` whose new tasks the in-process worker serves.
     ``task_config`` is laid under every new task's config (its ``prompts``
     merged key by key); ``queue`` is the one new tasks are created on unless
-    a call names one."""
+    a call names one. The plugins :attr:`default_off` names join the
+    ``plugins_off`` of every new task that continues no other."""
 
     def __init__(self, store: Store, runtime: Runtime, *,
                  task_config: dict[str, Any] | None = None, queue: str = "default",
@@ -99,6 +102,9 @@ class LocalClient(Client):
         #: given (``MODEL_ROUTE``: its provider, its limits), or ``None``;
         #: blocking. Set by a host with several providers.
         self.route_model: Callable[[str], dict[str, Any] | None] | None = None
+        #: ``default_off()``: the plugins new tasks start without (the
+        #: machine's switches); blocking.
+        self.default_off: Callable[[], list[str]] = lambda: []
 
     async def _route(self, model: Any) -> dict[str, Any] | None:
         if self.route_model is None or not isinstance(model, str) or not model:
@@ -123,6 +129,12 @@ class LocalClient(Client):
         prompts = {**self.task_config.get("prompts", {}), **(config or {}).get("prompts", {})}
         if prompts:
             merged["prompts"] = prompts
+        # A conversation continued (a fork, a rewind) keeps the switches it
+        # is given.
+        default = [] if kw.get("history_from") else [
+            n for n in await asyncio.to_thread(self.default_off) if host_plugins.switchable(n)]
+        if default:
+            merged[PLUGINS_OFF] = sorted({*off_names(merged), *default})
         if self.route_model is not None and MODEL_ROUTE not in merged:
             found = self.runtime.agent(agent)
             route = await self._route(merged.get("model") or (found.model if found else ""))
@@ -219,6 +231,12 @@ class LocalApp:
         #: returning what the person should know (an unknown model) or
         #: ``None``; ``None`` when only the catalog is known. Off the loop.
         self.prepare_model: Callable[[str], str | None] | None = None
+        #: The machine's plugins as the ``noeta`` command lets front ends
+        #: manage them (switches for new tasks, install, remove, the
+        #: marketplaces); the default can do none of that.
+        self.plugin_admin = PluginAdmin()
+        self.client.default_off = lambda: [
+            n for n in self.plugin_admin.default_off() if n not in self.plugin_admin.fixed()]
         self._summaries: Cache = {}
 
     def replace_agents(self, agents: list[Agent]) -> None:
@@ -262,10 +280,62 @@ class LocalApp:
         return sorted(self.runtime.agents)
 
     async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
-        return await agent_commands(self.runtime.agents, self._named(agent), ctx)
+        return await agent_commands(self.runtime.agents, self._named(agent), ctx,
+                                    await host_plugins.command_off(self.store, ctx))
 
     async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
-        return await agent_run_command(self.runtime.agents, self._named(agent), ctx, text)
+        return await agent_run_command(self.runtime.agents, self._named(agent), ctx, text,
+                                       await host_plugins.command_off(self.store, ctx))
+
+    async def plugins(self, agent: str, cwd: str = "") -> list[PluginInfo]:
+        admin = self.plugin_admin
+        return await asyncio.to_thread(host_plugins.plugin_infos,
+                                       self.runtime.agent(agent), admin, cwd)
+
+    async def set_plugin_default(self, name: str, enabled: bool) -> None:
+        if not host_plugins.switchable(name, self.plugin_admin.fixed()):
+            raise ValueError(f"every task runs the plugin {name!r}: it cannot be switched off")
+        if self.plugin_admin.set_default is None:
+            raise NotImplementedError("this host keeps no plugin switches")
+        await asyncio.to_thread(self.plugin_admin.set_default, name, enabled)
+
+    async def ui(self, task_id: str) -> list[UiEntry]:
+        return await host_plugins.task_ui(self.runtime, task_id)
+
+    async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
+        return await host_plugins.call_plugin(self.runtime, task_id, plugin, name, args)
+
+    async def install_plugin(self, source: str, marketplace: str | None = None,
+                             commit: str | None = None) -> PluginInfo:
+        install = self.plugin_admin.install
+        if install is None:
+            raise NotImplementedError("this host does not install plugins")
+        name = await asyncio.to_thread(install, source, marketplace, commit)
+        self._reload()
+        found = next((p for p in await self.plugins(self.main_agent) if p["name"] == name),
+                     None)
+        return found or PluginInfo(name=name, version="", description="", source=source,
+                                   builtin=False, enabled=False, switchable=False,
+                                   broken="installed; it joins no agent", parts=[],
+                                   ui_api=None, web=None)
+
+    async def remove_plugin(self, name: str) -> None:
+        remove = self.plugin_admin.remove
+        if remove is None:
+            raise NotImplementedError("this host does not remove plugins")
+        await asyncio.to_thread(remove, name)
+        self._reload()
+
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
+        market = self.plugin_admin.market
+        return await asyncio.to_thread(market, [] if notices is None else notices) \
+            if market is not None else []
+
+    def _reload(self) -> None:
+        """Load the plugins again (``/reload-plugins``) after an install."""
+        if self.reload_plugins is not None:
+            for line in self.reload_plugins():
+                log.info("plugins: %s", line)
 
     def _named(self, agent: str) -> str:
         """``agent`` as named now (a task's log may hold a former name)."""
