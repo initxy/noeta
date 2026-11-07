@@ -65,7 +65,8 @@ events; when this process also runs workers, live model output streams too.
 With ``web_dir`` (``noeta serve --web DIR``) the other paths serve that directory's
 files, the built web app (``web/``), without a token: it holds none. They go with
 :data:`WEB_HEADERS`: a content security policy (the page's scripts, styles and requests
-are its own server's; images also ``data:`` and ``blob:``) and no framing.
+are its own server's, plus its import map by hash; images also ``data:`` and ``blob:``)
+and no framing.
 
 A bearer token is required (``NOETA_SERVER_TOKEN``; ``?token=`` for a
 WebSocket from a browser) unless the host turns auth off. A request from a web page of
@@ -102,8 +103,8 @@ from noeta.host.plugins import MarketEntry, PluginAdmin, PluginInfo, UiEntry, pl
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
-__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "Refused", "create_app",
-           "redact_token_logs", "token_digest"]
+__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "WEB_IMPORT_MAP_SHA256", "Refused",
+           "create_app", "redact_token_logs", "token_digest"]
 
 
 @dataclasses.dataclass
@@ -194,10 +195,15 @@ def _redact(text: str) -> str:
 #: The loggers uvicorn names a request's path in.
 _UVICORN_LOGGERS = ("uvicorn.access", "uvicorn.error")
 
+#: The web app's import map (``web/index.html``, the modules plugins' web parts
+#: share with the page): the one inline script its policy allows, by hash.
+WEB_IMPORT_MAP_SHA256 = b"jc6PTxpMzRywDtAr0jhb9dDRsH7EsOY2flGgmm1+0zs="
+
 #: The headers every file of ``web_dir`` is served with.
 WEB_HEADERS = (
     (b"content-security-policy",
-     b"default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
+     b"default-src 'self'; script-src 'self' 'sha256-" + WEB_IMPORT_MAP_SHA256 + b"'; "
+     b"img-src 'self' data: blob:; connect-src 'self'; "
      b"frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
     (b"x-frame-options", b"DENY"),
     (b"x-content-type-options", b"nosniff"),

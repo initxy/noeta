@@ -335,6 +335,28 @@ async def test_word_count(tmp_path):                 # pytest-asyncio，asyncio_
 - **只活在一个进程里的东西**（一个子进程、一条打开的连接），用 `ctx.keep()` 让任务一直留在这个工人上；工人挂了，下一个认领者会告诉模型这份工作丢了（见[单写者与崩溃恢复](../how-it-works/recovery.md)）。
 - **策略。** `/etc/noeta/config.toml` 的 `[policy]` 优先于所有用户和项目设置（见上文）。
 
+## 网页部分
+
+插件目录（或 Python 包）还可以带一段给网页版和桌面版用的代码：一个构建好的 ES 模块，由插件代码旁边的 `.noeta-plugin/plugin.json` 指明。
+
+```json
+{ "name": "my-plugin", "version": "0.1.0", "ui_api": 1, "web": "web/dist/index.js" }
+```
+
+模块导出 `activate(ctx)`，把 React 组件放进页面预留的位置（slot）：
+
+```tsx
+import { SLOTS, type PluginContext } from "@noeta-ai/web-sdk";
+
+export function activate(ctx: PluginContext) {
+  return ctx.slots.add(SLOTS.sidebar, { key: "files", mount: "keyed" }, () => (
+    <button onClick={() => ctx.call("workspace")}>Look</button>
+  ));
+}
+```
+
+`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 读插件自己的记录。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@noeta-ai/web-sdk`、`@noeta-ai/ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。页面有哪些位置、拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
+
 ## 替换内置插件
 
 把内置插件关掉（`[plugins.<name>] enabled = false`），加上你自己的。替换前端会读取的那几个插件时，要保留原来的名字和记录：`permissions`（`mode`、`modes`：前端显示和切换的模式）和 `checkpoints`（`snapshot`：回退）。`plan_mode` 把它的切换写成 `permissions` 名下的 `mode` / `plan_exit` 记录并读回来（`folds`），所以关掉权限插件计划模式也能用（这时除了写计划文件，凡是既不只读、也不是 `safe_while_planning` 的调用都会询问）；而关掉 `plan_mode` 后，权限插件不提供 `plan` 模式。因此替换 `permissions` 的插件，绝不能用别的含义去写这些记录类型：`mode`、`plan_exit`、`modes`（前端、`plan_mode` 在读），`plan_name`、`noted`、`compacted`、`plan_file`、`plan_file_sent`（`plan_mode`，拆分之前的日志里有），`step`、`tool_call`、`cost`（`budget`，同理）。
@@ -343,11 +365,12 @@ async def test_word_count(tmp_path):                 # pytest-asyncio，asyncio_
 
 ## 现成的例子
 
-每个都是一个文件（hello-plugin 是一个包）、一份简短 README，外加一个 `make example` 会跑的测试：
+每个都是一个文件（hello-plugin 是一个包，web-panel 是一个目录）、一份简短 README，外加一个 `make example` 会跑的测试：
 
 - [`examples/run-tests`](https://github.com/initxy/noeta/tree/main/examples/run-tests)：一个工具。在任务跑命令的地方执行测试命令，从日志里算出上次结果，改过文件后提醒模型一次。配置 `[plugins.run_tests] command = "uv run pytest -q"`。
 - [`examples/house-style`](https://github.com/initxy/noeta/tree/main/examples/house-style)：提示词和提醒。任务开始时抓一次输出风格，任务恢复后发的字节不变；加入所有代理（`add_to = ("*",)`）。
 - [`examples/hello-plugin`](https://github.com/initxy/noeta/tree/main/examples/hello-plugin)：同类插件的 Python 包版本，带 entry point。
+- [`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel)：带网页部分的插件目录。一个状态项，外加侧栏里一块会调用自己后端的面板。
 
 官方市场里的插件也可以当例子看，每个都是一个插件目录，带自己的测试：[`chat-bridge`](https://github.com/initxy/noeta-plugins/tree/main/chat-bridge) 是一个渠道，聊天里的一个话题对应一个任务，请求带共享密钥，发送者按名单放行，回复从任务里转发出去；[`chat-approvals`](https://github.com/initxy/noeta-plugins/tree/main/chat-approvals) 是和它配套的第二个渠道，任务在等的审批会发到对应话题里，聊天软件里点"允许"或"拒绝"就是回答；[`repetition_guard`](https://github.com/initxy/noeta-plugins/tree/main/repetition_guard) 是一道 `before_tool` 关卡。
 

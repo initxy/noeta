@@ -27,6 +27,9 @@ site/
 *.egg
 node_modules/
 
+# a plugin's built web part is what gets installed (examples/web-panel)
+!examples/*/web/dist/
+
 # web/ test output
 web/test-results/
 web/playwright-report/

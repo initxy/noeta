@@ -63,6 +63,14 @@ npm run dist         # 安装包：macOS dmg、Linux AppImage 和 deb（未签�
 
 桌面版总是跑自己的本地服务器；要连远端服务器，打开那台服务器提供的网页版。
 
+## 网页版和桌面版里的插件
+
+点页头的插件按钮（或输入 `/plugins`）打开插件对话框。**Installed** 列出代理用到的插件、每个带哪几部分、哪里有问题：可以只在这个会话里关掉某个插件（从下一轮起生效，走 `config` 信号的 `plugins_off`），也可以让之后新建的会话都不带它（本机的默认值），或者把它删掉。**Discover** 列出已配置的插件市场里的插件，先把来源、commit 和包含哪几部分摆出来，你确认了才安装；也可以直接填一个路径，或者钉了 commit 的仓库地址。通过 HTTP 安装和删除只在两种服务器上能用：只监听本机地址的（桌面版就是），或者启动时加了 `--allow-plugin-install` 的；别的情况对话框会说明原因。
+
+插件不写前端代码也能显示的东西（`Extension.ui`）出现在输入框附近：状态项在状态行里，小部件在输入框上方或下方，提示可以关掉。会话日志一有新内容，页面稍等片刻就重新取一次。
+
+带网页部分的插件（见[写一个插件 › 网页部分](./plugins.md#网页部分)）只在当前打开的会话用到它时才在页面里运行：页面从服务器导入它的模块，调用 `activate(ctx)`；插件被关掉、或者你离开这个会话，它加进页面的东西全部撤掉。它的组件放进页面预留的位置：`statusbar`、`sidebar`（对话旁边那一栏）、`settings`（对话框的 Settings 页）、`session.header`、`composer`、`tool:<Tool>`（工具卡片的正文）、`record:<plugin>/<kind>`（对话里的一条记录）、`codeblock:<language>`（渲染后的 markdown 里的代码块）和 `theme`。某个组件抛了异常，原地只显示插件名和错误，页面其余部分照常；网页部分加载失败、或者一直没等到另一个插件的位置，对话框里会点名是哪个插件。在桌面版里，`ctx.desktop` 就是桌面版给页面的那几个接口（`project`、`chooseProject`、`notify`）；在浏览器里它是 `null`。
+
 ## 编辑器：`noeta acp`
 
 `noeta acp` 在 stdin 和 stdout 上提供 [Agent Client Protocol](https://agentclientprotocol.com)，Zed、JetBrains 系列 IDE、Neovim 等 ACP 客户端都能把 noeta 当作自己的代理。需要 `acp` 这个 extra：

@@ -24,7 +24,9 @@ export type Item =
       childStatus?: string;
     }
   | { kind: "notice"; id: string; text: string; tone: "info" | "error" }
-  | { kind: "compaction"; id: string; summary: string };
+  | { kind: "compaction"; id: string; summary: string }
+  /** A plugin's record the page has no view of its own for: the `record:<plugin>/<kind>` slot. */
+  | { kind: "record"; id: string; seq: number; plugin: string; recordKind: string; data: unknown };
 
 export interface Todo {
   id: string;
@@ -95,6 +97,8 @@ export interface TaskState {
   /** Sub-agents the task started whose end it has not taken yet: whatever
    * started them (an Agent call, a workflow's later agents with no call). */
   running: string[];
+  /** The plugins the task runs without (its config's `plugins_off`). */
+  pluginsOff: string[];
 }
 
 export const emptyTask = (): TaskState => ({
@@ -118,6 +122,7 @@ export const emptyTask = (): TaskState => ({
   queued: [],
   taken: 0,
   running: [],
+  pluginsOff: [],
 });
 
 export type Action =
@@ -144,6 +149,8 @@ export function shownPrompt(t: string): string {
   const m = /^<command-message>[^<]*<\/command-message>\s*<command-name>([^<]*)<\/command-name>\s*(?:<command-args>([\s\S]*?)<\/command-args>)?/.exec(t.trim());
   return m ? [m[1], (m[2] ?? "").trim()].filter(Boolean).join(" ") : t;
 }
+
+const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 function updateTool(items: Item[], id: string, patch: Partial<Extract<Item, { kind: "tool" }>>): Item[] {
   return items.map((it) => (it.kind === "tool" && it.id === id ? { ...it, ...patch } : it));
@@ -230,7 +237,8 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
     case "core/notice":
       return notice(String(data.text ?? ""));
     default:
-      return st;
+      if (ev.extension === "core") return st;
+      return { ...st, items: [...st.items, { kind: "record", id: `r${seq}`, seq, plugin: ev.extension, recordKind: ev.kind, data: ev.data }] };
   }
 }
 
@@ -245,6 +253,7 @@ function event(st: TaskState, rec: Recorded): TaskState {
         cwd: String(ev.config.cwd ?? ""),
         model: String(ev.config.model ?? st.model),
         mode: String(ev.config.permission_mode ?? st.mode),
+        pluginsOff: names(ev.config.plugins_off),
       };
     case "InputTaken": {
       let items = st.items;
@@ -267,8 +276,9 @@ function event(st: TaskState, rec: Recorded): TaskState {
           items = updateChild(items, body.child_id, body.status);
           running = running.filter((id) => id !== body.child_id);
         } else if (body.kind === "external" && body.name === "config") {
-          const model = (body.data as Record<string, unknown> | null)?.model;
-          if (typeof model === "string") st = { ...st, model };
+          const config = (body.data ?? {}) as Record<string, unknown>;
+          if (typeof config.model === "string") st = { ...st, model: config.model };
+          if ("plugins_off" in config) st = { ...st, pluginsOff: names(config.plugins_off) };
         }
       }
       // Taking input ends a wait, but an approval or a question stands until

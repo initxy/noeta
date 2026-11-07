@@ -8,7 +8,7 @@ import { ApiContext } from "../state/useTask";
 import { ApiError } from "../api/client";
 import { Composer, menuQuery } from "./Composer";
 import { UsageBadge } from "./Controls";
-import { Markdown } from "./Markdown";
+import { Markdown } from "@noeta-ai/ui";
 import { PendingCards } from "./PendingCard";
 import { Sidebar } from "./Sidebar";
 import { ToolCard } from "./ToolCard";

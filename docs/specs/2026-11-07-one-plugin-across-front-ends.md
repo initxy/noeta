@@ -208,20 +208,20 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 - [x] The `plugins` task signal, folded off-set, the runner filter, sub-agent inheritance,
       pins recorded again; tests across two workers.
 - [x] TUI `/plugins` menu.
-- [ ] Web settings page "Plugins" › Installed; desktop gets it for free.
+- [x] Web settings page "Plugins" › Installed; desktop gets it for free.
 - [ ] Docs (en + zh): front ends guide, plugins guide, HTTP API reference.
 
 ### 2. UI data part
 - [x] `UiItem` types, `Extension.ui`, `GET /tasks/{id}/ui`, `AppAPI.ui`.
 - [x] Renderers: TUI status line, widgets and notices.
-- [ ] Renderers: web status bar, widgets, notices.
-- [ ] `examples/hello-plugin` shows a status item; docs.
+- [x] Renderers: web status bar, widgets, notices.
+- [x] `examples/hello-plugin` shows a status item; docs.
 
 ### 3. Web code part
-- [ ] Manifest reading (`.noeta-plugin/plugin.json`) for files, directories and packages.
+- [x] Manifest reading (`.noeta-plugin/plugin.json`) for plugin directories and packages (a single-file plugin has no place of its own for one).
 - [x] `/plugins/{name}/web/` serving, `POST /plugins/{name}/call`, `Extension.ui_call`.
-- [ ] Web: import map, loader, slot registry with mounts, timeouts, error boundaries, `ctx` v1.
-- [ ] `web/sdk`, `web/ui` packages and a build template; `examples/web-panel`; e2e test.
+- [x] Web: import map, loader, slot registry with mounts, timeouts, error boundaries, `ctx` v1.
+- [x] `web/sdk`, `web/ui` packages and a build template; `examples/web-panel`; e2e test.
 
 ### 4. Built-in UI under plugin names
 - [ ] `todos` and `compaction` first (proves `sidebar` and `statusbar`).
@@ -233,7 +233,7 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 ### 5. Marketplace
 - [x] `noeta plugin marketplace add|list|remove`, the default official marketplace, `noeta`
       entry fields.
-- [ ] Plugins page › Discover; install and remove endpoints with the loopback /
+- [x] Plugins page › Discover; install and remove endpoints with the loopback /
       `--allow-plugin-install` guard.
 
 ### 6. `noeta-plugins` repository
@@ -277,3 +277,4 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 - 2026-11-07 Kernel and host half: `plugins_off` (folded as `TaskState.plugins_off`, taken from the config only while no turn is open; `TaskRun.exts` is the filtered list, `all_exts` folds and pins), `UiItem`s, `ui`/`ui_call`, the `AppAPI` plugin methods with `LocalApp`/`RemoteApp`, the plugin routes (`noeta/host/_http_plugins.py`, listing in `noeta/host/plugins.py`), machine switches and install/remove/market wiring (`noeta/cli/plugin_switches.py`), `noeta serve --allow-plugin-install`, hello-plugin's status item, HTTP and Extension reference (en + zh). Open: a manifest beside a single-file plugin (only directories and packages read one); Claude Code plugins are listed but not switchable per task; a request's `plugins_off` may not name a built-in outside D2's list (403); with `--no-worker` `/tasks/{id}/ui` is empty and switches are 501; guides still to write.
 - 2026-11-07 Marketplace CLI (`noeta plugin marketplace`, `market_entries()`, install by name) and the move-out done: `repetition_guard`, `chat-bridge`, `chat-approvals` live in the local `noeta-plugins` repository (no remote yet), whose entries pin `git-subdir` commits of `https://github.com/initxy/noeta-plugins.git`, so installing from it works once that repository is pushed (verified end to end with a copy of the listing pointing at the local clone). `market_entries(notices)` takes an optional list for the unreadable-marketplace notices; `plugin_command.install(name, marketplace=, commit=)` refuses a commit other than the entry's pin (what `install_plugin` can pass from Discover).
 - 2026-11-07 TUI half: `/plugins` (`tui/src/noeta_tui/plugin_ui.py`: both switches, remove, Discover with a source/commit/parts confirmation; a refusing server's reason shown), status items under the footer, widgets over and under the prompt, notices, fetched 0.3 s after the log advances; `tui/screenshots/plugins.svg`; terminal guide (en + zh). The two Plan boxes that named TUI and web together were split. Open: Discover is empty until the marketplaces land (section 5).
+- 2026-11-07 Web and desktop half: `web/sdk` (`@noeta-ai/web-sdk`: ctx types, slot names, the slot registry and `<Slot>`, a build template) and `web/ui` (`@noeta-ai/ui`) as npm workspaces of `web/`, built from source by the app (`source` export condition) and to `dist/` for plugin authors; the import map is fixed text in `web/index.html` whose entries are `shared/*.js` shims re-exporting what the page puts on `globalThis` (`web/shared-modules.ts`, dev server and build alike). Friction: `default-src 'self'` blocks an inline import map, so the server's CSP now allows it by hash (`WEB_IMPORT_MAP_SHA256`, `noeta/host/http.py`; a test keeps it equal to `index.html`'s). Loader, ctx v1, UI data renderers, plugins dialog (Installed, Discover with a typed-in source too, Settings from the `settings` slot), `/plugins`, slots placed in the page; built-in parts register by name in `web/src/plugins/builtin.ts` (empty until section 4). `examples/web-panel` with its built `web/dist`; web e2e installs it from the dialog against a real `noeta serve`, desktop e2e runs it in Electron (`ctx.desktop` set). A record item is kept for every non-core plugin record the page has no view of (the `record:` slot). Open: TUI renderers and `/plugins` menu; `@noeta-ai/*` unpublished.

@@ -152,6 +152,50 @@ export interface RewindPoint {
   files: string[];
 }
 
+/** A plugin as the server lists it (`GET /plugins`; noeta/host/plugins.py). */
+export interface PluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  source: string;
+  builtin: boolean;
+  /** In the agent and on by the machine's default for new tasks. */
+  enabled: boolean;
+  /** Front ends may switch it on and off. */
+  switchable: boolean;
+  /** Why it, or its web part, cannot be used. */
+  broken: string | null;
+  parts: string[];
+  ui_api: number | null;
+  /** `{entry: "/plugins/<name>/web/<file>?v=<hash>"}`, when it has a usable web part. */
+  web: { entry: string } | null;
+}
+
+export interface PluginListing {
+  plugins: PluginInfo[];
+  /** The `ui_api` range the server serves web parts for. */
+  ui_api: [number, number];
+}
+
+/** What a task's plugins show now (`GET /tasks/{id}/ui`). */
+export type UiEntry =
+  | { plugin: string; type: "status"; key: string; text: string; tone: "normal" | "ok" | "warn" | "error" }
+  | { plugin: string; type: "widget"; key: string; markdown: string; placement: "above" | "below" }
+  | { plugin: string; type: "notice"; key: string; text: string; level: "info" | "warn" | "error" };
+
+/** A plugin a configured marketplace offers (`GET /market`). */
+export interface MarketEntry {
+  marketplace: string;
+  name: string;
+  description: string;
+  version: string;
+  source: string;
+  commit: string;
+  parts: string[];
+  ui_api: number | null;
+  installed: boolean;
+}
+
 /** A person's turn: text, or text and images (base64). */
 export type Input =
   | string
