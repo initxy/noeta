@@ -147,7 +147,9 @@ resolved only when the plugin is made; config files and task logs hold only the 
 Besides `enabled = false`, a plugin is switched off for one task by the task config key
 `plugins_off` (a list of names), and for new tasks by `~/.noeta/plugin-switches.json`
 (`{"off": [...]}`), which the front ends' plugin menus write
-([Switching a plugin off](./plugins.md#switching-a-plugin-off)). The marketplaces `noeta plugin
+([Switching a plugin off](./plugins.md#switching-a-plugin-off)). `switchable = false` in a
+plugin's table keeps it out of both: no request and no menu can switch it off (for a gate a
+server must keep). The marketplaces `noeta plugin
 add <name>` looks in are kept in `~/.noeta/marketplaces.json`, written by `noeta plugin
 marketplace` ([the noeta command](./cli.md)).
 

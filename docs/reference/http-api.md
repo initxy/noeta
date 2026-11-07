@@ -149,9 +149,9 @@ With a `task_id`, commands are listed and run in that task's own agent and direc
 | `GET /plugins` | `?agent=&cwd=` (`agent` default `main`) | `{"plugins": [PluginInfo], "ui_api": [min, max]}` |
 | `PUT /plugins/{name}` | `{enabled}` | `{"ok": true}`: the plugin on or off for tasks created from now on |
 | `GET /tasks/{id}/ui` | | `{"items": [UiEntry]}`: what the task's plugins show now |
-| `POST /plugins/{name}/call` | `{task_id, name, args?}` | `{"result": …}`, the plugin's `ui_call` answer; `404` when the task does not run the plugin or it has no such call |
+| `POST /plugins/{name}/call` | `{task_id, name, args?}` | `{"result": …}`, the plugin's `ui_call` answer; `404` when the task does not run the plugin or it raises `UnknownUiCall`; `500` when the plugin fails |
 | `GET /plugins/{name}/web/{path}` | | a file of the plugin's web part, **without a token** |
-| `GET /market` | | `{"entries": [MarketEntry]}`: the configured marketplaces' plugins |
+| `GET /market` | | `{"entries": [MarketEntry], "notices": [str]}`: the configured marketplaces' plugins, and why a marketplace could not be read (its last listing is shown then) |
 | `POST /plugins/install` | `{source, marketplace?, commit?}` | `201` with the installed plugin's `PluginInfo` |
 | `DELETE /plugins/{name}` | | `{"ok": true}` |
 
@@ -177,8 +177,8 @@ With a `task_id`, commands are listed and run in that task's own agent and direc
   ui_api, installed}`.
 - Installing and removing run what `noeta plugin add` and `noeta plugin remove` run, then
   reload the plugins as `/reload-plugins` does. They are allowed only on a server listening on
-  a loopback address (the desktop app's) or started with `--allow-plugin-install`; elsewhere
-  they are `403`. A plugin with options to set (`userConfig`) is refused over HTTP (`400`):
+  a loopback address (the desktop app's) with no `--allow-host` or `--allow-origin` (a proxy
+  in front), or started with `--allow-plugin-install`; elsewhere they are `403`. A plugin with options to set (`userConfig`) is refused over HTTP (`400`):
   install it from a terminal.
 
 ## The event stream: `GET /tasks/{id}/watch`

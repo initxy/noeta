@@ -139,7 +139,8 @@ token = "{env:CHAT_TOKEN}"
 
 除了 `enabled = false`，还能用任务配置项 `plugins_off`（一串插件名）只在一个任务里关掉插件，用
 `~/.noeta/plugin-switches.json`（`{"off": [...]}`）让以后的新任务都不带它；这个文件由前端的插件菜单来写
-（见[关掉插件](./plugins.md#switching-a-plugin-off)）。`noeta plugin add <名字>` 去哪些插件市场里找，
+（见[关掉插件](./plugins.md#switching-a-plugin-off)）。插件表里写 `switchable = false`，这两种都关不掉它：
+请求和菜单都动不了，适合服务器必须留着的关卡类插件。`noeta plugin add <名字>` 去哪些插件市场里找，
 记在 `~/.noeta/marketplaces.json`，由 `noeta plugin marketplace` 来改（见 [noeta 命令](./cli.md)）。
 
 任务会记下它用了哪些插件（名字、来源、版本或文件哈希、参数的哈希）。缺了其中某个插件的 worker

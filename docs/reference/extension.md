@@ -89,7 +89,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | Method | Returns | Called |
 |---|---|---|
 | `async ui(self, view: TaskView)` | `Sequence[UiItem]` | Whenever a front end asks what the task shows (`GET /tasks/{id}/ui`, `AppAPI.ui`), again each time the watched log advances: computed from the folded state like `reminders`, cheap, recording nothing. |
-| `async ui_call(self, ctx: CommandContext, name: str, args)` | JSON | The plugin's own front-end code calls it (`POST /plugins/{name}/call`, `AppAPI.plugin_call`) with `ctx.task_id` set. What it changes for good goes into the task's log (a signal, a record), never into the plugin's memory. Raise `LookupError` for a `name` it does not answer (the default). |
+| `async ui_call(self, ctx: CommandContext, name: str, args)` | JSON | The plugin's own front-end code calls it (`POST /plugins/{name}/call`, `AppAPI.plugin_call`) with `ctx.task_id` set. What it changes for good goes into the task's log (a signal, a record), never into the plugin's memory. Raise `UnknownUiCall` (a `LookupError`, from `noeta`) for a `name` it does not answer, or call `super().ui_call`; any other error is the plugin's own and answers `500`. |
 
 A plugin named in a task's `plugins_off` config (the `config` signal) keeps folding its records
 (`initial_state`, `reduce`, `continue_state`: its state, the task's snapshots and fold version
@@ -169,7 +169,7 @@ Records made during a hook are appended by the runner right after the hook retur
 | `compacted(event: Compacted)` | `None` | Record a compaction (the compaction plugin's one core event). |
 | `async residents(*, lead=False, keeps_tail=None, kept=())` | `list[Message]` | Every plugin's `resident` (or `lead_resident`) messages; a failing plugin is logged and skipped. |
 | `notify(text, *, kind=None, data=None)` | `None` | Tell the person; front ends show it, the model never sees it. |
-| `set_timer(name, at, text="")` | `None` | Wake the task at `at` (epoch seconds) once idle, with `text` as the next message; same name replaces. Durable: any worker fires it. |
+| `set_timer(name, at, text="")` | `None` | Wake the task at `at` (epoch seconds) once idle, with `text` as the next message; same name replaces. Durable: any worker fires it. A timer named `<plugin>.<rest>` belongs to that plugin: while the plugin is switched off for the task it neither fires nor wakes it, and fires once the plugin is back on. |
 | `clear_timer(name)` | `None` | Take a timer back. |
 | `erase_messages(seqs)` | `None` | Take the person's messages at those log seqs (and their `inline` expansions and `memory` recalls) out of the conversation. |
 

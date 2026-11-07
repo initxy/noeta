@@ -18,20 +18,26 @@ install from marketplaces, the official one configured by default.
 - **A plugin can be switched off for one task.** The task config key `plugins_off` (set when
   the task is created or with the `config` signal) names plugins the task runs without from
   its next turn on, on whichever worker runs it: they keep folding their records but offer no
-  tools, context, reminders, gates, commands or UI. Sub-agents start with their parent's.
+  tools, context, reminders, gates, commands or UI, and their timers (`<plugin>.<rest>`) wait
+  until they are back on. Sub-agents start with what their parent's turn runs with; a fork, a
+  rewind or a conversation continued as a new task keeps its source's switches.
   `~/.noeta/plugin-switches.json` (`{"off": [...]}`, written by `PUT /plugins/{name}` and the
   front ends' plugin menus) is the machine's default for new tasks. A request may not switch
-  off a built-in plugin a task is built on (the permission gate, the file and shell tools).
+  off a built-in plugin a task is built on (the permission gate, the file and shell tools), nor
+  one whose `config.toml` table says `switchable = false`.
 - **Plugins show UI in every front end.** `Extension.ui(view)` returns `StatusItem`, `Widget`
   and `Notice` items (exported from `noeta`), served by `GET /tasks/{id}/ui` and `AppAPI.ui`;
   `Extension.ui_call` answers a plugin's own front-end code (`POST /plugins/{name}/call`,
-  `AppAPI.plugin_call`). `examples/hello-plugin` shows a status item.
+  `AppAPI.plugin_call`); a call it does not answer raises `UnknownUiCall` (`404`), any other
+  error is `500`. `examples/hello-plugin` shows a status item.
 - **Plugins are listed and managed over the API.** `GET /plugins` (`AppAPI.plugins`) lists
   each plugin's source, version, parts, switch and why it is broken; a plugin's
   `.noeta-plugin/plugin.json` manifest may name a built web module (`ui_api`, `web`), served
   at `/plugins/{name}/web/` without a token. `POST /plugins/install`, `DELETE /plugins/{name}`
   and `GET /market` install, remove and discover plugins; installing and removing over HTTP
-  are allowed only on a loopback server or with `noeta serve --allow-plugin-install`.
+  are allowed only on a loopback server with no `--allow-host` / `--allow-origin` (a proxy in
+  front) or with `noeta serve --allow-plugin-install`. `GET /market` also says why a
+  marketplace could not be read, and lists its last reading then.
 - **Plugins' web parts in the web and desktop apps.** A web part is a built ES module
   exporting `activate(ctx)` that adds React components to the page's slots (`statusbar`,
   `sidebar`, `settings`, `session.header`, `composer`, `tool:<Tool>`, `request:<Tool>`,
@@ -41,7 +47,8 @@ install from marketplaces, the official one configured by default.
   plugins dialog and leaves the page working. `web/sdk` (`@noeta-ai/web-sdk`: `ctx` types,
   slot names, a build template) and `web/ui` (`@noeta-ai/ui`) are the packages a part builds
   against (not yet published to npm); `examples/web-panel` is a plugin with one. In the desktop
-  app `ctx.desktop` is its bridge.
+  app `ctx.desktop` is its bridge. `activate` may be async; what a part subscribed to through
+  `ctx` ends with it, and a rebuilt part (a new entry hash) is loaded again.
 - **The web and desktop apps' plugins dialog** (the header button or `/plugins`): Installed
   switches a plugin for this session or for new ones and removes it; Discover installs from the
   marketplaces, or from a typed-in path or pinned repository URL, after showing its source,
@@ -57,7 +64,9 @@ install from marketplaces, the official one configured by default.
   configured until removed. `noeta plugin add <name>` installs a plugin a configured
   marketplace lists; `--marketplace` also takes a configured marketplace's name. An entry may
   carry a `noeta` object (`ui_api`, `parts`). `noeta.cli.plugin_command.market_entries()` lists
-  every entry for front ends.
+  every entry for front ends. A broken `marketplaces.json` is a notice (the official marketplace
+  is used), install records are written atomically under a lock, and no other marketplace may
+  take the name `noeta-plugins`.
 - A `config.toml` `[plugins.<name>]` table naming a plugin not installed here is a notice at the
   start.
 

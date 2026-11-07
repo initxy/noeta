@@ -134,9 +134,9 @@ worker 不会自己去取。只要通过这里给它发消息、回答、取消�
 | `GET /plugins` | `?agent=&cwd=`（`agent` 默认 `main`） | `{"plugins": [PluginInfo], "ui_api": [最小, 最大]}` |
 | `PUT /plugins/{name}` | `{enabled}` | `{"ok": true}`：这个插件在之后新建的任务里开还是关 |
 | `GET /tasks/{id}/ui` | | `{"items": [UiEntry]}`：任务的插件此刻要显示的东西 |
-| `POST /plugins/{name}/call` | `{task_id, name, args?}` | `{"result": …}`，即插件 `ui_call` 的回答；任务没在用这个插件、或插件不认这个调用时返回 `404` |
+| `POST /plugins/{name}/call` | `{task_id, name, args?}` | `{"result": …}`，即插件 `ui_call` 的回答；任务没在用这个插件、或插件抛 `UnknownUiCall` 时返回 `404`；插件自己出错返回 `500` |
 | `GET /plugins/{name}/web/{path}` | | 插件网页部分的文件，**不要 token** |
-| `GET /market` | | `{"entries": [MarketEntry]}`：已配置的插件市场里有哪些插件 |
+| `GET /market` | | `{"entries": [MarketEntry], "notices": [str]}`：已配置的插件市场里有哪些插件；某个市场读不到时，`notices` 说明原因，列表用它上次读到的 |
 | `POST /plugins/install` | `{source, marketplace?, commit?}` | `201`，返回装好的插件的 `PluginInfo` |
 | `DELETE /plugins/{name}` | | `{"ok": true}` |
 
@@ -158,8 +158,8 @@ worker 不会自己去取。只要通过这里给它发消息、回答、取消�
 - `MarketEntry` 是 `{marketplace, name, description, version, source, commit, parts, ui_api,
   installed}`。
 - 安装和删除做的就是 `noeta plugin add` 和 `noeta plugin remove` 做的事，做完像 `/reload-plugins`
-  一样重新加载插件。只有服务端监听在回环地址上（桌面端就是这样）、或启动时带了
-  `--allow-plugin-install` 才允许，否则返回 `403`。需要填选项（`userConfig`）的插件不能通过 HTTP
+  一样重新加载插件。只有服务端监听在回环地址上（桌面端就是这样）且没带 `--allow-host`、`--allow-origin`（带了说明前面有代理），
+  或启动时带了 `--allow-plugin-install` 才允许，否则返回 `403`。需要填选项（`userConfig`）的插件不能通过 HTTP
   装（`400`），请在终端里装。
 
 ## 事件流：`GET /tasks/{id}/watch`

@@ -85,7 +85,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | 方法 | 返回 | 什么时候调用 |
 |---|---|---|
 | `async ui(self, view: TaskView)` | `Sequence[UiItem]` | 前端来问任务此刻要显示什么时（`GET /tasks/{id}/ui`、`AppAPI.ui`），跟踪的日志每往前走一次就再问一次。和 `reminders` 一样从折叠后的状态算出来，要便宜，不能写记录。 |
-| `async ui_call(self, ctx: CommandContext, name: str, args)` | JSON | 插件自己的前端代码来调（`POST /plugins/{name}/call`、`AppAPI.plugin_call`），`ctx.task_id` 一定有值。要长期留下的改动写进任务日志（发信号或写记录），不能只存在插件自己的内存里。不认识的 `name` 抛 `LookupError`（默认就是这样）。 |
+| `async ui_call(self, ctx: CommandContext, name: str, args)` | JSON | 插件自己的前端代码来调（`POST /plugins/{name}/call`、`AppAPI.plugin_call`），`ctx.task_id` 一定有值。要长期留下的改动写进任务日志（发信号或写记录），不能只存在插件自己的内存里。不认识的 `name` 抛 `UnknownUiCall`（是 `LookupError` 的子类，从 `noeta` 导入），或者调 `super().ui_call`；抛别的异常算插件自己出错，返回 `500`。 |
 
 任务配置的 `plugins_off`（通过 `config` 信号改）里点了名的插件，照样折叠自己的记录（`initial_state`、
 `reduce`、`continue_state` 照常调用，它的状态、任务的快照和折叠版本都不变），但从下一轮起，这个任务不
@@ -163,7 +163,7 @@ from noeta import (Extension, TaskView, Tool, ToolContext, ToolOutput, ToolChang
 | `compacted(event: Compacted)` | `None` | 记下一次压缩（压缩插件唯一的内核事件）。 |
 | `async residents(*, lead=False, keeps_tail=None, kept=())` | `list[Message]` | 所有插件的 `resident`（或 `lead_resident`）消息；某个插件出错就写日志并跳过。 |
 | `notify(text, *, kind=None, data=None)` | `None` | 告诉用户一件事；前端显示，模型看不到。 |
-| `set_timer(name, at, text="")` | `None` | 在 `at`（epoch 秒）之后、任务闲着时叫醒它，`text` 作为下一条消息；同名的会替换。持久：哪台工人都能触发。 |
+| `set_timer(name, at, text="")` | `None` | 在 `at`（epoch 秒）之后、任务闲着时叫醒它，`text` 作为下一条消息；同名的会替换。持久：哪台工人都能触发。名字写成 `<插件名>.<其余>` 的定时器归那个插件：插件对这个任务关着时，它不触发也不叫醒任务，插件重新打开后再触发。 |
 | `clear_timer(name)` | `None` | 撤回一个计时器。 |
 | `erase_messages(seqs)` | `None` | 把这些 seq 上用户的消息（以及它们的 `inline` 展开和 `memory` 召回）从对话里拿掉。 |
 
