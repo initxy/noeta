@@ -104,7 +104,7 @@ app that server serves.
 The plugins button in the header (or `/plugins`) opens the plugins dialog. **Installed** lists
 the agent's plugins with their parts and anything wrong with them: switch one off for this
 session (from its next turn on; the `config` signal's `plugins_off`) or for new sessions (the
-machine's default), or remove one. **Discover** lists what the configured marketplaces offer
+machine's default), or remove one ([which plugins can be switched](../reference/plugins.md#switching-a-plugin-off)). **Discover** lists what the configured marketplaces offer
 and installs one only after showing its source, commit and parts; a path or a pinned git URL
 can be typed in too. Installing and removing over HTTP work on a loopback server (the desktop
 app's) or one started with `--allow-plugin-install`; anywhere else the dialog says so.

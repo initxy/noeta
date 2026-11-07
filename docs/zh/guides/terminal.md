@@ -155,7 +155,7 @@ noeta
 - **新任务里关掉（或打开）**：改的是这台机器的默认值（`~/.noeta/plugin-switches.json`；连着服务器时改的是服务器上的）。已经开始的任务还按自己的开关来。
 - **卸载**：确认之后删掉。
 
-只有任务离了它也能跑的插件才有这两个开关：所有自己装的插件，加上内置的 `web`、`workflow`、`schedule`、`todos`、`findings`、`title`、`quiet_nudge`、`memory`、`mcp`、`checkpoints`、`skills`、`ask_user`。想彻底关掉某个插件，还是在 `config.toml` 里写 `[plugins.<name>] enabled = false`（见[写一个插件](./plugins.md)）。
+只有任务离了它也能跑的插件才有这两个开关。具体是哪些内置插件，以及怎么在 `config.toml` 里彻底关掉一个插件，见[内置插件](../reference/plugins.md#switching-a-plugin-off)。
 
 `Discover plugins…`（或者直接 `/plugins discover`）列出已配置的插件市场里的插件。选中一个，会先给你看它从哪来、钉在哪个提交、包含哪些部分，确认了才去下载；安装过程不会执行插件里的任何代码，任务从下一轮起加载它。连着服务器时，只有允许通过 HTTP 装卸插件的服务器（监听本机回环地址，或带了 `--allow-plugin-install`）才能装和卸，否则界面会把服务器给的理由显示出来。
 

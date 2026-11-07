@@ -25,9 +25,8 @@
    `max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、
    `permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`、`bash_mode`、`plugins_off`。`max_budget_usd`
    必须是大于 0 的数（布尔值、字符串都不行），这里和 `config` 信号里都一样，不合规就返回 `400`。
-   `plugins_off` 是一串插件名，不能包含任务离不开的内置插件（内置插件里只能关 `web`、`workflow`、
-   `schedule`、`todos`、`findings`、`title`、`quiet_nudge`、`memory`、`mcp`、`checkpoints`、
-   `skills`、`ask_user`），否则返回 `403`。服务端
+   `plugins_off` 是一串插件名，不能包含任务离不开的内置插件（能关哪些见
+   [关掉插件](./plugins.md#switching-a-plugin-off)），否则返回 `403`。服务端
    启动时带的 `--effort`、`--permission-mode` 垫在请求的配置下面，请求自己给了的以请求为准。只能发前端会发的那几种信号：
    `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。除非服务端带了
    `--allow-bypass-permissions`，否则不能让任务以 `bypassPermissions` 启动或切过去。`cwd` 必须在
@@ -143,7 +142,7 @@ worker 不会自己去取。只要通过这里给它发消息、回答、取消�
 
 - `PluginInfo` 是 `{name, version, description, source, builtin, enabled, switchable, broken,
   parts, ui_api, web}`。`enabled`：在这个智能体里，并且新任务默认开着；`switchable`：前端可以给它
-  开关（装上的插件，或上面 `plugins_off` 那句列出的内置插件）；`broken`：它本身或它的网页部分为什么
+  开关（装上的插件，或任务离了也能跑的内置插件）；`broken`：它本身或它的网页部分为什么
   用不了，没问题时为 `null`；`parts` 取自 `backend`、`ui`、`web`、`skills`、`agents`、`commands`、
   `hooks`、`mcp`；`web` 是 `{"entry": "/plugins/<name>/web/<file>?v=<hash>"}` 或 `null`。列表先列
   智能体自己的插件，再列装了但它没用上的、加载失败的插件文件，最后是 Claude Code 插件。

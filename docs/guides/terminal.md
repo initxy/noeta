@@ -212,10 +212,8 @@ switch for this task and for new tasks, its version and its parts (`backend`, `u
   on a server, the server's). Tasks already started keep their own switch.
 - **Remove**: uninstall it, after a confirmation.
 
-Only plugins a task can run without have the two switches: every installed one and the
-built-ins `web`, `workflow`, `schedule`, `todos`, `findings`, `title`, `quiet_nudge`, `memory`,
-`mcp`, `checkpoints`, `skills` and `ask_user`. `[plugins.<name>] enabled = false` in
-`config.toml` still turns one off for good ([plugins](./plugins.md)).
+Only plugins a task can run without have the two switches; which built-ins those are, and the
+hard switch in `config.toml`, are in [Built-in plugins](../reference/plugins.md#switching-a-plugin-off).
 
 `Discover plugins…` (or `/plugins discover`) lists the plugins of the configured marketplaces.
 Picking one shows its source, the commit it is pinned to and its parts before anything is

@@ -24,6 +24,14 @@ A plugin comes in one of three shapes. All three end up in the same registry
 Start with a file. Turn it into a package when it needs dependencies of its own or is shared by
 many machines.
 
+Whatever its shape, a plugin is one name with one switch, and may carry up to these parts: its
+`Extension` (the backend: tools, prompt text, gates, state), UI data every front end shows
+(`Extension.ui`: status items, widgets, notices), and a [web part](#a-web-part) for the web
+and desktop apps; a Claude Code plugin's skills, agents, commands, hooks and MCP servers are
+parts too. Code that runs inside the terminal UI is not a part yet: there a plugin shows its
+UI data. Switching the plugin off takes all of its parts away together
+([Switching a plugin off](../reference/plugins.md#switching-a-plugin-off)).
+
 ## A plugin file, in two steps
 
 1. Write `~/.noeta/plugins/<name>.py` defining an `Extension` subclass with a `name`. Set
@@ -116,7 +124,9 @@ plugins:
 
 Argument tables of one plugin merge key by key across the levels (`build_agents`,
 `default_agents`, `from_settings`, `config.toml`). The full list of keys is in
-[Configuration keys](../reference/config.md).
+[Configuration keys](../reference/config.md). `enabled = false` removes a plugin for good;
+front ends also switch one off for a single task or for new tasks
+([Switching a plugin off](../reference/plugins.md#switching-a-plugin-off)).
 
 A secret is written as a reference, `"{env:NAME}"` or `"{keyring:service/user}"`, resolved only
 when the plugin is made (`noeta/agents/agent_files.py` `resolve_secrets`). A variable named this
@@ -161,6 +171,8 @@ need.
 | offer a tool only when the model asks for it | `flags = ToolFlags(deferred=True)` (loaded through `ToolSearch`) | `noeta/plugins/tool_search` |
 | keep text across a compaction, or take part in one | `resident` / `lead_resident`; `before_compact`; `on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | show a result to front ends as data | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/tool.py`, `noeta/core/types.py` |
+| show a status item, a widget or a notice in every front end | `ui(view)` → `StatusItem` / `Widget` / `Notice`, computed from the folded state | `noeta/core/extension.py` |
+| put your own components into the web and desktop apps | a [web part](#a-web-part), calling back into your plugin through `ui_call` | `web/sdk` |
 | go on after a reply with no text and no tool call (the turn ends otherwise) | `on_empty_reply(view, response)` → the message to go on with, or `None` (as `noeta/plugins/empty_reply.py` does) | `noeta/core/extension.py` |
 | block a prompt, or keep a turn going (as UserPromptSubmit and Stop hooks do) | `reminders` + `view.erase_messages` + raise `TurnFailed`; `on_event` on `ModelReplied` posting `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
@@ -494,13 +506,17 @@ shows another task's conversation, such as a sub-agent's. The built-in plugins' 
 (`web/src/plugins/<name>/` in noeta's repository) are written this way. Build it as one ES module
 with `react`, `react-dom`, `react/jsx-runtime`, `@noeta-ai/web-sdk` and `@noeta-ai/ui` left
 external (the page provides its own; `web/sdk/template` has the build script) and commit the
-built file: installing runs no build. The slots and what the page does with a web part are in
-[Web, desktop and editors](./front-ends.md#plugins-in-the-web-and-desktop-apps).
+built file: installing runs no build. Every `ctx` member, the slots and their mounts are in
+[`web/sdk`'s README](https://github.com/initxy/noeta/blob/main/web/sdk/README.md);
+[`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) is a
+complete plugin with one. Where the page puts each slot and what it does with a web part are
+in [Web, desktop and editors](./front-ends.md#plugins-in-the-web-and-desktop-apps).
 
 ## Replacing a built-in plugin
 
-Switch the built-in off (`[plugins.<name>] enabled = false`) and add yours. A plugin that
-replaces one front ends read keeps its name and records: `permissions` (`mode`, `modes`: the
+Switch the built-in off (`[plugins.<name>] enabled = false`) and add yours. In the web app a
+built-in's view is its web part and goes with it; a replacement brings its own. A plugin that
+replaces one the terminal UI and editors (ACP) read keeps its name and records: `permissions` (`mode`, `modes`: the
 mode shown and cycled) and `checkpoints` (`snapshot`: rewind). `plan_mode` writes its switches
 as `permissions` `mode` / `plan_exit` records and folds them back (`folds`), so plan mode works
 with the permissions plugin off (it then asks about every call that is neither read-only nor

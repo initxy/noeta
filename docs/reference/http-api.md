@@ -31,9 +31,8 @@ app and the desktop app all use it.
    `output_schema`, `timezone`, `interactive`, `permission_prompt_tool`, `ultracode`,
    `max_budget_usd`, `continued_as`, `bash_mode`, `plugins_off`. `max_budget_usd` must be a number above 0 (not a bool or
    a string), here and in a `config` signal; anything else is `400`. `plugins_off` is a list of
-   plugin names; it may not name a built-in plugin a task is built on (only `web`, `workflow`,
-   `schedule`, `todos`, `findings`, `title`, `quiet_nudge`, `memory`, `mcp`, `checkpoints`,
-   `skills`, `ask_user` among them): `403`. Keys the server runs
+   plugin names; it may not name a built-in plugin a task is built on (the ones it may name:
+   [Switching a plugin off](./plugins.md#switching-a-plugin-off)): `403`. Keys the server runs
    with (`--effort`, `--permission-mode`) are laid under the request's, which win. It may post only the signals front ends send: `permission_mode`, `config`,
    `resumed`, `restore_files`, `rename`, `archive`. It may not start or switch a task into
    `bypassPermissions` unless the server runs with `--allow-bypass-permissions`. A `cwd` must
@@ -158,8 +157,7 @@ With a `task_id`, commands are listed and run in that task's own agent and direc
 
 - A `PluginInfo` is `{name, version, description, source, builtin, enabled, switchable,
   broken, parts, ui_api, web}`. `enabled`: in the agent and on for new tasks; `switchable`:
-  front ends may switch it (an installed plugin, or one of the built-ins listed under
-  `plugins_off` above); `broken`: why it, or its web part, cannot be used (`null` when
+  front ends may switch it (an installed plugin, or a built-in a task may run without); `broken`: why it, or its web part, cannot be used (`null` when
   nothing is wrong); `parts` among `backend`, `ui`, `web`, `skills`, `agents`, `commands`,
   `hooks`, `mcp`; `web`: `{"entry": "/plugins/<name>/web/<file>?v=<hash>"}` or `null`. The
   listing names the agent's plugins first, then installed ones it does not run, plugin files

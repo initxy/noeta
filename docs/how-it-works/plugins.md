@@ -167,6 +167,25 @@ Claude Code does. Monitors, `bin/`, LSP servers, themes and output styles are no
 commit. Installing runs nothing from the plugin: no install scripts, no git hooks, no dependency
 installs.
 
+## Front-end parts
+
+A plugin also carries what front ends show of it, so one switch takes its tools and its UI
+away together ([ADR-033](https://github.com/initxy/noeta/blob/main/docs/adr/033-one-plugin-carries-its-front-end-parts-and-is-switched-per-task.md)):
+
+- **UI data** (`Extension.ui`) is computed from the folded state, like reminders, and every
+  front end draws it, the terminal UI included, without running any plugin code.
+- **A web part** is a built module the web and desktop apps import from the server at run
+  time. The page hands it React and noeta's web SDK through an import map, so every plugin
+  and the page share one copy of each, and the plugin names no host dependency of its own.
+- **The built-ins' views are web parts too** (`web/src/plugins/<name>/`), through the same
+  slots, so the slot API is proven the way the built-in backends prove `Extension`.
+- **A task's switch lives in its log**: the `plugins_off` config key. A plugin named there is
+  asked nothing from the next turn on but still folds its records, so the task's state and
+  snapshots do not depend on it and switching back loses nothing.
+
+Rejected: a plugin system per front end, plugins bundling their own React, iframes, and a
+hosted marketplace (a marketplace is a static file whose entries pin commits).
+
 ## Plugin settings
 
 What a host says about one plugin, by name: its arguments, a ready `Extension`, or on/off. There
