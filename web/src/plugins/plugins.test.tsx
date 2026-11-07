@@ -181,6 +181,15 @@ describe("ctx", () => {
     events.emit(rec(3, "panel", "note", { text: "c" }));
     expect(seen).toEqual([1, 2]);
     expect(ctx.records("note")).toEqual([{ text: "a" }, { text: "c" }]);
+    // The conversation the task continues: its records kept, not handed on.
+    events.keep(rec(1, "panel", "older", { text: "z" }));
+    expect(ctx.allRecords()).toEqual([
+      { kind: "note", data: { text: "a" } },
+      { kind: "note", data: { text: "c" } },
+      { kind: "older", data: { text: "z" } },
+    ]);
+    expect(seen).toEqual([1, 2]);
+    expect(ctx.Transcript).toBeTypeOf("function");
 
     const modes: string[] = [];
     ctx.theme.onChange((m) => modes.push(m));

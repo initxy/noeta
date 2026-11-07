@@ -24,7 +24,7 @@ export interface SlotProblem {
 }
 
 const FIXED = new Set(["statusbar", "sidebar", "settings", "session.header", "composer", "theme"]);
-const FAMILIES = ["tool:", "record:", "codeblock:"];
+const FAMILIES = ["tool:", "request:", "record:", "codeblock:"];
 
 /** Whether `slot` is one of the page's own (always there). */
 export function isHostSlot(slot: string): boolean {
@@ -217,8 +217,9 @@ export function Slot({ name, props, children }: { name: string; props?: object; 
   const added = all.filter((c) => c.mount === "list" || (c.mount === "keyed" && keyed.get(c.key ?? c.plugin) === c));
   let out: ReactNode = (
     <>
+      {added.filter((c) => c.order < 0).map((c) => shown(c))}
       {single ? shown(single, { children }, children) : children}
-      {added.map((c) => shown(c))}
+      {added.filter((c) => c.order >= 0).map((c) => shown(c))}
     </>
   );
   for (const c of all.filter((c) => c.mount === "wrap").reverse()) {

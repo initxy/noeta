@@ -25,7 +25,7 @@ on the offline scripted provider, so they are rewritten on every run.
 | Sessions sidebar: list, new, resume, grouped by project directory, status (running / needs you / waiting / ended) | done |
 | Rename a session (title button, `/rename`) | done |
 | Transcript: markdown, code highlighting, streamed text, collapsible thinking | done |
-| Tool cards: Bash command and output (long output folded), Read/Grep/Glob compact, Edit/Write/MultiEdit as diffs, WebFetch, MCP tools, sub-agents nested | done |
+| Tool cards: Bash command and output (long output folded), Read and the task tools compact, Edit/Write/MultiEdit as diffs, WebFetch, MCP tools, sub-agents nested (each built-in plugin's view is its web part, `web/src/plugins/<name>/`) | done |
 | Compaction markers, retries, failures, interrupts | done |
 | Approval cards: yes / always allow (the rule) / switch mode / no with feedback; sub-agents' too; Edit/Write cards show the diff | done |
 | Keyboard: digits / arrows / Enter / Esc on approval cards, Shift+Tab cycles the mode, Enter runs the highlighted slash command | done |

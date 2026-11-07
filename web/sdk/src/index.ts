@@ -5,6 +5,7 @@ import type { ComponentType, ReactNode } from "react";
 
 export { Slot, SlotRegistry, SlotsContext, useSlotCount, isHostSlot } from "./slots";
 export type { Contribution, SlotProblem } from "./slots";
+export { useAllRecords, useRecords } from "./hooks";
 
 /** The `ui_api` this SDK describes: a plugin's manifest names it. */
 export const UI_API = 1;
@@ -24,13 +25,15 @@ export const SHARED_MODULES = [
 
 /** The page's slots with a fixed name. */
 export const SLOTS = {
-  /** The line under the composer: short items. */
+  /** The line under the composer: the model picker, then short items
+   * (`StatusbarSlotProps`); a negative `order` puts one before the picker. */
   statusbar: "statusbar",
   /** The column beside the conversation: panels. */
   sidebar: "sidebar",
   /** The plugins dialog's Settings tab: sections. */
   settings: "settings",
-  /** The session's header, after its title. */
+  /** The session's header: its own content is the session's title
+   * (`SessionHeaderSlotProps`); added ones come after it. */
   sessionHeader: "session.header",
   /** The composer; `wrap` it, add beside it, or (`single`) replace it. */
   composer: "composer",
@@ -42,13 +45,18 @@ export const SLOTS = {
 export const toolSlot = (tool: string): string => `tool:${tool}`;
 /** Where a plugin's record of `kind` is in the conversation (`record:my-plugin/note`). */
 export const recordSlot = (plugin: string, kind: string): string => `record:${plugin}/${kind}`;
+/** What an approval or question card about a call of `tool` shows above its
+ * choices (`request:Bash`); a `single` contribution replaces the card's own
+ * lead (who asks). */
+export const requestSlot = (tool: string): string => `request:${tool}`;
 /** A fenced code block of `language` in rendered markdown (`codeblock:mermaid`). */
 export const codeblockSlot = (language: string): string => `codeblock:${language}`;
 
 /** How a slot shows its contributions: `single` replaces the slot's own
  * content (the highest `order` wins, then the latest), `list` adds beside
- * it, `keyed` adds one per `key` (a later one replaces an earlier), `wrap`
- * wraps the whole (lowest `order` outermost). */
+ * it (after it; before it with a negative `order`), `keyed` adds one per
+ * `key` (a later one replaces an earlier) as `list` does, `wrap` wraps the
+ * whole (lowest `order` outermost). */
 export type Mount = "single" | "list" | "keyed" | "wrap";
 
 export interface SlotOptions {
@@ -66,11 +74,43 @@ export interface ToolCall {
   status: "pending" | "running" | "waiting" | "done" | "error";
   result?: string;
   meta?: Record<string, unknown>;
+  /** What the running call streamed last (a command's output so far). */
+  progress?: string;
+  /** The tasks the call started (sub-agents), each with how it ended once it has. */
+  children?: { id: string; status?: string }[];
 }
 
 /** The props each slot passes; `wrap` contributions also get `children`. */
 export interface ToolSlotProps {
   call: ToolCall;
+  /** Whether the person opened the card (clicked its head). A card whose
+   * contributions show nothing while it is closed is drawn as one line. */
+  open: boolean;
+}
+/** An approval or a question the task (or one of its sub-agents) waits on. */
+export interface PendingRequest {
+  kind: "approval" | "question";
+  /** The task that asks: the open one or one of its sub-agents. */
+  taskId: string;
+  tool: string;
+  input: Record<string, unknown>;
+  title: string;
+  prompt: string;
+  /** The agent that asks (`main`: the open task's own). */
+  agent: string;
+}
+export interface RequestSlotProps {
+  request: PendingRequest;
+}
+/** The `statusbar` slot's props: how full the task's context is (the last
+ * model call's tokens, and the model's window, 0 when not known). */
+export interface StatusbarSlotProps {
+  context: { tokens: number; window: number };
+}
+/** The `session.header` slot's props: the session's title as the server
+ * lists it (what the slot's own content shows). */
+export interface SessionHeaderSlotProps {
+  title: string;
 }
 export interface RecordSlotProps {
   record: { seq: number; plugin: string; kind: string; data: unknown };
@@ -130,16 +170,28 @@ export interface DesktopBridge {
   notify(n: { title: string; body: string; taskId?: string }): void;
 }
 
+/** One of the plugin's records. */
+export interface PluginRecord {
+  kind: string;
+  data: unknown;
+}
+
 /** What `activate` is given, for the task the page shows. */
 export interface PluginContext {
   client: TaskClient;
-  /** The data of this plugin's records of `kind` in the task's log, oldest first. */
+  /** The data of this plugin's records of `kind` in the task's log (after
+   * those of the conversation it continues, if any), oldest first. */
   records(kind: string): unknown[];
+  /** This plugin's records of every kind, in the same order. */
+  allRecords(): PluginRecord[];
   /** This plugin's backend `ui_call(name, args)` for the task. */
   call<T = unknown>(name: string, args?: unknown): Promise<T>;
   slots: Slots;
   theme: Theme;
   desktop: DesktopBridge | null;
+  /** The page's view of another task's conversation, followed live (a
+   * sub-agent's: `<ctx.Transcript taskId={child.id} />`). */
+  Transcript: ComponentType<{ taskId: string }>;
 }
 
 /** A web part's module. A returned function is called when the plugin is

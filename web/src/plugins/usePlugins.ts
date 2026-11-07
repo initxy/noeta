@@ -35,6 +35,23 @@ export function webParts(plugins: PluginInfo[], off: string[], importEntry: (url
   return parts;
 }
 
+/** Every built-in web part's plugin, as if listed (no listing to go by). */
+function builtinsUnlisted(): PluginInfo[] {
+  return Object.keys(BUILTIN_WEB_PARTS).map((name) => ({
+    name,
+    version: "",
+    description: "",
+    source: "",
+    builtin: true,
+    enabled: true,
+    switchable: false,
+    broken: null,
+    parts: ["backend", "web"],
+    ui_api: null,
+    web: null,
+  }));
+}
+
 /** The plugins listing, and the web parts of the task `events` follows
  * (none without a task), kept in step with what the task runs. */
 export function usePlugins(
@@ -49,11 +66,19 @@ export function usePlugins(
   const [host, setHost] = useState<PluginHost | null>(null);
   const [, changed] = useReducer((n: number) => n + 1, 0);
 
+  const [unlisted, setUnlisted] = useState(false);
   const refresh = useCallback(
     () =>
-      api.plugins(cwd || undefined).then(setListing, (e: unknown) => {
-        console.warn("could not list the plugins", e);
-      }),
+      api.plugins(cwd || undefined).then(
+        (got) => {
+          setListing(got);
+          setUnlisted(false);
+        },
+        (e: unknown) => {
+          console.warn("could not list the plugins", e);
+          setUnlisted(true);
+        },
+      ),
     [api, cwd],
   );
   useEffect(() => void refresh(), [refresh]);
@@ -68,10 +93,12 @@ export function usePlugins(
 
   const off = pluginsOff.join("\n");
   useEffect(() => {
-    if (!host || !listing) return;
+    if (!host || (!listing && !unlisted)) return;
     const importEntry = (entry: string) => import(/* @vite-ignore */ api.webEntry(entry));
-    void host.sync(webParts(listing.plugins, off ? off.split("\n") : [], importEntry));
-  }, [api, host, listing, off]);
+    // A server that lists no plugins (an older one): the built-in parts, as the page had them.
+    const plugins = listing?.plugins ?? builtinsUnlisted();
+    void host.sync(webParts(plugins, off ? off.split("\n") : [], importEntry));
+  }, [api, host, listing, unlisted, off]);
 
   return { listing, refresh, registry, status: (name) => host?.status(name) };
 }

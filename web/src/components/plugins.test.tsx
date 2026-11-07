@@ -1,5 +1,5 @@
 import { Markdown } from "@noeta-ai/ui";
-import { SlotRegistry, SlotsContext, type CodeBlockSlotProps, type ToolSlotProps } from "@noeta-ai/web-sdk";
+import { SlotRegistry, SlotsContext, type CodeBlockSlotProps, type StatusbarSlotProps, type ToolSlotProps } from "@noeta-ai/web-sdk";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
@@ -129,7 +129,7 @@ describe("UI data", () => {
         <Notices items={items} />
         <Widgets items={items} placement="above" />
         <Widgets items={items} placement="below" />
-        <StatusBar items={items} />
+        <StatusBar items={items} context={{ tokens: 0, window: 0 }} />
       </>,
     );
     expect(screen.getByText("3 greeted")).toHaveClass("tone-warn");
@@ -168,7 +168,35 @@ describe("the page's slots", () => {
       </>,
     );
     expect(screen.getByText("custom ls")).toBeInTheDocument();
-    expect(screen.queryByText("$ ls")).toBeNull();
+    expect(screen.queryByText("a")).toBeNull(); // the generic view's output is replaced
     expect(screen.getByText("read running")).toBeInTheDocument();
+  });
+
+  it("a card whose plugin shows nothing while closed is one line, with its result's length, and open gets `open`", async () => {
+    const registry = new SlotRegistry();
+    registry.add("p", "tool:Look", { mount: "single" }, ({ call, open }: ToolSlotProps) => (open ? <div>opened {call.result}</div> : null));
+    const { container } = page(registry, <ToolCard t={{ kind: "tool", id: "c1", name: "Look", input: {}, status: "done", result: "x\ny" }} />);
+    expect(container.querySelector(".tool")).toHaveClass("tool-compact");
+    expect(container.querySelector(".tool-head")).toHaveTextContent("· 2 lines");
+    await userEvent.click(screen.getByText("Look"));
+    expect(screen.getByText(/opened x/)).toBeInTheDocument();
+    expect(container.querySelector(".tool")).toHaveClass("tool-compact"); // the look it had closed
+    expect(container.querySelector(".tool-head")).not.toHaveTextContent("lines");
+  });
+
+  it("the status bar's own content is the model picker and the items; a negative order comes first; the context is its props", () => {
+    const registry = new SlotRegistry();
+    registry.add("a", "statusbar", { order: -1 }, () => <span>first</span>);
+    registry.add("b", "statusbar", {}, ({ context }: StatusbarSlotProps) => <span>last {context.tokens}</span>);
+    const { container } = page(
+      registry,
+      <div className="pickers">
+        <StatusBar items={[]} context={{ tokens: 7, window: 10 }}>
+          <span>picker</span>
+        </StatusBar>
+      </div>,
+    );
+    expect(container.querySelector(".pickers")).toHaveTextContent(/^firstpickerlast 7$/);
+    expect(container.querySelector(".pickers > .statusbar")).toBeInTheDocument();
   });
 });

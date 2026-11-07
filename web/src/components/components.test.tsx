@@ -9,26 +9,30 @@ import { ApiError } from "../api/client";
 import { Composer, menuQuery } from "./Composer";
 import { UsageBadge } from "./Controls";
 import { Markdown } from "@noeta-ai/ui";
+import { SlotRegistry, SlotsContext, type RequestSlotProps } from "@noeta-ai/web-sdk";
 import { PendingCards } from "./PendingCard";
 import { Sidebar } from "./Sidebar";
 import { ToolCard } from "./ToolCard";
-import { Transcript } from "./Transcript";
+import { TaskTranscript, Transcript } from "./Transcript";
 
 type Tool = Extract<Item, { kind: "tool" }>;
-const tool = (t: Partial<Tool>): Tool => ({ kind: "tool", id: "c1", name: "Bash", input: {}, status: "done", ...t });
+const tool = (t: Partial<Tool>): Tool => ({ kind: "tool", id: "c1", name: "some_tool", input: {}, status: "done", ...t });
 
+// A tool no plugin gives a view of; each built-in plugin's view is tested
+// with its web part (web/src/plugins/builtin.test.tsx).
 describe("ToolCard", () => {
-  it("shows a shell command and its output", () => {
-    render(<ToolCard t={tool({ input: { command: "ls -la" }, result: "a\nb" })} />);
-    expect(screen.getByText("$ ls -la")).toBeInTheDocument();
+  it("shows a tool's output, and its input once opened", async () => {
+    const { container } = render(<ToolCard t={tool({ input: { path: "/a/b/c/d.txt", flag: true }, result: "a\nb" })} />);
     expect(screen.getByText(/a\s+b/)).toBeInTheDocument();
+    expect(screen.getByText("…/c/d.txt")).toBeInTheDocument();
+    expect(container.querySelector("pre.input")).toBeNull();
+    await userEvent.click(screen.getByText("some_tool"));
+    expect(container.querySelector("pre.input")).toHaveTextContent('"flag": true');
   });
 
-  it("shows a yes's words under the call's result, a compact call's too", () => {
+  it("shows a yes's words under the call's result", () => {
     const { container, rerender } = render(<ToolCard t={tool({ input: { command: "ls" }, result: "a", note: "then run the tests" })} />);
     expect(container.querySelector(".tool-note")).toHaveTextContent("⎿ then run the tests");
-    rerender(<ToolCard t={tool({ name: "Read", input: { file_path: "/a" }, result: "x", note: "skim it" })} />);
-    expect(container.querySelector(".tool-note")).toHaveTextContent("skim it");
     rerender(<ToolCard t={tool({ input: { command: "ls" }, result: "a" })} />);
     expect(container.querySelector(".tool-note")).toBeNull();
   });
@@ -41,22 +45,12 @@ describe("ToolCard", () => {
     expect(screen.getByText(/line 39/)).toBeInTheDocument();
   });
 
-  it("shows an edit as a diff: proposed before it runs, the recorded one after", () => {
-    const { rerender, container } = render(<ToolCard t={tool({ name: "Edit", status: "waiting", input: { file_path: "/a/b/c.py", old_string: "x = 1", new_string: "x = 2" } })} />);
-    expect(container.querySelector(".diff-del")).toHaveTextContent("-x = 1");
-    expect(container.querySelector(".diff-add")).toHaveTextContent("+x = 2");
-    expect(screen.getByText("waiting for you")).toBeInTheDocument();
-    rerender(<ToolCard t={tool({ name: "Edit", input: { file_path: "/a/b/c.py" }, meta: { diff: "@@ -1 +1 @@\n-old\n+new\n", added: 1, removed: 1 } })} />);
-    expect(container.querySelector(".diff-hunk")).toHaveTextContent("@@ -1 +1 @@");
-    expect(container.querySelector(".diffstat")).toHaveTextContent("+1 -1");
-  });
-
   it("names an MCP tool by its server and tool", () => {
     render(<ToolCard t={tool({ name: "mcp__github__search", input: { query: "bug" }, result: "found" })} />);
     expect(screen.getByText("github · search")).toBeInTheDocument();
   });
 
-  it("opens a sub-agent's own transcript", async () => {
+  it("follows another task's conversation (ctx.Transcript)", async () => {
     const api = {
       events: vi.fn(async () => []),
       watch: vi.fn(async (_id: string, _after: number, on: { event: (r: unknown) => void }) => {
@@ -65,10 +59,9 @@ describe("ToolCard", () => {
     } as unknown as Api;
     render(
       <ApiContext.Provider value={api}>
-        <ToolCard t={tool({ name: "Agent", input: { subagent_type: "Explore", description: "look" }, child: "t.c1.1", childStatus: "done" })} />
+        <TaskTranscript taskId="t.c1.1" />
       </ApiContext.Provider>,
     );
-    await userEvent.click(screen.getByRole("button", { name: /Show the sub-agent's work \(done\)/ }));
     expect(await screen.findByText("explored it")).toBeInTheDocument();
     expect(api.watch).toHaveBeenCalledWith("t.c1.1", 0, expect.anything(), expect.anything());
   });
@@ -122,7 +115,6 @@ describe("PendingCards", () => {
     const api = { answer } as unknown as Api;
     const answered = vi.fn();
     render(<PendingCards pending={[approval]} api={api} answered={answered} />);
-    expect(screen.getByText("$ rm -rf build")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Always allow/ }));
     expect(answer).toHaveBeenLastCalledWith("t1", "c1", "allow", { always: true });
     await userEvent.click(screen.getByRole("button", { name: /accept edits/ }));
@@ -183,22 +175,26 @@ describe("PendingCards", () => {
     expect(answered).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the change an Edit approval would make", () => {
-    const edit: Pending = { ...approval, tool: "Edit", title: "Edit file", input: { file_path: "/w/a.py", old_string: "x = 1", new_string: "x = 2" }, choices: undefined };
-    const { container } = render(<PendingCards pending={[edit]} api={{} as Api} answered={() => undefined} />);
-    expect(screen.getByText("/w/a.py")).toBeInTheDocument();
-    expect(container.querySelector(".card .diff-del")).toHaveTextContent("-x = 1");
-    expect(container.querySelector(".card .diff-add")).toHaveTextContent("+x = 2");
+  it("shows what the tool's plugin shows of the call it asks about (the request slot)", () => {
+    const registry = new SlotRegistry();
+    registry.add("p", "request:Bash", {}, ({ request }: RequestSlotProps) => <pre>asked: {String(request.input.command)} by {request.agent}</pre>);
+    render(
+      <SlotsContext.Provider value={registry}>
+        <PendingCards pending={[approval]} api={{} as Api} answered={() => undefined} />
+      </SlotsContext.Provider>,
+    );
+    expect(screen.getByText("asked: rm -rf build by main")).toBeInTheDocument();
   });
 
-  it("answers a question with picked options or other text, and shows a plan to review", async () => {
+  it("answers a question with picked options or other text, and says which agent asks", async () => {
     const answer = vi.fn().mockResolvedValue({});
     const question: Pending = {
       ...approval,
       kind: "question",
-      tool: "ExitPlanMode",
-      input: { plan: "# The plan\n\n1. do it" },
-      title: "ExitPlanMode",
+      tool: "AskUserQuestion",
+      agent: "Explore",
+      input: {},
+      title: "AskUserQuestion",
       detail: {
         questions: [
           { id: "0", question: "Leave plan mode?", options: [{ label: "Yes" }, { label: "No, keep planning" }] },
@@ -207,7 +203,7 @@ describe("PendingCards", () => {
       },
     };
     render(<PendingCards pending={[question]} api={{ answer } as unknown as Api} answered={() => undefined} />);
-    expect(screen.getByRole("heading", { name: "The plan" })).toBeInTheDocument();
+    expect(screen.getByText("from the Explore agent")).toBeInTheDocument();
     const submit = screen.getByRole("button", { name: "Submit" });
     expect(submit).toBeDisabled();
     await userEvent.click(screen.getByLabelText("Yes"));
@@ -429,14 +425,12 @@ describe("Markdown", () => {
 
 describe("UsageBadge", () => {
   const usage = { tasks: 1, cost_usd: 0.5, usage: { uncached: 90_000 }, by_model: {} };
-  it("shows the context share, and near the threshold how far auto-compact is", () => {
-    const at = { threshold: 100_000, window: 120_000, auto: true };
-    const { rerender, container } = render(<UsageBadge usage={usage} contextTokens={50_000} window={200_000} compaction={at} />);
-    expect(container).toHaveTextContent("· 25% context");
-    rerender(<UsageBadge usage={usage} contextTokens={90_000} window={200_000} compaction={at} />);
-    expect(container).toHaveTextContent("· 10% until auto-compact");
+  it("shows tokens, cost and the context's share of the window", () => {
+    const { rerender, container } = render(<UsageBadge usage={usage} contextTokens={50_000} window={200_000} />);
+    expect(container).toHaveTextContent("90.0k tokens · $0.50 · 25% context");
+    rerender(<UsageBadge usage={usage} contextTokens={50_000} window={0} />);
     expect(container).not.toHaveTextContent("% context");
-    rerender(<UsageBadge usage={null} contextTokens={108_000} window={200_000} compaction={{ ...at, auto: false }} />);
-    expect(screen.getByText(/Context low \(10% remaining\)/)).toHaveClass("context-low");
+    rerender(<UsageBadge usage={null} contextTokens={50_000} window={200_000} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

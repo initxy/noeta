@@ -15,8 +15,15 @@ export function activate(ctx: PluginContext) {
 ```
 
 `ctx` holds `client` (read, watch, send, answer, signal for the session's task), `records(kind)`
-(the plugin's own records), `call(name, args)` (its backend's `ui_call`), `slots` (`add`,
-`wait`), `theme` and `desktop` (the desktop app's bridge, `null` in a browser). What
+and `allRecords()` (the plugin's own records; the hooks `useRecords` and `useAllRecords` keep a
+component current), `call(name, args)` (its backend's `ui_call`), `slots` (`add`, `wait`),
+`theme`, `desktop` (the desktop app's bridge, `null` in a browser) and `Transcript` (the page's
+view of another task's conversation, such as a sub-agent's). The slots and the props each
+passes are `SLOTS`, `toolSlot` (`ToolSlotProps`: the call, and whether its card is open),
+`requestSlot` (`RequestSlotProps`: an approval or question about a call), `recordSlot` and
+`codeblockSlot`; `statusbar` passes `StatusbarSlotProps` (how full the context is),
+`session.header` `SessionHeaderSlotProps` (the listed title). In a `list`, a negative `order`
+comes before the slot's own content. What
 `activate` returns is called when the plugin is switched off for the session or the page
 leaves it; whatever it added to slots goes then too.
 

@@ -1,24 +1,28 @@
 // What a task's plugins show through their UI data (`GET /tasks/{id}/ui`):
 // status items, widgets above or below the composer, notices.
 import { Markdown } from "@noeta-ai/ui";
-import { Slot, SLOTS } from "@noeta-ai/web-sdk";
-import { useState } from "react";
+import { Slot, SLOTS, type StatusbarSlotProps } from "@noeta-ai/web-sdk";
+import { useState, type ReactNode } from "react";
 import type { UiEntry } from "../api/types";
 
 type Of<T extends UiEntry["type"]> = Extract<UiEntry, { type: T }>;
 
-/** The line under the composer: each plugin's status items, then the `statusbar` slot. */
-export function StatusBar({ items }: { items: UiEntry[] }) {
+/** The line under the composer, the `statusbar` slot: its own content is
+ * `children` (the model picker), then each plugin's status items; plugins'
+ * contributions come after them, or with a negative `order` before all. */
+export function StatusBar({ items, context, children }: { items: UiEntry[]; context: StatusbarSlotProps["context"]; children?: ReactNode }) {
   const status = items.filter((i): i is Of<"status"> => i.type === "status");
   return (
-    <div className="statusbar" aria-label="Status">
-      {status.map((s) => (
-        <span key={`${s.plugin}/${s.key}`} className={`status-item tone-${s.tone}`} title={s.plugin}>
-          {s.text}
-        </span>
-      ))}
-      <Slot name={SLOTS.statusbar} />
-    </div>
+    <Slot name={SLOTS.statusbar} props={{ context }}>
+      {children}
+      <div className="statusbar" aria-label="Status">
+        {status.map((s) => (
+          <span key={`${s.plugin}/${s.key}`} className={`status-item tone-${s.tone}`} title={s.plugin}>
+            {s.text}
+          </span>
+        ))}
+      </div>
+    </Slot>
   );
 }
 

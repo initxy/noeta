@@ -1,8 +1,19 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ApiError, type Api } from "../api/client";
 import type { Pending, Question } from "../api/types";
-import { DiffView, EDITS, editDiff } from "./DiffView";
-import { Markdown } from "@noeta-ai/ui";
+import { requestSlot, Slot, type PendingRequest } from "@noeta-ai/web-sdk";
+
+/** What the card about `p` shows of its call: the `request:<Tool>` slot,
+ * where the plugin that offers the tool shows it (a command, a diff, a
+ * plan); `children` is the card's own lead, which a `single` view replaces. */
+function Request({ p, children }: { p: Pending; children?: ReactNode }) {
+  const request: PendingRequest = { kind: p.kind, taskId: p.task_id, tool: p.tool, input: p.input, title: p.title, prompt: p.prompt, agent: p.agent };
+  return (
+    <Slot name={requestSlot(p.tool)} props={{ request }}>
+      {children}
+    </Slot>
+  );
+}
 
 /** Answers an approval with one of its choices, as noeta.host.pending.answer_choice does. */
 export async function answerChoice(api: Api, p: Pending, choice: string, message = ""): Promise<void> {
@@ -80,18 +91,11 @@ function ApprovalCard({ p, api, done, focus }: { p: Pending; api: Api; done: () 
     else return;
     e.preventDefault();
   };
-  const diff = EDITS.has(p.tool) ? editDiff(p.tool, p.input) : "";
   return (
     <div className="card approval" role="dialog" aria-label={p.title} tabIndex={-1} ref={ref} onKeyDown={onKey}>
       <div className="card-title">{p.title}</div>
       {p.prompt && <div className="card-prompt">{p.prompt}</div>}
-      {p.tool === "Bash" && <pre className="command">$ {String(p.input.command ?? "")}</pre>}
-      {diff && (
-        <>
-          <div className="muted">{String(p.input.file_path ?? p.input.notebook_path ?? "")}</div>
-          <DiffView diff={diff} />
-        </>
-      )}
+      <Request p={p} />
       <div className="card-question">Do you want to proceed?</div>
       <div className="choices">
         {choices.map((c, i) => (
@@ -160,19 +164,9 @@ function QuestionCard({ p, api, done, focus }: { p: Pending; api: Api; done: () 
     else return;
     e.preventDefault();
   };
-  const plan = p.tool === "ExitPlanMode" ? String(p.input.plan ?? "") : "";
   return (
     <div className="card question" role="dialog" aria-label={p.title} tabIndex={-1} ref={ref} onKeyDown={onKey}>
-      {plan ? (
-        <>
-          <div className="card-title">Ready to code? Here is the plan:</div>
-          <div className="plan">
-            <Markdown text={plan} />
-          </div>
-        </>
-      ) : (
-        p.agent && p.agent !== "main" && <div className="muted">from the {p.agent} agent</div>
-      )}
+      <Request p={p}>{p.agent && p.agent !== "main" && <div className="muted">from the {p.agent} agent</div>}</Request>
       {questions.map((q) => (
         <fieldset key={q.id} className="q">
           <legend>
