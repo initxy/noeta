@@ -56,7 +56,7 @@ replaces it).
 | Argument | Meaning |
 |---|---|
 | `model` | the model every agent runs unless its file names another; a file with `model: inherit` (or no `model`) runs on it, and as a sub-agent on its caller's model |
-| `plugins` | per plugin name: its arguments (a mapping; `enabled: False` turns it off), a ready `Extension`, or `False` to leave it out of every agent. `memory`, `mcp` and `repetition_guard` stay off until this names them |
+| `plugins` | per plugin name: its arguments (a mapping; `enabled: False` turns it off), a ready `Extension`, or `False` to leave it out of every agent. `memory` and `mcp` stay off until this names them |
 | `add` | per agent name (`"*"` for all): more plugins after the file's own, as `(name, arguments)` pairs |
 | `extensions` | `Extension` instances added to every agent |
 | `extra_files` | more `AgentFile`s (from `read_agent_dir` / `parse_agent_file`) |

@@ -174,7 +174,7 @@ To start the terminal UI or `-p` with another agent than `main`: `noeta --agent 
 
 ```toml
 [agents.main]
-add_plugins = ["repetition_guard", {my_plugin = {level = 2}}]
+add_plugins = ["house_style", {my_plugin = {level = 2}}]
 
 [agents."*"]
 add_plugins = ["run_tests"]
@@ -183,8 +183,8 @@ add_plugins = ["run_tests"]
 enabled = false          # off for every agent
 ```
 
-Of the plugins the built-in agents name, `memory`, `mcp` and `repetition_guard` stay off until a
-host sets them; the `noeta` command turns memory and MCP on. Writing a plugin:
+Of the plugins the built-in agents name, `memory` and `mcp` stay off until a host sets them;
+the `noeta` command turns both on. Writing a plugin:
 [Write a plugin](./plugins.md).
 
 ## Slash commands

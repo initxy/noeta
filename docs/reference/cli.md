@@ -15,7 +15,7 @@ noeta serve [flags]             the HTTP / WebSocket API, with workers unless --
 noeta worker [flags]            run tasks from the store until stopped
 noeta trust                     trust the current folder
 noeta plugins                   list every plugin and where it comes from
-noeta plugin add|configure|list|remove
+noeta plugin add|configure|list|remove|marketplace
 noeta mcp add|add-json|list|get|remove|login|logout
 ```
 
@@ -222,15 +222,21 @@ Installs plugins into `~/.noeta/plugins/`, pinned, running nothing from them.
 | Command | Meaning |
 |---|---|
 | `noeta plugin add SOURCE` | install from `<git-url>@<commit>` (https or ssh, a full commit: 40 hex digits, or 64 in a SHA-256 repository), or copy a path |
-| `noeta plugin add --marketplace MARKETPLACE NAME` | install `NAME` from a Claude Code `marketplace.json` (a path or `<git-url>@<commit>`); the marketplace is only read |
-| `  --commit SHA` | the commit to install when the marketplace entry pins none (an entry's `ref`, a branch or tag, is not followed) |
+| `noeta plugin add NAME` | install the plugin a configured marketplace lists as `NAME` (several listing it: name one with `--marketplace`) |
+| `noeta plugin add --marketplace MARKETPLACE NAME` | install `NAME` from a configured marketplace (by its name) or a Claude Code `marketplace.json` (a path, `<git-url>@<commit>`, or a git URL read at its default branch); the marketplace is only read |
+| `  --commit SHA` | the commit to install when the marketplace entry pins none (an entry's `ref`, a branch or tag, is not followed); one other than the entry's pin is refused |
 | `  --config KEY=VALUE` | a Claude Code plugin's `userConfig` value (repeatable); the others are asked for on a terminal |
 | `noeta plugin configure NAME [--config KEY=VALUE]` | set a Claude Code plugin's `userConfig` values again |
 | `noeta plugin list` | the plugins installed with `noeta plugin add` |
 | `noeta plugin remove NAME` | remove one |
+| `noeta plugin marketplace add SOURCE` | add a marketplace: a path, `<git-url>@<commit>`, or a git URL read at its default branch; known by its `marketplace.json` `name` (one already configured under it is replaced) |
+| `noeta plugin marketplace list` | each marketplace with the plugins it lists (version, pinned commit, whether installed); one that cannot be read is named on stderr |
+| `noeta plugin marketplace remove NAME` | remove one (the plugins installed from it stay) |
 
 `userConfig` values are kept in `~/.noeta/settings.json` `pluginConfigs`, sensitive ones in the
-OS keyring. See [Write a plugin](../guides/plugins.md).
+OS keyring. The marketplaces are kept in `~/.noeta/marketplaces.json`; until it exists the
+official one, `noeta-plugins` (`https://github.com/initxy/noeta-plugins`), is the only one. See
+[Write a plugin](../guides/plugins.md).
 
 ## `noeta mcp`
 

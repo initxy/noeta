@@ -8,6 +8,29 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+### Added
+
+- **Marketplaces you configure once.** `noeta plugin marketplace add|list|remove` keeps a list
+  in `~/.noeta/marketplaces.json`: a path, `<git-url>@<commit>`, or a git URL read at its
+  default branch (the listing is data; each entry still installs only the commit it pins). The
+  official marketplace, `noeta-plugins` (`https://github.com/initxy/noeta-plugins`), is
+  configured until removed. `noeta plugin add <name>` installs a plugin a configured
+  marketplace lists; `--marketplace` also takes a configured marketplace's name. An entry may
+  carry a `noeta` object (`ui_api`, `parts`). `noeta.cli.plugin_command.market_entries()` lists
+  every entry for front ends.
+- A `config.toml` `[plugins.<name>]` table naming a plugin not installed here is a notice at the
+  start.
+
+### Changed
+
+- **`repetition_guard`, `examples/chat-bridge` and `examples/chat-approvals` moved to the
+  official marketplace** (`initxy/noeta-plugins`). A `config.toml` that sets
+  `[plugins.repetition_guard]` or adds it to an agent now starts with a notice naming
+  `noeta plugin add repetition_guard`; installed, the guard joins every agent with its arguments
+  from that table, as before. A copied `chat_bridge.py` / `chat_approvals.py` keeps working.
+- A marketplace install without a plugin manifest is named by its marketplace entry (it was the
+  fetched directory's name).
+
 ## [1.0.6] - 2026-11-07
 
 Open-source readiness: a restart limit for tasks that keep killing their worker, a Docker image for many workers, requests that no longer present noeta as Claude Code, a clearer first run, and DeepSeek's current models.

@@ -106,7 +106,7 @@ enabled = false               # 所有代理都关掉
 add_plugins = ["my_plugin", {hooks = {}}]   # 加在代理文件自己的插件后面；"*" 表示所有代理
 ```
 
-- 代理文件在 frontmatter 里列出自己的插件，写名字或 `name: {参数}`（`noeta/agents/agent_files.py`）。所有从代理文件建出来的代理都会额外带上 `tool_search` 和 `structured_output`（`ALWAYS_PLUGINS`）。内置代理默认不开 `memory`、`mcp` 和 `repetition_guard`，设了才开。
+- 代理文件在 frontmatter 里列出自己的插件，写名字或 `name: {参数}`（`noeta/agents/agent_files.py`）。所有从代理文件建出来的代理都会额外带上 `tool_search` 和 `structured_output`（`ALWAYS_PLUGINS`）。内置代理默认不开 `memory` 和 `mcp`，设了才开。
 - 同名同参数的插件只建一个实例，所有用到它的代理共用。
 - 密钥写成引用：`{env:NAME}` 或 `{keyring:service/user}`，只在建插件实例时才解析；插件版本记录里哈希的是这个引用，不是密钥本身。
 - 机器上 `/etc/noeta/config.toml` 的 `[policy]`（`allowed_plugins`、`blocked_plugins`）优先于所有用户和项目的设置。

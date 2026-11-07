@@ -90,7 +90,7 @@ is its `Extension.name`. A plugin (or channel) can also be a plain file in `~/.n
 trusted project's `.noeta/plugins` or a `--plugin-dir` for one run
 (`registry.load_plugin_files`); an installed plugin wins a name clash. Such a file joins the agents its `Extension.add_to` names by itself (an installed
 package's `add_to` is ignored). `noeta plugin add <git-url>@<commit>` installs one there pinned
-(also from a Claude Code `marketplace.json`, only read), running nothing from it.
+(also by name from a Claude Code `marketplace.json`, only read: `~/.noeta/marketplaces.json`, the official `noeta-plugins` by default), running nothing from it.
 
 ## Plugin pin
 
@@ -109,7 +109,7 @@ What a host says about one plugin, by name: its arguments (`enabled: false` amon
 it off), a ready `Extension`, or on/off. One table at every level (`build_agents`,
 `default_agents`, `from_settings`, `config.toml` `[plugins.<name>]`); argument tables of one
 plugin merge key by key. `add` (`[agents.<name>] add_plugins`, `"*"` for all) appends plugins
-to an agent without copying its file. The built-in agents keep memory, MCP and the repetition guard off until set.
+to an agent without copying its file. The built-in agents keep memory and MCP off until set.
 A secret is written as a reference, `{env:NAME}` or `{keyring:service/user}`, resolved only when
 the plugin is made (`agent_files.resolve_secrets`).
 

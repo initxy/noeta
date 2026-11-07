@@ -49,7 +49,7 @@ changelog 里会写明。
 | 参数 | 含义 |
 |---|---|
 | `model` | 所有代理用的模型，除非代理文件另有指定；写了 `model: inherit`（或没写 `model`）的代理用它，作为子代理时用调用方的模型 |
-| `plugins` | 按插件名：它的参数（映射；`enabled: False` 表示关掉）、一个现成的 `Extension`，或 `False`（从所有代理里去掉）。`memory`、`mcp`、`repetition_guard` 要在这里写上设置才开 |
+| `plugins` | 按插件名：它的参数（映射；`enabled: False` 表示关掉）、一个现成的 `Extension`，或 `False`（从所有代理里去掉）。`memory`、`mcp` 要在这里写上设置才开 |
 | `add` | 按代理名（`"*"` 表示全部）：在文件自带的插件之后再加，写成 `(名字, 参数)` 对 |
 | `extensions` | 加给每个代理的 `Extension` 实例 |
 | `extra_files` | 更多 `AgentFile`（来自 `read_agent_dir` / `parse_agent_file`） |

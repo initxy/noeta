@@ -186,8 +186,8 @@ add_plugins = ["my_plugin", {hooks = {}}]   # after the agent file's own; "*" = 
 
 - An agent file lists its plugins in its frontmatter, as names or `name: {arguments}`
   (`noeta/agents/agent_files.py`). Every agent built from agent files also gets `tool_search` and
-  `structured_output` (`ALWAYS_PLUGINS`). The built-in agents keep `memory`, `mcp` and
-  `repetition_guard` off until set.
+  `structured_output` (`ALWAYS_PLUGINS`). The built-in agents keep `memory` and `mcp` off
+  until set.
 - One plugin instance per name and arguments is shared by every agent that names it.
 - A secret is written as a reference, `{env:NAME}` or `{keyring:service/user}`, and resolved only
   when the plugin is made; the reference, not the secret, is what the pin hashes.

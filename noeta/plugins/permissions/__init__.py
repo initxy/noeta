@@ -5,8 +5,7 @@
   directories and protected paths, the auto-mode classifier and what may
   run while planning (plan mode itself is ``noeta.plugins.plan_mode``); plus
   declarative PreToolUse rules and ``can_use_tool`` (the budget caps are
-  ``noeta.plugins.budget``, the repetition guard
-  ``noeta.plugins.repetition_guard``).
+  ``noeta.plugins.budget``).
 """
 
 from noeta.plugins.permissions.extension import (

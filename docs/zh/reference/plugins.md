@@ -26,7 +26,6 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | `permissions` | ✓ | ✓ | ✓ | |
 | `plan_mode` | ✓ | ✓ | ✓ | |
 | `quiet_nudge` | ✓ | | | 只有部分 Claude 模型会收到提醒 |
-| `repetition_guard` | ✓ | ✓ | ✓ | 设了 `[plugins.repetition_guard]` 才开 |
 | `schedule` | ✓ | | | |
 | `shell` | ✓ | ✓ | ✓ | |
 | `skills` | ✓ | ✓ | ✓ | |
@@ -38,7 +37,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | `web` | ✓ | ✓ | ✓ | 有搜索密钥才有 `WebSearch` |
 | `workflow` | ✓ | | | |
 
-"不设置就不开"（`noeta/agents/__init__.py` 的 `OFF_UNLESS_SET`）：`memory` 要往某个目录里写，`mcp` 要启动给它的服务器，重复调用检查又不是 Claude Code 有的东西，所以 `default_agents` 在宿主没给设置之前一律关着。`noeta` 命令会给 `memory` 和 `mcp` 设置（`noeta/cli/config.py`），所以终端界面、`-p`、`noeta worker`、`noeta serve` 里这两个都是开的；`repetition_guard` 仍然关着。没写 `plugins` 的代理文件（普通的 Claude Code 代理文件）用 `general-purpose` 那一套（`DEFAULT_PLUGINS`）。`tool_search` 和 `structured_output` 会自动加到每个由代理文件构建、又没写它们的代理上（`ALWAYS_PLUGINS`）。
+"不设置就不开"（`noeta/agents/__init__.py` 的 `OFF_UNLESS_SET`）：`memory` 要往某个目录里写，`mcp` 要启动给它的服务器，所以 `default_agents` 在宿主没给设置之前一律关着。`noeta` 命令会给这两个设置（`noeta/cli/config.py`），所以终端界面、`-p`、`noeta worker`、`noeta serve` 里它们都是开的。没写 `plugins` 的代理文件（普通的 Claude Code 代理文件）用 `general-purpose` 那一套（`DEFAULT_PLUGINS`）。`tool_search` 和 `structured_output` 会自动加到每个由代理文件构建、又没写它们的代理上（`ALWAYS_PLUGINS`）。
 
 `noeta` 命令还会从 noeta 的目录和 settings 文件里填一些配置项：`memory.home`、`hooks.settings_files`、`mcp.settings_files` 和 `mcp.project`、`skills` 的各个目录和清单预算、`instructions.user_dir` 和 `managed_dir`、`permissions` 的规则和模式、`plan_mode` 的配置、`fs.write_roots`（额外目录）、`environment.language` 和署名行。你在 `config.toml` 里写的表按键覆盖在这些之上。
 
@@ -285,18 +284,6 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | `steps` | `5` | 连续多少步只调工具才提醒 |
 | `most` | `3` | 一段沉默最多提醒几次 |
 
-### `repetition_guard`
-
-`noeta/plugins/repetition_guard.py`：某次调用和紧挨着的前几次一模一样（同一工具、同样参数），连同自己算达到 `threshold` 次，就询问或拒绝。它读的是对话本身，所以每个工人看到的连续调用都一样。Claude Code 没有这种检查，所以不设 `[plugins.repetition_guard]` 就不开。
-
-实现的方法：`before_tool`。
-
-| 配置项 | 默认 | 含义 |
-|---|---|---|
-| `threshold` | `3` | 连续相同调用的次数；`<= 0` 表示关 |
-| `action` | `"require_approval"` | `require_approval` 问用户，`deny` 直接拒绝 |
-| `window` | `8` | 看最近多少次调用 |
-
 ### `schedule`
 
 `noeta/plugins/schedule`：和 Claude Code 一样的定时提示：`ScheduleWakeup` 控制自定节奏的 `/loop`；`CronCreate` / `CronList` / `CronDelete` 按 cron 计划或只跑一次地发送提示；`/loop` 两种都能设。每个唤醒和定时任务都是任务日志里的一个内核定时器，所以重启后还在，由持有这个任务的工人触发。见[子代理与后台任务](../guides/subagents.md)。没有配置项（`clock` 是测试用的）。
@@ -437,4 +424,4 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | `noeta.execenvs` | `local`、`container` | 命令在哪里跑（[命令在哪里执行](../guides/sandbox.md)） |
 | `noeta.stores` | `sqlite`、`postgres`（也认 `postgresql`） | 任务存在哪（[作为服务端运行](../guides/server.md)） |
 | `noeta.frontends` | `tui`（来自 `noeta-tui` 包） | 终端界面 |
-| `noeta.channels` | 无内置 | 外部对话；`examples/chat-bridge` 是一个例子 |
+| `noeta.channels` | 无内置 | 外部对话；[官方插件市场](https://github.com/initxy/noeta-plugins)里的 `chat-bridge` 就是一个 |

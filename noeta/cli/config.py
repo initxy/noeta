@@ -59,6 +59,7 @@ from noeta.cli.claude_plugins import (
     plugin_settings,
     read_plugin_dir,
 )
+from noeta.cli.plugin_command import MOVED_OUT, missing_plugin_line
 from noeta.cli.plugin_policy import plugin_policy
 from noeta.cli.settings_files import (
     FileSettings,
@@ -709,14 +710,18 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         policy = plugin_policy(managed_dir())
         table.update({name: False for name in registry.available(registry.PLUGINS)
                       if not policy.admits(name, shipped=_shipped(name))})
-        add = {agent: tuple(entries) for agent, entries in add_plugins.items()}
+        missing = _missing_plugin_notices(settings.plugins, add_plugins)
+        # A plugin that left noeta is a notice, not a start that fails.
+        add = {agent: tuple(e for e in entries if e[0] not in MOVED_OUT
+                            or e[0] in registry.available(registry.PLUGINS))
+               for agent, entries in add_plugins.items()}
         for agent, names in registry.added_by_files().items():
             add[agent] = (*add.get(agent, ()), *((name, {}) for name in names))
         # Every agent offers the typed commands (``/init``, ``/review`` and
         # the Claude Code plugins').
         add["*"] = (*add.get("*", ()), ("markdown_commands", {}))
         agents = default_agents(model, plugins=table, add=add, extra_files=files, made=made)
-        unjoined[:] = _unjoined_notices(agents, table)
+        unjoined[:] = [*_unjoined_notices(agents, table), *missing]
         notices.extend(n for n in unjoined if n not in notices)
         return agents
 
@@ -845,6 +850,21 @@ def _unjoined_notices(agents: Sequence[Agent],
             continue
         out.append(f"plugin file {path}: {name!r} joins no agent; set add_to = (\"main\",) "
                    f"on its class, or [agents.main] add_plugins = [\"{name}\"] in config.toml")
+    return out
+
+
+def _missing_plugin_notices(tables: Mapping[str, Mapping[str, Any]],
+                            add: Mapping[str, Sequence[PluginEntry]]) -> list[str]:
+    """One notice per ``[plugins.<name>]`` table (not switched off) and per
+    ``add_plugins`` entry of a plugin that left noeta, naming a plugin not
+    installed here, with how to get it."""
+    have = set(registry.available(registry.PLUGINS))
+    out = [f"config.toml [plugins.{name}]: {missing_plugin_line(name)}"
+           for name, args in tables.items()
+           if name not in have and args.get("enabled", True) is not False]
+    out += [f"config.toml [agents.{agent}] add_plugins: {missing_plugin_line(name)}"
+            for agent, entries in add.items() for name, _ in entries
+            if name in MOVED_OUT and name not in have]
     return out
 
 
