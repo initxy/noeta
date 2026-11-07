@@ -38,6 +38,10 @@ this repository. Their versions are listed on PyPI.
 
 ### Changed
 
+- **Requests to Anthropic no longer present noeta as Claude Code.** The `claude-code-20250219`
+  beta is no longer sent, and `metadata.user_id` is this machine's opaque id
+  (`~/.noeta/device_id`) instead of Claude Code's JSON of device, account and session ids. The
+  protocol is still Claude Code's; both differences are listed in `parity/deviations.md`.
 - **Store adapters: `Store.claim` reports `Claim.reclaimed`**, true when the claimed row still
   had a lease (the claim before was neither released nor handed back by an append), read in
   the claim's transaction. A third-party store that does not set it keeps working, without the
