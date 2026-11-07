@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import os
 import signal
 import sys
@@ -39,8 +40,11 @@ README_EXTRAS: tuple[str, ...] = ()
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
     "acp": "acp", "psycopg": "postgres", "psycopg_pool": "postgres",
-    "keyring": "keyring",
+    "keyring": "keyring", "py_mini_racer": "workflow",
 }
+#: The built-in plugins that need an extra's module to do their work: plugin
+#: name -> that module (``noeta plugins`` names the extra when it is missing).
+PLUGIN_MODULES = {"workflow": "py_mini_racer"}
 
 
 def _noeta(*extras: str) -> str:
@@ -356,6 +360,17 @@ def broken_plugin_lines() -> list[str]:
     missing = registry.missing_modules()
     return [f"{path}: {why}{_install_hint(missing[path]) if path in missing else ''}"
             for path, why in registry.broken_plugin_files().items()]
+
+
+def plugin_extra_lines() -> list[str]:
+    """``plugin: why`` for each installed built-in plugin whose extra is not
+    installed here, with the install line."""
+    from noeta.core import registry
+
+    names = set(registry.available(registry.PLUGINS))
+    return [f"{name}: the {module} module is not installed{_install_hint(module)}"
+            for name, module in PLUGIN_MODULES.items()
+            if name in names and importlib.util.find_spec(module) is None]
 
 
 def _install_hint(module: str) -> str:

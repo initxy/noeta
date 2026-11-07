@@ -27,7 +27,6 @@ classifiers = [
 requires-python = ">=3.11"
 dependencies = [
     "httpx[socks]>=0.28.1",
-    "mini-racer>=0.14,<0.15",
     "msgspec>=0.19",
     "pillow>=10.4",
     "pyyaml>=6.0",
@@ -38,6 +37,8 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 server = ["starlette>=0.40", "uvicorn>=0.30", "websockets>=12"]
 acp = ["agent-client-protocol>=0.12,<0.13"]
 keyring = ["keyring>=24"]
+# The Workflow tool's embedded JavaScript engine (V8, about 80 MB installed).
+workflow = ["mini-racer>=0.14,<0.15"]
 # Released together, at the same version (docs/releasing.md).
 tui = ["noeta-tui==1.0.5"]
 
@@ -108,6 +109,8 @@ dev = [
     "import-linter>=2.0",
     "types-pyyaml>=6.0",
     "pytest-timeout>=2.3",
+    # The workflow extra, so the Workflow tests run whatever `uv sync` is given.
+    "mini-racer>=0.14,<0.15",
     # The terminal UI (tui/), so `make check` runs its tests and lints it.
     "noeta-tui",
 ]
