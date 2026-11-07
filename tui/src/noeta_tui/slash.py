@@ -1,7 +1,7 @@
 """The terminal UI's own slash commands with a mechanism behind them, as
 Claude Code has them: ``/help``, ``/status``, ``/model``, ``/effort``, ``/context``,
 ``/cost``, ``/memory``, ``/config``, ``/permissions``, ``/agents``,
-``/rewind``, ``/clear``, ``/reload-plugins``, and ``/mcp`` ``/hooks`` (what
+``/rewind``, ``/clear``, ``/plugins``, ``/reload-plugins``, and ``/mcp`` ``/hooks`` (what
 the MCP and hooks plugins say, shown as a panel). Each takes the app and what
 was typed after the name; what it shows goes to the transcript, never to
 the model. Plugins' commands (``/compact``, skills, ``.noeta/commands``)
@@ -27,7 +27,7 @@ from noeta.host.rewind import RewindPoint, rewind_points
 from noeta.host.usage import cost_text, tree_usage
 from noeta.toolkit.permission_modes import MODE_NAMES
 from noeta.toolkit.plugin_records import MEMORY
-from noeta_tui import render
+from noeta_tui import plugin_ui, render
 from noeta_tui.transcript import SERVER_DIRECTORY
 from noeta_tui.widgets import Option, Picker
 
@@ -56,6 +56,7 @@ COMMANDS = {
     "new": "Start a new task",
     "resume": "Pick a task to resume",
     "stop": "Stop the turn (also Esc)",
+    "plugins": "Switch plugins for this task or new tasks; remove or install them",
     "reload-plugins": "Load the plugin, agent and settings files again (from the next turn on)",
     "exit": "Quit",
 }
@@ -164,11 +165,16 @@ async def _new(app: NoetaApp, arg: str) -> None:
     await app.new_task()
 
 
+async def _plugins(app: NoetaApp, arg: str) -> None:
+    await plugin_ui.menu(app, arg)
+
+
 async def _reload_plugins(app: NoetaApp, arg: str) -> None:
     reload = getattr(app.local, "reload_plugins", None)
     if reload is None:
         await app.say_notice("attached to a server: its workers load plugins when they start, "
-                             "so restart them (one by one) to reload")
+                             "so restart them (one by one) to reload; /plugins switches "
+                             "them per task")
         return
     lines = reload()
     app._load_commands()

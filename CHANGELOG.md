@@ -47,6 +47,10 @@ this repository. Their versions are listed on PyPI.
   from that table, as before. A copied `chat_bridge.py` / `chat_approvals.py` keeps working.
 - A marketplace install without a plugin manifest is named by its marketplace entry (it was the
   fetched directory's name).
+- **The terminal UI's `/plugins`** switches a plugin for this task (from its next turn on) or
+  for new tasks, removes one, and installs one from the marketplaces after showing its source,
+  commit and parts. Plugins' status items show in a line under the footer, their widgets over
+  or under the prompt and their notices in the transcript.
 
 ## [1.0.6] - 2026-11-07
 
