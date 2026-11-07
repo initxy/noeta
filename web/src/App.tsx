@@ -2,7 +2,7 @@ import { Slot, SLOTS, SlotsContext } from "@noeta-ai/web-sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, TaskSummary, TreeUsage } from "./api/types";
-import { Composer, type Attachment } from "./components/Composer";
+import { Composer, newComposerKeep, type Attachment } from "./components/Composer";
 import { ModelPicker, NEW_SESSION_MODES, NewSessionMode, RewindDialog, UsageBadge } from "./components/Controls";
 import { PendingCards } from "./components/PendingCard";
 import { PluginsDialog } from "./components/PluginsDialog";
@@ -182,6 +182,7 @@ function Workspace({
   const [rewinding, setRewinding] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [draft, setDraft] = useState<{ text: string; n: number } | undefined>();
+  const [composerKeep] = useState(newComposerKeep);
   const [replaced, setReplaced] = useState(loadReplaced);
   const [navOpen, setNavOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -456,6 +457,7 @@ function Workspace({
             onCycleMode={taskId ? undefined : cycleMode}
             placeholder={ended ? "This session has ended. Send a message to continue it." : undefined}
             draft={draft}
+            keep={composerKeep}
           />
           </Slot>
           <Widgets items={uiItems} placement="below" />

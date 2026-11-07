@@ -1,7 +1,7 @@
 // The slots of a page: which plugin put what where, and the <Slot> that
 // shows it. The page keeps one SlotRegistry and provides it (SlotsContext);
 // a plugin's ctx.slots is the same registry, bound to the plugin's name.
-import { Component, createContext, useContext, useEffect, useSyncExternalStore, type ComponentType, type ErrorInfo, type ReactNode } from "react";
+import { Component, createContext, Fragment, useContext, useEffect, useSyncExternalStore, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import type { Mount, SlotOptions } from "./index";
 
 export interface Contribution {
@@ -200,12 +200,18 @@ class Boundary extends Component<BoundaryProps, { error: string | null }> {
 
 /** A place plugins put things in: `children` is its own content (what a
  * `single` contribution replaces and a `wrap` one wraps); `props` go to
- * every contribution. */
+ * every contribution.
+ *
+ * The tree has one shape whatever the slot holds (the contributions before
+ * the own content, the own content, the ones after it, each in a fixed
+ * place), so a `list`, `keyed` or `single` one coming or going never
+ * remounts the own content. A `wrap` can't do the same: what it wraps
+ * becomes its child, so one coming or going remounts what is inside, and
+ * own content that must keep its state across that keeps it outside. */
 export function Slot({ name, props, children }: { name: string; props?: object; children?: ReactNode }) {
   const registry = useRegistry();
   useEffect(() => registry.provide(name), [registry, name]);
   const all = registry.contributions(name);
-  if (!all.length) return <>{children}</>;
   const shown = (c: Contribution, extra: { children?: ReactNode } = {}, fallback?: ReactNode) => (
     <Boundary key={c.id} plugin={c.plugin} slot={name} registry={registry} fallback={fallback}>
       <c.Component {...(props as Record<string, unknown>)} {...extra} />
@@ -218,7 +224,7 @@ export function Slot({ name, props, children }: { name: string; props?: object; 
   let out: ReactNode = (
     <>
       {added.filter((c) => c.order < 0).map((c) => shown(c))}
-      {single ? shown(single, { children }, children) : children}
+      {single ? shown(single, { children }, children) : <Fragment key="own">{children}</Fragment>}
       {added.filter((c) => c.order >= 0).map((c) => shown(c))}
     </>
   );
@@ -226,5 +232,5 @@ export function Slot({ name, props, children }: { name: string; props?: object; 
     const inner = out;
     out = shown(c, { children: inner }, inner);
   }
-  return <>{out}</>;
+  return out;
 }

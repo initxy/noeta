@@ -1,5 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isHostSlot, Slot, SlotRegistry, SlotsContext } from "./slots";
 
@@ -137,5 +137,29 @@ describe("Slot", () => {
     expect(screen.getByText("composer")).toBeInTheDocument(); // a broken wrap leaves what it wrapped
     expect(screen.getAllByRole("alert").map((a) => a.textContent)).toEqual(["bad: boom", "worse: boom"]);
     expect(r.problems("bad")).toEqual([{ plugin: "bad", slot: "sidebar", kind: "render", message: "boom" }]);
+  });
+
+  it("never remounts its own content as list, keyed and single contributions come and go", () => {
+    const r = new SlotRegistry();
+    let mounts = 0;
+    function Own() {
+      const [n] = useState(() => ++mounts);
+      return <span>own {n}</span>;
+    }
+    render(
+      <Page registry={r}>
+        <Slot name="sidebar">
+          <Own />
+        </Slot>
+      </Page>,
+    );
+    const removers: (() => void)[] = [];
+    act(() => void removers.push(r.add("a", "sidebar", {}, Text("after"))));
+    act(() => void removers.push(r.add("b", "sidebar", { order: -1 }, Text("before"))));
+    act(() => void removers.push(r.add("c", "sidebar", { key: "k", mount: "keyed" }, Text("keyed"))));
+    act(() => void removers.push(r.add("d", "other", { mount: "single" }, Text("elsewhere"))));
+    for (const remove of removers) act(() => remove());
+    expect(screen.getByText("own 1")).toBeInTheDocument();
+    expect(mounts).toBe(1);
   });
 });
