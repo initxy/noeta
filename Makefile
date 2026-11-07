@@ -58,7 +58,7 @@ lint:
 ## (found through its entry point, nothing patched), in a throwaway environment;
 ## then the single-file plugins of examples/ (docs/guides/plugins.md), loaded as plain files
 PLUGIN_FILE_EXAMPLES = examples/run-tests/tests examples/chat-bridge/tests \
-	examples/chat-approvals/tests examples/house-style/tests
+	examples/chat-approvals/tests examples/house-style/tests examples/web-panel/tests
 example:
 	uv run --with-editable ./examples/hello-plugin python -m pytest -q -p no:cacheprovider examples/hello-plugin/tests
 	uv run pytest -q -p no:cacheprovider $(PLUGIN_FILE_EXAMPLES)

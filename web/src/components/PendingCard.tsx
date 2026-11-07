@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ApiError, type Api } from "../api/client";
 import type { Pending, Question } from "../api/types";
 import { DiffView, EDITS, editDiff } from "./DiffView";
-import { Markdown } from "./Markdown";
+import { Markdown } from "@noeta-ai/ui";
 
 /** Answers an approval with one of its choices, as noeta.host.pending.answer_choice does. */
 export async function answerChoice(api: Api, p: Pending, choice: string, message = ""): Promise<void> {

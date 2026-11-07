@@ -1,0 +1,7 @@
+{
+  "name": "web-panel",
+  "version": "0.1.0",
+  "description": "A sidebar panel showing the task's directory, and the conversation's length",
+  "ui_api": 1,
+  "web": "web/dist/index.js"
+}

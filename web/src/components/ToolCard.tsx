@@ -2,7 +2,8 @@ import { useState, type ReactNode } from "react";
 import type { Item } from "../state/transcript";
 import { useApi, useTask } from "../state/useTask";
 import { DiffView, EDITS, editDiff } from "./DiffView";
-import { Markdown } from "./Markdown";
+import { Markdown } from "@noeta-ai/ui";
+import { Slot, toolSlot, useSlotCount, type ToolCall } from "@noeta-ai/web-sdk";
 import { Transcript } from "./Transcript";
 
 type Tool = Extract<Item, { kind: "tool" }>;
@@ -65,6 +66,7 @@ function ChildTranscript({ api, taskId }: { api: ReturnType<typeof useApi>; task
  * deserves — a shell command and its output, a diff, a sub-agent's work. */
 export function ToolCard({ t }: { t: Tool }) {
   const [open, setOpen] = useState(false);
+  const contributed = useSlotCount(toolSlot(t.name)) > 0;
   const mcp = t.name.startsWith("mcp__");
   const label = mcp ? t.name.slice(5).split("__").join(" · ") : t.name;
   const target = toolTarget(t.name, t.input);
@@ -117,6 +119,8 @@ export function ToolCard({ t }: { t: Tool }) {
       </>
     );
   }
+  const call: ToolCall = { id: t.id, name: t.name, input: t.input, status: t.status, result: t.result, meta: t.meta };
+  const slot = toolSlot(t.name);
   const summary = COMPACT.has(t.name) && t.result !== undefined && !open ? `${t.result.split("\n").length} lines` : "";
   return (
     <div className={`tool tool-${COMPACT.has(t.name) ? "compact" : "full"}`} data-tool={t.name} data-status={t.status}>
@@ -127,7 +131,13 @@ export function ToolCard({ t }: { t: Tool }) {
         {summary && <span className="muted"> · {summary}</span>}
         {t.status === "waiting" && <span className="badge">waiting for you</span>}
       </div>
-      {body && <div className="tool-body">{body}</div>}
+      {(body || contributed) && (
+        <div className="tool-body">
+          <Slot name={slot} props={{ call }}>
+            {body}
+          </Slot>
+        </div>
+      )}
       {t.note && <div className="tool-note">⎿ {t.note}</div>}
     </div>
   );

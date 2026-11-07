@@ -9,9 +9,16 @@
     "build": "tsc -p . && vite build",
     "typecheck": "tsc -p .",
     "test": "vitest run",
-    "e2e": "vite build && playwright test"
+    "e2e": "vite build && playwright test",
+    "build:packages": "npm run build -w sdk && npm run build -w ui"
   },
+  "workspaces": [
+    "sdk",
+    "ui"
+  ],
   "dependencies": {
+    "@noeta-ai/ui": "1.0.6",
+    "@noeta-ai/web-sdk": "1.0.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
@@ -23,10 +30,12 @@
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
+    "@types/hast": "^3.0.5",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.1.0",
+    "esbuild": "^0.28.2",
     "jsdom": "^26.1.0",
     "typescript": "~5.9.3",
     "vite": "^7.2.0",

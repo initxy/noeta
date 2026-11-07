@@ -1,0 +1,16 @@
+{
+  "name": "my-plugin-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@noeta-ai/ui": "^1.0.6",
+    "@noeta-ai/web-sdk": "^1.0.6",
+    "@types/react": "^19.2.0",
+    "esbuild": "^0.28.2",
+    "typescript": "~5.9.3"
+  }
+}

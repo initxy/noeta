@@ -184,6 +184,23 @@ describe("reduce", () => {
   });
 });
 
+describe("a task's plugins", () => {
+  it("follows what the task runs without, from its config and config signals", () => {
+    const config = (data: unknown, inbox: number): Action =>
+      ev({ type: "InputTaken", through: inbox, items: [{ seq: inbox, at: 0, body: { kind: "external", name: "config", data } }] });
+    expect(run(ev({ type: "TaskCreated", agent: "main", config: { plugins_off: ["web"] } })).pluginsOff).toEqual(["web"]);
+    const st = run(ev({ type: "TaskCreated", agent: "main", config: {} }), config({ plugins_off: ["panel", 3] }, 1));
+    expect(st.pluginsOff).toEqual(["panel"]);
+    expect(reduce(st, config({ model: "m" }, 2)).pluginsOff).toEqual(["panel"]);
+    expect(reduce(st, config({ plugins_off: null }, 2)).pluginsOff).toEqual([]);
+  });
+
+  it("keeps a plugin's record the page has no view of as a slot item, never a core one", () => {
+    const st = run(record("panel", "note", { text: "a" }), record("core", "unknown_kind"), record("title", "title", { title: "T" }));
+    expect(st.items).toEqual([{ kind: "record", id: expect.any(String), seq: expect.any(Number), plugin: "panel", recordKind: "note", data: { text: "a" } }]);
+  });
+});
+
 describe("sessionStatus", () => {
   it("names what the sidebar shows", () => {
     expect(sessionStatus("waiting", "approval")).toBe("needs-you");

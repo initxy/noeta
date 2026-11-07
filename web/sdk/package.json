@@ -1,0 +1,27 @@
+{
+  "name": "@noeta-ai/web-sdk",
+  "version": "1.0.6",
+  "description": "Types, slot names and the slot registry for a noeta plugin's web part; the page provides this module at run time.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "template"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0"
+  }
+}

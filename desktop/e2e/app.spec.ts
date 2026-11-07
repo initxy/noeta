@@ -3,7 +3,7 @@
 // with NOETA_SCREENSHOTS=1.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -63,6 +63,32 @@ test("the app starts its own server, injects the token, and a session replies", 
     // The menu's New Session (Cmd/Ctrl+N) goes back to the welcome screen.
     await clickMenu(app, "New Session");
     await expect(page.getByText("What should we work on?")).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
+test("an installed plugin's web part runs in the window, with the desktop bridge", async () => {
+  const { dir, work } = profile({});
+  // Installed as `noeta plugin add` leaves it: a copy in the home's plugins.
+  const plugin = resolve(here, "..", "examples", "web-panel");
+  cpSync(plugin, join(dir, "home", "plugins", "web-panel"), { recursive: true, filter: (p) => !p.includes("node_modules") });
+  const { app, page } = await launch(dir, work, join(here, "e2e", "noeta"));
+  try {
+    await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible({ timeout: 180_000 });
+    await page.getByLabel("Permission mode").selectOption("default");
+    const box = page.getByLabel("Message");
+    await box.fill("hello, plugins");
+    await box.press("Enter");
+    await expect(page.locator(".msg.assistant").last()).toContainText("I am the scripted model", { timeout: 30_000 });
+    const panel = page.getByTestId("web-panel");
+    await expect(panel.getByTestId("web-panel-host")).toHaveText(`in the desktop app (${process.platform})`);
+    await panel.getByRole("button", { name: "Look" }).click();
+    await expect(panel).toContainText(work);
+    await expect(page.getByLabel("Status")).toContainText("messages");
+    await page.getByRole("button", { name: "Plugins", exact: true }).click();
+    await expect(page.locator('.plugin-row[data-plugin="web-panel"]')).toContainText("web");
+    await page.screenshot({ path: `${SHOTS}/05-plugin.png` });
   } finally {
     await app.close();
   }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Item, TaskState } from "../state/transcript";
-import { Markdown } from "./Markdown";
+import { Markdown } from "@noeta-ai/ui";
+import { recordSlot, Slot } from "@noeta-ai/web-sdk";
 import { ToolCard } from "./ToolCard";
 
 function Thinking({ text, live }: { text: string; live?: boolean }) {
@@ -54,6 +55,8 @@ function Row({ item }: { item: Item }) {
       return <div className={`notice ${item.tone}`}>{item.text}</div>;
     case "compaction":
       return <Compaction summary={item.summary} />;
+    case "record":
+      return <Slot name={recordSlot(item.plugin, item.recordKind)} props={{ record: { seq: item.seq, plugin: item.plugin, kind: item.recordKind, data: item.data } }} />;
   }
 }
 
