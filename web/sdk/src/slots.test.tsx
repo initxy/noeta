@@ -13,7 +13,7 @@ const Text = (text: string) => () => <span>{text}</span>;
 
 describe("SlotRegistry", () => {
   it("knows the page's own slots", () => {
-    expect(["statusbar", "sidebar", "settings", "session.header", "composer", "theme", "tool:Bash", "record:todos/created", "codeblock:mermaid"].every(isHostSlot)).toBe(true);
+    expect(["statusbar", "sidebar", "settings", "session.header", "composer", "theme", "tool:Bash", "request:Bash", "record:todos/created", "codeblock:mermaid"].every(isHostSlot)).toBe(true);
     expect(isHostSlot("tool:")).toBe(false);
     expect(isHostSlot("my-plugin.panel")).toBe(false);
   });
@@ -97,6 +97,21 @@ describe("Slot", () => {
       r.add("e", "composer", { mount: "wrap", order: 0 }, ({ children }: { children?: ReactNode }) => <div>outer({children})</div>);
     });
     expect(container.textContent).toBe("outer(inner(single[own]keyed-newlist-L))");
+  });
+
+  it("puts a list or keyed contribution with a negative order before the slot's own content", () => {
+    const r = new SlotRegistry();
+    r.add("a", "statusbar", { order: -1 }, Text("first"));
+    r.add("b", "statusbar", { mount: "keyed", order: -2 }, Text("before-first"));
+    r.add("c", "statusbar", {}, Text("after"));
+    const { container } = render(
+      <Page registry={r}>
+        <Slot name="statusbar">
+          <i>own</i>
+        </Slot>
+      </Page>,
+    );
+    expect(container.textContent).toBe("before-firstfirstownafter");
   });
 
   it("keeps a contribution's error in its own boundary, naming its plugin", () => {

@@ -35,8 +35,8 @@ export async function earlierLogs(api: Api, first: Recorded | undefined): Promis
 
 /** A task's state, followed live: the conversations it continues, its own
  * log, then what it records and streams from then on. `tap` is handed each
- * event of the task's own log as it is folded. */
-export function useTask(api: Api, taskId: string | null, tap?: (rec: Recorded) => void): [TaskState, (a: Action) => void] {
+ * event as it is folded, `from` naming the earlier conversation it is of. */
+export function useTask(api: Api, taskId: string | null, tap?: (rec: Recorded, from?: string) => void): [TaskState, (a: Action) => void] {
   const [state, dispatch] = useReducer(reduce, undefined, emptyTask);
   const tapped = useRef(tap);
   tapped.current = tap;
@@ -51,7 +51,10 @@ export function useTask(api: Api, taskId: string | null, tap?: (rec: Recorded) =
       const own = await api.events(taskId, 0);
       for (const [from, log] of await earlierLogs(api, own[0])) {
         if (!log) live({ type: "notice", text: "An earlier part of this conversation could not be loaded.", tone: "error" });
-        for (const rec of log ?? []) live({ type: "history", rec, from });
+        for (const rec of log ?? []) {
+          live({ type: "history", rec, from });
+          if (!ctl.signal.aborted) tapped.current?.(rec, from);
+        }
       }
       const recorded = (rec: Recorded) => {
         if (ctl.signal.aborted) return;

@@ -1,22 +1,27 @@
+import type { PluginRecord } from "@noeta-ai/web-sdk";
 import type { Recorded } from "../api/types";
 
 /** The open task's own events as the page folds them, handed on to plugins'
- * web parts (`ctx.client.watch`) and kept per plugin and kind (`ctx.records`). */
+ * web parts (`ctx.client.watch`) and kept per plugin (`ctx.records`), the
+ * records of the conversation it continues first. */
 export class TaskEvents {
   private listeners = new Set<(r: Recorded) => void>();
-  private kept = new Map<string, unknown[]>();
+  private kept = new Map<string, PluginRecord[]>();
   private last = 0;
 
   constructor(readonly taskId: string) {}
 
+  /** A record of the conversation the task continues: kept, not handed on. */
+  keep(rec: Recorded): void {
+    const ev = rec.event;
+    if (ev.type !== "ExtensionRecorded") return;
+    this.kept.set(ev.extension, [...(this.kept.get(ev.extension) ?? []), { kind: ev.kind, data: ev.data ?? null }]);
+  }
+
   emit(rec: Recorded): void {
     if (rec.seq <= this.last) return; // a stream picked up again
     this.last = rec.seq;
-    const ev = rec.event;
-    if (ev.type === "ExtensionRecorded") {
-      const key = `${ev.extension}/${ev.kind}`;
-      this.kept.set(key, [...(this.kept.get(key) ?? []), ev.data ?? null]);
-    }
+    this.keep(rec);
     for (const l of [...this.listeners]) {
       try {
         l(rec);
@@ -32,6 +37,12 @@ export class TaskEvents {
   }
 
   records(plugin: string, kind: string): unknown[] {
-    return [...(this.kept.get(`${plugin}/${kind}`) ?? [])];
+    return this.all(plugin)
+      .filter((r) => r.kind === kind)
+      .map((r) => r.data);
+  }
+
+  all(plugin: string): PluginRecord[] {
+    return [...(this.kept.get(plugin) ?? [])];
   }
 }

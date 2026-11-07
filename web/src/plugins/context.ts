@@ -1,5 +1,6 @@
 import { WAIT_TIMEOUT_MS, type PluginContext, type SlotRegistry, type Theme } from "@noeta-ai/web-sdk";
 import type { Api } from "../api/client";
+import { TaskTranscript } from "../components/Transcript";
 import { desktop } from "../desktop";
 import type { TaskEvents } from "./events";
 
@@ -35,6 +36,7 @@ export function pluginContext(plugin: string, deps: { api: Api; events: TaskEven
       signal: (name, data, wake) => api.signal(taskId, name, data, wake),
     },
     records: (kind) => events.records(plugin, kind),
+    allRecords: () => events.all(plugin),
     call: <T>(name: string, args?: unknown) => api.pluginCall<T>(taskId, plugin, name, args),
     slots: {
       add: (slot, options, Component) => registry.add(plugin, slot, options, Component),
@@ -42,5 +44,6 @@ export function pluginContext(plugin: string, deps: { api: Api; events: TaskEven
     },
     theme,
     desktop: desktop(),
+    Transcript: TaskTranscript,
   };
 }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Item, TaskState } from "../state/transcript";
+import { useApi, useTask } from "../state/useTask";
 import { Markdown } from "@noeta-ai/ui";
 import { recordSlot, Slot } from "@noeta-ai/web-sdk";
 import { ToolCard } from "./ToolCard";
@@ -58,6 +59,17 @@ function Row({ item }: { item: Item }) {
     case "record":
       return <Slot name={recordSlot(item.plugin, item.recordKind)} props={{ record: { seq: item.seq, plugin: item.plugin, kind: item.recordKind, data: item.data } }} />;
   }
+}
+
+/** Another task's conversation (a sub-agent's), followed live: plugins get
+ * it as `ctx.Transcript`. */
+export function TaskTranscript({ taskId }: { taskId: string }) {
+  const [state] = useTask(useApi(), taskId);
+  return (
+    <div className="nested">
+      <Transcript state={state} nested />
+    </div>
+  );
 }
 
 /** The conversation: recorded items, then what the model is writing now. */
