@@ -408,7 +408,9 @@ class CoreNotices:
     def set_timer(self, name: str, at: float, text: str = "") -> None:
         """Wake the task at ``at`` (epoch seconds) once it is idle, with
         ``text`` as the next message (``TimerFired(name)`` either way); a
-        timer of the same name is replaced. Durable: any worker fires it."""
+        timer of the same name is replaced. Durable: any worker fires it.
+        Name it ``<your plugin>.<rest>``: such a timer waits while the task
+        runs without that plugin (``plugins_off``), instead of firing."""
         self._record_core(Timer(name=name, at=at, text=text))
 
     def clear_timer(self, name: str) -> None:
