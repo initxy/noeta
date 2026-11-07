@@ -108,7 +108,9 @@ class TaskRun:
         self.task_id = claim.task_id
         self.state = TaskState()
         self.agent: Agent | None = None
-        self.exts: list[Extension] = []
+        #: Every extension of the task's agent: what folds the log, pins and
+        #: versions the fold, whether switched off for the task or not.
+        self.all_exts: list[Extension] = []
         self.reducers: dict[str, Any] = {}
         self.also: dict[str, list[str]] = {}
         self._step: asyncio.Task[Any] | None = None
@@ -345,7 +347,7 @@ class TaskRun:
         view = self.view()
         if self.state.prompt_files is None:
             await self._record_prompt_files(view)
-        current = [registry.pin(e) for e in self.exts]
+        current = [registry.pin(e) for e in self.all_exts]
         pinned = self.state.plugins
         if pinned is not None:
             missing = sorted({str(p.get("name")) for p in pinned}
@@ -398,7 +400,7 @@ class TaskRun:
         records = await self.store.read(self.task_id)
         first = records[0].event if records else None
         self._use_agent(getattr(first, "agent", ""))
-        initial = {e.name: e.initial_state() for e in self.exts}
+        initial = {e.name: e.initial_state() for e in self.all_exts}
         base = await self._history(first, initial) or new_state(initial)
         base.task_id = self.task_id  # the log never names its own task
         if self._snapshots_on():
@@ -409,9 +411,17 @@ class TaskRun:
 
     def _use_agent(self, name: str) -> None:
         self.agent = self.rt.agent(name)
-        self.exts = self.agent.all_extensions() if self.agent is not None else []
-        self.reducers = {e.name: e.reduce for e in self.exts}
-        self.also = also_folding(self.exts)
+        self.all_exts = self.agent.all_extensions() if self.agent is not None else []
+        self.reducers = {e.name: e.reduce for e in self.all_exts}
+        self.also = also_folding(self.all_exts)
+
+    @property
+    def exts(self) -> list[Extension]:
+        """The extensions the task runs with now: its agent's, less the ones
+        switched off for this turn (``TaskState.plugins_off``), which still
+        fold their records but are asked nothing."""
+        off = self.state.plugins_off
+        return [e for e in self.all_exts if e.name not in off] if off else self.all_exts
 
     def _snapshots_on(self) -> bool:
         return self.rt.snapshot_every > 0 and self.agent is not None \
@@ -420,7 +430,7 @@ class TaskRun:
     def fold_version(self) -> str:
         """The snapshot version of this task's fold (``snapshots.version``)."""
         assert self.agent is not None
-        return snapshots.version(self.agent.name, self.exts)
+        return snapshots.version(self.agent.name, self.all_exts)
 
     async def _load_snapshot(self) -> bool:
         """Start from the task's snapshot and fold only the events after it;
@@ -469,7 +479,7 @@ class TaskRun:
                                    first.history_from)
         return continued(fold([r for r in source if through is None or r.seq <= through],
                               self.reducers, initial, state=base, also=self.also),
-                         {e.name: e.continue_state for e in self.exts},
+                         {e.name: e.continue_state for e in self.all_exts},
                          started_by=core_records.spawning_call(source, task_id))
 
     async def _keep_claim(self) -> None:

@@ -8,6 +8,26 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+### Added
+
+- **A plugin can be switched off for one task.** The task config key `plugins_off` (set when
+  the task is created or with the `config` signal) names plugins the task runs without from
+  its next turn on, on whichever worker runs it: they keep folding their records but offer no
+  tools, context, reminders, gates, commands or UI. Sub-agents start with their parent's.
+  `~/.noeta/plugin-switches.json` (`{"off": [...]}`, written by `PUT /plugins/{name}`) is the
+  machine's default for new tasks. A request may not switch off a built-in plugin a task is
+  built on (the permission gate, the file and shell tools).
+- **Plugins show UI in every front end.** `Extension.ui(view)` returns `StatusItem`, `Widget`
+  and `Notice` items (exported from `noeta`), served by `GET /tasks/{id}/ui` and `AppAPI.ui`;
+  `Extension.ui_call` answers a plugin's own front-end code (`POST /plugins/{name}/call`,
+  `AppAPI.plugin_call`). `examples/hello-plugin` shows a status item.
+- **Plugins are listed and managed over the API.** `GET /plugins` (`AppAPI.plugins`) lists
+  each plugin's source, version, parts, switch and why it is broken; a plugin's
+  `.noeta-plugin/plugin.json` manifest may name a built web module (`ui_api`, `web`), served
+  at `/plugins/{name}/web/` without a token. `POST /plugins/install`, `DELETE /plugins/{name}`
+  and `GET /market` install, remove and discover plugins; installing and removing over HTTP
+  are allowed only on a loopback server or with `noeta serve --allow-plugin-install`.
+
 ## [1.0.6] - 2026-11-07
 
 Open-source readiness: a restart limit for tasks that keep killing their worker, a Docker image for many workers, requests that no longer present noeta as Claude Code, a clearer first run, and DeepSeek's current models.

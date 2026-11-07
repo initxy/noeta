@@ -2,7 +2,7 @@
 
 `noeta serve` 提供的每个接口、怎么认证，以及两种流式格式：`/tasks/{id}/watch` 的事件流，和
 `/stream-json` 上 Claude Code 的无界面协议。代码在 `noeta/host/http.py`、`_http_routes.py`、
-`_http_stream.py`、`_http_guard.py`；`GET /openapi.json` 以 OpenAPI 3.1 文档的形式返回同一套接口。
+`_http_plugins.py`、`_http_stream.py`、`_http_guard.py`；`GET /openapi.json` 以 OpenAPI 3.1 文档的形式返回同一套接口。
 怎么把服务端跑起来，见[作为服务端运行](../guides/server.md)。
 
 这套接口就是客户端接口搬到网络上：创建、发消息、回答、发信号、取消、读取、跟踪。
@@ -23,8 +23,11 @@
    （只限回环地址）可以关掉这一步。
 3. **请求能要求什么**（`GuardedClient`）。创建任务时，请求只能设这些配置项：`model`、`effort`、
    `max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、
-   `permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`、`bash_mode`。`max_budget_usd`
-   必须是大于 0 的数（布尔值、字符串都不行），这里和 `config` 信号里都一样，不合规就返回 `400`。服务端
+   `permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`、`bash_mode`、`plugins_off`。`max_budget_usd`
+   必须是大于 0 的数（布尔值、字符串都不行），这里和 `config` 信号里都一样，不合规就返回 `400`。
+   `plugins_off` 是一串插件名，不能包含任务离不开的内置插件（内置插件里只能关 `web`、`workflow`、
+   `schedule`、`todos`、`findings`、`title`、`quiet_nudge`、`memory`、`mcp`、`checkpoints`、
+   `skills`、`ask_user`），否则返回 `403`。服务端
    启动时带的 `--effort`、`--permission-mode` 垫在请求的配置下面，请求自己给了的以请求为准。只能发前端会发的那几种信号：
    `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。除非服务端带了
    `--allow-bypass-permissions`，否则不能让任务以 `bypassPermissions` 启动或切过去。`cwd` 必须在
@@ -89,7 +92,7 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时�
 
 **信号。** `permission_mode` 带 `{mode}` 切换权限模式；`config` 带 `model`、`effort`、
 `max_turns`、`output_schema`、`interactive`、`permission_prompt_tool`、`ultracode`、
-`max_budget_usd` 中的任意几个，修改任务配置（值为 `null` 表示删掉这个键；请求只能删除
+`max_budget_usd`、`plugins_off` 中的任意几个，修改任务配置（值为 `null` 表示删掉这个键；请求只能删除
 `client_hooks`，不能设置它；`max_budget_usd` 必须是大于 0 的数）；`resumed`、`restore_files`、`rename` `{title}`、`archive`
 `{archived}` 是前端在重新打开、回退、改名、归档时发的。`wake: false` 让正在等待的任务继续等。
 模型走哪家 provider 由服务端记录，从不采用请求里给的。
@@ -124,6 +127,41 @@ worker 不会自己去取。只要通过这里给它发消息、回答、取消�
 
 带 `task_id` 时，命令在那个任务自己的代理和目录里列出、执行；带 `cwd` 时，这个目录会像新任务的
 目录一样被检查。
+
+## 插件
+
+| 方法与路径 | 查询参数 / 请求体 | 返回 |
+|---|---|---|
+| `GET /plugins` | `?agent=&cwd=`（`agent` 默认 `main`） | `{"plugins": [PluginInfo], "ui_api": [最小, 最大]}` |
+| `PUT /plugins/{name}` | `{enabled}` | `{"ok": true}`：这个插件在之后新建的任务里开还是关 |
+| `GET /tasks/{id}/ui` | | `{"items": [UiEntry]}`：任务的插件此刻要显示的东西 |
+| `POST /plugins/{name}/call` | `{task_id, name, args?}` | `{"result": …}`，即插件 `ui_call` 的回答；任务没在用这个插件、或插件不认这个调用时返回 `404` |
+| `GET /plugins/{name}/web/{path}` | | 插件网页部分的文件，**不要 token** |
+| `GET /market` | | `{"entries": [MarketEntry]}`：已配置的插件市场里有哪些插件 |
+| `POST /plugins/install` | `{source, marketplace?, commit?}` | `201`，返回装好的插件的 `PluginInfo` |
+| `DELETE /plugins/{name}` | | `{"ok": true}` |
+
+- `PluginInfo` 是 `{name, version, description, source, builtin, enabled, switchable, broken,
+  parts, ui_api, web}`。`enabled`：在这个智能体里，并且新任务默认开着；`switchable`：前端可以给它
+  开关（装上的插件，或上面 `plugins_off` 那句列出的内置插件）；`broken`：它本身或它的网页部分为什么
+  用不了，没问题时为 `null`；`parts` 取自 `backend`、`ui`、`web`、`skills`、`agents`、`commands`、
+  `hooks`、`mcp`；`web` 是 `{"entry": "/plugins/<name>/web/<file>?v=<hash>"}` 或 `null`。列表先列
+  智能体自己的插件，再列装了但它没用上的、加载失败的插件文件，最后是 Claude Code 插件。
+- 单个任务的开关是带 `plugins_off` 的 `config` 信号；`PUT /plugins/{name}` 只改这台机器上新任务
+  的默认值（存在 `~/.noeta/plugin-switches.json`，每个新任务创建时并进它的 `plugins_off`）。任务
+  离不开的插件返回 `400`；`--no-worker` 时开关由跑任务的那边管，返回 `501`。
+- `UiEntry` 是 `{plugin, type, key, …}`：`type` 为 `status` 时带 `text` 和 `tone`，为 `widget` 时
+  带 `markdown` 和 `placement`，为 `notice` 时带 `text` 和 `level`。前端在跟踪的日志往前走时再取一次。
+  `--no-worker` 时总是空的。
+- 网页文件只为这里某个智能体在用、并且清单里 `ui_api` 在服务端支持范围内的插件提供，只从它 `web`
+  模块所在的目录里取，出不了这个目录；响应头和网页应用的一样（JavaScript 文件是
+  `text/javascript`）。Host 和来源检查照样做。
+- `MarketEntry` 是 `{marketplace, name, description, version, source, commit, parts, ui_api,
+  installed}`。
+- 安装和删除做的就是 `noeta plugin add` 和 `noeta plugin remove` 做的事，做完像 `/reload-plugins`
+  一样重新加载插件。只有服务端监听在回环地址上（桌面端就是这样）、或启动时带了
+  `--allow-plugin-install` 才允许，否则返回 `403`。需要填选项（`userConfig`）的插件不能通过 HTTP
+  装（`400`），请在终端里装。
 
 ## 事件流：`GET /tasks/{id}/watch`
 

@@ -174,6 +174,7 @@ enables and, unless `--no-worker`, workers, all in the same process. Endpoints a
 | `--allow-origin ORIGIN` | none | a web origin (`https://host:port`) whose pages may call the API (repeatable) |
 | `--allow-bypass-permissions` | off | let requests start or switch tasks into `bypassPermissions` |
 | `--allow-root PATH` | none | a directory besides the server's own that tasks may run in (repeatable) |
+| `--allow-plugin-install` | off (on for a loopback `--host`) | let requests install and remove plugins (`POST /plugins/install`, `DELETE /plugins/{name}`) |
 | `--web DIR` | none | also serve this directory's files (the built web app, `web/dist`) at the other paths |
 
 The token is `NOETA_SERVER_TOKEN`, else one made on the first start and printed that once;

@@ -58,9 +58,15 @@ CONFIG_SIGNAL = "config"
 #: limits the catalog may not know), recorded with the model so every worker
 #: that runs the task reads the same; the kernel only keeps it.
 MODEL_ROUTE = "model_route"
+#: Config key: the names of the plugins the task runs without. Such a
+#: plugin still folds its records (its state, the task's snapshots and fold
+#: version stay as they are) but is asked nothing and offers nothing, from
+#: the next turn on (:attr:`TaskState.plugins_off`). A child task starts
+#: with its parent's.
+PLUGINS_OFF = "plugins_off"
 CHANGEABLE_CONFIG = ("model", "effort", "max_turns", "output_schema", "interactive",
                      "permission_prompt_tool", "client_hooks", "ultracode", "max_budget_usd",
-                     MODEL_ROUTE)
+                     MODEL_ROUTE, PLUGINS_OFF)
 
 
 @dataclass
@@ -185,6 +191,10 @@ class TaskState:
     #: The plugins the task last recorded running with
     #: (``noeta.core.registry.pin``); ``None`` until first recorded.
     plugins: list[dict[str, str]] | None = None
+    #: The plugins switched off for the turn open now (or the next one):
+    #: the config's :data:`PLUGINS_OFF` as it stood when no turn was open,
+    #: so a switch sent mid-turn applies from the next turn on.
+    plugins_off: list[str] = field(default_factory=list)
 
     usage: Usage = field(default_factory=Usage)
     #: Tool calls this task finished (a continued task counts its own).
@@ -265,6 +275,7 @@ def apply(state: TaskState, rec: Recorded, reducers: Mapping[str, Reducer],
     if isinstance(ev, TaskCreated):
         state.agent = ev.agent
         state.config = dict(ev.config)
+        state.plugins_off = off_names(state.config)
         state.parent_id = ev.parent_id
         state.root_id = ev.root_id
     elif isinstance(ev, InputTaken):
@@ -561,6 +572,16 @@ def _configure(state: TaskState, data: Any) -> None:
             else:
                 config[key] = data[key]
     state.config = config
+    if not state.turn_open:
+        state.plugins_off = off_names(config)
+
+
+def off_names(config: Mapping[str, Any]) -> list[str]:
+    """The plugin names ``config``'s :data:`PLUGINS_OFF` holds, sorted."""
+    value = config.get(PLUGINS_OFF)
+    if not isinstance(value, (list, tuple)):
+        return []
+    return sorted({n for n in value if isinstance(n, str) and n})
 
 
 def _say(state: TaskState, message: Message, seq: int, *, now: bool = False) -> bool:
@@ -644,6 +665,7 @@ def _erase(state: TaskState, seqs: set[int]) -> None:
 
 def _close_turn(state: TaskState, seq: int) -> None:
     state.turn_open = False
+    state.plugins_off = off_names(state.config)
     state.model_attempts = 0
     state.empty_replies = 0
     state.continuing = False
