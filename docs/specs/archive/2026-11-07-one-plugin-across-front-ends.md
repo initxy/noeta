@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-07
 branch: spec/unified-plugins
 ---
@@ -256,7 +256,7 @@ conversation, live), and the hooks `useRecords(ctx, kind)`, `useAllRecords(ctx)`
 
 ### 7. Wrap-up
 - [x] ADR refining ADR-002 (front-end parts of one plugin), `CONTEXT.md` entry.
-- [ ] Archive the spec when the branch merges into `main`.
+- [x] Archive the spec when the branch merges into `main`.
 
 ## Acceptance criteria
 
@@ -297,3 +297,4 @@ conversation, live), and the hooks `useRecords(ctx, kind)`, `useAllRecords(ctx)`
 - 2026-11-07 Docs wrap-up: the plugin pages (en + zh) read as one story: a plugin's parts in the plugins guide, the three switches and the per-task switchable built-ins in one home (`docs/reference/plugins.md#switching-a-plugin-off`; terminal guide, HTTP API, config and front ends link to it), a front-end parts section in How it works, web part docs linking `web/sdk` and `examples/web-panel`. ADR-033 refines ADR-002; `CONTEXT.md` gains `Plugin parts`; the CHANGELOG gains the web and desktop entries (web parts, plugins dialog, built-in views as web parts). Left: the TUI code part (deferred), archiving at merge. Diagrams `guide2-plugin-shapes` / `guide2-plugin-install` still show backend loading only and stay correct.
 - 2026-11-07 Review fixes, Python side: a timer named `<plugin>.<rest>` waits while that plugin is off for the task (`timer_held`; a firing already posted fires again once it is back), so `schedule` stays switchable; `Client.create` with `history_from` takes the source's current `plugins_off` (config, then untaken config signals) unless its config names its own, and a rewind no longer copies the creation-time one; a child takes `TaskState.plugins_off`; the `--no-worker` server's commands leave out switched-off plugins; `switchable = false` in `[plugins.<name>]` (`PluginAdmin.fixed`); `UnknownUiCall` (only it is a 404, a plugin's own error a 500); `--allow-host`/`--allow-origin` make HTTP install opt-in; marketplace robustness, `GET /market` gains `notices`. The server keeps the mode an approved plan switched to when the web app continues with a stale `permission_mode` (the recorded mode wins; tested), so the open note above concerns the page's picker only.
 - 2026-11-07 Review fixes, web side: `Slot` keeps one tree shape and the composer's draft lives in an App-owned store (`keep`), so a `wrap` mount no longer loses it; continuing an ended session sends neither `permission_mode` nor `plugins_off` (the server carries both from the source); the plugins dialog sends rapid switches from a pending set; async `activate`, scoped `ctx` disposal, re-import on a new entry hash; plugin records kept out of transcript items; the boundary test parses every import form; `react/jsx-dev-runtime` shared. Re-review: approve; after it, Discover shows `/market`'s notices and `timer_held` matches a dotted plugin name by prefix.
+- 2026-11-07 Owner: ship it. `initxy/noeta-plugins` created and pushed (installing `repetition_guard` from the official marketplace verified end to end); merged into `main`; done.
