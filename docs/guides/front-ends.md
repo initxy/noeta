@@ -116,13 +116,25 @@ The page asks for them again shortly after the session's log moves.
 A plugin with a web part (see [Write a plugin › A web part](./plugins.md#a-web-part)) runs in
 the page while the open session runs it: the page imports its module from the server, calls
 its `activate(ctx)`, and withdraws everything it added when it is switched off or you leave the
-session. Its components go into the page's slots: `statusbar`, `sidebar` (the column beside
-the conversation), `settings` (the dialog's Settings tab), `session.header`, `composer`,
-`tool:<Tool>` (a tool card's body), `record:<plugin>/<kind>` (a record in the conversation),
-`codeblock:<language>` (a fenced block in rendered markdown) and `theme`. A contribution that
-throws shows its plugin's name in its place, and the dialog names a plugin whose web part
-failed to load or that waited in vain for another plugin's slot. In the desktop app
-`ctx.desktop` is its bridge (`project`, `chooseProject`, `notify`); in a browser it is `null`.
+session. Its components go into the page's slots: `statusbar` (the line under the composer,
+after the model picker; a negative `order` puts one before it), `sidebar` (the column beside
+the conversation), `settings` (the dialog's Settings tab), `session.header` (the session's
+title), `composer`, `tool:<Tool>` (a tool card's body), `request:<Tool>` (what an approval or
+question card shows of the call it asks about), `record:<plugin>/<kind>` (a record in the
+conversation), `codeblock:<language>` (a fenced block in rendered markdown) and `theme`. A
+contribution that throws shows its plugin's name in its place, and the dialog names a plugin
+whose web part failed to load or that waited in vain for another plugin's slot. In the desktop
+app `ctx.desktop` is its bridge (`project`, `chooseProject`, `notify`); in a browser it is
+`null`.
+
+The built-in plugins' views come the same way, from their own web parts in the page's
+`web/src/plugins/<name>/`: the task list (`todos`), the permission mode picker and Shift+Tab
+(`permissions`), the plan to review (`plan_mode`), the auto-compact countdown (`compaction`),
+the session's title (`title`), the shell and file tools' cards with their diffs (`shell`,
+`fs`), sub-agents and workflow runs (`subtasks`, `workflow`), review findings (`findings`), and
+the Settings tab's memory, MCP and hooks sections. Switch one off for a session and its view
+goes with it; a tool no plugin gives a view of gets a plain card (its input, its output).
+Approvals and questions, rewind, the conversation and the model picker are the page's own.
 
 ## Editors: `noeta acp`
 

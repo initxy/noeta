@@ -488,7 +488,10 @@ export function activate(ctx: PluginContext) {
 ```
 
 `ctx.call(name, args)` reaches the plugin's own `Extension.ui_call`; `ctx.client` acts on the
-open session's task, `ctx.records(kind)` reads the plugin's records. Build it as one ES module
+open session's task, `ctx.records(kind)` and `ctx.allRecords()` read the plugin's records
+(`useRecords`/`useAllRecords` keep a component current), and `<ctx.Transcript taskId=…/>`
+shows another task's conversation, such as a sub-agent's. The built-in plugins' own views
+(`web/src/plugins/<name>/` in noeta's repository) are written this way. Build it as one ES module
 with `react`, `react-dom`, `react/jsx-runtime`, `@noeta-ai/web-sdk` and `@noeta-ai/ui` left
 external (the page provides its own; `web/sdk/template` has the build script) and commit the
 built file: installing runs no build. The slots and what the page does with a web part are in

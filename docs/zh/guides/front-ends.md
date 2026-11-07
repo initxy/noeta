@@ -69,7 +69,9 @@ npm run dist         # 安装包：macOS dmg、Linux AppImage 和 deb（未签�
 
 插件不写前端代码也能显示的东西（`Extension.ui`）出现在输入框附近：状态项在状态行里，小部件在输入框上方或下方，提示可以关掉。会话日志一有新内容，页面稍等片刻就重新取一次。
 
-带网页部分的插件（见[写一个插件 › 网页部分](./plugins.md#网页部分)）只在当前打开的会话用到它时才在页面里运行：页面从服务器导入它的模块，调用 `activate(ctx)`；插件被关掉、或者你离开这个会话，它加进页面的东西全部撤掉。它的组件放进页面预留的位置：`statusbar`、`sidebar`（对话旁边那一栏）、`settings`（对话框的 Settings 页）、`session.header`、`composer`、`tool:<Tool>`（工具卡片的正文）、`record:<plugin>/<kind>`（对话里的一条记录）、`codeblock:<language>`（渲染后的 markdown 里的代码块）和 `theme`。某个组件抛了异常，原地只显示插件名和错误，页面其余部分照常；网页部分加载失败、或者一直没等到另一个插件的位置，对话框里会点名是哪个插件。在桌面版里，`ctx.desktop` 就是桌面版给页面的那几个接口（`project`、`chooseProject`、`notify`）；在浏览器里它是 `null`。
+带网页部分的插件（见[写一个插件 › 网页部分](./plugins.md#网页部分)）只在当前打开的会话用到它时才在页面里运行：页面从服务器导入它的模块，调用 `activate(ctx)`；插件被关掉、或者你离开这个会话，它加进页面的东西全部撤掉。它的组件放进页面预留的位置：`statusbar`（输入框下面那一行，排在模型选择之后；`order` 为负数的排到它前面）、`sidebar`（对话旁边那一栏）、`settings`（对话框的 Settings 页）、`session.header`（会话标题）、`composer`、`tool:<Tool>`（工具卡片的正文）、`request:<Tool>`（审批卡片或提问卡片上，关于这次调用要展示的内容）、`record:<plugin>/<kind>`（对话里的一条记录）、`codeblock:<language>`（渲染后的 markdown 里的代码块）和 `theme`。某个组件抛了异常，原地只显示插件名和错误，页面其余部分照常；网页部分加载失败、或者一直没等到另一个插件的位置，对话框里会点名是哪个插件。在桌面版里，`ctx.desktop` 就是桌面版给页面的那几个接口（`project`、`chooseProject`、`notify`）；在浏览器里它是 `null`。
+
+内置插件的界面也走这条路，各自的网页部分放在页面源码的 `web/src/plugins/<name>/` 下：待办列表（`todos`）、权限模式选择和 Shift+Tab 切换（`permissions`）、待审阅的计划（`plan_mode`）、自动压缩前的倒数（`compaction`）、会话标题（`title`）、命令和文件工具的卡片及 diff（`shell`、`fs`）、子代理和 workflow 的进度（`subtasks`、`workflow`）、代码审查的发现（`findings`），以及 Settings 页里记忆、MCP、hooks 三块。某个会话关掉其中一个，它的界面跟着消失；没有插件接管的工具显示成普通卡片（输入和输出）。审批和提问、回退（rewind）、对话本身和模型选择由页面自己负责。
 
 ## 编辑器：`noeta acp`
 

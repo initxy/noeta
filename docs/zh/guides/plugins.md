@@ -355,7 +355,7 @@ export function activate(ctx: PluginContext) {
 }
 ```
 
-`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 读插件自己的记录。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@noeta-ai/web-sdk`、`@noeta-ai/ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。页面有哪些位置、拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
+`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 和 `ctx.allRecords()` 读插件自己的记录（组件里用 `useRecords`/`useAllRecords`，记录有新的就跟着刷新），`<ctx.Transcript taskId=…/>` 显示另一个任务的对话，比如某个子代理的。内置插件自己的界面（noeta 仓库里的 `web/src/plugins/<name>/`）也是这样写的。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@noeta-ai/web-sdk`、`@noeta-ai/ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。页面有哪些位置、拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
 
 ## 替换内置插件
 

@@ -200,6 +200,19 @@ mount?}, Component)` returns a remover; `ctx.slots.wait(slot, timeoutMs = 5000)`
 import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 `@noeta-ai/web-sdk`, `@noeta-ai/ui` as the page's own single instances.
 
+Added for the built-in parts (section 4), all usable by a third party: the slot family
+`request:<Tool>` (`requestSlot`, props `{request: PendingRequest}`: what an approval or question
+card shows of its call; the card's lead is its own content); slot props `tool:<Tool>` `{call,
+open}` (`ToolCall` also has `progress` and `children`, the tasks it started; a card whose
+contributions show nothing while closed is drawn as one line), `statusbar` `{context: {tokens,
+window}}` (its own content is the model picker and the status items), `session.header`
+`{title}` (its own content is the listed title, which a `single` replaces); in a `list` or
+`keyed` mount a negative `order` comes before the slot's own content; `ctx.allRecords()` (the
+plugin's records of every kind, in order; `ctx.records` and it include the records of the
+conversation a task continues), `ctx.Transcript` (`<ctx.Transcript taskId/>`: another task's
+conversation, live), and the hooks `useRecords(ctx, kind)`, `useAllRecords(ctx)`;
+`@noeta-ai/ui` gains `ToolOutput`, `DiffView`, `proposedDiff`.
+
 ## Plan
 
 ### 1. Listing and switches
@@ -224,11 +237,12 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 - [x] `web/sdk`, `web/ui` packages and a build template; `examples/web-panel`; e2e test.
 
 ### 4. Built-in UI under plugin names
-- [ ] `todos` and `compaction` first (proves `sidebar` and `statusbar`).
-- [ ] `subtasks`, `workflow`, `permissions`, `plan_mode`, `findings`, `title`, `mcp`,
+- [x] `todos` and `compaction` first (proves `sidebar` and `statusbar`).
+- [x] `subtasks`, `workflow`, `permissions`, `plan_mode`, `findings`, `title`, `mcp`,
       `hooks`, `memory`.
-- [ ] `fs` and `shell` tool cards last; the web tree keeps no plugin-specific component
+- [x] `fs` and `shell` tool cards last; the web tree keeps no plugin-specific component
       outside `web/src/plugins/`.
+- [ ] The same for the TUI (its code part is deferred, see Non-goals).
 
 ### 5. Marketplace
 - [x] `noeta plugin marketplace add|list|remove`, the default official marketplace, `noeta`
@@ -278,3 +292,4 @@ import map serves `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`,
 - 2026-11-07 Marketplace CLI (`noeta plugin marketplace`, `market_entries()`, install by name) and the move-out done: `repetition_guard`, `chat-bridge`, `chat-approvals` live in the local `noeta-plugins` repository (no remote yet), whose entries pin `git-subdir` commits of `https://github.com/initxy/noeta-plugins.git`, so installing from it works once that repository is pushed (verified end to end with a copy of the listing pointing at the local clone). `market_entries(notices)` takes an optional list for the unreadable-marketplace notices; `plugin_command.install(name, marketplace=, commit=)` refuses a commit other than the entry's pin (what `install_plugin` can pass from Discover).
 - 2026-11-07 TUI half: `/plugins` (`tui/src/noeta_tui/plugin_ui.py`: both switches, remove, Discover with a source/commit/parts confirmation; a refusing server's reason shown), status items under the footer, widgets over and under the prompt, notices, fetched 0.3 s after the log advances; `tui/screenshots/plugins.svg`; terminal guide (en + zh). The two Plan boxes that named TUI and web together were split. Open: Discover is empty until the marketplaces land (section 5).
 - 2026-11-07 Web and desktop half: `web/sdk` (`@noeta-ai/web-sdk`: ctx types, slot names, the slot registry and `<Slot>`, a build template) and `web/ui` (`@noeta-ai/ui`) as npm workspaces of `web/`, built from source by the app (`source` export condition) and to `dist/` for plugin authors; the import map is fixed text in `web/index.html` whose entries are `shared/*.js` shims re-exporting what the page puts on `globalThis` (`web/shared-modules.ts`, dev server and build alike). Friction: `default-src 'self'` blocks an inline import map, so the server's CSP now allows it by hash (`WEB_IMPORT_MAP_SHA256`, `noeta/host/http.py`; a test keeps it equal to `index.html`'s). Loader, ctx v1, UI data renderers, plugins dialog (Installed, Discover with a typed-in source too, Settings from the `settings` slot), `/plugins`, slots placed in the page; built-in parts register by name in `web/src/plugins/builtin.ts` (empty until section 4). `examples/web-panel` with its built `web/dist`; web e2e installs it from the dialog against a real `noeta serve`, desktop e2e runs it in Electron (`ctx.desktop` set). A record item is kept for every non-core plugin record the page has no view of (the `record:` slot). Open: TUI renderers and `/plugins` menu; `@noeta-ai/*` unpublished.
+- 2026-11-07 Section 4, web and desktop: every built-in plugin's view is its web part in `web/src/plugins/<name>/` (`todos` sidebar; `compaction` status-bar countdown, moved there from the header; `permissions` mode picker first in the status bar and Shift+Tab as a `composer` wrap; `plan_mode` plan review via `request:ExitPlanMode`; `title` as a `single` in `session.header`; `subtasks`, `workflow`, `findings`, `fs`, `shell`, `web`, `tool_search` tool cards; `memory`, `mcp`, `hooks` Settings sections), loaded through `BUILTIN_WEB_PARTS` with the same ctx and slots, importing only react and `@noeta-ai/*`; the API additions are under Interfaces. The page's fold reads only the kernel's records (`core/spawned` links calls to their sub-tasks; `subtasks/launched` is no longer read); a new session's mode picker is the page's (its creation config). `web/src/plugins/boundary.test.ts` fails when a host file names a built-in part's tool or reads a plugin's records by name, or a part imports anything a third party could not. Findings come through `tool:ReportFindings` (the plugin's data is a core notice, not a record of its own). Open: the TUI side; the sidebar row's title follows the server's listing (3 s), not the title record; continuing an ended session keeps the mode it was made with or last sent, not one a plugin switched to.
