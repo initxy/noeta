@@ -23,9 +23,11 @@ passes are `SLOTS`, `toolSlot` (`ToolSlotProps`: the call, and whether its card 
 `requestSlot` (`RequestSlotProps`: an approval or question about a call), `recordSlot` and
 `codeblockSlot`; `statusbar` passes `StatusbarSlotProps` (how full the context is),
 `session.header` `SessionHeaderSlotProps` (the listed title). In a `list`, a negative `order`
-comes before the slot's own content. What
-`activate` returns is called when the plugin is switched off for the session or the page
-leaves it; whatever it added to slots goes then too.
+comes before the slot's own content. `activate` may be async; a rejection shows on the
+plugins page. What it returns (or resolves to) is called when the plugin is switched off for
+the session, its web part is rebuilt (a new entry hash), or the page leaves it; whatever it
+added to slots goes then too, what it subscribed to through `ctx` (`client.watch`,
+`theme.onChange`) is unsubscribed, and that `ctx` adds nothing more.
 
 ## Building
 

@@ -194,8 +194,13 @@ export interface PluginContext {
   Transcript: ComponentType<{ taskId: string }>;
 }
 
-/** A web part's module. A returned function is called when the plugin is
- * switched off for the task or the page leaves the task. */
+/** A web part's module. `activate` may be async (the part is active once
+ * its promise resolves; a rejection is shown on the plugins page). A
+ * returned (or resolved) function is called when the plugin is switched off
+ * for the task, its web part is rebuilt, or the page leaves the task; then
+ * what it added through `ctx.slots` is withdrawn and what it subscribed to
+ * through `ctx` (`client.watch`, `theme.onChange`) is unsubscribed, and that
+ * `ctx` adds nothing more. */
 export interface PluginModule {
-  activate(ctx: PluginContext): void | (() => void);
+  activate(ctx: PluginContext): void | (() => void) | Promise<void | (() => void)>;
 }

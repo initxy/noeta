@@ -26,10 +26,10 @@ export function webParts(plugins: PluginInfo[], off: string[], importEntry: (url
   for (const p of plugins) {
     if (off.includes(p.name)) continue;
     const own = builtins[p.name];
-    if (own && p.builtin) parts.push({ name: p.name, load: () => Promise.resolve(own) });
+    if (own && p.builtin) parts.push({ name: p.name, source: "built-in", load: () => Promise.resolve(own) });
     else if (p.web && !uiApiProblem(p)) {
       const entry = p.web.entry;
-      parts.push({ name: p.name, load: () => importEntry(entry) as Promise<PluginModule> });
+      parts.push({ name: p.name, source: entry, load: () => importEntry(entry) as Promise<PluginModule> });
     }
   }
   return parts;

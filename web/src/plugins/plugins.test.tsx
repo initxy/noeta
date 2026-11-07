@@ -112,6 +112,122 @@ describe("PluginHost", () => {
     expect(registry.contributions("sidebar")).toHaveLength(0);
   });
 
+  it("awaits an async activate: active once it resolves, its resolved disposer kept, its rejection shown", async () => {
+    const { host, registry } = hostWith();
+    const disposed = vi.fn();
+    let finish: () => void = () => undefined;
+    const slow = {
+      name: "slow",
+      load: async () => ({
+        activate: async (ctx: PluginContext) => {
+          await new Promise<void>((r) => (finish = r));
+          ctx.slots.add("sidebar", {}, () => null);
+          return disposed;
+        },
+      }),
+    };
+    const rejects = {
+      name: "rejects",
+      load: async () => ({
+        activate: async (ctx: PluginContext) => {
+          ctx.slots.add("statusbar", {}, () => null);
+          await flush();
+          throw new Error("no server");
+        },
+      }),
+    };
+    const synced = host.sync([slow, rejects]);
+    await flush();
+    await flush();
+    expect(host.status("slow")).toEqual({ state: "loading" });
+    finish();
+    await synced;
+    expect(host.status("slow")).toEqual({ state: "active" });
+    expect(host.status("rejects")).toEqual({ state: "failed", error: "activate failed: no server" });
+    expect(registry.contributions("statusbar")).toHaveLength(0);
+    await host.sync([]);
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(registry.contributions("sidebar")).toHaveLength(0);
+  });
+
+  it("an async activate still running when its part is switched off adds nothing and is disposed once done", async () => {
+    const { host, registry } = hostWith();
+    const disposed = vi.fn();
+    let finish: () => void = () => undefined;
+    const part = {
+      name: "late",
+      load: async () => ({
+        activate: async (ctx: PluginContext) => {
+          await new Promise<void>((r) => (finish = r));
+          ctx.slots.add("sidebar", {}, () => null);
+          return disposed;
+        },
+      }),
+    };
+    const synced = host.sync([part]);
+    await flush();
+    await host.sync([]);
+    finish();
+    await synced;
+    expect(registry.contributions("sidebar")).toHaveLength(0);
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(host.status("late")).toBeUndefined();
+  });
+
+  it("unsubscribes what a part subscribed to through its ctx, and refuses its ctx after, so off then on never doubles", async () => {
+    const registry = new SlotRegistry();
+    const events = new TaskEvents("t1");
+    const theme = new ThemeSource("light");
+    const host = new PluginHost(registry, (plugin) => pluginContext(plugin, { api: {} as Api, events, registry, theme }));
+    const seen: string[] = [];
+    let kept: PluginContext | null = null;
+    const part = {
+      name: "p",
+      source: "/plugins/p/web/index.js?v=1",
+      load: async () => ({
+        activate: (ctx: PluginContext) => {
+          kept = ctx;
+          ctx.client.watch((r) => seen.push(`event ${r.seq}`));
+          ctx.theme.onChange((mode) => seen.push(mode));
+          ctx.slots.add("sidebar", {}, () => null);
+        },
+      }),
+    };
+    await host.sync([part]);
+    await host.sync([]);
+    await host.sync([part]);
+    events.emit({ seq: 1, at: 0, event: { type: "ModelCalled", model: "m" } } as Recorded);
+    theme.set("dark");
+    expect(seen).toEqual(["event 1", "dark"]);
+    expect(registry.contributions("sidebar")).toHaveLength(1);
+    const first = kept!;
+    await host.sync([]);
+    first.slots.add("sidebar", {}, () => null); // a disposed ctx adds nothing
+    first.client.watch(() => seen.push("late"));
+    events.emit({ seq: 2, at: 0, event: { type: "ModelCalled", model: "m" } } as Recorded);
+    await expect(first.slots.wait("statusbar")).rejects.toThrow("disposed");
+    expect(registry.contributions("sidebar")).toHaveLength(0);
+    expect(seen).toEqual(["event 1", "dark"]);
+  });
+
+  it("loads a part again when its web entry changes (a new build), disposing the old", async () => {
+    const { host } = hostWith();
+    const disposed = vi.fn();
+    const loads: string[] = [];
+    const build = (v: string) => ({
+      name: "p",
+      source: `/plugins/p/web/index.js?v=${v}`,
+      load: async () => (loads.push(v), { activate: () => disposed }),
+    });
+    await host.sync([build("1")]);
+    await host.sync([build("1")]);
+    expect(loads).toEqual(["1"]);
+    await host.sync([build("2")]);
+    expect(loads).toEqual(["1", "2"]);
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(host.status("p")).toEqual({ state: "active" });
+  });
+
   it("a wait that times out is reported for the waiting plugin", async () => {
     vi.useFakeTimers();
     const { host, registry } = hostWith();
@@ -138,6 +254,7 @@ describe("webParts", () => {
     );
     expect(parts.map((p) => p.name)).toEqual(["panel", "todos"]);
     expect(await parts[0].load()).toEqual({ url: "/plugins/panel/web/index.js?v=1" });
+    expect(parts[0].source).toBe("/plugins/panel/web/index.js?v=1"); // another build, another source: loaded again
     expect(await parts[1].load()).toBe(builtin);
     expect(webParts([info({ name: "todos", builtin: true })], ["todos"], load, { todos: builtin })).toEqual([]);
   });
