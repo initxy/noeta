@@ -54,7 +54,7 @@
 
 ## Gates
 
-- Automated gates (required for done): `make check`. CI's test job runs the same target; CI-only on top: the Postgres parameters of the store contract tests (`NOETA_TEST_POSTGRES_DSN`), the Python 3.11 / 3.12 / 3.13 matrix, and the `cluster` job (`make cluster` against a Postgres service container).
+- Automated gates (required for done): `make check`. CI's test job runs the same target; CI-only on top: the Postgres parameters of the store contract tests (`NOETA_TEST_POSTGRES_DSN`), the Python 3.11 / 3.12 / 3.13 matrix, the `cluster` job (`make cluster` against a Postgres service container), and the `macos` job (the test suite on macOS, Python 3.12).
 - `make check` can't judge model-facing prompt text or provider wire behavior. A change there also runs `make eval` (no scenario may regress; re-record the baseline when a scenario changes) and the relevant `make e2e` tests.
 - Approval gates (the maintainer signs off before running): release, data migration or deletion on a host's store.
 
