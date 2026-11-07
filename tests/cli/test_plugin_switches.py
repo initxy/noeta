@@ -49,10 +49,7 @@ def test_install_and_remove_go_through_noeta_plugin(home: Path, tmp_path: Path,
         admin.remove("wave")
     with pytest.raises(ValueError, match="no such file"):
         admin.install(str(tmp_path / "missing"), None, None)
-    monkeypatch.delattr(plugin_command, "market_entries", raising=False)
-    assert admin.market() == []
-    monkeypatch.setattr(plugin_command, "market_entries", lambda: [{"name": "x"}],
-                        raising=False)
+    monkeypatch.setattr(plugin_command, "market_entries", lambda: [{"name": "x"}])
     assert admin.market() == [{"name": "x"}]
 
 

@@ -11,7 +11,7 @@ import os
 import tempfile
 from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from noeta.cli import home_dir, plugin_command
 from noeta.host.plugins import MarketEntry, PluginAdmin, PluginInfo
@@ -77,9 +77,7 @@ def _remove(name: str) -> None:
 
 
 def _market() -> list[MarketEntry]:
-    entries = getattr(plugin_command, "market_entries", None)
-    found: list[MarketEntry] = list(entries()) if entries is not None else []
-    return found
+    return [cast(MarketEntry, e) for e in plugin_command.market_entries()]
 
 
 def _claude_info(plugin: Any) -> PluginInfo:
