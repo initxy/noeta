@@ -106,6 +106,9 @@ class PluginAdmin:
     set_default: Callable[[str, bool], None] | None = None
     #: The plugins the settings turn off for good (``enabled = false``).
     turned_off: Callable[[], Collection[str]] = lambda: ()
+    #: The plugins the settings keep in every task (``switchable = false``):
+    #: no task may run without them, whatever a front end asks.
+    fixed: Callable[[], Collection[str]] = lambda: ()
     #: Plugins that are no ``Extension`` (Claude Code plugins) found for a
     #: directory, already as listed.
     others: Callable[[str], list[PluginInfo]] = lambda _cwd: []
@@ -117,10 +120,13 @@ class PluginAdmin:
     market: Callable[[], list[MarketEntry]] | None = None
 
 
-def switchable(name: str) -> bool:
+def switchable(name: str, fixed: Collection[str] = ()) -> bool:
     """Whether a task may run without the plugin ``name``: every plugin but
     the built-ins outside :data:`SWITCHABLE_BUILTINS` (the permission gate,
-    the file and shell tools a task is built on)."""
+    the file and shell tools a task is built on) and the ones in ``fixed``
+    (:attr:`PluginAdmin.fixed`)."""
+    if name in fixed:
+        return False
     return name in SWITCHABLE_BUILTINS \
         or registry.sources(registry.PLUGINS).get(name) != _SHIPPED
 
@@ -186,7 +192,7 @@ def _builtin(ext: Extension, source: str) -> bool:
     return source == _SHIPPED or type(ext).__module__.split(".")[0] == "noeta"
 
 
-def _info(ext: Extension, *, off: Collection[str]) -> PluginInfo:
+def _info(ext: Extension, *, off: Collection[str], fixed: Collection[str]) -> PluginInfo:
     pin = registry.pin(ext)
     source = registry.sources(registry.PLUGINS).get(ext.name) or pin["source"]
     builtin = _builtin(ext, source)
@@ -210,7 +216,7 @@ def _info(ext: Extension, *, off: Collection[str]) -> PluginInfo:
         broken = f"its manifest's web file {manifest['web']!r} is missing"
     if root is not None and not builtin:
         parts += [p for p in ("skills", "agents", "commands") if (root / p).is_dir()]
-    can_switch = not builtin or ext.name in SWITCHABLE_BUILTINS
+    can_switch = (not builtin or ext.name in SWITCHABLE_BUILTINS) and ext.name not in fixed
     return PluginInfo(
         name=ext.name, version=str(manifest.get("version") or pin["version"]),
         description=str(manifest.get("description") or _description(type(ext))),
@@ -232,8 +238,9 @@ def plugin_infos(agent: Agent | None, admin: PluginAdmin, cwd: str = "") -> list
     """Every plugin ``agent`` runs, in its order, then the installed ones it
     does not (each saying why), the plugin files that failed to load and
     ``admin``'s others for ``cwd``."""
-    off = set(admin.default_off())
-    out = [_info(e, off=off) for e in (agent.all_extensions() if agent is not None else [])]
+    off, fixed = set(admin.default_off()), set(admin.fixed())
+    out = [_info(e, off=off, fixed=fixed)
+           for e in (agent.all_extensions() if agent is not None else [])]
     seen = {p["name"] for p in out}
     hard = set(admin.turned_off())
     for name, source in registry.sources(registry.PLUGINS).items():

@@ -288,11 +288,12 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         token_sha256 = token_digest(token)
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
+    admin = plugin_admin or getattr(app, "plugin_admin", None) or PluginAdmin()
     serving: AppAPI = app if app is not None else _Front(
-        client=client, agents=agents or {}, live=deltas, admin=plugin_admin or PluginAdmin())
+        client=client, agents=agents or {}, live=deltas, admin=admin)
     guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, roots=roots)
+                  cwd=cwd, roots=roots, fixed=lambda: admin.fixed())
     r = Routes(serving, app, agents)
     s = StreamRoutes(guard, deltas)
     running = agents or {}

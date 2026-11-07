@@ -235,7 +235,8 @@ class LocalApp:
         #: manage them (switches for new tasks, install, remove, the
         #: marketplaces); the default can do none of that.
         self.plugin_admin = PluginAdmin()
-        self.client.default_off = lambda: self.plugin_admin.default_off()
+        self.client.default_off = lambda: [
+            n for n in self.plugin_admin.default_off() if n not in self.plugin_admin.fixed()]
         self._summaries: Cache = {}
 
     def replace_agents(self, agents: list[Agent]) -> None:
@@ -292,7 +293,7 @@ class LocalApp:
                                        self.runtime.agent(agent), admin, cwd)
 
     async def set_plugin_default(self, name: str, enabled: bool) -> None:
-        if not host_plugins.switchable(name):
+        if not host_plugins.switchable(name, self.plugin_admin.fixed()):
             raise ValueError(f"every task runs the plugin {name!r}: it cannot be switched off")
         if self.plugin_admin.set_default is None:
             raise NotImplementedError("this host keeps no plugin switches")

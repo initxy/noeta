@@ -91,6 +91,44 @@ async def test_the_app_starts_new_tasks_with_the_switches_and_lists_claude_plugi
         await app.store.close()
 
 
+async def test_a_plugin_the_settings_keep_on_cannot_be_switched_off(
+        home: Path, tmp_path: Path) -> None:
+    """``switchable = false`` in a plugin's table: no switch is offered, the
+    machine's switch is ignored, and a request switching it off is refused."""
+    import httpx
+
+    from noeta.host.http import create_app
+
+    home.mkdir()
+    (home / "config.toml").write_text(
+        f'model = "m"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'
+        '[plugins.todos]\nswitchable = false\n')
+    plugin_switches.set_default("todos", False)
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    try:
+        assert "todos" in app.plugin_admin.fixed()
+        tid = await app.client.create("main", None)
+        assert PLUGINS_OFF not in (await app.client.events(tid))[0].event.config  # type: ignore[attr-defined]
+        listed = {p["name"]: p for p in await app.plugins("main", str(tmp_path))}
+        assert listed["todos"]["enabled"] and not listed["todos"]["switchable"]
+        with pytest.raises(ValueError, match="cannot be switched off"):
+            await app.set_plugin_default("todos", True)
+        api = create_app(app.client, token="secret", app=app)
+        transport = httpx.ASGITransport(app=api)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1",
+                                     headers={"authorization": "Bearer secret"}) as http:
+            made = await http.post("/tasks", json={"agent": "main",
+                                                   "config": {PLUGINS_OFF: ["todos"]}})
+            assert made.status_code == 403
+            sent = await http.post(f"/tasks/{tid}/signals", json={
+                "name": "config", "data": {PLUGINS_OFF: ["todos"]}})
+            assert sent.status_code == 403
+            assert (await http.put("/plugins/todos", json={"enabled": False})).status_code \
+                == 400
+    finally:
+        await app.store.close()
+
+
 class _Stop(Exception):
     pass
 

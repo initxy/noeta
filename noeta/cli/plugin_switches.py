@@ -91,9 +91,11 @@ def _claude_info(plugin: Any) -> PluginInfo:
 
 
 def make_admin(cwd: str | None, plugin_dirs: Sequence[str | Path],
-               turned_off: Callable[[], Collection[str]]) -> PluginAdmin:
+               turned_off: Callable[[], Collection[str]],
+               fixed: Callable[[], Collection[str]] = lambda: ()) -> PluginAdmin:
     """The admin of the plugins a ``noeta`` process started in ``cwd``
-    loads; ``turned_off()``: the plugins its settings switch off."""
+    loads; ``turned_off()``: the plugins its settings switch off;
+    ``fixed()``: the ones they keep in every task (``switchable = false``)."""
     from noeta.cli.config import claude_plugins
 
     def others(where: str) -> list[PluginInfo]:
@@ -101,5 +103,5 @@ def make_admin(cwd: str | None, plugin_dirs: Sequence[str | Path],
         return [_claude_info(p) for p in found]
 
     return PluginAdmin(default_off=default_off, set_default=set_default,
-                       turned_off=turned_off, others=others, install=_install,
+                       turned_off=turned_off, fixed=fixed, others=others, install=_install,
                        remove=_remove, market=_market)

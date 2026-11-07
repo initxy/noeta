@@ -8,6 +8,7 @@ win. The plugin part of ``config.toml``::
     [plugins.web]
     enabled = false            # off for every agent
     [plugins.my_plugin]        # a third-party plugin's arguments
+    switchable = false         # no task may run without it (no front-end switch)
 
     [agents.main]
     add_plugins = ["my_plugin", {hooks = {}}]  # after the agent file's own
@@ -724,12 +725,15 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         agents = default_agents(model, plugins=table, add=add, extra_files=files, made=made)
         turned_off[:] = sorted(name for name, setting in table.items() if setting is False or (
             isinstance(setting, Mapping) and setting.get("enabled") is False))
-        unjoined[:] = [*_unjoined_notices(agents, table), *missing]
+        fixed[:] = sorted(name for name, setting in table.items()
+                          if isinstance(setting, Mapping) and setting.get("switchable") is False)
+        unjoined[:] =[*_unjoined_notices(agents, table), *missing]
         notices.extend(n for n in unjoined if n not in notices)
         return agents
 
     unjoined: list[str] = []
     turned_off: list[str] = []
+    fixed: list[str] = []
     agents = make_agents()
     for notice in unjoined:
         log.warning("%s", notice)
@@ -799,7 +803,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
                 *loaded, *unjoined, *restart]
 
     app.reload_plugins = reload_plugins
-    app.plugin_admin = make_admin(cwd, plugin_dirs, lambda: turned_off)
+    app.plugin_admin = make_admin(cwd, plugin_dirs, lambda: turned_off, lambda: fixed)
     return app
 
 

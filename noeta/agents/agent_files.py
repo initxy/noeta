@@ -430,6 +430,9 @@ def _setting(name: str, value: PluginSetting) -> tuple[bool, Mapping[str, Any], 
         enabled = args.pop("enabled", True)
         if not isinstance(enabled, bool):
             raise ValueError(f"plugin {name!r}: 'enabled' must be true or false")
+        # The host's, not the plugin's: whether a task may run without it.
+        if not isinstance(args.pop("switchable", True), bool):
+            raise ValueError(f"plugin {name!r}: 'switchable' must be true or false")
         return enabled, args, None
     raise TypeError(f"plugin {name!r}: a setting is arguments, an Extension, or true/false")
 
