@@ -168,3 +168,23 @@ async def test_the_switch_folds_from_the_created_config(store: SqliteStore) -> N
     await runtime(store, provider, Extra()).run_until_idle()
     assert tool_names(provider) == [[]]
 
+
+async def test_a_continued_conversation_runs_without_what_its_source_runs_without_now(
+        store: SqliteStore) -> None:
+    """A fork, a rewind or a resume-as-new takes the source's switches as
+    they stand now (not as it was created), unless its config names its
+    own."""
+    client = Client(store)
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("three")])
+    rt = runtime(store, provider, Extra())
+    src = await client.create("a", "hi", config={PLUGINS_OFF: ["web"]})
+    await rt.run_until_idle()
+    await client.signal(src, CONFIG_SIGNAL, {PLUGINS_OFF: ["extra"]})
+    fork = await client.create("a", "go on", history_from=src)
+    created = (await client.events(fork))[0].event
+    assert created.config[PLUGINS_OFF] == ["extra"]  # type: ignore[attr-defined]
+    await rt.run_until_idle()
+    assert tool_names(provider)[-1] == []
+    own = await client.create("a", None, history_from=src, config={PLUGINS_OFF: []})
+    assert (await client.events(own))[0].event.config[PLUGINS_OFF] == []  # type: ignore[attr-defined]
+

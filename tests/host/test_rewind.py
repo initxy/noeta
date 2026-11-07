@@ -16,6 +16,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.events import ExtensionRecorded
+from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF
 from noeta.core.runner import Runtime
 from noeta.host.rewind import diff_stats, file_plan, rewind, rewind_points
 from noeta.plugins.checkpoints import RESTORE_SIGNAL, Checkpoints
@@ -231,3 +232,19 @@ async def test_a_rewind_restores_what_a_sub_agent_changed(
     notices = [r.event.data for r in await client.events(done.task_id)
                if isinstance(r.event, ExtensionRecorded) and r.event.kind == "notice"]
     assert [n["text"] for n in notices] == ["restored 1 file(s)"]
+
+
+async def test_a_rewind_runs_without_the_plugins_its_source_runs_without_now(
+        store: SqliteStore, tmp_path: Path) -> None:
+    """Not the switches the source was created with: the ones it has now."""
+    provider = ScriptedProvider([reply("one")])
+    rt = _runtime(store, provider, tmp_path)
+    client = Client(store)
+    tid = await client.create("a", "first", config={"model": "m", PLUGINS_OFF: ["web"]})
+    await rt.run_until_idle()
+    await client.signal(tid, CONFIG_SIGNAL, {PLUGINS_OFF: ["todos"]})
+    [point] = await rewind_points(client, tid)
+    done = await rewind(client, tid, point, files=False)
+    created = (await client.events(done.task_id))[0].event
+    assert created.config[PLUGINS_OFF] == ["todos"]  # type: ignore[attr-defined]
+    assert created.config["model"] == "m"  # type: ignore[attr-defined]
