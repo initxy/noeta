@@ -8,6 +8,10 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-11-07
+
+Open-source readiness: a restart limit for tasks that keep killing their worker, a Docker image for many workers, requests that no longer present noeta as Claude Code, a clearer first run, and DeepSeek's current models.
+
 ### Added
 
 - **A task whose run keeps killing its worker ends instead of taking down every worker.** A
@@ -27,7 +31,10 @@ this repository. Their versions are listed on PyPI.
   it lists, the plugin interface, the event types and the entry-point groups; everything else is
   internal. A public name is deprecated with a `DeprecationWarning` for at least one minor
   release, and only a major release removes it.
-- **CI runs the test suite on macOS** (Python 3.12).
+- **CI runs the test suite on macOS** (Python 3.12). It reports without gating for now: its
+  first run had failures, most in background shell jobs.
+- **Each release gets a GitHub Release** with its CHANGELOG section as the notes, created by the
+  release workflow after publishing.
 - **A Docker image and a multi-worker compose file** (`deploy/`). `deploy/Dockerfile` builds
   noeta from the checkout with the `postgres` and `server` extras (locked versions), `git`,
   `ripgrep`, `bubblewrap` and `tini`, as a non-root user; `deploy/compose.yaml` runs Postgres,
