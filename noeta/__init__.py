@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         TaskView,
         ToolChanges,
         UiItem,
+        UnknownUiCall,
         Widget,
     )
     from noeta.core.loop.state import TaskState
@@ -72,6 +73,7 @@ _EXPORTS = {
     "ToolOutput": "noeta.core.tool",
     "ToolUse": "noeta.core.types",
     "UiItem": "noeta.core.extension",
+    "UnknownUiCall": "noeta.core.extension",
     "Widget": "noeta.core.extension",
     "ask": "noeta.core.questions",
     "default_agents": "noeta.agents",
@@ -110,6 +112,7 @@ __all__ = [
     "ToolOutput",
     "ToolUse",
     "UiItem",
+    "UnknownUiCall",
     "Widget",
     "ask",
     "connect",

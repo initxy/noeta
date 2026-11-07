@@ -92,7 +92,7 @@ from starlette.staticfiles import StaticFiles
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.commands import Typed
-from noeta.core.extension import Command, CommandContext
+from noeta.core.extension import Command, CommandContext, UnknownUiCall
 from noeta.host._http_guard import LOOPBACK_HOSTS, Guard, Refused, token_digest
 from noeta.host._http_openapi import OPENAPI
 from noeta.host._http_plugins import PluginRoutes
@@ -161,7 +161,7 @@ class _Front:
         return []  # no worker here folds the task
 
     async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
-        raise LookupError(f"no worker in this server process runs {plugin!r}")
+        raise UnknownUiCall(f"no worker in this server process runs {plugin!r}")
 
     async def install_plugin(self, source: str, marketplace: str | None = None,
                              commit: str | None = None) -> PluginInfo:

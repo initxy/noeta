@@ -28,6 +28,7 @@ from noeta.core.extension import (
     StatusItem,
     TaskView,
     UiItem,
+    UnknownUiCall,
     Widget,
     task_cwd,
 )
@@ -327,11 +328,12 @@ async def task_ui(runtime: Runtime, task_id: str) -> list[UiEntry]:
 async def call_plugin(runtime: Runtime, task_id: str, plugin: str, name: str,
                       args: Any) -> Any:
     """``plugin``'s answer to its front-end code's call ``name``
-    (``Extension.ui_call``) for the task. Raises ``LookupError`` when the
-    task does not run that plugin now, or the plugin has no such call."""
+    (``Extension.ui_call``) for the task. Raises :class:`UnknownUiCall`
+    when the task does not run that plugin now, or the plugin has no such
+    call."""
     run = await _loaded(runtime, task_id)
     ext = next((e for e in run.exts if e.name == plugin), None) if run is not None else None
     if run is None or ext is None:
-        raise LookupError(f"task {task_id} runs no plugin {plugin!r}")
+        raise UnknownUiCall(f"task {task_id} runs no plugin {plugin!r}")
     ctx = CommandContext(cwd=task_cwd(run.state, None), task_id=task_id)
     return await ext.ui_call(ctx, name, args)

@@ -16,7 +16,7 @@ from noeta.core.client import ClientAPI, Input
 from noeta.core.commands import Typed
 from noeta.core.errors import NoetaError, UnknownTask
 from noeta.core.events import Recorded
-from noeta.core.extension import Command, CommandContext
+from noeta.core.extension import Command, CommandContext, UnknownUiCall
 from noeta.core.store import Status, TaskRow
 from noeta.core.types import Delta
 from noeta.host.app import AppAPI, archive_task
@@ -238,7 +238,7 @@ class RemoteApp:
         resp = await self.client.http.post(f"/plugins/{plugin}/call", json={
             "task_id": task_id, "name": name, "args": args})
         if resp.status_code == 404:
-            raise LookupError(resp.json().get("error") or name)
+            raise UnknownUiCall(resp.json().get("error") or name)
         resp.raise_for_status()
         return resp.json()["result"]
 

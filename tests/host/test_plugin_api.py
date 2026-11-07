@@ -17,6 +17,7 @@ pytest.importorskip("starlette")
 
 import httpx
 
+from noeta import UnknownUiCall
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core import registry
 from noeta.core.agent import Agent
@@ -56,7 +57,9 @@ class Panel(Extension):
     async def ui_call(self, ctx, name, args):
         if name == "echo":
             return {"task": ctx.task_id, "args": args}
-        raise LookupError(name)
+        if name == "buggy":
+            return {}["missing"]
+        return await super().ui_call(ctx, name, args)
 
     async def commands(self, ctx):
         return [Command(name="panel", description="Open the panel", template="panel")]
@@ -202,7 +205,10 @@ async def test_ui_items_and_calls_in_process_over_http_and_remote(
         assert missing.status_code == 404
         assert (await http.post("/plugins/title/call", json={
             "task_id": tid, "name": "x"})).status_code == 404
-        listed = (await http.get("/plugins", params={"agent": "main"})).json()
+        # A plugin's own bug is no unknown call: a 500, its traceback logged.
+        buggy = await http.post("/plugins/panel/call", json={"task_id": tid, "name": "buggy"})
+        assert buggy.status_code == 500 and "KeyError" in buggy.json()["error"]
+        listed =(await http.get("/plugins", params={"agent": "main"})).json()
         assert listed["ui_api"] == list(UI_API)
         assert [p["name"] for p in listed["plugins"]] == ["title", "panel"]
     remote = RemoteApp("http://127.0.0.1", token="secret",
@@ -211,8 +217,10 @@ async def test_ui_items_and_calls_in_process_over_http_and_remote(
         assert await remote.ui(tid) == items
         assert await remote.plugin_call(tid, "panel", "echo", {"a": 1}) == {
             "task": tid, "args": {"a": 1}}
-        with pytest.raises(LookupError):
+        with pytest.raises(UnknownUiCall):
             await remote.plugin_call(tid, "panel", "nope", None)
+        with pytest.raises(httpx.HTTPStatusError):
+            await remote.plugin_call(tid, "panel", "buggy", None)
         assert [p["name"] for p in await remote.plugins("main")] == ["title", "panel"]
         await remote.set_plugin_default("panel", False)
         assert app.plugin_admin.default_off() == ["panel"]
@@ -237,7 +245,7 @@ async def test_a_task_switched_off_shows_no_ui_and_lists_no_commands(
     assert await app.ui(tid) == []
     assert "panel" not in [c.name for c in await app.commands("main", ctx)]
     assert await app.run_command("main", ctx, "/panel") is None
-    with pytest.raises(LookupError):
+    with pytest.raises(UnknownUiCall):
         await app.plugin_call(tid, "panel", "echo", None)
 
 

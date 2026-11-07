@@ -37,7 +37,7 @@ class WebPanel(Extension):
 
     async def ui_call(self, ctx: CommandContext, name: str, args: Any) -> Any:
         if name != "workspace":
-            raise LookupError(name)
+            return await super().ui_call(ctx, name, args)
         try:
             entries = sorted(os.listdir(ctx.cwd)) if ctx.cwd else []
         except OSError as exc:

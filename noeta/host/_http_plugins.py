@@ -6,6 +6,7 @@ with ``--allow-plugin-install``."""
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -16,11 +17,13 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 
 from noeta.core.agent import Agent
+from noeta.core.extension import UnknownUiCall
 from noeta.host._http_guard import Guard, Refused, scope
 from noeta.host.app import AppAPI
 from noeta.host.plugins import UI_API, web_dir
 
 _enc = msgspec.json.Encoder()
+log = logging.getLogger("noeta.host.http")
 
 #: Media types a browser needs exactly (a module script is refused under
 #: ``nosniff`` with any other).
@@ -71,13 +74,17 @@ class PluginRoutes:
 
     async def call(self, request: Request) -> Response:
         body = await request.json()
-        task_id = str(body["task_id"])
+        task_id, name, plugin = str(body["task_id"]), str(body["name"]), \
+            request.path_params["name"]
         await scope(request).client.get(task_id)  # an unknown task answers 404
         try:
-            result = await self._serving.plugin_call(task_id, request.path_params["name"],
-                                                     str(body["name"]), body.get("args"))
-        except LookupError as exc:
+            result = await self._serving.plugin_call(task_id, plugin, name, body.get("args"))
+        except UnknownUiCall as exc:
             return _json({"error": f"no such plugin call: {exc}"}, 404)
+        except Exception as exc:  # the plugin's bug, not the request's
+            log.exception("plugin %s: ui_call %r failed", plugin, name)
+            return _json({"error": f"plugin {plugin!r} failed its call {name!r}: "
+                                   f"{type(exc).__name__}: {exc}"}, 500)
         return _json({"result": result})
 
     async def ui(self, request: Request) -> Response:

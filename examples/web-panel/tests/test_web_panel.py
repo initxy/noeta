@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta import Agent, CommandContext, Runtime
+from noeta import Agent, CommandContext, Runtime, UnknownUiCall
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core import registry
 from noeta.core.client import Client
@@ -43,7 +43,7 @@ async def test_it_shows_the_conversations_length_and_answers_its_web_part(tmp_pa
     got = await plugin.ui_call(CommandContext(cwd=str(tmp_path), task_id=tid), "workspace", None)
     assert got["cwd"] == str(tmp_path) and "a.txt" in got["entries"]
     assert ".hidden" not in got["entries"] and got["count"] == len(got["entries"])
-    with pytest.raises(LookupError):
+    with pytest.raises(UnknownUiCall):
         await plugin.ui_call(CommandContext(cwd=str(tmp_path)), "nope", None)
     await store.close()
 

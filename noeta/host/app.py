@@ -76,7 +76,7 @@ class AppAPI(Protocol):
 
     async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
         """``plugin``'s answer to its front-end code (``Extension.ui_call``);
-        raises ``LookupError`` when the task does not run it or it has no
+        raises ``UnknownUiCall`` when the task does not run it or it has no
         such call."""
         ...
 
