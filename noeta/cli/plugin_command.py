@@ -31,6 +31,7 @@ asked for on a terminal, or given with ``--config KEY=VALUE``
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import logging
@@ -42,7 +43,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -192,10 +195,44 @@ def _records() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _write_json(path: Path, data: Any, *, sort_keys: bool = False) -> None:
+    """``data`` written whole into ``path``: a reader sees the old file or
+    the new one, never half of one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2, sort_keys=sort_keys) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def _save(records: dict[str, Any]) -> None:
     home_dir.ensure_home()
-    (home_dir.HOME / SOURCES_FILE).write_text(json.dumps(records, indent=2, sort_keys=True) + "\n",
-                                            "utf-8")
+    _write_json(home_dir.HOME / SOURCES_FILE, records, sort_keys=True)
+
+
+@contextlib.contextmanager
+def _sources_locked() -> Iterator[None]:
+    """Hold the lock of ``plugin-sources.json`` (a sibling ``.lock`` file)
+    over a read-modify-write of what is installed, across threads and
+    processes: two installs at once over HTTP each keep their record.
+    Without ``fcntl`` (Windows) there is no lock."""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    home_dir.ensure_home()
+    fd = os.open(home_dir.HOME / f"{SOURCES_FILE}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def _place(found: Path, name: str, record: dict[str, Any]) -> Path:
@@ -205,18 +242,19 @@ def _place(found: Path, name: str, record: dict[str, Any]) -> Path:
         raise PluginInstallError(f"{name!r} is not a usable plugin name")
     plugins = home_dir.HOME / "plugins"
     target = plugins / (f"{name}.py" if found.is_file() else name)
-    if target.exists() or (plugins / name).exists() or (plugins / f"{name}.py").exists():
-        raise PluginInstallError(f"{name} is already in {plugins}; noeta plugin remove {name} "
-                                 "first")
-    plugins.mkdir(parents=True, exist_ok=True)
-    if found.is_file():
-        shutil.copy2(found, target)
-    else:
-        shutil.copytree(found, target, symlinks=True,
-                        ignore=shutil.ignore_patterns(".git", "__pycache__"))
-    records = _records()
-    records[name] = {**record, "path": str(target)}
-    _save(records)
+    with _sources_locked():
+        if target.exists() or (plugins / name).exists() or (plugins / f"{name}.py").exists():
+            raise PluginInstallError(f"{name} is already in {plugins}; noeta plugin remove "
+                                     f"{name} first")
+        plugins.mkdir(parents=True, exist_ok=True)
+        if found.is_file():
+            shutil.copy2(found, target)
+        else:
+            shutil.copytree(found, target, symlinks=True,
+                            ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        records = _records()
+        records[name] = {**record, "path": str(target)}
+        _save(records)
     return target
 
 
@@ -329,22 +367,43 @@ def _from_marketplace(market: str, name: str, commit: str | None,
     return fetched, full
 
 
-def marketplaces() -> dict[str, str]:
+def _notice(notices: list[str] | None, text: str) -> None:
+    if notices is None:
+        log.warning("%s", text)
+    else:
+        notices.append(text)
+
+
+def marketplaces(notices: list[str] | None = None) -> dict[str, str]:
     """The configured marketplaces, name -> source: the official one until
-    the person changes the list."""
+    the person changes the list, and while the file is unreadable (a line
+    in ``notices``, in the log when none is given)."""
     path = home_dir.HOME / MARKETPLACES_FILE
     if not path.is_file():
         return {OFFICIAL_MARKETPLACE: OFFICIAL_SOURCE}
-    data = json.loads(path.read_text("utf-8"))
-    table = data.get("marketplaces") if isinstance(data, dict) else None
-    return {str(name): str(item["source"]) for name, item in (table or {}).items()
+    try:
+        data = json.loads(path.read_text("utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("marketplaces", {}), dict):
+            raise ValueError("not a JSON object of marketplaces")
+    except (OSError, ValueError) as exc:
+        _notice(notices, f"{path} is unreadable ({exc}); the official marketplace is used "
+                         "until it is fixed (noeta plugin marketplace add|remove rewrites it)")
+        return {OFFICIAL_MARKETPLACE: OFFICIAL_SOURCE}
+    table = data.get("marketplaces") or {}
+    return {str(name): str(item["source"]) for name, item in table.items()
             if isinstance(item, dict) and isinstance(item.get("source"), str)}
 
 
 def _save_marketplaces(table: dict[str, str]) -> None:
     home_dir.ensure_home()
     data = {"marketplaces": {name: {"source": source} for name, source in table.items()}}
-    (home_dir.HOME / MARKETPLACES_FILE).write_text(json.dumps(data, indent=2) + "\n", "utf-8")
+    _write_json(home_dir.HOME / MARKETPLACES_FILE, data)
+
+
+def _official(source: str) -> bool:
+    """Whether ``source`` is the official marketplace's repository."""
+    url = _split(source)[0].rstrip("/").removesuffix(".git")
+    return url == OFFICIAL_SOURCE
 
 
 def _cache_file(source: str) -> Path:
@@ -352,27 +411,35 @@ def _cache_file(source: str) -> Path:
     return home_dir.HOME / MARKET_CACHE / f"{digest}.json"
 
 
+def _cached(source: str) -> tuple[_Market, float] | None:
+    """The marketplace ``source`` as last read from its repository, and
+    when; ``None`` when there is no usable copy."""
+    cache = _cache_file(source)
+    if not cache.is_file():
+        return None
+    try:
+        kept = json.loads(cache.read_text("utf-8"))
+        if kept["source"] != source:
+            return None
+        return (_Market(Path(kept["root"]), kept["data"], kept["kind"], kept["commit"],
+                        kept["url"]), float(kept["read_at"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None  # read it again
+
+
 def _listing(source: str, *, refresh: bool = False) -> _Market:
     """The marketplace ``source`` as read now, or as kept from a read
     within :data:`MARKET_TTL` (for one at a commit, any read)."""
-    cache = _cache_file(source)
     remote = _remote(_split(source)[0])
-    if remote and not refresh and cache.is_file():
-        try:
-            kept = json.loads(cache.read_text("utf-8"))
-            if kept["source"] == source and (kept["kind"] == "pinned"
-                                             or time.time() - kept["read_at"] < MARKET_TTL):
-                return _Market(Path(kept["root"]), kept["data"], kept["kind"], kept["commit"],
-                               kept["url"])
-        except (ValueError, KeyError, TypeError):
-            pass  # read it again
+    kept = _cached(source) if remote and not refresh else None
+    if kept is not None and (kept[0].kind == "pinned" or time.time() - kept[1] < MARKET_TTL):
+        return kept[0]
     with tempfile.TemporaryDirectory(prefix="noeta-marketplace-") as tmp:
         m = _read_market(source, Path(tmp))
     if remote:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"source": source, "read_at": time.time(), "kind": m.kind,
-                                     "commit": m.commit, "url": m.url, "root": str(m.root),
-                                     "data": m.data}), "utf-8")
+        _write_json(_cache_file(source), {
+            "source": source, "read_at": time.time(), "kind": m.kind, "commit": m.commit,
+            "url": m.url, "root": str(m.root), "data": m.data})
     return m
 
 
@@ -417,20 +484,23 @@ def market_entries(notices: list[str] | None = None, *,
     ``marketplace``, ``name``, ``description``, ``version``, ``source``,
     ``commit`` (its pin, ``None`` for an entry that pins none), ``parts``
     and ``ui_api`` (from the entry's ``noeta`` object), ``installed``. A
-    marketplace that cannot be read is left out with a line in ``notices``
-    (in the log when none is given)."""
+    marketplace that cannot be read is listed as last read, if it ever
+    was, else left out; either way with a line in ``notices`` (in the log
+    when none is given)."""
     installed = _installed_names()
     out: list[dict[str, Any]] = []
-    for market, source in marketplaces().items():
+    for market, source in marketplaces(notices).items():
         try:
             m = _listing(source, refresh=refresh)
         except (PluginInstallError, OSError, ValueError) as exc:
             text = f"marketplace {market} ({source}) could not be read: {exc}"
-            if notices is None:
-                log.warning("%s", text)
-            else:
-                notices.append(text)
-            continue
+            kept = _cached(source)
+            if kept is None:
+                _notice(notices, text)
+                continue
+            m, read_at = kept
+            when = datetime.fromtimestamp(read_at).strftime("%Y-%m-%d %H:%M")
+            _notice(notices, f"{text}; its listing as read at {when} is shown")
         out += [_market_entry(market, m, entry, installed)
                 for entry in m.data.get("plugins") or []
                 if isinstance(entry, dict) and isinstance(entry.get("name"), str)
@@ -541,18 +611,19 @@ def _configure(name: str, path: Path, given: list[str]) -> int:
 
 
 def _remove(name: str, *, quiet: bool = False, keep_options: bool = False) -> int:
-    records = _records()
     plugins = (home_dir.HOME / "plugins").resolve()
-    rec = records.pop(name, None)
-    candidates = [Path(rec["path"])] if rec and rec.get("path") else \
-        [plugins / name, plugins / f"{name}.py"]
-    removed = False
-    for path in candidates:
-        if path.resolve().parent != plugins or not path.exists():
-            continue
-        shutil.rmtree(path) if path.is_dir() else path.unlink()
-        removed = True
-    _save(records)
+    with _sources_locked():
+        records = _records()
+        rec = records.pop(name, None)
+        candidates = [Path(rec["path"])] if rec and rec.get("path") else \
+            [plugins / name, plugins / f"{name}.py"]
+        removed = False
+        for path in candidates:
+            if path.resolve().parent != plugins or not path.exists():
+                continue
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+            removed = True
+        _save(records)
     if not keep_options:
         plugin_options.forget(name)
     if quiet:
@@ -572,10 +643,15 @@ def _marketplace_add(source: str) -> int:
         name = m.data.get("name")
         if not isinstance(name, str) or not _NAME.fullmatch(name):
             raise PluginInstallError(f"{source}: its marketplace.json has no usable name")
+        if name == OFFICIAL_MARKETPLACE and not _official(source):
+            # A bare name finds its plugin there: the name stays the official one's.
+            raise PluginInstallError(f"{source}: its marketplace.json is named {name}, the "
+                                     f"official marketplace's name, but it is not "
+                                     f"{OFFICIAL_SOURCE}; not added")
     except (PluginInstallError, OSError, ValueError) as exc:
         print(f"noeta: {exc}", file=sys.stderr)
         return 1
-    table = marketplaces()
+    table = _configured()
     before = table.get(name)
     table[name] = source
     _save_marketplaces(table)
@@ -587,12 +663,21 @@ def _marketplace_add(source: str) -> int:
     return 0
 
 
+def _configured() -> dict[str, str]:
+    """:func:`marketplaces`, its notice (an unreadable file) on stderr."""
+    notices: list[str] = []
+    table = marketplaces(notices)
+    for notice in notices:
+        print(f"noeta: {notice}", file=sys.stderr)
+    return table
+
+
 def _marketplace_list() -> int:
-    table = marketplaces()
-    if not table:
-        print("no marketplaces (noeta plugin marketplace add <path | git-url[@commit]>)")
     notices: list[str] = []
     entries = market_entries(notices)
+    table = marketplaces([])
+    if not table:
+        print("no marketplaces (noeta plugin marketplace add <path | git-url[@commit]>)")
     for name, source in table.items():
         print(f"{name}\t{source}")
         for e in (e for e in entries if e["marketplace"] == name):
@@ -605,7 +690,7 @@ def _marketplace_list() -> int:
 
 
 def _marketplace_remove(name: str) -> int:
-    table = marketplaces()
+    table = _configured()
     source = table.pop(name, None)
     if source is None:
         print(f"noeta: no marketplace {name} (noeta plugin marketplace list)", file=sys.stderr)

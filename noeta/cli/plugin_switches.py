@@ -61,7 +61,8 @@ def _install(source: str, marketplace: str | None, commit: str | None) -> str:
         raise ValueError(str(exc)) from exc
     fields = getattr(plugin_command, "_fields", None)
     if path.is_dir() and fields is not None and fields(path):
-        _remove(name)
+        # Options and secrets kept from an earlier install stay.
+        plugin_command._remove(name, quiet=True, keep_options=True)
         raise ValueError(f"plugin {name!r} has options to set: install it from a terminal "
                          f"(noeta plugin add)")
     return name
@@ -76,8 +77,8 @@ def _remove(name: str) -> None:
     plugin_command._remove(name, quiet=True)
 
 
-def _market() -> list[MarketEntry]:
-    return [cast(MarketEntry, e) for e in plugin_command.market_entries()]
+def _market(notices: list[str]) -> list[MarketEntry]:
+    return [cast(MarketEntry, e) for e in plugin_command.market_entries(notices)]
 
 
 def _claude_info(plugin: Any) -> PluginInfo:

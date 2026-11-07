@@ -26,7 +26,7 @@ from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF
 from noeta.host.app import change_config
 from noeta.host.http import create_app
 from noeta.host.local import LocalApp
-from noeta.host.plugins import UI_API, PluginAdmin, plugin_infos, switchable
+from noeta.host.plugins import UI_API, MarketEntry, PluginAdmin, plugin_infos, switchable
 from noeta.host.remote import RemoteApp
 from noeta.plugins.title import Title
 from noeta.testing import ScriptedProvider, reply
@@ -110,13 +110,17 @@ class Admin:
             self.installed.append((source, market, commit))
             return "panel"
 
+        def market(notices: list[str]) -> list[MarketEntry]:
+            notices.append("marketplace team could not be read")
+            return [{"marketplace": "official", "name": "panel", "description": "",
+                     "version": "1", "source": "x", "commit": "abc", "parts": [],
+                     "ui_api": 1, "installed": False}]
+
         return PluginAdmin(
             default_off=lambda: sorted(self.off),
             set_default=lambda n, on: self.off.discard(n) if on else self.off.add(n),
             turned_off=lambda: {"gone"}, install=install, remove=self.removed.append,
-            market=lambda: [{"marketplace": "official", "name": "panel", "description": "",
-                             "version": "1", "source": "x", "commit": "abc", "parts": [],
-                             "ui_api": 1, "installed": False}])
+            market=market)
 
 
 @pytest.fixture
@@ -224,7 +228,9 @@ async def test_ui_items_and_calls_in_process_over_http_and_remote(
         assert [p["name"] for p in await remote.plugins("main")] == ["title", "panel"]
         await remote.set_plugin_default("panel", False)
         assert app.plugin_admin.default_off() == ["panel"]
-        assert [e["name"] for e in await remote.market()] == ["panel"]
+        notices: list[str] = []
+        assert [e["name"] for e in await remote.market(notices)] == ["panel"]
+        assert notices == ["marketplace team could not be read"]
     finally:
         await remote.stop()
 
@@ -306,7 +312,9 @@ async def test_install_and_remove_only_where_allowed(
     async with _http(shut) as http:
         assert (await http.post("/plugins/install", json={"source": "x"})).status_code == 403
         assert (await http.delete("/plugins/panel")).status_code == 403
-        assert (await http.get("/market")).json()["entries"][0]["name"] == "panel"
+        market = (await http.get("/market")).json()
+        assert market["entries"][0]["name"] == "panel"
+        assert market["notices"] == ["marketplace team could not be read"]
     open_ = create_app(app.client, token="secret", app=app, cwd=str(tmp_path),
                        allow_plugin_install=True)
     async with _http(open_) as http:
@@ -354,7 +362,7 @@ async def test_an_api_only_server_lists_plugins_and_shows_no_ui(tmp_path: Path) 
         assert (await http.post("/plugins/title/call", json={
             "task_id": tid, "name": "x"})).status_code == 404
         assert (await http.put("/plugins/title", json={"enabled": False})).status_code == 501
-        assert (await http.get("/market")).json() == {"entries": []}
+        assert (await http.get("/market")).json() == {"entries": [], "notices": []}
     await store.close()
 
 

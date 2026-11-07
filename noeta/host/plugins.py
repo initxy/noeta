@@ -117,8 +117,9 @@ class PluginAdmin:
     install: Callable[[str, str | None, str | None], str] | None = None
     #: Remove an installed plugin by name.
     remove: Callable[[str], None] | None = None
-    #: The configured marketplaces' entries.
-    market: Callable[[], list[MarketEntry]] | None = None
+    #: The configured marketplaces' entries; a marketplace that could not
+    #: be read (or is shown as last read) adds a line to the list given.
+    market: Callable[[list[str]], list[MarketEntry]] | None = None
 
 
 def switchable(name: str, fixed: Collection[str] = ()) -> bool:

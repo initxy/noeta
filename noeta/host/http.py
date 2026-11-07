@@ -48,7 +48,7 @@ events; when this process also runs workers, live model output streams too.
                                       ``ui_call``
     GET  /plugins/{name}/web/{path}   an enabled plugin's built web files, without a token
     GET  /tasks/{id}/ui               {items}: what the task's plugins show now
-    GET  /market                      {entries}: the configured marketplaces' plugins
+    GET  /market                      {entries, notices}: the configured marketplaces' plugins
     POST /plugins/install             {source, marketplace?, commit?} -> the plugin; with
                                       DELETE /plugins/{name}, only on a loopback server or
                                       with allow_plugin_install (403 otherwise)
@@ -170,7 +170,7 @@ class _Front:
     async def remove_plugin(self, name: str) -> None:
         raise NotImplementedError("plugins are removed where the workers run")
 
-    async def market(self) -> list[MarketEntry]:
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
         return []
 
     async def summaries(self, limit: int = 50, *,

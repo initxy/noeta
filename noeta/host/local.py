@@ -326,9 +326,10 @@ class LocalApp:
         await asyncio.to_thread(remove, name)
         self._reload()
 
-    async def market(self) -> list[MarketEntry]:
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
         market = self.plugin_admin.market
-        return await asyncio.to_thread(market) if market is not None else []
+        return await asyncio.to_thread(market, [] if notices is None else notices) \
+            if market is not None else []
 
     def _reload(self) -> None:
         """Load the plugins again (``/reload-plugins``) after an install."""

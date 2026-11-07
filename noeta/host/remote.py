@@ -251,8 +251,11 @@ class RemoteApp:
     async def remove_plugin(self, name: str) -> None:
         await self.client._call("DELETE", f"/plugins/{name}")
 
-    async def market(self) -> list[MarketEntry]:
-        entries: list[MarketEntry] = (await self.client._call("GET", "/market"))["entries"]
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
+        got = await self.client._call("GET", "/market")
+        if notices is not None:
+            notices += [str(n) for n in got.get("notices") or []]
+        entries: list[MarketEntry] = got["entries"]
         return entries
 
     async def summaries(self, limit: int = 50, *,

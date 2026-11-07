@@ -211,7 +211,10 @@ async def confirm_remove(app: NoetaApp, info: Mapping[str, Any]) -> None:
 async def discover(app: NoetaApp) -> None:
     """The configured marketplaces' plugins; picking one asks before it is
     installed."""
-    entries: list[dict[str, Any]] = [dict(e) for e in await app.local.market()]
+    notices: list[str] = []
+    entries: list[dict[str, Any]] = [dict(e) for e in await app.local.market(notices)]
+    for notice in notices:
+        await app.say_notice(notice)
     if not entries:
         await app.say_notice("no plugins found in the configured marketplaces")
         await menu(app, at=DISCOVER)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import home_dir, plugin_command, plugin_switches
+from noeta.cli import home_dir, plugin_command, plugin_options, plugin_switches
 from noeta.cli.config import from_settings, load_settings
 from noeta.core.loop.state import PLUGINS_OFF
 
@@ -49,8 +49,8 @@ def test_install_and_remove_go_through_noeta_plugin(home: Path, tmp_path: Path,
         admin.remove("wave")
     with pytest.raises(ValueError, match="no such file"):
         admin.install(str(tmp_path / "missing"), None, None)
-    monkeypatch.setattr(plugin_command, "market_entries", lambda: [{"name": "x"}])
-    assert admin.market() == [{"name": "x"}]
+    monkeypatch.setattr(plugin_command, "market_entries", lambda notices: [{"name": "x"}])
+    assert admin.market([]) == [{"name": "x"}]
 
 
 def test_a_plugin_with_options_is_not_installed_over_http(home: Path, tmp_path: Path) -> None:
@@ -59,11 +59,16 @@ def test_a_plugin_with_options_is_not_installed_over_http(home: Path, tmp_path: 
     (plugin / "skills").mkdir()
     (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps({
         "name": "opts", "userConfig": {"key": {"type": "string", "title": "Key"}}}))
+    # Kept from an earlier install (set from a terminal): the refusal keeps it.
+    home.mkdir()
+    (home / "settings.json").write_text(json.dumps(
+        {"pluginConfigs": {"opts": {"options": {"key": "kept"}}}}))
     admin = plugin_switches.make_admin(str(tmp_path), [], lambda: ())
     assert admin.install is not None
     with pytest.raises(ValueError, match="options"):
         admin.install(str(plugin), None, None)
     assert not (home / "plugins" / "opts").exists()
+    assert plugin_options.stored("opts") == {"key": "kept"}
 
 
 async def test_the_app_starts_new_tasks_with_the_switches_and_lists_claude_plugins(

@@ -93,7 +93,9 @@ class PluginRoutes:
         return _json({"items": await self._serving.ui(task_id)})
 
     async def market(self, request: Request) -> Response:
-        return _json({"entries": await self._serving.market()})
+        notices: list[str] = []
+        entries = await self._serving.market(notices)
+        return _json({"entries": entries, "notices": notices})
 
     def _check_install(self) -> None:
         if not self._allow_install:

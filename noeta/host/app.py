@@ -89,8 +89,10 @@ class AppAPI(Protocol):
         """Remove a plugin as ``noeta plugin remove`` does, then reload."""
         ...
 
-    async def market(self) -> list[MarketEntry]:
-        """The configured marketplaces' plugins."""
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
+        """The configured marketplaces' plugins; a marketplace that could not
+        be read (left out, or listed as last read) adds a line to
+        ``notices``."""
         ...
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
