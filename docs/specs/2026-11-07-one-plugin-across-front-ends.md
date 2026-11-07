@@ -22,7 +22,8 @@ Optional official plugins and the official marketplace live in a separate reposi
 - A hosted marketplace service (review, ratings, accounts). A marketplace is a static file.
 - Rendering HTML from plugins or MCP servers in iframes (MCP Apps); a later spec if asked for.
 - The TUI code part (`activate(ctx)` in Python). The UI data part covers the TUI in this
-  spec; the code part gets its own spec once the web code part has shipped.
+  spec; the code part gets its own spec once the web code part has shipped, and with it the
+  TUI's built-in views move under plugin names as the web app's did (section 4).
 - New front-end features (file tree, terminal pane, task board, Git panel, themes). They are
   plugins for later, in `noeta-plugins` or third-party.
 - Renaming built-in plugins or changing how existing file, package and Claude Code plugins load.
@@ -242,7 +243,6 @@ conversation, live), and the hooks `useRecords(ctx, kind)`, `useAllRecords(ctx)`
       `hooks`, `memory`.
 - [x] `fs` and `shell` tool cards last; the web tree keeps no plugin-specific component
       outside `web/src/plugins/`.
-- [ ] The same for the TUI (its code part is deferred, see Non-goals).
 
 ### 5. Marketplace
 - [x] `noeta plugin marketplace add|list|remove`, the default official marketplace, `noeta`
