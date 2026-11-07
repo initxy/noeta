@@ -101,6 +101,10 @@ def make_specs(rng: random.Random, n: int, *, bg: bool) -> dict[str, Spec]:
     return specs
 
 
+#: ``--restart-limit`` for the random fault runs (see :func:`run_cluster`).
+CHAOS_RESTART_LIMIT = 50
+
+
 async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec], *,
                       seconds: float, targets: set[str] | None = None,
                       workers: int = 3, drain: float = DRAIN, faulty: Any = chaos,
@@ -108,7 +112,13 @@ async def run_cluster(tmp_path: Path, url: str, seed: int, specs: dict[str, Spec
     """Create the roots, run the faults and the pings for ``seconds``, then
     let the workers drain until every root is done or ``DRAIN`` passes."""
     rng = random.Random(seed)
-    cluster = Cluster(tmp_path, url, workers=workers, lease=LEASE, fire_after=fire_after)
+    # The random runs kill workers far more often than machines are lost, and
+    # some faults aim at the one worker keeping a waiting root's claim, so a
+    # healthy root can lose four workers in a row with no step between: a
+    # high limit keeps the restart record in play without ending it. The
+    # limit itself has its own scenario (the poison task below).
+    cluster = Cluster(tmp_path, url, workers=workers, lease=LEASE, fire_after=fire_after,
+                      restart_limit=CHAOS_RESTART_LIMIT)
     faults, watch, stop = Faults(), EpochWatch(), asyncio.Event()
     await cluster.start()
     watcher = asyncio.create_task(watch_rows(cluster, watch, stop))
