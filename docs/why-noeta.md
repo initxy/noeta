@@ -7,8 +7,10 @@ relates to Claude Code.
 
 noeta is an open-source coding agent that behaves, from the model's side, like Claude Code,
 and is built, from the operator's side, like a server program. It is one Python package
-(`noeta`) with a terminal UI (`noeta-tui`), a web app and a desktop shell on top of the same
-API.
+(`noeta`) with a terminal UI (`noeta-tui`) on top of its API, plus an experimental web app and
+desktop shell built from source. What sets it apart is the pair: an agent that keeps Claude
+Code's contract with the model, and that you self-host on as many workers as you like, all
+sharing one Postgres store, any of them continuing any task.
 
 Two decisions shape everything else:
 
@@ -16,8 +18,9 @@ Two decisions shape everything else:
    tools and prompts of the most-used coding agent. noeta sends the same tool names and
    schemas, keeps the rules and order of Claude Code's prompt parts (in its own words), sends
    the same reminders and notices, compacts the way Claude Code does, and shapes the provider
-   request the same way. A difference is a bug unless it is listed with its reason
-   ([ADR-003](https://github.com/initxy/noeta/blob/main/docs/adr/003-claude-code-is-the-model-visible-contract.md),
+   request the same way. A difference is a bug unless it is listed with its reason, and
+   `make parity` checks it by replaying recorded Claude Code sessions against noeta
+   ([Matching Claude Code](./how-it-works/parity.md), [ADR-003](https://github.com/initxy/noeta/blob/main/docs/adr/003-claude-code-is-the-model-visible-contract.md),
    [`parity/deviations.md`](https://github.com/initxy/noeta/blob/main/parity/deviations.md)).
 2. **Underneath, a task is an append-only log with one writer.** Nothing about a running task
    lives only in a process. A worker claims a task, folds its log into its state, takes one
@@ -28,13 +31,14 @@ Two decisions shape everything else:
 
 ## What it is for
 
-- **Coding agents that run unattended.** A task can run for hours, survive a worker being
-  killed or redeployed, and pick up on another machine where its log stops.
-- **Agents that wait for people.** Approvals and questions park the task. Answer from the
-  terminal, the web app, an editor or your own service, minutes or days later.
 - **Many machines.** Point any number of `noeta worker` processes at one Postgres store and put
   `noeta serve` in front; front ends attach to any server
-  ([Run it as a server](./guides/server.md), [Many machines](./how-it-works/many-machines.md)).
+  ([Run it as a server](./guides/server.md), [Deploy with Docker](./guides/docker.md),
+  [Many machines](./how-it-works/many-machines.md)).
+- **Coding agents that run unattended.** A task can run for hours; when its worker is killed or
+  redeployed, another worker picks it up where its log stops.
+- **Agents that wait for people.** Approvals and questions park the task, holding no process.
+  Answer from the terminal, an editor, the HTTP API or your own service, minutes or days later.
 - **Embedding.** The same kernel is a Python library: create tasks, watch their events and
   answer their questions from your own program ([Embed it in Python](./start/embedding.md)).
 - **Any model.** Anthropic's API, any OpenAI-compatible endpoint (vLLM, gateways, DeepSeek),

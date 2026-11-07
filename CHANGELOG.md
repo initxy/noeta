@@ -2,10 +2,30 @@
 
 All notable changes to Noeta are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The 0.x history (packages
-`noeta-runtime` and `noeta-sdk`) is in `CHANGELOG.md` at tag `v0.6.42`.
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The 0.x releases (packages
+`noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
+this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
+
+### Added
+
+- **A Docker image and a multi-worker compose file** (`deploy/`). `deploy/Dockerfile` builds
+  noeta from the checkout with the `postgres` and `server` extras (locked versions), `git`,
+  `ripgrep`, `bubblewrap` and `tini`, as a non-root user; `deploy/compose.yaml` runs Postgres,
+  `noeta serve --no-worker` with a bearer token, and three workers sharing the workspace and
+  noeta's home at the same paths. New page:
+  [Deploy with Docker](https://initxy.github.io/noeta/guides/docker), with what the sandbox
+  needs inside a container. CI builds the image (never pushed) and checks the compose file.
+
+### Changed
+
+- **README and docs home lead with self-hosting on many workers**: one Postgres store, any
+  worker continuing any task, waits that hold no process; Claude Code compatibility is shown
+  with the `make parity` replay. The benchmark is shown with its standard error (+5.4, SE 3.6,
+  not significant, on DeepSeek V4.1 Flash for both agents) instead of a bolded winner.
+- **The web and desktop apps are marked experimental**: built from source, not published, not
+  in CI, installers unsigned.
 
 ## [1.0.5] - 2026-11-06
 
