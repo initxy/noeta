@@ -438,6 +438,34 @@ kernel adds:
 - **Policy.** `/etc/noeta/config.toml` `[policy]` wins over every user and project setting
   (above).
 
+## A web part
+
+A plugin directory (or package) can also carry code for the web and desktop apps: a built ES
+module named by `.noeta-plugin/plugin.json` beside the plugin's code.
+
+```json
+{ "name": "my-plugin", "version": "0.1.0", "ui_api": 1, "web": "web/dist/index.js" }
+```
+
+The module exports `activate(ctx)` and puts React components into the page's slots:
+
+```tsx
+import { SLOTS, type PluginContext } from "@noeta-ai/web-sdk";
+
+export function activate(ctx: PluginContext) {
+  return ctx.slots.add(SLOTS.sidebar, { key: "files", mount: "keyed" }, () => (
+    <button onClick={() => ctx.call("workspace")}>Look</button>
+  ));
+}
+```
+
+`ctx.call(name, args)` reaches the plugin's own `Extension.ui_call`; `ctx.client` acts on the
+open session's task, `ctx.records(kind)` reads the plugin's records. Build it as one ES module
+with `react`, `react-dom`, `react/jsx-runtime`, `@noeta-ai/web-sdk` and `@noeta-ai/ui` left
+external (the page provides its own; `web/sdk/template` has the build script) and commit the
+built file: installing runs no build. The slots and what the page does with a web part are in
+[Web, desktop and editors](./front-ends.md#plugins-in-the-web-and-desktop-apps).
+
 ## Replacing a built-in plugin
 
 Switch the built-in off (`[plugins.<name>] enabled = false`) and add yours. A plugin that
@@ -455,7 +483,7 @@ Who reads which record is held in one place, `noeta/toolkit/plugin_records.py`.
 
 ## Worked examples
 
-Each is one file (hello-plugin a package), a short README and a test `make example` runs:
+Each is one file (hello-plugin a package, web-panel a directory), a short README and a test `make example` runs:
 
 - [`examples/run-tests`](https://github.com/initxy/noeta/tree/main/examples/run-tests) — a tool:
   runs the test command where the task's commands run, folds the last result from the log,
@@ -471,5 +499,7 @@ Each is one file (hello-plugin a package), a short README and a test `make examp
   and the chat app's Allow or Deny press answers it.
 - [`examples/hello-plugin`](https://github.com/initxy/noeta/tree/main/examples/hello-plugin) —
   the same kind of plugin as a package with an entry point.
+- [`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) — a
+  plugin directory with a web part: a status item, and a sidebar panel that calls its backend.
 
 The built-in plugins are listed with their settings in [Built-in plugins](../reference/plugins.md).
