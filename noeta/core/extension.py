@@ -495,13 +495,15 @@ def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], 
                history_through: int | None = None) -> TaskCreated:
     """The ``TaskCreated`` of a child the task ``task_id`` stages: ``config``
     with what every extension passes on (``Extension.inherit``) laid over it,
-    and the plugins switched off for the task switched off for it too."""
+    and the plugins the task's turn runs without (``TaskState.plugins_off``,
+    not a switch sent since, which is the task's from its next turn on)
+    switched off for it too."""
     from noeta.core.loop.state import PLUGINS_OFF, off_names
 
     child_config = dict(config or {})
     for ext in extensions:
         child_config.update(ext.inherit(state))
-    off = sorted({*off_names(child_config), *off_names(state.config)})
+    off = sorted({*off_names(child_config), *state.plugins_off})
     if off:
         child_config[PLUGINS_OFF] = off
     return TaskCreated(agent=agent, config=child_config, parent_id=task_id,

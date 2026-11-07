@@ -153,10 +153,18 @@ async def test_another_worker_runs_the_task_without_the_plugin(store: SqliteStor
 
 
 def test_a_child_starts_with_its_parents_switches() -> None:
-    state = TaskState(task_id="p", config={PLUGINS_OFF: ["web", "todos"]})
+    state = TaskState(task_id="p", config={PLUGINS_OFF: ["web", "todos"]},
+                      plugins_off=["todos", "web"])
     created = child_task("p", state, [], "a", {PLUGINS_OFF: ["memory"], "model": "m"})
     assert created.config[PLUGINS_OFF] == ["memory", "todos", "web"]
     assert child_task("p", TaskState(task_id="p"), [], "a", None).config == {}
+
+
+def test_a_child_runs_without_what_its_parents_turn_runs_without() -> None:
+    """A switch sent while the parent's turn runs is the parent's from its
+    next turn on: a child started in this turn runs as the turn does."""
+    state = TaskState(task_id="p", config={PLUGINS_OFF: ["web"]}, plugins_off=["todos"])
+    assert child_task("p", state, [], "a", None).config[PLUGINS_OFF] == ["todos"]
 
 
 async def test_the_switch_folds_from_the_created_config(store: SqliteStore) -> None:
