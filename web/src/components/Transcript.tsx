@@ -1,8 +1,8 @@
-import { useState } from "react";
-import type { Item, TaskState } from "../state/transcript";
+import { Fragment, useContext, useMemo, useState, useSyncExternalStore } from "react";
+import { shownRecords, type Item, type PluginRecordAt, type TaskState } from "../state/transcript";
 import { useApi, useTask } from "../state/useTask";
 import { Markdown } from "@noeta-ai/ui";
-import { recordSlot, Slot } from "@noeta-ai/web-sdk";
+import { recordSlot, Slot, SlotRegistry, SlotsContext } from "@noeta-ai/web-sdk";
 import { ToolCard } from "./ToolCard";
 
 function Thinking({ text, live }: { text: string; live?: boolean }) {
@@ -56,9 +56,25 @@ function Row({ item }: { item: Item }) {
       return <div className={`notice ${item.tone}`}>{item.text}</div>;
     case "compaction":
       return <Compaction summary={item.summary} />;
-    case "record":
-      return <Slot name={recordSlot(item.plugin, item.recordKind)} props={{ record: { seq: item.seq, plugin: item.plugin, kind: item.recordKind, data: item.data } }} />;
   }
+}
+
+function Records({ records }: { records?: PluginRecordAt[] }) {
+  return records?.map((r) => (
+    <Slot key={r.id} name={recordSlot(r.plugin, r.kind)} props={{ record: { seq: r.seq, plugin: r.plugin, kind: r.kind, data: r.data } }} />
+  ));
+}
+
+const noSlots = new SlotRegistry(() => false);
+
+/** The plugins' records some contribution shows, by where they go. */
+function useShownRecords(state: TaskState): Map<number, PluginRecordAt[]> {
+  const registry = useContext(SlotsContext) ?? noSlots;
+  const version = useSyncExternalStore(registry.subscribe, () => registry.version);
+  return useMemo(
+    () => shownRecords(state, (slot) => registry.contributions(slot).length > 0),
+    [state.records, registry, version], // version: what the registry holds
+  );
 }
 
 /** Another task's conversation (a sub-agent's), followed live: plugins get
@@ -75,10 +91,15 @@ export function TaskTranscript({ taskId }: { taskId: string }) {
 /** The conversation: recorded items, then what the model is writing now. */
 export function Transcript({ state, nested }: { state: TaskState; nested?: boolean }) {
   const { live } = state;
+  const records = useShownRecords(state);
   return (
     <div className={nested ? "transcript nested-transcript" : "transcript"} aria-live="polite">
-      {state.items.map((item) => (
-        <Row key={item.id} item={item} />
+      <Records records={records.get(0)} />
+      {state.items.map((item, i) => (
+        <Fragment key={item.id}>
+          <Row item={item} />
+          <Records records={records.get(i + 1)} />
+        </Fragment>
       ))}
       {live?.thinking && !live.text && <Thinking text={live.thinking} live />}
       {live?.text && (

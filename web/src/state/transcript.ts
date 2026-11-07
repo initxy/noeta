@@ -23,9 +23,43 @@ export type Item =
       children?: { id: string; status?: string }[];
     }
   | { kind: "notice"; id: string; text: string; tone: "info" | "error" }
-  | { kind: "compaction"; id: string; summary: string }
-  /** A plugin's record the page has no view of its own for: the `record:<plugin>/<kind>` slot. */
-  | { kind: "record"; id: string; seq: number; plugin: string; recordKind: string; data: unknown };
+  | { kind: "compaction"; id: string; summary: string };
+
+/** A plugin's record, shown (by a `record:<plugin>/<kind>` contribution, if
+ * any) after the first `at` items; `n` orders it among all records. */
+export interface PluginRecordAt {
+  id: string;
+  seq: number;
+  plugin: string;
+  kind: string;
+  data: unknown;
+  at: number;
+  n: number;
+}
+
+/** Records of one plugin and kind, newest first. */
+export interface RecordList {
+  record: PluginRecordAt;
+  before: RecordList | null;
+}
+
+/** The records whose `record:<plugin>/<kind>` slot `shows`, by the number
+ * of items they come after, in the order recorded. Walks only those kinds. */
+export function shownRecords(st: TaskState, shows: (slot: string) => boolean): Map<number, PluginRecordAt[]> {
+  const found: PluginRecordAt[] = [];
+  for (const [key, list] of Object.entries(st.records)) {
+    if (!shows(`record:${key}`)) continue;
+    for (let node: RecordList | null = list; node; node = node.before) found.push(node.record);
+  }
+  found.sort((a, b) => a.n - b.n);
+  const byPlace = new Map<number, PluginRecordAt[]>();
+  for (const r of found) {
+    const here = byPlace.get(r.at);
+    if (here) here.push(r);
+    else byPlace.set(r.at, [r]);
+  }
+  return byPlace;
+}
 
 // What plugins record (the task list, the title, the mode a plugin switched
 // to …) is theirs to show (web/src/plugins/<name>/): this fold reads the
@@ -33,6 +67,11 @@ export type Item =
 
 export interface TaskState {
   items: Item[];
+  /** The plugins' records by `<plugin>/<kind>`, apart from the items (the
+   * `record:` slots'): adding one costs the same in a long session as in a
+   * new one, and the page walks only the kinds a contribution shows. */
+  records: Readonly<Record<string, RecordList>>;
+  recordCount: number;
   /** Text and thinking of the model call streaming now (not yet recorded). */
   live: { callSeq: number; attempt: number; text: string; thinking: string } | null;
   /** The seq of the last `ModelCalled` and of the last call that replied. */
@@ -61,6 +100,8 @@ export interface TaskState {
 
 export const emptyTask = (): TaskState => ({
   items: [],
+  records: {},
+  recordCount: 0,
   live: null,
   called: 0,
   replied: 0,
@@ -155,7 +196,14 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
       return notice(String(data.text ?? ""));
     default:
       if (ev.extension === "core") return st;
-      return { ...st, items: [...st.items, { kind: "record", id: `r${seq}`, seq, plugin: ev.extension, recordKind: ev.kind, data: ev.data }] };
+      return {
+        ...st,
+        records: {
+          ...st.records,
+          [key]: { record: { id: `r${seq}`, seq, plugin: ev.extension, kind: ev.kind, data: ev.data, at: st.items.length, n: st.recordCount }, before: st.records[key] ?? null },
+        },
+        recordCount: st.recordCount + 1,
+      };
   }
 }
 
@@ -278,16 +326,23 @@ function delta(st: TaskState, d: Delta): TaskState {
   return { ...st, live, busy: true };
 }
 
-/** An earlier conversation's event: its items and what it set (title, mode,
- * todos …), but not the state of its turn (busy, waiting, ended) nor its
+/** An earlier conversation's event: its items, its plugins' records and
+ * what it set (the model, the cwd …), but not the state of its turn (busy, waiting, ended) nor its
  * seqs, which are another log's. */
 function history(st: TaskState, rec: Recorded, from: string): TaskState {
   if (rec.event.type === "TaskEnded" || rec.event.type === "Waiting") return st;
   const next = event(st, rec);
   const added = next.items.slice(st.items.length).map((it) => (it.kind === "tool" ? it : { ...it, id: `${from}:${it.id}` }));
+  let records = next.records;
+  if (next.recordCount > st.recordCount && rec.event.type === "ExtensionRecorded") {
+    const key = `${rec.event.extension}/${rec.event.kind}`;
+    const added = records[key];
+    records = { ...records, [key]: { record: { ...added.record, id: `${from}:${added.record.id}` }, before: added.before } };
+  }
   return {
     ...next,
-    items: [...next.items.slice(0, st.items.length), ...added],
+    items: added.length ? [...next.items.slice(0, st.items.length), ...added] : next.items,
+    records,
     lastSeq: st.lastSeq,
     taken: st.taken,
     called: st.called,
