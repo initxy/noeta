@@ -3,6 +3,12 @@
   "version": "1.0.6",
   "description": "Types, slot names and the slot registry for a noeta plugin's web part; the page provides this module at run time.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/initxy/noeta.git",
+    "directory": "web/sdk"
+  },
+  "homepage": "https://initxy.github.io/noeta/guides/plugins",
   "type": "module",
   "exports": {
     ".": {
@@ -16,12 +22,17 @@
     "dist",
     "src",
     "README.md",
-    "template"
+    "template",
+    "!src/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json"
   },
   "peerDependencies": {
     "react": "^19.2.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

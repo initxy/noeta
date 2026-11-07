@@ -3,6 +3,12 @@
   "version": "1.0.6",
   "description": "The noeta web app's own components (markdown, buttons, switches, panels) for a plugin's web part; the page provides this module at run time.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/initxy/noeta.git",
+    "directory": "web/ui"
+  },
+  "homepage": "https://initxy.github.io/noeta/guides/plugins",
   "type": "module",
   "exports": {
     ".": {
@@ -15,7 +21,8 @@
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "!src/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json"
@@ -28,5 +35,9 @@
   },
   "peerDependencies": {
     "react": "^19.2.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
