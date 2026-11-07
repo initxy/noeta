@@ -183,6 +183,7 @@ Postgres 存储就能把任务分到多台机器上跑。
 | `--concurrency N` | `8` | 同时跑几个任务 |
 | `--lease SECONDS` | `30` | 一次认领不续约能维持多久；worker 挂了，它的任务大约等这么久后被别人接手 |
 | `--snapshot-every EVENTS` | `100` | 最多每隔多少个事件写一次任务的重放快照；`0` 表示不写 |
+| `--restart-limit N` | `3` | 工人跑到一半死掉后，任务最多连续重启这么多次（期间一步也没做完）；再崩一次就以 `failed`（`restart_limit`）结束；`0` 表示不限（[原因](../how-it-works/recovery.md#a-task-that-keeps-killing-its-worker)） |
 | `--allow-bypass-permissions` | 关 | 允许任务以 `bypassPermissions` 运行 |
 
 worker 也会每天清理一次本机存下来的旧工具输出（见[清理](../guides/server.md#清理)）。退出时，正在跑的任务立刻交还；为后台作业保留着认领的任务会被释放，并在下一轮被告知作业已经没了。

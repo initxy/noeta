@@ -48,7 +48,7 @@ effort = "high"
 family = "openai_compat"
 base_url = "https://api.deepseek.com/v1"
 api_key = "{env:DEEPSEEK_API_KEY}"
-models = ["deepseek-chat", { id = "deepseek-reasoner", context_window = 128000, max_output_tokens = 64000 }]
+models = ["deepseek-flash", "deepseek-v4-pro"]
 
 [plugins.shell]                   # a plugin's arguments, by its name
 background = true

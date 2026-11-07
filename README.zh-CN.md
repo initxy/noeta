@@ -5,10 +5,10 @@
   </picture>
 </p>
 
-<h3 align="center">开源的编程智能体，进程崩了、机器换了，任务照样接着干。</h3>
+<h3 align="center">兼容 Claude Code、可以自己部署成多机集群的编程智能体。</h3>
 
 <p align="center">
-  兼容 Claude Code · 崩溃不丢进度 · 等人回复不占资源 · 一台笔记本到一整个集群
+  兼容 Claude Code · 一个 Postgres 配任意多个工人 · 哪个工人都能接着跑任何任务 · 等人回复不占进程
 </p>
 
 <p align="center">
@@ -29,10 +29,11 @@
 
 ---
 
-**noeta** 是一个编程智能体：可以在终端里直接用，可以嵌进 Python 程序，也可以部署到一群服务器上。
-在模型眼里，它和 Claude Code 一模一样：工具一样、提示词规则一样、提醒一样、请求结构也一样。
-所以模型在 Claude Code 上练出来的习惯原样有效，你现有的 Claude Code 设置、hooks、技能、子代理、
-MCP 服务器和插件也都能用。底层则按数据库的思路来做：每个任务都是一条只追加的日志，什么都丢不了。
+**noeta** 是一个编程智能体：在模型看来它就是 Claude Code，在你看来它是一个服务端程序。
+模型拿到的工具、提示词规则、提醒和请求结构都和 Claude Code 一样，所以模型在 Claude Code 上练出来的
+习惯原样有效，你现有的 Claude Code 设置、hooks、技能、子代理、MCP 服务器和插件也都能用。底层每个
+任务都是存储里的一条日志：让任意多个工人连同一个 Postgres，哪个工人都能接着跑任何任务；等人回复的
+任务一个进程都不占。单机用 SQLite 也照样能跑，可以在终端里直接用，也可以嵌进 Python 程序。
 
 <p align="center">
   <img alt="noeta 的终端界面在修一个失败的测试" src="https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/transcript.svg" width="760">
@@ -40,17 +41,21 @@ MCP 服务器和插件也都能用。底层则按数据库的思路来做：每�
 
 ## 亮点
 
-- 🧠 **兼容 Claude Code。** 工具名和参数、提示词规则、提醒、上下文压缩都和 Claude Code 一致，
-  而且是拿录下来的 Claude Code 真实请求逐条比对过的。设置、hooks、技能、子代理、MCP、插件目录
-  都用 Claude Code 的格式。
-- 💥 **崩了也不丢。** 杀进程、拔电源、整台机器没了，别的工人从日志停下的地方接着跑。崩溃时正在
-  执行的工具调用会如实告诉模型「结果未知」，绝不会悄悄再跑一遍。
-- ⏸️ **等待不花钱。** 等审批、问人问题、等子代理、等定时器，任务都会挂起，不占进程也不占工人，
-  几分钟还是几周后回复到了再醒。
-- 🌐 **笔记本到集群，同一套代码。** 单机用 SQLite；上生产用 Postgres，挂任意多个工人，前面一个
-  HTTP API。任何工人都能接着跑任何任务。
+- 🌐 **自己部署，工人想加几个加几个。** 一个 Postgres 存储，任意多个 `noeta worker` 进程，前面一个
+  `noeta serve`。任务不归哪个工人所有：每一步都是先认领、再执行、再追加到任务日志里，所以下一步在
+  哪个工人上跑都行。发版重启、进程崩溃、整台机器没了，任务只是换个工人接着跑；当时正在执行的工具
+  调用会如实告诉模型「结果未知」，绝不会悄悄再跑一遍。
+- ⏸️ **等待不占进程。** 等审批、问人问题、等子代理、等定时器，任务都会挂起：它只是存储里的一行记录
+  和一条日志，背后没有进程也没有工人，几分钟还是几周后回复到了再醒。
+- 🧠 **兼容 Claude Code，而且有核对。** 工具名和参数、提示词规则、提醒、上下文压缩都跟着 Claude Code
+  走。`make parity` 会离线重放录下来的 Claude Code 真实会话，把 noeta 发出的每个请求和 Claude Code
+  的逐个比对；有意保留的差异都单独列出并写明原因。设置、hooks、技能、子代理、MCP、插件目录都用
+  Claude Code 的格式。
+- 💻 **单机也能用。** 同一套代码在一个进程里用 SQLite 就能跑：终端界面、`noeta -p`，或者当作库嵌进
+  你的 Python 程序。
 - 🔌 **怎么接都行。** 全屏终端界面、Claude Code 的 `-p` 和 `stream-json` 协议（Agent SDK 可以直接
-  接上）、给 Zed 等编辑器用的 ACP、HTTP / WebSocket API、网页版、桌面版、Python SDK。
+  接上）、给 Zed 等编辑器用的 ACP、HTTP / WebSocket API、Python SDK；另有网页版和桌面版，都还在
+  实验阶段，需要从源码构建。
 - 🤖 **模型随便换。** Claude、DeepSeek，或者任何 OpenAI 兼容 / Responses 接口，包括你自己部署的
   vLLM 或网关。
 - 🧩 **一切都是插件。** 文件、shell、权限、hooks、技能、子代理、MCP、记忆、压缩，全都实现同一个
@@ -60,14 +65,16 @@ MCP 服务器和插件也都能用。底层则按数据库的思路来做：每�
 
 ## 跑分
 
-同一个模型（DeepSeek V4.1 Flash，effort `high`）、同一批任务、同样的限制、同一台机器：
+两边用的是同一个模型 DeepSeek V4.1 Flash（effort `high`），不是 Claude 模型；同一批任务、同样的
+限制、同一台机器：
 
-| 测试集 | noeta | Claude Code |
-|---|---|---|
-| SWE-rebench 07-2026（111 题，两轮合并） | **50.5 %** | 45.0 % |
-| 跑完 111 题一轮的花费 | **$5.01–5.77** | $5.70–6.25 |
+| 测试集 | noeta | Claude Code | 差值（标准误） |
+|---|---|---|---|
+| SWE-rebench 07-2026（111 题，两轮合并） | 50.5 % | 45.0 % | +5.4（3.6） |
+| 跑完 111 题一轮的花费 | $5.01–5.77 | $5.70–6.25 | |
 
-每一轮的结果、标准误、重试情况、答案泄露的题目，见[完整跑分报告](https://initxy.github.io/noeta/zh/benchmarks)。
+结论是持平或略好：差值大约是 1.5 个标准误，不算显著，单跑一轮本身就会上下浮动 5 个百分点左右。
+每一轮的结果、重试情况、答案泄露的题目，见[完整跑分报告](https://initxy.github.io/noeta/zh/benchmarks)。
 
 ## 快速上手
 
@@ -88,7 +95,7 @@ noeta -p "这个仓库是做什么的？"         # 问一句，打印回答
 
 ```bash
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...
+export NOETA_MODEL=deepseek-flash NOETA_API_KEY=...
 ```
 
 `openai_compat` 的地址以 `/v1` 结尾；`anthropic` 只写到域名；`openai_responses` 写完整的
@@ -135,7 +142,10 @@ noeta serve --no-worker --host 0.0.0.0    # API（需要 bearer token）
 noeta --server http://api.internal:8642   # 终端界面连过去
 ```
 
-工人挂了什么也不会留下：别的工人从日志停下的地方接手。详见[作为服务运行](https://initxy.github.io/noeta/zh/guides/server)。
+工人挂了什么也不会留下：别的工人从日志停下的地方接手。详见[作为服务端运行](https://initxy.github.io/noeta/zh/guides/server)。
+想先在一台 Docker 主机上试试，[`deploy/`](https://github.com/initxy/noeta/tree/main/deploy) 里有
+Dockerfile 和一份 compose 文件（Postgres、`noeta serve` 加三个工人），说明见
+[用 Docker 部署](https://initxy.github.io/noeta/zh/guides/docker)。
 
 ## 嵌进 Python
 

@@ -1,6 +1,6 @@
 # 作为服务端运行
 
-这一页讲怎样把 noeta 跑成给别人和别的程序用的服务：`noeta serve` 提供 HTTP / WebSocket 接口，若干 `noeta worker` 进程负责跑任务，它们共用一个 Postgres 存储；另外还有访问令牌、网页端，以及让聊天应用接进来的渠道。各部分怎样在多台机器之间保持正确，见[多机运行](../how-it-works/many-machines.md)。
+这一页讲怎样把 noeta 跑成给别人和别的程序用的服务：`noeta serve` 提供 HTTP / WebSocket 接口，若干 `noeta worker` 进程负责跑任务，它们共用一个 Postgres 存储；另外还有访问令牌、网页端，以及让聊天应用接进来的渠道。各部分怎样在多台机器之间保持正确，见[多机运行](../how-it-works/many-machines.md)。现成的 Docker 镜像和 compose 文件见[用 Docker 部署](./docker.md)。
 
 每个任务都是存储里的一条日志。工人挂了不会留下烂摊子：别的工人会从日志停下的地方认领它的任务接着跑。
 
@@ -47,6 +47,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 | `--concurrency N` | 8 | 这个进程同时跑几个任务 |
 | `--lease SECONDS` | 30 | 认领不续期能维持多久；工人挂掉后，它的任务大约等这么久才被别人接走 |
 | `--snapshot-every EVENTS` | 100 | 最多每隔这么多个事件写一次任务快照（`0`：不写） |
+| `--restart-limit N` | 3 | 任务反复把工人弄死时，最多连续重启这么多次（期间一步没做完），再崩就让它失败（`0`：不限） |
 | `--allow-bypass-permissions` | 关 | 允许任务以 `bypassPermissions` 运行 |
 
 ### `noeta serve` 参数

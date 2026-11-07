@@ -5,10 +5,10 @@
   </picture>
 </p>
 
-<h3 align="center">The open-source coding agent that never loses its place.</h3>
+<h3 align="center">The Claude Code–compatible coding agent you can self-host on many workers.</h3>
 
 <p align="center">
-  Claude Code–compatible · survives crashes · waits for free · one laptop or a fleet of servers
+  Claude Code–compatible · one Postgres, any number of workers · any worker continues any task · waiting holds no process
 </p>
 
 <p align="center">
@@ -29,12 +29,13 @@
 
 ---
 
-**noeta** is a coding agent you can run in your terminal, embed in Python, or deploy across many
-machines. To the model it looks exactly like Claude Code: same tools, same prompt rules, same
-reminders, same request shape. That means the habits models learned on Claude Code carry over
-unchanged, and your Claude Code settings, hooks, skills, agents, MCP servers and plugins work
-too. Underneath it is built like a database: every task is an append-only log, so nothing is
-ever lost.
+**noeta** is a coding agent that looks like Claude Code to the model and runs like a server
+program for you. The model gets Claude Code's tools, prompt rules, reminders and request shape,
+so the habits models learned on Claude Code carry over, and your Claude Code settings, hooks,
+skills, agents, MCP servers and plugins work too. Underneath, every task is a log in a store:
+point any number of workers at one Postgres and any of them continues any task, while a task
+that waits for a person holds no process at all. It also runs on one laptop with SQLite, in your
+terminal or embedded in Python.
 
 <p align="center">
   <img alt="noeta's terminal UI fixing a failing test" src="https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/transcript.svg" width="760">
@@ -42,21 +43,24 @@ ever lost.
 
 ## Why noeta
 
-- 🧠 **Claude Code–compatible.** Tool names and schemas, prompt rules, reminders and context
-  compaction all match Claude Code, checked by replaying recorded Claude Code requests
-  against noeta. Settings, hooks, skills, agents, MCP servers and plugin folders use Claude
-  Code's formats.
-- 💥 **Crash-proof.** Kill the process, pull the plug, lose the machine: another worker picks
-  the task up where its log stops. A tool call that was in flight is reported as "outcome
-  unknown", never silently run twice.
-- ⏸️ **Waiting costs nothing.** An approval, a question for a person, a sub-agent or a timer
-  parks the task. It holds no process and no worker until the answer arrives, minutes or
-  weeks later.
-- 🌐 **Laptop to fleet, same code.** SQLite on one laptop; Postgres with any number of workers
-  behind an HTTP API in production. Any worker can continue any task.
+- 🌐 **Self-host it on many workers.** One Postgres store, any number of `noeta worker`
+  processes, `noeta serve` in front. No worker owns a task: each step is claimed, run and
+  appended to the task's log, so the next step can run anywhere. A deploy, a crash or a lost
+  machine only moves the task to another worker; a tool call that was in flight is reported to
+  the model as "outcome unknown", never silently run twice.
+- ⏸️ **Waiting holds no process.** An approval, a question for a person, a sub-agent or a
+  timer parks the task: it is a row and a log in the store, with no process or worker behind
+  it, until the answer arrives minutes or weeks later.
+- 🧠 **Claude Code–compatible, and checked.** Tool names and schemas, prompt rules, reminders
+  and context compaction follow Claude Code. `make parity` replays recorded Claude Code
+  sessions against noeta offline and compares every request it sends; each accepted difference
+  is listed with its reason. Settings, hooks, skills, agents, MCP servers and plugin folders
+  use Claude Code's formats.
+- 💻 **Starts on a laptop.** The same code runs on SQLite in one process: a terminal UI,
+  `noeta -p`, or a library in your Python program.
 - 🔌 **Every way in.** A full-screen terminal UI, Claude Code's `-p` and `stream-json`
   protocol (point an Agent SDK at it), ACP for Zed and other editors, an HTTP / WebSocket
-  API, a web app, a desktop app and a Python SDK.
+  API and a Python SDK; a web app and a desktop app, both experimental and built from source.
 - 🤖 **Any model.** Claude, DeepSeek, or anything behind an OpenAI-compatible or Responses
   endpoint, including your own vLLM or gateway.
 - 🧩 **Everything is a plugin.** Files, shell, permissions, hooks, skills, sub-agents, MCP,
@@ -68,15 +72,17 @@ ever lost.
 
 ## Benchmarks
 
-Same model (DeepSeek V4.1 Flash, effort `high`), same tasks, same limits, same machine:
+Both agents driven by the same model, DeepSeek V4.1 Flash (effort `high`), not a Claude
+model; same tasks, same limits, same machine:
 
-| Benchmark | noeta | Claude Code |
-|---|---|---|
-| SWE-rebench 07-2026 (111 tasks, 2 runs pooled) | **50.5 %** | 45.0 % |
-| Cost per run of the 111 tasks | **$5.01–5.77** | $5.70–6.25 |
+| Benchmark | noeta | Claude Code | Difference (standard error) |
+|---|---|---|---|
+| SWE-rebench 07-2026 (111 tasks, 2 runs pooled) | 50.5 % | 45.0 % | +5.4 (3.6) |
+| Cost per run of the 111 tasks | $5.01–5.77 | $5.70–6.25 | |
 
-Every run, the standard errors, the retries and the tasks with leaked answers are in
-[the full benchmark report](https://github.com/initxy/noeta/blob/main/docs/benchmarks.md).
+On par or slightly ahead: the difference is about 1.5 standard errors, not significant, and a
+single run moves by about ±5 points. Every run, the retries and the tasks with leaked answers
+are in [the full benchmark report](https://github.com/initxy/noeta/blob/main/docs/benchmarks.md).
 
 ## Quickstart
 
@@ -97,7 +103,7 @@ noeta -p "what does this repository do?"   # one prompt, print the answer
 
 ```bash
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...
+export NOETA_MODEL=deepseek-flash NOETA_API_KEY=...
 ```
 
 For `openai_compat` the base URL ends in `/v1`; for `anthropic` it is the host only; for
@@ -134,7 +140,7 @@ Several at once: `uv tool install 'noeta[tui,server,postgres]'`.
 
 </details>
 
-## Run it on many machines
+## Deploy on many machines
 
 One Postgres store, any number of workers, an HTTP API in front:
 
@@ -146,7 +152,10 @@ noeta --server http://api.internal:8642   # the terminal UI against it
 ```
 
 A worker that dies leaves nothing behind: another claims its tasks where their logs stop.
-See [Run it as a server](https://initxy.github.io/noeta/guides/server).
+See [Run it as a server](https://initxy.github.io/noeta/guides/server). To try it on one
+Docker host, [`deploy/`](https://github.com/initxy/noeta/tree/main/deploy) has a Dockerfile and
+a compose file with Postgres, `noeta serve` and three workers:
+[Deploy with Docker](https://initxy.github.io/noeta/guides/docker).
 
 ## Embed it in Python
 

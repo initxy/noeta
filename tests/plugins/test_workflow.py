@@ -381,6 +381,7 @@ async def test_a_bad_meta_and_a_missing_engine_are_refused(
     assert missing.result.is_error
     assert "embedded JavaScript engine does not load here" in missing.result.text
     assert "mini-racer" in missing.result.text
+    assert "pip install 'noeta[workflow]'" in missing.result.text
     assert await client.tasks(parent_id=tid2) == []
 
 

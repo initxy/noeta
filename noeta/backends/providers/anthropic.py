@@ -85,9 +85,10 @@ _COUNT_TOKENS_BETA = "token-counting-2024-11-01"
 
 #: The ``anthropic-beta`` set Claude Code 2.1.312 sends an API-key user in
 #: its default permission mode (mid-conversation system turns, adaptive
-#: thinking updates, effort and thinking clearing ride on these).
+#: thinking updates, effort and thinking clearing ride on these), without
+#: ``claude-code-20250219``, which names the client as Claude Code: noeta
+#: speaks the protocol, it does not claim to be Claude Code.
 DEFAULT_BETAS: tuple[str, ...] = (
-    "claude-code-20250219",
     "interleaved-thinking-2025-05-14",
     "context-management-2025-06-27",
     "per-turn-control-2026-07-01",

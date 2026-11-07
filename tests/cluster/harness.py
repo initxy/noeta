@@ -139,8 +139,10 @@ class Cluster:
     """Worker processes serving one store from a shared directory."""
 
     def __init__(self, base: Path, url: str, *, workers: int = 3, lease: float = 1.0,
-                 fire_after: float = 2.0) -> None:
+                 fire_after: float = 2.0, restart_limit: int | None = None) -> None:
         self.base = base
+        #: ``noeta worker --restart-limit``; ``None`` keeps the default.
+        self.restart_limit = restart_limit
         self.url = url
         self.lease = lease
         self.home = base / "home"
@@ -178,8 +180,10 @@ class Cluster:
         self.spawned += 1
         log = open(self.logs / f"worker-{self.spawned}.log", "wb")
         with log:
+            limit = ([] if self.restart_limit is None
+                     else ["--restart-limit", str(self.restart_limit)])
             return subprocess.Popen([NOETA, "worker", "--lease", str(self.lease),
-                                     "--snapshot-every", str(SNAPSHOT_EVERY)],
+                                     "--snapshot-every", str(SNAPSHOT_EVERY), *limit],
                                     cwd=self.work, env=self.env, stdout=log, stderr=log)
 
     async def start(self) -> None:

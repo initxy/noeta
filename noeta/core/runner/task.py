@@ -146,6 +146,9 @@ class TaskRun:
         #: A kept run woken to step holds a slot of ``Runtime.concurrency``.
         self._slot = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        #: The claim took the task over from one never given back; judged
+        #: once, at the claim's first start (:meth:`_record_start`).
+        self._reclaimed = claim.reclaimed
 
     # ------------------------------------------------------------ lifecycle
 
@@ -355,8 +358,36 @@ class TaskRun:
         if pinned != current:
             plugins = core_records.Plugins(pins=current)
             view.record(CORE, plugins.kind, plugins.data())
+        if self._reclaimed:
+            self._reclaimed = False
+            return await self._record_reclaim(view)
         await self.flush(view)
         return True
+
+    async def _record_reclaim(self, view: TaskView) -> bool:
+        """This claim took the task over from one never given back. Counted
+        only by a worker that will run the task (after the plugin check, and
+        once its inbox reads: a worker that walks away writes nothing), in
+        the log, so the count survives the crash it is about. Past
+        ``Runtime.restart_limit`` such restarts in a row with no step
+        finished, the task ends ``failed`` instead: its parent hears it like
+        any failure. ``False`` once it has ended."""
+        try:
+            await self.store.inbox(self.task_id, after=self.state.inbox_read)
+        except msgspec.DecodeError as exc:
+            raise UnreadableInbox(exc) from exc
+        limit = self.rt.restart_limit
+        if limit <= 0 or self.state.reclaims < limit:
+            reclaimed = core_records.Reclaimed()
+            view.record(CORE, reclaimed.kind, reclaimed.data())
+            await self.flush(view)
+            return True
+        await self.flush(view)
+        error = texts.RESTART_LIMIT.format(n=self.state.reclaims + 1)
+        log.error("task %s: ended failed: %s", self.task_id, error)
+        await closing.end(self, "failed", self.state.last_answer, error,
+                          close_open=f"{texts.TURN_FAILED_CALL_ERROR}restart_limit")
+        return False
 
     async def load(self) -> None:
         """Fold the log (and the conversation it continues): from the

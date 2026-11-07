@@ -4,7 +4,9 @@
 - Date: 2026-10-28
 - Refined by: [ADR-026](026-a-blocked-prompt-is-erased-by-a-core-record.md) (a blocked prompt
   leaves the fold, not the log), [ADR-031](031-background-plugin-work-returns-through-the-inbox.md)
-  (background plugin work returns through the inbox)
+  (background plugin work returns through the inbox),
+  [ADR-032](032-a-task-that-keeps-killing-its-worker-ends-at-a-restart-limit.md) (a task that
+  keeps killing its worker ends at a restart limit)
 
 ## Context
 

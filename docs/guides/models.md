@@ -51,12 +51,16 @@ sits idle between turns.
 ```bash
 # DeepSeek
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=sk-...
+export NOETA_MODEL=deepseek-flash NOETA_API_KEY=sk-...
 
 # a local vLLM
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=http://localhost:8000/v1
 export NOETA_MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct NOETA_API_KEY=unused
 ```
+
+DeepSeek's current models, `deepseek-flash` and `deepseek-v4-pro`, are in the catalog with their
+windows and list prices; DeepSeek retired the older names `deepseek-chat` and `deepseek-reasoner`
+on 2026-07-24.
 
 A model noeta's catalog does not know runs with conservative default limits (a 128,000-token
 window, 16,384 output tokens) and a warning, unless something tells noeta its real limits:
@@ -68,7 +72,6 @@ window, 16,384 output tokens) and a warning, unless something tells noeta its re
 
 ```json
 {"models": [
-  {"id": "deepseek-chat", "context_window": 128000, "max_output_tokens": 8192},
   {"id": "Qwen/Qwen3-Coder-30B-A3B-Instruct", "context_window": 262144,
    "max_output_tokens": 65536, "supports_vision": false}
 ]}
@@ -113,12 +116,13 @@ model = "claude-sonnet-5-5"            # the default provider: anthropic
 family = "openai_compat"               # anthropic | openai_compat | openai_responses
 base_url = "https://api.deepseek.com/v1"
 api_key = "{env:DEEPSEEK_API_KEY}"     # a literal, {env:NAME} or {keyring:service/user}
-models = ["deepseek-chat", {id = "deepseek-reasoner", context_window = 128000, max_output_tokens = 64000}]
+models = ["deepseek-flash", "deepseek-v4-pro"]
 
 [providers.local]
 family = "openai_compat"
 base_url = "http://localhost:8000/v1"
 api_key = "unused"
+models = [{id = "Qwen/Qwen3-Coder-30B-A3B-Instruct", context_window = 262144, max_output_tokens = 65536}]
 list_models = true                     # read its /models (the default); false skips it
 ```
 
@@ -147,7 +151,7 @@ provider, and tool-call ids another provider wrote are rewritten to the form Ant
 ## Switching models
 
 - **In the terminal UI:** `/model` lists the aliases and every provider's models, with the
-  provider each comes from; `/model deepseek-chat` switches directly. The switch takes effect from
+  provider each comes from; `/model deepseek-flash` switches directly. The switch takes effect from
   the next request and is recorded in the log, so a resumed task keeps it.
 - **In the web app and editors:** the model picker; over ACP, `/model [name]` too.
 - **Headless:** `--model`, or the SDK's `set_model` control request.

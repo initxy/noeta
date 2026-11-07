@@ -1,0 +1,81 @@
+# Postgres, one `noeta serve` (the HTTP API) and several `noeta worker` replicas, on one
+# Docker host. docs/guides/docker.md walks through it. From the repository root:
+#
+#   cp deploy/.env.example deploy/.env      # then fill in the model, key and token
+#   docker compose -f deploy/compose.yaml up -d --build
+#
+# Every noeta container mounts the same two volumes at the same paths: the workspace
+# (the tasks' working directory, /workspace) and noeta's home (agents, plugins,
+# settings, saved tool outputs, plans, memory), because a task may continue on any
+# worker after any step.
+
+name: noeta
+
+x-noeta-env: &noeta-env
+  NOETA_STORE: postgresql://noeta:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/noeta
+  NOETA_MODEL: ${NOETA_MODEL:?set NOETA_MODEL in deploy/.env}
+  NOETA_PROVIDER: ${NOETA_PROVIDER:-}
+  NOETA_BASE_URL: ${NOETA_BASE_URL:-}
+  NOETA_API_KEY: ${NOETA_API_KEY:-}
+
+x-noeta: &noeta
+  image: ${NOETA_IMAGE:-noeta:local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment: *noeta-env
+  volumes:
+    - workspace:/workspace
+    - noeta-home:/home/noeta/.noeta
+  # SIGTERM hands a worker's running tasks back to the store; give it time to.
+  stop_grace_period: 30s
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: noeta
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: noeta
+    # Each noeta process keeps its own pool of connections (8, plus its listeners).
+    command: ["postgres", "-c", "max_connections=200"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noeta -d noeta"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  serve:
+    <<: *noeta
+    # The API only; the workers run the tasks. Name every host clients reach this
+    # server by with another --allow-host.
+    command: ["serve", "--no-worker", "--host", "0.0.0.0",
+              "--allow-host", "localhost", "--allow-host", "127.0.0.1", "--allow-host", "serve"]
+    environment:
+      <<: *noeta-env
+      NOETA_SERVER_TOKEN: ${NOETA_SERVER_TOKEN:?set NOETA_SERVER_TOKEN in deploy/.env}
+    ports:
+      - "${NOETA_PORT:-127.0.0.1:8642}:8642"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8642/agents', headers={'Authorization': 'Bearer ' + os.environ['NOETA_SERVER_TOKEN']}), timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  worker:
+    <<: *noeta
+    command: ["worker", "--concurrency", "8"]
+    deploy:
+      replicas: ${NOETA_WORKERS:-3}
+
+volumes:
+  pgdata:
+  workspace:
+  noeta-home:

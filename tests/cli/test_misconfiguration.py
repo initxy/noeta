@@ -43,6 +43,44 @@ def test_no_api_key_names_the_variables_to_set(
     assert line.startswith("noeta: no API key") and "NOETA_API_KEY" in line and also in line
 
 
+def test_no_model_names_a_model_a_key_and_the_quickstart(tmp_path: Path) -> None:
+    done = subprocess.run(
+        [sys.executable, "-m", "noeta.cli.main", "-p", "hi", "--cwd", str(tmp_path)],
+        capture_output=True, text=True, timeout=120, check=False, env=_env(tmp_path))
+    assert done.returncode == 1, done.stderr
+    assert "Traceback" not in done.stderr, done.stderr
+    for wanted in ("no model configured", "API key", "NOETA_MODEL=", "ANTHROPIC_API_KEY=",
+                   "NOETA_PROVIDER=openai_compat", "NOETA_BASE_URL=",
+                   "https://initxy.github.io/noeta/start/quickstart"):
+        assert wanted in done.stderr, wanted
+
+
+def test_a_missing_key_stops_the_start_before_any_request(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No model listing is read without a key (it would only answer 401),
+    and a model that is not Claude's on the default provider gets the way to
+    an OpenAI-compatible endpoint."""
+    from noeta.backends.providers import listing
+    from noeta.cli import home_dir
+    from noeta.cli.config import MissingAPIKey, from_settings, load_settings
+
+    monkeypatch.setattr(home_dir, "HOME", tmp_path / "home")
+    for var in ("NOETA_API_KEY", "ANTHROPIC_API_KEY", "NOETA_PROVIDER", "NOETA_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+    read: list[object] = []
+    monkeypatch.setattr(listing, "fetch_listing", lambda *a, **kw: read.append(a) or [])
+    s = load_settings(model="some-gateway-model", store=f"sqlite:///{tmp_path / 't.db'}")
+    with pytest.raises(MissingAPIKey) as missing:
+        from_settings(s, cwd=str(tmp_path))
+    assert read == []
+    assert "NOETA_PROVIDER=openai_compat" in str(missing.value)
+    assert "NOETA_BASE_URL" in str(missing.value)
+    s = load_settings(model="sonnet", store=f"sqlite:///{tmp_path / 't.db'}")
+    with pytest.raises(MissingAPIKey) as missing:
+        from_settings(s, cwd=str(tmp_path))
+    assert "NOETA_PROVIDER" not in str(missing.value)
+
+
 class _Agents(BaseHTTPRequestHandler):
     """``GET /agents`` of a server whose token is ``right``."""
 

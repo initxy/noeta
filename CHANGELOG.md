@@ -2,10 +2,66 @@
 
 All notable changes to Noeta are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The 0.x history (packages
-`noeta-runtime` and `noeta-sdk`) is in `CHANGELOG.md` at tag `v0.6.42`.
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The 0.x releases (packages
+`noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
+this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
+
+### Added
+
+- **A task whose run keeps killing its worker ends instead of taking down every worker.** A
+  pickup after a claim that was never given back (its worker died, was killed or lost its
+  lease mid-run) is recorded in the task's log (`core/reclaimed`); after three such restarts in a
+  row with no step finished in between, the next crash ends the task `failed` with
+  `restart_limit`, which front ends show like
+  any failure and a sub-agent's parent hears as a failed child. A healthy task that loses its
+  machine once resets at its next step; a worker shutting down cleanly is not counted.
+  `noeta worker --restart-limit N` (`Runtime.restart_limit`, `0` for no limit) changes it.
+  Workers older than this release leave a task with such a record to newer workers.
+- **DeepSeek's current models in the catalog**: `deepseek-flash` and `deepseek-v4-pro` (1M
+  window, 384K output, list prices), so they start without the unknown-model warning and their
+  cost is counted. DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on 2026-07-24; the
+  docs' examples use the new names.
+- **The Python API reference says what semver covers**: the top-level `noeta` names, the modules
+  it lists, the plugin interface, the event types and the entry-point groups; everything else is
+  internal. A public name is deprecated with a `DeprecationWarning` for at least one minor
+  release, and only a major release removes it.
+- **CI runs the test suite on macOS** (Python 3.12).
+- **A Docker image and a multi-worker compose file** (`deploy/`). `deploy/Dockerfile` builds
+  noeta from the checkout with the `postgres` and `server` extras (locked versions), `git`,
+  `ripgrep`, `bubblewrap` and `tini`, as a non-root user; `deploy/compose.yaml` runs Postgres,
+  `noeta serve --no-worker` with a bearer token, and three workers sharing the workspace and
+  noeta's home at the same paths. New page:
+  [Deploy with Docker](https://initxy.github.io/noeta/guides/docker), with what the sandbox
+  needs inside a container. CI builds the image (never pushed) and checks the compose file.
+
+### Changed
+
+- **Requests to Anthropic no longer present noeta as Claude Code.** The `claude-code-20250219`
+  beta is no longer sent, and `metadata.user_id` is this machine's opaque id
+  (`~/.noeta/device_id`) instead of Claude Code's JSON of device, account and session ids. The
+  protocol is still Claude Code's; both differences are listed in `parity/deviations.md`.
+- **Store adapters: `Store.claim` reports `Claim.reclaimed`**, true when the claimed row still
+  had a lease (the claim before was neither released nor handed back by an append), read in
+  the claim's transaction. A third-party store that does not set it keeps working, without the
+  restart limit; the store contract tests check it.
+- **`mini-racer` is optional: install `noeta[workflow]` for the `Workflow` tool.** The embedded
+  V8 (about 80 MB) was a hard dependency used only by Workflow scripts. Without it the tool
+  refuses and names the install line, and `noeta plugins` names the missing extra. The `tui`
+  extra does not pull it.
+- **A first run says what is missing.** With no model, noeta names a model and an API key, the
+  minimal variables for Anthropic and for an OpenAI-compatible provider, and the quickstart. A
+  missing key now stops the start before any request (it used to read the Anthropic model
+  listing with an empty key and print a 401 first), and a model that does not look like Claude
+  on the default provider gets the `NOETA_PROVIDER=openai_compat` / `NOETA_BASE_URL` hint.
+- **Development status is Beta** (`4 - Beta`) on PyPI, for `noeta` and `noeta-tui`.
+- **README and docs home lead with self-hosting on many workers**: one Postgres store, any
+  worker continuing any task, waits that hold no process; Claude Code compatibility is shown
+  with the `make parity` replay. The benchmark is shown with its standard error (+5.4, SE 3.6,
+  not significant, on DeepSeek V4.1 Flash for both agents) instead of a bolded winner.
+- **The web and desktop apps are marked experimental**: built from source, not published, not
+  in CI, installers unsigned.
 
 ## [1.0.5] - 2026-11-06
 

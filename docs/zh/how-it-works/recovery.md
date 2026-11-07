@@ -6,7 +6,7 @@
 
 工人跑一个任务之前，先从存储里**认领**它：
 
-- `claim(worker, queues, lease_seconds)` 取一个可认领的任务，置为 `running`，记下这个工人是持有者，**把任务的 epoch 加一**，并设一个租约（`lease_until`）。
+- `claim(worker, queues, lease_seconds)` 取一个可认领的任务，置为 `running`，记下这个工人是持有者，**把任务的 epoch 加一**，并设一个租约（`lease_until`）。返回的 `reclaimed` 说明上一个认领是不是还挂着租约、没有交还（[反复把工人弄死的任务](#a-task-that-keeps-killing-its-worker)）。
 - `renew(claim, lease_seconds)` 延长租约。工人每过三分之一租期续一次（默认租期 30 秒；`noeta worker --lease`）。
 - `release(claim)` 交还认领但不结束任务（工人停机时）：running 的任务变回 `ready`。
 - `requeue(root_id, queue, to)` 把一整棵任务树从一个队列挪到另一个，但只要树里有任务的租约还没过期就不挪（服务端接手前端开的对话时用，见 [HTTP 接口](../reference/http-api.md#和任务交互)）。
@@ -80,6 +80,16 @@
 
 `on_event` 在事件提交之后才运行，所以崩溃可能让某次调用丢掉。承受不起的插件在自己的状态里记一个进度，从 `delivered_through(view)` 返回它；之后每次认领都会把进度之后的事件再交给它一次，于是每条事件它至少能看到一次（它的副作用应当按事件序号做成幂等的）。`Waiting` 要等它的所有 `on_event` 都跑完、记录都落地之后才交还任务，所以中间崩溃的话，任务会在租约过期后被重新认领，而这条等待不会被写两遍。
 
+### 反复把工人弄死的任务 {#a-task-that-keeps-killing-its-worker}
+
+上面的上限都是按单次调用算的。一次运行也可能在别处把工人弄死：某个插件 hook 把内存吃光，组装请求时某个原生库段错误，模型看到“结果未知”后又去调那条会杀掉进程的命令，或者卡死到续不上租约。这样每次接手都会再崩一次；工人有好几个的话，这个任务会把它们一个接一个拖垮。
+
+认领时存储会告诉这次认领：上一个认领有没有交还。行上还挂着租约（没人 release，也没有哪次追加把任务交回来），`Claim.reclaimed` 就是 true，这是在认领自己的事务里读的。停机时的 release 不算。真正要跑这个任务的工人（在插件检查之后，所以把任务留给别人的工人什么都不写）会在插件的 `on_start` 之前记一条 `core/reclaimed`。计数在日志里，所以是下一个工人写的，绝不靠那个正在死掉的工人；这次追加和别的追加一样受认领 epoch 约束，两个工人抢同一个任务，不会都记上。
+
+折叠时，这些记录累加在 `TaskState.reclaims` 里，直到任务**在某条记录之后做完一步**：最近一条 `reclaimed` 之后记下了一次模型回复，而且它的调用全都有了结果（没有调用的回复当场就算做完）。把崩溃时做到一半的那个调用补完不算，因为它是崩溃之前开始的。停下来等待也不清零：崩溃可能就发生在 `Waiting` 写下之后、认领交还之前。一个健康的任务丢了一次机器，只会记一条 `reclaimed`，到下一步就清零了。
+
+任务最多连续重启 `Runtime.restart_limit` 次（默认 3；`noeta worker --restart-limit`，`0` 表示不限）。再崩一次，下一次接手就不再跑它，把还开着的调用都答上，直接以 `failed` 结束，错误是 `restart_limit: the task's run stopped without handing it back 4 times in a row ...`。这是一条普通的 `TaskEnded`：前端照常显示为失败，子代理的父任务会收到一条失败的 `ChildEnded`。默认值比上面那几道按单次调用算的上限高，所以一次总在中途死掉的模型调用或 `retry_safe` 调用会先被它自己的上限拦下，模型还能接着干。
+
 ## 插件版本记录 {#plugin-pins}
 
 任务第一次开始时，以及之后每次接手发现插件有变化时，都会记下它用到的插件：`core/plugins`，每个插件的 `registry.pin`（名字、来源、包版本或文件哈希、参数的哈希）。
@@ -106,6 +116,7 @@
 | 运行器或插件 hook 里的 bug | 连续 2 次 | 第一次让这一轮以 `internal_error` 失败，第二次让任务以 `failed` 结束 |
 | 读不了的日志，或缺插件 | 同一个工人上连续 3 次认领（`task.LOAD_ATTEMPTS`） | 任务以 `failed` 结束 |
 | 输出被截断、空回复 | 各自连续 3 次 | 这一轮以 `llm_truncated` 失败 / 不带答案地结束 |
+| 上一个认领没交还就重启，期间一步也没做完 | 连续 3 次（`Runtime.restart_limit`） | 再崩一次，任务就以 `failed`（`restart_limit`）结束 |
 
 ## 证明：`make cluster`
 

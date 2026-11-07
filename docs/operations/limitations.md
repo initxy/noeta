@@ -48,6 +48,12 @@ Most of a task lives in its log and moves freely between workers. These parts do
 - **Plugins must match on every worker.** A worker missing a plugin a task was started with
   never runs the task; after three such claims on the same worker the task fails with
   `plugin_missing` ([troubleshooting](./troubleshooting.md#a-worker-without-a-plugin-the-task-needs)).
+- **A task whose run keeps killing its worker gets three restarts.** After three restarts in a
+  row from claims that were never given back, with no step finished in between, the next crash
+  ends the task `failed` with `restart_limit` (`noeta worker --restart-limit`). A machine lost
+  four times during one long step counts the same way; a crash before a worker writes anything (folding a
+  log too large for its memory) is not counted at all
+  ([how it works](../how-it-works/recovery.md#a-task-that-keeps-killing-its-worker)).
 - **Snapshots hold the whole conversation.** A 20,000-event log's snapshot is about 12 MiB, so
   on Postgres a claim of a long task is bound by transfer (open follow-up).
 - **Dead workers' job log directories** (`w<pid>`) in an exec env that is not the local machine

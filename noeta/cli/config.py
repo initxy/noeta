@@ -26,8 +26,7 @@ More providers than the default one (``model`` / ``provider`` / ``base_url`` /
     base_url = "https://api.deepseek.com/v1"
     api_key = "{env:DEEPSEEK_API_KEY}"
     headers = {}
-    models = ["deepseek-chat", {id = "deepseek-reasoner", context_window = 128000,
-                                max_output_tokens = 64000}]
+    models = ["deepseek-flash", "deepseek-v4-pro"]
     list_models = true         # read its /models for more models and their windows
 
 An ``anthropic`` provider (the default one, or a table) also takes
@@ -179,8 +178,21 @@ class Settings:
                 also = f" ({fallback} is read too)" if fallback else ""
                 raise MissingAPIKey(
                     f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
-                    f"or api_key in {home_dir.HOME / 'config.toml'}")
+                    f"or api_key in {home_dir.HOME / 'config.toml'}"
+                    + self._other_vendor_hint())
         return _adapter(self.provider, self.base_url, key, headers, self.prompt_cache_ttl)
+
+    def _other_vendor_hint(self) -> str:
+        """For a model that does not look like Claude on the default
+        ``anthropic`` provider: how to point noeta at the endpoint that
+        serves it."""
+        real = models.resolve_alias(self.model)
+        if self.provider != "anthropic" or not real or "claude" in real.lower() \
+                or models.model_family(real) == "anthropic":
+            return ""
+        return (f"; {real!r} does not look like an Anthropic model: for an OpenAI-compatible "
+                "API set NOETA_PROVIDER=openai_compat and NOETA_BASE_URL (its URL ending in "
+                "/v1, e.g. https://api.deepseek.com/v1), with its key in NOETA_API_KEY")
 
     def _default_secrets(self) -> tuple[str | None, dict[str, str]]:
         """The default provider's key and headers, their secret references
@@ -624,7 +636,15 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices += load_plugin_files(cwd, plugin_dirs)
     notices += [n for sub in PROJECT_GATED_DIRS if sub != ".noeta/plugins"
                 if (n := untrusted_notice(cwd, sub)) is not None]
+    found = file_settings(cwd, sources=setting_sources, flag=flag_settings)
+    apply_env(found)
+    if not settings.model and found.model:
+        settings = dataclasses.replace(settings, model=found.model)
+    store = open_store(settings.store_url)
     router = settings.make_router()
+    # The default provider is built before any request (a listing among
+    # them), so a missing key is the one thing the start says.
+    default_provider = settings.make_provider()
     # Only a start model the catalog does not know needs a listing now (its
     # limits, and whether to say so); its route is settled when a task is
     # given it.
@@ -634,10 +654,6 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         notices.append(unknown)
     for notice in notices:
         log.warning("%s", notice)
-    found = file_settings(cwd, sources=setting_sources, flag=flag_settings)
-    apply_env(found)
-    if not settings.model and found.model:
-        settings = dataclasses.replace(settings, model=found.model)
 
     def source(name: str) -> bool:
         return setting_sources is None or name in setting_sources
@@ -645,7 +661,6 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     runtime_kw.setdefault("spill_root", str(home_dir.HOME / "tool-results"))
     sandbox = SandboxSettings.from_settings(found.sandbox, found.sandbox_permissions,
                                             base_dir=str(cwd or os.getcwd()))
-    store = open_store(settings.store_url)
 
     def plugin_base(found: FileSettings) -> dict[str, PluginSetting]:
         base = _base_plugin_settings(found, cwd, permissions, project=source("project"))
@@ -712,8 +727,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
     notices += _apply_sandbox(sandbox, cwd, runtime_kw)
     runtime_kw.setdefault("prompt_dirs", [str(home_dir.HOME / "prompts")])
     runtime_kw.setdefault("workspace_trusted", project_trusted)
-    # The default provider is built now, so a missing key stops the start.
-    router.adopt(router.default.name, settings.make_provider())
+    router.adopt(router.default.name, default_provider)
     if router.several:
         # Routes are recorded and followed only with several providers: with
         # one, every route is that one and the log stays as it always was.

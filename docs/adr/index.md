@@ -13,9 +13,10 @@ and describe a different codebase.
 ## Kernel
 
 - [001](001-task-is-an-event-log-with-one-writer.md) A task is an append-only event log with one writer and an inbox
-  (refined by 026, 031)
+  (refined by 026, 031, 032)
 - [031](031-background-plugin-work-returns-through-the-inbox.md) A plugin's background model work returns through the task's inbox
 - [029](029-a-task-keeps-its-own-claim-while-it-owns-process-bound-work.md) A task keeps its own claim while it owns process-bound work
+- [032](032-a-task-that-keeps-killing-its-worker-ends-at-a-restart-limit.md) A task that keeps killing its worker ends at a restart limit
 - [006](006-fold-snapshots.md) Claims fold from versioned snapshots; a snapshot may be missing, never wrong
   (refined by 012, 023, 030)
 - [012](012-snapshots-follow-state-size.md) Snapshots are written as the state grows and deleted when the task ends

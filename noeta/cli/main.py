@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import os
 import signal
 import sys
@@ -39,8 +40,11 @@ README_EXTRAS: tuple[str, ...] = ()
 EXTRA_MODULES = {
     "uvicorn": "server", "starlette": "server", "websockets": "server",
     "acp": "acp", "psycopg": "postgres", "psycopg_pool": "postgres",
-    "keyring": "keyring",
+    "keyring": "keyring", "py_mini_racer": "workflow",
 }
+#: The built-in plugins that need an extra's module to do their work: plugin
+#: name -> that module (``noeta plugins`` names the extra when it is missing).
+PLUGIN_MODULES = {"workflow": "py_mini_racer"}
 
 
 def _noeta(*extras: str) -> str:
@@ -95,6 +99,10 @@ def _parser() -> argparse.ArgumentParser:
     w.add_argument("--snapshot-every", type=int, default=None, metavar="EVENTS",
                    help="write a task's fold snapshot at most every this many events "
                         "(default 100; 0 never)")
+    w.add_argument("--restart-limit", type=int, default=None, metavar="N",
+                   help="restarts in a row a task gets after its worker died mid-run, with "
+                        "no step finished in between, before it ends failed (default 3; 0 "
+                        "no limit)")
     w.add_argument("--allow-bypass-permissions", action="store_true",
                    help="let tasks run in bypassPermissions")
     sv = sub.add_parser("serve", help="the client API over HTTP")
@@ -172,8 +180,23 @@ def _plugins(cwd: str) -> None:
     notices += more
     for line in broken_plugin_lines():
         print(f"(failed) {line}", file=sys.stderr)
+    for line in plugin_extra_lines():
+        print(f"(missing) {line}", file=sys.stderr)
     for notice in notices:
         print(notice, file=sys.stderr)
+
+
+QUICKSTART_URL = "https://initxy.github.io/noeta/start/quickstart"
+#: What a start with no model says: a model and a key for its provider.
+NO_MODEL = (
+    "noeta: no model configured. noeta needs a model and an API key for its provider:\n"
+    "  Anthropic:\n"
+    "    export NOETA_MODEL=sonnet ANTHROPIC_API_KEY=sk-ant-...\n"
+    "  an OpenAI-compatible API (DeepSeek here):\n"
+    "    export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1\n"
+    "    export NOETA_MODEL=deepseek-flash NOETA_API_KEY=sk-...\n"
+    "Flags (--model, --provider, --base-url) and ~/.noeta/config.toml work too. "
+    f"Quickstart: {QUICKSTART_URL}")
 
 
 def _settings(args: argparse.Namespace, *, need_model: bool = True,
@@ -184,7 +207,7 @@ def _settings(args: argparse.Namespace, *, need_model: bool = True,
                       model=args.model, provider=args.provider, base_url=args.base_url,
                       store=args.store, effort=args.effort, **layers)
     if need_model and not s.model:
-        sys.exit("noeta: no model configured (--model or NOETA_MODEL)")
+        sys.exit(NO_MODEL)
     if args.system_prompt is not None:
         s.prompts["system/main"] = args.system_prompt
     if args.append_system_prompt is not None:
@@ -294,7 +317,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 async def _worker(s: Settings, queues: list[str], concurrency: int,
                   lease: float | None = None, snapshot_every: int | None = None, *,
-                  allow_bypass: bool = False, task_defaults: dict[str, Any] | None = None,
+                  restart_limit: int | None = None, allow_bypass: bool = False,
+                  task_defaults: dict[str, Any] | None = None,
                   flags: tuple[str, ...] = ()) -> None:
     """``task_defaults``: the config of the tasks this worker's channels
     start (``flags``: the command-line flags that gave it, named on stderr:
@@ -304,6 +328,8 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     kw["permissions"] = {} if allow_bypass else {"disable_bypass_mode": True}
     if snapshot_every is not None:
         kw["snapshot_every"] = snapshot_every
+    if restart_limit is not None:
+        kw["restart_limit"] = restart_limit
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
     app.client.task_config.update(task_defaults or {})
     if flags:
@@ -341,6 +367,17 @@ def broken_plugin_lines() -> list[str]:
     missing = registry.missing_modules()
     return [f"{path}: {why}{_install_hint(missing[path]) if path in missing else ''}"
             for path, why in registry.broken_plugin_files().items()]
+
+
+def plugin_extra_lines() -> list[str]:
+    """``plugin: why`` for each installed built-in plugin whose extra is not
+    installed here, with the install line."""
+    from noeta.core import registry
+
+    names = set(registry.available(registry.PLUGINS))
+    return [f"{name}: the {module} module is not installed{_install_hint(module)}"
+            for name, module in PLUGIN_MODULES.items()
+            if name in names and importlib.util.find_spec(module) is None]
 
 
 def _install_hint(module: str) -> str:
@@ -418,7 +455,7 @@ def _main(argv: list[str]) -> None:
         flags = tuple(f for f, v in (("--effort", args.effort),
                                      ("--permission-mode", args.permission_mode)) if v)
         asyncio.run(_worker(s, args.queue or ["default"], args.concurrency,
-                            args.lease, args.snapshot_every,
+                            args.lease, args.snapshot_every, restart_limit=args.restart_limit,
                             allow_bypass=args.allow_bypass_permissions,
                             task_defaults=_task_defaults(s, args), flags=flags))
         return

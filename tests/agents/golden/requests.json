@@ -1,24 +1,24 @@
 {
  "hashes": [
-  "main c865d7259c80b4b2",
-  "main 8f3a20a4ac27b7b6",
-  "main 15bbe3fbc4a9560b",
-  "main df23702da2d7b490",
-  "child 533859476a5021ff",
-  "child de4d0bc331bfa72b",
-  "main ae87aa12841b87a2",
-  "main c58563e12a219724",
-  "main 5a19d3b87e3522d4",
-  "main a40749b855d7f2b0",
-  "main b71ed005582b2d12",
-  "main c4242fc04f085e1c",
-  "main 51ceabbf9e4358e4",
-  "main b44c5a759ab2e763",
-  "main e1aaea6d1092f182",
-  "main fefc759e920d298c",
-  "main ddfead877bd98b9c",
-  "main f946c4e46881f626",
-  "main 427d8d645cda1ca2"
+  "main 6452624c1cc0c853",
+  "main 2229af48985bad08",
+  "main 0673bbd44a2adcac",
+  "main 7982889fc6d090bd",
+  "child 0ac6612586fe9ea8",
+  "child 9bf88e3aa1be0aac",
+  "main 8b232707255c54e5",
+  "main 494529521872c4e8",
+  "main d4287a03babac7c9",
+  "main 7f63826a28a5880b",
+  "main 65c1cde7945e583c",
+  "main 0a4c2d7bafe01735",
+  "main 8fbea4af0417c56b",
+  "main 76929c863c7ceef3",
+  "main 64b009cac1475cde",
+  "main d2089f4fb6fd7b19",
+  "main df856115fb1ab306",
+  "main e56c58b31712b59c",
+  "main c4e49f9d01c26b97"
  ],
  "last": {
   "child": {
@@ -88,7 +88,7 @@
      }
     ],
     "metadata": {
-     "user_id": "{\"device_id\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"account_uuid\":\"\",\"session_id\":\"tttttttttttttttttttttttttttttttt\"}"
+     "user_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     },
     "model": "claude-sonnet-4-6",
     "output_config": {
@@ -1164,7 +1164,7 @@
      }
     ],
     "metadata": {
-     "user_id": "{\"device_id\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"account_uuid\":\"\",\"session_id\":\"tttttttttttttttttttttttttttttttt\"}"
+     "user_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     },
     "model": "claude-sonnet-4-6",
     "output_config": {

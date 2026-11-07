@@ -3,7 +3,8 @@
 This page shows how to run noeta for other people and programs: `noeta serve` for the
 HTTP / WebSocket API, `noeta worker` processes that run the tasks, one Postgres store they
 share, the bearer token, the web app, and channels that let a chat app in. How the pieces stay
-correct across machines is on [Many machines](../how-it-works/many-machines.md).
+correct across machines is on [Many machines](../how-it-works/many-machines.md). A ready
+Docker image and compose file for all of this are on [Deploy with Docker](./docker.md).
 
 Every task is a log in the store. A worker that dies leaves nothing behind: another one claims
 its tasks where their logs stop.
@@ -70,6 +71,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # the API, on
 | `--concurrency N` | 8 | tasks this process runs at once |
 | `--lease SECONDS` | 30 | how long a claim lasts without renewal; a dead worker's tasks wait about this long before another takes them |
 | `--snapshot-every EVENTS` | 100 | write a task's fold snapshot at most every this many events (`0`: never) |
+| `--restart-limit N` | 3 | restarts in a row, with no step finished, a task that keeps killing its worker gets before it fails (`0`: no limit) |
 | `--allow-bypass-permissions` | off | let tasks run in `bypassPermissions` |
 
 ### `noeta serve` flags

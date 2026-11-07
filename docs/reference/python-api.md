@@ -7,6 +7,28 @@ imported from its module (`noeta.core.*`, `noeta.toolkit.*`, `noeta.plugins.*`,
 part of the SDK. A walk-through is on [Embed it in Python](../start/embedding.md); the plugin
 side is in [Extension interface](./extension.md).
 
+## What is stable
+
+noeta follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The public API, which
+no minor or patch release breaks, is:
+
+- every name importable from `noeta` (`noeta.__all__`, this page);
+- the modules and names in [Useful modules outside `noeta`](#useful-modules-outside-noeta);
+- the plugin interface in [Extension interface](./extension.md) and the event types in
+  [Events](./events.md);
+- the entry-point groups: `noeta.plugins`, `noeta.providers`, `noeta.execenvs`, `noeta.stores`,
+  `noeta.channels`, `noeta.frontends`.
+
+Everything else under `noeta` (the rest of `noeta.core`, `noeta.toolkit`, `noeta.plugins`,
+`noeta.host`, `noeta.agents`, `noeta.backends`, and `noeta.cli`) is internal: importable, but it
+may change in any release, and so may any name that starts with `_`. The protocols a backend
+implements (`Store`, `Provider`, `ExecEnv`) are not frozen yet: a minor release may add a
+required member, and the changelog names it.
+
+A public name that is going away is deprecated first. It keeps working, raises a
+`DeprecationWarning` and is listed under *Deprecated* in the changelog for at least one minor
+release; only a major release removes it.
+
 ## Making the parts
 
 ### `noeta.store(url) -> Store`
@@ -101,6 +123,7 @@ A worker: claims tasks from the store and runs them, many at once. A dataclass:
 | `on_delta` | `None` | `(task_id, Delta) -> None` for live output |
 | `output_ceiling` | the catalog's | `model -> max_tokens` when the agent sets none |
 | `snapshot_every` | `100` | events between fold snapshots; `0` never |
+| `restart_limit` | `3` | restarts in a row after a claim never given back, with no step finished; the next crash ends the task `failed`; `0` no limit |
 | `agent_aliases` | `{}` | a former agent name -> its name now, for tasks recorded under the former |
 | `roots` | `None` | serve only these task trees (a set the front end adds to); `None` serves every task |
 | `sleep` | `asyncio.sleep` | how it waits between model retries (tests pass a fake) |
@@ -226,4 +249,6 @@ These are the plugin author's names; each is described fully in
 | `noeta.host.pending` | `pending_tree`, `choices`, `answer_choice`: what a task tree waits on a person for |
 | `noeta.host.questions` | `answer_question`: answer a question after checking it |
 | `noeta.host.http` | `create_app`: the HTTP API as a Starlette app in your own server |
-| `noeta.testing` | `ScriptedProvider`, `reply`: a scripted model for tests |
+| `noeta.testing` | `ScriptedProvider`, `reply`: a scripted model for tests; `noeta.testing.store_contract`: the tests every store passes |
+| `noeta.core.registry` | `load_plugin_files`, `load`, `available` and the group names (`PLUGINS`, …): the entry points and plugin files |
+| `noeta.backends.stores.sqlite`, `noeta.backends.execenvs.local`, `noeta.backends.execenvs.container` | `SqliteStore`, `LocalExecEnv`, `ContainerExecEnv` and `start_container`: the built-in store and exec envs by class |

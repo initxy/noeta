@@ -57,6 +57,29 @@ jobs:
           NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: make check
 
+  docker:
+    # deploy/Dockerfile builds and its noeta starts; the image is never pushed.
+    name: docker image (build only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build deploy/Dockerfile
+        run: docker build -f deploy/Dockerfile -t noeta:ci .
+
+      - name: Smoke test
+        run: |
+          docker run --rm noeta:ci --version
+          docker run --rm noeta:ci worker --help
+          docker run --rm noeta:ci serve --help
+
+      - name: Compose file is valid
+        run: |
+          cp deploy/.env.example deploy/.env
+          sed -i 's/^NOETA_SERVER_TOKEN=$/NOETA_SERVER_TOKEN=ci/; s/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci/' deploy/.env
+          docker compose -f deploy/compose.yaml config --quiet
+
   cluster:
     name: make cluster (workers on Postgres under faults)
     runs-on: ubuntu-latest
@@ -100,3 +123,29 @@ jobs:
         env:
           NOETA_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
         run: make cluster
+
+  macos:
+    name: tests (macOS, Python 3.12)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    # Not yet a gate: its first run had 88 failures, most in background
+    # shell jobs (tests/plugins/shell), permissions and pasted images. Drop
+    # this once they are fixed on a Mac.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --all-extras
+
+      - name: pytest
+        # The core suite (pyproject's addopts leave out live and cluster tests). The bubblewrap,
+        # Docker and Postgres tests skip themselves here; lint, coverage and the docs checks run
+        # in the Linux job.
+        run: uv run pytest -n auto -q

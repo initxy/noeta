@@ -138,6 +138,8 @@ same thing.
 | `7678a2ee` | A sub-agent's request has no billing header block either. | As for the main request. | pi: no sub-agents. dsh: no billing header. |
 | `098ae292` | A sub-agent's two system cache marks sit on `system[0]` and `system[1]`. | As for the main request: the billing header is absent. | pi: no sub-agents. dsh: as for its main request (not checked separately). |
 | `d334efde` | The summarize call's two system cache marks sit on `system[0]` and `system[1]`. | As for the main request: the billing header is absent. | pi: same request builder as its main call. dsh: not checked. |
+| `3c79663f` `c2894bc8` `dbb3f6bb` | No `claude-code-20250219` in `anthropic-beta`. | That beta names the client as Claude Code; noeta speaks Claude Code's protocol and is not Claude Code, and the endpoint may be any Anthropic-compatible gateway (owner, 2026-11-07). | pi and dsh: not sent with an API key. |
+| `c798b632` `87b0efe6` `cc07670b` | `metadata.user_id` is a plain opaque machine id (`~/.noeta/device_id`), not Claude Code's JSON of device, account and session ids. | Same reason: the JSON shape presents the caller as Claude Code (owner, 2026-11-07). A sub-agent belongs to its tree in noeta's own log, not through this field. | pi: no `metadata`. dsh: not checked. |
 
 ## Main prompt and environment message
 
