@@ -189,7 +189,7 @@ HTTP (`noeta/host/http.py`; token as today unless noted):
 | `GET /plugins?agent=&cwd=` | `{"plugins": [PluginInfo], "ui_api": [min, max]}` |
 | `PUT /plugins/{name}` | `{"enabled": bool}` → machine default for new tasks |
 | `POST /plugins/{name}/call` | `{"task_id", "name", "args"}` → `{"result": ...}` |
-| `GET /plugins/{name}/web/{path}` | the plugin's built web files, **no token** (an ES module import sends no header; the files hold no secret), only for an enabled plugin |
+| `GET /plugins/{name}/web/{path}` | the plugin's built web files, **no token** (an ES module import sends no header; the files hold no secret), only for a plugin the server's agents run with a supported `ui_api` |
 | `GET /tasks/{id}/ui` | `{"items": [UiEntry]}` |
 | `GET /market` | `{"entries": [MarketEntry]}` |
 | `POST /plugins/install`, `DELETE /plugins/{name}` | loopback or `--allow-plugin-install` only (403 otherwise) |
