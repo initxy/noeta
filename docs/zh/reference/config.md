@@ -137,6 +137,11 @@ token = "{env:CHAT_TOKEN}"
 参数里的密钥写成引用（`{env:NAME}`、`{keyring:service/user}`），创建插件时才解析；配置文件和任务
 日志里只存引用。
 
+除了 `enabled = false`，还能用任务配置项 `plugins_off`（一串插件名）只在一个任务里关掉插件，用
+`~/.noeta/plugin-switches.json`（`{"off": [...]}`）让以后的新任务都不带它；这个文件由前端的插件菜单来写
+（见[关掉插件](./plugins.md#switching-a-plugin-off)）。`noeta plugin add <名字>` 去哪些插件市场里找，
+记在 `~/.noeta/marketplaces.json`，由 `noeta plugin marketplace` 来改（见 [noeta 命令](./cli.md)）。
+
 任务会记下它用了哪些插件（名字、来源、版本或文件哈希、参数的哈希）。缺了其中某个插件的 worker
 绝不会在少了它的情况下跑这个任务（[插件体系](../how-it-works/plugins.md)）。
 

@@ -61,6 +61,23 @@ rules and mode, `plan_mode`'s settings, `fs.write_roots` (the additional directo
 `environment.language` and the attribution lines. Your `config.toml` table is merged over
 those, key by key.
 
+## Switching a plugin off {#switching-a-plugin-off}
+
+| Scope | How | Takes effect |
+|---|---|---|
+| every agent, for good | `[plugins.<name>] enabled = false` | when the agents are made again (`/reload-plugins`, a restart) |
+| one task | the task config's `plugins_off`: `/plugins` in the terminal UI, the plugins dialog in the web and desktop apps, or the `config` signal | from the task's next turn on, on every worker; its sub-agents inherit it |
+| new tasks on this machine | `~/.noeta/plugin-switches.json` (`{"off": [...]}`), written by the same menus and `PUT /plugins/{name}` | for tasks created afterwards |
+
+A plugin switched off for a task keeps folding its records, so switching it back on loses
+nothing. Every installed plugin can be switched per task, and of the built-ins only those a
+task runs well without (`noeta/host/plugins.py` `SWITCHABLE_BUILTINS`): `ask_user`,
+`checkpoints`, `findings`, `mcp`, `memory`, `quiet_nudge`, `schedule`, `skills`, `title`,
+`todos`, `web`, `workflow`. The others (the permission gate, the file and shell tools, …) a
+task is built on; only `enabled = false` removes them. A Claude Code plugin's parts belong to
+the plugins that load them and are not switched on their own. A built-in's view in the web
+app is its web part in `web/src/plugins/<name>/`, and goes with it.
+
 ## Tools and commands at a glance
 
 | Plugin | Tools the model sees | Slash commands |

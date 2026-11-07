@@ -18,6 +18,8 @@ noeta 除了"按日志跑任务"这一件事，其余能力全是插件，内置
 
 先从单文件写起。等它需要自己的依赖，或者要在很多机器上共用，再打成包。
 
+不管哪种形态，一个插件就是一个名字、一个开关，最多带这几部分：它的 `Extension`（后端：工具、提示词、关卡、状态），每个前端都会显示的界面数据（`Extension.ui`：状态项、小部件、提示），以及给网页版和桌面版用的[网页部分](#网页部分)；Claude Code 插件带的技能、代理、命令、hook 和 MCP 服务器也都算它的部分。在终端界面里跑的代码现在还不算一个部分，终端里只显示插件的界面数据。关掉一个插件，它的所有部分一起拿掉（见[关掉插件](../reference/plugins.md#switching-a-plugin-off)）。
+
 ## 插件文件：两步
 
 1. 写 `~/.noeta/plugins/<名字>.py`，定义一个有 `name` 的 `Extension` 子类。写上 `add_to = ("main",)`（或者 `("*",)` 表示所有代理），它就会自己加入这些代理。
@@ -89,7 +91,7 @@ plugins:
   - word_count: {timeout: 60}
 ```
 
-同一个插件的参数表在各层之间按键合并（`build_agents`、`default_agents`、`from_settings`、`config.toml`）。全部配置项见[配置项](../reference/config.md)。
+同一个插件的参数表在各层之间按键合并（`build_agents`、`default_agents`、`from_settings`、`config.toml`）。全部配置项见[配置项](../reference/config.md)。`enabled = false` 是彻底关掉；前端还可以只在一个任务里关，或者让以后的新任务都不带它（见[关掉插件](../reference/plugins.md#switching-a-plugin-off)）。
 
 密钥写成引用：`"{env:NAME}"` 或 `"{keyring:service/user}"`，只在构造插件的那一刻才解析（`noeta/agents/agent_files.py` 的 `resolve_secrets`）。这样点名的环境变量，不会传给 noeta 启动的任何命令、hook 或 MCP 服务器。
 
@@ -131,6 +133,8 @@ plugins:
 | 工具等模型要用时才发给它 | `flags = ToolFlags(deferred=True)`（经 `ToolSearch` 加载） | `noeta/plugins/tool_search` |
 | 文字在压缩后保留，或者参与压缩 | `resident` / `lead_resident`；`before_compact`；`on_context_overflow(view, request)` | `noeta/core/extension.py` |
 | 把结果以数据形式给前端展示 | `ToolOutput.display` → `Display(kind, data, fallback)` | `noeta/core/tool.py`、`noeta/core/types.py` |
+| 在每个前端里显示状态项、小部件或提示 | `ui(view)` → `StatusItem` / `Widget` / `Notice`，从折叠出来的状态算 | `noeta/core/extension.py` |
+| 往网页版和桌面版里放自己的组件 | 一个[网页部分](#网页部分)，通过 `ui_call` 回调自己的插件 | `web/sdk` |
 | 模型回了个既没文字也没工具调用的空回复时继续（否则这一轮就结束了） | `on_empty_reply(view, response)` → 用来继续的那条消息，或 `None`（参考 `noeta/plugins/empty_reply.py`） | `noeta/core/extension.py` |
 | 拦下一条用户输入，或让一轮继续下去（就像 UserPromptSubmit 和 Stop hook） | `reminders` + `view.erase_messages` + 抛 `TurnFailed`；在 `on_event` 里看到 `ModelReplied` 就投一条 `Say(when="now")` | `noeta/plugins/hooks/extension.py` |
 
@@ -355,11 +359,11 @@ export function activate(ctx: PluginContext) {
 }
 ```
 
-`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 和 `ctx.allRecords()` 读插件自己的记录（组件里用 `useRecords`/`useAllRecords`，记录有新的就跟着刷新），`<ctx.Transcript taskId=…/>` 显示另一个任务的对话，比如某个子代理的。内置插件自己的界面（noeta 仓库里的 `web/src/plugins/<name>/`）也是这样写的。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@noeta-ai/web-sdk`、`@noeta-ai/ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。页面有哪些位置、拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
+`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 和 `ctx.allRecords()` 读插件自己的记录（组件里用 `useRecords`/`useAllRecords`，记录有新的就跟着刷新），`<ctx.Transcript taskId=…/>` 显示另一个任务的对话，比如某个子代理的。内置插件自己的界面（noeta 仓库里的 `web/src/plugins/<name>/`）也是这样写的。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@noeta-ai/web-sdk`、`@noeta-ai/ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。`ctx` 的每个成员、所有位置和挂载方式见 [`web/sdk` 的 README](https://github.com/initxy/noeta/blob/main/web/sdk/README.md)；[`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) 是一个带网页部分的完整插件。每个位置在页面上的哪里、页面拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
 
 ## 替换内置插件
 
-把内置插件关掉（`[plugins.<name>] enabled = false`），加上你自己的。替换前端会读取的那几个插件时，要保留原来的名字和记录：`permissions`（`mode`、`modes`：前端显示和切换的模式）和 `checkpoints`（`snapshot`：回退）。`plan_mode` 把它的切换写成 `permissions` 名下的 `mode` / `plan_exit` 记录并读回来（`folds`），所以关掉权限插件计划模式也能用（这时除了写计划文件，凡是既不只读、也不是 `safe_while_planning` 的调用都会询问）；而关掉 `plan_mode` 后，权限插件不提供 `plan` 模式。因此替换 `permissions` 的插件，绝不能用别的含义去写这些记录类型：`mode`、`plan_exit`、`modes`（前端、`plan_mode` 在读），`plan_name`、`noted`、`compacted`、`plan_file`、`plan_file_sent`（`plan_mode`，拆分之前的日志里有），`step`、`tool_call`、`cost`（`budget`，同理）。
+把内置插件关掉（`[plugins.<name>] enabled = false`），加上你自己的。网页版里内置插件的界面就是它的网页部分，会跟着一起关掉，替换的插件自己带界面。终端界面和编辑器（ACP）会按名字读几个插件的记录，替换这几个时要保留原来的名字和记录：`permissions`（`mode`、`modes`：前端显示和切换的模式）和 `checkpoints`（`snapshot`：回退）。`plan_mode` 把它的切换写成 `permissions` 名下的 `mode` / `plan_exit` 记录并读回来（`folds`），所以关掉权限插件计划模式也能用（这时除了写计划文件，凡是既不只读、也不是 `safe_while_planning` 的调用都会询问）；而关掉 `plan_mode` 后，权限插件不提供 `plan` 模式。因此替换 `permissions` 的插件，绝不能用别的含义去写这些记录类型：`mode`、`plan_exit`、`modes`（前端、`plan_mode` 在读），`plan_name`、`noted`、`compacted`、`plan_file`、`plan_file_sent`（`plan_mode`，拆分之前的日志里有），`step`、`tool_call`、`cost`（`budget`，同理）。
 
 谁读哪条记录，统一登记在 `noeta/toolkit/plugin_records.py`。
 

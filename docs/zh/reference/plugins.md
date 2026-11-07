@@ -41,6 +41,16 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 
 `noeta` 命令还会从 noeta 的目录和 settings 文件里填一些配置项：`memory.home`、`hooks.settings_files`、`mcp.settings_files` 和 `mcp.project`、`skills` 的各个目录和清单预算、`instructions.user_dir` 和 `managed_dir`、`permissions` 的规则和模式、`plan_mode` 的配置、`fs.write_roots`（额外目录）、`environment.language` 和署名行。你在 `config.toml` 里写的表按键覆盖在这些之上。
 
+## 关掉插件 {#switching-a-plugin-off}
+
+| 范围 | 怎么关 | 什么时候生效 |
+|---|---|---|
+| 所有代理，彻底关掉 | `[plugins.<name>] enabled = false` | 代理重新构建时（`/reload-plugins` 或重启） |
+| 只关一个任务 | 任务配置里的 `plugins_off`：终端界面的 `/plugins`、网页版和桌面版的插件对话框，或者直接发 `config` 信号 | 从这个任务的下一轮起，换到哪个工人上都算数；子代理跟着父任务 |
+| 本机以后新建的任务 | `~/.noeta/plugin-switches.json`（`{"off": [...]}`），由上面那些菜单和 `PUT /plugins/{name}` 来写 | 之后新建的任务 |
+
+只在一个任务里关掉的插件，记录照样折叠，重新打开什么也不丢。装上的插件都能按任务开关；内置插件里只有任务离了也能正常跑的那些可以（`noeta/host/plugins.py` 的 `SWITCHABLE_BUILTINS`）：`ask_user`、`checkpoints`、`findings`、`mcp`、`memory`、`quiet_nudge`、`schedule`、`skills`、`title`、`todos`、`web`、`workflow`。其余的（权限关卡、文件和 shell 工具等）任务离不开，只能用 `enabled = false` 去掉。Claude Code 插件的各部分归加载它们的那些插件管，不单独开关。内置插件在网页版里的界面就是它在 `web/src/plugins/<name>/` 下的网页部分，插件关了，界面也跟着没了。
+
 ## 工具和命令一览
 
 | 插件 | 模型看到的工具 | 斜杠命令 |
