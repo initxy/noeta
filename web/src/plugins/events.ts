@@ -15,7 +15,10 @@ export class TaskEvents {
   keep(rec: Recorded): void {
     const ev = rec.event;
     if (ev.type !== "ExtensionRecorded") return;
-    this.kept.set(ev.extension, [...(this.kept.get(ev.extension) ?? []), { kind: ev.kind, data: ev.data ?? null }]);
+    const kept = this.kept.get(ev.extension);
+    const record = { kind: ev.kind, data: ev.data ?? null };
+    if (kept) kept.push(record);
+    else this.kept.set(ev.extension, [record]);
   }
 
   emit(rec: Recorded): void {

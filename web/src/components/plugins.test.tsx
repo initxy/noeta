@@ -1,12 +1,16 @@
 import { Markdown } from "@noeta-ai/ui";
-import { SlotRegistry, SlotsContext, type CodeBlockSlotProps, type StatusbarSlotProps, type ToolSlotProps } from "@noeta-ai/web-sdk";
+import { Slot, SlotRegistry, SlotsContext, type CodeBlockSlotProps, type RecordSlotProps, type WrapProps, type StatusbarSlotProps, type ToolSlotProps } from "@noeta-ai/web-sdk";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, type Api } from "../api/client";
 import type { MarketEntry, PluginInfo, UiEntry } from "../api/types";
+import type { Event, Recorded } from "../api/types";
+import { emptyTask, reduce, type Action } from "../state/transcript";
+import { Composer, newComposerKeep } from "./Composer";
 import { PluginsDialog } from "./PluginsDialog";
+import { Transcript } from "./Transcript";
 import { Notices, StatusBar, Widgets } from "./PluginUi";
 import { ToolCard } from "./ToolCard";
 
@@ -61,6 +65,52 @@ describe("PluginsDialog", () => {
     const fs = screen.getByText("fs").closest("li")!;
     expect(fs.querySelectorAll("input")).toHaveLength(0); // a task is built on it
     expect(fs).toHaveTextContent("built-in");
+  });
+
+  it("sends a quick second switch on top of the first, while the log shows neither yet", async () => {
+    const setTaskPluginsOff = vi.fn().mockResolvedValue({});
+    const plugins = [info({ name: "a" }), info({ name: "b" }), info({ name: "c" })];
+    const registry = new SlotRegistry();
+    const at = (taskOff: string[]) => (
+      <SlotsContext.Provider value={registry}>
+        <PluginsDialog
+          api={{ setTaskPluginsOff } as unknown as Api}
+          listing={{ plugins, ui_api: [1, 1] }}
+          refresh={() => Promise.resolve()}
+          taskId="t1"
+          taskOff={taskOff}
+          status={() => undefined}
+          registry={registry}
+          onClose={() => undefined}
+        />
+      </SlotsContext.Provider>
+    );
+    const { rerender } = render(at([]));
+    const sessionSwitch = (name: string) => screen.getByText(name).closest("li")!.querySelector<HTMLInputElement>("input[role=switch]")!;
+    await userEvent.click(sessionSwitch("a"));
+    await userEvent.click(sessionSwitch("b"));
+    expect(setTaskPluginsOff.mock.calls).toEqual([
+      ["t1", ["a"]],
+      ["t1", ["a", "b"]],
+    ]);
+    rerender(at(["a"])); // the log shows the first switch only
+    expect(sessionSwitch("a").checked).toBe(false);
+    expect(sessionSwitch("b").checked).toBe(false);
+    await userEvent.click(sessionSwitch("c"));
+    expect(setTaskPluginsOff).toHaveBeenLastCalledWith("t1", ["a", "b", "c"]);
+    rerender(at(["a", "b", "c"]));
+    await userEvent.click(sessionSwitch("a")); // back on, on top of what the log shows
+    expect(setTaskPluginsOff).toHaveBeenLastCalledWith("t1", ["b", "c"]);
+    expect(sessionSwitch("a").checked).toBe(true);
+  });
+
+  it("puts a switch back when sending it fails", async () => {
+    const setTaskPluginsOff = vi.fn().mockRejectedValue(new Error("offline"));
+    dialog({ setTaskPluginsOff }, [info({ name: "a" })]);
+    const session = screen.getByText("a").closest("li")!.querySelector<HTMLInputElement>("input[role=switch]")!;
+    await userEvent.click(session);
+    await waitFor(() => expect(session.checked).toBe(true));
+    expect(screen.getByText("offline")).toBeInTheDocument();
   });
 
   it("names what is wrong: broken, a ui_api the page does not run, a failed web part, a slot never come", () => {
@@ -198,5 +248,84 @@ describe("the page's slots", () => {
     );
     expect(container.querySelector(".pickers")).toHaveTextContent(/^firstpickerlast 7$/);
     expect(container.querySelector(".pickers > .statusbar")).toBeInTheDocument();
+  });
+});
+
+describe("the page's own content in a slot", () => {
+  it("keeps what is typed in the composer while plugins' contributions come and go, a wrap of it too", async () => {
+    const registry = new SlotRegistry();
+    function Footer() {
+      const [keep] = useState(newComposerKeep);
+      return (
+        <SlotsContext.Provider value={registry}>
+          <Slot name="composer">
+            <Composer busy={false} commands={[]} findFiles={async () => []} onSend={() => undefined} onStop={() => undefined} keep={keep} draft={{ text: "rewound", n: 1 }} />
+          </Slot>
+        </SlotsContext.Provider>
+      );
+    }
+    render(<Footer />);
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, " and more");
+    let remove = () => undefined as void;
+    act(() => void (remove = registry.add("p", "composer", { order: -1 }, () => <span>beside</span>)));
+    act(() => void registry.add("q", "composer", { key: "k", mount: "keyed" }, () => <span>keyed</span>));
+    expect(screen.getByLabelText("Message")).toBe(box); // never remounted
+    act(() => remove());
+    expect(screen.getByLabelText("Message")).toBe(box);
+    let unwrap = () => undefined as void;
+    act(() => void (unwrap = registry.add("permissions", "composer", { mount: "wrap" }, ({ children }: WrapProps) => <div data-testid="wrap">{children}</div>)));
+    expect(screen.getByTestId("wrap")).toContainElement(screen.getByLabelText("Message"));
+    expect(screen.getByLabelText("Message")).toHaveValue("rewound and more");
+    act(() => unwrap());
+    expect(screen.getByLabelText("Message")).toHaveValue("rewound and more"); // the draft is not put in again
+    act(() => registry.withdraw("q"));
+    expect(screen.getByLabelText("Message")).toHaveValue("rewound and more");
+  });
+});
+
+describe("the page's own content in a slot, put in and remounted at once", () => {
+  it("keeps a draft put in just as a wrap comes (a rewind opens another session)", () => {
+    const registry = new SlotRegistry();
+    const keep = newComposerKeep();
+    // Its effect runs after the composer's, as the page's plugin host does.
+    function Wraps({ n }: { n: number }) {
+      useEffect(() => (n ? registry.add("permissions", "composer", { mount: "wrap" }, ({ children }: WrapProps) => <div>{children}</div>) : undefined), [n]);
+      return null;
+    }
+    const at = (draft?: { text: string; n: number }) => (
+      <SlotsContext.Provider value={registry}>
+        <Slot name="composer">
+          <Composer busy={false} commands={[]} findFiles={async () => []} onSend={() => undefined} onStop={() => undefined} keep={keep} draft={draft} />
+        </Slot>
+        <Wraps n={draft?.n ?? 0} />
+      </SlotsContext.Provider>
+    );
+    const { rerender } = render(at());
+    rerender(at({ text: "hello two", n: 1 }));
+    expect(screen.getByLabelText("Message")).toHaveValue("hello two");
+  });
+});
+
+describe("plugins' records in the transcript", () => {
+  let seq = 0;
+  const ev = (event: Event): Action => ({ type: "event", rec: { seq: ++seq, at: 0, event } as Recorded });
+  const record = (extension: string, kind: string, data?: unknown): Action => ev({ type: "ExtensionRecorded", extension, kind, data });
+  const said = (text: string, inbox: number): Action =>
+    ev({ type: "InputTaken", through: inbox, items: [{ seq: inbox, at: 0, body: { kind: "message", message: { role: "user", content: [{ type: "text", text }], origin: "human" } } }] });
+
+  it("shows a record where it was recorded once a contribution shows its kind, and no other", () => {
+    const noisy = Array.from({ length: 500 }, (_, i) => record("noisy", "tick", { i }));
+    const st = [said("first", 1), ...noisy, record("panel", "note", { text: "between" }), said("second", 2)].reduce(reduce, emptyTask());
+    const registry = new SlotRegistry();
+    const { container } = render(
+      <SlotsContext.Provider value={registry}>
+        <Transcript state={st} />
+      </SlotsContext.Provider>,
+    );
+    expect(container.querySelector(".transcript")!.textContent).not.toContain("between");
+    act(() => void registry.add("panel", "record:panel/note", {}, ({ record }: RecordSlotProps) => <div className="note">{(record.data as { text: string }).text}</div>));
+    expect(container.querySelector(".transcript")!.textContent).toMatch(/^firstbetweensecond/);
+    expect(container.querySelectorAll(".note")).toHaveLength(1);
   });
 });

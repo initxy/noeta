@@ -1,6 +1,6 @@
 import { Badge, Button, Switch } from "@noeta-ai/ui";
 import { Slot, SLOTS, useSlotCount, type SlotRegistry } from "@noeta-ai/web-sdk";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, type Api } from "../api/client";
 import type { MarketEntry, PluginInfo, PluginListing } from "../api/types";
 import type { PartStatus } from "../plugins/host";
@@ -26,11 +26,48 @@ function why(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** The plugins a task runs without, as asked: what its log shows (`off`)
+ * with each switch sent since (`sent`: on or off) on top. */
+export function offAsAsked(off: string[], sent: ReadonlyMap<string, boolean>): string[] {
+  const out = off.filter((n) => sent.get(n) !== true);
+  for (const [name, on] of sent) if (!on && !out.includes(name)) out.push(name);
+  return out;
+}
+
+/** The task's switches: each sent is shown as sent until the log shows
+ * it, and the next is sent on top of every one not shown yet (two quick
+ * switches never send a list that undoes the first). */
+function useTaskSwitches(api: Api, taskId: string | null, taskOff: string[], onError: (m: string) => void) {
+  const sent = useRef(new Map<string, boolean>());
+  const [, changed] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    sent.current.clear(); // another session
+    changed();
+  }, [taskId]);
+  useEffect(() => {
+    for (const [name, on] of [...sent.current]) if (taskOff.includes(name) !== on) sent.current.delete(name);
+    changed();
+  }, [taskOff]);
+  const off = offAsAsked(taskOff, sent.current);
+  const set = (name: string, on: boolean) => {
+    if (!taskId) return;
+    sent.current.set(name, on);
+    changed();
+    api.setTaskPluginsOff(taskId, offAsAsked(taskOff, sent.current)).catch((e: unknown) => {
+      if (sent.current.get(name) === on) sent.current.delete(name);
+      changed();
+      onError(why(e));
+    });
+  };
+  return { off, set };
+}
+
 function Row({
   p,
   api,
   taskId,
-  taskOff,
+  off,
+  switchTask,
   status,
   registry,
   onChanged,
@@ -39,26 +76,16 @@ function Row({
   p: PluginInfo;
   api: Api;
   taskId: string | null;
-  taskOff: string[];
+  /** What the session runs without, as asked. */
+  off: string[];
+  switchTask: (on: boolean) => void;
   status?: PartStatus;
   registry: SlotRegistry;
   onChanged: () => void;
   onError: (m: string) => void;
 }) {
-  const [asked, setAsked] = useState<boolean | null>(null); // the task's switch until the log shows it
-  const onForTask = !taskOff.includes(p.name);
-  useEffect(() => setAsked(null), [onForTask]);
   const problems = registry.problems(p.name);
   const problem = uiApiProblem(p);
-  const switchTask = (on: boolean) => {
-    if (!taskId) return;
-    setAsked(on);
-    const off = on ? taskOff.filter((n) => n !== p.name) : [...taskOff.filter((n) => n !== p.name), p.name];
-    api.setTaskPluginsOff(taskId, off).catch((e: unknown) => {
-      setAsked(null);
-      onError(why(e));
-    });
-  };
   const switchDefault = (on: boolean) => api.setPluginDefault(p.name, on).then(onChanged, (e: unknown) => onError(why(e)));
   const remove = () => {
     if (!window.confirm(`Remove the plugin ${p.name} from this machine?`)) return;
@@ -88,7 +115,7 @@ function Row({
       ))}
       {(p.switchable || !p.builtin) && (
         <div className="plugin-actions">
-          {p.switchable && taskId && <Switch label="This session" checked={asked ?? onForTask} onChange={switchTask} />}
+          {p.switchable && taskId && <Switch label="This session" checked={!off.includes(p.name)} onChange={switchTask} />}
           {p.switchable && <Switch label="New sessions" checked={p.enabled} onChange={(on) => void switchDefault(on)} />}
           {!p.builtin && (
             <Button kind="link" onClick={remove}>
@@ -230,6 +257,7 @@ export function PluginsDialog({
   const [tab, setTab] = useState<"installed" | "discover" | "settings">("installed");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const switches = useTaskSwitches(api, taskId, taskOff, setError);
   useSyncExternalStore(registry.subscribe, () => registry.version);
   const settings = useSlotCount(SLOTS.settings);
   const tabs: [typeof tab, string][] = [
@@ -263,7 +291,8 @@ export function PluginsDialog({
                 p={p}
                 api={api}
                 taskId={taskId}
-                taskOff={taskOff}
+                off={switches.off}
+                switchTask={(on) => switches.set(p.name, on)}
                 status={status(p.name)}
                 registry={registry}
                 onChanged={() => void refresh()}

@@ -197,7 +197,7 @@ _UVICORN_LOGGERS = ("uvicorn.access", "uvicorn.error")
 
 #: The web app's import map (``web/index.html``, the modules plugins' web parts
 #: share with the page): the one inline script its policy allows, by hash.
-WEB_IMPORT_MAP_SHA256 = b"jc6PTxpMzRywDtAr0jhb9dDRsH7EsOY2flGgmm1+0zs="
+WEB_IMPORT_MAP_SHA256 = b"XYCHptmG4gw+Hpl4a+nOGTVRdFXGwqhy7UcwtyxmHIc="
 
 #: The headers every file of ``web_dir`` is served with.
 WEB_HEADERS = (

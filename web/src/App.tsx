@@ -2,7 +2,7 @@ import { Slot, SLOTS, SlotsContext } from "@noeta-ai/web-sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, TaskSummary, TreeUsage } from "./api/types";
-import { Composer, type Attachment } from "./components/Composer";
+import { Composer, newComposerKeep, type Attachment } from "./components/Composer";
 import { ModelPicker, NEW_SESSION_MODES, NewSessionMode, RewindDialog, UsageBadge } from "./components/Controls";
 import { PendingCards } from "./components/PendingCard";
 import { PluginsDialog } from "./components/PluginsDialog";
@@ -13,6 +13,7 @@ import { attentionChanges, desktop } from "./desktop";
 import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
 import { usePlugins, useUiItems } from "./plugins/usePlugins";
+import { continuationConfig, newSessionConfig } from "./state/newTask";
 import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask } from "./state/useTask";
 
@@ -182,6 +183,7 @@ function Workspace({
   const [rewinding, setRewinding] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [draft, setDraft] = useState<{ text: string; n: number } | undefined>();
+  const [composerKeep] = useState(newComposerKeep);
   const [replaced, setReplaced] = useState(loadReplaced);
   const [navOpen, setNavOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -291,16 +293,10 @@ function Workspace({
    * one has ended) a new one continuing its conversation. */
   const target = async (): Promise<string> => {
     if (taskId && !ended) return taskId;
-    const config: Record<string, unknown> = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-    if (taskId) {
-      Object.assign(config, { permission_mode: state.mode || "default", continued_as: "resume" });
-      if (state.model) config.model = state.model;
-      if (state.cwd) config.cwd = state.cwd;
-    } else {
-      config.permission_mode = newMode;
-      if (newModel) config.model = newModel;
-      if (desk && project) config.cwd = project;
-    }
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const config = taskId
+      ? continuationConfig({ model: state.model, cwd: state.cwd }, timezone)
+      : newSessionConfig({ mode: newMode, model: newModel, project: desk ? project : "" }, timezone);
     const id = await api.create(null, config, "main", taskId ?? undefined);
     if (taskId) replace(taskId);
     open(id);
@@ -456,6 +452,7 @@ function Workspace({
             onCycleMode={taskId ? undefined : cycleMode}
             placeholder={ended ? "This session has ended. Send a message to continue it." : undefined}
             draft={draft}
+            keep={composerKeep}
           />
           </Slot>
           <Widgets items={uiItems} placement="below" />

@@ -23,9 +23,43 @@ export type Item =
       children?: { id: string; status?: string }[];
     }
   | { kind: "notice"; id: string; text: string; tone: "info" | "error" }
-  | { kind: "compaction"; id: string; summary: string }
-  /** A plugin's record the page has no view of its own for: the `record:<plugin>/<kind>` slot. */
-  | { kind: "record"; id: string; seq: number; plugin: string; recordKind: string; data: unknown };
+  | { kind: "compaction"; id: string; summary: string };
+
+/** A plugin's record, shown (by a `record:<plugin>/<kind>` contribution, if
+ * any) after the first `at` items; `n` orders it among all records. */
+export interface PluginRecordAt {
+  id: string;
+  seq: number;
+  plugin: string;
+  kind: string;
+  data: unknown;
+  at: number;
+  n: number;
+}
+
+/** Records of one plugin and kind, newest first. */
+export interface RecordList {
+  record: PluginRecordAt;
+  before: RecordList | null;
+}
+
+/** The records whose `record:<plugin>/<kind>` slot `shows`, by the number
+ * of items they come after, in the order recorded. Walks only those kinds. */
+export function shownRecords(st: TaskState, shows: (slot: string) => boolean): Map<number, PluginRecordAt[]> {
+  const found: PluginRecordAt[] = [];
+  for (const [key, list] of Object.entries(st.records)) {
+    if (!shows(`record:${key}`)) continue;
+    for (let node: RecordList | null = list; node; node = node.before) found.push(node.record);
+  }
+  found.sort((a, b) => a.n - b.n);
+  const byPlace = new Map<number, PluginRecordAt[]>();
+  for (const r of found) {
+    const here = byPlace.get(r.at);
+    if (here) here.push(r);
+    else byPlace.set(r.at, [r]);
+  }
+  return byPlace;
+}
 
 // What plugins record (the task list, the title, the mode a plugin switched
 // to …) is theirs to show (web/src/plugins/<name>/): this fold reads the
@@ -33,6 +67,11 @@ export type Item =
 
 export interface TaskState {
   items: Item[];
+  /** The plugins' records by `<plugin>/<kind>`, apart from the items (the
+   * `record:` slots'): adding one costs the same in a long session as in a
+   * new one, and the page walks only the kinds a contribution shows. */
+  records: Readonly<Record<string, RecordList>>;
+  recordCount: number;
   /** Text and thinking of the model call streaming now (not yet recorded). */
   live: { callSeq: number; attempt: number; text: string; thinking: string } | null;
   /** The seq of the last `ModelCalled` and of the last call that replied. */
@@ -46,9 +85,6 @@ export interface TaskState {
   ended: string | null;
   cwd: string;
   model: string;
-  /** The permission mode the task started in or was last sent (a mode a
-   * plugin switched to is the plugin's to show). */
-  mode: string;
   contextTokens: number;
   /** Inbox seqs of messages sent but not taken yet (queued), with their text. */
   queued: { seq: number; text: string }[];
@@ -64,6 +100,8 @@ export interface TaskState {
 
 export const emptyTask = (): TaskState => ({
   items: [],
+  records: {},
+  recordCount: 0,
   live: null,
   called: 0,
   replied: 0,
@@ -74,7 +112,6 @@ export const emptyTask = (): TaskState => ({
   ended: null,
   cwd: "",
   model: "",
-  mode: "",
   contextTokens: 0,
   queued: [],
   taken: 0,
@@ -94,9 +131,6 @@ export type Action =
 /** The note a declined call's result carries (noeta.core.runner.texts.REJECTED_MARKER):
  * the decline already shows as the call's error. */
 const REJECTED_MARKER = "[Request interrupted by user for tool use]\n";
-
-/** The signal that switches a task's permission mode (noeta.toolkit.permission_modes.MODE_SIGNAL). */
-export const MODE_SIGNAL = "permission_mode";
 
 const text = (blocks: Block[]): string =>
   blocks.map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -162,7 +196,14 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
       return notice(String(data.text ?? ""));
     default:
       if (ev.extension === "core") return st;
-      return { ...st, items: [...st.items, { kind: "record", id: `r${seq}`, seq, plugin: ev.extension, recordKind: ev.kind, data: ev.data }] };
+      return {
+        ...st,
+        records: {
+          ...st.records,
+          [key]: { record: { id: `r${seq}`, seq, plugin: ev.extension, kind: ev.kind, data: ev.data, at: st.items.length, n: st.recordCount }, before: st.records[key] ?? null },
+        },
+        recordCount: st.recordCount + 1,
+      };
   }
 }
 
@@ -176,7 +217,6 @@ function event(st: TaskState, rec: Recorded): TaskState {
         ...st,
         cwd: String(ev.config.cwd ?? ""),
         model: String(ev.config.model ?? st.model),
-        mode: String(ev.config.permission_mode ?? st.mode),
         pluginsOff: names(ev.config.plugins_off),
       };
     case "InputTaken": {
@@ -203,9 +243,6 @@ function event(st: TaskState, rec: Recorded): TaskState {
           const config = (body.data ?? {}) as Record<string, unknown>;
           if (typeof config.model === "string") st = { ...st, model: config.model };
           if ("plugins_off" in config) st = { ...st, pluginsOff: names(config.plugins_off) };
-        } else if (body.kind === "external" && body.name === MODE_SIGNAL) {
-          const mode = (body.data as { mode?: unknown } | null)?.mode;
-          if (typeof mode === "string" && mode) st = { ...st, mode };
         }
       }
       // Taking input ends a wait, but an approval or a question stands until
@@ -289,16 +326,23 @@ function delta(st: TaskState, d: Delta): TaskState {
   return { ...st, live, busy: true };
 }
 
-/** An earlier conversation's event: its items and what it set (title, mode,
- * todos …), but not the state of its turn (busy, waiting, ended) nor its
+/** An earlier conversation's event: its items, its plugins' records and
+ * what it set (the model, the cwd …), but not the state of its turn (busy, waiting, ended) nor its
  * seqs, which are another log's. */
 function history(st: TaskState, rec: Recorded, from: string): TaskState {
   if (rec.event.type === "TaskEnded" || rec.event.type === "Waiting") return st;
   const next = event(st, rec);
   const added = next.items.slice(st.items.length).map((it) => (it.kind === "tool" ? it : { ...it, id: `${from}:${it.id}` }));
+  let records = next.records;
+  if (next.recordCount > st.recordCount && rec.event.type === "ExtensionRecorded") {
+    const key = `${rec.event.extension}/${rec.event.kind}`;
+    const added = records[key];
+    records = { ...records, [key]: { record: { ...added.record, id: `${from}:${added.record.id}` }, before: added.before } };
+  }
   return {
     ...next,
-    items: [...next.items.slice(0, st.items.length), ...added],
+    items: added.length ? [...next.items.slice(0, st.items.length), ...added] : next.items,
+    records,
     lastSeq: st.lastSeq,
     taken: st.taken,
     called: st.called,

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Plugin } from "vite";
 
 /** The same list as @noeta-ai/web-sdk's SHARED_MODULES. */
-export const SHARED = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "@noeta-ai/web-sdk", "@noeta-ai/ui"];
+export const SHARED = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "@noeta-ai/web-sdk", "@noeta-ai/ui"];
 
 /** Where a shared module's file is, relative to the page. */
 export const sharedFile = (spec: string): string => `shared/${spec.replace(/^@/, "").replace(/\//g, "-")}.js`;

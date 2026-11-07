@@ -11,6 +11,7 @@ describe("the shared modules", () => {
     const html = readFileSync(join(import.meta.dirname, "index.html"), "utf-8");
     expect(html).toContain(`<script type="importmap">${IMPORT_MAP}</script>`);
     expect(JSON.parse(IMPORT_MAP).imports["react/jsx-runtime"]).toBe("./shared/react-jsx-runtime.js");
+    expect(JSON.parse(IMPORT_MAP).imports["react/jsx-dev-runtime"]).toBe("./shared/react-jsx-dev-runtime.js");
     expect(sharedFile("@noeta-ai/web-sdk")).toBe("shared/noeta-ai-web-sdk.js");
   });
 
