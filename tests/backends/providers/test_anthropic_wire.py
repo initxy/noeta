@@ -247,8 +247,9 @@ async def test_api_key_request_settings_follow_claude_code() -> None:
         "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
     # Claude Code's catalog: Opus 4.8's default effort is high.
     assert sent["output_config"] == {"effort": "high"}
-    assert json.loads(sent["metadata"]["user_id"]) == {
-        "device_id": "d" * 64, "account_uuid": "", "session_id": str(uuid.UUID(root))}
+    # An opaque machine id, not Claude Code's JSON (no claim to be Claude Code).
+    assert sent["metadata"]["user_id"] == "d" * 64
+    assert "claude-code-20250219" not in route.calls.last.request.headers["anthropic-beta"]
 
 
 @respx.mock

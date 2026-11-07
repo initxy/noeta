@@ -14,9 +14,9 @@ ARG PYTHON_VERSION=3.12
 FROM python:${PYTHON_VERSION}-slim-bookworm AS build
 COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
 
-# The extras installed, space-separated. When pyproject.toml gains a `workflow` extra
-# (the Workflow tool's JavaScript engine, mini-racer, today a core dependency), add it.
-ARG EXTRAS="postgres server"
+# The extras installed, space-separated (`workflow` is the Workflow tool's JavaScript
+# engine, mini-racer).
+ARG EXTRAS="postgres server workflow"
 
 WORKDIR /src
 # What the wheel and the lock need: the package, its metadata, and the workspace's

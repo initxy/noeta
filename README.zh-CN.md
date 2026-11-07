@@ -95,7 +95,7 @@ noeta -p "这个仓库是做什么的？"         # 问一句，打印回答
 
 ```bash
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...
+export NOETA_MODEL=deepseek-flash NOETA_API_KEY=...
 ```
 
 `openai_compat` 的地址以 `/v1` 结尾；`anthropic` 只写到域名；`openai_responses` 写完整的

@@ -103,7 +103,7 @@ noeta -p "what does this repository do?"   # one prompt, print the answer
 
 ```bash
 export NOETA_PROVIDER=openai_compat NOETA_BASE_URL=https://api.deepseek.com/v1
-export NOETA_MODEL=deepseek-chat NOETA_API_KEY=...
+export NOETA_MODEL=deepseek-flash NOETA_API_KEY=...
 ```
 
 For `openai_compat` the base URL ends in `/v1`; for `anthropic` it is the host only; for

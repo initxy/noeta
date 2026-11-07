@@ -1,7 +1,7 @@
 [project]
 name = "noeta"
 version = "1.0.5"
-description = "Open-source, Claude Code-compatible coding agent: crash-proof tasks, free waits for approval, from one laptop to many servers. Terminal UI, CLI, ACP, HTTP API and Python SDK; Claude, DeepSeek or any OpenAI-compatible model."
+description = "Open-source, Claude Code-compatible coding agent you can self-host on many workers: any worker continues any task, waits for approval hold no process. Terminal UI, CLI, ACP, HTTP API and Python SDK; Claude, DeepSeek or any OpenAI-compatible model."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
