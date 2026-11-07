@@ -61,7 +61,7 @@ class Admin:
                            set_default=lambda n, on: self.off.discard(n) if on
                            else self.off.add(n),
                            install=install, remove=self.removed.append,
-                           market=lambda: [entry])
+                           market=lambda notices: [entry])
 
 
 def _picker_title(app: NoetaApp) -> str:

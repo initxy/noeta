@@ -175,6 +175,12 @@ class Notice:
 UiItem = Union[StatusItem, Widget, Notice]
 
 
+class UnknownUiCall(LookupError):
+    """A plugin's front-end call no plugin of the task answers: the task
+    does not run that plugin now, or its ``Extension.ui_call`` has no call
+    of that name (``POST /plugins/{name}/call`` answers 404)."""
+
+
 @dataclass(frozen=True)
 class ToolEntry:
     """An entry of a request's tool list that is no tool: sent, never
@@ -489,13 +495,15 @@ def child_task(task_id: str, state: TaskState, extensions: Sequence[Extension], 
                history_through: int | None = None) -> TaskCreated:
     """The ``TaskCreated`` of a child the task ``task_id`` stages: ``config``
     with what every extension passes on (``Extension.inherit``) laid over it,
-    and the plugins switched off for the task switched off for it too."""
+    and the plugins the task's turn runs without (``TaskState.plugins_off``,
+    not a switch sent since, which is the task's from its next turn on)
+    switched off for it too."""
     from noeta.core.loop.state import PLUGINS_OFF, off_names
 
     child_config = dict(config or {})
     for ext in extensions:
         child_config.update(ext.inherit(state))
-    off = sorted({*off_names(child_config), *off_names(state.config)})
+    off = sorted({*off_names(child_config), *state.plugins_off})
     if off:
         child_config[PLUGINS_OFF] = off
     return TaskCreated(agent=agent, config=child_config, parent_id=task_id,
@@ -585,8 +593,9 @@ class Extension:
         """Answer the plugin's own front-end code (``POST
         /plugins/{name}/call``) with JSON. What it changes for good goes into
         the task's log (a signal, a record), never into the plugin's own
-        memory. Raises ``LookupError`` for a ``name`` it does not answer."""
-        raise LookupError(name)
+        memory. Raises :class:`UnknownUiCall` for a ``name`` it does not
+        answer (``super().ui_call``); any other error is the plugin's bug."""
+        raise UnknownUiCall(f"plugin {self.name!r} answers no call {name!r}")
 
     async def resident(self, view: TaskView) -> Sequence[Message]:
         """Content a compaction re-attaches after the messages it keeps (a

@@ -264,8 +264,74 @@ def test_a_marketplace_at_its_branch_is_kept_for_a_while(home: Path, tmp_path: P
     assert [e["name"] for e in plugin_command.market_entries(refresh=True)] == ["two"]
     monkeypatch.setattr(plugin_command, "MARKET_TTL", 0.0)
     shutil.rmtree(market)
+    # Unreadable now: its listing as last read, and why.
     notices: list[str] = []
+    assert [e["name"] for e in plugin_command.market_entries(notices)] == ["two"]
+    [notice] = notices
+    assert "git clone failed" in notice and "its listing as read at" in notice
+    plugin_command._cache_file(f"file://{market}").unlink()
+    notices.clear()
     assert plugin_command.market_entries(notices) == [] and "git clone failed" in notices[0]
+
+
+def test_an_unreadable_marketplaces_file_is_the_official_one_and_a_notice(
+        home: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (home / "marketplaces.json").write_text("{not json")
+    notices: list[str] = []
+    assert plugin_command.marketplaces(notices) == {
+        "noeta-plugins": plugin_command.OFFICIAL_SOURCE}
+    assert "marketplaces.json is unreadable" in notices[0]
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "list"])
+    assert "marketplaces.json is unreadable" in capsys.readouterr().err
+    market = tmp_path / "market"
+    _market(market, [{"name": "one", "source": "./one"}])
+    with pytest.raises(SystemExit, match="0"):
+        main.main(["plugin", "marketplace", "add", str(market)])
+    assert plugin_command.marketplaces() == {
+        "noeta-plugins": plugin_command.OFFICIAL_SOURCE, "team": str(market)}
+
+
+def test_another_marketplace_cannot_take_the_official_ones_name(
+        home: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    market = tmp_path / "market"
+    _market(market, [{"name": "guard", "source": "./guard"}], name="noeta-plugins")
+    with pytest.raises(SystemExit, match="1"):
+        main.main(["plugin", "marketplace", "add", str(market)])
+    assert "the official marketplace's name" in capsys.readouterr().err
+    assert plugin_command.marketplaces() == {"noeta-plugins": plugin_command.OFFICIAL_SOURCE}
+    assert plugin_command._official(plugin_command.OFFICIAL_SOURCE + ".git@" + "a" * 40)
+
+
+def test_installs_at_once_each_keep_their_record(home: Path, tmp_path: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two installs over HTTP run in two threads: the record file is read,
+    changed and written under its lock, whole."""
+    import threading
+    import time
+
+    read = plugin_command._records
+
+    def slow() -> dict[str, object]:
+        found = read()
+        time.sleep(0.05)  # the other install reads now, without the lock
+        return found
+
+    monkeypatch.setattr(plugin_command, "_records", slow)
+    sources = []
+    for name in ("one", "two"):
+        (tmp_path / f"{name}.py").write_text(PLUGIN.replace("pinned", name))
+        sources.append(str(tmp_path / f"{name}.py"))
+    threads = [threading.Thread(target=install, args=(s,)) for s in sources]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(json.loads((home / "plugin-sources.json").read_text())) == ["one", "two"]
+    with pytest.raises(TypeError):
+        plugin_command._save({"bad": object()})
+    assert sorted(json.loads((home / "plugin-sources.json").read_text())) == ["one", "two"]
+    assert [p.name for p in home.iterdir() if p.name.startswith(".plugin-sources")] == []
 
 
 def test_a_bare_name_installs_from_the_marketplace_listing_it(home: Path,

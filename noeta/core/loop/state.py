@@ -173,9 +173,10 @@ class TaskState:
     spawned: dict[str, dict[str, Any]] = field(default_factory=dict)
     children: dict[str, ChildEnded | None] = field(default_factory=dict)
     #: Timers set and not yet fired or cleared, by name: ``{"at": epoch
-    #: seconds, "text": message or "", "seq": the log seq that set it}``. A
-    #: due timer fires while the task is idle; its text arrives as a
-    #: message, as if sent for the next turn.
+    #: seconds, "text": message or "", "seq": the log seq that set it,
+    #: "held": the seq of a firing taken while its plugin was off}``. A due
+    #: timer fires while the task is idle (unless :func:`timer_held`); its
+    #: text arrives as a message, as if sent for the next turn.
     timers: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiting: Waiting | None = None
     #: The log seq of the last ``Waiting``.
@@ -554,11 +555,32 @@ def _take(state: TaskState, ev: InputTaken, seq: int) -> None:
         else:
             if isinstance(body, External) and body.name == CONFIG_SIGNAL:
                 _configure(state, body.data)
-            timer = state.timers.pop(body.name, None) if isinstance(body, TimerFired) else None
-            if timer and timer["text"]:
-                _say(state, user(timer["text"]), seq)
+            if isinstance(body, TimerFired):
+                _timer_fired(state, body.name, seq)
     if said_now and state.stop_turn_requested is not None:
         state.reopen_after_stop = True
+
+
+def _timer_fired(state: TaskState, name: str, seq: int) -> None:
+    timer = state.timers.get(name)
+    if timer is not None and timer_held(state, name):
+        # Posted before its plugin was switched off: it stays, and fires
+        # again (under a new dedupe key) once the plugin is back.
+        timer["held"] = seq
+        return
+    state.timers.pop(name, None)
+    if timer and timer["text"]:
+        _say(state, user(timer["text"]), seq)
+
+
+def timer_held(state: TaskState, name: str) -> bool:
+    """Whether the timer ``name`` waits for its plugin: a timer named
+    ``<plugin>.<rest>`` belongs to that plugin, and while the task runs
+    without it (:attr:`TaskState.plugins_off`) it neither fires nor wakes
+    the task; one due meanwhile fires (once) when the plugin is back, and
+    the plugin hears it (``TimerFired``) as it would a late one."""
+    plugin, dot, _ = name.partition(".")
+    return bool(dot) and plugin in state.plugins_off
 
 
 def _configure(state: TaskState, data: Any) -> None:

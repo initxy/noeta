@@ -122,7 +122,7 @@ def _parser() -> argparse.ArgumentParser:
                     help="a directory besides the server's own tasks may run in")
     sv.add_argument("--allow-plugin-install", action="store_true",
                     help="let requests install and remove plugins (always allowed on a "
-                         "loopback address)")
+                         "loopback address without --allow-host or --allow-origin)")
     sv.add_argument("--web", metavar="DIR",
                     help="also serve this directory's files (the built web app, web/dist) "
                          "at the server's other paths")
@@ -308,8 +308,11 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
                      web_dir=os.path.abspath(args.web) if args.web else None,
+                     # A Host or origin named besides the loopback ones: a
+                     # reverse proxy may bring anyone to the loopback bind.
                      allow_plugin_install=args.allow_plugin_install
-                     or host in LOOPBACK_HOSTS,
+                     or (host in LOOPBACK_HOSTS and not args.allow_host
+                         and not args.allow_origin),
                      plugin_admin=app.plugin_admin)
     if args.web:
         print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)

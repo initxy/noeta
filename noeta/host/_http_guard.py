@@ -9,7 +9,7 @@ import dataclasses
 import hashlib
 import hmac
 import os
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
 from typing import Any, Literal
 
 import msgspec
@@ -88,8 +88,11 @@ class GuardedClient:
     :attr:`queue`, so it runs here, unless a front end holds it now."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
-                 roots: Sequence[str] = ()) -> None:
+                 roots: Sequence[str] = (),
+                 fixed: Callable[[], Collection[str]] = lambda: ()) -> None:
         self._client = client
+        #: The plugins the settings keep in every task (``PluginAdmin.fixed``).
+        self._fixed = fixed
         #: The queue this server's workers take: a front end's task a request
         #: acts on is moved there, a rewind's new task is created there.
         self.queue: str = getattr(client, "queue", "default")
@@ -139,7 +142,8 @@ class GuardedClient:
                 raise ValueError(f"{PLUGINS_OFF} is a list of plugin names")
             # The permission gate and the tools a task is built on stay: a
             # request switching them off would loosen what the server allows.
-            if fixed := sorted(n for n in off if not switchable(n)):
+            kept = self._fixed()
+            if fixed := sorted(n for n in off if not switchable(n, kept)):
                 raise Refused(f"a request may not switch off the plugins {', '.join(fixed)}")
         budget = config.get(BUDGET_KEY)
         if budget is not None and (isinstance(budget, bool) or not isinstance(budget, (int, float))
@@ -278,10 +282,12 @@ class Guard:
 
     def __init__(self, client: Any, serving: Any, *, token_sha256: str | None, auth: bool,
                  allowed_hosts: Sequence[str] | None, origins: Sequence[str],
-                 allow_bypass: bool, cwd: str | None, roots: Sequence[str]) -> None:
+                 allow_bypass: bool, cwd: str | None, roots: Sequence[str],
+                 fixed: Callable[[], Collection[str]] = lambda: ()) -> None:
         self._auth = auth
         self._sha256 = token_sha256
-        guarded = GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots)
+        guarded = GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots,
+                                fixed=fixed)
         self.scope = Scope(client, guarded, _GuardedFront(serving, guarded))
         self._hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
         self._origins = {o.rstrip("/").lower() for o in origins}

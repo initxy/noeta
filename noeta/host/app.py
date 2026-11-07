@@ -76,7 +76,7 @@ class AppAPI(Protocol):
 
     async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
         """``plugin``'s answer to its front-end code (``Extension.ui_call``);
-        raises ``LookupError`` when the task does not run it or it has no
+        raises ``UnknownUiCall`` when the task does not run it or it has no
         such call."""
         ...
 
@@ -89,8 +89,10 @@ class AppAPI(Protocol):
         """Remove a plugin as ``noeta plugin remove`` does, then reload."""
         ...
 
-    async def market(self) -> list[MarketEntry]:
-        """The configured marketplaces' plugins."""
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
+        """The configured marketplaces' plugins; a marketplace that could not
+        be read (left out, or listed as last read) adds a line to
+        ``notices``."""
         ...
 
     async def context(self, task_id: str) -> dict[str, Any] | None:

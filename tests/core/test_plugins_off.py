@@ -153,10 +153,18 @@ async def test_another_worker_runs_the_task_without_the_plugin(store: SqliteStor
 
 
 def test_a_child_starts_with_its_parents_switches() -> None:
-    state = TaskState(task_id="p", config={PLUGINS_OFF: ["web", "todos"]})
+    state = TaskState(task_id="p", config={PLUGINS_OFF: ["web", "todos"]},
+                      plugins_off=["todos", "web"])
     created = child_task("p", state, [], "a", {PLUGINS_OFF: ["memory"], "model": "m"})
     assert created.config[PLUGINS_OFF] == ["memory", "todos", "web"]
     assert child_task("p", TaskState(task_id="p"), [], "a", None).config == {}
+
+
+def test_a_child_runs_without_what_its_parents_turn_runs_without() -> None:
+    """A switch sent while the parent's turn runs is the parent's from its
+    next turn on: a child started in this turn runs as the turn does."""
+    state = TaskState(task_id="p", config={PLUGINS_OFF: ["web"]}, plugins_off=["todos"])
+    assert child_task("p", state, [], "a", None).config[PLUGINS_OFF] == ["todos"]
 
 
 async def test_the_switch_folds_from_the_created_config(store: SqliteStore) -> None:
@@ -167,4 +175,24 @@ async def test_the_switch_folds_from_the_created_config(store: SqliteStore) -> N
     provider = ScriptedProvider([reply("one")])
     await runtime(store, provider, Extra()).run_until_idle()
     assert tool_names(provider) == [[]]
+
+
+async def test_a_continued_conversation_runs_without_what_its_source_runs_without_now(
+        store: SqliteStore) -> None:
+    """A fork, a rewind or a resume-as-new takes the source's switches as
+    they stand now (not as it was created), unless its config names its
+    own."""
+    client = Client(store)
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("three")])
+    rt = runtime(store, provider, Extra())
+    src = await client.create("a", "hi", config={PLUGINS_OFF: ["web"]})
+    await rt.run_until_idle()
+    await client.signal(src, CONFIG_SIGNAL, {PLUGINS_OFF: ["extra"]})
+    fork = await client.create("a", "go on", history_from=src)
+    created = (await client.events(fork))[0].event
+    assert created.config[PLUGINS_OFF] == ["extra"]  # type: ignore[attr-defined]
+    await rt.run_until_idle()
+    assert tool_names(provider)[-1] == []
+    own = await client.create("a", None, history_from=src, config={PLUGINS_OFF: []})
+    assert (await client.events(own))[0].event.config[PLUGINS_OFF] == []  # type: ignore[attr-defined]
 

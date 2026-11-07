@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from noeta.cli import home_dir, plugin_command, plugin_switches
+from noeta.cli import home_dir, plugin_command, plugin_options, plugin_switches
 from noeta.cli.config import from_settings, load_settings
 from noeta.core.loop.state import PLUGINS_OFF
 
@@ -49,8 +49,8 @@ def test_install_and_remove_go_through_noeta_plugin(home: Path, tmp_path: Path,
         admin.remove("wave")
     with pytest.raises(ValueError, match="no such file"):
         admin.install(str(tmp_path / "missing"), None, None)
-    monkeypatch.setattr(plugin_command, "market_entries", lambda: [{"name": "x"}])
-    assert admin.market() == [{"name": "x"}]
+    monkeypatch.setattr(plugin_command, "market_entries", lambda notices: [{"name": "x"}])
+    assert admin.market([]) == [{"name": "x"}]
 
 
 def test_a_plugin_with_options_is_not_installed_over_http(home: Path, tmp_path: Path) -> None:
@@ -59,11 +59,16 @@ def test_a_plugin_with_options_is_not_installed_over_http(home: Path, tmp_path: 
     (plugin / "skills").mkdir()
     (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps({
         "name": "opts", "userConfig": {"key": {"type": "string", "title": "Key"}}}))
+    # Kept from an earlier install (set from a terminal): the refusal keeps it.
+    home.mkdir()
+    (home / "settings.json").write_text(json.dumps(
+        {"pluginConfigs": {"opts": {"options": {"key": "kept"}}}}))
     admin = plugin_switches.make_admin(str(tmp_path), [], lambda: ())
     assert admin.install is not None
     with pytest.raises(ValueError, match="options"):
         admin.install(str(plugin), None, None)
     assert not (home / "plugins" / "opts").exists()
+    assert plugin_options.stored("opts") == {"key": "kept"}
 
 
 async def test_the_app_starts_new_tasks_with_the_switches_and_lists_claude_plugins(
@@ -91,13 +96,55 @@ async def test_the_app_starts_new_tasks_with_the_switches_and_lists_claude_plugi
         await app.store.close()
 
 
+async def test_a_plugin_the_settings_keep_on_cannot_be_switched_off(
+        home: Path, tmp_path: Path) -> None:
+    """``switchable = false`` in a plugin's table: no switch is offered, the
+    machine's switch is ignored, and a request switching it off is refused."""
+    import httpx
+
+    from noeta.host.http import create_app
+
+    home.mkdir()
+    (home / "config.toml").write_text(
+        f'model = "m"\napi_key = "k"\nstore = "sqlite:///{tmp_path / "t.db"}"\n'
+        '[plugins.todos]\nswitchable = false\n')
+    plugin_switches.set_default("todos", False)
+    app = from_settings(load_settings(), cwd=str(tmp_path))
+    try:
+        assert "todos" in app.plugin_admin.fixed()
+        tid = await app.client.create("main", None)
+        assert PLUGINS_OFF not in (await app.client.events(tid))[0].event.config  # type: ignore[attr-defined]
+        listed = {p["name"]: p for p in await app.plugins("main", str(tmp_path))}
+        assert listed["todos"]["enabled"] and not listed["todos"]["switchable"]
+        with pytest.raises(ValueError, match="cannot be switched off"):
+            await app.set_plugin_default("todos", True)
+        api = create_app(app.client, token="secret", app=app)
+        transport = httpx.ASGITransport(app=api)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1",
+                                     headers={"authorization": "Bearer secret"}) as http:
+            made = await http.post("/tasks", json={"agent": "main",
+                                                   "config": {PLUGINS_OFF: ["todos"]}})
+            assert made.status_code == 403
+            sent = await http.post(f"/tasks/{tid}/signals", json={
+                "name": "config", "data": {PLUGINS_OFF: ["todos"]}})
+            assert sent.status_code == 403
+            assert (await http.put("/plugins/todos", json={"enabled": False})).status_code \
+                == 400
+    finally:
+        await app.store.close()
+
+
 class _Stop(Exception):
     pass
 
 
 @pytest.mark.parametrize(("argv", "allowed"), [
     (["--no-token"], True), (["--host", "10.1.2.3"], False),
-    (["--host", "10.1.2.3", "--allow-plugin-install"], True)])
+    (["--host", "10.1.2.3", "--allow-plugin-install"], True),
+    # A reverse proxy in front of the loopback bind: not a local server.
+    (["--no-token", "--allow-host", "noeta.example.com"], False),
+    (["--no-token", "--allow-origin", "https://noeta.example.com"], False),
+    (["--no-token", "--allow-host", "noeta.example.com", "--allow-plugin-install"], True)])
 def test_serve_installs_over_http_only_on_loopback_or_when_allowed(
         argv: list[str], allowed: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from noeta.cli import main as cli

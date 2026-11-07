@@ -20,6 +20,7 @@ from typing import Any
 
 from noeta.core.client import CONTINUED_AS_KEY, ClientAPI
 from noeta.core.events import ExtensionRecorded, InputTaken, Recorded, Say, TaskCreated
+from noeta.core.loop.state import PLUGINS_OFF
 from noeta.toolkit.plugin_records import CHECKPOINTS
 
 __all__ = ["CHECKPOINTS", "RESTORE_SIGNAL", "FilePlan", "RewindPoint", "Rewound",
@@ -191,8 +192,9 @@ async def rewind(client: ClientAPI, task_id: str, point: RewindPoint, *, convers
         first = events[0].event if events else None
         if not isinstance(first, TaskCreated):
             raise ValueError(f"task {point.task_id} has no creation event")
+        # Its switches are the source's now, not at its start (``create``).
         config = {k: v for k, v in first.config.items()
-                  if config_keys is None or k in config_keys}
+                  if (config_keys is None or k in config_keys) and k != PLUGINS_OFF}
         queue = queue or (await client.get(point.task_id)).queue
         config[CONTINUED_AS_KEY] = "rewind"
         target = await client.create(first.agent, None, config=config, queue=queue,

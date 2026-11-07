@@ -9,6 +9,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -16,6 +17,7 @@ pytest.importorskip("starlette")
 
 import httpx
 
+from noeta import UnknownUiCall
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core import registry
 from noeta.core.agent import Agent
@@ -24,7 +26,7 @@ from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF
 from noeta.host.app import change_config
 from noeta.host.http import create_app
 from noeta.host.local import LocalApp
-from noeta.host.plugins import UI_API, PluginAdmin, plugin_infos, switchable
+from noeta.host.plugins import UI_API, MarketEntry, PluginAdmin, plugin_infos, switchable
 from noeta.host.remote import RemoteApp
 from noeta.plugins.title import Title
 from noeta.testing import ScriptedProvider, reply
@@ -55,7 +57,9 @@ class Panel(Extension):
     async def ui_call(self, ctx, name, args):
         if name == "echo":
             return {"task": ctx.task_id, "args": args}
-        raise LookupError(name)
+        if name == "buggy":
+            return {}["missing"]
+        return await super().ui_call(ctx, name, args)
 
     async def commands(self, ctx):
         return [Command(name="panel", description="Open the panel", template="panel")]
@@ -106,13 +110,17 @@ class Admin:
             self.installed.append((source, market, commit))
             return "panel"
 
+        def market(notices: list[str]) -> list[MarketEntry]:
+            notices.append("marketplace team could not be read")
+            return [{"marketplace": "official", "name": "panel", "description": "",
+                     "version": "1", "source": "x", "commit": "abc", "parts": [],
+                     "ui_api": 1, "installed": False}]
+
         return PluginAdmin(
             default_off=lambda: sorted(self.off),
             set_default=lambda n, on: self.off.discard(n) if on else self.off.add(n),
             turned_off=lambda: {"gone"}, install=install, remove=self.removed.append,
-            market=lambda: [{"marketplace": "official", "name": "panel", "description": "",
-                             "version": "1", "source": "x", "commit": "abc", "parts": [],
-                             "ui_api": 1, "installed": False}])
+            market=market)
 
 
 @pytest.fixture
@@ -201,7 +209,10 @@ async def test_ui_items_and_calls_in_process_over_http_and_remote(
         assert missing.status_code == 404
         assert (await http.post("/plugins/title/call", json={
             "task_id": tid, "name": "x"})).status_code == 404
-        listed = (await http.get("/plugins", params={"agent": "main"})).json()
+        # A plugin's own bug is no unknown call: a 500, its traceback logged.
+        buggy = await http.post("/plugins/panel/call", json={"task_id": tid, "name": "buggy"})
+        assert buggy.status_code == 500 and "KeyError" in buggy.json()["error"]
+        listed =(await http.get("/plugins", params={"agent": "main"})).json()
         assert listed["ui_api"] == list(UI_API)
         assert [p["name"] for p in listed["plugins"]] == ["title", "panel"]
     remote = RemoteApp("http://127.0.0.1", token="secret",
@@ -210,12 +221,16 @@ async def test_ui_items_and_calls_in_process_over_http_and_remote(
         assert await remote.ui(tid) == items
         assert await remote.plugin_call(tid, "panel", "echo", {"a": 1}) == {
             "task": tid, "args": {"a": 1}}
-        with pytest.raises(LookupError):
+        with pytest.raises(UnknownUiCall):
             await remote.plugin_call(tid, "panel", "nope", None)
+        with pytest.raises(httpx.HTTPStatusError):
+            await remote.plugin_call(tid, "panel", "buggy", None)
         assert [p["name"] for p in await remote.plugins("main")] == ["title", "panel"]
         await remote.set_plugin_default("panel", False)
         assert app.plugin_admin.default_off() == ["panel"]
-        assert [e["name"] for e in await remote.market()] == ["panel"]
+        notices: list[str] = []
+        assert [e["name"] for e in await remote.market(notices)] == ["panel"]
+        assert notices == ["marketplace team could not be read"]
     finally:
         await remote.stop()
 
@@ -236,7 +251,7 @@ async def test_a_task_switched_off_shows_no_ui_and_lists_no_commands(
     assert await app.ui(tid) == []
     assert "panel" not in [c.name for c in await app.commands("main", ctx)]
     assert await app.run_command("main", ctx, "/panel") is None
-    with pytest.raises(LookupError):
+    with pytest.raises(UnknownUiCall):
         await app.plugin_call(tid, "panel", "echo", None)
 
 
@@ -297,7 +312,9 @@ async def test_install_and_remove_only_where_allowed(
     async with _http(shut) as http:
         assert (await http.post("/plugins/install", json={"source": "x"})).status_code == 403
         assert (await http.delete("/plugins/panel")).status_code == 403
-        assert (await http.get("/market")).json()["entries"][0]["name"] == "panel"
+        market = (await http.get("/market")).json()
+        assert market["entries"][0]["name"] == "panel"
+        assert market["notices"] == ["marketplace team could not be read"]
     open_ = create_app(app.client, token="secret", app=app, cwd=str(tmp_path),
                        allow_plugin_install=True)
     async with _http(open_) as http:
@@ -345,6 +362,37 @@ async def test_an_api_only_server_lists_plugins_and_shows_no_ui(tmp_path: Path) 
         assert (await http.post("/plugins/title/call", json={
             "task_id": tid, "name": "x"})).status_code == 404
         assert (await http.put("/plugins/title", json={"enabled": False})).status_code == 501
-        assert (await http.get("/market")).json() == {"entries": []}
+        assert (await http.get("/market")).json() == {"entries": [], "notices": []}
+    await store.close()
+
+
+async def test_an_api_only_server_offers_no_commands_of_a_plugin_a_task_runs_without(
+        tmp_path: Path) -> None:
+    from noeta.core.client import Client
+    from noeta.core.extension import Command
+
+    class Panel(Extension):
+        name = "panel"
+
+        async def commands(self, ctx: CommandContext) -> list[Command]:
+            return [Command(name="panel", description="Open the panel", template="panel")]
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    client = Client(store)
+    agents: dict[str, Agent] = {"main": Agent(name="main", model="m", extensions=[Panel()])}
+    api = create_app(client, token="secret", agents=agents)
+    on = await client.create("main", None)
+    off = await client.create("main", None, config={PLUGINS_OFF: ["panel"]})
+    async with _http(api) as http:
+        def listed(tid: str) -> Any:
+            return http.get("/commands", params={"agent": "main", "task_id": tid})
+
+        def run(tid: str) -> Any:
+            return http.post("/commands/run", json={"agent": "main", "task_id": tid,
+                                                    "text": "/panel"})
+        assert [c["name"] for c in (await listed(on)).json()] == ["panel"]
+        assert (await run(on)).json() is not None
+        assert (await listed(off)).json() == []
+        assert (await run(off)).json() is None
     await store.close()
 

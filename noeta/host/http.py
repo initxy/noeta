@@ -48,7 +48,7 @@ events; when this process also runs workers, live model output streams too.
                                       ``ui_call``
     GET  /plugins/{name}/web/{path}   an enabled plugin's built web files, without a token
     GET  /tasks/{id}/ui               {items}: what the task's plugins show now
-    GET  /market                      {entries}: the configured marketplaces' plugins
+    GET  /market                      {entries, notices}: the configured marketplaces' plugins
     POST /plugins/install             {source, marketplace?, commit?} -> the plugin; with
                                       DELETE /plugins/{name}, only on a loopback server or
                                       with allow_plugin_install (403 otherwise)
@@ -92,14 +92,21 @@ from starlette.staticfiles import StaticFiles
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.commands import Typed
-from noeta.core.extension import Command, CommandContext
+from noeta.core.extension import Command, CommandContext, UnknownUiCall
 from noeta.host._http_guard import LOOPBACK_HOSTS, Guard, Refused, token_digest
 from noeta.host._http_openapi import OPENAPI
 from noeta.host._http_plugins import PluginRoutes
 from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command, archive_task
-from noeta.host.plugins import MarketEntry, PluginAdmin, PluginInfo, UiEntry, plugin_infos
+from noeta.host.plugins import (
+    MarketEntry,
+    PluginAdmin,
+    PluginInfo,
+    UiEntry,
+    command_off,
+    plugin_infos,
+)
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
@@ -134,10 +141,12 @@ class _Front:
         return sorted(self.agents)
 
     async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
-        return await agent_commands(self.agents, agent, ctx)
+        return await agent_commands(self.agents, agent, ctx,
+                                    await command_off(self.client.store, ctx))
 
     async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
-        return await agent_run_command(self.agents, agent, ctx, text)
+        return await agent_run_command(self.agents, agent, ctx, text,
+                                       await command_off(self.client.store, ctx))
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
         return None
@@ -152,7 +161,7 @@ class _Front:
         return []  # no worker here folds the task
 
     async def plugin_call(self, task_id: str, plugin: str, name: str, args: Any) -> Any:
-        raise LookupError(f"no worker in this server process runs {plugin!r}")
+        raise UnknownUiCall(f"no worker in this server process runs {plugin!r}")
 
     async def install_plugin(self, source: str, marketplace: str | None = None,
                              commit: str | None = None) -> PluginInfo:
@@ -161,7 +170,7 @@ class _Front:
     async def remove_plugin(self, name: str) -> None:
         raise NotImplementedError("plugins are removed where the workers run")
 
-    async def market(self) -> list[MarketEntry]:
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
         return []
 
     async def summaries(self, limit: int = 50, *,
@@ -279,11 +288,12 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         token_sha256 = token_digest(token)
     agents = agents if agents is not None else getattr(getattr(app, "runtime", None),
                                                        "agents", None)
+    admin = plugin_admin or getattr(app, "plugin_admin", None) or PluginAdmin()
     serving: AppAPI = app if app is not None else _Front(
-        client=client, agents=agents or {}, live=deltas, admin=plugin_admin or PluginAdmin())
+        client=client, agents=agents or {}, live=deltas, admin=admin)
     guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, roots=roots)
+                  cwd=cwd, roots=roots, fixed=lambda: admin.fixed())
     r = Routes(serving, app, agents)
     s = StreamRoutes(guard, deltas)
     running = agents or {}

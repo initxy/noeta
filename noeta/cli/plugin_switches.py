@@ -61,7 +61,8 @@ def _install(source: str, marketplace: str | None, commit: str | None) -> str:
         raise ValueError(str(exc)) from exc
     fields = getattr(plugin_command, "_fields", None)
     if path.is_dir() and fields is not None and fields(path):
-        _remove(name)
+        # Options and secrets kept from an earlier install stay.
+        plugin_command._remove(name, quiet=True, keep_options=True)
         raise ValueError(f"plugin {name!r} has options to set: install it from a terminal "
                          f"(noeta plugin add)")
     return name
@@ -76,8 +77,8 @@ def _remove(name: str) -> None:
     plugin_command._remove(name, quiet=True)
 
 
-def _market() -> list[MarketEntry]:
-    return [cast(MarketEntry, e) for e in plugin_command.market_entries()]
+def _market(notices: list[str]) -> list[MarketEntry]:
+    return [cast(MarketEntry, e) for e in plugin_command.market_entries(notices)]
 
 
 def _claude_info(plugin: Any) -> PluginInfo:
@@ -91,9 +92,11 @@ def _claude_info(plugin: Any) -> PluginInfo:
 
 
 def make_admin(cwd: str | None, plugin_dirs: Sequence[str | Path],
-               turned_off: Callable[[], Collection[str]]) -> PluginAdmin:
+               turned_off: Callable[[], Collection[str]],
+               fixed: Callable[[], Collection[str]] = lambda: ()) -> PluginAdmin:
     """The admin of the plugins a ``noeta`` process started in ``cwd``
-    loads; ``turned_off()``: the plugins its settings switch off."""
+    loads; ``turned_off()``: the plugins its settings switch off;
+    ``fixed()``: the ones they keep in every task (``switchable = false``)."""
     from noeta.cli.config import claude_plugins
 
     def others(where: str) -> list[PluginInfo]:
@@ -101,5 +104,5 @@ def make_admin(cwd: str | None, plugin_dirs: Sequence[str | Path],
         return [_claude_info(p) for p in found]
 
     return PluginAdmin(default_off=default_off, set_default=set_default,
-                       turned_off=turned_off, others=others, install=_install,
+                       turned_off=turned_off, fixed=fixed, others=others, install=_install,
                        remove=_remove, market=_market)

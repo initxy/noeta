@@ -235,7 +235,8 @@ class LocalApp:
         #: manage them (switches for new tasks, install, remove, the
         #: marketplaces); the default can do none of that.
         self.plugin_admin = PluginAdmin()
-        self.client.default_off = lambda: self.plugin_admin.default_off()
+        self.client.default_off = lambda: [
+            n for n in self.plugin_admin.default_off() if n not in self.plugin_admin.fixed()]
         self._summaries: Cache = {}
 
     def replace_agents(self, agents: list[Agent]) -> None:
@@ -280,17 +281,11 @@ class LocalApp:
 
     async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
         return await agent_commands(self.runtime.agents, self._named(agent), ctx,
-                                    await self._off(ctx))
+                                    await host_plugins.command_off(self.store, ctx))
 
     async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
         return await agent_run_command(self.runtime.agents, self._named(agent), ctx, text,
-                                       await self._off(ctx))
-
-    async def _off(self, ctx: CommandContext) -> list[str]:
-        """The plugins ``ctx``'s task runs without (none before it has one)."""
-        if not ctx.task_id or await self.store.get(ctx.task_id) is None:
-            return []
-        return await host_plugins.task_off(self.store, ctx.task_id)
+                                       await host_plugins.command_off(self.store, ctx))
 
     async def plugins(self, agent: str, cwd: str = "") -> list[PluginInfo]:
         admin = self.plugin_admin
@@ -298,7 +293,7 @@ class LocalApp:
                                        self.runtime.agent(agent), admin, cwd)
 
     async def set_plugin_default(self, name: str, enabled: bool) -> None:
-        if not host_plugins.switchable(name):
+        if not host_plugins.switchable(name, self.plugin_admin.fixed()):
             raise ValueError(f"every task runs the plugin {name!r}: it cannot be switched off")
         if self.plugin_admin.set_default is None:
             raise NotImplementedError("this host keeps no plugin switches")
@@ -331,9 +326,10 @@ class LocalApp:
         await asyncio.to_thread(remove, name)
         self._reload()
 
-    async def market(self) -> list[MarketEntry]:
+    async def market(self, notices: list[str] | None = None) -> list[MarketEntry]:
         market = self.plugin_admin.market
-        return await asyncio.to_thread(market) if market is not None else []
+        return await asyncio.to_thread(market, [] if notices is None else notices) \
+            if market is not None else []
 
     def _reload(self) -> None:
         """Load the plugins again (``/reload-plugins``) after an install."""

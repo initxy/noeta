@@ -28,6 +28,7 @@ from noeta.core.extension import (
     StatusItem,
     TaskView,
     UiItem,
+    UnknownUiCall,
     Widget,
     task_cwd,
 )
@@ -36,7 +37,7 @@ from noeta.core.runner import Runtime, TaskRun
 from noeta.core.store import Claim, Store
 
 __all__ = ["MANIFEST", "PARTS", "SWITCHABLE_BUILTINS", "UI_API", "MarketEntry", "PluginAdmin",
-           "PluginInfo", "UiEntry", "call_plugin", "plugin_infos", "read_manifest",
+           "PluginInfo", "UiEntry", "call_plugin", "command_off", "plugin_infos", "read_manifest",
            "switchable", "task_off", "task_ui", "ui_entry", "web_dir"]
 
 log = logging.getLogger("noeta.host.plugins")
@@ -106,6 +107,9 @@ class PluginAdmin:
     set_default: Callable[[str, bool], None] | None = None
     #: The plugins the settings turn off for good (``enabled = false``).
     turned_off: Callable[[], Collection[str]] = lambda: ()
+    #: The plugins the settings keep in every task (``switchable = false``):
+    #: no task may run without them, whatever a front end asks.
+    fixed: Callable[[], Collection[str]] = lambda: ()
     #: Plugins that are no ``Extension`` (Claude Code plugins) found for a
     #: directory, already as listed.
     others: Callable[[str], list[PluginInfo]] = lambda _cwd: []
@@ -113,14 +117,18 @@ class PluginAdmin:
     install: Callable[[str, str | None, str | None], str] | None = None
     #: Remove an installed plugin by name.
     remove: Callable[[str], None] | None = None
-    #: The configured marketplaces' entries.
-    market: Callable[[], list[MarketEntry]] | None = None
+    #: The configured marketplaces' entries; a marketplace that could not
+    #: be read (or is shown as last read) adds a line to the list given.
+    market: Callable[[list[str]], list[MarketEntry]] | None = None
 
 
-def switchable(name: str) -> bool:
+def switchable(name: str, fixed: Collection[str] = ()) -> bool:
     """Whether a task may run without the plugin ``name``: every plugin but
     the built-ins outside :data:`SWITCHABLE_BUILTINS` (the permission gate,
-    the file and shell tools a task is built on)."""
+    the file and shell tools a task is built on) and the ones in ``fixed``
+    (:attr:`PluginAdmin.fixed`)."""
+    if name in fixed:
+        return False
     return name in SWITCHABLE_BUILTINS \
         or registry.sources(registry.PLUGINS).get(name) != _SHIPPED
 
@@ -186,7 +194,7 @@ def _builtin(ext: Extension, source: str) -> bool:
     return source == _SHIPPED or type(ext).__module__.split(".")[0] == "noeta"
 
 
-def _info(ext: Extension, *, off: Collection[str]) -> PluginInfo:
+def _info(ext: Extension, *, off: Collection[str], fixed: Collection[str]) -> PluginInfo:
     pin = registry.pin(ext)
     source = registry.sources(registry.PLUGINS).get(ext.name) or pin["source"]
     builtin = _builtin(ext, source)
@@ -210,7 +218,7 @@ def _info(ext: Extension, *, off: Collection[str]) -> PluginInfo:
         broken = f"its manifest's web file {manifest['web']!r} is missing"
     if root is not None and not builtin:
         parts += [p for p in ("skills", "agents", "commands") if (root / p).is_dir()]
-    can_switch = not builtin or ext.name in SWITCHABLE_BUILTINS
+    can_switch = (not builtin or ext.name in SWITCHABLE_BUILTINS) and ext.name not in fixed
     return PluginInfo(
         name=ext.name, version=str(manifest.get("version") or pin["version"]),
         description=str(manifest.get("description") or _description(type(ext))),
@@ -232,8 +240,9 @@ def plugin_infos(agent: Agent | None, admin: PluginAdmin, cwd: str = "") -> list
     """Every plugin ``agent`` runs, in its order, then the installed ones it
     does not (each saying why), the plugin files that failed to load and
     ``admin``'s others for ``cwd``."""
-    off = set(admin.default_off())
-    out = [_info(e, off=off) for e in (agent.all_extensions() if agent is not None else [])]
+    off, fixed = set(admin.default_off()), set(admin.fixed())
+    out = [_info(e, off=off, fixed=fixed)
+           for e in (agent.all_extensions() if agent is not None else [])]
     seen = {p["name"] for p in out}
     hard = set(admin.turned_off())
     for name, source in registry.sources(registry.PLUGINS).items():
@@ -293,6 +302,14 @@ async def task_off(store: Store, task_id: str) -> list[str]:
     return fold(await store.read(task_id), {}).plugins_off
 
 
+async def command_off(store: Store, ctx: CommandContext) -> list[str]:
+    """The plugins whose commands ``ctx``'s task does not offer: the ones it
+    runs without now (none before it has a task)."""
+    if not ctx.task_id or await store.get(ctx.task_id) is None:
+        return []
+    return await task_off(store, ctx.task_id)
+
+
 async def task_ui(runtime: Runtime, task_id: str) -> list[UiEntry]:
     """Every UI item the task's plugins (the ones it runs with now) show,
     in the agent's order. A plugin that fails is logged and left out."""
@@ -312,11 +329,12 @@ async def task_ui(runtime: Runtime, task_id: str) -> list[UiEntry]:
 async def call_plugin(runtime: Runtime, task_id: str, plugin: str, name: str,
                       args: Any) -> Any:
     """``plugin``'s answer to its front-end code's call ``name``
-    (``Extension.ui_call``) for the task. Raises ``LookupError`` when the
-    task does not run that plugin now, or the plugin has no such call."""
+    (``Extension.ui_call``) for the task. Raises :class:`UnknownUiCall`
+    when the task does not run that plugin now, or the plugin has no such
+    call."""
     run = await _loaded(runtime, task_id)
     ext = next((e for e in run.exts if e.name == plugin), None) if run is not None else None
     if run is None or ext is None:
-        raise LookupError(f"task {task_id} runs no plugin {plugin!r}")
+        raise UnknownUiCall(f"task {task_id} runs no plugin {plugin!r}")
     ctx = CommandContext(cwd=task_cwd(run.state, None), task_id=task_id)
     return await ext.ui_call(ctx, name, args)
