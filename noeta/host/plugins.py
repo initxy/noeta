@@ -36,7 +36,7 @@ from noeta.core.runner import Runtime, TaskRun
 from noeta.core.store import Claim, Store
 
 __all__ = ["MANIFEST", "PARTS", "SWITCHABLE_BUILTINS", "UI_API", "MarketEntry", "PluginAdmin",
-           "PluginInfo", "UiEntry", "call_plugin", "plugin_infos", "read_manifest",
+           "PluginInfo", "UiEntry", "call_plugin", "command_off", "plugin_infos", "read_manifest",
            "switchable", "task_off", "task_ui", "ui_entry", "web_dir"]
 
 log = logging.getLogger("noeta.host.plugins")
@@ -291,6 +291,14 @@ async def task_off(store: Store, task_id: str) -> list[str]:
     """The plugins the task runs without now (``TaskState.plugins_off``),
     from the kernel's fold of its log alone."""
     return fold(await store.read(task_id), {}).plugins_off
+
+
+async def command_off(store: Store, ctx: CommandContext) -> list[str]:
+    """The plugins whose commands ``ctx``'s task does not offer: the ones it
+    runs without now (none before it has a task)."""
+    if not ctx.task_id or await store.get(ctx.task_id) is None:
+        return []
+    return await task_off(store, ctx.task_id)
 
 
 async def task_ui(runtime: Runtime, task_id: str) -> list[UiEntry]:

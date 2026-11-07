@@ -9,6 +9,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -346,5 +347,36 @@ async def test_an_api_only_server_lists_plugins_and_shows_no_ui(tmp_path: Path) 
             "task_id": tid, "name": "x"})).status_code == 404
         assert (await http.put("/plugins/title", json={"enabled": False})).status_code == 501
         assert (await http.get("/market")).json() == {"entries": []}
+    await store.close()
+
+
+async def test_an_api_only_server_offers_no_commands_of_a_plugin_a_task_runs_without(
+        tmp_path: Path) -> None:
+    from noeta.core.client import Client
+    from noeta.core.extension import Command
+
+    class Panel(Extension):
+        name = "panel"
+
+        async def commands(self, ctx: CommandContext) -> list[Command]:
+            return [Command(name="panel", description="Open the panel", template="panel")]
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    client = Client(store)
+    agents: dict[str, Agent] = {"main": Agent(name="main", model="m", extensions=[Panel()])}
+    api = create_app(client, token="secret", agents=agents)
+    on = await client.create("main", None)
+    off = await client.create("main", None, config={PLUGINS_OFF: ["panel"]})
+    async with _http(api) as http:
+        def listed(tid: str) -> Any:
+            return http.get("/commands", params={"agent": "main", "task_id": tid})
+
+        def run(tid: str) -> Any:
+            return http.post("/commands/run", json={"agent": "main", "task_id": tid,
+                                                    "text": "/panel"})
+        assert [c["name"] for c in (await listed(on)).json()] == ["panel"]
+        assert (await run(on)).json() is not None
+        assert (await listed(off)).json() == []
+        assert (await run(off)).json() is None
     await store.close()
 

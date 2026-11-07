@@ -280,17 +280,11 @@ class LocalApp:
 
     async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
         return await agent_commands(self.runtime.agents, self._named(agent), ctx,
-                                    await self._off(ctx))
+                                    await host_plugins.command_off(self.store, ctx))
 
     async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
         return await agent_run_command(self.runtime.agents, self._named(agent), ctx, text,
-                                       await self._off(ctx))
-
-    async def _off(self, ctx: CommandContext) -> list[str]:
-        """The plugins ``ctx``'s task runs without (none before it has one)."""
-        if not ctx.task_id or await self.store.get(ctx.task_id) is None:
-            return []
-        return await host_plugins.task_off(self.store, ctx.task_id)
+                                       await host_plugins.command_off(self.store, ctx))
 
     async def plugins(self, agent: str, cwd: str = "") -> list[PluginInfo]:
         admin = self.plugin_admin

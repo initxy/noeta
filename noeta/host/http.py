@@ -99,7 +99,14 @@ from noeta.host._http_plugins import PluginRoutes
 from noeta.host._http_routes import Routes
 from noeta.host._http_stream import StreamRoutes
 from noeta.host.app import AppAPI, agent_commands, agent_run_command, archive_task
-from noeta.host.plugins import MarketEntry, PluginAdmin, PluginInfo, UiEntry, plugin_infos
+from noeta.host.plugins import (
+    MarketEntry,
+    PluginAdmin,
+    PluginInfo,
+    UiEntry,
+    command_off,
+    plugin_infos,
+)
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
@@ -134,10 +141,12 @@ class _Front:
         return sorted(self.agents)
 
     async def commands(self, agent: str, ctx: CommandContext) -> list[Command]:
-        return await agent_commands(self.agents, agent, ctx)
+        return await agent_commands(self.agents, agent, ctx,
+                                    await command_off(self.client.store, ctx))
 
     async def run_command(self, agent: str, ctx: CommandContext, text: str) -> Typed | None:
-        return await agent_run_command(self.agents, agent, ctx, text)
+        return await agent_run_command(self.agents, agent, ctx, text,
+                                       await command_off(self.client.store, ctx))
 
     async def context(self, task_id: str) -> dict[str, Any] | None:
         return None
