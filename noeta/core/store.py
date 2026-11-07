@@ -85,6 +85,10 @@ class Claim(Struct):
     #: The queue the task is on: a child it creates goes there unless one is
     #: named, so the workers that serve the parent serve the child.
     queue: str = "default"
+    #: The task's previous claim was never given back: its lease ran out
+    #: (its worker died, froze or walked away mid-run). A store without it
+    #: leaves it ``False``, and the runner's restart limit never applies.
+    reclaimed: bool = False
 
 
 class Patch(Struct):

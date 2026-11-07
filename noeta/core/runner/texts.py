@@ -85,3 +85,10 @@ MAX_MODEL_ATTEMPTS = 3
 #: A task that started with plugins this worker does not have (host-facing).
 PLUGIN_MISSING = ("plugin_missing: this task runs with {names}, which the worker that claimed "
                   "it does not have; install them there (or run the task where they are)")
+
+#: A task whose run stopped without handing it back more often in a row
+#: than ``Runtime.restart_limit`` allows, with no step finished: it keeps
+#: killing or stalling its worker, so it is not run again (host-facing).
+RESTART_LIMIT = ("restart_limit: the task's run stopped without handing it back {n} times in a "
+                 "row with no step finished in between (its worker died, was killed or lost "
+                 "its lease each time), so it is not run again")

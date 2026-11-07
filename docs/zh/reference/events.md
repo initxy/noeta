@@ -164,6 +164,7 @@
 | `timer_cleared` | `name` | 清掉一个定时器。 |
 | `prompts` | 名字 → 文本 | 任务第一次开始时读到的提示词覆盖文件。 |
 | `plugins` | `pins`：每个 `{"name", "source", "version", "arguments"}` | 任务用到的插件；第一次开始时记，之后每次接手发现有变化时再记。 |
+| `reclaimed` | — | 这次接手前，上一个认领没有交还（它的工人跑到一半死了）；计入[重启上限](../how-it-works/recovery.md#a-task-that-keeps-killing-its-worker)。 |
 
 ## 谁写什么
 

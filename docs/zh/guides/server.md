@@ -47,6 +47,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 | `--concurrency N` | 8 | 这个进程同时跑几个任务 |
 | `--lease SECONDS` | 30 | 认领不续期能维持多久；工人挂掉后，它的任务大约等这么久才被别人接走 |
 | `--snapshot-every EVENTS` | 100 | 最多每隔这么多个事件写一次任务快照（`0`：不写） |
+| `--restart-limit N` | 3 | 任务反复把工人弄死时，最多连续重启这么多次（期间一步没做完），再崩就让它失败（`0`：不限） |
 | `--allow-bypass-permissions` | 关 | 允许任务以 `bypassPermissions` 运行 |
 
 ### `noeta serve` 参数

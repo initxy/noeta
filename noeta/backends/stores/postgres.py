@@ -476,7 +476,7 @@ class PostgresStore:
 
         async def tx(conn: Conn) -> Claim | None:
             cur = await conn.execute(self._q(
-                "WITH c AS (SELECT task_id FROM {s}.tasks k"
+                "WITH c AS (SELECT task_id, lease_until AS held_until FROM {s}.tasks k"
                 f" WHERE queue = ANY(%(q)s) AND {_CLAIMABLE}" + in_roots
                 + " AND ("
                 f" (status = 'ready' AND (ready_at IS NULL OR ready_at <= {_NOW}))"
@@ -488,14 +488,15 @@ class PostgresStore:
                 f" owner_epoch = t.owner_epoch + 1, lease_until = {_NOW} + %(ls)s,"
                 f" ready_at = NULL, waiting_on = NULL, updated_at = {_NOW}"
                 " FROM c WHERE t.task_id = c.task_id"
-                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.queue"),
+                " RETURNING t.task_id, t.owner_epoch, t.lease_until, t.queue,"
+                " c.held_until IS NOT NULL"),
                 {"q": list(queues), "w": worker, "ls": lease_seconds,
                  "r": list(roots or [])})
             row = await cur.fetchone()
             if row is None:
                 return None
             return Claim(task_id=str(row[0]), worker=worker, epoch=int(row[1]),
-                         lease_until=float(row[2]), queue=str(row[3]))
+                         lease_until=float(row[2]), queue=str(row[3]), reclaimed=bool(row[4]))
 
         return await self._conns.tx(tx)
 

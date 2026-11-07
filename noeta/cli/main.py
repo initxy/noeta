@@ -95,6 +95,10 @@ def _parser() -> argparse.ArgumentParser:
     w.add_argument("--snapshot-every", type=int, default=None, metavar="EVENTS",
                    help="write a task's fold snapshot at most every this many events "
                         "(default 100; 0 never)")
+    w.add_argument("--restart-limit", type=int, default=None, metavar="N",
+                   help="restarts in a row a task gets after its worker died mid-run, with "
+                        "no step finished in between, before it ends failed (default 3; 0 "
+                        "no limit)")
     w.add_argument("--allow-bypass-permissions", action="store_true",
                    help="let tasks run in bypassPermissions")
     sv = sub.add_parser("serve", help="the client API over HTTP")
@@ -294,7 +298,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 async def _worker(s: Settings, queues: list[str], concurrency: int,
                   lease: float | None = None, snapshot_every: int | None = None, *,
-                  allow_bypass: bool = False, task_defaults: dict[str, Any] | None = None,
+                  restart_limit: int | None = None, allow_bypass: bool = False,
+                  task_defaults: dict[str, Any] | None = None,
                   flags: tuple[str, ...] = ()) -> None:
     """``task_defaults``: the config of the tasks this worker's channels
     start (``flags``: the command-line flags that gave it, named on stderr:
@@ -304,6 +309,8 @@ async def _worker(s: Settings, queues: list[str], concurrency: int,
     kw["permissions"] = {} if allow_bypass else {"disable_bypass_mode": True}
     if snapshot_every is not None:
         kw["snapshot_every"] = snapshot_every
+    if restart_limit is not None:
+        kw["restart_limit"] = restart_limit
     app = _app(s, queues=tuple(queues), concurrency=concurrency, with_channels=True, **kw)
     app.client.task_config.update(task_defaults or {})
     if flags:
@@ -418,7 +425,7 @@ def _main(argv: list[str]) -> None:
         flags = tuple(f for f, v in (("--effort", args.effort),
                                      ("--permission-mode", args.permission_mode)) if v)
         asyncio.run(_worker(s, args.queue or ["default"], args.concurrency,
-                            args.lease, args.snapshot_every,
+                            args.lease, args.snapshot_every, restart_limit=args.restart_limit,
                             allow_bypass=args.allow_bypass_permissions,
                             task_defaults=_task_defaults(s, args), flags=flags))
         return

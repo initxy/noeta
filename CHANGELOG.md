@@ -7,6 +7,25 @@ All notable changes to Noeta are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **A task whose run keeps killing its worker ends instead of taking down every worker.** A
+  pickup after a claim that was never given back (its worker died, was killed or lost its
+  lease mid-run) is recorded in the task's log (`core/reclaimed`); after three such restarts in a
+  row with no step finished in between, the next crash ends the task `failed` with
+  `restart_limit`, which front ends show like
+  any failure and a sub-agent's parent hears as a failed child. A healthy task that loses its
+  machine once resets at its next step; a worker shutting down cleanly is not counted.
+  `noeta worker --restart-limit N` (`Runtime.restart_limit`, `0` for no limit) changes it.
+  Workers older than this release leave a task with such a record to newer workers.
+
+### Changed
+
+- **Store adapters: `Store.claim` reports `Claim.reclaimed`**, true when the claimed row still
+  had a lease (the claim before was neither released nor handed back by an append), read in
+  the claim's transaction. A third-party store that does not set it keeps working, without the
+  restart limit; the store contract tests check it.
+
 ## [1.0.5] - 2026-11-06
 
 Fixes from a full review: compaction that looped, small windows, workflow approvals, sessions taken by `noeta serve`, the terminal UI, sandbox `denyRead`, and more.

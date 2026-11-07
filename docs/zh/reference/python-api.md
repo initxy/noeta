@@ -97,6 +97,7 @@
 | `on_delta` | `None` | 实时输出回调 `(task_id, Delta) -> None` |
 | `output_ceiling` | 模型目录给的 | 代理没设时 `模型 -> max_tokens` |
 | `snapshot_every` | `100` | 每隔多少个事件写一次重放快照；`0` 表示不写 |
+| `restart_limit` | `3` | 上一个认领没交还就重启、期间一步没做完，最多连续这么多次；再崩一次任务以 `failed` 结束；`0` 表示不限 |
 | `agent_aliases` | `{}` | 代理的旧名字 -> 现在的名字，给用旧名记录的任务用 |
 | `roots` | `None` | 只服务这些任务树（一个集合，前端往里加）；`None` 表示服务所有任务 |
 | `sleep` | `asyncio.sleep` | 模型调用重试之间怎么等（测试里换成假的） |
