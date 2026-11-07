@@ -579,8 +579,7 @@ def timer_held(state: TaskState, name: str) -> bool:
     without it (:attr:`TaskState.plugins_off`) it neither fires nor wakes
     the task; one due meanwhile fires (once) when the plugin is back, and
     the plugin hears it (``TimerFired``) as it would a late one."""
-    plugin, dot, _ = name.partition(".")
-    return bool(dot) and plugin in state.plugins_off
+    return any(name.startswith(f"{plugin}.") for plugin in state.plugins_off)
 
 
 def _configure(state: TaskState, data: Any) -> None:

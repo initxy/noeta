@@ -196,9 +196,11 @@ export class Api {
     return got.result;
   }
 
-  /** The configured marketplaces' plugins. */
-  async market(): Promise<MarketEntry[]> {
-    return (await this.call<{ entries: MarketEntry[] }>("GET", "/market")).entries;
+  /** The configured marketplaces' plugins, and why a marketplace could not
+   * be read (its last listing is in `entries` then). */
+  async market(): Promise<{ entries: MarketEntry[]; notices: string[] }> {
+    const got = await this.call<{ entries: MarketEntry[]; notices?: string[] }>("GET", "/market");
+    return { entries: got.entries, notices: got.notices ?? [] };
   }
 
   /** Install as `noeta plugin add` does: `source` is a git URL with

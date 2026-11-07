@@ -127,7 +127,7 @@ describe("PluginsDialog", () => {
   it("installs from Discover only after showing source, commit and parts, and explains a 403", async () => {
     const entry: MarketEntry = { marketplace: "official", name: "lint", description: "Lints", version: "1.0", source: "github:initxy/noeta-plugins", commit: "abc1234", parts: ["backend", "web"], ui_api: 1, installed: false };
     const installPlugin = vi.fn().mockRejectedValueOnce(new ApiError(403, "this server does not install")).mockResolvedValueOnce(info({ name: "lint" }));
-    dialog({ market: vi.fn().mockResolvedValue([entry]), installPlugin }, []);
+    dialog({ market: vi.fn().mockResolvedValue({ entries: [entry], notices: [] }), installPlugin }, []);
     await userEvent.click(screen.getByRole("tab", { name: "Discover" }));
     await userEvent.click(await screen.findByRole("button", { name: "Install…" }));
     const confirm = screen.getByRole("dialog", { name: "Install lint" });
@@ -144,9 +144,10 @@ describe("PluginsDialog", () => {
 
   it("reviews a source typed in, its commit read from @<commit>", async () => {
     const installPlugin = vi.fn().mockResolvedValue(info({ name: "tool" }));
-    dialog({ market: vi.fn().mockResolvedValue([]), installPlugin }, []);
+    dialog({ market: vi.fn().mockResolvedValue({ entries: [], notices: ["team: could not be read (no network)"] }), installPlugin }, []);
     await userEvent.click(screen.getByRole("tab", { name: "Discover" }));
     expect(await screen.findByText("No marketplace lists a plugin.")).toBeInTheDocument();
+    expect(screen.getByText("team: could not be read (no network)")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Install from a source"), "https://github.com/me/tool.git@0123abcd");
     await userEvent.click(screen.getByRole("button", { name: "Review…" }));
     const confirm = screen.getByRole("dialog", { name: "Install tool" });

@@ -14,7 +14,7 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.extension import Extension, Reminder, TaskView, child_task
-from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF, TaskState, fold
+from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF, TaskState, fold, timer_held
 from noeta.core.runner import Runtime, TaskRun
 from noeta.core.store import Claim
 from noeta.core.tool import Tool, ToolContext, ToolOutput, text_output
@@ -196,3 +196,12 @@ async def test_a_continued_conversation_runs_without_what_its_source_runs_withou
     own = await client.create("a", None, history_from=src, config={PLUGINS_OFF: []})
     assert (await client.events(own))[0].event.config[PLUGINS_OFF] == []  # type: ignore[attr-defined]
 
+
+
+def test_a_timer_waits_for_the_plugin_its_name_starts_with() -> None:
+    state = TaskState(plugins_off=["acme.x", "schedule"])
+    assert timer_held(state, "acme.x.tick")
+    assert timer_held(state, "schedule.job")
+    assert not timer_held(state, "acme.y.tick")
+    assert not timer_held(state, "acme.tick")
+    assert not timer_held(state, "schedulejob")

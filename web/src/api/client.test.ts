@@ -70,7 +70,7 @@ describe("Api plugins", () => {
     await api.setTaskPluginsOff("t1", ["panel"]);
     expect(await api.ui("t1")).toHaveLength(1);
     expect(await api.pluginCall("t1", "panel", "look")).toEqual({ n: 2 });
-    expect(await api.market()).toEqual([]);
+    expect(await api.market()).toEqual({ entries: [], notices: [] });
     await api.installPlugin("p", "official", "abc1234");
     await api.removePlugin("p");
     const calls = fetch.mock.calls.map(([url, init]) => [init.method, url, init.body && JSON.parse(init.body)]);

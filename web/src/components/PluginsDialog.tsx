@@ -159,11 +159,15 @@ function Confirm({ install, onInstall, onCancel }: { install: Install; onInstall
 
 function Discover({ api, onInstalled, onError }: { api: Api; onInstalled: (p: PluginInfo) => void; onError: (m: string) => void }) {
   const [entries, setEntries] = useState<MarketEntry[] | null>(null);
+  const [notices, setNotices] = useState<string[]>([]);
   const [source, setSource] = useState("");
   const [install, setInstall] = useState<Install | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    api.market().then(setEntries, (e: unknown) => {
+    api.market().then((m) => {
+      setEntries(m.entries);
+      setNotices(m.notices);
+    }, (e: unknown) => {
       setEntries([]);
       onError(why(e));
     });
@@ -183,6 +187,7 @@ function Discover({ api, onInstalled, onError }: { api: Api; onInstalled: (p: Pl
   if (install) return <Confirm install={install} onInstall={() => !busy && go(install)} onCancel={() => setInstall(null)} />;
   return (
     <div className="discover">
+      {notices.map((n) => <div key={n} className="muted plugin-notice">{n}</div>)}
       {entries === null && <div className="muted">Loading…</div>}
       {entries?.length === 0 && <div className="muted">No marketplace lists a plugin.</div>}
       <ul className="plugin-list">
