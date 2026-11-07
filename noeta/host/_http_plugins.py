@@ -91,8 +91,8 @@ class PluginRoutes:
     def _check_install(self) -> None:
         if not self._allow_install:
             raise Refused("this server does not install or remove plugins over HTTP "
-                          "(serve on a loopback address, or start it with "
-                          "--allow-plugin-install)")
+                          "(serve on a loopback address with no --allow-host or "
+                          "--allow-origin, or start it with --allow-plugin-install)")
 
     async def install(self, request: Request) -> Response:
         self._check_install()

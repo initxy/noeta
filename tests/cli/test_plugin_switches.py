@@ -97,7 +97,11 @@ class _Stop(Exception):
 
 @pytest.mark.parametrize(("argv", "allowed"), [
     (["--no-token"], True), (["--host", "10.1.2.3"], False),
-    (["--host", "10.1.2.3", "--allow-plugin-install"], True)])
+    (["--host", "10.1.2.3", "--allow-plugin-install"], True),
+    # A reverse proxy in front of the loopback bind: not a local server.
+    (["--no-token", "--allow-host", "noeta.example.com"], False),
+    (["--no-token", "--allow-origin", "https://noeta.example.com"], False),
+    (["--no-token", "--allow-host", "noeta.example.com", "--allow-plugin-install"], True)])
 def test_serve_installs_over_http_only_on_loopback_or_when_allowed(
         argv: list[str], allowed: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from noeta.cli import main as cli
