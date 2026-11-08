@@ -490,7 +490,7 @@ module named by `.noeta-plugin/plugin.json` beside the plugin's code.
 The module exports `activate(ctx)` and puts React components into the page's slots:
 
 ```tsx
-import { SLOTS, type PluginContext } from "@noeta-ai/web-sdk";
+import { SLOTS, type PluginContext } from "@initxy/web-sdk";
 
 export function activate(ctx: PluginContext) {
   return ctx.slots.add(SLOTS.sidebar, { key: "files", mount: "keyed" }, () => (
@@ -504,7 +504,7 @@ open session's task, `ctx.records(kind)` and `ctx.allRecords()` read the plugin'
 (`useRecords`/`useAllRecords` keep a component current), and `<ctx.Transcript taskId=…/>`
 shows another task's conversation, such as a sub-agent's. The built-in plugins' own views
 (`web/src/plugins/<name>/` in noeta's repository) are written this way. Build it as one ES module
-with `react`, `react-dom`, `react/jsx-runtime`, `@noeta-ai/web-sdk` and `@noeta-ai/ui` left
+with `react`, `react-dom`, `react/jsx-runtime`, `@initxy/web-sdk` and `@initxy/ui` left
 external (the page provides its own; `web/sdk/template` has the build script) and commit the
 built file: installing runs no build. Every `ctx` member, the slots and their mounts are in
 [`web/sdk`'s README](https://github.com/initxy/noeta/blob/main/web/sdk/README.md);

@@ -1,7 +1,7 @@
 // The title plugin's web part: the session's title in its header, as the
 // plugin records it (`title`, from the model or a rename), live; a click
 // renames it (the `rename` signal, which the plugin takes).
-import { SLOTS, useRecords, type PluginContext, type SessionHeaderSlotProps } from "@noeta-ai/web-sdk";
+import { SLOTS, useRecords, type PluginContext, type SessionHeaderSlotProps } from "@initxy/web-sdk";
 
 /** The signal that renames a task (noeta.toolkit.signals.RENAME_SIGNAL). */
 const RENAME_SIGNAL = "rename";

@@ -1,8 +1,8 @@
 // The findings plugin's web part: a `ReportFindings` call's card lists the
 // review's findings (the call's input, which the plugin also hands on as a
 // notice of kind `findings`), most severe first, as the model ordered them.
-import { ToolOutput } from "@noeta-ai/ui";
-import { toolSlot, type PluginContext, type ToolSlotProps } from "@noeta-ai/web-sdk";
+import { ToolOutput } from "@initxy/ui";
+import { toolSlot, type PluginContext, type ToolSlotProps } from "@initxy/web-sdk";
 
 const TOOL = "ReportFindings";
 

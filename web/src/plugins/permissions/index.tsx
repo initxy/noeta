@@ -2,7 +2,7 @@
 // and switched at the start of the status bar (its `mode`, `plan_exit` and
 // `modes` records; the plan-mode plugin records its switches here too), and
 // Shift+Tab in the composer for the next mode, as in Claude Code.
-import { SLOTS, useAllRecords, type PluginContext, type PluginRecord, type WrapProps } from "@noeta-ai/web-sdk";
+import { SLOTS, useAllRecords, type PluginContext, type PluginRecord, type WrapProps } from "@initxy/web-sdk";
 import { useEffect, useState, type KeyboardEvent } from "react";
 
 export interface Modes {

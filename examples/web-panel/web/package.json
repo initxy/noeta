@@ -9,8 +9,8 @@
     "typecheck": "tsc -p ."
   },
   "devDependencies": {
-    "@noeta-ai/ui": "file:../../../web/ui",
-    "@noeta-ai/web-sdk": "file:../../../web/sdk",
+    "@initxy/ui": "file:../../../web/ui",
+    "@initxy/web-sdk": "file:../../../web/sdk",
     "@types/react": "^19.2.0",
     "esbuild": "^0.28.2",
     "typescript": "~5.9.3"

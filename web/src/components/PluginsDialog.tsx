@@ -1,5 +1,5 @@
-import { Badge, Button, Switch } from "@noeta-ai/ui";
-import { Slot, SLOTS, useSlotCount, type SlotRegistry } from "@noeta-ai/web-sdk";
+import { Badge, Button, Switch } from "@initxy/ui";
+import { Slot, SLOTS, useSlotCount, type SlotRegistry } from "@initxy/web-sdk";
 import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, type Api } from "../api/client";
 import type { MarketEntry, PluginInfo, PluginListing } from "../api/types";

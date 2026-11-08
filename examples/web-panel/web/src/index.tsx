@@ -1,7 +1,7 @@
 // The web-panel plugin's web part: a sidebar panel that asks the plugin's
 // backend (`ui_call("workspace")`) what is in the task's directory.
-import { Button, Notice, Panel } from "@noeta-ai/ui";
-import { SLOTS, type PluginContext } from "@noeta-ai/web-sdk";
+import { Button, Notice, Panel } from "@initxy/ui";
+import { SLOTS, type PluginContext } from "@initxy/web-sdk";
 import { useEffect, useState } from "react";
 
 interface Workspace {

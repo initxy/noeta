@@ -1,5 +1,5 @@
-import { Markdown } from "@noeta-ai/ui";
-import { Slot, SlotRegistry, SlotsContext, type CodeBlockSlotProps, type RecordSlotProps, type WrapProps, type StatusbarSlotProps, type ToolSlotProps } from "@noeta-ai/web-sdk";
+import { Markdown } from "@initxy/ui";
+import { Slot, SlotRegistry, SlotsContext, type CodeBlockSlotProps, type RecordSlotProps, type WrapProps, type StatusbarSlotProps, type ToolSlotProps } from "@initxy/web-sdk";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useState, type ReactNode } from "react";

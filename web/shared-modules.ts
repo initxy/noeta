@@ -9,8 +9,8 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { Plugin } from "vite";
 
-/** The same list as @noeta-ai/web-sdk's SHARED_MODULES. */
-export const SHARED = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "@noeta-ai/web-sdk", "@noeta-ai/ui"];
+/** The same list as @initxy/web-sdk's SHARED_MODULES. */
+export const SHARED = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "@initxy/web-sdk", "@initxy/ui"];
 
 /** Where a shared module's file is, relative to the page. */
 export const sharedFile = (spec: string): string => `shared/${spec.replace(/^@/, "").replace(/\//g, "-")}.js`;
@@ -22,7 +22,7 @@ export const IMPORT_MAP = JSON.stringify({ imports: Object.fromEntries(SHARED.ma
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
 /** This repository's packages, by their source (what the page bundles). */
-const SOURCES: Record<string, string> = { "@noeta-ai/web-sdk": "sdk/src/index.ts", "@noeta-ai/ui": "ui/src/index.tsx" };
+const SOURCES: Record<string, string> = { "@initxy/web-sdk": "sdk/src/index.ts", "@initxy/ui": "ui/src/index.tsx" };
 
 /** The names `spec` exports: a CommonJS package's by loading it, one of
  * this repository's by bundling its source with esbuild. */

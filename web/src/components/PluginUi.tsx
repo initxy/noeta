@@ -1,7 +1,7 @@
 // What a task's plugins show through their UI data (`GET /tasks/{id}/ui`):
 // status items, widgets above or below the composer, notices.
-import { Markdown } from "@noeta-ai/ui";
-import { Slot, SLOTS, type StatusbarSlotProps } from "@noeta-ai/web-sdk";
+import { Markdown } from "@initxy/ui";
+import { Slot, SLOTS, type StatusbarSlotProps } from "@initxy/web-sdk";
 import { useState, type ReactNode } from "react";
 import type { UiEntry } from "../api/types";
 
