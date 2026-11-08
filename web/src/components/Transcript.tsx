@@ -1,8 +1,8 @@
 import { Fragment, useContext, useMemo, useState, useSyncExternalStore } from "react";
 import { shownRecords, type Item, type PluginRecordAt, type TaskState } from "../state/transcript";
 import { useApi, useTask } from "../state/useTask";
-import { Markdown } from "@noeta-ai/ui";
-import { recordSlot, Slot, SlotRegistry, SlotsContext } from "@noeta-ai/web-sdk";
+import { Markdown } from "@initxy/ui";
+import { recordSlot, Slot, SlotRegistry, SlotsContext } from "@initxy/web-sdk";
 import { ToolCard } from "./ToolCard";
 
 function Thinking({ text, live }: { text: string; live?: boolean }) {

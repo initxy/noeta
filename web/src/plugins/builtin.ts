@@ -1,4 +1,4 @@
-import type { PluginModule } from "@noeta-ai/web-sdk";
+import type { PluginModule } from "@initxy/web-sdk";
 import * as compaction from "./compaction";
 import * as findings from "./findings";
 import * as fs from "./fs";
@@ -17,7 +17,7 @@ import * as workflow from "./workflow";
 
 /** The web parts of plugins noeta ships, by plugin name: each under
  * web/src/plugins/<name>/, loaded through the same ctx and slots a
- * third-party web part gets (importing only react and `@noeta-ai/*`), and
+ * third-party web part gets (importing only react and `@initxy/*`), and
  * only while the task runs that plugin. */
 export const BUILTIN_WEB_PARTS: Record<string, PluginModule> = {
   compaction,

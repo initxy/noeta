@@ -1,4 +1,4 @@
-// @noeta-ai/ui: the web app's own pieces, styled by its stylesheet, for a
+// @initxy/ui: the web app's own pieces, styled by its stylesheet, for a
 // plugin's web part to look like the rest of the page. The page serves this
 // module itself (its import map): a plugin marks it external.
 import type { ButtonHTMLAttributes, ReactNode } from "react";

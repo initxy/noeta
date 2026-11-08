@@ -1,7 +1,7 @@
 // The web plugin's web part: a `WebFetch` call's card, opened, shows what
 // was asked of the page (its prompt) rather than the raw input.
-import { ToolOutput } from "@noeta-ai/ui";
-import { toolSlot, type PluginContext, type ToolSlotProps } from "@noeta-ai/web-sdk";
+import { ToolOutput } from "@initxy/ui";
+import { toolSlot, type PluginContext, type ToolSlotProps } from "@initxy/web-sdk";
 
 function Fetch({ call, open }: ToolSlotProps) {
   return (

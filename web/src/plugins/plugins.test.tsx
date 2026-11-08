@@ -1,4 +1,4 @@
-import { SHARED_MODULES, SlotRegistry, WAIT_TIMEOUT_MS, type PluginContext } from "@noeta-ai/web-sdk";
+import { SHARED_MODULES, SlotRegistry, WAIT_TIMEOUT_MS, type PluginContext } from "@initxy/web-sdk";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../api/client";
@@ -319,8 +319,8 @@ describe("ctx", () => {
     provideSharedModules();
     const shared = globalThis.__noetaShared!;
     expect(Object.keys(shared).sort()).toEqual([...SHARED_MODULES].sort());
-    const sdk = await import("@noeta-ai/web-sdk");
-    expect((shared["@noeta-ai/web-sdk"] as typeof sdk).SlotRegistry).toBe(sdk.SlotRegistry);
+    const sdk = await import("@initxy/web-sdk");
+    expect((shared["@initxy/web-sdk"] as typeof sdk).SlotRegistry).toBe(sdk.SlotRegistry);
     expect(typeof (shared["react/jsx-dev-runtime"] as { jsxDEV: unknown }).jsxDEV).toBe("function");
   });
 

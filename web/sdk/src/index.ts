@@ -1,4 +1,4 @@
-// @noeta-ai/web-sdk: what a plugin's web part is given (`activate(ctx)`)
+// @initxy/web-sdk: what a plugin's web part is given (`activate(ctx)`)
 // and the places it can put things. The page serves this module itself
 // (its import map), so a plugin marks it external and gets the page's own.
 import type { ComponentType, ReactNode } from "react";
@@ -20,8 +20,8 @@ export const SHARED_MODULES = [
   "react-dom/client",
   "react/jsx-runtime",
   "react/jsx-dev-runtime",
-  "@noeta-ai/web-sdk",
-  "@noeta-ai/ui",
+  "@initxy/web-sdk",
+  "@initxy/ui",
 ] as const;
 
 /** The page's slots with a fixed name. */

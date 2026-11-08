@@ -1,8 +1,8 @@
 // The hooks plugin's web part: what the session's hooks did (each record
 // naming a `hook`: a block, a stop, context they added), in the plugins
 // dialog's Settings tab.
-import { Panel } from "@noeta-ai/ui";
-import { SLOTS, useAllRecords, type PluginContext, type PluginRecord } from "@noeta-ai/web-sdk";
+import { Panel } from "@initxy/ui";
+import { SLOTS, useAllRecords, type PluginContext, type PluginRecord } from "@initxy/web-sdk";
 
 /** Hook label -> how many times it acted. */
 export function hookActs(records: PluginRecord[]): [string, number][] {

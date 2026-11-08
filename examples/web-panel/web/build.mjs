@@ -2,7 +2,7 @@
 // page provides stay imports: its import map serves the page's own.
 import { build } from "esbuild";
 
-const SHARED = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "@noeta-ai/web-sdk", "@noeta-ai/ui"];
+const SHARED = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "@initxy/web-sdk", "@initxy/ui"];
 
 await build({
   entryPoints: ["src/index.tsx"],

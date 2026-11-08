@@ -27,7 +27,7 @@ DeepSeek Harness, to turn plugins on and off from the UI and to install ones tha
   calls `Extension.ui_call`, and anything lasting it changes goes into the task's log.
 - **The web part** is a prebuilt ES module exporting `activate(ctx)`, served by `noeta serve`
   from the plugin's own directory on the page's origin and loaded at runtime. The page provides
-  `react`, `react-dom`, `react/jsx-runtime`, `@noeta-ai/web-sdk` and `@noeta-ai/ui` as its own
+  `react`, `react-dom`, `react/jsx-runtime`, `@initxy/web-sdk` and `@initxy/ui` as its own
   single instances through a native import map (`web/index.html`, `web/shared-modules.ts`); a
   plugin marks them external and bundles anything else. `ctx` and the slot names
   (`web/sdk`) are the contract, versioned by `ui_api`. The desktop app is the web app;
@@ -83,7 +83,7 @@ Rejected:
 
 ## Consequences
 
-- `ctx`, the slot names and the `UiItem` types are public contracts once `@noeta-ai/web-sdk`
+- `ctx`, the slot names and the `UiItem` types are public contracts once `@initxy/web-sdk`
   is published; a change needs a new `ui_api` and a host range that keeps the old one.
 - A web part runs with the page's rights (its token, every endpoint): the install confirmation
   and the HTTP install guard are the only checks, as in the projects compared.

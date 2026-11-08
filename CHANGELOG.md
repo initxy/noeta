@@ -42,10 +42,10 @@ install from marketplaces, the official one configured by default.
   exporting `activate(ctx)` that adds React components to the page's slots (`statusbar`,
   `sidebar`, `settings`, `session.header`, `composer`, `tool:<Tool>`, `request:<Tool>`,
   `record:<plugin>/<kind>`, `codeblock:<language>`, `theme`); the page provides `react`,
-  `react-dom` and `@noeta-ai/*` through an import map, which the server's content security
+  `react-dom` and `@initxy/*` through an import map, which the server's content security
   policy allows by hash. A part that throws or waits in vain for a slot is named in the
-  plugins dialog and leaves the page working. `web/sdk` (`@noeta-ai/web-sdk`: `ctx` types,
-  slot names, a build template) and `web/ui` (`@noeta-ai/ui`) are the packages a part builds
+  plugins dialog and leaves the page working. `web/sdk` (`@initxy/web-sdk`: `ctx` types,
+  slot names, a build template) and `web/ui` (`@initxy/ui`) are the packages a part builds
   against (not yet published to npm); `examples/web-panel` is a plugin with one. In the desktop
   app `ctx.desktop` is its bridge. `activate` may be async; what a part subscribed to through
   `ctx` ends with it, and a rebuilt part (a new entry hash) is loaded again.

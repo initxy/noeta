@@ -96,7 +96,7 @@ package's `add_to` is ignored). `noeta plugin add <git-url>@<commit>` installs o
 
 One plugin name, one switch, up to these parts (ADR-033): its `Extension`; UI data every front end
 draws (`Extension.ui`, `GET /tasks/{id}/ui`); a web part named by `.noeta-plugin/plugin.json` beside
-its code (`noeta/host/plugins.py`), imported by the web page with React and `@noeta-ai/*` taken from
+its code (`noeta/host/plugins.py`), imported by the web page with React and `@initxy/*` taken from
 its import map (`web/index.html`, `web/shared-modules.ts`). A built-in's web view is its part in
 `web/src/plugins/<name>/` (`builtin.ts`), through the same slots; `web/src/plugins/boundary.test.ts`
 fails a page file that reads a plugin's records or names its tool. Task config `plugins_off` (taken

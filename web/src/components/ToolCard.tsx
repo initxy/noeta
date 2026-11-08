@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Item } from "../state/transcript";
-import { ToolOutput } from "@noeta-ai/ui";
-import { Slot, toolSlot, useSlotCount, type ToolCall, type ToolSlotProps } from "@noeta-ai/web-sdk";
+import { ToolOutput } from "@initxy/ui";
+import { Slot, toolSlot, useSlotCount, type ToolCall, type ToolSlotProps } from "@initxy/web-sdk";
 
 type Tool = Extract<Item, { kind: "tool" }>;
 
