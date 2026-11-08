@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ApiError, type Api } from "../api/client";
 import type { Pending, Question } from "../api/types";
-import { requestSlot, Slot, type PendingRequest } from "@initxy/web-sdk";
+import { requestSlot, Slot, type PendingRequest } from "@initxy/noeta-web-sdk";
 
 /** What the card about `p` shows of its call: the `request:<Tool>` slot,
  * where the plugin that offers the tool shows it (a command, a diff, a

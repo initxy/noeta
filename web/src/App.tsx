@@ -1,4 +1,4 @@
-import { Slot, SLOTS, SlotsContext } from "@initxy/web-sdk";
+import { Slot, SLOTS, SlotsContext } from "@initxy/noeta-web-sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, TaskSummary, TreeUsage } from "./api/types";

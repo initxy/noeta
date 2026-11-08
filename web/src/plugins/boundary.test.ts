@@ -2,7 +2,7 @@
 // plugin's records or names a specific plugin's tool (what each built-in
 // plugin shows lives in web/src/plugins/<name>/), and a built-in part uses
 // only what a third-party part gets (react and `@initxy/*`).
-import { SHARED_MODULES, type PluginContext } from "@initxy/web-sdk";
+import { SHARED_MODULES, type PluginContext } from "@initxy/noeta-web-sdk";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";

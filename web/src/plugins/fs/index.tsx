@@ -1,8 +1,8 @@
 // The file tools' web part: an edit's card shows its change as a diff (the
 // one it proposes, then the one recorded), the approval card the change it
 // asks about; a `Read` is one line, its text once opened.
-import { DiffView, proposedDiff, ToolOutput } from "@initxy/ui";
-import { requestSlot, toolSlot, type PluginContext, type RequestSlotProps, type ToolSlotProps } from "@initxy/web-sdk";
+import { DiffView, proposedDiff, ToolOutput } from "@initxy/noeta-ui";
+import { requestSlot, toolSlot, type PluginContext, type RequestSlotProps, type ToolSlotProps } from "@initxy/noeta-web-sdk";
 
 /** The tools whose call is a change to a file. */
 export const EDITS = ["Edit", "MultiEdit", "Write", "NotebookEdit"];

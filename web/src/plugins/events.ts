@@ -1,4 +1,4 @@
-import type { PluginRecord } from "@initxy/web-sdk";
+import type { PluginRecord } from "@initxy/noeta-web-sdk";
 import type { Recorded } from "../api/types";
 
 /** The open task's own events as the page folds them, handed on to plugins'

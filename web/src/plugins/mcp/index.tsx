@@ -1,8 +1,8 @@
 // The MCP plugin's web part: the session's MCP servers, their tools and the
 // ones that could not be reached (the plugin's `listed`, `server_down` and
 // `server_up` records), in the plugins dialog's Settings tab.
-import { Panel } from "@initxy/ui";
-import { SLOTS, useAllRecords, type PluginContext, type PluginRecord } from "@initxy/web-sdk";
+import { Panel } from "@initxy/noeta-ui";
+import { SLOTS, useAllRecords, type PluginContext, type PluginRecord } from "@initxy/noeta-web-sdk";
 
 export interface Servers {
   /** Alias -> how many tools it gives. */

@@ -3,7 +3,7 @@
 // and disposed (its contributions withdrawn, what it subscribed to through
 // its ctx unsubscribed) when the plugin is switched off for the task, its
 // web part changes, or the page leaves the task.
-import type { PluginContext, PluginModule, SlotRegistry } from "@initxy/web-sdk";
+import type { PluginContext, PluginModule, SlotRegistry } from "@initxy/noeta-web-sdk";
 
 /** A plugin's web part as the page loads it. */
 export interface WebPart {

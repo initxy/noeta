@@ -1,6 +1,6 @@
 // src/index.tsx
-import { Button, Notice, Panel } from "@initxy/ui";
-import { SLOTS } from "@initxy/web-sdk";
+import { Button, Notice, Panel } from "@initxy/noeta-ui";
+import { SLOTS } from "@initxy/noeta-web-sdk";
 import { useEffect, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 function WorkspacePanel({ ctx }) {

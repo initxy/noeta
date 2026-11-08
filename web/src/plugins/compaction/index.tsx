@@ -1,7 +1,7 @@
 // The compaction plugin's web part: near the point it compacts at (its
 // `threshold` record), the status bar counts down to it, as Claude Code's
 // footer does.
-import { SLOTS, useRecords, type PluginContext, type StatusbarSlotProps } from "@initxy/web-sdk";
+import { SLOTS, useRecords, type PluginContext, type StatusbarSlotProps } from "@initxy/noeta-web-sdk";
 
 /** The plugin's `threshold` record (noeta.toolkit.plugin_records.auto_compact). */
 export interface AutoCompact {

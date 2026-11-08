@@ -1,8 +1,8 @@
 // The shell plugin's web part: a `Bash` (or `Monitor`) call's card shows the
 // command, its output as it streams and once done; the approval card shows
 // the command it asks about.
-import { ToolOutput } from "@initxy/ui";
-import { requestSlot, toolSlot, type PluginContext, type RequestSlotProps, type ToolSlotProps } from "@initxy/web-sdk";
+import { ToolOutput } from "@initxy/noeta-ui";
+import { requestSlot, toolSlot, type PluginContext, type RequestSlotProps, type ToolSlotProps } from "@initxy/noeta-web-sdk";
 
 /** The tools that run a command. */
 export const COMMANDS = ["Bash", "Monitor"];

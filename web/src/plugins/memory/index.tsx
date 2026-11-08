@@ -1,7 +1,7 @@
 // The memory plugin's web part: where the session keeps its memory (the
 // plugin's `dir` record), in the plugins dialog's Settings tab.
-import { Panel } from "@initxy/ui";
-import { SLOTS, useRecords, type PluginContext } from "@initxy/web-sdk";
+import { Panel } from "@initxy/noeta-ui";
+import { SLOTS, useRecords, type PluginContext } from "@initxy/noeta-web-sdk";
 
 /** The memory directory last recorded, "" before one is. */
 export function memoryDir(records: unknown[]): string {
