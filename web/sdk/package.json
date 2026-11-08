@@ -1,5 +1,5 @@
 {
-  "name": "@initxy/web-sdk",
+  "name": "@initxy/noeta-web-sdk",
   "version": "1.0.6",
   "description": "Types, slot names and the slot registry for a noeta plugin's web part; the page provides this module at run time.",
   "license": "Apache-2.0",

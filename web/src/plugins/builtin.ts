@@ -1,4 +1,4 @@
-import type { PluginModule } from "@initxy/web-sdk";
+import type { PluginModule } from "@initxy/noeta-web-sdk";
 import * as compaction from "./compaction";
 import * as findings from "./findings";
 import * as fs from "./fs";

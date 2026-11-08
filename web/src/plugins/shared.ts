@@ -1,7 +1,7 @@
 // The page's own instances of the modules plugins share (index.html's import
 // map resolves each to a shared/<name>.js re-exporting from here).
-import * as ui from "@initxy/ui";
-import * as sdk from "@initxy/web-sdk";
+import * as ui from "@initxy/noeta-ui";
+import * as sdk from "@initxy/noeta-web-sdk";
 import * as React from "react";
 import * as ReactDOM from "react-dom";
 import * as ReactDOMClient from "react-dom/client";
@@ -33,7 +33,7 @@ export function provideSharedModules(): void {
     "react-dom/client": ReactDOMClient,
     "react/jsx-runtime": JSXRuntime,
     "react/jsx-dev-runtime": devRuntime(),
-    "@initxy/web-sdk": sdk,
-    "@initxy/ui": ui,
+    "@initxy/noeta-web-sdk": sdk,
+    "@initxy/noeta-ui": ui,
   };
 }

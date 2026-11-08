@@ -1,8 +1,8 @@
 // The todos plugin's web part: the session's task list beside the
 // conversation, folded from the plugin's records (`created`, `updated`,
 // `deleted`), and its task tools drawn as one line each.
-import { ToolOutput } from "@initxy/ui";
-import { SLOTS, toolSlot, useAllRecords, type PluginContext, type PluginRecord, type ToolSlotProps } from "@initxy/web-sdk";
+import { ToolOutput } from "@initxy/noeta-ui";
+import { SLOTS, toolSlot, useAllRecords, type PluginContext, type PluginRecord, type ToolSlotProps } from "@initxy/noeta-web-sdk";
 
 export interface Todo {
   id: string;

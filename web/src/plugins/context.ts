@@ -1,4 +1,4 @@
-import { WAIT_TIMEOUT_MS, type PluginContext, type SlotRegistry, type Theme } from "@initxy/web-sdk";
+import { WAIT_TIMEOUT_MS, type PluginContext, type SlotRegistry, type Theme } from "@initxy/noeta-web-sdk";
 import type { Api } from "../api/client";
 import { TaskTranscript } from "../components/Transcript";
 import { desktop } from "../desktop";

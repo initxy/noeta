@@ -1,8 +1,8 @@
 // The plan-mode plugin's web part: the plan to review on the question card
 // `ExitPlanMode` asks, and the plan on its call's card once answered. (Its
 // mode switches are the permissions plugin's records, shown there.)
-import { Markdown } from "@initxy/ui";
-import { requestSlot, toolSlot, type PluginContext, type RequestSlotProps, type ToolSlotProps, type WrapProps } from "@initxy/web-sdk";
+import { Markdown } from "@initxy/noeta-ui";
+import { requestSlot, toolSlot, type PluginContext, type RequestSlotProps, type ToolSlotProps, type WrapProps } from "@initxy/noeta-web-sdk";
 
 const TOOL = "ExitPlanMode";
 

@@ -1,8 +1,8 @@
 // The workflow plugin's web part: a `Workflow` call's card follows its run
 // (the plugin's `run`, `agent` and `ended` records): the workflow's name, how
 // the run stands, and each agent it started, whose conversation opens.
-import { ToolOutput } from "@initxy/ui";
-import { toolSlot, useAllRecords, type PluginContext, type PluginRecord, type ToolSlotProps } from "@initxy/web-sdk";
+import { ToolOutput } from "@initxy/noeta-ui";
+import { toolSlot, useAllRecords, type PluginContext, type PluginRecord, type ToolSlotProps } from "@initxy/noeta-web-sdk";
 import { useState, type ComponentType } from "react";
 
 const TOOL = "Workflow";

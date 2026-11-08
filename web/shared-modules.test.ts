@@ -12,7 +12,7 @@ describe("the shared modules", () => {
     expect(html).toContain(`<script type="importmap">${IMPORT_MAP}</script>`);
     expect(JSON.parse(IMPORT_MAP).imports["react/jsx-runtime"]).toBe("./shared/react-jsx-runtime.js");
     expect(JSON.parse(IMPORT_MAP).imports["react/jsx-dev-runtime"]).toBe("./shared/react-jsx-dev-runtime.js");
-    expect(sharedFile("@initxy/web-sdk")).toBe("shared/initxy-web-sdk.js");
+    expect(sharedFile("@initxy/noeta-web-sdk")).toBe("shared/initxy-noeta-web-sdk.js");
   });
 
   it("re-export what the page put on globalThis, by name and as the default", async () => {

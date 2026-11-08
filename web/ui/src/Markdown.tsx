@@ -1,4 +1,4 @@
-import { codeblockSlot, Slot } from "@initxy/web-sdk";
+import { codeblockSlot, Slot } from "@initxy/noeta-web-sdk";
 import type { Element, ElementContent } from "hast";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";

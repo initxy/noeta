@@ -1,4 +1,4 @@
-# @initxy/web-sdk
+# @initxy/noeta-web-sdk
 
 What a noeta plugin's web part is given, and where it can put things. The web app and the
 desktop app load the part of every plugin the open session runs; the guide is
@@ -7,7 +7,7 @@ desktop app load the part of every plugin the open session runs; the guide is
 A web part is one built ES module exporting `activate(ctx)`:
 
 ```tsx
-import { SLOTS, type PluginContext } from "@initxy/web-sdk";
+import { SLOTS, type PluginContext } from "@initxy/noeta-web-sdk";
 
 export function activate(ctx: PluginContext) {
   return ctx.slots.add(SLOTS.sidebar, { key: "hello", mount: "keyed" }, () => <div>Task {ctx.client.taskId}</div>);
@@ -32,7 +32,7 @@ added to slots goes then too, what it subscribed to through `ctx` (`client.watch
 ## Building
 
 The page provides `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime`,
-`@initxy/web-sdk` and `@initxy/ui` itself (its import map), so a build marks them
+`@initxy/noeta-web-sdk` and `@initxy/noeta-ui` itself (its import map), so a build marks them
 external and bundles everything else. `template/` is a starting point: `npm install`, then
 `npm run build` writes `dist/index.js`. The plugin's `.noeta-plugin/plugin.json` names it:
 

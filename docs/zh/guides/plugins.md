@@ -350,7 +350,7 @@ async def test_word_count(tmp_path):                 # pytest-asyncio，asyncio_
 模块导出 `activate(ctx)`，把 React 组件放进页面预留的位置（slot）：
 
 ```tsx
-import { SLOTS, type PluginContext } from "@initxy/web-sdk";
+import { SLOTS, type PluginContext } from "@initxy/noeta-web-sdk";
 
 export function activate(ctx: PluginContext) {
   return ctx.slots.add(SLOTS.sidebar, { key: "files", mount: "keyed" }, () => (
@@ -359,7 +359,7 @@ export function activate(ctx: PluginContext) {
 }
 ```
 
-`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 和 `ctx.allRecords()` 读插件自己的记录（组件里用 `useRecords`/`useAllRecords`，记录有新的就跟着刷新），`<ctx.Transcript taskId=…/>` 显示另一个任务的对话，比如某个子代理的。内置插件自己的界面（noeta 仓库里的 `web/src/plugins/<name>/`）也是这样写的。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@initxy/web-sdk`、`@initxy/ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。`ctx` 的每个成员、所有位置和挂载方式见 [`web/sdk` 的 README](https://github.com/initxy/noeta/blob/main/web/sdk/README.md)；[`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) 是一个带网页部分的完整插件。每个位置在页面上的哪里、页面拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
+`ctx.call(name, args)` 调到插件自己后端的 `Extension.ui_call`；`ctx.client` 操作当前打开的会话对应的任务，`ctx.records(kind)` 和 `ctx.allRecords()` 读插件自己的记录（组件里用 `useRecords`/`useAllRecords`，记录有新的就跟着刷新），`<ctx.Transcript taskId=…/>` 显示另一个任务的对话，比如某个子代理的。内置插件自己的界面（noeta 仓库里的 `web/src/plugins/<name>/`）也是这样写的。构建成一个 ES 模块，`react`、`react-dom`、`react/jsx-runtime`、`@initxy/noeta-web-sdk`、`@initxy/noeta-ui` 不打进包里（页面自己提供，用的是页面那一份；构建脚本见 `web/sdk/template`），并把构建产物提交进仓库：安装插件时不会跑任何构建。`ctx` 的每个成员、所有位置和挂载方式见 [`web/sdk` 的 README](https://github.com/initxy/noeta/blob/main/web/sdk/README.md)；[`examples/web-panel`](https://github.com/initxy/noeta/tree/main/examples/web-panel) 是一个带网页部分的完整插件。每个位置在页面上的哪里、页面拿到网页部分后怎么处理，见[网页、桌面与编辑器](./front-ends.md#网页版和桌面版里的插件)。
 
 ## 替换内置插件
 

@@ -1,4 +1,4 @@
-import { SlotRegistry, type PluginModule } from "@initxy/web-sdk";
+import { SlotRegistry, type PluginModule } from "@initxy/noeta-web-sdk";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import type { Api } from "../api/client";
 import type { PluginInfo, PluginListing, UiEntry } from "../api/types";

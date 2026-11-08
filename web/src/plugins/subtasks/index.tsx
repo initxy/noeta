@@ -1,7 +1,7 @@
 // The subtasks plugin's web part: an `Agent` call's card names the agent and
 // its job, and opens the sub-agent's own conversation, followed live.
-import { ToolOutput } from "@initxy/ui";
-import { toolSlot, type PluginContext, type ToolSlotProps } from "@initxy/web-sdk";
+import { ToolOutput } from "@initxy/noeta-ui";
+import { toolSlot, type PluginContext, type ToolSlotProps } from "@initxy/noeta-web-sdk";
 import { useState, type ComponentType } from "react";
 
 /** `Agent`, and `Task`, its old name. */

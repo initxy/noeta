@@ -1,6 +1,6 @@
 // The built-in plugins' web parts, each through the page's own loader, ctx
 // and slots (as a third-party part runs), and each gone once switched off.
-import { Slot, SLOTS, SlotRegistry, SlotsContext } from "@initxy/web-sdk";
+import { Slot, SLOTS, SlotRegistry, SlotsContext } from "@initxy/noeta-web-sdk";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
