@@ -13,6 +13,8 @@ import shlex
 from typing import NamedTuple
 
 __all__ = [
+    "GIT_FILTER_DRIVERS",
+    "GIT_READ_FLAGS",
     "LONG_SLEEP_S",
     "NO_OUTPUT",
     "SHELL_EXPANSION_CHARS",
@@ -27,6 +29,7 @@ __all__ = [
     "read_files",
     "shell_reads",
     "subcommands",
+    "untrusted_filters",
 ]
 
 
@@ -418,3 +421,27 @@ def harden_git(argv: list[str]) -> list[str]:
     """``git <sub> ...`` with :data:`_GIT_HARDENING` applied."""
     before, after = _GIT_HARDENING[argv[1]]
     return [argv[0], *before, argv[1], *after, *argv[2:]]
+
+
+#: Global flags for the git commands noeta runs itself to read a repository's
+#: state: no fsmonitor hook, no hooks, no signature program, no index refresh
+#: written back.
+GIT_READ_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
+                  "-c", "log.showSignature=false", "--no-optional-locks")
+#: ``git`` arguments that list every filter driver configured, each with the
+#: config scope that sets it (:func:`untrusted_filters` reads the answer).
+GIT_FILTER_DRIVERS = ("config", "--show-scope", "--get-regexp", r"^filter\.")
+#: Config scopes a person set up themselves (a filter there is trusted).
+_TRUSTED_SCOPES = ("system", "global")
+
+
+def untrusted_filters(exit_code: int, output: str) -> bool:
+    """Whether the answer to :data:`GIT_FILTER_DRIVERS` names a filter driver
+    (whose ``clean`` program ``git status`` would run) set up anywhere but the
+    system or global config: by the repository itself. A failure counts as yes."""
+    if exit_code == 1 and not output.strip():
+        return False  # no filter configured anywhere
+    if exit_code != 0:
+        return True
+    return any(line.strip() and line.split("\t", 1)[0].strip() not in _TRUSTED_SCOPES
+               for line in output.splitlines())
