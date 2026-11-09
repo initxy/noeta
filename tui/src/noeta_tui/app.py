@@ -13,6 +13,7 @@ from textual import events, on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.timer import Timer
 from textual.widgets import Static, TextArea
 
 from noeta.core.events import InputTaken, Say, Waiting
@@ -34,7 +35,7 @@ from noeta.toolkit.permission_modes import (
     published_modes,
 )
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from noeta_tui import bash_mode, files, history, mentions, render, slash, wrap
+from noeta_tui import bash_mode, clipboard, files, history, mentions, render, selection, slash, wrap
 from noeta_tui.agents import MAIN, AgentsPanel, AgentView, WorkflowView
 from noeta_tui.transcript import SERVER_DIRECTORY, WORKFLOW_KEY, TranscriptView, _short_path
 from noeta_tui.widgets import (
@@ -43,9 +44,9 @@ from noeta_tui.widgets import (
     Notice,
     PromptInput,
     QuestionCard,
-    ReadGroup,
     ThinkingBlock,
     ToolCall,
+    ToolGroup,
     UserMessage,
     Welcome,
 )
@@ -59,10 +60,13 @@ SHORTCUTS = """\
 / for commands         shift + tab to cycle modes        ctrl + v to paste images
 @ for file paths       ctrl + o for verbose output       ctrl + b for agents
 ctrl + r for history   ctrl + t to toggle tasks          shift + ⏎ for newline
-                       ↑ ↓ for earlier prompts           esc to interrupt[/dim]"""
+drag to copy           ↑ ↓ for earlier prompts           esc to interrupt
+click to expand        /copy for last reply[/dim]"""
 
 #: Seconds between two presses of Esc (or Ctrl+C) that count as a double press.
 DOUBLE_PRESS = 0.8
+#: Seconds the footer says what was copied.
+COPIED_FLASH = 2.0
 #: Seconds the mode key waits for a new task's start to record its mode.
 MODE_WAIT = 2.0
 #: The tasks ``/resume`` offers: the most recently updated roots.
@@ -153,6 +157,10 @@ class NoetaApp(TranscriptView):
         self.attempts: dict[int, int] = {}
         #: The newest model call seen in the log.
         self.called = 0
+        self.replied = 0
+        self._batch = None
+        self._record_at = 0.0
+        self.turn_started_at = 0.0
         #: A delta is taken off the queue but not yet written.
         self._pumping = False
         self.busy = False
@@ -182,6 +190,9 @@ class NoetaApp(TranscriptView):
         self.turn_output = 0
         self.turn_verb = ""
         self.flash = ""
+        self._flash_timer: Timer | None = None
+        #: The screen's selection copied last (copied once on release).
+        self._copied: dict[Any, Any] | None = None
         #: Prompts sent in this project, oldest first (earlier sessions'
         #: too); ``history_at`` steps through them.
         self._history_file = history.history_file(self.start.home, self.start.cwd)
@@ -320,7 +331,10 @@ class NoetaApp(TranscriptView):
             await follow(self.local.client, task_id)
             await self.local.client.signal(task_id, RESUMED_SIGNAL)
         await self._clear(task_id, refused=refused)
-        self._follower = self.follow(task_id)
+        after = await self.show_log(task_id)
+        if task_id != self.task_id:  # another task was opened meanwhile
+            return
+        self._follower = self.follow(task_id, after)
         self._load_commands()
         self.update_status()
 
@@ -356,7 +370,7 @@ class NoetaApp(TranscriptView):
         self.streamed.clear()
         self.attempts.clear()
         self.cost_usd = 0.0
-        self.called = 0
+        self.called = self.replied = 0
         self.todos.clear()
         self._show_todos()
         self.queued.clear()
@@ -375,8 +389,8 @@ class NoetaApp(TranscriptView):
                                           "/new starts a task here.", classes="-error"))
 
     def _default_task_cwd(self) -> str:
-        """What the footer shows until the task's ``TaskCreated`` says: the
-        directory new tasks are asked to run in (on a server, ``""`` for its own)."""
+        """The task's directory until its ``TaskCreated`` says: the one new
+        tasks are asked to run in (on a server, ``""`` for its own)."""
         return str(self.task_config.get("cwd") or ("" if self.on_server else self.cwd))
 
     async def pick_task(self) -> None:
@@ -549,7 +563,7 @@ class NoetaApp(TranscriptView):
     # ------------------------------------------------------------ the prompt's keys
 
     def _box(self) -> PromptInput:
-        return self.query_one(PromptInput)
+        return self.query_one("#prompt", PromptInput)
 
     def _to_prompt(self) -> PromptInput | None:
         """The prompt, focused, when what has focus takes no typing (the
@@ -727,7 +741,11 @@ class NoetaApp(TranscriptView):
             await slash.run(self, "rewind", "")
 
     async def action_interrupt(self) -> None:
-        """Ctrl+C: clear the input; on an empty one, twice to quit."""
+        """Ctrl+C: copy the selection (it is then gone), else clear the
+        input; on an empty one, twice to quit."""
+        if self.copy_selection():
+            self.screen.clear_selection()
+            return
         box = self._box()
         if box.text:
             box.clear()
@@ -737,9 +755,40 @@ class NoetaApp(TranscriptView):
             self.exit()
             return
         self._last_interrupt = now
-        self.flash = "Press Ctrl-C again to exit"
+        self.show_flash("Press Ctrl-C again to exit", DOUBLE_PRESS)
+
+    def on_text_selected(self, event: events.TextSelected) -> None:
+        """The mouse button was released: a selection it made is copied (a
+        click selects nothing; one on the scrollbar keeps the selection)."""
+        self._copy_new_selection()
+
+    def on_click(self, event: events.Click) -> None:
+        if event.chain > 1:  # a double click selected its block, a triple what is around it
+            self._copy_new_selection()
+
+    def _copy_new_selection(self) -> None:
+        if self.screen.selections is not self._copied:
+            self.copy_selection()
+
+    def copy_selection(self) -> bool:
+        """The screen's selection to the clipboard, the footer saying so;
+        ``False`` when nothing is selected."""
+        self._copied = self.screen.selections
+        text = selection.selected_text(self.screen)
+        if not text:
+            return False
+        clipboard.copy(self, text)
+        self.show_flash(f"Copied {len(text)} character{'' if len(text) == 1 else 's'}",
+                        COPIED_FLASH)
+        return True
+
+    def show_flash(self, text: str, seconds: float) -> None:
+        """``text`` on the footer's left for ``seconds``."""
+        if self._flash_timer is not None:
+            self._flash_timer.stop()
+        self.flash = text
         self.update_status()
-        self.set_timer(DOUBLE_PRESS, self._clear_flash)
+        self._flash_timer = self.set_timer(seconds, self._clear_flash)
 
     def _clear_flash(self) -> None:
         self.flash = ""
@@ -798,7 +847,7 @@ class NoetaApp(TranscriptView):
             view.set_expanded(self.verbose)
         for call in self.query(ToolCall):
             call.set_expanded(self.verbose)
-        for group in self.query(ReadGroup):
+        for group in self.query(ToolGroup):
             group.set_expanded(self.verbose)
         for block in self.query(ThinkingBlock):
             block.set_expanded(self.verbose)

@@ -14,12 +14,22 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.geometry import Offset
+from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static, TextArea
 
 from noeta.core.events import Answer
 from noeta.core.types import ToolUse
 from noeta.toolkit.commands import parse_command_message
 from noeta_tui import render
+from noeta_tui.selection import Unselectable
+
+
+def composed(widget: Widget) -> bool:
+    """``widget``'s own children are in place: what is added to it now is
+    mounted, else its ``compose`` yields it (a widget built before it is
+    mounted, as a log shown at once builds them)."""
+    return bool(widget.children)
 
 
 class UserMessage(Static):
@@ -55,7 +65,8 @@ class AssistantMessage(CleanMarkdown):
 
 def bulleted(widget: Any, *, classes: str = "") -> Horizontal:
     """``widget`` after Claude Code's ``●`` bullet."""
-    row = Horizontal(Static("●", classes="bullet"), widget, classes=f"row {classes}".strip())
+    row = Horizontal(Unselectable("●", classes="bullet"), widget,
+                     classes=f"row {classes}".strip())
     return row
 
 
@@ -92,8 +103,28 @@ class Welcome(Horizontal):
         self.info = out
 
     def compose(self) -> ComposeResult:
-        yield Static(render.logo(), classes="welcome-logo")
+        yield Unselectable(render.logo(), classes="welcome-logo")
         yield Static(self.info, classes="welcome-info")
+
+
+class Toggle(Static):
+    """A line a click opens or closes (``on_toggle``); a drag over it
+    selects its text instead."""
+
+    def __init__(self, content: Any = "", *, on_toggle: Callable[[], None], **kw: Any) -> None:
+        super().__init__(content, **kw)
+        self.on_toggle = on_toggle
+        self._pressed_at: Offset | None = None
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        self._pressed_at = event.screen_offset
+
+    def on_click(self, event: events.Click) -> None:
+        pressed, self._pressed_at = self._pressed_at, None
+        # A double click's second press selects a word to copy: it does not close again.
+        if pressed == event.screen_offset and event.chain == 1:
+            event.stop()
+            self.on_toggle()
 
 
 class ThinkingBlock(Static):
@@ -124,6 +155,15 @@ class ThinkingBlock(Static):
         self.expanded = expanded
         self._draw()
 
+    def copy(self) -> ThinkingBlock:
+        """The same thought, to show elsewhere (a widget removed from the
+        screen is not mounted again)."""
+        out = ThinkingBlock(expanded=self.expanded, started=self.started)
+        out.text = self.text
+        if self.took is not None:
+            out.finish(self.took)
+        return out
+
     def _draw(self) -> None:
         out = Text()
         if self.took is None:
@@ -141,15 +181,18 @@ class ThinkingBlock(Static):
 class ToolCall(Vertical):
     """One tool call: ``● Name(argument)`` with its state in the bullet's
     colour, and the ``⎿`` block under it — the latest output while it runs,
-    the result folded once done (ctrl+o unfolds every call)."""
+    the result folded once done (a click on it, or ctrl+o for every call,
+    unfolds it)."""
 
     DEFAULT_CLASSES = "tool-call"
     STYLES = {"pending": "dim", "running": "dim", "waiting": "yellow", "done": "green",
               "error": "red", "background": render.WORKING}
 
-    def __init__(self, call: ToolUse, *, expanded: bool = False) -> None:
+    def __init__(self, call: ToolUse, *, expanded: bool = False, cwd: str = "") -> None:
+        """``cwd``: the task's directory (paths under it are shown relative)."""
         super().__init__()
         self.call = call
+        self.cwd = cwd
         self.state = "pending"
         self.progressed = False
         #: Showing the folded result (``False`` while its output runs).
@@ -157,9 +200,13 @@ class ToolCall(Vertical):
         self.expanded = expanded
         self.rows: list[tuple[str, str]] = []
         self.is_diff = False
+        #: The run of calls it is shown in, if any.
+        self.group: ToolGroup | None = None
         self.head = Static(self._header(), classes="tool-head")
-        self.body = Static("", classes="tool-body")
+        self.body = Toggle("", on_toggle=self.toggle_result, classes="tool-body")
         self.body.display = False  # until there is output
+        #: What the person added to their yes, a line each.
+        self.notes: list[Static] = []
         #: A background agent's progress (an ``Agent`` call's child), or ``None``.
         self.child: dict[str, Any] | None = None
         #: A ``Workflow`` call's run (its records folded), or ``None``.
@@ -167,11 +214,12 @@ class ToolCall(Vertical):
 
     @property
     def title(self) -> str:
-        return render.tool_header(self.call)
+        return render.tool_header(self.call, cwd=self.cwd)
 
     def compose(self) -> ComposeResult:
         yield self.head
         yield self.body
+        yield from self.notes
 
     def _header(self, frame: int = -1) -> render.Hanging:
         """``● Name(argument)``; a long one wraps under the name, not the bullet."""
@@ -187,8 +235,8 @@ class ToolCall(Vertical):
         self.head.update(self._header())
         self.set_class(state == "error", "-error")
         self.set_class(state == "done", "-done")
-        if isinstance(self.parent, ReadGroup):
-            self.parent.show_head()
+        if self.group is not None:
+            self.group.show_head()
 
     def set_progress(self, text: str) -> None:
         if self.state in ("done", "error"):
@@ -225,7 +273,8 @@ class ToolCall(Vertical):
             self.show_workflow()
             return
         self.set_state("error" if is_error else "done")
-        self.rows = render.result_rows(self.call, text, meta or {}, is_error=is_error)
+        self.rows = render.result_rows(self.call, text, meta or {}, is_error=is_error,
+                                       cwd=self.cwd)
         self.is_diff = isinstance((meta or {}).get("diff"), str) and not is_error
         self.collapsed = True
         self._show()
@@ -233,9 +282,16 @@ class ToolCall(Vertical):
     async def set_note(self, note: str) -> None:
         """What the person added to their yes, under the result, as the
         model reads it beside the result."""
-        await self.mount(Static(render.Hanging(Text.assemble(("  ⎿  ", "dim"),
-                                                             render.clean(note))),
-                                classes="tool-note"))
+        line = Static(render.Hanging(Text.assemble(("  ⎿  ", "dim"), render.clean(note))),
+                      classes="tool-note")
+        self.notes.append(line)
+        if composed(self):
+            await self.mount(line)
+
+    def toggle_result(self) -> None:
+        """A click on the result: shown in full, or folded again."""
+        if self.state in ("done", "error", "background"):
+            self.set_expanded(not self.expanded)
 
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
@@ -298,27 +354,40 @@ class ToolCall(Vertical):
         self.body.display = True
 
 
-class ReadGroup(Vertical):
-    """Reads one after another as one line, Claude Code's ``Read 3 files``;
-    ctrl+o shows each call. A single read shows as itself."""
+class ToolGroup(Vertical):
+    """Quiet calls one after another (reads, searches, shell commands, other
+    tools) and the model's thoughts between them as one counted line, Claude
+    Code's ``Thought for 4s, searched for 2 patterns, read 3 files``; a click
+    on it or ctrl+o shows each part. While a call runs or waits for an
+    approval it shows under the line. A single call shows as itself."""
 
-    DEFAULT_CLASSES = "read-group"
+    DEFAULT_CLASSES = "tool-group"
 
     def __init__(self, *, expanded: bool = False) -> None:
         super().__init__()
         self.expanded = expanded
-        self.head = Static("", classes="read-head")
-
-    def compose(self) -> ComposeResult:
-        yield self.head
+        #: The calls and thoughts, in order.
+        self.parts: list[ToolCall | ThinkingBlock] = []
+        self.head = Toggle("", on_toggle=self.toggle, classes="group-head")
 
     @property
     def calls(self) -> list[ToolCall]:
-        return [c for c in self.children if isinstance(c, ToolCall)]
+        return [p for p in self.parts if isinstance(p, ToolCall)]
 
-    async def add(self, call: ToolCall) -> None:
-        await self.mount(call)
+    def compose(self) -> ComposeResult:
+        yield self.head
+        yield from self.parts
+
+    async def add(self, part: ToolCall | ThinkingBlock) -> None:
+        self.parts.append(part)
+        if isinstance(part, ToolCall):
+            part.group = self
+        if composed(self):
+            await self.mount(part)
         self.show_head()
+
+    def toggle(self) -> None:
+        self.set_expanded(not self.expanded)
 
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
@@ -328,20 +397,24 @@ class ReadGroup(Vertical):
         calls = self.calls
         many = len(calls) > 1
         self.head.display = many
-        for call in calls:
-            call.display = self.expanded or not many
+        for part in self.parts:
+            live = many and not self.expanded and isinstance(part, ToolCall) \
+                and part.state in ("running", "waiting")
+            part.display = self.expanded or not many or live
+            part.set_class(live, "-live")
         if not many:
             return
-        failed = any(c.state == "error" for c in calls)
         running = any(c.state not in ("done", "error") for c in calls)
-        out = Text().append("Reading " if running else "Read ", style="dim")
-        out.append(str(len(calls)), style="bold")
-        out.append(" files…" if running else " files", style="dim")
-        if failed:
-            out.append(" (some failed)", style="red")
-        if not self.expanded:
-            out.append(" (ctrl+o to expand)", style="dim")
-        self.head.update(out)
+        waiting = any(c.state == "waiting" for c in calls)
+        # The bullet in a call's colours: what the run is doing, green once done.
+        bullet = "waiting" if waiting else "running" if running else "done"
+        line = Text().append("● ", style=ToolCall.STYLES[bullet])
+        line.append_text(render.run_line(
+            (render.call_kind(c.call) for c in calls),
+            thought=sum(p.took or 0.0 for p in self.parts if isinstance(p, ThinkingBlock)),
+            running=running, waiting=waiting,
+            failed=sum(c.state == "error" for c in calls), expanded=self.expanded))
+        self.head.update(render.Hanging(line, 2))
 
 
 class Choices(Static, can_focus=True):
@@ -445,6 +518,8 @@ class ApprovalCard(Vertical):
         self.prompt = prompt
         self.decide = decide
         self.done = False
+        #: What was answered (``""``: nothing yet).
+        self.said = ""
         #: The option the open amend line adds to (``""``: none open).
         self.amending = ""
 
@@ -455,6 +530,8 @@ class ApprovalCard(Vertical):
         if self.preview is not None:
             yield Static(self.preview, classes="approval-diff")
         yield Static("Do you want to proceed?", classes="approval-question")
+        if self.said:
+            yield self._result()
         if self.done:
             return
         deny = next((o["id"] for o in self.options if o["id"] == "deny"), "")
@@ -522,9 +599,15 @@ class ApprovalCard(Vertical):
         return focused
 
     async def _decided(self, said: str) -> None:
+        self.said = said
+        if not composed(self):
+            return
         await self.query(".hint, Choices, Input").remove()
-        await self.mount(Static(render.Hanging(render.plain(f"  ⎿  {said}", "dim")),
-                                classes="approval-result"))
+        await self.mount(self._result())
+
+    def _result(self) -> Static:
+        return Static(render.Hanging(render.plain(f"  ⎿  {self.said}", "dim")),
+                      classes="approval-result")
 
     def label(self, answer: Answer | None) -> str:
         """What the card says of ``answer`` (``None``: there was none)."""

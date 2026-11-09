@@ -119,8 +119,7 @@ async def test_tool_calls_fold_long_output_and_show_diffs(tmp_path: Path) -> Non
         assert plain(bash.body).splitlines() == [
             "  ⎿  line 1", "     line 2", "     line 3", "     … +6 lines (ctrl+o to expand)"]
         assert plain(read.body).startswith("  ⎿  Read ")
-        path = str(target) if len(str(target)) <= 100 else f"{str(target)[:100]}…"  # macOS's
-        assert plain(edit.head) == f"● Update({path})"  # long temporary directories
+        assert plain(edit.head) == "● Update(calc.py)"  # under the task's directory
         body = plain(edit.body)
         assert "Added 1 line, removed 1 line" in body
         assert "2 -    return a - b" in body and "2 +    return a + b" in body

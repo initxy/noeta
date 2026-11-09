@@ -6,8 +6,11 @@ the spinner line, the footer's mode hint and ``/context``'s grid."""
 from __future__ import annotations
 
 import difflib
+import os
 import re
+from collections import Counter
 from collections.abc import Iterable, Mapping
+from pathlib import PurePath
 from typing import Any
 
 from rich.console import Console, ConsoleOptions, RenderResult
@@ -20,6 +23,8 @@ from noeta.core.types import ToolUse
 DISPLAY_NAMES = {"Edit": "Update", "MultiEdit": "Update", "NotebookEdit": "Update",
                  "Grep": "Search", "Glob": "Search", "WebFetch": "Fetch",
                  "WebSearch": "Web Search"}
+#: What a folded line says opens it (a click on it does too).
+EXPAND_HINT = "(ctrl+o to expand)"
 #: Lines of a folded result after its first; ctrl+o shows the rest.
 FOLDED_LINES = 2
 #: Diff lines shown while folded.
@@ -67,15 +72,34 @@ def plain(text: str, style: str = "") -> Text:
     return Text(clean(text), style=style)
 
 
-def _main_argument(call: ToolUse) -> str:
+def display_path(path: str, cwd: str) -> str:
+    """``path`` as a call's line shows it: relative to the task's directory
+    ``cwd`` when under it (Claude Code's ``Update(calc.py)``), the home
+    directory as ``~``, else as it is."""
+    if cwd and os.path.isabs(path):
+        try:
+            return str(PurePath(path).relative_to(cwd))
+        except ValueError:  # outside the task's directory
+            pass
+    home = os.path.expanduser("~")
+    if home not in ("", "~", os.sep) and (path == home or path.startswith(home + os.sep)):
+        return "~" + path[len(home):]
+    return path
+
+
+#: The arguments that name a file or directory.
+PATH_KEYS = ("file_path", "notebook_path", "path")
+
+
+def _main_argument(call: ToolUse, cwd: str = "") -> str:
     i = call.input
     if call.name in ("Grep", "Glob"):
         arg = f'pattern: "{i.get("pattern", "")}"'
-        return arg + (f', path: "{i["path"]}"' if i.get("path") else "")
-    for key in ("file_path", "notebook_path", "path", "command", "url", "query",
+        return arg + (f', path: "{display_path(str(i["path"]), cwd)}"' if i.get("path") else "")
+    for key in (*PATH_KEYS, "command", "url", "query",
                 "subject", "description", "prompt", "skill", "taskId"):
         if i.get(key):
-            return str(i[key])
+            return display_path(str(i[key]), cwd) if key in PATH_KEYS else str(i[key])
     return ""
 
 
@@ -87,9 +111,10 @@ def tool_name(call: ToolUse) -> str:
     return clean(DISPLAY_NAMES.get(call.name, call.name))
 
 
-def tool_header(call: ToolUse, limit: int = 100) -> str:
-    """``Bash(ls -la)``: the name and the main argument's first line."""
-    arg = clean(_main_argument(call))
+def tool_header(call: ToolUse, limit: int = 100, cwd: str = "") -> str:
+    """``Bash(ls -la)``: the name and the main argument's first line, a
+    path relative to the task's directory ``cwd`` when under it."""
+    arg = clean(_main_argument(call, cwd))
     lines = arg.splitlines()
     first = lines[0] if lines else ""
     if len(first) > limit or len(lines) > 1:
@@ -101,11 +126,13 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
-def change_summary(call: ToolUse, meta: Mapping[str, Any]) -> str:
+def change_summary(call: ToolUse, meta: Mapping[str, Any], cwd: str = "") -> str:
     """``Added 1 line, removed 1 line`` (``Wrote 3 lines to a.py`` for a new file)."""
     added, removed = int(meta.get("added") or 0), int(meta.get("removed") or 0)
     if call.name == "Write" and removed == 0:
-        return f"Wrote {_plural(added, 'line')} to {meta.get('path') or _main_argument(call)}"
+        path = display_path(str(meta["path"]), cwd) if meta.get("path") \
+            else _main_argument(call, cwd)
+        return f"Wrote {_plural(added, 'line')} to {path}"
     parts = []
     if added:
         parts.append(f"added {_plural(added, 'line')}")
@@ -141,11 +168,11 @@ def diff_rows(diff: str) -> list[tuple[str, str]]:
 
 
 def result_rows(call: ToolUse, text: str, meta: Mapping[str, Any], *,
-                is_error: bool) -> list[tuple[str, str]]:
+                is_error: bool, cwd: str = "") -> list[tuple[str, str]]:
     """A finished call's result as ``(text, style)`` rows, its summary first."""
     diff = meta.get("diff")
     if isinstance(diff, str) and diff and not is_error:
-        return [(change_summary(call, meta), ""), *diff_rows(diff)]
+        return [(change_summary(call, meta, cwd), ""), *diff_rows(diff)]
     lines = text[:RESULT_CHARS].rstrip("\n").splitlines()
     if is_error:
         return [(line, "red") for line in lines] or [("Error", "red")]
@@ -194,12 +221,74 @@ def folded(rows: list[tuple[str, str]], *, diff: bool, expanded: bool,
     if expanded:
         return rows
     if read and len(rows) > 1:  # Claude Code: ``Read 20 lines (ctrl+o to expand)``
-        return [(f"{rows[0][0]} (ctrl+o to expand)", rows[0][1])]
+        return [(f"{rows[0][0]} {EXPAND_HINT}", rows[0][1])]
     keep = 1 + (FOLDED_DIFF_LINES if diff else FOLDED_LINES)
     if len(rows) <= keep:
         return rows
     hidden = len(rows) - keep
-    return [*rows[:keep], (f"… +{_plural(hidden, 'line')} (ctrl+o to expand)", "dim")]
+    return [*rows[:keep], (f"… +{_plural(hidden, 'line')} {EXPAND_HINT}", "dim")]
+
+
+# ------------------------------------------------------------- runs of calls
+
+#: What the line of a run of quiet calls counts a tool as; any other tool
+#: not in :data:`OWN_LINE` counts as ``tool`` (an MCP server's, say).
+CALL_KINDS = {"Grep": "search", "Glob": "search", "Read": "read", "LS": "list",
+              "WebFetch": "fetch", "WebSearch": "web", "Bash": "shell", "PowerShell": "shell"}
+#: The tools shown on their own, never in a run: an edit keeps its diff, an
+#: agent or a workflow its progress; the task list, a question, a plan, a skill.
+OWN_LINE = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit", "Agent", "Task", "Workflow",
+                      "TodoWrite", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList",
+                      "AskUserQuestion", "ExitPlanMode", "EnterPlanMode", "Skill"})
+#: Per kind, in the order the line names them (Claude Code's): the verb
+#: while a call runs, once all are done, and the thing counted (one, many).
+RUN_WORDS = (("search", "searching for", "searched for", "pattern", "patterns"),
+             ("read", "reading", "read", "file", "files"),
+             ("list", "listing", "listed", "directory", "directories"),
+             ("fetch", "fetching", "fetched", "page", "pages"),
+             ("web", "running", "ran", "web search", "web searches"),
+             ("tool", "calling", "called", "tool", "tools"),
+             ("shell", "running", "ran", "shell command", "shell commands"))
+
+
+def call_kind(call: ToolUse) -> str:
+    """What a run of quiet calls counts ``call`` as (``read``, ``shell``,
+    …); ``""`` for a call shown on its own."""
+    return "" if call.name in OWN_LINE else CALL_KINDS.get(call.name, "tool")
+
+
+def run_line(kinds: Iterable[str], *, thought: float = 0.0, running: bool, waiting: bool,
+             failed: int, expanded: bool) -> Text:
+    """A run of calls as one line, Claude Code's: ``Thought for 4s, searched
+    for 2 patterns, read 3 files (ctrl+o to expand)``; ``Reading 3 files,
+    running 1 shell command…`` while one runs (yellow while one waits for an
+    approval), ``(1 failed)`` in red. ``thought``: seconds of the model's
+    reasoning between the calls."""
+    counts = Counter(kinds)
+    style = "yellow" if waiting else "dim"
+    out = Text()
+    if thought:
+        out.append("Thought for ", style=style)
+        out.append(elapsed_text(thought), style="bold")
+    for kind, now, done, one, many in RUN_WORDS:
+        n = counts.get(kind, 0)
+        if not n:
+            continue
+        verb = now if running else done
+        if out:
+            out.append(", ", style=style)
+        else:
+            verb = verb[0].upper() + verb[1:]
+        out.append(f"{verb} ", style=style)
+        out.append(str(n), style="bold")
+        out.append(f" {one if n == 1 else many}", style=style)
+    if running:
+        out.append("…", style=style)
+    if failed:
+        out.append(f" ({failed} failed)", style="red")
+    if not expanded:
+        out.append(f" {EXPAND_HINT}", style="dim")
+    return out
 
 
 def result_block(rows: Iterable[tuple[str, str]]) -> Hanging:
@@ -224,6 +313,14 @@ class Hanging:
     @property
     def plain(self) -> str:
         return self.text.plain
+
+    def visualize(self) -> Any:
+        """What Textual draws: the same, selectable (``selection.HangingContent``)."""
+        from textual.content import Content
+
+        from noeta_tui.selection import HangingContent
+
+        return HangingContent(Content.from_rich_text(self.text), self.indent)
 
     def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
         return Measurement.get(console, options, self.text)
@@ -487,7 +584,7 @@ def workflow_rows(run: Mapping[str, Any], *, expanded: bool) -> list[tuple[str, 
         rows.append((f"{mark} {phase}{label}", style if a.get("state") != "done" else "dim"))
     hidden = len(agents) - len(shown)
     if hidden > 0 and not expanded:
-        rows.append((f"… {hidden} more (ctrl+o to expand)", "dim"))
+        rows.append((f"… {hidden} more {EXPAND_HINT}", "dim"))
     status = run.get("status")
     if status == "completed":
         rows.append(("Completed", "green"))

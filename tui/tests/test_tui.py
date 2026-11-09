@@ -223,12 +223,13 @@ async def test_an_approval_decided_before_its_card_mounts() -> None:
         assert plain(result).strip() == "⎿  Yes"
 
 
-async def test_on_a_server_the_status_shows_the_tasks_directory_and_no_file_is_attached(
+async def test_on_a_server_the_welcome_shows_the_tasks_directory_and_no_file_is_attached(
         tmp_path: Path) -> None:
     """Attached to a server, the task runs in the server's directory: the
-    status line shows the one its task recorded, and an ``@`` mention is
-    sent as typed, for the task to attach from its own files."""
+    welcome box shows the one its task is asked to run in, and an ``@``
+    mention is sent as typed, for the task to attach from its own files."""
     from noeta.core.types import Text
+    from noeta_tui.widgets import Welcome
 
     (tmp_path / "calc.py").write_text("def add(a, b):\n    return a - b\n")
     provider = ScriptedProvider([reply("seen")])
@@ -238,19 +239,21 @@ async def test_on_a_server_the_status_shows_the_tasks_directory_and_no_file_is_a
     app = NoetaApp(local, agent="main", model="the server's model", cwd=str(tmp_path),
                    task_config={"cwd": "/srv/projects/web"}, on_server=True)
     async with app.run_test(size=(160, 30)) as pilot:
-        def status() -> str:
-            return str(app.query_one("#status").render())
+        def welcome() -> str:
+            return plain(app.query_one(Welcome))
 
-        await settle(pilot, lambda: "/srv/projects/web" in status())
-        assert str(tmp_path) not in status()
+        await settle(pilot, lambda: ready(app) and "/srv/projects/web" in welcome())
+        assert str(tmp_path) not in welcome()
         await pilot.press(*"look at @calc.py", "enter")
         await settle(pilot, lambda: len(provider.requests) == 1 and not app.busy)
         sent = provider.requests[0].messages[-1]
         assert [b.text for b in sent.content if isinstance(b, Text)] == ["look at @calc.py"]
 
 
-async def test_on_a_server_with_no_directory_asked_the_status_names_the_servers(
+async def test_on_a_server_with_no_directory_asked_the_welcome_names_the_servers(
         tmp_path: Path) -> None:
+    from noeta_tui.widgets import Welcome
+
     agent = Agent(name="main", model="claude-sonnet-4-5", tools=[Look()])
     local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], ScriptedProvider([]),
                      env_for=lambda _s: None)
@@ -258,8 +261,9 @@ async def test_on_a_server_with_no_directory_asked_the_status_names_the_servers(
                    task_config={}, on_server=True)
     async with app.run_test(size=(160, 30)) as pilot:
         await settle(pilot, lambda: ready(app))
-        status = str(app.query_one("#status").render())
-        assert str(tmp_path) not in status and "server's directory" in status
+        welcome = plain(app.query_one(Welcome))
+        assert str(tmp_path) not in welcome and "server's directory" in welcome
+        assert str(tmp_path) not in plain(app.query_one("#status"))
 
 
 async def test_a_running_call_shows_its_latest_output_then_folds(tmp_path: Path) -> None:

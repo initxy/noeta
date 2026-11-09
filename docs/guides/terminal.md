@@ -52,9 +52,20 @@ Flags for a run (all in [the CLI reference](../reference/cli.md)):
 ## The screen
 
 The transcript fills the screen; the prompt box sits at the bottom. The footer shows the
-permission mode on the left, and the model, how full the context is (or how far it is from the
-automatic compaction), the cost so far and the directory on the right. Tool calls show as one line each and fold
-their output; a run of reads groups into one line. `?` on an empty prompt shows the shortcuts.
+permission mode on the left, and the model with its effort, how full the context is (or how far
+it is from the automatic compaction) and the cost so far on the right. The effort shows whenever
+the task has one, whatever the model; with none set, a catalogued reasoning model's default
+shows, and on any other model nothing is sent and nothing shows. The line under the footer holds
+the plugins' status items; the shipped `project_status` plugin puts the project and its git
+branch there (`noeta  ·  ⎇ main* ↑1`). `?` on an empty prompt shows the shortcuts.
+
+Tool calls in a row fold into one line, as Claude Code's do: `● Searched for 2 patterns, read 3
+files, ran 2 shell commands (ctrl+o to expand)`. Reads, searches, listings, web fetches and
+searches, shell commands and other tools (an MCP server's) fold, with the model's thinking
+between them; an edit keeps its diff on screen, and agents, workflows, the task list and
+questions keep their own lines. A call that runs, or waits for your approval, shows under the
+line until it ends; a failed one is counted in red. A click on the line, or on a call's folded
+output, opens it; `Ctrl+O` opens everything. Paths under the task's directory show relative to it.
 
 ![The transcript](https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/transcript.svg)
 
@@ -70,7 +81,7 @@ from its first message).
 | `Shift+Enter` (terminals that report it: Ghostty, kitty, iTerm2, WezTerm…), `\` then `Enter`, or `Ctrl+J` | New line |
 | `Esc` | Stop the turn (the task keeps everything said so far) |
 | `Esc` `Esc` | Clear the input; on an empty input, open `/rewind` |
-| `Ctrl+C` | Clear the input; on an empty input, press twice to quit |
+| `Ctrl+C` | Copy the selected text; with none, clear the input, and on an empty input press twice to quit |
 | `Shift+Tab` | Step to the next permission mode |
 | `↑` / `↓` | Earlier prompts (from the first or last line of the box); `↓` on an empty prompt moves to the agents' list |
 | `Ctrl+R` | Search earlier prompts; `Enter` puts the pick in the box, `Esc` leaves it empty |
@@ -82,6 +93,17 @@ from its first message).
 
 Two presses count as a double press within 0.8 seconds (`DOUBLE_PRESS` in
 `tui/src/noeta_tui/app.py`).
+
+### Copying
+
+Drag over any text in the transcript (a reply, a tool call and its output) and it is copied when
+you let go; a double or triple click copies a word or a line, and `Ctrl+C` copies the selection
+again. `/copy` copies the last reply as markdown, `/copy 2` the one before. The text reaches the
+clipboard by the terminal (OSC 52), which works over ssh in iTerm2, kitty, WezTerm, Ghostty,
+Alacritty and Windows Terminal but not in macOS Terminal.app; inside tmux the UI also hands it to
+tmux (`set-clipboard` must not be `off`), and on this machine (not over ssh) to `pbcopy`,
+`wl-copy`, `xclip` or `xsel`. The terminal's own selection still works with `Shift` held
+(`Option` in iTerm2 and Terminal.app).
 
 While sub-agents run, a list under the footer shows `● main` and one line per agent: its name,
 what it said or the tool it runs, how long it has run and its tokens; a workflow is one line,
@@ -126,9 +148,10 @@ highlighted one. The terminal UI's own commands (`tui/src/noeta_tui/slash.py`):
 | Command | What it does |
 |---|---|
 | `/help` | The shortcuts and every command, plugins' included |
-| `/status` | Version, task, agent, model, permission mode, directory, settings |
+| `/status` | Version, task, agent, model, effort, permission mode, directory, settings |
 | `/model [name]` | Pick or set the model, from the next request on ([models](./models.md)) |
-| `/effort [level]` | Pick or set the effort: `low`, `medium`, `high`, `xhigh`, `max` |
+| `/effort [level]` | Pick or set the effort: `low`, `medium`, `high`, `xhigh`, `max` (sent on any model; the provider maps it) |
+| `/copy [n]` | Copy the last reply (`n`: the nth latest) to the clipboard |
 | `/context` | What fills the next request, as a grid |
 | `/cost` | Tokens and cost of this task and its sub-agents |
 | `/memory [n]` | The instruction and memory files; `/memory 2` opens the second in `$EDITOR` |
@@ -256,6 +279,8 @@ Opening a task again tells its plugins it was resumed (a `resumed` signal: Sessi
 `resume`), and a task a headless run started becomes one a person follows (it gets a title and
 may ask questions). A task you cannot run here (its agent is not one this front end runs) opens
 read-only, with its history.
+
+A reopened task's history appears at once, folded as it was shown live; what it records next follows.
 
 ## Attach to a server
 

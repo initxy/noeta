@@ -47,7 +47,8 @@ UI_API = (1, 1)
 #: The built-in plugins a task runs well without: the only built-ins front
 #: ends offer a switch for (every installed plugin has one).
 SWITCHABLE_BUILTINS = ("web", "workflow", "schedule", "todos", "findings", "title",
-                       "quiet_nudge", "memory", "mcp", "checkpoints", "skills", "ask_user")
+                       "quiet_nudge", "memory", "mcp", "checkpoints", "skills", "ask_user",
+                       "project_status")
 #: A plugin's manifest, relative to the directory its code is in.
 MANIFEST = Path(".noeta-plugin") / "plugin.json"
 #: What a plugin may carry.

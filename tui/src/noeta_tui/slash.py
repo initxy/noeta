@@ -1,6 +1,6 @@
 """The terminal UI's own slash commands with a mechanism behind them, as
 Claude Code has them: ``/help``, ``/status``, ``/model``, ``/effort``, ``/context``,
-``/cost``, ``/memory``, ``/config``, ``/permissions``, ``/agents``,
+``/cost``, ``/copy``, ``/memory``, ``/config``, ``/permissions``, ``/agents``,
 ``/rewind``, ``/clear``, ``/plugins``, ``/reload-plugins``, and ``/mcp`` ``/hooks`` (what
 the MCP and hooks plugins say, shown as a panel). Each takes the app and what
 was typed after the name; what it shows goes to the transcript, never to
@@ -21,13 +21,13 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 
 from noeta.core import models
-from noeta.core.events import ExtensionRecorded
+from noeta.core.events import ExtensionRecorded, ModelReplied
 from noeta.host.app import change_config, model_choices, prepare_model
 from noeta.host.rewind import RewindPoint, rewind_points
 from noeta.host.usage import cost_text, tree_usage
 from noeta.toolkit.permission_modes import MODE_NAMES
 from noeta.toolkit.plugin_records import MEMORY
-from noeta_tui import plugin_ui, render
+from noeta_tui import clipboard, plugin_ui, render
 from noeta_tui.transcript import SERVER_DIRECTORY
 from noeta_tui.widgets import Option, Picker
 
@@ -45,6 +45,7 @@ COMMANDS = {
     "effort": "Pick or set how hard the model thinks (low … max)",
     "context": "Show what fills the next request, as a grid",
     "cost": "Show the tokens and cost of this task and its sub-agents",
+    "copy": "Copy the last reply to the clipboard (or /copy N for the Nth-latest)",
     "memory": "List the instruction and memory files; open one in $EDITOR",
     "config": "Show the settings; edit a settings file (edit user|project|local)",
     "permissions": "Show the permission mode and rules",
@@ -123,11 +124,14 @@ def _shortcuts() -> str:
 async def _status(app: NoetaApp, arg: str) -> None:
     rows = [("version", app.start.version or "?"),
             ("task", app.task_id or "(none yet: the first message starts it)"),
-            ("agent", app.agent), ("model", app.model),
+            ("agent", app.agent), ("model", app.model), ("effort", app.effort_said()),
             ("permission mode", app.mode or app.permission_mode or "(the plugin's default)"),
             ("working directory", app.task_cwd or SERVER_DIRECTORY),
             ("runs", "on a server" if app.on_server else "in this process")]
-    await app.say_text(_rows("Status", rows + app.start.settings()))
+    # The task's own value over the one the settings start tasks with.
+    named = {name for name, _ in rows}
+    await app.say_text(_rows("Status", rows + [r for r in app.start.settings()
+                                               if r[0] not in named]))
 
 
 #: Line marks of a plugin's panel and their colours.
@@ -226,7 +230,7 @@ async def _effort(app: NoetaApp, arg: str) -> None:
         if level:
             await set_effort(app, level)
 
-    await _picker(app, Picker(f"Select effort (now {current or 'the model default'})", options,
+    await _picker(app, Picker(f"Select effort (now {app.effort_said()})", options,
                               picked, index=index), "/effort")
 
 
@@ -275,6 +279,39 @@ async def _cost(app: NoetaApp, arg: str) -> None:
     if app.task_id:
         total = await tree_usage(app.local.client, app.task_id)
         await app.say_text(Text(cost_text(total)))
+
+
+async def _copy(app: NoetaApp, arg: str) -> None:
+    if arg and not (arg.isdigit() and int(arg) >= 1):
+        await app.say_notice("/copy copies the last reply, /copy N the Nth-latest")
+        return
+    n = int(arg or 1)
+    replies = await _replies(app)
+    if len(replies) < n:
+        await app.say_notice("no reply to copy yet" if not replies else
+                             f"there {'is' if len(replies) == 1 else 'are'} only "
+                             f"{len(replies)} {'reply' if len(replies) == 1 else 'replies'}")
+        return
+    text = replies[-n]
+    clipboard.copy(app, text)
+    which = "the last reply" if n == 1 else f"the {_ordinal(n)}-latest reply"
+    await app.say_notice(f"Copied {which} ({len(text)} character{'' if len(text) == 1 else 's'})")
+
+
+async def _replies(app: NoetaApp) -> list[str]:
+    """What the model said in the task's replies, oldest first (a reply of
+    tool calls only says nothing)."""
+    if not app.task_id:
+        return []
+    return [said for rec in await app.local.client.events(app.task_id)
+            if isinstance(rec.event, ModelReplied)
+            and (said := rec.event.response.message.text.strip())]
+
+
+def _ordinal(n: int) -> str:
+    """``2nd``, ``3rd``, ``11th``, ``21st``."""
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 async def _permissions(app: NoetaApp, arg: str) -> None:

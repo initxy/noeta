@@ -95,7 +95,7 @@
 | 对话框 | `ui.select`、`confirm`、`input` | 审批、提问 | AskUserQuestion、权限提示 | `ask()`、`Ask` | 已有 | 每个前端都能显示，不需要插件写任何前端代码。 |
 | 通知 | `ui.notify` | toast 插槽 | Notification hook | `view.notify(text, kind, data)` | 已有 | 不会以用户的身份进到模型那里。 |
 | 面板、小部件、编辑器、主题 | `ui.*` | 106 个 UI 插槽 | mods、主题 | — | 不做 | 前端不导入插件；插件发布数据，由前端渲染。 |
-| 状态栏 | `setStatus` | — | `statusLine` 设置 | — | 不做 | 留给插件：记录和 `notify` 带着前端可以展示的内容。 |
+| 状态栏 | `setStatus` | — | `statusLine` 设置 | `ui()` → `StatusItem` | 已有 | 插件的状态项，显示在终端界面底栏下面和 web、桌面端的状态栏里；自带的 `project_status` 显示项目名和 git 分支。不运行 Claude Code 的 `statusLine` 命令。 |
 | 插件自己的 HTTP 路由 | — | `webServer.register` | — | — | 不做 | 只有一套 API；外部流量通过渠道 `Channel` 进来。 |
 | **状态** | | | | | | |
 | 插件条目，可从历史重建 | `appendEntry` | 会话事件、投影 | — | `view.record` + `reduce`、快照 | 已有 | 插件状态都是从日志算出来的。 |

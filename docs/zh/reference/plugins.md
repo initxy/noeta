@@ -25,6 +25,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | `memory` | ✓ | | | 不设置就不开；`noeta` 命令会设置 |
 | `permissions` | ✓ | ✓ | ✓ | |
 | `plan_mode` | ✓ | ✓ | ✓ | |
+| `project_status` | ✓ | | | |
 | `quiet_nudge` | ✓ | | | 只有部分 Claude 模型会收到提醒 |
 | `schedule` | ✓ | | | |
 | `shell` | ✓ | ✓ | ✓ | |
@@ -49,7 +50,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 | 只关一个任务 | 任务配置里的 `plugins_off`：终端界面的 `/plugins`、网页版和桌面版的插件对话框，或者直接发 `config` 信号 | 从这个任务的下一轮起，换到哪个工人上都算数；子代理跟着父任务 |
 | 本机以后新建的任务 | `~/.noeta/plugin-switches.json`（`{"off": [...]}`），由上面那些菜单和 `PUT /plugins/{name}` 来写 | 之后新建的任务 |
 
-只在一个任务里关掉的插件，记录照样折叠，重新打开什么也不丢。装上的插件都能按任务开关；内置插件里只有任务离了也能正常跑的那些可以（`noeta/host/plugins.py` 的 `SWITCHABLE_BUILTINS`）：`ask_user`、`checkpoints`、`findings`、`mcp`、`memory`、`quiet_nudge`、`schedule`、`skills`、`title`、`todos`、`web`、`workflow`。其余的（权限关卡、文件和 shell 工具等）任务离不开，只能用 `enabled = false` 去掉。Claude Code 插件的各部分归加载它们的那些插件管，不单独开关。内置插件在网页版里的界面就是它在 `web/src/plugins/<name>/` 下的网页部分，插件关了，界面也跟着没了。
+只在一个任务里关掉的插件，记录照样折叠，重新打开什么也不丢。装上的插件都能按任务开关；内置插件里只有任务离了也能正常跑的那些可以（`noeta/host/plugins.py` 的 `SWITCHABLE_BUILTINS`）：`ask_user`、`checkpoints`、`findings`、`mcp`、`memory`、`project_status`、`quiet_nudge`、`schedule`、`skills`、`title`、`todos`、`web`、`workflow`。其余的（权限关卡、文件和 shell 工具等）任务离不开，只能用 `enabled = false` 去掉。Claude Code 插件的各部分归加载它们的那些插件管，不单独开关。内置插件在网页版里的界面就是它在 `web/src/plugins/<name>/` 下的网页部分，插件关了，界面也跟着没了。
 
 ## 工具和命令一览
 
@@ -282,6 +283,14 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 |---|---|---|
 | `plans_dir` | `<home>/plans` | 计划文件放哪 |
 | `auto_during_plan` | `true` | 在自动模式下开始的计划，用自动模式的分类器来判断（`useAutoModeDuringPlan`） |
+
+### `project_status`
+
+`noeta/plugins/project_status.py`：把任务所在目录的项目名和 git 分支做成状态项，各个前端都会显示（终端界面显示在底栏下面那一行），和 Claude Code 的状态栏插件显示的一样：项目名取 git 仓库的顶层文件夹名（关联工作树取它自己的文件夹名），不在仓库里就取目录名；在仓库里后面跟着分支（HEAD 游离时显示短提交号），工作区有改动加 `*`，和上游比有领先或落后时显示 `↑2 ↓1`。目录取任务的 shell 当前所在的位置（`cd` 或 `EnterWorktree` 之后），否则取任务自己的目录；本机上没有的目录（比如在容器里）什么也不显示。
+
+git 在回答前端的那台机器上跑，超过一秒就停，同一个目录两秒内最多跑一次。仓库自己的配置里写的程序一个都不会跑：不跑 fsmonitor、钩子和签名程序；仓库配置里定义了过滤器（filter driver）的，干脆不跑 `git status`，也就不显示 `*`。没有配置项。
+
+实现的方法：`ui`。
 
 ### `quiet_nudge`
 
