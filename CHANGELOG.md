@@ -6,7 +6,13 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
-## [Unreleased]
+## [1.1.1] - 2026-11-09
+
+The terminal UI copies text, reopens long tasks at once, folds runs of tool calls as Claude Code
+does, shows the effort and, through the new `project_status` plugin, the project and git branch.
+On macOS, background commands, deny rules over globs and servers on this machine work as on
+Linux. Reading a repository's git state can no longer start a program its
+config names through a partial clone's fetch.
 
 ### Added
 
