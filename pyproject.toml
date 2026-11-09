@@ -1,6 +1,6 @@
 [project]
 name = "noeta"
-version = "1.1.0"
+version = "1.1.1"
 description = "Open-source, Claude Code-compatible coding agent you can self-host on many workers: any worker continues any task, waits for approval hold no process. Terminal UI, CLI, ACP, HTTP API and Python SDK; Claude, DeepSeek or any OpenAI-compatible model."
 readme = "README.md"
 license = "Apache-2.0"
@@ -40,7 +40,7 @@ keyring = ["keyring>=24"]
 # The Workflow tool's embedded JavaScript engine (V8, about 80 MB installed).
 workflow = ["mini-racer>=0.14,<0.15"]
 # Released together, at the same version (docs/releasing.md).
-tui = ["noeta-tui==1.1.0"]
+tui = ["noeta-tui==1.1.1"]
 
 [project.urls]
 Homepage = "https://github.com/initxy/noeta"
