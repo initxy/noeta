@@ -17,6 +17,7 @@ import asyncio
 import ipaddress
 import os
 import socket
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -324,12 +325,27 @@ def address_refusal(host: str, address: str, port: int, allowed: Sequence[str],
     return None
 
 
+#: This host's addresses and when they were looked up: looking up its own
+#: name can take seconds (macOS waits on multicast DNS for it), so it is
+#: done off the event loop and kept a minute.
+_own: tuple[float, list[str]] | None = None
+OWN_ADDRESSES_KEEP_S = 60.0
+
+
 def _own_addresses() -> list[str]:
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None)
     except OSError:
         return []
     return [str(info[4][0]) for info in infos]
+
+
+async def own_addresses() -> list[str]:
+    global _own
+    now = time.monotonic()
+    if _own is None or now - _own[0] > OWN_ADDRESSES_KEEP_S:
+        _own = (now, await asyncio.to_thread(_own_addresses))
+    return _own[1]
 
 
 async def resolve_allowed(host: str, port: int, allowed: Sequence[str],
@@ -340,7 +356,7 @@ async def resolve_allowed(host: str, port: int, allowed: Sequence[str],
     :class:`PermissionError` naming why when none is."""
     loop = asyncio.get_running_loop()
     infos = await loop.getaddrinfo(host.strip("[]"), port, type=socket.SOCK_STREAM)
-    own = _own_addresses()
+    own = await own_addresses()
     reasons: list[str] = []
     for info in infos:
         address = str(info[4][0])

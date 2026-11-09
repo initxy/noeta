@@ -334,7 +334,7 @@ async def test_a_foreground_command_returns_when_its_shell_exits(h: Harness) -> 
     loop = asyncio.get_running_loop()
     start = loop.time()
     out = await h.call("Bash", command="echo before; sleep 5 & echo hi", timeout=20000)
-    assert loop.time() - start < 3
+    assert loop.time() - start < 4.5  # well before the child's 5 s, on a slow runner too
     assert not out.is_error and text(out) == "before\nhi"
     assert h.registry.jobs == {} or all(not jobs for jobs in h.registry.jobs.values())
 

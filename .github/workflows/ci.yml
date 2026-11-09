@@ -137,6 +137,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      - name: Install ripgrep
+        # Grep and Glob run it (as the Linux jobs install it).
+        run: brew install ripgrep
+
       - name: Install
         run: uv sync --all-extras
 
