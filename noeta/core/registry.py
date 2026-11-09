@@ -116,11 +116,16 @@ def available(group: str) -> list[str]:
     return sorted(set(_group(group)) | set(_from_files(group)))
 
 
+@cache
+def _source(ep: EntryPoint) -> str:
+    # A distribution's name is read from its metadata file on every access.
+    return f"package {ep.dist.name}" if ep.dist is not None else f"entry point {ep.value}"
+
+
 def sources(group: str) -> dict[str, str]:
     """Where each name of ``group`` comes from: the installed distribution
     (``package <name>``) or the plugin file's path."""
-    out = {name: f"package {ep.dist.name}" if ep.dist is not None else f"entry point {ep.value}"
-           for name, ep in _group(group).items()}
+    out = {name: _source(ep) for name, ep in _group(group).items()}
     out.update({name: path for name, (path, _cls) in _from_files(group).items()})
     return dict(sorted(out.items()))
 

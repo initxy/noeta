@@ -687,8 +687,8 @@ class PromptInput(TextArea):
             event.stop()
             for image, name in found:
                 await self.on_image(image, name)
-            return
-        await super()._on_paste(event)
+        # Else TextArea's own handler inserts the text: Textual calls it after
+        # this one (calling it here too pasted everything twice).
 
     async def _on_key(self, event: events.Key) -> None:
         if self.on_key_cb is not None and await self.on_key_cb(event.key):

@@ -103,7 +103,11 @@ _KEY_ENV: dict[str, str | None] = {
 }
 
 
-class MissingAPIKey(ValueError):
+class ConfigError(ValueError):
+    """A setting noeta cannot use; the message names where it is set."""
+
+
+class MissingAPIKey(ConfigError):
     """No API key for the configured provider; the message names where to set one."""
 
 
@@ -121,8 +125,14 @@ def _adapter(family: str, base_url: str | None, api_key: str | None,
         if cache_ttl:
             kw["prompt_cache_ttl"] = cache_ttl
     elif cache_ttl:
-        raise ValueError(f"prompt_cache_ttl is an anthropic provider's setting, not {family}'s")
-    return registry.provider(family, base_url=base_url, api_key=api_key, **kw)
+        raise ConfigError(f"prompt_cache_ttl is an anthropic provider's setting, not {family}'s")
+    try:
+        return registry.provider(family, base_url=base_url, api_key=api_key, **kw)
+    except registry.UnknownName:
+        known = ", ".join(registry.available(registry.PROVIDERS))
+        raise ConfigError(f"there is no provider {family!r} (NOETA_PROVIDER, --provider or "
+                          f"provider in {home_dir.HOME / 'config.toml'}); one of: {known}") \
+            from None
 
 
 #: The keys of a ``[providers.<name>]`` table.
@@ -286,7 +296,10 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
     data: dict[str, Any] = {}
     path = home_dir.HOME / "config.toml"
     if path.is_file():
-        data.update(tomllib.loads(path.read_text("utf-8")))
+        try:
+            data.update(tomllib.loads(path.read_text("utf-8")))
+        except tomllib.TOMLDecodeError as exc:
+            raise ConfigError(f"{path} is not valid TOML: {exc}") from None
         if unknown := sorted(set(data) - _TOP_LEVEL_KEYS):
             log.warning("%s: unknown top-level keys %s; ignored", path, unknown)
     env = {
@@ -471,7 +484,11 @@ def _register_rows(rows: Sequence[Mapping[str, Any]]) -> None:
 
 def open_store(url: str) -> Any:
     """``sqlite:///path`` or ``postgres://…`` → a store."""
-    return registry.store(url)
+    try:
+        return registry.store(url)
+    except ValueError as exc:
+        raise ConfigError(f"{exc}: set NOETA_STORE, --store or store in "
+                          f"{home_dir.HOME / 'config.toml'}") from None
 
 
 def _shipped(name: str) -> bool:

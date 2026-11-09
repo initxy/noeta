@@ -22,14 +22,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.util
+import logging
 import os
 import signal
 import sys
 from pathlib import Path
 from typing import Any
 
+from noeta.agents.agent_files import AgentFileError, PluginArgumentError
 from noeta.cli import home_dir, mcp_command, plugin_command
-from noeta.cli.config import MissingAPIKey, Settings, load_settings
+from noeta.cli.config import ConfigError, Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
@@ -404,7 +406,7 @@ def _install_hint(module: str) -> str:
 def main(argv: list[str] | None = None) -> None:
     try:
         _main(list(sys.argv[1:] if argv is None else argv))
-    except MissingAPIKey as exc:
+    except (ConfigError, AgentFileError, PluginArgumentError) as exc:
         sys.exit(f"noeta: {exc}")
     except ImportError as exc:
         extra = missing_extra(exc)
@@ -503,10 +505,14 @@ def _front(argv: list[str]) -> None:
                                           hook_callbacks=hook_callbacks)))
     run = front_end("tui")
     from noeta.cli.config import settings_rows
-    from noeta.host.app import FrontEndStart
+    from noeta.host.app import FrontEndStart, LoggedWarnings
     from noeta.host.stream_json import noeta_version
 
-    common: dict[str, Any] = {"cwd": cwd, "resume": args.resume,
+    # The terminal UI's screen covers stderr: what is logged from here on
+    # is shown in it instead.
+    warnings = LoggedWarnings()
+    logging.getLogger().addHandler(warnings)
+    common: dict[str, Any] = {"cwd": cwd, "resume": args.resume, "warnings": warnings,
                               "continue_last": args.continue_last,
                               "permission_mode": args.permission_mode, "prompt": args.prompt,
                               "home": str(home_dir.HOME), "version": noeta_version()}
@@ -537,6 +543,7 @@ def _front(argv: list[str]) -> None:
         args.permission_prompt_tool = None
         backend, s, _ = _local_app(args, cwd)
         backend.notices += [f"{flag} is used only with -p; ignored here" for flag in unused]
+        warnings.forget(backend.notices)  # shown as the app's notices
         start = FrontEndStart(agent=args.agent or backend.main_agent, model=s.model,
                               task_config={"cwd": cwd, "model": s.model,
                                            **({"effort": s.effort} if s.effort else {})},

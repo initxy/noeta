@@ -11,7 +11,16 @@ Screen { layout: vertical; background: transparent; }
 .row { height: auto; margin: 1 0 0 0; }
 .bullet { width: 2; }
 .assistant-message { width: 1fr; margin: 0; padding: 0; }
-.assistant-message MarkdownParagraph { margin: 0; }
+/* A reply reads like Claude Code's: its blocks one blank line apart and none
+   above the first (beside the bullet), headings bold in the text colour,
+   inline code in one soft colour, code blocks without blank padding. */
+.assistant-message > * { margin: 0 0 1 0; }
+.assistant-message > *:last-child { margin: 0; }
+.assistant-message MarkdownHeader { margin: 0 0 1 0; color: $foreground; background: transparent; text-style: bold; content-align: left top; width: 1fr; }
+.assistant-message MarkdownFence > Label { padding: 0 2; }
+.assistant-message MarkdownTableContent > .header { color: $foreground; }
+.assistant-message MarkdownBlock > .code_inline { color: #b1b9f9; background: transparent; }
+.assistant-message MarkdownBlock:light > .code_inline { color: #5769f7; }
 .notice { text-style: dim; margin: 1 0 0 0; }
 .notice.-error { color: $error; }
 .worked { margin: 1 0 0 0; }

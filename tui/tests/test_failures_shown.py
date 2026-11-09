@@ -6,13 +6,15 @@ lists the root tasks however many sub-agents ran since."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from noeta.host.app import LoggedWarnings
 from noeta.testing import ScriptedProvider, reply
-from noeta_tui.widgets import Choices, Picker
+from noeta_tui.widgets import Choices, Notice, Picker
 
 from support import AskBash, Lines, make_app, ready, settle, shown, type_line
 
@@ -88,3 +90,24 @@ async def test_a_rewind_the_server_refuses(tmp_path: Path) -> None:
         assert app.task_id == first
     assert app.return_code is None
 
+
+
+async def test_what_is_logged_is_said_in_the_transcript(tmp_path: Path) -> None:
+    """stderr is under the screen: a warning logged before the app opens and
+    an error logged while it runs are shown, each once."""
+    held = LoggedWarnings()
+    log = logging.getLogger("noeta.plugins.example")
+    log.addHandler(held)
+    try:
+        log.warning("settings: a.json could not be read; ignored")
+        app = make_app(tmp_path, ScriptedProvider([]), warnings=held)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(pilot, lambda: ready(app)
+                         and "settings: a.json could not be read" in shown(app))
+            log.error("mcp: the server x did not start")
+            log.error("mcp: the server x did not start")
+            await settle(pilot, lambda: "the server x did not start" in shown(app))
+            assert [n for n in app.query(Notice) if "-error" in n.classes] != []
+            assert shown(app).count("the server x did not start") == 1
+    finally:
+        log.removeHandler(held)

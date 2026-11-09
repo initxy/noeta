@@ -24,7 +24,7 @@ import functools
 import hashlib
 import importlib.util
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import msgspec
@@ -73,21 +73,31 @@ def _module_digest(module: str) -> str:
     return hashlib.sha256(source).hexdigest()[:16] if source is not None else module
 
 
-def _imported(module: str) -> set[str]:
+def _statements(node: ast.AST) -> Iterator[ast.AST]:
+    """``node``'s statements, nested ones too (an import is a statement, so
+    expressions, most of a tree, are not walked)."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
+            yield child
+            yield from _statements(child)
+
+
+@functools.cache
+def _imported(module: str) -> frozenset[str]:
     """The modules ``module``'s source imports (anywhere in it, also under
     ``TYPE_CHECKING`` or inside a function), by absolute name; a ``from m
     import n`` counts ``m.n`` when that is a module."""
     source = _module_source(module)
     if source is None:
-        return set()
+        return frozenset()
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return set()
+        return frozenset()
     is_package = (_source_path(module) or "").endswith("__init__.py")
     package = module if is_package else module.rpartition(".")[0]
     out: set[str] = set()
-    for node in ast.walk(tree):
+    for node in _statements(tree):
         if isinstance(node, ast.Import):
             out.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -101,7 +111,7 @@ def _imported(module: str) -> set[str]:
             out.add(base)
             out.update(f"{base}.{alias.name}" for alias in node.names
                        if _source_path(f"{base}.{alias.name}") is not None)
-    return out
+    return frozenset(out)
 
 
 @functools.cache
