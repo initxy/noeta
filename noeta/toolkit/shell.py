@@ -424,9 +424,11 @@ def harden_git(argv: list[str]) -> list[str]:
     return [argv[0], *before, argv[1], *after, *argv[2:]]
 
 
-#: Transports git may use, each named so a repository's own
-#: ``protocol.<name>.allow`` cannot outrank the ``never`` given for all.
-_GIT_PROTOCOLS = ("ext", "ssh", "git", "file", "http", "https")
+#: Transports git knows, each named so a repository's own
+#: ``protocol.<name>.allow`` cannot outrank the ``never`` given for all. A
+#: ``git-remote-<name>`` helper installed here is stopped only by
+#: :data:`GIT_READ_ENV` (git 2.45 and later, or a patched older one).
+_GIT_PROTOCOLS = ("ext", "ssh", "git", "file", "http", "https", "ftp", "ftps")
 #: Global flags for the git commands noeta runs itself to read a repository's
 #: state: no fsmonitor hook, no hooks, no signature program, no index refresh
 #: written back, and no transport — a partial clone fetches a missing object

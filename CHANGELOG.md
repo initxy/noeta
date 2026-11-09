@@ -36,6 +36,8 @@ this repository. Their versions are listed on PyPI.
 - **Reopening a task in the terminal UI is fast**: its history is rendered first and shown at
   once (a 424-event task: 1.3 s, was 12.5 s); each record shown live costs a fifth of what it did.
   A reopened turn's `Worked for` comes from its log.
+- In the terminal UI, a reply streamed while the screen is still behind the task's log no longer
+  lands above the tool calls of the reply before it.
 - **The footer shows the effort whenever the task has one**, on a model outside the catalog too
   (it was sent but not shown); `/status` and the `/effort` picker say when none is sent.
 

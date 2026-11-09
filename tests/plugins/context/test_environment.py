@@ -71,7 +71,7 @@ async def test_a_partial_clone_never_fetches_through_the_repositorys_programs(
 
     pwned = tmp_path / "PWNED"
     repo = tmp_path / "repo"
-    lazy_fetching_repo(repo, pwned, ext=True)
+    lazy_fetching_repo(repo, pwned, via="ext")
     text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
     assert not pwned.exists()
     assert " - Is a git repository: true" in text

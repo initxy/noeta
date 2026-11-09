@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from typing import Any
 
 from rich.text import Text
@@ -200,7 +201,8 @@ class NoetaApp(TranscriptView):
         self.history_at = len(self.history)
         #: The commands the slash menu offers: plugins' for this task.
         self.plugin_commands: list[Command] = []
-        self._deltas: asyncio.Queue[Delta] = asyncio.Queue()
+        self._deltas: asyncio.Queue[tuple[str, Delta]] = asyncio.Queue()
+        self._unshown: Counter[int] = Counter()
         self._follower: Any = None
         #: Held while a new screen's task is created (one task, however many ask).
         self._creating = asyncio.Lock()

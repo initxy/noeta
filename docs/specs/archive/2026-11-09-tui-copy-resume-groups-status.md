@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-09
 branch: tui/polish
 ---
@@ -107,3 +107,5 @@ Five complaints from the owner about the terminal UI (2026-11-09), each fixed:
 2026-11-09 Resume of the 424-event task: 1.2–1.9 s headless. Added on integration: replayed `Worked for` from record times, transcript anchored after the batch (a wrapping warning hid its last line), bullet on folded lines, a double click does not close what its first click opened.
 2026-11-09 Moved git's read-only flags and filter check from `plugins/environment/git.py` to `toolkit/shell.py` for `project_status` (structure: its own commit).
 2026-11-09 Review (fresh agent): P1 — a partial clone's lazy fetch ran the repository's `core.sshCommand` / `ext::` URL from `git status` (also on main in the environment plugin); fixed for both by blocking every transport in `GIT_READ_FLAGS` plus `GIT_READ_ENV`, with a test on such a repository. P3 — live output during the log read could land above the history; the batch now opens before the read. P3 — a synthetic 460-event task (38 turns of Read + 2 Bash, lists and code) opens in 3.2–4.0 s here; on main it did not finish.
+2026-11-09 Re-review: mergeable; added `ftp`/`ftps` to the named transports (a repository's `protocol.ftp.allow` plus a credential helper for its proxy, on a git without `GIT_NO_LAZY_FETCH`) and reset the batch when the log read is cancelled. Merged as PR #92; distilled "Git noeta runs itself" into CONTEXT.md.
+2026-11-09 macOS CI: the live screen put a later reply's stream above the calls of the reply before it when the follower lagged (on main too); live fragments now wait for their model call's record. Pinned by a test that slows the follower.

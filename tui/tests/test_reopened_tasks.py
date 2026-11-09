@@ -4,6 +4,7 @@ long task), looks as it did live, and what the task records next follows."""
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any
@@ -98,3 +99,34 @@ async def test_a_reopened_turn_says_how_long_it_worked_from_its_log(tmp_path: Pa
     async with again.run_test(size=(120, 40)) as pilot:
         await settle(pilot, lambda: again.query(".worked"))
         assert plain(again.query_one(".worked")) == "✻ Worked for 3m 5s"
+
+
+async def test_a_reply_streamed_while_the_log_is_behind_comes_after_the_calls_before_it(
+        tmp_path: Path) -> None:
+    from noeta.core.events import ModelReplied
+    from noeta_tui.widgets import ToolGroup
+
+    provider = ScriptedProvider([
+        reply("Looking.", ("Read", {"file_path": "a.txt"}), ("Bash", {"command": "ls", "n": 2})),
+        reply("Fixed.")])
+    app = make_app(tmp_path, provider, tools=[Lines()])
+    (tmp_path / "w" / "a.txt").write_text("a\n")
+    render = app.render_event
+    slowed = False
+
+    async def behind(rec: Any) -> None:  # the follower lags while the next reply streams
+        nonlocal slowed
+        if isinstance(rec.event, ModelReplied) and not slowed:
+            slowed = True
+            await asyncio.sleep(0.5)
+        await render(rec)
+
+    app.render_event = behind  # type: ignore[method-assign]
+    async with app.run_test(size=(120, 40)) as pilot:
+        await type_line(pilot, "fix it")
+        await settle(pilot, lambda: not provider.steps and not app.busy
+                     and len(app.query(AssistantMessage)) == 2)
+        kinds = [type(w).__name__ for w in app.query_one("#transcript").children[1:]]
+        assert kinds[:3] == ["UserMessage", "Horizontal", "ToolGroup"], kinds
+        assert len(app.query_one(ToolGroup).calls) == 2
+        assert kinds.index("ToolGroup") < max(i for i, k in enumerate(kinds) if k == "Horizontal")

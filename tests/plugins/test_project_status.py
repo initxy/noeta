@@ -144,30 +144,39 @@ async def test_a_repository_filter_never_runs_and_the_dirty_mark_is_left_out(
     assert not pwned.exists()
 
 
-def lazy_fetching_repo(path: Path, pwned: Path, *, ext: bool) -> None:
+def lazy_fetching_repo(path: Path, pwned: Path, *, via: str) -> None:
     """A partial clone whose HEAD names a commit it lacks: a read of it
-    fetches the commit through the repository's own ``core.sshCommand`` (or
-    an ``ext::`` URL it allows), which would touch ``pwned``."""
+    fetches the commit through a program the repository's own config names,
+    which would touch ``pwned`` — its ``core.sshCommand`` (``via="ssh"``),
+    an ``ext::`` URL it allows (``"ext"``), or a credential helper asked for
+    an ftp proxy's password (``"ftp"``)."""
     subprocess.run(["git", "init", "-q", "-b", "trunk", str(path)], check=True)
+    url = {"ssh": "ssh://example.invalid/x", "ext": f"ext::sh -c touch% {pwned}",
+           "ftp": "ftp://u@127.0.0.1:1/x"}[via]
     for key, value in (("core.repositoryformatversion", "1"),
                        ("extensions.partialClone", "origin"),
                        ("remote.origin.promisor", "true"),
-                       ("remote.origin.url", f"ext::sh -c touch% {pwned}" if ext
-                        else "ssh://example.invalid/x"),
+                       ("remote.origin.url", url),
                        ("protocol.ext.allow", "always"),
-                       ("core.sshCommand", f"touch {pwned}; false")):
+                       ("protocol.ftp.allow", "always"),
+                       ("core.sshCommand", f"touch {pwned}; false"),
+                       ("http.proxy", "http://u@127.0.0.1:1"),
+                       ("credential.helper", f"!touch {pwned}; true")):
         subprocess.run(["git", "-C", str(path), "config", key, value], check=True)
     (path / ".git" / "refs" / "heads" / "trunk").write_text("12" * 20 + "\n")
 
 
 @needs_git
-@pytest.mark.parametrize("ext", [False, True], ids=["ssh-command", "ext-url"])
+@pytest.mark.parametrize("via", ["ssh", "ext", "ftp"])
 async def test_a_partial_clone_never_fetches_through_the_repositorys_programs(
-        tmp_path: Path, ext: bool) -> None:
+        tmp_path: Path, via: str) -> None:
     pwned = tmp_path / "PWNED"
-    lazy_fetching_repo(tmp_path / "repo", pwned, ext=ext)
+    lazy_fetching_repo(tmp_path / "repo", pwned, via=via)
     # The trap is real: a plain read runs the repository's program.
-    subprocess.run(["git", "-C", str(tmp_path / "repo"), "status"], capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path / "repo"), "status"], capture_output=True,
+                   timeout=30)
+    if via == "ftp" and not pwned.exists():
+        pytest.skip("this git cannot fetch over ftp")
     assert pwned.exists()
     pwned.unlink()
     assert await _shown(tmp_path / "repo") == ["repo", "⎇ trunk"]
@@ -175,7 +184,7 @@ async def test_a_partial_clone_never_fetches_through_the_repositorys_programs(
     # The flags alone hold where git does not know GIT_NO_LAZY_FETCH.
     for read in (["status"], ["log", "-n", "1"], ["rev-list", "--count", "HEAD"]):
         subprocess.run(["git", *GIT_READ_FLAGS, *read], cwd=tmp_path / "repo",
-                       capture_output=True)
+                       capture_output=True, timeout=30)
     assert not pwned.exists()
 
 

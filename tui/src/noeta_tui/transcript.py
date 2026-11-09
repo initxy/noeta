@@ -11,6 +11,7 @@ import contextlib
 import logging
 import random
 import time
+from collections import Counter
 from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -155,7 +156,11 @@ class TranscriptView(App[None]):
     #: The task's approval cards still open, by request id.
     open_cards: dict[str, ApprovalCard]
     waiting_for: str
-    _deltas: asyncio.Queue[Delta]
+    #: Live output not shown yet, with the task it came from.
+    _deltas: asyncio.Queue[tuple[str, Delta]]
+    #: Per model call (its ``ModelCalled`` seq), its text and thinking
+    #: fragments queued or being shown.
+    _unshown: Counter[int]
     #: The task list (the todos plugin's records), by id.
     todos: dict[str, dict[str, Any]]
     #: Every call's result shown in full (ctrl+o).
@@ -333,21 +338,33 @@ class TranscriptView(App[None]):
 
     def _on_delta(self, task_id: str, delta: Delta) -> None:
         if task_id == self.task_id and delta.kind in ("text", "thinking", "tool") and delta.text:
-            self._deltas.put_nowait(delta)
+            if delta.kind != "tool":
+                self._unshown[delta.call_seq] += 1
+            self._deltas.put_nowait((task_id, delta))
 
     @work(exclusive=False, group="deltas", exit_on_error=False)
     async def _pump_deltas(self) -> None:
         while True:
-            delta = await self._deltas.get()
+            task_id, delta = await self._deltas.get()
             self._pumping = True
             try:
-                while self._batch is not None:  # shown after the log being shown
+                # Shown after what the log holds before it: the log being shown
+                # at once, and the records up to its model call (a follower
+                # behind the stream would put an earlier reply's calls below it).
+                while task_id == self.task_id and (
+                        self._batch is not None
+                        or (delta.kind != "tool" and self.called < delta.call_seq)):
                     await asyncio.sleep(0.01)
-                await self._show_delta(delta)
+                if task_id == self.task_id:
+                    await self._show_delta(delta)
             except Exception:
                 log.exception("showing live output failed")
             finally:
                 self._pumping = False
+                if delta.kind != "tool":
+                    self._unshown[delta.call_seq] -= 1
+                    if self._unshown[delta.call_seq] <= 0:
+                        del self._unshown[delta.call_seq]
 
     async def _show_delta(self, delta: Delta) -> None:
         if delta.kind == "tool":
@@ -450,12 +467,11 @@ class TranscriptView(App[None]):
         batch: list[Widget] = []
         self._batch = batch
         try:
-            found = await self.local.client.events(task_id)
-        except Exception:  # the follower reads it then, and says so if it cannot
-            log.warning("reading the log of %s failed", task_id, exc_info=True)
-            self._batch = None
-            return 0
-        try:
+            try:
+                found = await self.local.client.events(task_id)
+            except Exception:  # the follower reads it then, and says so if it cannot
+                log.warning("reading the log of %s failed", task_id, exc_info=True)
+                return 0
             for rec in found:
                 try:
                     await self.render_event(rec)
@@ -552,10 +568,11 @@ class TranscriptView(App[None]):
             if not self.busy:  # a turn nobody typed: an agent's notice woke the task
                 self.set_busy(True)
         elif isinstance(ev, ModelReplied):
-            # Every delta written first (one taken off the queue may still be
-            # mounting its widget), or the reply would be shown twice. A log
-            # shown at once holds replies only: its deltas wait for it.
-            while self._batch is None and (not self._deltas.empty() or self._pumping):
+            # Every fragment of this call (and earlier ones) written first, one
+            # being mounted too, or the reply would be shown twice; a later
+            # call's wait for this. A log shown at once holds replies only: its
+            # fragments wait for it.
+            while self._batch is None and any(seq <= self.called for seq in self._unshown):
                 await asyncio.sleep(0.01)
             await self._end_stream()
             self.replied = self.called
