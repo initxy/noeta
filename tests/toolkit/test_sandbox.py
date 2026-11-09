@@ -156,3 +156,19 @@ def test_violations_block() -> None:
     block = violations_block(["a.com:443", "a.com:443", "b.com:80"])
     assert block.startswith("<sandbox_violations>\n") and block.endswith("</sandbox_violations>")
     assert block.count("a.com:443") == 1 and "b.com:80" in block
+
+
+def test_this_hosts_addresses_are_found_without_a_name_lookup(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Looking up the host's own name waited on multicast DNS on macOS for
+    longer than a connection may take; the routing table answers at once."""
+    import socket
+
+    from noeta.toolkit import sandbox
+
+    def no_lookup(*_a: object, **_k: object) -> None:
+        raise AssertionError("looked a name up")
+
+    monkeypatch.setattr(socket, "getaddrinfo", no_lookup)
+    own = sandbox._own_addresses()
+    assert all(sandbox._address(a) is not None for a in own)

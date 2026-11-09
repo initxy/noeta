@@ -17,7 +17,6 @@ import asyncio
 import ipaddress
 import os
 import socket
-import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -325,27 +324,20 @@ def address_refusal(host: str, address: str, port: int, allowed: Sequence[str],
     return None
 
 
-#: This host's addresses and when they were looked up: looking up its own
-#: name can take seconds (macOS waits on multicast DNS for it), so it is
-#: done off the event loop and kept a minute.
-_own: tuple[float, list[str]] | None = None
-OWN_ADDRESSES_KEEP_S = 60.0
-
-
 def _own_addresses() -> list[str]:
-    try:
-        infos = socket.getaddrinfo(socket.gethostname(), None)
-    except OSError:
-        return []
-    return [str(info[4][0]) for info in infos]
-
-
-async def own_addresses() -> list[str]:
-    global _own
-    now = time.monotonic()
-    if _own is None or now - _own[0] > OWN_ADDRESSES_KEEP_S:
-        _own = (now, await asyncio.to_thread(_own_addresses))
-    return _own[1]
+    """The addresses this host sends from (IPv4 and IPv6), asked of the
+    routing table: a UDP socket "connected" to a documentation address sends
+    nothing. Not a lookup of the host's own name, which on macOS can wait on
+    multicast DNS for longer than a connection may take."""
+    out = []
+    for family, target in ((socket.AF_INET, "192.0.2.1"), (socket.AF_INET6, "2001:db8::1")):
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as probe:
+                probe.connect((target, 9))
+                out.append(str(probe.getsockname()[0]))
+        except OSError:  # no route in that family
+            continue
+    return out
 
 
 async def resolve_allowed(host: str, port: int, allowed: Sequence[str],
@@ -356,7 +348,7 @@ async def resolve_allowed(host: str, port: int, allowed: Sequence[str],
     :class:`PermissionError` naming why when none is."""
     loop = asyncio.get_running_loop()
     infos = await loop.getaddrinfo(host.strip("[]"), port, type=socket.SOCK_STREAM)
-    own = await own_addresses()
+    own = _own_addresses()
     reasons: list[str] = []
     for info in infos:
         address = str(info[4][0])

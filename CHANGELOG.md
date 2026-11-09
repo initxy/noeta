@@ -25,8 +25,9 @@ this repository. Their versions are listed on PyPI.
   exceptions (localhost among them), and the proxy answered 502.
 - Memory files in an exec env elsewhere (a container) are listed without GNU `find -printf`,
   which BusyBox's `find` (Alpine images) lacks too.
-- The sandbox's network check looks up this host's own addresses off the event loop and keeps
-  them a minute: the lookup of its own name can take seconds on macOS.
+- The sandbox's network check finds this host's own addresses in the routing table, not by
+  looking up the host's own name, which on macOS can wait on multicast DNS for longer than a
+  connection may take (sandboxed connections and Monitor timed out).
 - The macOS CI job is a gate now and runs the terminal UI's tests too.
 
 ## [1.1.0] - 2026-11-09
