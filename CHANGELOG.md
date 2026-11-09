@@ -6,7 +6,7 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
-## [Unreleased]
+## [1.1.0] - 2026-11-09
 
 One plugin across the kernel and every front end: a plugin is one name and one switch, and may
 carry UI data every front end shows and a web part the web and desktop apps load; it can be
