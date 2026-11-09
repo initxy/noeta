@@ -24,6 +24,7 @@ import httpx
 from noeta.plugins.mcp.client import StreamClient
 from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpAuthRequired, McpError
 from noeta.plugins.mcp.stdio import LINE_CAP
+from noeta.toolkit.http import DIRECT_LOOPBACK
 
 if TYPE_CHECKING:
     from noeta.plugins.mcp.http_client import HeadersFn
@@ -63,7 +64,7 @@ class SseClient(StreamClient):
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
-            self._http = httpx.AsyncClient(timeout=self.timeout)
+            self._http = httpx.AsyncClient(timeout=self.timeout, mounts=DIRECT_LOOPBACK)
         return self._http
 
     async def _with_auth(self, headers: dict[str, str]) -> str | None:

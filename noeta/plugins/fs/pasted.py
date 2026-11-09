@@ -70,7 +70,7 @@ esac
 for p in "$d" "$d/$3"; do
   if [ ! -e "$p" ] && [ ! -L "$p" ]; then (umask 077 && mkdir -p -- "$p") || exit 3; fi
   if ! mine "$p"; then echo "refusing $p: not a directory owned by the current user" >&2; exit 4; fi
-  chmod 700 -- "$p" || exit 5
+  chmod -- 700 "$p" || exit 5  # the order BSD chmod takes too
 done
 f="$d/$3/$5"
 if [ -L "$f" ]; then echo "refusing $f: a symlink" >&2; exit 4; fi

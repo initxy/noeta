@@ -80,6 +80,13 @@ def _local_files(directory: str, suffix: str) -> list[tuple[str, float]]:
     return out
 
 
+#: ``<mtime> <name>`` of each file directly in ``$1`` ending in ``$2``. Not
+#: ``find -printf``, which only GNU's find has (not macOS's, nor BusyBox's);
+#: ``date -r FILE`` is in all three.
+_LIST_FILES = ('[ -d "$1" ] || exit 1; for f in "$1"/*"$2"; do '
+               '[ -f "$f" ] && printf "%s %s\\n" "$(date -r "$f" +%s)" "${f##*/}"; done; exit 0')
+
+
 async def task_files(env: ExecEnv, directory: str, suffix: str) -> list[tuple[str, float]]:
     """``(name, modification time)`` of the files directly in ``directory``
     whose names end in ``suffix``, where the task's own files are (as
@@ -87,8 +94,7 @@ async def task_files(env: ExecEnv, directory: str, suffix: str) -> list[tuple[st
     if is_local(env):
         return await asyncio.to_thread(_local_files, directory, suffix)
     try:
-        done = await env.run(["find", directory, "-maxdepth", "1", "-type", "f",
-                              "-name", f"*{suffix}", "-printf", "%T@ %f\\n"],
+        done = await env.run(["sh", "-c", _LIST_FILES, "_", directory, suffix],
                              timeout=10, output_cap=1024 * 1024)
     except Exception:  # noqa: BLE001 — no such directory, or no find
         return []

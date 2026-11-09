@@ -32,6 +32,7 @@ from noeta.core.types import (
     user,
 )
 from noeta.plugins.hooks.config import HookCommand
+from noeta.toolkit.http import DIRECT_LOOPBACK
 from noeta.toolkit.local_env import child_env
 from noeta.toolkit.side_requests import thinking_off
 
@@ -178,7 +179,8 @@ async def run_http(hook: HookCommand, payload: dict[str, Any],
     for name, value in hook.headers:
         headers[name] = header_value(value, hook.allowed_env_vars)
     try:
-        async with httpx.AsyncClient(transport=transport, follow_redirects=False,
+        async with httpx.AsyncClient(transport=transport, mounts=DIRECT_LOOPBACK,
+                                     follow_redirects=False,
                                      timeout=hook.timeout) as client:
             response = await client.post(hook.url, content=json.dumps(payload).encode(),
                                          headers=headers)

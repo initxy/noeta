@@ -184,11 +184,14 @@ async def expand_glob(view: TaskView, pattern: str) -> list[str] | None:
 
 #: Expands each ``g:`` argument (a glob) and lists it with every match,
 #: then every listed path's resolved form: ``paths \0... \1 resolved \0...``.
+#: The resolved forms are left out where ``realpath`` has no ``-m`` / ``-z``
+#: (macOS's): the paths are then resolved one at a time.
 _RESOLVE_SCRIPT = (
     'shopt -s nullglob; IFS=; out=(); '
     'for a in "$@"; do p=${a:2}; '
     'if [ "${a:0:1}" = g ]; then for f in $p; do out+=("$f"); done; fi; out+=("$p"); done; '
-    'printf "%s\\0" "${out[@]}"; printf "\\1"; realpath -m -z -- "${out[@]}"')
+    'printf "%s\\0" "${out[@]}"; printf "\\1"; realpath -m -z -- "${out[@]}" 2>/dev/null; '
+    'exit 0')
 
 
 async def resolve_paths(view: TaskView, paths: Sequence[tuple[str, bool]]
@@ -215,6 +218,8 @@ async def resolve_paths(view: TaskView, paths: Sequence[tuple[str, bool]]
     if out is not None and "\1" in out:
         named, _sep, real = out.partition("\1")
         a, b = named.split("\0")[:-1], real.split("\0")[:-1]
+        if a and not b:  # expanded, but no realpath -m here
+            b = list(await asyncio.gather(*(real_path(view, x) for x in a)))
         if len(a) == len(b):
             return [(x, posixpath.normpath(y)) for x, y in zip(a, b, strict=True)]
     reals = await asyncio.gather(*(real_path(view, x) for x, _g in paths))

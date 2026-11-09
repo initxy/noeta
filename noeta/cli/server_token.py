@@ -37,9 +37,12 @@ def server_problem(url: str, token: str | None) -> str | None:
     to set, or ``None`` when its ``/agents`` answers."""
     import httpx
 
+    from noeta.toolkit.http import DIRECT_LOOPBACK
+
     headers = {"authorization": f"Bearer {token}"} if token else {}
     try:
-        resp = httpx.get(f"{url.rstrip('/')}/agents", headers=headers, timeout=15)
+        with httpx.Client(timeout=15, mounts=DIRECT_LOOPBACK) as client:
+            resp = client.get(f"{url.rstrip('/')}/agents", headers=headers)
     except httpx.HTTPError as exc:
         return f"cannot reach the server at {url}: {str(exc) or type(exc).__name__}"
     if resp.status_code == 401:

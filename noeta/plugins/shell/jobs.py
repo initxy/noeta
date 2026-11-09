@@ -201,13 +201,26 @@ _KEEP_TAIL = r"""keep_tail() {
 #: ``.alive`` file the worker re-creates, ``$4`` ticks it has to do so
 #: (0: no file to watch).
 _GUARD = r"""
+# Kills the group. On macOS, kill(0, SIGKILL) ends the sender and no other
+# member: there the others are killed one by one first. Only there: in a
+# sandbox's pid namespace, ps may list the host's processes, not ours.
+die() {
+  if [ "$(uname)" = Darwin ]; then
+    g=$(ps -o pgid= -p $$ 2>/dev/null); g=$(echo $g)
+    [ -z "$g" ] || for p in $(ps -A -o pid= -o pgid= 2>/dev/null |
+                              awk -v g="$g" -v s=$$ '$2 == g && $1 != s {print $1}'); do
+      kill -KILL "$p" 2>/dev/null
+    done
+  fi
+  kill -KILL 0
+}
 n=0
 while sleep "$5"; do
   kill -0 "$1" 2>/dev/null || exit 0
-  if [ -n "$2" ] && ! kill -0 "$2" 2>/dev/null; then kill -KILL 0; fi
+  if [ -n "$2" ] && ! kill -0 "$2" 2>/dev/null; then die; fi
   if [ "$4" -gt 0 ]; then
     n=$((n + 1))
-    if [ "$n" -ge "$4" ]; then n=0; rm "$3" 2>/dev/null || kill -KILL 0; fi
+    if [ "$n" -ge "$4" ]; then n=0; rm "$3" 2>/dev/null || die; fi
   fi
 done
 """

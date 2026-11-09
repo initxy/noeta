@@ -8,6 +8,7 @@ needed."""
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,9 @@ async def test_stat_many_works_with_gnu_and_busybox_stat(tmp_path: Path, stat: s
     busybox = shutil.which("busybox")
     if stat == "busybox" and busybox is None:
         pytest.skip("busybox not installed")
+    if stat == "gnu" and subprocess.run(["stat", "--version"], capture_output=True,
+                                        check=False).returncode != 0:
+        pytest.skip("this machine's stat is not GNU's (macOS: BSD's)")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     if stat == "busybox":

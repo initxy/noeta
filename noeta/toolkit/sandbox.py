@@ -325,11 +325,19 @@ def address_refusal(host: str, address: str, port: int, allowed: Sequence[str],
 
 
 def _own_addresses() -> list[str]:
-    try:
-        infos = socket.getaddrinfo(socket.gethostname(), None)
-    except OSError:
-        return []
-    return [str(info[4][0]) for info in infos]
+    """The addresses this host sends from (IPv4 and IPv6), asked of the
+    routing table: a UDP socket "connected" to a documentation address sends
+    nothing. Not a lookup of the host's own name, which on macOS can wait on
+    multicast DNS for longer than a connection may take."""
+    out = []
+    for family, target in ((socket.AF_INET, "192.0.2.1"), (socket.AF_INET6, "2001:db8::1")):
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as probe:
+                probe.connect((target, 9))
+                out.append(str(probe.getsockname()[0]))
+        except OSError:  # no route in that family
+            continue
+    return out
 
 
 async def resolve_allowed(host: str, port: int, allowed: Sequence[str],

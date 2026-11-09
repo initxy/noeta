@@ -14,6 +14,12 @@ import pytest
 
 PG_DSN = os.environ.get("NOETA_TEST_POSTGRES_DSN", "")
 
+# The tests' own HTTP clients reach their servers on this machine directly,
+# past a proxy the environment or macOS's system settings name (noeta's own
+# clients do: noeta.toolkit.http).
+os.environ["NO_PROXY"] = ",".join(
+    x for x in ("localhost,127.0.0.1,::1", os.environ.get("NO_PROXY", "")) if x)
+
 
 class Pg:
     def __init__(self, dsn: str, schema: str) -> None:

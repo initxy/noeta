@@ -5,6 +5,7 @@ guards and ``can_use_tool``."""
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -218,7 +219,7 @@ async def test_reads_and_writes_outside_the_working_directories_ask(store: Sqlit
     assert reading["always"] == [f"Read(/{other}/**)"]
     # acceptEdits covers the working directories only, as in Claude Code.
     assert "outside the working directories" in writing["prompt"]
-    assert writing["always"] == ["Edit(//etc/**)"]
+    assert writing["always"] == [f"Edit(/{REAL_ETC}/**)"]
     assert [c["id"] for c in writing["choices"]] == ["allow", "always", "deny"]
 
 
@@ -353,7 +354,11 @@ async def test_a_lexical_read_rule_does_not_follow_a_link_out(
     assert str(secret / "key") in detail["prompt"]
 
 
-@pytest.mark.parametrize("rule", ["Edit(//etc/**)", "Write"])
+#: Where /etc is (macOS: /private/etc): an allow rule names where a link leads.
+REAL_ETC = os.path.realpath("/etc")
+
+
+@pytest.mark.parametrize("rule", [f"Edit(/{REAL_ETC}/**)", "Write"])
 async def test_an_allow_rule_lets_a_write_outside_through(
         store: SqliteStore, tmp_path: Path, rule: str) -> None:
     write = Fake("Write")

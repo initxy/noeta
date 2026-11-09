@@ -55,6 +55,7 @@ from noeta.plugins.mcp.oauth_discovery import (
 from noeta.plugins.mcp.oauth_discovery import (
     parse_challenge as parse_challenge,
 )
+from noeta.toolkit.http import DIRECT_LOOPBACK
 from noeta.toolkit.paths import noeta_home
 
 __all__ = [
@@ -308,7 +309,7 @@ async def _client(http: httpx.AsyncClient | None) -> Any:
     if http is not None:
         yield http
         return
-    async with httpx.AsyncClient(follow_redirects=True) as own:
+    async with httpx.AsyncClient(follow_redirects=True, mounts=DIRECT_LOOPBACK) as own:
         yield own
 
 

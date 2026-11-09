@@ -225,7 +225,8 @@ def test_seatbelt_profile_shape(tmp_path: Path, home: Path) -> None:
     assert profile.index("(deny network*)") < profile.index("localhost:4001")
 
 
-def test_missing_bwrap_is_explained(tmp_path: Path) -> None:
+def test_missing_bwrap_is_explained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sb, "filter_unsupported", lambda *_: None)  # a Mac's arm64 is not Linux's
     settings = SandboxSettings(enabled=True, bwrap_path="/nonexistent/bwrap")
     linux = sb.LocalSandbox(settings, str(tmp_path), platform="linux")
     reason = linux.unavailable()
@@ -238,6 +239,7 @@ def test_missing_bwrap_is_explained(tmp_path: Path) -> None:
 
 def test_bwrap_missing_from_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setattr(sb, "filter_unsupported", lambda *_: None)  # a Mac's arm64 is not Linux's
     linux = sb.LocalSandbox(SandboxSettings(enabled=True), str(tmp_path), platform="linux")
     assert "not installed" in (linux.unavailable() or "")
 

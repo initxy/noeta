@@ -128,10 +128,6 @@ jobs:
     name: tests (macOS, Python 3.12)
     runs-on: macos-latest
     timeout-minutes: 30
-    # Not yet a gate: its first run had 88 failures, most in background
-    # shell jobs (tests/plugins/shell), permissions and pasted images. Drop
-    # this once they are fixed on a Mac.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -141,6 +137,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      - name: Install ripgrep
+        # Grep and Glob run it (as the Linux jobs install it).
+        run: brew install ripgrep
+
       - name: Install
         run: uv sync --all-extras
 
@@ -148,4 +148,8 @@ jobs:
         # The core suite (pyproject's addopts leave out live and cluster tests). The bubblewrap,
         # Docker and Postgres tests skip themselves here; lint, coverage and the docs checks run
         # in the Linux job.
+        run: uv run pytest -n auto -q
+
+      - name: pytest (terminal UI)
+        working-directory: tui
         run: uv run pytest -n auto -q
