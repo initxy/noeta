@@ -110,10 +110,14 @@ async def test_pending_lists_the_card(served: tuple[str, ScriptedProvider]) -> N
         answers = f"/tasks/{tid}/answers"
         unknown = await http.post(answers, json={"request_id": "nope", "decision": "allow"})
         assert unknown.status_code == 409 and "'nope'" in unknown.json()["error"]
-        for _ in range(2):  # a retry before the answer is taken goes through
-            ok = await http.post(answers, json={"request_id": row["request_id"],
-                                                "decision": "allow"})
-            assert ok.status_code == 200
+        ok = await http.post(answers, json={"request_id": row["request_id"],
+                                            "decision": "allow"})
+        assert ok.status_code == 200
+        # A retry goes through until the task takes the answer, then is
+        # refused: which one it meets depends on how fast the task runs.
+        retry = await http.post(answers, json={"request_id": row["request_id"],
+                                               "decision": "allow"})
+        assert retry.status_code in (200, 409)
         for _ in range(200):
             if (await client.get(tid)).status == "waiting" and not (
                     await http.get(f"/tasks/{tid}/pending")).json():
