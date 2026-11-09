@@ -202,6 +202,15 @@ marker). Providers render `system` / `memory` as
 shapes); user text cannot forge the tag. `system` text taken into a running turn (a job's end
 notice) folds as a system turn, unless it would directly follow the model's reply.
 
+## Git noeta runs itself
+
+A git command noeta runs on its own to read a repository (not the model's Bash: the environment
+block's snapshot, `project_status`) takes `GIT_READ_FLAGS` and `GIT_READ_ENV` from
+`noeta/toolkit/shell.py` (no fsmonitor, hooks, signature program or transport — a partial
+clone's lazy fetch would run the repository's ssh command or `ext::` URL), `harden_git` for
+`status` / `diff` / `log`, and runs no `status` where `untrusted_filters` finds a filter driver
+the repository set up: nothing a repository's own config names may start.
+
 ## Naming: Session is a scope, never an identity
 
 No `session_id`, session list or session-keyed state in `noeta/`; use `task_id` or `root_id`.

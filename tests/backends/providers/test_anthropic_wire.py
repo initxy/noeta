@@ -324,8 +324,21 @@ async def test_output_schema_wired_to_output_config_json_schema() -> None:
 
 @respx.mock
 async def test_effort_wired_to_output_config_effort() -> None:
-    body, _ = await _send(_req(effort="high"))
+    body, _ = await _send(_req(effort="high"))  # a model outside the catalog
     assert body["output_config"] == {"effort": "high"}
+
+
+@respx.mock
+async def test_effort_on_a_registered_model_without_efforts_is_sent_when_set(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row a host registered with no ``efforts`` (a ``config.toml``
+    provider's ``models``): not a reasoning model, yet a task's effort goes
+    out; with none set, none does."""
+    register_text_only_model(monkeypatch)
+    body, _ = await _send(_req(model=_TEXT_ONLY_MODEL, effort="high"))
+    assert body["output_config"] == {"effort": "high"}
+    body, _ = await _send(_req(model=_TEXT_ONLY_MODEL))
+    assert "output_config" not in body
 
 
 @respx.mock

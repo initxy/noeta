@@ -8,7 +8,38 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+### Added
+
+- **Copy from the terminal UI**: drag over any text in the transcript (replies, tool calls and
+  their output) and it is copied when you let go; `Ctrl+C` copies the selection (and then neither
+  clears the input nor counts toward quitting); `/copy [n]` copies the last reply, as Claude
+  Code's. The text goes by OSC 52, plus tmux's buffer inside tmux and `pbcopy` / `wl-copy` /
+  `xclip` / `xsel` when not over ssh.
+- **Tool calls in a row fold into one line**, as Claude Code's: `● Searched for 2 patterns, read
+  3 files, ran 2 shell commands (ctrl+o to expand)` (reads, searches, listings, web, shell
+  commands, other tools, and the thinking between them); present tense while one runs, failures
+  counted in red. A click opens the line or a call's folded output. Paths under the task's
+  directory are shown relative to it.
+- **`project_status`**, a shipped plugin (on in `main`, switchable in `/plugins`): the project
+  and git branch of the task's directory (`noeta  ·  ⎇ main* ↑1`) as status items, on the line
+  under the terminal UI's footer and in the web and desktop status lines. Git runs with the
+  repository's programs (fsmonitor, filters, hooks) and every transport switched off, cached for
+  two seconds. The footer no longer shows the directory.
+
 ### Fixed
+
+- **Reading a repository's git state can no longer run a program its config names through a
+  fetch**: in a partial clone, a read that meets a missing object fetches it, through the
+  repository's own `core.sshCommand`, an `ext::` URL it allows or a credential helper. The git
+  commands noeta runs itself (the environment block's snapshot) now allow no transport and set
+  `GIT_NO_LAZY_FETCH`.
+- **Reopening a task in the terminal UI is fast**: its history is rendered first and shown at
+  once (a 424-event task: 1.3 s, was 12.5 s); each record shown live costs a fifth of what it did.
+  A reopened turn's `Worked for` comes from its log.
+- In the terminal UI, a reply streamed while the screen is still behind the task's log no longer
+  lands above the tool calls of the reply before it.
+- **The footer shows the effort whenever the task has one**, on a model outside the catalog too
+  (it was sent but not shown); `/status` and the `/effort` picker say when none is sent.
 
 - **macOS**: background commands (`run_in_background`, Monitor) started: the log directory was
   made with `chmod 700 -- dir`, an order BSD `chmod` refuses (`chmod -- 700 dir` now). The same

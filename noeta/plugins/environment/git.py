@@ -6,7 +6,13 @@ from __future__ import annotations
 import posixpath
 
 from noeta.core.execenv import ExecEnv
-from noeta.toolkit.shell import harden_git
+from noeta.toolkit.shell import (
+    GIT_FILTER_DRIVERS,
+    GIT_READ_ENV,
+    GIT_READ_FLAGS,
+    harden_git,
+    untrusted_filters,
+)
 
 #: Git status longer than this many characters is cut there (Claude Code's
 #: cut), and the note below follows.
@@ -22,12 +28,6 @@ SNAPSHOT_AT_START = ("A snapshot taken when this conversation started; it does n
                      "you work.")
 SNAPSHOT_AGAIN = ("Taken again when the latest message arrived; it replaces the earlier "
                   "snapshot and does not change as you work.")
-#: Global flags every capture git runs with: no fsmonitor hook, no signature
-#: program, no index refresh written back.
-_GIT_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
-              "-c", "log.showSignature=false", "--no-optional-locks")
-#: Config scopes a person set up themselves (a filter there is trusted).
-_TRUSTED_SCOPES = ("system", "global")
 
 
 async def _git(env: ExecEnv, cwd: str, *args: str) -> str:
@@ -39,9 +39,10 @@ async def _git_or_none(env: ExecEnv, cwd: str, *args: str) -> str | None:
     argv = ["git", *args]
     if args and args[0] == "status":
         argv = harden_git(argv)
-    argv = [argv[0], *_GIT_FLAGS, *argv[1:]]
+    argv = [argv[0], *GIT_READ_FLAGS, *argv[1:]]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20,
+                            env=GIT_READ_ENV)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return None
     if out.exit_code != 0 or out.timed_out:
@@ -52,21 +53,14 @@ async def _git_or_none(env: ExecEnv, cwd: str, *args: str) -> str | None:
 async def _repo_defines_filters(env: ExecEnv, cwd: str) -> bool:
     """Whether the repository's own config defines a filter driver (whose
     ``clean`` program ``git status`` would run). Unsure counts as yes."""
-    argv = ["git", *_GIT_FLAGS, "config", "--show-scope", "--get-regexp", r"^filter\."]
+    argv = ["git", *GIT_READ_FLAGS, *GIT_FILTER_DRIVERS]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20,
+                            env=GIT_READ_ENV)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return True
-    if out.timed_out:
-        return True
-    if out.exit_code == 1 and not out.stdout.strip():
-        return False  # no filter configured anywhere
-    if out.exit_code != 0:
-        return True
-    for line in out.stdout.decode("utf-8", errors="replace").splitlines():
-        if line.strip() and line.split("\t", 1)[0].strip() not in _TRUSTED_SCOPES:
-            return True
-    return False
+    return out.timed_out or untrusted_filters(
+        out.exit_code, out.stdout.decode("utf-8", errors="replace"))
 
 
 async def _git_status(env: ExecEnv, cwd: str) -> str | None:

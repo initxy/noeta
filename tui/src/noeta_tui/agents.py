@@ -292,7 +292,8 @@ class AgentView(Vertical):
             if msg.text.strip():
                 await log_view.mount(bulleted(AssistantMessage(msg.text)))
             for call in msg.tool_uses:
-                block = ToolCall(call, expanded=self.expanded)
+                block = ToolCall(call, expanded=self.expanded,
+                                 cwd=str(getattr(self.app, "task_cwd", "") or ""))
                 self.calls[call.id] = block
                 await log_view.mount(block)
         elif isinstance(ev, ToolStarted):

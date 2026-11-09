@@ -23,6 +23,7 @@ plugins:
   - schedule
   - findings
   - title
+  - project_status
   - workflow
   - mcp
   - empty_reply

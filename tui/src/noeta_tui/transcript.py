@@ -11,13 +11,15 @@ import contextlib
 import logging
 import random
 import time
+from collections import Counter
 from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 from textual import work
-from textual.app import App
+from textual.app import App, ScreenStackError
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Markdown, Static
 from textual.widgets.markdown import MarkdownStream
@@ -72,9 +74,9 @@ from noeta_tui.widgets import (
     Notice,
     PromptInput,
     QuestionCard,
-    ReadGroup,
     ThinkingBlock,
     ToolCall,
+    ToolGroup,
     UserMessage,
     bulleted,
 )
@@ -137,6 +139,9 @@ class TranscriptView(App[None]):
     streamed: set[int]
     attempts: dict[int, int]
     called: int
+    #: The newest model call whose reply is shown: what its stream still
+    #: brings (taken before the reply was read from the log) is not shown again.
+    replied: int
     _pumping: bool
     busy: bool
     cost_usd: float
@@ -151,7 +156,11 @@ class TranscriptView(App[None]):
     #: The task's approval cards still open, by request id.
     open_cards: dict[str, ApprovalCard]
     waiting_for: str
-    _deltas: asyncio.Queue[Delta]
+    #: Live output not shown yet, with the task it came from.
+    _deltas: asyncio.Queue[tuple[str, Delta]]
+    #: Per model call (its ``ModelCalled`` seq), its text and thinking
+    #: fragments queued or being shown.
+    _unshown: Counter[int]
     #: The task list (the todos plugin's records), by id.
     todos: dict[str, dict[str, Any]]
     #: Every call's result shown in full (ctrl+o).
@@ -166,6 +175,10 @@ class TranscriptView(App[None]):
     turn_tokens: int
     turn_output: int
     turn_verb: str
+    #: When the record being rendered was written, and the one that started
+    #: the running turn (wall clock, as the log has them).
+    _record_at: float
+    turn_started_at: float
     #: The task list is shown (ctrl+t hides it).
     show_tasks: bool
     #: What the footer says for a moment (``Press Ctrl-C again to exit``).
@@ -201,6 +214,9 @@ class TranscriptView(App[None]):
     ui_widgets: dict[str, list[str]]
     #: The task's log advanced since its plugins' UI was last fetched.
     _ui_wanted: asyncio.Event
+    #: While a task's log is shown at once (:meth:`show_log`): the widgets
+    #: rendered from it, not yet mounted; ``None`` when rendering live.
+    _batch: list[Widget] | None
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, message: str = "", *,
@@ -244,22 +260,60 @@ class TranscriptView(App[None]):
         transcript.scroll_end(animate=False)
         self.update_status()
 
+    async def _add(self, widget: Widget) -> None:
+        """``widget`` at the transcript's end (into the batch while a log is
+        shown at once)."""
+        if self._batch is not None:
+            self._batch.append(widget)
+        else:
+            await self.query_one("#transcript").mount(widget)
+
+    def _last_shown(self) -> Widget | None:
+        if self._batch:
+            return self._batch[-1]
+        shown = self.query_one("#transcript").children
+        return shown[-1] if shown else None
+
+    async def _run_to_join(self) -> ToolGroup:
+        """The run of calls a quiet call joins: the one the transcript ends
+        with, else a new one. The model's thought just before the call
+        (shown while it streamed) joins the run first."""
+        last = self._last_shown()
+        thought = last if isinstance(last, ThinkingBlock) and last.took is not None else None
+        if thought is not None:
+            await thought.remove()
+            last = self._last_shown()
+        group = last if isinstance(last, ToolGroup) else None
+        if group is None:
+            group = ToolGroup(expanded=self.verbose)
+            await self._add(group)
+        if thought is not None:
+            await group.add(thought.copy())
+        return group
+
     # ------------------------------------------------------------ busy
+
+    def _since(self) -> float:
+        """Seconds since the record being shown was written: none for one
+        shown as it comes, its age for one of a log shown at once."""
+        return max(0.0, time.time() - self._record_at) if self._batch is not None else 0.0
 
     def set_busy(self, busy: bool) -> None:
         """A turn starts or ends: the spinner runs while it does."""
         if busy and not self.busy:
-            self.turn_started, self.turn_tokens, self.turn_output = time.monotonic(), 0, 0
+            self.turn_started = time.monotonic() - self._since()
+            self.turn_started_at = self._record_at
+            self.turn_tokens, self.turn_output = 0, 0
             self.turn_verb = random.choice(render.VERBS)
         self.busy = busy
         self.update_status()
 
     def _tick(self) -> None:
         """The spinner's next frame (a timer while the app runs)."""
-        found = self.query("#spinner")
-        if not found:  # the app is closing
+        try:
+            spinner = self.query_one("#spinner", Static)
+        except (NoMatches, ScreenStackError):  # the app is closing
             return
-        spinner = found.first(Static)
         frame = int(time.monotonic() / SPINNER_TICK)
         for call in [*self.agents.values(), *self.workflows.values()]:
             call.pulse(frame)
@@ -273,28 +327,44 @@ class TranscriptView(App[None]):
 
     async def _turn_done(self) -> None:
         if self.busy and self.turn_started:
-            took = render.elapsed_text(time.monotonic() - self.turn_started)
-            await self.query_one("#transcript").mount(Notice(
-                Text(f"✻ Worked for {took}", style="dim"), classes="worked"))
+            # A turn of a log shown at once took what its records say.
+            took = render.elapsed_text(self._record_at - self.turn_started_at
+                                       if self._batch is not None
+                                       else time.monotonic() - self.turn_started)
+            await self._add(Notice(Text(f"✻ Worked for {took}", style="dim"), classes="worked"))
         self.set_busy(False)
 
     # ------------------------------------------------------------ rendering
 
     def _on_delta(self, task_id: str, delta: Delta) -> None:
         if task_id == self.task_id and delta.kind in ("text", "thinking", "tool") and delta.text:
-            self._deltas.put_nowait(delta)
+            if delta.kind != "tool":
+                self._unshown[delta.call_seq] += 1
+            self._deltas.put_nowait((task_id, delta))
 
     @work(exclusive=False, group="deltas", exit_on_error=False)
     async def _pump_deltas(self) -> None:
         while True:
-            delta = await self._deltas.get()
+            task_id, delta = await self._deltas.get()
             self._pumping = True
             try:
-                await self._show_delta(delta)
+                # Shown after what the log holds before it: the log being shown
+                # at once, and the records up to its model call (a follower
+                # behind the stream would put an earlier reply's calls below it).
+                while task_id == self.task_id and (
+                        self._batch is not None
+                        or (delta.kind != "tool" and self.called < delta.call_seq)):
+                    await asyncio.sleep(0.01)
+                if task_id == self.task_id:
+                    await self._show_delta(delta)
             except Exception:
                 log.exception("showing live output failed")
             finally:
                 self._pumping = False
+                if delta.kind != "tool":
+                    self._unshown[delta.call_seq] -= 1
+                    if self._unshown[delta.call_seq] <= 0:
+                        del self._unshown[delta.call_seq]
 
     async def _show_delta(self, delta: Delta) -> None:
         if delta.kind == "tool":
@@ -304,8 +374,8 @@ class TranscriptView(App[None]):
                 self.early_progress[delta.call_id] = delta.text
             return
         key = (delta.call_seq, delta.attempt)
-        if delta.attempt < self.attempts.get(delta.call_seq, 1):
-            return  # the tail of an attempt that failed
+        if delta.attempt < self.attempts.get(delta.call_seq, 1) or delta.call_seq <= self.replied:
+            return  # the tail of an attempt that failed, or of a reply shown
         transcript = self.query_one("#transcript")
         self.turn_tokens += estimate_tokens(delta.text)
         if delta.kind == "thinking":
@@ -388,10 +458,45 @@ class TranscriptView(App[None]):
                 and self.stream_key[1] <= failed_attempt:
             await self._end_stream(drop=True)
 
-    @work(exclusive=True, group="follow", exit_on_error=False)
-    async def follow(self, task_id: str) -> None:
+    async def show_log(self, task_id: str) -> int:
+        """What ``task_id``'s log holds now, shown at once: its records
+        rendered into widgets first, mounted in one go (one by one, Textual
+        lays the screen out again for each). The seq of its last record, for
+        :meth:`follow` to go on after."""
+        # Open before the log is read: live output meanwhile waits for it.
+        batch: list[Widget] = []
+        self._batch = batch
         try:
-            async for rec in follow_tree(self.local.client, task_id):
+            try:
+                found = await self.local.client.events(task_id)
+            except Exception:  # the follower reads it then, and says so if it cannot
+                log.warning("reading the log of %s failed", task_id, exc_info=True)
+                return 0
+            for rec in found:
+                try:
+                    await self.render_event(rec)
+                except Exception:
+                    log.exception("rendering %s failed", type(rec.event).__name__)
+        finally:
+            self._batch = None
+        if task_id != self.task_id:
+            return 0
+        transcript = self.query_one("#transcript")
+        with self.batch_update():
+            await transcript.mount_all(batch)
+            transcript.scroll_end(animate=False)
+        # Kept at the end as what comes next (a warning that wraps) grows it.
+        self.call_after_refresh(self._follow_end)
+        self._refresh_cost(task_id)
+        self._ui_wanted.set()
+        self.update_status()
+        return found[-1].seq if found else 0
+
+    @work(exclusive=True, group="follow", exit_on_error=False)
+    async def follow(self, task_id: str, after: int = 0) -> None:
+        """Render what ``task_id`` records after ``after``, as it comes."""
+        try:
+            async for rec in follow_tree(self.local.client, task_id, after):
                 if task_id != self.task_id:
                     return
                 try:
@@ -426,7 +531,7 @@ class TranscriptView(App[None]):
 
     async def render_event(self, rec: Recorded) -> None:
         ev = rec.event
-        transcript = self.query_one("#transcript")
+        self._record_at = rec.at
         if isinstance(ev, TaskCreated):
             self.task_cwd = str(ev.config.get("cwd") or self.task_cwd)
             # What the task runs with: its config's effort, else the model's default.
@@ -442,7 +547,7 @@ class TranscriptView(App[None]):
                     if text in self.echoed:
                         self.echoed.remove(text)  # shown when it was sent
                     else:
-                        await transcript.mount(UserMessage(text))
+                        await self._add(UserMessage(text))
                     self.set_busy(True)
                 elif isinstance(item.body, External) and item.body.name == CONFIG_SIGNAL \
                         and isinstance(item.body.data, dict):
@@ -463,33 +568,33 @@ class TranscriptView(App[None]):
             if not self.busy:  # a turn nobody typed: an agent's notice woke the task
                 self.set_busy(True)
         elif isinstance(ev, ModelReplied):
-            # Every delta written first (one taken off the queue may still be
-            # mounting its widget), or the reply would be shown twice.
-            while not self._deltas.empty() or self._pumping:
+            # Every fragment of this call (and earlier ones) written first, one
+            # being mounted too, or the reply would be shown twice; a later
+            # call's wait for this. A log shown at once holds replies only: its
+            # fragments wait for it.
+            while self._batch is None and any(seq <= self.called for seq in self._unshown):
                 await asyncio.sleep(0.01)
             await self._end_stream()
+            self.replied = self.called
             msg = ev.response.message
             if msg.text.strip() and self.called not in self.streamed:
-                await transcript.mount(bulleted(AssistantMessage(msg.text)))
+                await self._add(bulleted(AssistantMessage(msg.text)))
             self.streamed.discard(self.called)
             for call in msg.tool_uses:
-                block = ToolCall(call, expanded=self.verbose)
+                block = ToolCall(call, expanded=self.verbose, cwd=self.task_cwd)
                 self.calls[call.id] = block
                 if (early := self.early_progress.pop(call.id, None)) is not None:
                     block.set_progress(early)
-                if call.name != "Read":
-                    await transcript.mount(block)
+                if not render.call_kind(call):
+                    await self._add(block)
                     continue
-                last = transcript.children[-1] if transcript.children else None
-                group = last if isinstance(last, ReadGroup) else ReadGroup(expanded=self.verbose)
-                if group is not last:
-                    await transcript.mount(group)
-                await group.add(block)
+                await (await self._run_to_join()).add(block)
             self.context_tokens = ev.response.usage.input + ev.response.usage.output
             # The reply's real count replaces what its stream was estimated at.
             self.turn_output += ev.response.usage.output
             self.turn_tokens = self.turn_output
-            self._refresh_cost(self.task_id)
+            if self._batch is None:  # a log shown at once is priced once
+                self._refresh_cost(self.task_id)
         elif isinstance(ev, ToolStarted):
             await self._close_cards([ev.call.id])
             if ev.call.id in self.calls:
@@ -509,20 +614,20 @@ class TranscriptView(App[None]):
                 if ev.note and ev.note != REJECTED_MARKER:
                     await finished.set_note(ev.note)
         elif isinstance(ev, ExtensionRecorded):
-            await self._render_record(rec, ev, transcript)
+            await self._render_record(rec, ev)
         elif isinstance(ev, Waiting):
-            await self._render_waiting(ev, transcript)
+            await self._render_waiting(ev)
         elif isinstance(ev, TaskEnded):
             await self._close_cards()
             await self._turn_done()
-            self._refresh_cost(self.task_id)
-            await transcript.mount(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error
-                                                                 else "")))
-        transcript.scroll_end(animate=False)
-        self.update_status()
+            if self._batch is None:
+                self._refresh_cost(self.task_id)
+            await self._add(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error else "")))
+        if self._batch is None:
+            self.query_one("#transcript").scroll_end(animate=False)
+            self.update_status()
 
-    async def _render_record(self, rec: Recorded, ev: ExtensionRecorded,
-                             transcript: Any) -> None:
+    async def _render_record(self, rec: Recorded, ev: ExtensionRecorded) -> None:
         data = ev.data if isinstance(ev.data, dict) else {}
         mode = current_mode([rec])
         if mode:
@@ -541,24 +646,23 @@ class TranscriptView(App[None]):
             self._show_todos()
         elif isinstance(core, records.Retry):
             await self._retried(int(core.attempt or 1))
-            await transcript.mount(Notice(f"retrying (attempt {core.attempt}): "
-                                          f"{str(core.error or '')[:120]}"))
+            await self._add(Notice(f"retrying (attempt {core.attempt}): "
+                                   f"{str(core.error or '')[:120]}"))
         elif isinstance(core, records.TurnStopped):
             await self._close_cards()
             await self._end_stream()
             self._set_question("", "", {})
-            await transcript.mount(Notice(Text("  ⎿  Interrupted · what should noeta do "
-                                               "instead?", style="red")))
+            await self._add(Notice(Text("  ⎿  Interrupted · what should noeta do instead?",
+                                        style="red")))
         elif isinstance(core, records.TurnFailed):
-            await transcript.mount(Notice(f"turn failed: {failure_text(data)}",
-                                          classes="-error"))
+            await self._add(Notice(f"turn failed: {failure_text(data)}", classes="-error"))
         elif isinstance(core, records.Notice) and core.notice_kind == "workflow" \
                 and str((core.notice_data or {}).get("run_id")) in self.workflows:
             return  # shown in the run's call
         elif isinstance(core, records.Notice):
             # Structured news (a review's findings) reads as a list.
-            await transcript.mount(CleanMarkdown(core.text, classes="notice")
-                                   if core.notice_kind else Notice(core.text))
+            await self._add(CleanMarkdown(core.text, classes="notice")
+                            if core.notice_kind else Notice(core.text))
 
     def _agent_ended(self, ended: ChildEnded, at: float) -> None:
         call = self.agents.pop(ended.child_id, None)
@@ -618,7 +722,7 @@ class TranscriptView(App[None]):
                     c["seq"] = r.seq
                     ev = r.event
                     if isinstance(ev, ToolStarted):
-                        c["last"] = render.tool_header(ev.call, 80)
+                        c["last"] = render.tool_header(ev.call, 80, cwd=self.task_cwd)
                     elif isinstance(ev, ToolFinished):
                         c["tools"] += 1
                     elif isinstance(ev, ModelReplied):
@@ -733,9 +837,11 @@ class TranscriptView(App[None]):
         return rows
 
     def _show_agents(self) -> None:
-        found = self.query("#agents")
-        if found:
-            found.first(AgentsPanel).show(self.agent_rows())
+        try:
+            panel = self.query_one("#agents", AgentsPanel)
+        except (NoMatches, ScreenStackError):  # the app is closing
+            return
+        panel.show(self.agent_rows())
 
     def _show_todos(self) -> None:
         tasks = self.query_one("#tasks", Static)
@@ -750,7 +856,7 @@ class TranscriptView(App[None]):
     async def _back_to_transcript(self) -> None:
         """What waits on the person is in the transcript: an agent's view
         in its place closes."""
-        if self.query(".agent-view"):
+        if self.screen.query_children(".agent-view"):
             await self.close_agent()
 
     async def _close_cards(self, ids: Collection[str] | None = None,
@@ -768,9 +874,9 @@ class TranscriptView(App[None]):
         if closing and not self.open_cards and self.waiting_for == WAITING_APPROVAL:
             self.waiting_for = ""
         if focused:
-            self.query_one(PromptInput).focus()
+            self.query_one("#prompt", PromptInput).focus()
 
-    async def _render_waiting(self, ev: Waiting, transcript: Any) -> None:
+    async def _render_waiting(self, ev: Waiting) -> None:
         await self._close_cards(keep=ev.ids if ev.on == "approval" else ())
         await self._end_stream()
         if ev.on in ("approval", "question"):
@@ -788,13 +894,13 @@ class TranscriptView(App[None]):
                 card = ApprovalCard(p.request_id, card_title(p, self.task_id), card_prompt(p),
                                     self.decide, choices(p.detail), preview=self._preview(p))
                 self.open_cards[p.request_id] = card
-                await transcript.mount(card)
+                await self._add(card)
         elif ev.on == "question":
             questions = [k for k, v in ev.detail.items()
                          if isinstance(v, dict) and v.get("on") == "question"]
             for call_id in questions[:1]:  # one at a time: the next line answers it
                 self._set_question(call_id, self.task_id, ev.detail[call_id])
-                await transcript.mount(QuestionCard(ev.detail[call_id]))
+                await self._add(QuestionCard(ev.detail[call_id]))
         elif ev.on == "input":
             self._set_question("", "", {})
             await self._turn_done()
@@ -819,18 +925,29 @@ class TranscriptView(App[None]):
             self.modes, self.modes_published = offered, True
 
     def effort_level(self) -> str | None:
-        """The effort the next request runs at, for a model known to take
-        one (``None`` for any other)."""
+        """The effort the next request asks for: the task's, whatever the
+        model, else the model's default for a catalogued reasoning model;
+        ``None`` when none is sent (the model's own default applies)."""
+        if self.effort:
+            return self.effort
         spec = models.find_spec(self.model)
-        if spec is None or not spec.is_reasoning:
-            return None
-        return self.effort or models.default_effort(self.model)
+        return models.default_effort(self.model) if spec is not None and spec.is_reasoning \
+            else None
+
+    def effort_said(self) -> str:
+        """The effort as ``/status`` and the ``/effort`` picker say it."""
+        level = self.effort_level()
+        if level is None:
+            return "none sent, the model's own default applies"
+        return level if self.effort else f"{level}, the model's default"
 
     def update_status(self) -> None:
         """The footer: on the left the mode (or what waits on the person, or
         a passing word) and the agents working in the background; on the
-        right the model and its effort, how full the context is, the cost
-        and the directory."""
+        right the model and its effort, how full the context is and the
+        cost. The directory is a plugin's to show (``project_status``)."""
+        if self._batch is not None:  # shown once the log is
+            return
         spec = models.find_spec(self.model)
         window = spec.context_window if spec else models.UNKNOWN_MODEL_CONTEXT_WINDOW
         at = self.compacts_at
@@ -859,16 +976,11 @@ class TranscriptView(App[None]):
         status.append(*sep)
         status.append_text(left if left is not None
                            else render.context_bar(self.context_tokens / window))
-        # What does not fit beside the left side is left out: the directory
-        # first, then the cost.
+        # The cost only when it fits beside the left side.
         room = self.size.width - 6 - len(hints.plain)
         if self.cost_usd and len(status.plain) + 12 <= room:
             status.append(*sep)
             status.append(f"${self.cost_usd:.2f}", style="dim")
-        width = room - len(status.plain) - 5
-        if width >= 16:
-            status.append(*sep)
-            status.append(_short_path(self.task_cwd or SERVER_DIRECTORY, width), style="dim")
         self.query_one("#status", Static).update(status)
         self._tick()
 

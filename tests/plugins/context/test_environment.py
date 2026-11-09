@@ -65,6 +65,19 @@ async def test_a_repository_fsmonitor_hook_never_runs(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+async def test_a_partial_clone_never_fetches_through_the_repositorys_programs(
+        tmp_path: Path) -> None:
+    from tests.plugins.test_project_status import lazy_fetching_repo
+
+    pwned = tmp_path / "PWNED"
+    repo = tmp_path / "repo"
+    lazy_fetching_repo(repo, pwned, via="ext")
+    text = await _block(Environment(), _view(str(repo), LocalExecEnv(str(repo))))
+    assert not pwned.exists()
+    assert " - Is a git repository: true" in text
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 async def test_a_repository_clean_filter_never_runs(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

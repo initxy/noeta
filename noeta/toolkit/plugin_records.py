@@ -15,7 +15,7 @@ test_plugin_records.py`` holds each writer to its reader.
 Who reads what:
 
 * memory's ``dir`` — instructions, permissions, fs, compaction;
-* shell's ``cwd`` — permissions, hooks, fs, compaction;
+* shell's ``cwd`` — permissions, hooks, fs, compaction, project_status;
 * permissions' ``mode`` (plan_mode writes its switches there) — hooks,
   shell, front ends; its ``classified`` records — hooks;
 * plan_mode's ``plan`` — compaction;

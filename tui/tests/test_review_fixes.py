@@ -11,7 +11,7 @@ from typing import Any
 from noeta.plugins.permissions import Permissions
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui import render
-from noeta_tui.widgets import ApprovalCard, Completions, Picker, PromptInput, ReadGroup, ToolCall
+from noeta_tui.widgets import ApprovalCard, Completions, Picker, PromptInput, ToolCall, ToolGroup
 
 from support import MODEL, make_app, plain, ready, settle, shown, type_line
 
@@ -167,12 +167,12 @@ async def test_reads_one_after_another_are_one_line(tmp_path: Path) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await type_line(pilot, "read them")
         await settle(pilot, lambda: not app.busy and provider.steps == [])
-        three, one = app.query(ReadGroup)
-        assert plain(three.head) == "Read 3 files (ctrl+o to expand)"
+        three, one = app.query(ToolGroup)
+        assert plain(three.head) == "● Read 3 files (ctrl+o to expand)"
         assert not any(c.display for c in three.calls)
         assert not one.head.display and one.calls[0].display  # alone: shown as itself
         await pilot.press("ctrl+o")
-        assert all(c.display for c in three.calls) and plain(three.head) == "Read 3 files"
+        assert all(c.display for c in three.calls) and plain(three.head) == "● Read 3 files"
         assert len(app.query(ToolCall)) == 4
         assert MODEL in plain(app.query_one("#status"))
 

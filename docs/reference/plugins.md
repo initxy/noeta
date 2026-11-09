@@ -33,6 +33,7 @@ The built-in agents are the files in `noeta/agents/files/`. A plugin file's `add
 | `memory` | ✓ | | | off until set; the `noeta` command sets it |
 | `permissions` | ✓ | ✓ | ✓ | |
 | `plan_mode` | ✓ | ✓ | ✓ | |
+| `project_status` | ✓ | | | |
 | `quiet_nudge` | ✓ | | | only some Claude models get the nudge |
 | `schedule` | ✓ | | | |
 | `shell` | ✓ | ✓ | ✓ | |
@@ -72,8 +73,8 @@ those, key by key.
 A plugin switched off for a task keeps folding its records, so switching it back on loses
 nothing. Every installed plugin can be switched per task, and of the built-ins only those a
 task runs well without (`noeta/host/plugins.py` `SWITCHABLE_BUILTINS`): `ask_user`,
-`checkpoints`, `findings`, `mcp`, `memory`, `quiet_nudge`, `schedule`, `skills`, `title`,
-`todos`, `web`, `workflow`. The others (the permission gate, the file and shell tools, …) a
+`checkpoints`, `findings`, `mcp`, `memory`, `project_status`, `quiet_nudge`, `schedule`,
+`skills`, `title`, `todos`, `web`, `workflow`. The others (the permission gate, the file and shell tools, …) a
 task is built on; only `enabled = false` removes them. A Claude Code plugin's parts belong to
 the plugins that load them and are not switched on their own. A built-in's view in the web
 app is its web part in `web/src/plugins/<name>/`, and goes with it.
@@ -373,6 +374,24 @@ Hooks: `tools`, `commands`, `run_command`, `reminders`, `on_start`, `before_tool
 |---|---|---|
 | `plans_dir` | `<home>/plans` | where plan files go |
 | `auto_during_plan` | `true` | a plan begun in auto mode runs with the auto-mode classifier (`useAutoModeDuringPlan`) |
+
+### `project_status`
+
+`noeta/plugins/project_status.py` — the project and git branch of the task's directory as
+status items, which every front end shows (the terminal UI on the line under its footer), as
+Claude Code's status-line plugins show them: the project is the git checkout's top folder (a
+linked worktree's own), else the directory's name; in a checkout the branch follows (the short
+commit when detached), with `*` when the work tree has changes and `↑2 ↓1` against its upstream.
+The directory is where the task's shell is (after `cd` or `EnterWorktree`), else the task's
+own; one this machine lacks (inside a container) shows nothing.
+
+git runs on the machine that answers the front end, stopped after a second, at most once every
+two seconds per directory. Nothing the repository's own config names runs: no fsmonitor, hooks,
+signature program or transport (a partial clone would fetch a missing object through its own ssh
+command), and no `git status` in a repository whose config defines a filter driver,
+where the `*` is left out. No settings.
+
+Hooks: `ui`.
 
 ### `quiet_nudge`
 

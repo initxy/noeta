@@ -105,7 +105,7 @@ the code; [Extension interface](../reference/extension.md) has each method.
 | Dialogs | `ui.select`, `confirm`, `input` | approval, questions | AskUserQuestion, permission prompts | `ask()`, `Ask` | have | Every front end shows them with no plugin code. |
 | Notices | `ui.notify` | toast slot | Notification hook | `view.notify(text, kind, data)` | have | Never reaches the model as the person. |
 | Panels, widgets, editor, themes | `ui.*` | 106 UI slots | mods, themes | — | won't | Front ends import no plugin; a plugin publishes data a front end renders. |
-| Status line | `setStatus` | — | `statusLine` setting | — | won't | Left to plugins: records and `notify` carry what a front end may show. |
+| Status line | `setStatus` | — | `statusLine` setting | `ui()` → `StatusItem` | have | A plugin's status items, shown under the terminal UI's footer and in the web and desktop status lines; the shipped `project_status` shows the project and git branch. Claude Code's `statusLine` command is not run. |
 | Plugin HTTP routes | — | `webServer.register` | — | — | won't | One API; traffic from outside comes in through a `Channel`. |
 | **State** | | | | | | |
 | Plugin entries, rebuilt from history | `appendEntry` | session events, projections | — | `view.record` + `reduce`, snapshots | have | Plugin state is a fold of the log. |
