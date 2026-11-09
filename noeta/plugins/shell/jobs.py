@@ -202,13 +202,16 @@ _KEEP_TAIL = r"""keep_tail() {
 #: (0: no file to watch).
 _GUARD = r"""
 # Kills the group. On macOS, kill(0, SIGKILL) ends the sender and no other
-# member: the others are killed one by one first, wherever ps can list them.
+# member: there the others are killed one by one first. Only there: in a
+# sandbox's pid namespace, ps may list the host's processes, not ours.
 die() {
-  g=$(ps -o pgid= -p $$ 2>/dev/null); g=$(echo $g)
-  [ -z "$g" ] || for p in $(ps -A -o pid= -o pgid= 2>/dev/null |
-                            awk -v g="$g" -v s=$$ '$2 == g && $1 != s {print $1}'); do
-    kill -KILL "$p" 2>/dev/null
-  done
+  if [ "$(uname)" = Darwin ]; then
+    g=$(ps -o pgid= -p $$ 2>/dev/null); g=$(echo $g)
+    [ -z "$g" ] || for p in $(ps -A -o pid= -o pgid= 2>/dev/null |
+                              awk -v g="$g" -v s=$$ '$2 == g && $1 != s {print $1}'); do
+      kill -KILL "$p" 2>/dev/null
+    done
+  fi
   kill -KILL 0
 }
 n=0
