@@ -158,6 +158,61 @@ class FrontEndStart:
     #: The person's first message (``noeta "<prompt>"``), sent as if typed
     #: once the task opens.
     prompt: str | None = None
+    #: The warnings logged since the start, for the front end to show: its
+    #: screen covers stderr, where they would otherwise go.
+    warnings: LoggedWarnings | None = None
+
+
+class LoggedWarnings(logging.Handler):
+    """Warnings and errors logged while a front end's screen covers stderr,
+    each as one line: held until :meth:`show_with` names where they go, then
+    handed there as they come, each text once. Records of the task runner
+    (``noeta.core.runner``) are left out: a front end shows a failed task or
+    tool from the task's own events."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self._held: list[tuple[str, int]] = []
+        self._seen: set[str] = set()
+        self._show: Callable[[str, int], None] | None = None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.name.startswith("noeta.core.runner"):
+            return
+        try:
+            line = record.getMessage()
+        except Exception:  # noqa: BLE001 — a bad format string is still a line
+            line = str(record.msg)
+        exc = record.exc_info[1] if record.exc_info else None
+        if exc is not None and str(exc) and str(exc) not in line:
+            line += f": {exc}"
+        with self.lock:  # type: ignore[union-attr]
+            if line in self._seen:
+                return
+            self._seen.add(line)
+            show = self._show
+            if show is None:
+                self._held.append((line, record.levelno))
+                return
+        show(line, record.levelno)
+
+    def forget(self, lines: Collection[str]) -> None:
+        """Never show ``lines`` (what the front end is given as notices)."""
+        with self.lock:  # type: ignore[union-attr]
+            self._seen.update(lines)
+            self._held = [h for h in self._held if h[0] not in lines]
+
+    def show_with(self, show: Callable[[str, int], None], *,
+                  shown: Collection[str] = ()) -> None:
+        """Hand the held lines, then every later one, to ``show(line,
+        level)`` (from whichever thread logs it); ``shown``: lines the front
+        end shows already."""
+        with self.lock:  # type: ignore[union-attr]
+            self._seen.update(shown)
+            held, self._held, self._show = self._held, [], show
+        for line, level in held:
+            if line not in shown:
+                show(line, level)
 
 
 async def change_config(client: ClientAPI, task_id: str, changes: Mapping[str, Any]) -> None:

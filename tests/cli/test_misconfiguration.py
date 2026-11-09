@@ -55,6 +55,25 @@ def test_no_model_names_a_model_a_key_and_the_quickstart(tmp_path: Path) -> None
         assert wanted in done.stderr, wanted
 
 
+@pytest.mark.parametrize(("config", "env", "wanted"), [
+    ("model = sonnet\n", {}, "config.toml is not valid TOML: Invalid value (at line 1"),
+    ("", {"NOETA_PROVIDER": "nope"}, "there is no provider 'nope'"),
+    ('[plugins.fs]\nnope = 1\n', {}, "plugin 'fs': got an unexpected keyword argument 'nope'"),
+    ("", {"NOETA_STORE": "mysql://x"}, "unknown store url 'mysql://x'"),
+])
+def test_a_setting_noeta_cannot_use_ends_with_one_line(
+        tmp_path: Path, config: str, env: dict[str, str], wanted: str) -> None:
+    env = {**_env(tmp_path, NOETA_MODEL="sonnet", NOETA_API_KEY="k"), **env}
+    (tmp_path / "home" / "config.toml").write_text(config)
+    done = subprocess.run(
+        [sys.executable, "-m", "noeta.cli.main", "-p", "hi", "--cwd", str(tmp_path)],
+        capture_output=True, text=True, timeout=120, check=False, env=env)
+    assert done.returncode == 1, done.stderr
+    assert "Traceback" not in done.stderr, done.stderr
+    line = done.stderr.strip().splitlines()[-1]
+    assert line.startswith("noeta: ") and wanted in line, line
+
+
 def test_a_missing_key_stops_the_start_before_any_request(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No model listing is read without a key (it would only answer 401),

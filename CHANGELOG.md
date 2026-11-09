@@ -6,7 +6,7 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
-## [Unreleased]
+## [1.1.0] - 2026-11-09
 
 One plugin across the kernel and every front end: a plugin is one name and one switch, and may
 carry UI data every front end shows and a web part the web and desktop apps load; it can be
@@ -85,6 +85,32 @@ install from marketplaces, the official one configured by default.
   from that table, as before. A copied `chat_bridge.py` / `chat_approvals.py` keeps working.
 - A marketplace install without a plugin manifest is named by its marketplace entry (it was the
   fetched directory's name).
+
+### Fixed
+
+- **The terminal UI opens about twice as fast** (2.9 s to 1.2 s here). The version a fold
+  snapshot carries read and parsed the same source files once per plugin; each file is now
+  parsed once and only its statements are walked (the version is the same). The source of
+  each plugin's package was read from its metadata file every time it was asked for.
+- **A setting noeta cannot use ends the start with one line naming it**, not a traceback:
+  a `config.toml` that is not valid TOML (with its line and column), an unknown provider, a
+  plugin given an argument it does not take, a store URL of no known kind.
+- **What noeta logs while the terminal UI is open is shown in it.** Its screen covers stderr,
+  so a warning logged at the start (a settings file that cannot be read, a model listing that
+  failed) flashed by before the screen came up, and one logged later (an MCP server's
+  settings, a hook's, a skill file's) was never seen. Each is now a line in the transcript,
+  once; errors in the error color. `FrontEndStart.warnings` (`noeta.host.app.LoggedWarnings`)
+  holds them for a front end.
+- **A paste goes into the terminal UI's prompt once** (it went in twice).
+- **What is typed or pasted while the transcript has focus** (after a click on it) goes to
+  the prompt, as in Claude Code; a card's choices and the agents panel keep their keys.
+- **Replies read better in the terminal UI.** Their blocks are one blank line apart (two
+  paragraphs ran together; a heading had two blank lines above it and an H1 was centred under
+  its bullet), headings are bold in the text colour (not underlined in the accent colour, like
+  a link), inline code is one soft colour, a code block has no blank padding, a table's header
+  is in the text colour. Chinese and Japanese text breaks between characters, never before a
+  comma or full stop: a line broke at the last space before a run of it, leaving most of the
+  line empty.
 
 ## [1.0.6] - 2026-11-07
 

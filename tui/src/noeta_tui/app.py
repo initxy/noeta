@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from rich.text import Text
-from textual import on, work
+from textual import events, on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -34,7 +34,7 @@ from noeta.toolkit.permission_modes import (
     published_modes,
 )
 from noeta.toolkit.signals import RESUMED_SIGNAL
-from noeta_tui import bash_mode, files, history, mentions, render, slash
+from noeta_tui import bash_mode, files, history, mentions, render, slash, wrap
 from noeta_tui.agents import MAIN, AgentsPanel, AgentView, WorkflowView
 from noeta_tui.transcript import SERVER_DIRECTORY, WORKFLOW_KEY, TranscriptView, _short_path
 from noeta_tui.widgets import (
@@ -51,6 +51,8 @@ from noeta_tui.widgets import (
 )
 
 log = logging.getLogger("noeta_tui")
+
+wrap.install()
 
 SHORTCUTS = """\
 [dim]! for bash mode        double tap esc to clear input     ctrl + c twice to exit
@@ -252,6 +254,13 @@ class NoetaApp(TranscriptView):
             return
         else:
             await self.new_task()
+        if self.start.warnings is not None:
+            loop = asyncio.get_running_loop()
+
+            def show(line: str, level: int) -> None:  # from whichever thread logs it
+                loop.call_soon_threadsafe(self.call_later, self._say_warning, line, level)
+
+            self.start.warnings.show_with(show, shown=list(getattr(self.local, "notices", ())))
         if not self.open_cards:  # a reopened task's open approval keeps the keys
             self.query_one(PromptInput).focus()
         if prompt and self.resume == "":
@@ -468,6 +477,13 @@ class NoetaApp(TranscriptView):
             self.listed = [r.task_id for r in roots]
             await slash.resume_picker(self, roots)
 
+    async def _say_warning(self, line: str, level: int) -> None:
+        """A warning noeta logged (its stderr is under this screen)."""
+        transcript = self.query_one("#transcript")
+        await transcript.mount(Notice(line, classes="-error" if level >= logging.ERROR
+                                      else "-warn"))
+        transcript.scroll_end(animate=False)
+
     async def say_markdown(self, text: str) -> None:
         transcript = self.query_one("#transcript")
         await transcript.mount(CleanMarkdown(text, classes="notice"))
@@ -534,6 +550,31 @@ class NoetaApp(TranscriptView):
 
     def _box(self) -> PromptInput:
         return self.query_one(PromptInput)
+
+    def _to_prompt(self) -> PromptInput | None:
+        """The prompt, focused, when what has focus takes no typing (the
+        transcript after a click, or nothing): what is typed or pasted then
+        goes to the prompt, as in Claude Code. A card's choices, the agents
+        panel and an input keep their keys."""
+        if self.focused is not None and not isinstance(self.focused, VerticalScroll):
+            return None
+        box = self._box()
+        if not box.display or box.disabled:
+            return None
+        box.focus()
+        return box
+
+    def on_key(self, event: events.Key) -> None:
+        if event.is_printable and (box := self._to_prompt()) is not None:
+            event.stop()
+            box._forward_event(events.Key(event.key, event.character))
+
+    def on_paste(self, event: events.Paste) -> None:
+        # Forwarded, as the app forwards a terminal's paste: one that is not
+        # comes back to the focused widget once more.
+        if (box := self._to_prompt()) is not None:
+            event.stop()
+            box._forward_event(events.Paste(event.text))
 
     async def prompt_key(self, key: str) -> bool:
         """The prompt's key, first: the completion menu's, history, ``?``."""

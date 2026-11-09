@@ -35,6 +35,7 @@ so a third-party plugin is used exactly like a built-in one. A file without
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import re
@@ -108,6 +109,10 @@ PluginSetting = Mapping[str, Any] | Extension | bool
 
 class AgentFileError(ValueError):
     """An agent file that cannot be read as one."""
+
+
+class PluginArgumentError(ValueError):
+    """A plugin given arguments it does not take."""
 
 
 @dataclass(frozen=True)
@@ -480,7 +485,16 @@ def build_agents(
         arguments = _lay_over({**host_args, **args}, overlay or {})
         key = (name, factory, _freeze(arguments))
         if key not in made:
-            made[key] = factory(**resolve_secrets(arguments, f"plugin {name!r}"))
+            resolved = resolve_secrets(arguments, f"plugin {name!r}")
+            try:
+                inspect.signature(factory).bind(**resolved)
+            except TypeError as exc:
+                raise PluginArgumentError(
+                    f"plugin {name!r}: {exc} (its [plugins.{name}] table in config.toml, or "
+                    "an agent file that names it)") from None
+            except ValueError:  # no signature to check against
+                pass
+            made[key] = factory(**resolved)
             registry.note_arguments(made[key], arguments)
         return made[key]
 
