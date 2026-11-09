@@ -65,7 +65,8 @@ Five complaints from the owner about the terminal UI (2026-11-09), each fixed:
 - Project and branch: a shipped plugin (on by default, switchable) returns status items for the
   task's directory — the project (the git checkout's top folder, else the directory's name)
   and the branch with a dirty mark and ahead/behind; git runs hardened (no repo-configured
-  programs), cached briefly, with a timeout. The footer stops showing the directory.
+  programs, no transport: a partial clone's lazy fetch would run the repository's ssh command
+  or `ext::` URL), cached briefly, with a timeout. The footer stops showing the directory.
 
 ## Plan
 
@@ -80,7 +81,8 @@ Five complaints from the owner about the terminal UI (2026-11-09), each fixed:
 
 - Dragging over any transcript text (a reply, a tool call's line or result) puts that text on the
   clipboard and the footer says so; `ctrl+c` with a selection does not start the quit countdown.
-- The 424-event task of the profile opens in under 2 s headless (was 12.5 s), looking the same
+- The 424-event task of the profile (the owner's, on the owner's server) opens in under 2 s
+  headless (was 12.5 s), looking the same
   as when it was followed live; a pilot test pins batch rendering.
 - Three reads, two greps and two shell commands in a row show as one line
   `Searched for 2 patterns, read 3 files, ran 2 shell commands (ctrl+o to expand)`; a click
@@ -104,3 +106,4 @@ Five complaints from the owner about the terminal UI (2026-11-09), each fixed:
 2026-11-09 Half the old resume time was `.assistant-message > *:last-child` (every mount restyled its siblings); narrowed to `MarkdownBlock:last-child`.
 2026-11-09 Resume of the 424-event task: 1.2–1.9 s headless. Added on integration: replayed `Worked for` from record times, transcript anchored after the batch (a wrapping warning hid its last line), bullet on folded lines, a double click does not close what its first click opened.
 2026-11-09 Moved git's read-only flags and filter check from `plugins/environment/git.py` to `toolkit/shell.py` for `project_status` (structure: its own commit).
+2026-11-09 Review (fresh agent): P1 — a partial clone's lazy fetch ran the repository's `core.sshCommand` / `ext::` URL from `git status` (also on main in the environment plugin); fixed for both by blocking every transport in `GIT_READ_FLAGS` plus `GIT_READ_ENV`, with a test on such a repository. P3 — live output during the log read could land above the history; the batch now opens before the read. P3 — a synthetic 460-event task (38 turns of Read + 2 Bash, lists and code) opens in 3.2–4.0 s here; on main it did not finish.

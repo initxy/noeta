@@ -20,6 +20,7 @@ from noeta.host.plugins import PluginAdmin, plugin_infos, switchable
 from noeta.plugins import project_status
 from noeta.plugins.project_status import ProjectStatus
 from noeta.plugins.shell.state import SHELL, ShellState
+from noeta.toolkit.shell import GIT_READ_FLAGS
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
@@ -140,6 +141,41 @@ async def test_a_repository_filter_never_runs_and_the_dirty_mark_is_left_out(
     (tmp_path / "repo" / ".gitattributes").write_text("*.txt filter=x\n")
     (tmp_path / "repo" / "kept.txt").write_text("changed\n")
     assert await _shown(tmp_path / "repo") == ["repo", "⎇ trunk ↑1"]  # no "*"
+    assert not pwned.exists()
+
+
+def lazy_fetching_repo(path: Path, pwned: Path, *, ext: bool) -> None:
+    """A partial clone whose HEAD names a commit it lacks: a read of it
+    fetches the commit through the repository's own ``core.sshCommand`` (or
+    an ``ext::`` URL it allows), which would touch ``pwned``."""
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(path)], check=True)
+    for key, value in (("core.repositoryformatversion", "1"),
+                       ("extensions.partialClone", "origin"),
+                       ("remote.origin.promisor", "true"),
+                       ("remote.origin.url", f"ext::sh -c touch% {pwned}" if ext
+                        else "ssh://example.invalid/x"),
+                       ("protocol.ext.allow", "always"),
+                       ("core.sshCommand", f"touch {pwned}; false")):
+        subprocess.run(["git", "-C", str(path), "config", key, value], check=True)
+    (path / ".git" / "refs" / "heads" / "trunk").write_text("12" * 20 + "\n")
+
+
+@needs_git
+@pytest.mark.parametrize("ext", [False, True], ids=["ssh-command", "ext-url"])
+async def test_a_partial_clone_never_fetches_through_the_repositorys_programs(
+        tmp_path: Path, ext: bool) -> None:
+    pwned = tmp_path / "PWNED"
+    lazy_fetching_repo(tmp_path / "repo", pwned, ext=ext)
+    # The trap is real: a plain read runs the repository's program.
+    subprocess.run(["git", "-C", str(tmp_path / "repo"), "status"], capture_output=True)
+    assert pwned.exists()
+    pwned.unlink()
+    assert await _shown(tmp_path / "repo") == ["repo", "⎇ trunk"]
+    assert not pwned.exists()
+    # The flags alone hold where git does not know GIT_NO_LAZY_FETCH.
+    for read in (["status"], ["log", "-n", "1"], ["rev-list", "--count", "HEAD"]):
+        subprocess.run(["git", *GIT_READ_FLAGS, *read], cwd=tmp_path / "repo",
+                       capture_output=True)
     assert not pwned.exists()
 
 

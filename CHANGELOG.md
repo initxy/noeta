@@ -23,11 +23,16 @@ this repository. Their versions are listed on PyPI.
 - **`project_status`**, a shipped plugin (on in `main`, switchable in `/plugins`): the project
   and git branch of the task's directory (`noeta  ·  ⎇ main* ↑1`) as status items, on the line
   under the terminal UI's footer and in the web and desktop status lines. Git runs with the
-  repository's programs (fsmonitor, filters, hooks) switched off, cached for two seconds. The
-  footer no longer shows the directory.
+  repository's programs (fsmonitor, filters, hooks) and every transport switched off, cached for
+  two seconds. The footer no longer shows the directory.
 
 ### Fixed
 
+- **Reading a repository's git state can no longer run a program its config names through a
+  fetch**: in a partial clone, a read that meets a missing object fetches it, through the
+  repository's own `core.sshCommand`, an `ext::` URL it allows or a credential helper. The git
+  commands noeta runs itself (the environment block's snapshot) now allow no transport and set
+  `GIT_NO_LAZY_FETCH`.
 - **Reopening a task in the terminal UI is fast**: its history is rendered first and shown at
   once (a 424-event task: 1.3 s, was 12.5 s); each record shown live costs a fifth of what it did.
   A reopened turn's `Worked for` comes from its log.

@@ -13,7 +13,9 @@ directory. A directory this machine lacks (one inside a container) shows
 nothing.
 
 Nothing of the repository's own config may start a program: git runs with no
-fsmonitor, hooks or signature program (``GIT_READ_FLAGS``), and ``status``
+fsmonitor, hooks, signature program or transport (``GIT_READ_FLAGS``,
+``GIT_READ_ENV``: a partial clone would fetch a missing object through the
+repository's own ssh command or ``ext::`` URL), and ``status``
 not at all where the repository's config defines a filter driver (whose
 ``clean`` program it would run): there the dirty mark is left out. The
 branch is read from ``HEAD`` itself."""
@@ -31,7 +33,13 @@ from dataclasses import dataclass
 from noeta.core.extension import Extension, StatusItem, TaskView
 from noeta.toolkit.local_env import child_env
 from noeta.toolkit.plugin_records import shell_cwd
-from noeta.toolkit.shell import GIT_FILTER_DRIVERS, GIT_READ_FLAGS, harden_git, untrusted_filters
+from noeta.toolkit.shell import (
+    GIT_FILTER_DRIVERS,
+    GIT_READ_ENV,
+    GIT_READ_FLAGS,
+    harden_git,
+    untrusted_filters,
+)
 
 __all__ = ["Checkout", "ProjectStatus", "branch_text", "read_checkout"]
 
@@ -204,7 +212,8 @@ async def _git(cwd: str, *args: str) -> tuple[int, str]:
     argv = ["git", *args]
     if args[0] == "status":
         argv = harden_git(argv)
-    env = {k: v for k, v in child_env().items() if k not in _REPOSITORY_VARIABLES}
+    env = {**{k: v for k, v in child_env().items() if k not in _REPOSITORY_VARIABLES},
+           **GIT_READ_ENV}
     proc = await asyncio.create_subprocess_exec(
         argv[0], *GIT_READ_FLAGS, *argv[1:], cwd=cwd, env=env,
         stdin=DEVNULL, stdout=PIPE, stderr=DEVNULL)

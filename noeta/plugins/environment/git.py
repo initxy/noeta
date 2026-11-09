@@ -6,7 +6,13 @@ from __future__ import annotations
 import posixpath
 
 from noeta.core.execenv import ExecEnv
-from noeta.toolkit.shell import GIT_FILTER_DRIVERS, GIT_READ_FLAGS, harden_git, untrusted_filters
+from noeta.toolkit.shell import (
+    GIT_FILTER_DRIVERS,
+    GIT_READ_ENV,
+    GIT_READ_FLAGS,
+    harden_git,
+    untrusted_filters,
+)
 
 #: Git status longer than this many characters is cut there (Claude Code's
 #: cut), and the note below follows.
@@ -35,7 +41,8 @@ async def _git_or_none(env: ExecEnv, cwd: str, *args: str) -> str | None:
         argv = harden_git(argv)
     argv = [argv[0], *GIT_READ_FLAGS, *argv[1:]]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20,
+                            env=GIT_READ_ENV)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return None
     if out.exit_code != 0 or out.timed_out:
@@ -48,7 +55,8 @@ async def _repo_defines_filters(env: ExecEnv, cwd: str) -> bool:
     ``clean`` program ``git status`` would run). Unsure counts as yes."""
     argv = ["git", *GIT_READ_FLAGS, *GIT_FILTER_DRIVERS]
     try:
-        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20)
+        out = await env.run(argv, cwd=cwd, timeout=5, output_cap=1 << 20,
+                            env=GIT_READ_ENV)
     except Exception:  # noqa: BLE001 — capture is best-effort
         return True
     return out.timed_out or untrusted_filters(

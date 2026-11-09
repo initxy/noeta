@@ -386,8 +386,9 @@ The directory is where the task's shell is (after `cd` or `EnterWorktree`), else
 own; one this machine lacks (inside a container) shows nothing.
 
 git runs on the machine that answers the front end, stopped after a second, at most once every
-two seconds per directory. Nothing the repository's own config names runs: no fsmonitor, hooks
-or signature program, and no `git status` in a repository whose config defines a filter driver,
+two seconds per directory. Nothing the repository's own config names runs: no fsmonitor, hooks,
+signature program or transport (a partial clone would fetch a missing object through its own ssh
+command), and no `git status` in a repository whose config defines a filter driver,
 where the `*` is left out. No settings.
 
 Hooks: `ui`.

@@ -14,6 +14,7 @@ from typing import NamedTuple
 
 __all__ = [
     "GIT_FILTER_DRIVERS",
+    "GIT_READ_ENV",
     "GIT_READ_FLAGS",
     "LONG_SLEEP_S",
     "NO_OUTPUT",
@@ -423,11 +424,21 @@ def harden_git(argv: list[str]) -> list[str]:
     return [argv[0], *before, argv[1], *after, *argv[2:]]
 
 
+#: Transports git may use, each named so a repository's own
+#: ``protocol.<name>.allow`` cannot outrank the ``never`` given for all.
+_GIT_PROTOCOLS = ("ext", "ssh", "git", "file", "http", "https")
 #: Global flags for the git commands noeta runs itself to read a repository's
 #: state: no fsmonitor hook, no hooks, no signature program, no index refresh
-#: written back.
+#: written back, and no transport — a partial clone fetches a missing object
+#: when a read meets one, through the repository's own ``core.sshCommand``,
+#: ``ext::`` URL or credential helper.
 GIT_READ_FLAGS = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null",
-                  "-c", "log.showSignature=false", "--no-optional-locks")
+                  "-c", "log.showSignature=false", "-c", "protocol.allow=never",
+                  *(f for name in _GIT_PROTOCOLS for f in ("-c", f"protocol.{name}.allow=never")),
+                  "--no-optional-locks")
+#: Environment for those commands: no fetch of a partial clone's missing
+#: objects (git 2.45 and later), no transport git does not know by name.
+GIT_READ_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_PROTOCOL_FROM_USER": "0"}
 #: ``git`` arguments that list every filter driver configured, each with the
 #: config scope that sets it (:func:`untrusted_filters` reads the answer).
 GIT_FILTER_DRIVERS = ("config", "--show-scope", "--get-regexp", r"^filter\.")

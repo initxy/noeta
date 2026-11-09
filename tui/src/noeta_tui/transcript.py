@@ -446,13 +446,15 @@ class TranscriptView(App[None]):
         rendered into widgets first, mounted in one go (one by one, Textual
         lays the screen out again for each). The seq of its last record, for
         :meth:`follow` to go on after."""
+        # Open before the log is read: live output meanwhile waits for it.
+        batch: list[Widget] = []
+        self._batch = batch
         try:
             found = await self.local.client.events(task_id)
         except Exception:  # the follower reads it then, and says so if it cannot
             log.warning("reading the log of %s failed", task_id, exc_info=True)
+            self._batch = None
             return 0
-        batch: list[Widget] = []
-        self._batch = batch
         try:
             for rec in found:
                 try:
