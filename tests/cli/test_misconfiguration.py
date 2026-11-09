@@ -145,3 +145,15 @@ def test_a_front_end_on_a_server_without_its_token_names_the_variable(
 def test_a_server_that_takes_the_token_has_no_problem(server: str) -> None:
     assert server_problem(server, "right") is None
     assert "cannot reach" in (server_problem("http://127.0.0.1:9", "right") or "")
+
+
+def test_a_server_on_this_machine_is_reached_past_a_proxy(
+        server: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A proxy (here one that answers nothing) is for other hosts: macOS's
+    system proxy came with no exception for localhost, and the proxy
+    answered 502 for a server on this machine."""
+    for var in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(var, "http://127.0.0.1:9")
+    assert server_problem(server, "right") is None

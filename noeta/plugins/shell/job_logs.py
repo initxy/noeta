@@ -51,7 +51,7 @@ if [ ! -e "$d" ] && [ ! -L "$d" ]; then (umask 077 && mkdir -p -- "$d") || exit 
 if [ -L "$d" ] || [ ! -d "$d" ] || [ ! -O "$d" ]; then
   echo "refusing $d: not a directory owned by the current user" >&2; exit 4
 fi
-chmod 700 -- "$d" || exit 5
+chmod -- 700 "$d" || exit 5  # the order BSD chmod takes too
 if [ ! -e "$d/$3" ]; then mkdir -m 700 -- "$d/$3" || exit 6; fi
 if [ -L "$d/$3" ] || [ ! -d "$d/$3" ]; then echo "refusing $d/$3: not a directory" >&2; exit 4; fi
 printf '%s' "$d/$3"

@@ -16,6 +16,8 @@ from typing import Any
 
 import httpx
 
+from noeta.toolkit.http import DIRECT_LOOPBACK
+
 __all__ = ["ListedModel", "fetch_listing", "listing_url", "parse_listing"]
 
 #: How long one listing request may take.
@@ -125,7 +127,7 @@ def fetch_listing(family: str, base_url: str | None, api_key: str | None,
         raise ValueError(f"no model listing is known for the {family} family")
     out: list[ListedModel] = []
     params: dict[str, Any] = {"limit": 1000} if family == "anthropic" else {}
-    with httpx.Client(timeout=timeout, transport=transport,
+    with httpx.Client(timeout=timeout, transport=transport, mounts=DIRECT_LOOPBACK,
                       headers=_headers(family, api_key, headers or {})) as client:
         for _page in range(50):
             response = client.get(url, params=params)

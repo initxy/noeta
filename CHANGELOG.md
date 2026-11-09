@@ -6,6 +6,27 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+### Fixed
+
+- **macOS**: background commands (`run_in_background`, Monitor) started: the log directory was
+  made with `chmod 700 -- dir`, an order BSD `chmod` refuses (`chmod -- 700 dir` now). The same
+  for the directory of pasted images.
+- **macOS: a read deny rule now refuses a shell command that names its file by a glob**
+  (`cat secret.t*`, `grep key *`). The paths a command touches were expanded and resolved with
+  GNU `realpath -m -z`; where that failed the globs went unexpanded and the rule matched nothing.
+  They are now expanded wherever bash runs, and resolved one by one without GNU `realpath`.
+- **macOS: a background command dies with its worker**, as on Linux. Its guard killed the
+  process group with `kill -KILL 0`, which on macOS ends the sender alone; the group's other
+  processes are now killed one by one first.
+- **A server on this machine is reached directly, never through a proxy**: a noeta server, a
+  local model, an MCP server, a hook URL. httpx took macOS's system proxy without its
+  exceptions (localhost among them), and the proxy answered 502.
+- Memory files in an exec env elsewhere (a container) are listed without GNU `find -printf`,
+  which BusyBox's `find` (Alpine images) lacks too.
+- The macOS CI job is a gate now and runs the terminal UI's tests too.
+
 ## [1.1.0] - 2026-11-09
 
 One plugin across the kernel and every front end: a plugin is one name and one switch, and may

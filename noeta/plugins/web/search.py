@@ -22,6 +22,7 @@ import httpx
 
 from noeta.core.tool import ToolContext, ToolFlags, ToolOutput, text_output
 from noeta.plugins.web.render import collapse_whitespace
+from noeta.toolkit.http import DIRECT_LOOPBACK
 from noeta.toolkit.tools import SCHEMA_DIALECT, limit_output, load_description, truncate_bytes
 
 __all__ = ["HttpSearchTransport", "SearchResult", "SearchTransport", "WebSearchTool"]
@@ -124,7 +125,8 @@ class HttpSearchTransport:
             body["include_domains"] = list(allowed_domains)
         if blocked_domains:
             body["exclude_domains"] = list(blocked_domains)
-        client = self.client or httpx.AsyncClient(timeout=self.timeout)
+        client = self.client or httpx.AsyncClient(timeout=self.timeout,
+                                                     mounts=DIRECT_LOOPBACK)
         try:
             resp = await client.post(self.endpoint,
                                      headers={"Authorization": f"Bearer {self.api_key}"},

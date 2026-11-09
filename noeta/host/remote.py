@@ -22,6 +22,7 @@ from noeta.core.types import Delta
 from noeta.host.app import AppAPI, archive_task
 from noeta.host.plugins import MarketEntry, PluginInfo, UiEntry
 from noeta.host.rewind import RewindPoint, Rewound
+from noeta.toolkit.http import DIRECT_LOOPBACK
 
 #: Reconnects in a row (without an event in between) before ``watch`` gives up.
 WATCH_RETRIES = 5
@@ -36,7 +37,8 @@ class RemoteClient:
                  transport: httpx.AsyncBaseTransport | None = None) -> None:
         headers = {"authorization": f"Bearer {token}"} if token else {}
         self.http = httpx.AsyncClient(base_url=url.rstrip("/"), headers=headers,
-                                      timeout=httpx.Timeout(30, read=None), transport=transport)
+                                      timeout=httpx.Timeout(30, read=None), transport=transport,
+                                      mounts=DIRECT_LOOPBACK)
         #: Called with each live output fragment seen while watching.
         self.on_delta: Callable[[str, Delta], None] | None = None
 

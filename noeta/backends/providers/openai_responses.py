@@ -56,6 +56,7 @@ from noeta.core.types import (
     ToolResult,
     ToolUse,
 )
+from noeta.toolkit.http import DIRECT_LOOPBACK
 
 __all__ = ["FAMILY", "OpenAIResponsesProvider", "ReasoningContinuation"]
 
@@ -124,8 +125,8 @@ class OpenAIResponsesProvider:
         if extra_headers:
             headers.update(extra_headers)
         self._client = httpx.AsyncClient(
-            headers=headers, timeout=timeout_seconds, transport=transport
-        )
+            headers=headers, timeout=timeout_seconds, transport=transport,
+            mounts=DIRECT_LOOPBACK)
 
     async def aclose(self) -> None:
         await self._client.aclose()

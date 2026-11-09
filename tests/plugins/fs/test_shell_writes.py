@@ -28,7 +28,7 @@ async def test_sed_in_place_names_the_read_file_it_changed(tmp_path: Path) -> No
     a, b = run.work / "a.txt", run.work / "b.txt"
     a.write_text("one\ntwo\n")
     b.write_text("keep\n")
-    run.steps = (_read(a), _read(b), _bash("sed -i 's/two/2/' a.txt"), _edit(a, "2", "two"))
+    run.steps = (_read(a), _read(b), _bash("sed -i.bak 's/two/2/' a.txt"), _edit(a, "2", "two"))
     results, provider, _ = await run.go()
     # sed printed nothing: the note is the whole result.
     assert results[2].text == (
@@ -48,7 +48,7 @@ async def test_output_comes_first_and_past_five_files_the_rest_are_counted(
     for f in files:
         f.write_text("x\n")
     run.steps = (*(_read(f) for f in files),
-                 _bash("sed -i 's/x/y/' f*.txt && echo done --fix"))
+                 _bash("sed -i.bak 's/x/y/' f*.txt && echo done --fix"))
     results, _, _ = await run.go()
     out = results[-1].text
     assert out.startswith("done --fix\n[Running this command changed 7 files you had read: "
@@ -63,7 +63,7 @@ async def test_no_note_without_a_marker_or_for_a_change_already_told(tmp_path: P
     run.tools = [Formatter(b, "TWO\n")]
     run.steps = (_read(a), _read(b), _bash("echo changed > a.txt"),
                  ("Format", {}),  # b changes; the changed-file check tells the model
-                 _bash("sed -i 's/zzz/y/' a.txt"))
+                 _bash("sed -i.bak 's/zzz/y/' a.txt"))
     results, _, _ = await run.go()
     assert "Running this command" not in results[2].text
     # a was rewritten by the redirect, b by the formatter: both were seen by

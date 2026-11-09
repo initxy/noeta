@@ -34,6 +34,7 @@ from noeta.plugins.web.render import (
     media_type_of,
     render,
 )
+from noeta.toolkit.http import DIRECT_LOOPBACK
 from noeta.toolkit.tools import (
     SCHEMA_DIALECT,
     format_size,
@@ -347,7 +348,8 @@ class HttpFetchTransport:
         self.max_bytes = max_bytes
 
     async def fetch(self, url: str) -> FetchedPage:
-        client = self.client or httpx.AsyncClient(timeout=self.timeout)
+        client = self.client or httpx.AsyncClient(timeout=self.timeout,
+                                                     mounts=DIRECT_LOOPBACK)
         try:
             current = url
             for _ in range(_MAX_REDIRECT_HOPS + 1):

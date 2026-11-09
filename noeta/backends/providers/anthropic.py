@@ -74,6 +74,7 @@ from noeta.core import models
 from noeta.core.errors import Fatal, StreamBroken, TimedOut
 from noeta.core.provider import OnDelta
 from noeta.core.types import ModelRequest, ModelResponse
+from noeta.toolkit.http import DIRECT_LOOPBACK
 
 __all__ = ["DEFAULT_BETAS", "FAMILY", "PER_TURN_BETA", "AnthropicProvider", "per_turn_model"]
 
@@ -232,6 +233,7 @@ class AnthropicProvider:
             headers=headers,
             timeout=timeout_seconds,
             transport=transport,
+            mounts=DIRECT_LOOPBACK,
         )
 
     async def aclose(self) -> None:

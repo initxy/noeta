@@ -63,6 +63,7 @@ from noeta.core.types import (
     ToolResult,
     ToolUse,
 )
+from noeta.toolkit.http import DIRECT_LOOPBACK
 
 __all__ = ["FAMILY", "MaxTokensParam", "OpenAICompatProvider", "ReasoningContinuation"]
 
@@ -149,6 +150,7 @@ class OpenAICompatProvider:
             headers=headers,
             timeout=timeout_seconds,
             transport=transport,
+            mounts=DIRECT_LOOPBACK,
         )
 
     async def aclose(self) -> None:

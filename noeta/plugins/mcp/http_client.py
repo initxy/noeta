@@ -44,6 +44,7 @@ from noeta.plugins.mcp.client import (
 )
 from noeta.plugins.mcp.config import DEFAULT_TIMEOUT_S, McpAuthRequired, McpError
 from noeta.plugins.mcp.stdio import LINE_CAP, TOTAL_CAP
+from noeta.toolkit.http import DIRECT_LOOPBACK
 
 if TYPE_CHECKING:
     from noeta.plugins.mcp.oauth import OAuth
@@ -121,7 +122,7 @@ class HttpClient(McpClient):
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
-            self._http = httpx.AsyncClient()
+            self._http = httpx.AsyncClient(mounts=DIRECT_LOOPBACK)
         return self._http
 
     async def start(self) -> None:
