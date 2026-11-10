@@ -513,6 +513,22 @@ def test_bad_provider_tables(home: Path, text: str, match: str) -> None:
         load_settings()
 
 
+def test_a_row_without_supports_vision_still_sends_images(home: Path) -> None:
+    """Leaving the field out means "unknown", not "text-only": a table of
+    gateway models that only gives limits must not strip every image."""
+    from noeta.backends.providers._common import model_admits_images
+
+    unsaid, text_only = f"gw-unsaid-{os.getpid()}", f"gw-text-{os.getpid()}"
+    (home / "config.toml").write_text(
+        '[providers.gw]\nfamily = "anthropic"\nbase_url = "https://gw"\napi_key = "g"\n'
+        f'models = [{{id = "{unsaid}", context_window = 1000000, max_output_tokens = 128000}},'
+        f' {{id = "{text_only}", context_window = 1000, max_output_tokens = 100,'
+        ' supports_vision = false}]\n')
+    load_settings()
+    assert model_admits_images(unsaid)
+    assert not model_admits_images(text_only)
+
+
 def test_a_models_file_row_names_a_configured_provider(home: Path) -> None:
     (home / "models.json").write_text(json.dumps([{"id": "q", "provider": "nobody"}]))
     (home / "config.toml").write_text(f'models_file = "{home / "models.json"}"\n')

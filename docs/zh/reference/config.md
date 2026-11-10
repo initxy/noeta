@@ -62,7 +62,8 @@
 
 一行要有 `id`、`context_window`、`max_output_tokens` 才算数；`supports_vision`、`family`（接口
 协议的类型）和 `efforts`（表示这是推理模型）可选；`provider` 按名字把这个模型分给某个已配置的
-provider。直接写一个行的列表也可以。
+provider。直接写一个行的列表也可以。不写 `supports_vision` 时图片照发、由 provider 判断；纯文本
+模型写 `false`。
 
 模型的上限依次来自：noeta 的内置目录、模型描述文件或表里的行、provider 的模型列表，都没有就按
 128,000 token 上下文和 16,384 token 输出处理，并给出警告。
