@@ -14,6 +14,9 @@ sessions, a rewound conversation shows whole, and both fold tool calls as Claude
 
 ### Changed
 
+- **`Store.read` takes a keyword `limit`** (the head of a log; `ClientAPI.events` and
+  `GET /tasks/{id}/events?limit=` pass it through). A third-party store adapter must accept it;
+  `noeta.testing.store_contract` checks it.
 - **Tasks start in `bypassPermissions` by default**, in the TUI, `noeta -p`, ACP, sub-agents, the
   web app and served tasks; deny rules, ask rules and protected paths still hold in it.
   `noeta serve` and `noeta worker` allow it unless started with the new
