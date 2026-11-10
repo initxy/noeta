@@ -9,8 +9,6 @@
                                ``--server URL`` drives a ``noeta serve`` server's tasks
     noeta worker               run tasks from the store until stopped (multi-machine)
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
-    noeta web                  the web app on a local server in the background
-                               (``noeta web status``, ``noeta web stop``)
     noeta update               upgrade noeta in place, keeping its extras
     noeta plugin ...           install (pinned), list and remove plugins
     noeta mcp ...              add, list, remove and sign in to MCP servers
@@ -39,12 +37,11 @@ from noeta.cli import (
     mcp_command,
     plugin_command,
     update_command,
-    web_command,
 )
 from noeta.cli.config import ConfigError, Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
-SUBCOMMANDS = ("acp", "worker", "serve", "web", "update", "trust", "plugins", "plugin", "mcp")
+SUBCOMMANDS = ("acp", "worker", "serve", "update", "trust", "plugins", "plugin", "mcp")
 
 #: The extras the README's install line names.
 README_EXTRAS: tuple[str, ...] = ()
@@ -130,8 +127,6 @@ def _parser() -> argparse.ArgumentParser:
                     help="a web origin (https://host:port) whose pages may call the API")
     sv.add_argument("--allow-bypass-permissions", action="store_true",
                     help="let requests start or switch tasks into bypassPermissions")
-    sv.add_argument("--allow-root", action="append", default=[], metavar="PATH",
-                    help="a directory besides the server's own tasks may run in")
     sv.add_argument("--allow-plugin-install", action="store_true",
                     help="let requests install and remove plugins (always allowed on a "
                          "loopback address without --allow-host or --allow-origin)")
@@ -139,9 +134,6 @@ def _parser() -> argparse.ArgumentParser:
                     help="serve this directory's files (the built web app, web/dist) at the "
                          "server's other paths (default: the web app noeta was built with, "
                          "if any)")
-    # Set by ``noeta web``: its refusals speak to someone who did not start ``noeta serve``.
-    sv.add_argument("--for-noeta-web", action="store_true", help=argparse.SUPPRESS)
-    web_command.add_parser(sub)
     update_command.add_parser(sub)
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
@@ -302,8 +294,6 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     from noeta.cli.server_token import server_token_digest
     from noeta.host.http import (
         LOOPBACK_HOSTS,
-        OUTSIDE_HINT,
-        WEB_OUTSIDE_HINT,
         bundled_web_dir,
         create_app,
         redact_token_logs,
@@ -331,7 +321,6 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allowed_hosts=_allowed_hosts(args),
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
-                     roots=[os.path.abspath(r) for r in args.allow_root],
                      web_dir=web,
                      # A Host or origin named besides the loopback ones: a
                      # reverse proxy may bring anyone to the loopback bind.
@@ -339,9 +328,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      or (host in LOOPBACK_HOSTS and not args.allow_host
                          and not args.allow_origin),
                      plugin_admin=app.plugin_admin,
-                     projects_file=str(home_dir.projects_file(s.store_url)),
-                     outside_hint=WEB_OUTSIDE_HINT if getattr(args, "for_noeta_web", False)
-                     else OUTSIDE_HINT)
+                     projects_file=str(home_dir.projects_file(s.store_url)))
     if web:
         print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)
@@ -467,10 +454,6 @@ def _main(argv: list[str]) -> None:
         return
     if args.command == "update":
         sys.exit(update_command.run(args))
-    if args.command == "web":
-        if args.action is None and web_command.running() is None:
-            _settings(args)  # a new server needs a model: say so here, not in its log
-        sys.exit(web_command.run(args, cwd))
     if args.command == "plugin":
         sys.exit(plugin_command.run(args, cwd))
     if args.command == "mcp":

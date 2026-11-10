@@ -1,6 +1,6 @@
 """The projects the web app lists down its side (saved directories and the
 directories of unarchived sessions, with their session counts) and the
-folder picker's directory listing, both inside the server's directories."""
+folder picker's directory listing, of any directory."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import httpx
 
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
-from noeta.host.http import WEB_OUTSIDE_HINT, create_app
+from noeta.host.http import create_app
 from noeta.host.local import LocalApp
 from noeta.host.projects import SavedProjects, list_dirs, projects
 from noeta.testing import ScriptedProvider
@@ -78,18 +78,14 @@ async def test_projects_are_saved_ones_then_session_directories(
             (beta, True), (gamma, False), (alpha, False)]
 
 
-async def test_a_project_outside_the_servers_directories_is_refused(
+async def test_a_project_is_any_directory_and_nothing_else(
         tmp_path: Path, tree: Path) -> None:
     _, http, saved = _api(tmp_path, tree)
     async with http:
-        refused = await http.post("/projects", json={"path": str(tmp_path / "outside")})
-        assert refused.status_code == 403 and "--allow-root" in refused.json()["error"]
-        sneaky = await http.post("/projects", json={"path": "../outside"})
-        assert sneaky.status_code == 403
         missing = await http.post("/projects", json={"path": str(tree / "nope")})
-        assert missing.status_code == 400
+        assert missing.status_code == 400 and "does not exist" in missing.json()["error"]
         a_file = await http.post("/projects", json={"path": str(tree / "a-file.txt")})
-        assert a_file.status_code == 400
+        assert a_file.status_code == 400 and "not a directory" in a_file.json()["error"]
         assert (await http.post("/projects", json={})).status_code == 400
         assert (await http.post("/projects", json={"path": 3})).status_code == 400
         unauthorized = await http.get("/projects", headers={"authorization": "Bearer no"})
@@ -97,12 +93,22 @@ async def test_a_project_outside_the_servers_directories_is_refused(
     assert not saved.exists()
 
 
-async def test_dirs_lists_subdirectories_inside_the_allowed_ones(
+async def test_a_project_outside_the_servers_directory_is_saved(
+        tmp_path: Path, tree: Path) -> None:
+    _, http, saved = _api(tmp_path, tree)
+    async with http:
+        outside = str(tmp_path / "outside")
+        added = await http.post("/projects", json={"path": "../outside"})
+        assert added.status_code == 200 and added.json()["path"] == outside
+    assert json.loads(saved.read_text())["projects"] == [outside]
+
+
+async def test_dirs_lists_the_subdirectories_of_any_directory(
         tmp_path: Path, tree: Path) -> None:
     _, http, _ = _api(tmp_path, tree)
     async with http:
         top = (await http.get("/dirs")).json()
-        assert top == {"path": str(tree), "parent": None, "dirs": [
+        assert top == {"path": str(tree), "parent": str(tmp_path), "dirs": [
             {"name": "alpha", "path": str(tree / "alpha")},
             {"name": "Beta", "path": str(tree / "Beta")},
             {"name": "gamma", "path": str(tree / "gamma")}]}
@@ -110,8 +116,9 @@ async def test_dirs_lists_subdirectories_inside_the_allowed_ones(
         assert inner == {"path": str(tree / "gamma"), "parent": str(tree),
                          "dirs": [{"name": "inner", "path": str(tree / "gamma" / "inner")}]}
         assert (await http.get("/dirs", params={"path": "gamma"})).json() == inner
-        outside = await http.get("/dirs", params={"path": str(tmp_path)})
-        assert outside.status_code == 403
+        up = (await http.get("/dirs", params={"path": str(tmp_path)})).json()
+        assert {"name": "outside", "path": str(tmp_path / "outside")} in up["dirs"]
+        assert (await http.get("/dirs", params={"path": "/"})).json()["parent"] is None
         assert (await http.get("/dirs", params={"path": str(tree / "a-file.txt")})
                 ).status_code == 400
         assert (await http.get("/dirs", params={"path": str(tree / "nope")})).status_code == 400
@@ -162,13 +169,3 @@ def test_the_saved_list_lives_beside_a_sqlite_store_else_in_noetas_home(
     monkeypatch.setattr(home_dir, "HOME", tmp_path / "home")
     assert home_dir.projects_file(f"sqlite:///{tmp_path}/s/t.db") == tmp_path / "s" / "projects.json"
     assert home_dir.projects_file("postgres://db/x") == tmp_path / "home" / "projects.json"
-
-
-async def test_noeta_webs_refusal_says_what_its_user_can_do(
-        tmp_path: Path, tree: Path) -> None:
-    _, http, _ = _api(tmp_path, tree, outside_hint=WEB_OUTSIDE_HINT)
-    async with http:
-        refused = await http.post("/projects", json={"path": str(tmp_path / "outside")})
-    error = refused.json()["error"]
-    assert refused.status_code == 403
-    assert "--allow-root" not in error and "noeta web stop" in error

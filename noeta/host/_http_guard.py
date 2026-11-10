@@ -1,7 +1,7 @@
 """What every ``noeta serve`` request passes before its handler runs: the
 bearer token, the ``Host`` and origin checks, and the client that refuses a
-``bypassPermissions`` mode or a ``cwd`` outside the server's directories and
-takes over the front end's task a request acts on."""
+``bypassPermissions`` mode or a ``cwd`` that is no directory and takes over
+the front end's task a request acts on."""
 
 from __future__ import annotations
 
@@ -69,25 +69,13 @@ REQUEST_SIGNALS = (MODE_SIGNAL, CONFIG_SIGNAL, RESUMED_SIGNAL, RESTORE_SIGNAL,
 REQUEST_CHANGEABLE = tuple(k for k in CHANGEABLE_CONFIG if k != MODEL_ROUTE)
 
 
-def _within(path: str, root: str) -> bool:
-    return path == root or path.startswith(root.rstrip("/") + "/")
-
-
-#: How to use a folder outside ``noeta serve``'s directories.
-OUTSIDE_HINT = "start it there or add the directory with --allow-root"
-#: The same for the server ``noeta web`` started, which its user did not configure.
-WEB_OUTSIDE_HINT = ("noeta web may use your home folder and the folder it was started in; "
-                    "to use this one, run noeta web stop, then noeta web from that folder")
-
-
 class GuardedClient:
     """``client`` refusing what a request may not ask for: a task in
-    ``bypassPermissions`` (unless allowed) or with a ``cwd`` outside the
-    server's directory and its other ``roots``. A relative ``cwd`` is taken
-    from the server's directory (not the process's) and passed on
-    absolute, so every worker resolves it the same. A task created without a
-    ``cwd`` runs in the server's directory (recorded, so every worker runs
-    it there).
+    ``bypassPermissions`` (unless allowed) or with a ``cwd`` that is not a
+    directory. A relative ``cwd`` is taken from the server's directory (not
+    the process's) and passed on absolute, so every worker resolves it the
+    same. A task created without a ``cwd`` runs in the server's directory
+    (recorded, so every worker runs it there).
 
     What a request posts to a task created by a front end (the TUI, ``-p``,
     ACP: on ``FRONT_END_QUEUE``, which no server takes by itself) makes the
@@ -95,12 +83,8 @@ class GuardedClient:
     :attr:`queue`, so it runs here, unless a front end holds it now."""
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
-                 roots: Sequence[str] = (),
-                 fixed: Callable[[], Collection[str]] = lambda: (),
-                 outside_hint: str = OUTSIDE_HINT) -> None:
+                 fixed: Callable[[], Collection[str]] = lambda: ()) -> None:
         self._client = client
-        #: What the refusal of a ``cwd`` outside the directories tells to do.
-        self._outside_hint = outside_hint
         #: The plugins the settings keep in every task (``PluginAdmin.fixed``).
         self._fixed = fixed
         #: The queue this server's workers take: a front end's task a request
@@ -108,7 +92,6 @@ class GuardedClient:
         self.queue: str = getattr(client, "queue", "default")
         self._allow_bypass = allow_bypass
         self._cwd = os.path.realpath(cwd) if cwd else None
-        self._roots = [r for r in (self._cwd, *(os.path.realpath(r) for r in roots)) if r]
 
     def _mode(self, mode: Any) -> None:
         if mode == _BYPASS and not self._allow_bypass:
@@ -116,22 +99,20 @@ class GuardedClient:
                           "(start it with --allow-bypass-permissions)")
 
     def check_cwd(self, cwd: Any) -> Any:
-        """``cwd`` made absolute; raises :class:`Refused` when it lies
-        outside the server's directories."""
+        """``cwd`` made absolute (a real path); raises ``ValueError`` when it
+        does not exist or is not a directory."""
         if not cwd or self._cwd is None:
             return cwd
         real = os.path.realpath(os.path.join(self._cwd, str(cwd)))
-        if not any(_within(real, r) for r in self._roots):
-            where = ", ".join(self._roots)
-            raise Refused(f"cwd {cwd!r} is outside this server's directories ({where}); "
-                          f"{self._outside_hint}")
+        if not os.path.isdir(real):
+            why = "is not a directory" if os.path.exists(real) else "does not exist"
+            raise ValueError(f"cwd {cwd!r} {why} ({real})")
         return real
 
     def check_config(self, config: Any, allowed: Sequence[str] = REQUEST_CONFIG) -> Any:
         """``config`` with its ``cwd`` absolute; raises :class:`Refused` for
         what a request may not ask for: a key not in ``allowed``, a
-        ``bypassPermissions`` mode, a ``cwd`` outside the server's
-        directories."""
+        ``bypassPermissions`` mode, a ``cwd`` that is no directory."""
         if config is None:
             return config
         if not isinstance(config, Mapping):
@@ -292,13 +273,11 @@ class Guard:
 
     def __init__(self, client: Any, serving: Any, *, token_sha256: str | None, auth: bool,
                  allowed_hosts: Sequence[str] | None, origins: Sequence[str],
-                 allow_bypass: bool, cwd: str | None, roots: Sequence[str],
-                 fixed: Callable[[], Collection[str]] = lambda: (),
-                 outside_hint: str = OUTSIDE_HINT) -> None:
+                 allow_bypass: bool, cwd: str | None,
+                 fixed: Callable[[], Collection[str]] = lambda: ()) -> None:
         self._auth = auth
         self._sha256 = token_sha256
-        guarded = GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots,
-                                fixed=fixed, outside_hint=outside_hint)
+        guarded = GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, fixed=fixed)
         self.scope = Scope(client, guarded, _GuardedFront(serving, guarded))
         self._hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
         self._origins = {o.rstrip("/").lower() for o in origins}

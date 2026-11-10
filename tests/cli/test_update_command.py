@@ -16,7 +16,7 @@ import respx
 
 import noeta.cli.main as cli
 import noeta.host.stream_json as stream_json
-from noeta.cli import update_command, web_command
+from noeta.cli import update_command
 
 RECEIPT = """\
 [tool]
@@ -56,7 +56,6 @@ def ran(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ran:
     monkeypatch.setattr(stream_json, "noeta_version", lambda: "1.1.0")
     monkeypatch.setattr(update_command.shutil, "which",
                         lambda name: f"/bin/{name}" if name == "uv" else None)
-    monkeypatch.setattr(web_command, "stop", lambda quiet=False: None)
     recorded = Ran()
     monkeypatch.setattr(update_command.subprocess, "run", recorded)
     return recorded
@@ -79,25 +78,6 @@ def test_a_uv_tool_install_is_reinstalled_with_its_extras_and_with(
     assert ran.commands[1] == [sys.executable, "-m", "noeta.cli.main", "--version"]
     out = capsys.readouterr().out
     assert "noeta update: 1.1.0 -> 1.2.0" in out and "noeta update: now at 1.2.0" in out
-
-
-def test_a_running_noeta_web_is_stopped_and_started_again(
-        ran: Ran, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    server = web_command.Server(pid=1, port=8700, token="t", log="l", cwd=str(tmp_path))
-    stopped: list[bool] = []
-
-    def stop(quiet: bool = False) -> web_command.Server:
-        stopped.append(quiet)
-        return server
-
-    monkeypatch.setattr(web_command, "stop", stop)
-    assert _update() == 0
-    assert stopped == [True]
-    assert ran.commands[0][:4] == ["/bin/uv", "tool", "install", "--reinstall"]
-    assert ran.commands[1] == [sys.executable, "-m", "noeta.cli.main", "web", "--no-open",
-                               "--port", "8700"]
-    assert "starts again after the update" in capsys.readouterr().out
 
 
 def test_up_to_date_runs_nothing(ran: Ran, monkeypatch: pytest.MonkeyPatch,

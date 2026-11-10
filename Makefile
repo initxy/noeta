@@ -122,7 +122,7 @@ cluster:
 	NOETA_CLUSTER_REQUIRED=1 uv run --all-extras --with-editable ./tests/cluster/scripted python -m pytest -m cluster -p no:cacheprovider -s -v tests/cluster
 
 ## the built web app copied into the package (noeta/host/web_dist, kept out of the
-## repository), so the wheel carries it and noeta serve / noeta web serve it;
+## repository), so the wheel carries it and noeta serve serves it;
 ## without npm the wheel has none and says so
 WEB_BUNDLE = noeta/host/web_dist
 web-bundle:
@@ -130,7 +130,7 @@ web-bundle:
 		cd web && npm ci && npm run build && cd .. && \
 		rm -rf $(WEB_BUNDLE) && cp -R web/dist $(WEB_BUNDLE); \
 	else \
-		echo "make: npm not found; the wheel carries no web app (noeta web needs it)"; \
+		echo "make: npm not found; the wheel carries no web app (noeta serve serves it)"; \
 	fi
 
 build: web-bundle

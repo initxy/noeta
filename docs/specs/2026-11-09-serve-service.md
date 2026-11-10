@@ -73,7 +73,7 @@ branch: feat/serve-service-2026-11-09
 
 ## Plan
 
-- [ ] Python: remove `noeta web` + `--allow-root` + cwd location check; desktop's server args
+- [x] Python: remove `noeta web` + `--allow-root` + cwd location check (desktop's server args: the Desktop item)
 - [ ] Python: token file holds the token (new ADR superseding 013), clients read it, address lines on start, auto Host names
 - [ ] Python: `noeta service` (systemd user / launchd) + `noeta update` restart
 - [ ] Python: scratch directory for tasks without `cwd`; `/projects` scratch entry

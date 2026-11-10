@@ -55,8 +55,8 @@ OPENAPI: dict[str, Any] = {
             "post": _op("Save a directory as a project (checked as a new task's cwd)",
                         body=_props("path")),
             "delete": _op("Stop saving a project (its sessions stay)", body=_props("path"))},
-        "/dirs": {"get": _op("The subdirectories of an allowed directory (hidden ones left "
-                             "out) and its parent", query=("path",))},
+        "/dirs": {"get": _op("The subdirectories of a directory (hidden ones left "
+                             "out) and its parent (null at /)", query=("path",))},
         "/tasks/{task_id}": {"get": _op("A task's row", params=_TASK)},
         "/tasks/{task_id}/events": {"get": _op("A task's events", params=_TASK,
                                                query=("after",))},

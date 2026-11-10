@@ -103,7 +103,7 @@ class StreamRoutes:
         try:
             mine.guarded.check_config({"permission_mode": options.permission_mode})
             options.cwd = mine.guarded.check_cwd(options.cwd)
-        except Refused as exc:
+        except (Refused, ValueError) as exc:
             await ws.accept()
             await ws.close(code=4403, reason=str(exc).encode()[:123].decode(errors="ignore"))
             return

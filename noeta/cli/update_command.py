@@ -5,9 +5,7 @@ keeping what it was installed with.
   --reinstall`` with the receipt's extras, ``--with`` packages, Python and index,
   noeta's version pin dropped (a reinstall keeps only what it names);
 * a pip install: ``pip install -U 'noeta[<the extras installed>]'``;
-* a source checkout or an editable install: the commands to run, nothing changed.
-
-A running ``noeta web`` server is stopped first and started again after."""
+* a source checkout or an editable install: the commands to run, nothing changed."""
 
 from __future__ import annotations
 
@@ -24,8 +22,6 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-from noeta.cli import web_command
 
 PYPI_JSON = "https://pypi.org/pypi/noeta/json"
 
@@ -207,9 +203,6 @@ def run(_args: argparse.Namespace) -> int:
     if not _newer(latest, installed):
         print(f"noeta is up to date ({installed})")
         return 0
-    server = web_command.stop(quiet=True)
-    if server is not None:
-        print("noeta update: stopped noeta web; it starts again after the update")
     print(f"noeta update: {installed} -> {latest}\n$ {_shown(how.command)}", flush=True)
     try:
         code = subprocess.run(how.command, check=False).returncode
@@ -217,10 +210,6 @@ def run(_args: argparse.Namespace) -> int:
         print(f"noeta update: cannot run {how.command[0]}: {exc.strerror or exc}",
               file=sys.stderr)
         code = 1
-    if server is not None:
-        # The new noeta's code, in a new process.
-        subprocess.run([sys.executable, "-m", "noeta.cli.main", "web", "--no-open",
-                        "--port", str(server.port)], cwd=server.cwd or None, check=False)
     if code != 0:
         print(f"noeta update: the update failed (exit {code}); see the output above",
               file=sys.stderr)

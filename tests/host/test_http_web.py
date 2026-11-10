@@ -154,7 +154,7 @@ async def test_file_matches_rank_names_first_and_skip_build_dirs(tmp_path: Path)
     assert file_matches(str(tmp_path / "missing"), "x") == []
 
 
-async def test_files_are_listed_only_in_the_servers_directories(
+async def test_files_are_listed_in_the_servers_directory_or_a_given_one(
         local: tuple[LocalApp, ScriptedProvider], tmp_path: Path) -> None:
     app, _ = local
     (tmp_path / "work").mkdir()
@@ -162,7 +162,12 @@ async def test_files_are_listed_only_in_the_servers_directories(
     api = create_app(app.client, token="secret", app=app, cwd=str(tmp_path / "work"))
     async with _http(api) as http:
         assert (await http.get("/files", params={"q": "note"})).json() == ["notes.txt"]
-        assert (await http.get("/files", params={"q": "x", "cwd": "/etc"})).status_code == 403
+        (tmp_path / "other").mkdir()
+        (tmp_path / "other" / "x.txt").write_text("x")
+        assert (await http.get("/files", params={"q": "x", "cwd": str(tmp_path / "other")})
+                ).json() == ["x.txt"]
+        assert (await http.get("/files", params={"q": "x", "cwd": str(tmp_path / "nope")})
+                ).status_code == 400
         task_id = (await http.post("/tasks", json={"agent": "main", "config": {
             "interactive": False}})).json()["task_id"]
         got = await http.get("/files", params={"q": "notes", "task_id": task_id})
