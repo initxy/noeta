@@ -6,6 +6,31 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+### Changed
+
+- **Tasks start in `bypassPermissions` by default**, in the TUI, `noeta -p`, ACP, sub-agents, the
+  web app and served tasks; deny rules, ask rules and protected paths still hold in it.
+  `noeta serve` and `noeta worker` allow it unless started with the new
+  `--disable-bypass-permissions`; `--allow-bypass-permissions` is still accepted and does nothing,
+  so an installed `noeta service` keeps starting. A settings file's
+  `permissions.disableBypassPermissionsMode: "disable"` still switches it off; where it is off,
+  tasks start in `auto` as before.
+
+### Fixed
+
+- **Every new message was slow with a large skills directory**: the skills were indexed again for
+  each message, and indexing compared every file with every skill (57 skills over 2,174 files took
+  1.2 s). The index is built in one pass (43 ms) and only again when a skill file changes; a
+  message after the first now answers in about 50 ms instead of 1.4 s against a zero-latency model.
+- **Each model call first ran `find | cat | cksum` over every skills directory** to notice a skill
+  added mid-turn (about 15 ms a step). On this machine the look is now made by `stat`; a sandbox
+  or remote exec env still runs the command through the env.
+- **A `Bash` call waited at least 50 ms after its command ended**, polling for its output to be
+  written: `echo hi` took about 60 ms. The shell now wakes as soon as the output is written (a few
+  ms), still giving a child left running with `&` at most a second.
+
 ## [1.2.2] - 2026-11-10
 
 Images reach gateway models again, switching between auto and bypass-permissions mode no longer
