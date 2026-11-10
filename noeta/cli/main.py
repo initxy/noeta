@@ -94,7 +94,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command")
     ac = sub.add_parser("acp", help="serve the Agent Client Protocol on stdio")
     ac.add_argument("--server", metavar="URL",
-                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN) "
+                    help="drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN, else "
+                         "~/.noeta/server-token) "
                          "instead of running them here")
     # The top-level --cwd and --model, also taken after "acp" (the later wins).
     ac.add_argument("--cwd", default=argparse.SUPPRESS, help="as noeta --cwd")
@@ -121,8 +122,9 @@ def _parser() -> argparse.ArgumentParser:
     sv.add_argument("--no-token", action="store_true",
                     help="serve a loopback address without a bearer token")
     sv.add_argument("--allow-host", action="append", default=[], metavar="NAME",
-                    help="a Host header name the server answers (repeatable); without "
-                         "it Host is checked only on a loopback bind")
+                    help="a Host header name the server answers (repeatable) besides "
+                         "the loopback names and, on another bind, this machine's own "
+                         "names and addresses (a reverse proxy's name, say)")
     sv.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
                     help="a web origin (https://host:port) whose pages may call the API")
     sv.add_argument("--allow-bypass-permissions", action="store_true",
@@ -152,7 +154,8 @@ def _front_parser() -> argparse.ArgumentParser:
     ap.add_argument("-r", "--resume", nargs="?", const="", default=None,
                     help="resume a task (id; the TUI offers a list without one)")
     ap.add_argument("--server", metavar="URL",
-                    help="TUI: drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN)")
+                    help="TUI: drive the tasks of a noeta server (token: NOETA_SERVER_TOKEN, "
+                         "else ~/.noeta/server-token)")
     add_arguments(ap)
     return ap
 
@@ -278,20 +281,33 @@ def _local_app(args: argparse.Namespace, cwd: str) -> tuple[Any, Settings, Any]:
     return app, s, hooks["callbacks"]
 
 
-def _allowed_hosts(args: argparse.Namespace) -> list[str] | None:
-    """The ``Host`` names ``noeta serve`` answers: the loopback names on a
-    loopback bind, plus ``--allow-host``; any on another bind without it."""
-    from noeta.host.http import LOOPBACK_HOSTS
+#: How long ``noeta serve`` waits on this machine's names (DNS) before it
+#: answers only its addresses and hostname.
+MACHINE_NAMES_SECONDS = 5.0
 
-    base = list(LOOPBACK_HOSTS) if args.host in LOOPBACK_HOSTS else []
-    return [*base, *args.allow_host] if base or args.allow_host else None
+
+async def _machine_names(host: str) -> list[str]:
+    """This machine's names and addresses when ``host`` is no loopback bind
+    (looked up off the event loop), else none."""
+    from noeta.cli.serve_address import machine_names
+    from noeta.host.http import LOOPBACK_HOSTS
+    from noeta.toolkit.sandbox import own_addresses
+
+    if host in LOOPBACK_HOSTS:
+        return []
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(machine_names), MACHINE_NAMES_SECONDS)
+    except TimeoutError:
+        import socket
+        return [socket.gethostname(), *own_addresses()]
 
 
 async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     import uvicorn
 
     from noeta.cli.home_dir import HOME
-    from noeta.cli.server_token import server_token_digest
+    from noeta.cli.serve_address import addresses, allowed_hosts
+    from noeta.cli.server_token import serve_token
     from noeta.host.http import (
         LOOPBACK_HOSTS,
         bundled_web_dir,
@@ -301,13 +317,12 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
     host, with_worker = args.host, not args.no_worker
     web = os.path.abspath(args.web) if args.web else bundled_web_dir()
-    server = None if args.no_token else server_token_digest()
-    if server is not None and server.shown is not None:
-        print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "
-              f"SHA-256): {server.shown}", file=sys.stderr)
-    elif server is not None and not os.environ.get("NOETA_SERVER_TOKEN"):
-        print(f"noeta: bearer token: the one shown when {HOME / 'server-token'} was made "
-              "(delete that file and restart for a new one)", file=sys.stderr)
+    server = None if args.no_token else serve_token()
+    if server is not None and server.made:
+        print(f"noeta: made a new bearer token, kept in {HOME / 'server-token'} (owner "
+              "only; noeta --server and noeta acp --server on this machine read it)",
+              file=sys.stderr)
+    machine = await _machine_names(host)
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
     permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
         "disable_bypass_mode": True}
@@ -315,10 +330,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     app.client.task_config.update(_task_defaults(s, args))
     await app.start(worker=with_worker)
     api = create_app(app.client, auth=server is not None,
-                     token_sha256=server.sha256 if server else None,
+                     token=server.token if server else None,
                      deltas=app.deltas, agents=app.runtime.agents,
                      app=app if with_worker else None,
-                     allowed_hosts=_allowed_hosts(args),
+                     allowed_hosts=allowed_hosts(host, args.allow_host, machine),
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      web_dir=web,
@@ -329,8 +344,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                          and not args.allow_origin),
                      plugin_admin=app.plugin_admin,
                      projects_file=str(home_dir.projects_file(s.store_url)))
-    if web:
-        print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
+    what = "web app" if web else "API (no web app)"
+    for url in addresses(host, args.port, server.token if server else None, args.allow_host,
+                         machine):
+        print(f"noeta: {what} at {url}", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)
     redact_token_logs()
     try:
@@ -495,10 +512,6 @@ def _main(argv: list[str]) -> None:
         if args.no_token and args.host not in LOOPBACK_HOSTS:
             sys.exit("noeta: --no-token serves only a loopback address")
         _refuse_bypass(args)
-        if _allowed_hosts(args) is None:
-            print(f"noeta: on {args.host} any Host header is answered; name the names this "
-                  "server is reached by with --allow-host (DNS-rebinding protection)",
-                  file=sys.stderr)
         asyncio.run(_serve(_settings(args), args, cwd))
         return
 

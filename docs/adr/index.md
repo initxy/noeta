@@ -44,11 +44,11 @@ and describe a different codebase.
 
 - [028](028-no-tenants-in-noeta.md) noeta has no tenants; a host that needs them builds them on the extension points;
   the model catalog stays kernel data for output ceilings
+  (refined by 034)
 - [008](008-sandbox-protected-path-placeholders.md) The sandbox keeps code-running paths read-only and covers missing ones with placeholders
 - [009](009-serve-requires-a-token.md) The HTTP API always requires a bearer token
-  (refined by 013, 028)
-- [013](013-server-token-kept-as-a-digest.md) The server token is kept as a digest; clients bring it themselves
-  (refined by 028)
+  (refined by 028, 034)
+- [034](034-the-server-token-file-holds-the-token-and-a-request-may-name-any-directory.md) The server token file holds the token, and a request may name any directory
 - [010](010-nothing-uploaded-by-default.md) noeta sends nothing anywhere but to the configured model provider
 
 ## Superseded
@@ -66,3 +66,6 @@ and describe a different codebase.
   [022](022-the-model-catalog-is-kernel-data.md),
   [025](025-every-model-call-checks-the-budget-before-it-is-made.md) Tenants, their fence,
   limits and budgets, and the catalog's place by way of the budget (superseded by 028)
+
+- [013](013-server-token-kept-as-a-digest.md) The server token is kept as a digest; clients bring it
+  themselves (superseded by 034)

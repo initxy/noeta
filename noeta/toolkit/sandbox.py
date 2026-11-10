@@ -32,6 +32,7 @@ __all__ = [
     "belongs_in_sandbox",
     "domain_allowed",
     "leaves_sandbox",
+    "own_addresses",
     "resolve_allowed",
     "runs_sandboxed",
     "sandbox_of",
@@ -324,7 +325,7 @@ def address_refusal(host: str, address: str, port: int, allowed: Sequence[str],
     return None
 
 
-def _own_addresses() -> list[str]:
+def own_addresses() -> list[str]:
     """The addresses this host sends from (IPv4 and IPv6), asked of the
     routing table: a UDP socket "connected" to a documentation address sends
     nothing. Not a lookup of the host's own name, which on macOS can wait on
@@ -348,7 +349,7 @@ async def resolve_allowed(host: str, port: int, allowed: Sequence[str],
     :class:`PermissionError` naming why when none is."""
     loop = asyncio.get_running_loop()
     infos = await loop.getaddrinfo(host.strip("[]"), port, type=socket.SOCK_STREAM)
-    own = _own_addresses()
+    own = own_addresses()
     reasons: list[str] = []
     for info in infos:
         address = str(info[4][0])

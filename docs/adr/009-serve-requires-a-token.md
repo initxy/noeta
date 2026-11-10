@@ -3,7 +3,9 @@
 - Status: accepted
 - Date: 2026-10-28
 - Refined by: [ADR-013](013-server-token-kept-as-a-digest.md) (the token is kept as a
-  digest; clients take it from `NOETA_SERVER_TOKEN`), [ADR-028](028-no-tenants-in-noeta.md) (tenant tokens are gone)
+  digest; clients take it from `NOETA_SERVER_TOKEN`), [ADR-028](028-no-tenants-in-noeta.md) (tenant tokens are gone),
+  [ADR-034](034-the-server-token-file-holds-the-token-and-a-request-may-name-any-directory.md)
+  (the file holds the token again; a request may name any directory)
 
 ## Context
 

@@ -170,5 +170,5 @@ def test_this_hosts_addresses_are_found_without_a_name_lookup(
         raise AssertionError("looked a name up")
 
     monkeypatch.setattr(socket, "getaddrinfo", no_lookup)
-    own = sandbox._own_addresses()
+    own = sandbox.own_addresses()
     assert all(sandbox._address(a) is not None for a in own)

@@ -1,6 +1,6 @@
 # ADR-013: The server token is kept as a digest; clients bring it themselves
 
-- Status: accepted
+- Status: superseded by ADR-034
 - Date: 2026-10-28
 - Refined by: [ADR-028](028-no-tenants-in-noeta.md) (one token, no tenant tokens)
 - Refines: [ADR-009](009-serve-requires-a-token.md)
