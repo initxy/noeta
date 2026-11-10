@@ -27,17 +27,46 @@ A new outside protocol is another translation in `noeta/host`, never a second AP
 ## The web app
 
 The web app ships inside the `noeta` package: there is nothing to build. With the `server`
-extra installed (`uv tool install 'noeta[tui,server]'`), open it with
+extra installed (`uv tool install 'noeta[tui,server]'`), start a server and open the address it
+prints:
 
 ```bash
-noeta web            # starts a local server in the background and opens the page, signed in
-noeta web status     # is it running, and where
-noeta web stop       # stops it
+noeta serve
+# noeta serve: http://127.0.0.1:8642/#token=…
 ```
 
-`noeta web` starts a `noeta serve` on `127.0.0.1` in the background with the web app noeta's
-wheel carries, and opens it in your browser, signed in; a second `noeta web` reuses the running
-server ([the noeta command](../reference/cli.md#noeta-web)).
+Every start prints that line on stderr, token included, so the address opens the page signed
+in. The part after `#` never reaches the server: the page keeps the token in the browser's
+storage and drops it from the address. The server keeps its token across restarts, so a
+bookmark goes on working; "Disconnect" forgets it in this browser. Opened without a token, the
+page asks for it once.
+
+### Keep it running
+
+`noeta serve` runs in the foreground. To have it start at login and come back after a crash,
+install it as a user service of the operating system (systemd on Linux, launchd on macOS):
+
+```bash
+noeta service install            # takes the same flags as noeta serve
+noeta service status             # is it running, and its addresses
+noeta service logs
+```
+
+`restart`, `stop`, `start` and `uninstall` do what they say, and `noeta update` restarts an
+installed service after upgrading. What it writes and where: [the noeta command](../reference/cli.md#noeta-service).
+
+### From another machine
+
+`noeta serve` answers on `127.0.0.1` only by default. Two ways to reach it from elsewhere:
+
+- **Bind every address**: `noeta serve --host 0.0.0.0` (or `noeta service install --host
+  0.0.0.0`). It prints one address per name and IP of this machine, each with the token, and
+  answers those names without `--allow-host`; add `--allow-host` for any other name it is
+  reached by (a DNS alias, a proxy). Traffic is plain HTTP, so keep it to a network you trust.
+- **An SSH tunnel**, leaving the server on loopback: `ssh -L 8642:127.0.0.1:8642 that-machine`,
+  then open the address the server printed on your own machine.
+
+### The page
 
 It is laid out as a local workbench. The left column starts with **New session**, then lists
 your projects: folders, by name (hover for the path), each with its sessions newest first, a
@@ -48,10 +77,15 @@ a session in it directly; its **⋯** menu removes a project you added (its sess
 search box narrows every project's sessions at once; **Archived** at the bottom lists the
 archived ones. The page remembers the project you last opened.
 
-**Add project** (the **+** beside "Projects") opens a folder picker over the server's folders:
-walk into one or type a path, then add it. The server only runs sessions in its own directory and
-the folders it was allowed (`--allow-root`; `noeta web` allows your home directory), and the
-picker says so when you try a folder outside them.
+With no project picked, a new session gets a scratch folder of its own,
+`~/.noeta/scratch/<date>/<id>/` (under `NOETA_HOME`): somewhere to try a thing without choosing
+a folder first. Those sessions are listed after the projects under **Scratch**, grouped by day,
+newest first. Picking **Scratch**, or **Use a scratch folder instead** under a picked project,
+makes the next session a scratch one again. Scratch cannot be removed and has no **+**.
+
+**Add project** (the **+** beside "Projects") opens a folder picker over the server's machine:
+walk into a folder or type a path, then add it. Any existing directory can be a project; a path
+that does not exist, or is not a directory, is refused with the reason.
 
 The main pane has a streamed markdown transcript, tool cards (Bash output, edits as diffs,
 sub-agents nested), approval cards with Claude Code's choices, `AskUserQuestion` forms, plan
@@ -59,21 +93,13 @@ review, the todo panel, the slash-command menu, `@` mentions completed from the 
 image paste and drop, mode and model pickers, usage and context fill, rewind, rename, light and
 dark themes and a phone-sized layout (`web/screenshots/README.md` lists each with a screenshot).
 
-### Against another server
-
-Any `noeta serve` serves the same page. It prints its bearer token the first time it makes one;
-open the address it prints (`http://127.0.0.1:8642/` by default) and the page asks for the token
-once. You can also hand it over in the address: `http://127.0.0.1:8642/#token=…` (the part after
-`#` never reaches the server; the page keeps the token in the browser's storage and drops it from
-the address). "Disconnect" forgets it.
-
 The page's files are served without a token (they hold none) with a content security policy
 that lets the page talk only to its own server. A page served from somewhere else may call the
 API only from an origin you name: `noeta serve --allow-origin https://ui.example.com`.
 
-What it does not have: cloud environments, repository and branch pickers (noeta runs in the
-server's directories), a terminal pane and a file tree. A session cannot be deleted, since the
-store keeps every task's log; archive hides it.
+What it does not have: cloud environments, repository and branch pickers (noeta runs in folders
+on the server's machine), a terminal pane and a file tree. A session cannot be deleted, since
+the store keeps every task's log; archive hides it.
 
 ### Developing the page
 
@@ -88,18 +114,19 @@ The desktop app is the web app in its own window, over a local `noeta serve` it 
 stops. Installers for macOS (`.dmg`) and Linux (`.AppImage`, `.deb`) are attached to each
 [GitHub Release](https://github.com/initxy/noeta/releases). They are not signed: on macOS,
 right-click the app and choose **Open** the first time (double-clicking says it cannot be
-checked); an AppImage needs `chmod +x` first. The app does not carry noeta itself: install it
-too (`uv tool install 'noeta[tui,server]'`); when it is missing the window shows that line.
+checked); an AppImage needs `chmod +x` first. The app does not carry noeta itself: install it on
+the same machine with the server extra (`uv tool install 'noeta[tui,server]'`); when it is
+missing the window shows that line.
 
 Nothing to connect or paste: on launch it finds `noeta`, picks a free loopback port, makes a
 fresh token for that run, and starts
 
 ```text
-noeta serve --host 127.0.0.1 --port <free port> --web <the app's web files> [--allow-root DIR …]
+noeta serve --host 127.0.0.1 --port <free port> --web <the app's web files>
 ```
 
-with the token in the server's environment (`NOETA_SERVER_TOKEN`), never on its command line
-(`desktop/src/server.ts`). Quitting stops the server.
+in your home directory, with the token in the server's environment (`NOETA_SERVER_TOKEN`),
+never on its command line (`desktop/src/server.ts`). Quitting stops the server.
 
 It looks for `noeta` on `PATH` and in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`
 (an app started from the Dock does not get the login shell's `PATH`); set
@@ -107,14 +134,13 @@ It looks for `noeta` on `PATH` and in `~/.local/bin`, `/opt/homebrew/bin` and `/
 another.
 
 **Add project** (the column's **+**, File > Add Project…, `⌘O`) opens the system's folder
-picker and saves the folder as a project. The server runs in your home directory, so a folder
-under it needs nothing more; a folder outside it is added as an `--allow-root` of the server,
-which restarts it (after asking, when sessions are working or waiting; `desktop/src/main.ts`).
-The window opens on the project you last used. When the local server dies the window shows its
-last output, and View > Reload starts it again. It also raises a system notification when a
-session needs you or finishes while the window is in the background.
+picker and saves the folder as one of the server's projects, wherever it is. The window opens on
+the project you last used (none: new sessions get scratch folders, as in the browser). When the
+local server dies the window shows its last output, and View > Reload starts it again. It also
+raises a system notification when a session needs you or finishes while the window is in the
+background.
 
-The desktop app always runs its own local server; to work against a remote one, open the web
+The desktop app only ever runs its own local server; to work on another machine's, open the web
 app that server serves.
 
 To build it yourself: `cd desktop && npm install && npm start` (it uses `../web/dist`; `npm run
@@ -209,30 +235,29 @@ and desktop apps always do.
 
 ```bash
 # on the server
-export NOETA_SERVER_TOKEN=$(openssl rand -hex 32)
-noeta serve --host 0.0.0.0 --allow-host api.internal
+noeta serve --host 0.0.0.0           # prints its addresses, each with #token=…
 
 # on your machine
-export NOETA_SERVER_TOKEN=...                   # the same token
+export NOETA_SERVER_TOKEN=...                   # the token from that address
 noeta --server http://api.internal:8642         # the terminal UI
 noeta acp --server http://api.internal:8642     # an editor (put this in agent_servers)
 ```
 
-`noeta serve` always requires a bearer token (`--no-token` only on a loopback address); without
-`NOETA_SERVER_TOKEN` it makes one on first start, prints it that once, and keeps only its SHA-256
-in `~/.noeta/server-token`. Before it starts, a client checks the server answers `GET /agents`
-with the token and says what is wrong when it does not (`noeta/cli/server_token.py`).
+`noeta serve` always requires a bearer token (`--no-token` only on a loopback address). On the
+server's own machine a client finds the token by itself, so `NOETA_SERVER_TOKEN` is needed only
+from elsewhere ([Run it as a server › The token](./server.md#the-token)). Before it starts, a
+client checks the server answers `GET /agents` with the token and says what is wrong when it
+does not (`noeta/cli/server_token.py`).
 
 A front end attached to a server needs no model of its own. A new task runs on the server's
-model and in the server's directory, unless `--model` names one or `--cwd PATH` names a
-directory on the server (the server refuses one outside its directory and its `--allow-root`
-paths). Plugins, agents, skills and settings are the server's: `--plugin-dir` and the other flags
-that shape the tasks run here (`--settings`, `--mcp-config`, `--allowedTools`, …) are refused, and
-`/reload-plugins` asks you to restart the workers. A request may set only the task config a
-client may (model, effort, permission mode, …); `bypassPermissions` is refused unless the server
-was started with `--allow-bypass-permissions`. `noeta -p` always runs here and refuses
-`--server`; a program that wants the headless protocol against a server uses its `/stream-json`
-WebSocket.
+model, and in a scratch folder of its own unless `--cwd PATH` names a directory on the server
+(any existing one) or `--model` names a model. Plugins, agents, skills and settings are the
+server's: `--plugin-dir` and the other flags that shape the tasks run here (`--settings`,
+`--mcp-config`, `--allowedTools`, …) are refused, and `/reload-plugins` asks you to restart the
+workers. A request may set only the task config a client may (model, effort, permission mode,
+…); `bypassPermissions` is refused unless the server was started with
+`--allow-bypass-permissions`. `noeta -p` always runs here and refuses `--server`; a program that
+wants the headless protocol against a server uses its `/stream-json` WebSocket.
 
 Deployment, workers, workspaces and the token in depth: [Run it as a server](./server.md); every
 endpoint: [HTTP / WebSocket API](../reference/http-api.md).

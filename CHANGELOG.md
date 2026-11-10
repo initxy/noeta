@@ -6,6 +6,26 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+### Added
+
+- **Scratch sessions in the web and desktop apps**: "New session" with no project picked makes
+  a session without a directory, which the server runs in a scratch folder of its own. The
+  sidebar lists those sessions after the projects under **Scratch**, grouped by day ("Today",
+  "Nov 9"), newest first; picking Scratch, or **Use a scratch folder instead** on the welcome
+  screen, goes back to scratch for the next session.
+
+### Changed
+
+- **The web app's folder picker goes anywhere**: any existing directory can be added as a
+  project; a path that does not exist or is not a directory shows the server's reason. The
+  hints about allowed folders are gone.
+- **The desktop app starts its server without `--allow-root`** and no longer restarts it for a
+  folder outside your home directory: a folder picked anywhere is saved as a project at once.
+  The `roots` an older version kept in `settings.json` are dropped on the next save. With no
+  project saved, new sessions get scratch folders, as in the browser.
+
 ## [1.1.3] - 2026-11-09
 
 `noeta web` tells you how to use a folder it refuses, and the web app's browser tests stop
