@@ -75,6 +75,8 @@ test("an approval card answered runs the Bash call", async ({ page }) => {
   await shot(page, "03-approval-card");
   await expect(card).toBeFocused();
   await page.keyboard.press("1");
+  // Done, the call folds into the run's line, Claude Code's; opened, its card.
+  await page.getByRole("button", { name: /^Ran 1 shell command/ }).click();
   const tool = page.locator('.tool[data-tool="Bash"]');
   await expect(tool).toHaveAttribute("data-status", "done");
   await expect(tool.locator(".tool-output")).toContainText("hello-from-bash");
@@ -95,7 +97,7 @@ test("an approval card stays while a message arrives during it", async ({ page }
   await page.waitForTimeout(2000); // past a poll of the cards
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: /^1 Yes/ }).click();
-  await expect(page.locator('.tool[data-tool="Bash"]')).toHaveAttribute("data-status", "done");
+  await expect(page.getByRole("button", { name: /^Ran 1 shell command/ })).toBeVisible();
 });
 
 test("a Write shows its diff, and its card switches the mode", async ({ page }) => {
@@ -157,6 +159,7 @@ test("task list, questions and a sub-agent", async ({ page }) => {
   const agent = page.locator('.tool[data-tool="Agent"]');
   await expect(agent).toContainText("Explore");
   await agent.getByRole("button", { name: /Show the sub-agent's work/ }).click();
+  await agent.locator(".nested").getByRole("button", { name: /searched for 1 pattern/i }).click();
   await expect(agent.locator(".nested .tool[data-tool='Glob']")).toBeVisible();
   await expect(agent.locator(".nested")).toContainText("explored");
   await shot(page, "10-subagent");

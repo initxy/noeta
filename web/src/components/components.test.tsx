@@ -97,6 +97,25 @@ describe("Transcript", () => {
     expect(screen.getByText("queued")).toBeInTheDocument();
   });
 
+  it("folds a run of calls into one line, opened on a click; a failed call shows on its own", async () => {
+    const items: Item[] = [
+      tool({ id: "r1", name: "Read", input: { file_path: "/w/a.py" }, result: "x" }),
+      { kind: "assistant", id: "t1", text: "Now the tests." },
+      tool({ id: "g1", name: "Grep", input: { pattern: "def" }, result: "a.py:1" }),
+      tool({ id: "b1", name: "Bash", input: { command: "npm test" }, status: "error", result: "2 failed" }),
+      tool({ id: "b2", name: "Bash", input: { command: "npm run build" }, status: "running" }),
+    ];
+    const { container } = render(<Transcript state={{ ...emptyTask(), items }} />);
+    const head = screen.getByRole("button", { name: /Searching for 1 pattern, reading 1 file, running 2 shell commands…/ });
+    expect(container.querySelector(".group-text")).toHaveTextContent("Now the tests.");
+    expect(container.querySelector(".group-hint")).toHaveTextContent("npm run build");
+    expect([...container.querySelectorAll(".tool")].map((t) => t.getAttribute("data-tool"))).toEqual(["Bash"]); // the failed one
+    expect(container.querySelector(".msg.assistant")).toBeNull();
+    await userEvent.click(head);
+    expect(container.querySelectorAll(".tool")).toHaveLength(4);
+    expect(container.querySelector(".msg.assistant")).toHaveTextContent("Now the tests.");
+  });
+
   it("draws a long conversation's last items first and the earlier ones after", async () => {
     const items = Array.from({ length: 100 }, (_, i): Item => ({ kind: "user", id: `u${i}`, text: `prompt ${i}`, images: [] }));
     const { container } = render(<Transcript state={{ ...emptyTask(), items }} />);

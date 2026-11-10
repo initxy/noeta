@@ -1,7 +1,7 @@
 import { Fragment, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { shownRecords, type Item, type PluginRecordAt, type TaskState } from "../state/transcript";
 import { useApi, useTask, useTaskView, type TaskStore } from "../state/useTask";
-import { Markdown } from "@initxy/noeta-ui";
+import { agentsSummary, editsSummary, groupItems, groupSummary, Markdown, poppedOut, type Block } from "@initxy/noeta-ui";
 import { recordSlot, Slot, SlotRegistry, SlotsContext } from "@initxy/noeta-web-sdk";
 import { ToolCard } from "./ToolCard";
 
@@ -75,6 +75,119 @@ const Row = memo(function Row({ item }: { item: Item }) {
   }
 });
 
+const sameItems = (a: Item[], b: Item[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** A run of quiet calls: one line saying what they did, opened on a click;
+ * under it the latest text between them, the command running now, and the
+ * calls that failed or wait for you. */
+const GroupRow = memo(
+  function GroupRow({ items }: { items: Item[] }) {
+    const [open, setOpen] = useState(false);
+    const s = groupSummary(items);
+    const popped = items.filter((i): i is Tool => i.kind === "tool" && poppedOut(i));
+    return (
+      <div className="tool-group" data-status={s.active ? "running" : "done"}>
+        <button className="group-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className={`dot dot-${s.active ? "running" : "done"}`} aria-hidden />
+          <span className="group-line">{s.line}</span>
+          {s.failed > 0 && <span className="group-failed">{s.failed} failed</span>}
+          <span className="group-caret" aria-hidden>
+            {open ? "▾" : "▸"}
+          </span>
+        </button>
+        {open ? (
+          <div className="group-body">
+            {items.map((item) => (
+              <Row key={item.id} item={item} />
+            ))}
+          </div>
+        ) : (
+          <>
+            {(s.text || (s.active && s.hint)) && (
+              <div className="group-under">
+                {s.text && <div className="group-text">{s.text}</div>}
+                {s.active && s.hint && <div className="group-hint">{s.hint}</div>}
+              </div>
+            )}
+            {popped.length > 0 && (
+              <div className="group-body">
+                {popped.map((t) => (
+                  <ToolCard key={t.id} t={t} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  },
+  (a, b) => sameItems(a.items, b.items),
+);
+
+/** Edits of one file in a row: one line, each edit's diff once opened. */
+const EditsRow = memo(
+  function EditsRow({ path, calls }: { path: string; calls: Tool[] }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <div className="tool-group">
+        <button className="group-head" onClick={() => setOpen(!open)} aria-expanded={open} title={path}>
+          <span className={`dot dot-${calls.some((t) => t.status === "running" || t.status === "pending") ? "running" : "done"}`} aria-hidden />
+          <span className="group-line">{editsSummary(path, calls)}</span>
+          <span className="group-caret" aria-hidden>
+            {open ? "▾" : "▸"}
+          </span>
+        </button>
+        {open && (
+          <div className="group-body">
+            {calls.map((t) => (
+              <ToolCard key={t.id} t={t} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  },
+  (a, b) => a.path === b.path && sameItems(a.calls, b.calls),
+);
+
+/** Agents started together: one line, then a line per agent. */
+const AgentsRow = memo(
+  function AgentsRow({ calls }: { calls: Tool[] }) {
+    const summary = agentsSummary(calls);
+    return (
+      <div className="tool-group">
+        <div className="group-head">
+          <span className={`dot dot-${summary.startsWith("Running") ? "running" : "done"}`} aria-hidden />
+          <span className="group-line">{summary}</span>
+        </div>
+        <div className="group-body">
+          {calls.map((t) => (
+            <ToolCard key={t.id} t={t} />
+          ))}
+        </div>
+      </div>
+    );
+  },
+  (a, b) => sameItems(a.calls, b.calls),
+);
+
+type Tool = Extract<Item, { kind: "tool" }>;
+
+function BlockRow({ block }: { block: Block<Item> }) {
+  switch (block.kind) {
+    case "item":
+      return <Row item={block.item} />;
+    case "group":
+      return <GroupRow items={block.items} />;
+    case "edits":
+      return <EditsRow path={block.path} calls={block.calls} />;
+    case "agents":
+      return <AgentsRow calls={block.calls} />;
+    case "skip":
+      return null;
+  }
+}
+
 function Records({ records }: { records?: PluginRecordAt[] }) {
   return records?.map((r) => (
     <Slot key={r.id} name={recordSlot(r.plugin, r.kind)} props={{ record: { seq: r.seq, plugin: r.plugin, kind: r.kind, data: r.data } }} />
@@ -93,7 +206,7 @@ function useShownRecords(records: TaskState["records"]): Map<number, PluginRecor
   );
 }
 
-/** Items drawn at first, from the end; the earlier ones follow in batches while the page is idle. */
+/** Blocks drawn at first, from the end; the earlier ones follow in batches while the page is idle. */
 const FIRST = 40;
 const BATCH = 30;
 
@@ -106,15 +219,17 @@ const idle = (run: () => void): (() => void) => {
   return () => clearTimeout(timer);
 };
 
-/** The recorded items: a long conversation draws its last items first and
- * the earlier ones while the page is idle, keeping what is on screen in place. */
-const Items = memo(function Items({ items, records: all }: { items: Item[]; records: TaskState["records"] }) {
-  const records = useShownRecords(all);
+/** The recorded items, runs of calls folded (groupItems): a long
+ * conversation draws its last blocks first and the earlier ones while the
+ * page is idle, keeping what is on screen in place. */
+const Items = memo(function Items({ items: all, records: kept }: { items: Item[]; records: TaskState["records"] }) {
+  const records = useShownRecords(kept);
+  const items = useMemo(() => groupItems(all), [all]);
   // The first item drawn: the last FIRST until the idle batches set it.
   const [from, setFrom] = useState(Infinity);
   const start = Math.min(from, Math.max(0, items.length - FIRST));
   const edge = useRef<HTMLDivElement>(null);
-  const edgeAt = useRef(start); // the item the edge marker is drawn before
+  const edgeAt = useRef(start); // the block the edge marker is drawn before
   const held = useRef<number | null>(null); // the marker's place on screen before earlier items came in
 
   useEffect(() => {
@@ -140,12 +255,14 @@ const Items = memo(function Items({ items, records: all }: { items: Item[]; reco
   const rows = [];
   if (start === 0) rows.push(<Records key="r0" records={records.get(0)} />);
   for (let i = start; i < items.length; i++) {
-    const item = items[i];
+    const block = items[i];
     if (i === markAt) rows.push(<div key="edge" ref={edge} className="window-edge" />);
+    const after: PluginRecordAt[] = [];
+    for (let at = block.from + 1; at <= block.to; at++) after.push(...(records.get(at) ?? []));
     rows.push(
-      <Fragment key={item.id}>
-        <Row item={item} />
-        <Records records={records.get(i + 1)} />
+      <Fragment key={block.id}>
+        <BlockRow block={block} />
+        {after.length > 0 && <Records records={after} />}
       </Fragment>,
     );
   }

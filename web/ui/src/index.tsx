@@ -5,6 +5,8 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export { Markdown } from "./Markdown";
 export { DiffView, proposedDiff, toolError, ToolOutput } from "./Tool";
+export { agentsSummary, callKind, editsSummary, groupItems, groupSummary, poppedOut, shellKind, shortText } from "./groups";
+export type { Block, GroupItem, ToolCallItem } from "./groups";
 
 /** A line of muted text, or an error's. */
 export function Notice({ tone = "info", children }: { tone?: "info" | "warn" | "error"; children: ReactNode }) {

@@ -796,6 +796,79 @@ code {
   text-underline-offset: 3px;
 }
 
+/* A run of calls folded into one line, opened on a click (groupItems). */
+.tool-group {
+  margin: 4px 0;
+  font-size: 14px;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0;
+  border: none;
+  background: none;
+  text-align: left;
+}
+
+button.group-head:hover .group-line {
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
+}
+
+.group-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-failed {
+  color: var(--error);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.group-caret {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* the latest text between the calls, and the command running now */
+.group-under {
+  padding: 0 0 2px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.group-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.group-hint {
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-body {
+  padding-left: 16px;
+}
+
+.group-body > .msg {
+  margin: 6px 0;
+}
+
 .tool-name {
   font-weight: 600;
   white-space: nowrap;
