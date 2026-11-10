@@ -36,6 +36,11 @@ page, and errors, diffs and dialogs read better.
 - Tool calls are drawn as lines without boxes; dark mode has its own error and status colors.
 - The rewind dialog says what each choice does (Both / Conversation / Code).
 - ↑ in an empty message box brings back your earlier prompts.
+- Runs of tool calls fold into one line in Claude Code's words ("Searched for 2 patterns, read 3
+  files, ran 1 shell command"), opened on a click; a failed call still shows on its own, edits of
+  one file in a row and agents started together are merged, and task-list calls are left out (the
+  task panel shows the list).
+- Projects that share a name show the parent folders that tell them apart.
 
 ## [1.2.2] - 2026-11-10
 
