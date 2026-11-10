@@ -1,6 +1,6 @@
 import { Slot, SLOTS, SlotsContext } from "@initxy/noeta-web-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
+import { Api, ApiError, bypassRefused, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, Project, TaskSummary, TreeUsage } from "./api/types";
 import { Composer, newComposerKeep, type Attachment } from "./components/Composer";
 import { ModelPicker, NEW_SESSION_MODES, NewSessionMode, RewindDialog, UsageBadge } from "./components/Controls";
@@ -395,9 +395,9 @@ function Workspace({
     try {
       id = await api.create(null, config, "main", taskId ?? undefined);
     } catch (e) {
-      // A server started with --disable-bypass-permissions refuses the
-      // default mode: start in auto, as that server's own default does.
-      if (!(e instanceof ApiError && e.status === 403 && config.permission_mode === "bypassPermissions")) throw e;
+      // A server whose flag or settings disable bypassPermissions refuses
+      // the default mode: start in auto, as that server's own default does.
+      if (!(bypassRefused(e) && config.permission_mode === "bypassPermissions")) throw e;
       setNewMode("auto");
       id = await api.create(null, { ...config, permission_mode: "auto" }, "main", taskId ?? undefined);
     }

@@ -45,7 +45,18 @@ def token_digest(token: str) -> str:
 
 
 class Refused(Exception):
-    """A request asked for what this server does not allow."""
+    """A request asked for what this server does not allow; ``code``, when
+    set, names the refusal for a client to tell it from the others (the
+    response's ``code``)."""
+
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+#: The ``code`` of a refused ``bypassPermissions`` (a client starts in
+#: another mode instead).
+BYPASS_REFUSED = "bypass_permissions_disabled"
 
 
 class NotOpen(Exception):
@@ -111,7 +122,7 @@ class GuardedClient:
     def _mode(self, mode: Any) -> None:
         if mode == _BYPASS and not self._allow_bypass:
             raise Refused("this server does not allow bypassPermissions "
-                          "(it runs with --disable-bypass-permissions)")
+                          "(it runs with --disable-bypass-permissions)", BYPASS_REFUSED)
 
     def check_cwd(self, cwd: Any) -> Any:
         """``cwd`` made absolute (a real path); raises ``ValueError`` when it
@@ -353,7 +364,8 @@ class Guard:
             except UnknownTask as exc:
                 return JSONResponse({"error": f"unknown task {exc}"}, status_code=404)
             except Refused as exc:
-                return JSONResponse({"error": str(exc)}, status_code=403)
+                return JSONResponse({"error": str(exc), **({"code": exc.code} if exc.code else {})},
+                                    status_code=403)
             except NotOpen as exc:
                 return JSONResponse({"error": str(exc)}, status_code=409)
             except (msgspec.ValidationError, ValueError, KeyError, IndexError) as exc:

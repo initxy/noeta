@@ -207,6 +207,8 @@ async def test_requests_cannot_bypass_permissions_or_name_a_missing_directory(
                                ({"cwd": str(tmp_path / ".." / "elsewhere")}, 400)):
             got = await http.post("/tasks", json={"agent": "main", "config": config})
             assert got.status_code == status, config
+            # A refused bypass says so, for a client to start in another mode.
+            assert (got.json().get("code") == "bypass_permissions_disabled") == (status == 403)
         anywhere = await http.post("/tasks", json={"agent": "main", "config": {"cwd": "/"}})
         assert anywhere.status_code == 201
         ok = await http.post("/tasks", json={"agent": "main", "config": {
