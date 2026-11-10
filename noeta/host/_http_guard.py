@@ -252,8 +252,9 @@ class GuardedClient:
         return await self._client.tasks(parent_id=parent_id, status=status, limit=limit,
                                         roots_only=roots_only)
 
-    async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
-        return await self._client.events(task_id, after)
+    async def events(self, task_id: str, after: int = 0, *,
+                     limit: int | None = None) -> list[Recorded]:
+        return await self._client.events(task_id, after, limit=limit)
 
     def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]:
         return self._client.watch(task_id, after)

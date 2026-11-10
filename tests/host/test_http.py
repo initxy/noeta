@@ -86,6 +86,9 @@ async def test_round_trip_with_approval(served: tuple[str, ScriptedProvider]) ->
     assert [d.text for d in deltas] == ["checking", "all good"]
     row = await client.get(tid)
     assert row.status == "waiting" and [r.task_id for r in await client.tasks()] == [tid]
+    # A head read sends only the head of the log.
+    assert [r.seq for r in await client.events(tid, limit=2)] == [1, 2]
+    assert [r.seq for r in await client.events(tid, 1, limit=1)] == [2]
     await client.cancel(tid)
     await client.close()
 

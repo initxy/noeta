@@ -406,11 +406,12 @@ class SqliteStore:
         self._notify(changes)
         return done
 
-    async def read(self, task_id: str, after: int = 0) -> list[Recorded]:
+    async def read(self, task_id: str, after: int = 0, *,
+                   limit: int | None = None) -> list[Recorded]:
         def q(conn: sqlite3.Connection) -> list[Recorded]:
             rows = conn.execute(
-                "SELECT seq, at, data FROM events WHERE task_id = ? AND seq > ? ORDER BY seq",
-                (task_id, after),
+                "SELECT seq, at, data FROM events WHERE task_id = ? AND seq > ? ORDER BY seq"
+                " LIMIT ?", (task_id, after, -1 if limit is None else limit),
             ).fetchall()
             return [Recorded(seq=s, at=a, event=event_decoder.decode(d)) for s, a, d in rows]
 

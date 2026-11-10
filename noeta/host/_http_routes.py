@@ -173,8 +173,10 @@ class Routes:
     async def events(self, request: Request) -> Response:
         task_id = request.path_params["task_id"]
         after = int(request.query_params.get("after", "0"))
+        limit = request.query_params.get("limit")
         await scope(request).client.get(task_id)  # an unknown task answers 404
-        return _json(await scope(request).client.events(task_id, after))
+        return _json(await scope(request).client.events(
+            task_id, after, limit=int(limit) if limit else None))
 
     async def pending(self, request: Request) -> Response:
         task_id = request.path_params["task_id"]

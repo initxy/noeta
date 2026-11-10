@@ -11,6 +11,7 @@ from typing import Any
 
 from noeta.core.events import TaskCreated
 from noeta.testing import ScriptedProvider, reply
+from noeta_tui.slash import RESUME_HEAD
 from noeta_tui.widgets import AssistantMessage, Choices, Picker, UserMessage
 
 from support import make_app, settle, shown, type_line
@@ -71,11 +72,22 @@ async def test_the_resume_list_shows_a_rewound_conversation_once(tmp_path: Path)
         await type_line(pilot, "second, again")
         await settle(pilot, lambda: bool(app.task_id) and not provider.steps and not app.busy)
         fork = app.task_id
+        # The list reads only the head of each log.
+        client = app.local.client
+        limits: list[int | None] = []
+        read = client.events
+
+        async def counted(task_id: str, after: int = 0, *, limit: int | None = None) -> Any:
+            limits.append(limit)
+            return await read(task_id, after, limit=limit)
+
+        client.events = counted  # type: ignore[method-assign]
         await type_line(pilot, "/resume")
         await settle(pilot, lambda: bool(app.query(Picker)))
         options = app.query_one(Choices).options
         assert [o.id for o in options] == [fork]
         assert options[0].label == "first" and f"rewound from {original[:8]}" in options[0].detail
+        assert limits and set(limits) == {RESUME_HEAD}
 
 
 async def test_resume_with_no_task_lists_before_opening_one(tmp_path: Path) -> None:
@@ -119,3 +131,4 @@ async def test_the_resume_list_is_this_directorys_with_a_way_to_every_one(
         await settle(pilot, lambda: len(here.query_one(Choices).options) == 2
                      and "every directory" not in here.query_one(Choices).options[-1].label)
         assert any(elsewhere in o.detail for o in here.query_one(Choices).options)
+

@@ -484,6 +484,10 @@ def _ago(at: float) -> str:
 
 #: Conversations the resume list reads at most, the most recently updated.
 RESUME_LIMIT = 200
+#: Events the resume list reads from the head of each log: its
+#: ``TaskCreated`` and first prompt come within the first few (plugins
+#: record a handful before the first prompt is taken).
+RESUME_HEAD = 64
 #: The resume list's choice that lists every directory's conversations.
 EVERYWHERE = "*everywhere"
 
@@ -500,23 +504,46 @@ class Listed:
     continues: str
 
 
+async def _earliest_prompt(client: Any, created: TaskCreated) -> str:
+    """The first prompt of the conversation a rewind's task continues: the
+    oldest log of its lineage that has one, read only from each log's head
+    (up to where it is continued from)."""
+    from noeta_tui.app import first_prompt
+
+    heads: list[list[Any]] = []
+    current, through = created.history_from, created.history_through
+    while current and len(heads) < 64:
+        events = [r for r in await client.events(current, limit=RESUME_HEAD)
+                  if through is None or r.seq <= through]
+        heads.append(events)
+        first = events[0].event if events else None
+        if not isinstance(first, TaskCreated):
+            break
+        current, through = first.history_from, first.history_through
+    return next((said for events in reversed(heads) if (said := first_prompt(events))), "")
+
+
 async def _listed(app: NoetaApp, row: Any) -> Listed:
     from noeta_tui.app import first_prompt
 
+    client = app.local.client
     try:
-        events = await app.local.client.events(row.task_id)
+        events = await client.events(row.task_id, limit=RESUME_HEAD)
     except Exception:  # noqa: BLE001 — a listing shows what it can
         return Listed(row, "", "", "")
     first = events[0].event if events else None
     created = first if isinstance(first, TaskCreated) else None
     source = str(created.history_from or "") if created is not None else ""
     prompt = ""
-    if source:
+    if created is not None and source:
         with contextlib.suppress(Exception):
-            prompt = next((said for _, records in await lineage(app.local.client, row.task_id)
-                           if (said := first_prompt(records))), "")
+            prompt = await _earliest_prompt(client, created)
+    prompt = prompt or first_prompt(events)
+    if not prompt and len(events) == RESUME_HEAD:  # a long head with no prompt yet
+        with contextlib.suppress(Exception):
+            prompt = first_prompt(await client.events(row.task_id))
     return Listed(row, str(created.config.get("cwd") or "") if created is not None else "",
-                   prompt or first_prompt(events), source)
+                   prompt, source)
 
 
 async def resume_picker(app: NoetaApp, *, everywhere: bool = False) -> None:

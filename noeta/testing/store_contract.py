@@ -112,6 +112,17 @@ async def test_append_returns_the_time_it_stamped(store: Store) -> None:
     assert [(r.seq, r.at) for r in await store.read("t1", after=1)] == [(2, done.at)]
 
 
+async def test_a_read_with_a_limit_is_the_head_of_the_log(store: Store) -> None:
+    await store.create(new())
+    claim = await store.claim("w", ["default"], 30)
+    assert claim is not None
+    await store.append(claim, [_record() for _ in range(4)], expected_seq=1)
+    assert [r.seq for r in await store.read("t1", limit=2)] == [1, 2]
+    assert [r.seq for r in await store.read("t1", after=2, limit=2)] == [3, 4]
+    assert [r.seq for r in await store.read("t1", after=4, limit=9)] == [5]
+    assert len(await store.read("t1")) == 5
+
+
 async def test_an_append_of_no_events_applies_its_patch(store: Store) -> None:
     """A task handed back still waiting writes no event."""
     await store.create(new())
