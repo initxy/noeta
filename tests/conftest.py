@@ -98,8 +98,14 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
 def noeta_home_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
                       ) -> None:
     """noeta's home is a fresh directory for each test, so what a task keeps
-    there (plans, pasted images, transcripts) never lands in the user's."""
-    monkeypatch.setenv("NOETA_HOME", str(tmp_path_factory.mktemp("noeta-home")))
+    there (plans, pasted images, transcripts, the server token) never lands
+    in the user's: the variable for subprocesses, ``home_dir.HOME`` (read
+    once at import) for this one."""
+    from noeta.cli import home_dir
+
+    home = tmp_path_factory.mktemp("noeta-home")
+    monkeypatch.setenv("NOETA_HOME", str(home))
+    monkeypatch.setattr(home_dir, "HOME", home)
 
 
 @pytest.fixture(autouse=True)
