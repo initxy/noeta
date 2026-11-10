@@ -605,7 +605,16 @@ class ToolGroup(Vertical):
         await self.add(GroupWords(render.Hanging(render.plain(text, "dim"), 2)))
 
     def toggle(self) -> None:
-        self.set_expanded(not self.expanded)
+        if self._single():
+            self.calls[0].toggle_result()  # its line is the call's own: its result opens
+        else:
+            self.set_expanded(not self.expanded)
+
+    def _single(self) -> bool:
+        """A run of one call: its line is the call's own (``● Bash(pytest -x)``,
+        its result under it), as Claude Code shows one call; the count comes
+        with the second, on the same line."""
+        return self.kind == "run" and len(self.calls) == 1
 
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
@@ -626,13 +635,17 @@ class ToolGroup(Vertical):
     def show_head(self) -> None:
         line_shown = self._shows_line()
         self.head.display = line_shown
-        folded = line_shown and not self.expanded
+        single = self._single()
+        folded = line_shown and not self.expanded and not single
         hint = ""
         for part in self.parts:
             if isinstance(part, ToolCall):
                 live = folded and self._live(part)
                 part.display = not folded or live
+                if self.kind == "run":
+                    part.head.display = not single
                 part.set_class(live, "-live", update=part.is_attached)
+                part.set_class(single, "-single", update=part.is_attached)
                 if folded and not live and part.state in ("pending", "running"):
                     hint = render.running_hint(part.call, part.cwd)
             else:
@@ -647,6 +660,9 @@ class ToolGroup(Vertical):
         if not line_shown:
             return
         calls = self.calls
+        if single:
+            self.head.update(calls[0]._header())
+            return
         running = any(c.state not in ("done", "error") for c in calls)
         waiting = any(c.state == "waiting" for c in calls)
         failed = sum(c.state == "error" for c in calls)

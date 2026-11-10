@@ -36,6 +36,8 @@ Screen { layout: vertical; background: transparent; }
 .group-head { height: auto; margin: 1 0 0 0; }
 /* A call that runs or waits in a folded run shows under the run's line. */
 .tool-group > .tool-call.-live { margin: 0 0 0 2; }
+/* A run of one call: the run's line is the call's, its result right under it. */
+.tool-group > .tool-call.-single { margin: 0; }
 .approval-diff { padding: 0 2 1 2; }
 
 .approval { border-top: solid $warning; padding: 0 1; margin: 1 0; height: auto; }

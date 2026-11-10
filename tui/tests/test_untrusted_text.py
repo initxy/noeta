@@ -86,9 +86,6 @@ async def test_control_sequences_never_reach_the_terminal(tmp_path: Path) -> Non
         assert not _escapes(_terminal(app))
         tool.release.set()
         await settle(pilot, lambda: not app.busy)
-        from noeta_tui.widgets import ToolGroup
-
-        await pilot.click(app.query_one(ToolGroup).head)  # its run folds once done
         await pilot.pause(0.2)
         out = _terminal(app)
         assert not _escapes(out) and "Project" in out and "It says docs" in shown(app)

@@ -31,6 +31,13 @@ def steps(n: int) -> list[Any]:
             for i in range(n)] + [reply("All done.")]
 
 
+def to_the_top(transcript: tail.TailScroll) -> bool:
+    """Scrolled to the top again (what came in moved it down): ``True``
+    once nothing older is left."""
+    transcript.scroll_home(animate=False)
+    return not transcript.has_older
+
+
 def said(app: Any) -> list[str]:
     """The replies laid out (mounted and shown), in order: their first lines."""
     return [m.source.splitlines()[0] for m in app.query(AssistantMessage)
@@ -52,10 +59,7 @@ async def test_a_long_live_transcript_lays_out_only_its_end(tmp_path: Path) -> N
         assert said(app)[-1] == "All done."
         assert "Step 0." not in said(app)
         # Scrolled to the top, what was hidden comes back, oldest last.
-        for _ in range(12):
-            transcript.scroll_home(animate=False)
-            await pilot.pause(0.05)
-        await settle(pilot, lambda: not transcript.has_older)
+        await settle(pilot, lambda: to_the_top(transcript), timeout=60)
         assert said(app)[:2] == ["Step 0.", "Step 1."]
 
 
@@ -88,10 +92,7 @@ async def test_a_reopened_long_task_mounts_its_last_items_and_the_rest_on_scroll
         await pilot.pause(0.2)
         assert first.virtual_region.y - transcript.scroll_y == \
             before - 2 * transcript.size.height
-        for _ in range(20):
-            transcript.scroll_home(animate=False)
-            await pilot.pause(0.05)
-        await settle(pilot, lambda: not transcript.has_older)
+        await settle(pilot, lambda: to_the_top(transcript), timeout=60)
         assert said(again)[0] == "Step 0."
 
 
