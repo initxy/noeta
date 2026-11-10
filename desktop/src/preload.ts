@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("noetaDesktop", {
   platform: process.platform,
   project: (): Promise<string> => ipcRenderer.invoke("noeta:project"),
   chooseProject: (): Promise<string | null> => ipcRenderer.invoke("noeta:choose-project"),
+  setProject: (path: string): void => ipcRenderer.send("noeta:set-project", path),
   notify: (n: { title: string; body: string; taskId?: string }): void => ipcRenderer.send("noeta:notify", n),
   onCommand: (cb: (c: Command) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, c: Command) => cb(c);

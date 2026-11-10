@@ -6,7 +6,9 @@
 ## 先看哪里
 
 - **命令自己的报错。** `noeta` 命令遇到能说清的问题（没配模型、没有 key、参数不允许）时，会打一行
-  `noeta:` 开头的话然后退出。先读这一行。
+  `noeta:` 开头的话然后退出。先读这一行。其他没料到的错误会打出 `noeta: unexpected error: <类型>: <信息>`，
+  外加一份出错报告的路径（在 `~/.noeta/logs/` 下，里面有调用栈、版本号和命令行）；报 bug 时把这个文件附上。
+  想直接在终端看调用栈，加 `--verbose` 或设 `NOETA_DEBUG=1`。
 - **任务这一轮失败的原因。** 一轮跑不下去时，日志里会记一条 `TurnFailed`，带上原因。交互式任务保留对话，
   等下一条消息；一次性任务（所有子代理，以及代理文件里写了 `one_shot: true` 的）直接以
   `TaskEnded(status="failed", error=…)` 结束，`error` 以原因开头。原因列表见下文「一轮失败的原因」。
@@ -26,6 +28,17 @@
 | `…: {env:NAME} names an environment variable that is not set`、`…: the keyring has no secret for 'service/user'`、`…: {keyring:…} needs the keyring package` | 这台机器上填不出某个密钥引用。引用只在插件或 provider 真正创建时才去读，所以第一次用到时才报。 | 设好变量、把密钥存进系统钥匙串（`keyring set service user`），或装上 `keyring` 这个可选依赖。 |
 | `noeta: this needs the server extra, which is not installed: pip install '…'`（也可能是 `postgres`、`acp`、`keyring`） | `noeta serve`、Postgres 存储、`noeta acp`、钥匙串密钥各自需要一个可选依赖组。 | 照打出来的那行装。用 `uv tool install --reinstall` 时要把你在用的可选依赖全写上，重装会丢掉没写的。 |
 | `noeta: the terminal UI is its own package, noeta-tui, which is not installed: …` | 不带子命令的 `noeta` 会启动终端界面，而终端界面是单独的 `noeta-tui` 包。 | 照打出来的那行装；只想问一句的话用 `noeta -p`。 |
+
+## `noeta web` 和 `noeta update`
+
+| 看到的报错 | 原因 | 怎么办 |
+|---|---|---|
+| `noeta web: this noeta has no web app built in (a source checkout without the built web/); …` | 装的这份 noeta 构建时没带网页：要么是源码目录，要么是在没有 npm 的机器上打的包。 | 在源码目录里跑 `make web-bundle`（需要 npm），或者改从 PyPI 装。 |
+| `noeta web: port N is in use; pick another with --port` | `--port` 指定的端口已经有别的程序在用。 | 换个端口，或者干脆不写 `--port`（默认 8642，被占了就自动挑空闲的）。 |
+| `noeta web: the server did not start; the end of its log (…/logs/web.log): …` | 后台的 `noeta serve` 退出了，或者 60 秒内没应答。下面贴出来的几行日志会说原因（存储打不开、缺 extra 等）。 | 按日志说的改好，再跑一次 `noeta web`。 |
+| `noeta web: the server (pid N) does not answer; …` | 之前 `noeta web` 起的服务进程还在，但不应答。 | 先 `noeta web stop`，再 `noeta web`。 |
+| `noeta update: cannot reach PyPI to check for a new version (…); nothing changed` | 没网，或者需要代理而 noeta 不知道。 | 设好 `HTTPS_PROXY`（或 `ALL_PROXY`）再跑。 |
+| `noeta update: this noeta (…) runs from source …, so nothing is changed` | noeta 是从源码目录或可编辑安装跑的，`noeta update` 不碰这种安装。 | 自己更新源码目录，或者照它打印的命令换成正式发布版。 |
 
 ## 模型与 provider
 

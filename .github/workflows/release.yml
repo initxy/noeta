@@ -45,10 +45,22 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # The wheel carries the built web app (noeta serve and noeta web serve it).
+      - name: Build the web app into the package
+        run: make web-bundle
       - name: Build both packages
         run: |
           uv build --all-packages
           ls -l dist/
+      - name: The noeta wheel carries the web app
+        run: |
+          python3 -m zipfile -l dist/noeta-*-py3-none-any.whl | grep -q 'noeta/host/web_dist/index.html' \
+            || { echo "::error::the noeta wheel has no noeta/host/web_dist/index.html"; exit 1; }
       - name: Both wheels' versions are the tag's
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -98,3 +110,39 @@ jobs:
           fi
           awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
           gh release create "$GITHUB_REF_NAME" --title "noeta $VERSION" --notes-file notes.md --latest
+
+  # The desktop installers, unsigned, attached to that release (a re-run replaces them).
+  desktop:
+    needs: [github-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            files: desktop/release/*.dmg
+          - os: ubuntu-latest
+            files: desktop/release/*.AppImage desktop/release/*.deb
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the web app's and the desktop app's packages
+        run: |
+          npm ci --prefix web
+          npm ci --prefix desktop
+      - name: Build the installers
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist -- --publish never -c.extraMetadata.version="${GITHUB_REF_NAME#v}"
+      - name: Attach them to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l desktop/release/
+          gh release upload "$GITHUB_REF_NAME" ${{ matrix.files }} --clobber

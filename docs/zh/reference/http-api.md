@@ -127,6 +127,20 @@ worker 不会自己去取。只要通过这里给它发消息、回答、取消�
 带 `task_id` 时，命令在那个任务自己的代理和目录里列出、执行；带 `cwd` 时，这个目录会像新任务的
 目录一样被检查。
 
+## 项目和目录
+
+项目就是一个目录：要么是用户保存过的，要么是有根任务在里面跑的。网页版左边那一列列的就是它们，
+添加新项目时用 `GET /dirs` 一层层选目录。
+
+| 方法与路径 | 查询参数 / 请求体 | 返回 |
+|---|---|---|
+| `GET /projects` | | `[{path, name, saved, sessions}]`：先是保存过的目录，按保存的先后；再是其余有未归档根任务的目录，最近用过的在前。`path` 是解开符号链接后的真实路径，`name` 是最后一级目录名，`sessions` 是那里未归档根任务的个数（只数最近 500 个） |
+| `POST /projects` | `{path}` | 保存这个目录，返回它的 `{path, name, saved, sessions}`。`path` 按新任务的 `cwd` 来检查（相对路径从服务端目录算起；不在服务端允许的目录里返回 `403`，不是目录返回 `400`） |
+| `DELETE /projects` | `{path}` | `{ok: true}`：不再保存它；里面的任务都还在 |
+| `GET /dirs` | `?path=`（默认是服务端的目录） | `{path, parent, dirs: [{name, path}]}`：按名字排好的子目录，隐藏目录（以 `.` 开头）不列；上一级不在允许范围内时 `parent` 为 `null`。目录不在允许范围内返回 `403`，不是能读的目录返回 `400` |
+
+保存的列表存在 sqlite 数据库文件旁边的 `projects.json` 里；不用 sqlite 时存在 `~/.noeta/` 下。
+
 ## 插件
 
 | 方法与路径 | 查询参数 / 请求体 | 返回 |
@@ -222,7 +236,8 @@ printf '%s\n' '{"type":"user","message":{"role":"user","content":"这个目录�
 
 ## 网页文件
 
-用 `noeta serve --web DIR`（构建好的网页，`web/dist`）时，上面没列出的路径都返回这个目录里的文件，
+用 `noeta serve --web DIR`（构建好的网页，`web/dist`）时，或者不给 `--web` 但装的包里自带网页时（从 PyPI
+装的都带），上面没列出的路径都返回这个目录里的文件，
 不需要 token：这些文件里本来就没有 token。它们带着内容安全策略（页面的脚本、样式和请求只能来自
 本服务端；图片还允许 `data:` 和 `blob:`）、`X-Frame-Options: DENY` 和
 `X-Content-Type-Options: nosniff`。页面会问一次 token，或者从地址里的 `#token=…` 取，这一段不会

@@ -177,8 +177,8 @@ A model's provider route is the server's to record, never a client's.
 
 - **Terminal UI**: `noeta --server http://api.internal:8642`.
 - **Editors** (ACP): `noeta acp --server URL`.
-- **Web app**: build it once (`cd web && npm install && npm run build`) and serve it with
-  `noeta serve --web web/dist`. The page asks for the token once, or takes it from the
+- **Web app**: `noeta serve` serves the one the installed package carries at `/` (`--web DIR`
+  serves another build). The page asks for the token once, or takes it from the
   address's `#token=…` fragment (never sent to the server, kept in the browser). Its files are
   served without a token, under a content security policy that allows only the server's own
   scripts, styles and requests, and no framing.

@@ -17,6 +17,7 @@ vi.mock("electron", () => ({
 interface Bridge {
   project(): Promise<string>;
   chooseProject(): Promise<string | null>;
+  setProject(path: string): void;
   notify(n: { title: string; body: string; taskId?: string }): void;
   onCommand(cb: (c: unknown) => void): () => void;
 }
@@ -37,6 +38,8 @@ describe("preload", () => {
     expect(await desk.project()).toBe("/home/me/code");
     await desk.chooseProject();
     expect(ipc.invoke).toHaveBeenCalledWith("noeta:choose-project");
+    desk.setProject("/srv/repo");
+    expect(ipc.send).toHaveBeenCalledWith("noeta:set-project", "/srv/repo");
     desk.notify({ title: "t", body: "b", taskId: "x" });
     expect(ipc.send).toHaveBeenCalledWith("noeta:notify", { title: "t", body: "b", taskId: "x" });
   });

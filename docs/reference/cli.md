@@ -1,7 +1,8 @@
 # The noeta command
 
 Every `noeta` subcommand and flag, read from `noeta/cli/main.py`, `noeta/cli/headless.py`,
-`noeta/cli/plugin_command.py` and `noeta/cli/mcp_command.py`, and the slash commands of the
+`noeta/cli/web_command.py`, `noeta/cli/update_command.py`, `noeta/cli/plugin_command.py` and
+`noeta/cli/mcp_command.py`, and the slash commands of the
 terminal UI. For a guided tour see [The terminal UI and -p](../guides/terminal.md).
 
 <Diagram name="ref-ways-in" caption="Front ends run on a LocalApp in their own process (only their own tasks) or a RemoteApp against a server; serve and worker run every task in the store." />
@@ -12,6 +13,8 @@ terminal UI. For a guided tour see [The terminal UI and -p](../guides/terminal.m
 noeta [flags] [prompt]          the terminal UI; headless with -p, --output-format or --input-format stream-json
 noeta acp [--server URL]        Agent Client Protocol on stdio, for editors
 noeta serve [flags]             the HTTP / WebSocket API, with workers unless --no-worker
+noeta web [status|stop]         the web app on a local server in the background
+noeta update                    upgrade noeta to the latest release, keeping its extras
 noeta worker [flags]            run tasks from the store until stopped
 noeta trust                     trust the current folder
 noeta plugins                   list every plugin and where it comes from
@@ -26,7 +29,7 @@ any other flag means the terminal UI or `-p`.
 
 ## Shared flags
 
-Taken by the terminal UI, `-p`, `acp`, `serve` and `worker`.
+Taken by the terminal UI, `-p`, `acp`, `serve`, `web` and `worker`.
 
 | Flag | Meaning |
 |---|---|
@@ -175,7 +178,7 @@ enables and, unless `--no-worker`, workers, all in the same process. Endpoints a
 | `--allow-bypass-permissions` | off | let requests start or switch tasks into `bypassPermissions` |
 | `--allow-root PATH` | none | a directory besides the server's own that tasks may run in (repeatable) |
 | `--allow-plugin-install` | off (on for a loopback `--host` without `--allow-host` / `--allow-origin`) | let requests install and remove plugins (`POST /plugins/install`, `DELETE /plugins/{name}`) |
-| `--web DIR` | none | also serve this directory's files (the built web app, `web/dist`) at the other paths |
+| `--web DIR` | the bundled web app, if any | serve this directory's files (the built web app, `web/dist`) at the other paths. Without it, the web app built into the installed package is served (a wheel from PyPI has one; a checkout has one after `make web-bundle`) |
 
 The token is `NOETA_SERVER_TOKEN`, else one made on the first start and printed that once;
 `~/.noeta/server-token` keeps only its SHA-256. Delete that file and restart for a new one.
@@ -183,6 +186,48 @@ Without `--allow-bypass-permissions` the permissions plugin itself refuses
 `bypassPermissions`, however it is asked for. On an address that is not loopback without
 `--allow-host`, the server warns once on stderr at startup that any `Host` header is answered
 (DNS rebinding) and names `--allow-host` as the fix; the bearer token still guards it.
+
+## `noeta web`
+
+The web app in your browser, against a `noeta serve` started in the background for you. The
+server listens on `127.0.0.1` only, with its own bearer token, and may run tasks in the
+directory you started it from and anywhere under your home directory (`--allow-root ~`).
+
+```text
+$ noeta web
+noeta web is running at http://127.0.0.1:8642/#token=…
+Stop it with: noeta web stop
+```
+
+| Command | Meaning |
+|---|---|
+| `noeta web` | start the server (or reuse the one running), wait until it answers, print the address and open it in the browser |
+| `  --port N` | the port of a new server (default `8642`, else a free one); a port in use is refused |
+| `  --no-open` | print the address only |
+| `noeta web status` | whether it runs, on which port, its pid and log; exit code 1 when it does not |
+| `noeta web stop` | stop it |
+
+The address carries the token after `#`, which the page reads and takes off the address bar;
+it never reaches the server's logs. A second `noeta web` reuses the running server and prints
+the same address. The shared flags (`--model`, `--provider`, `--base-url`, `--store`,
+`--effort`) apply to a new server only. The pid, port and token are kept in
+`~/.noeta/web.json` (owner only), the server's output in `~/.noeta/logs/web.log`. It needs the
+`server` extra, a model configured, and a noeta built with the web app (from a checkout:
+`make web-bundle`).
+
+## `noeta update`
+
+Upgrades noeta to the latest release on PyPI, keeping what it was installed with:
+
+| Installed with | Runs |
+|---|---|
+| `uv tool install` | `uv tool install --reinstall 'noeta[<extras>]'` with every `--with`, the Python and the index its `uv-receipt.toml` records, the version pin dropped |
+| pip | `pip install -U 'noeta[<extras installed>]'` (`uv pip install` in an environment without pip) |
+| a checkout or an editable install | nothing; it prints the commands to run |
+
+It says `noeta is up to date` when PyPI has nothing newer, and changes nothing when PyPI cannot
+be reached (proxies come from `HTTPS_PROXY` / `ALL_PROXY`). A running `noeta web` server is
+stopped first and started again after.
 
 ## `noeta worker`
 
@@ -262,6 +307,19 @@ Manages MCP servers as `claude mcp` does, in noeta's places.
 
 Client secrets and sign-in tokens are kept under `~/.noeta/mcp-auth/`, never in a settings
 file. See [MCP servers](../guides/mcp.md).
+
+## Errors
+
+An error noeta did not expect prints one line and where its report went:
+
+```text
+noeta: unexpected error: RuntimeError: …
+noeta: the full report is in ~/.noeta/logs/crash-20261109-101500-4242.txt (--verbose or NOETA_DEBUG=1 prints it here)
+```
+
+The report holds the traceback, the version and the command line. `--verbose` (anywhere on the
+command line) or `NOETA_DEBUG=1` prints the traceback on the terminal too. Ctrl+C exits with
+code 130.
 
 ## Slash commands
 

@@ -14,11 +14,11 @@
 #   make eval       prompt-regression eval vs evals/baseline.json (needs credentials)
 #   make parity     replay Claude Code's recorded scenarios against noeta, report every difference
 #   make cluster    worker processes on Postgres under random kills (needs docker or a DSN)
-#   make build      wheel + sdist into dist/
+#   make build      wheel + sdist into dist/, with the built web app (when npm is there)
 
 .DEFAULT_GOAL := help
 .PHONY: help install check test lint example tui tui-screenshots web desktop frontends docs docs-dev e2e eval eval-baseline \
-	parity cluster build
+	parity cluster build web-bundle
 
 help:
 	@echo "noeta"
@@ -39,7 +39,7 @@ help:
 	@echo "  make eval-baseline  9-trial run, then rewrite evals/baseline.json"
 	@echo "  make parity     replay Claude Code's recorded scenarios, write parity/report.md"
 	@echo "  make cluster    worker processes on Postgres under random kills (docker or a DSN)"
-	@echo "  make build      wheel + sdist into dist/"
+	@echo "  make build      wheel + sdist into dist/, with the built web app (when npm is there)"
 
 install:
 	uv sync --all-extras
@@ -121,7 +121,19 @@ parity:
 cluster:
 	NOETA_CLUSTER_REQUIRED=1 uv run --all-extras --with-editable ./tests/cluster/scripted python -m pytest -m cluster -p no:cacheprovider -s -v tests/cluster
 
-build:
+## the built web app copied into the package (noeta/host/web_dist, kept out of the
+## repository), so the wheel carries it and noeta serve / noeta web serve it;
+## without npm the wheel has none and says so
+WEB_BUNDLE = noeta/host/web_dist
+web-bundle:
+	@if command -v npm >/dev/null 2>&1; then \
+		cd web && npm ci && npm run build && cd .. && \
+		rm -rf $(WEB_BUNDLE) && cp -R web/dist $(WEB_BUNDLE); \
+	else \
+		echo "make: npm not found; the wheel carries no web app (noeta web needs it)"; \
+	fi
+
+build: web-bundle
 	uv build
 
 ## the front ends, each its own project with its own test command (never in check:

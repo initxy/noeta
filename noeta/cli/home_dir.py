@@ -34,6 +34,13 @@ def _sqlite_file(url: str) -> str | None:
     return os.path.abspath(os.path.expanduser(path))
 
 
+def projects_file(store_url: str) -> Path:
+    """Where ``noeta serve`` keeps the saved projects: beside a sqlite
+    store's database file, else in noeta's home."""
+    db = _sqlite_file(store_url)
+    return Path(db).with_name("projects.json") if db else HOME / "projects.json"
+
+
 def loose_permissions(store_url: str) -> list[str]:
     """A notice for noeta's home and a sqlite store's database file when
     other users may read them; noeta never changes an existing mode."""

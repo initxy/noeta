@@ -33,15 +33,18 @@ def test_serve_shows_the_token_only_when_it_is_made(
     monkeypatch.delenv("NOETA_SERVER_TOKEN", raising=False)
     monkeypatch.chdir(tmp_path)
 
+    class Started(BaseException):  # not an Exception: past main()'s crash report
+        pass
+
     def started(*_a: object, **_kw: object) -> None:
-        raise RuntimeError("started")
+        raise Started("started")
 
     monkeypatch.setattr(main, "_app", started)
     argv = ["--model", "m", "--store", f"sqlite:///{tmp_path}/t.db", "serve"]
-    with pytest.raises(RuntimeError, match="started"):
+    with pytest.raises(Started):
         main.main(argv)
     first = capsys.readouterr().err
-    with pytest.raises(RuntimeError, match="started"):
+    with pytest.raises(Started):
         main.main(argv)
     second = capsys.readouterr().err
     shown = first.rpartition(": ")[2].strip()

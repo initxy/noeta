@@ -8,6 +8,9 @@ it comes from.
 
 - **The command's own error.** The `noeta` command exits with one line starting `noeta:` for
   anything it can name (no model, no key, a refused flag). Read that line before anything else.
+  Anything else prints `noeta: unexpected error: <type>: <message>` and the path of a crash
+  report under `~/.noeta/logs/` (the traceback, the version, the command line); attach that
+  file to a bug report. `--verbose` or `NOETA_DEBUG=1` prints the traceback on the terminal too.
 - **The task's end or turn failure.** A turn that cannot go on records a `TurnFailed` with a
   reason. An interactive task keeps its conversation and waits for the next message; a one-shot
   task (any sub-agent, or an agent file with `one_shot: true`) ends with `TaskEnded(status="failed", error=…)`, and
@@ -31,6 +34,17 @@ it comes from.
 | `…: {env:NAME} names an environment variable that is not set` / `…: the keyring has no secret for 'service/user'` / `…: {keyring:…} needs the keyring package` | A secret reference cannot be filled on this machine. References are filled only when the plugin or provider is made, so this shows when it is first used. | Set the variable, store the secret (`keyring set service user`), or install the `keyring` extra. |
 | `noeta: this needs the server extra, which is not installed: pip install '…'` (also `postgres`, `acp`, `keyring`) | `noeta serve`, a Postgres store, `noeta acp` or keyring secrets need an optional extra. | Run the printed line. With `uv tool install --reinstall`, name every extra you use: a reinstall drops the ones it does not name. |
 | `noeta: the terminal UI is its own package, noeta-tui, which is not installed: …` | `noeta` with no subcommand starts the terminal UI, which is the separate `noeta-tui` package. | Run the printed install line, or use `noeta -p` for one prompt. |
+
+## `noeta web` and `noeta update`
+
+| You see | Cause | Fix |
+|---|---|---|
+| `noeta web: this noeta has no web app built in (a source checkout without the built web/); …` | The installed package was built without the web app: a checkout, or a wheel built without npm. | In the checkout run `make web-bundle` (it needs npm), or install noeta from PyPI. |
+| `noeta web: port N is in use; pick another with --port` | `--port` names a port something else listens on. | Pick another port, or leave `--port` out (8642, else a free one). |
+| `noeta web: the server did not start; the end of its log (…/logs/web.log): …` | The background `noeta serve` exited or did not answer within 60 seconds. The lines shown say why (a store it cannot open, a missing extra). | Fix what the log says and run `noeta web` again. |
+| `noeta web: the server (pid N) does not answer; …` | The server `noeta web` started earlier is alive but does not answer. | `noeta web stop`, then `noeta web`. |
+| `noeta update: cannot reach PyPI to check for a new version (…); nothing changed` | No network, or a proxy noeta does not know about. | Set `HTTPS_PROXY` (or `ALL_PROXY`) and run it again. |
+| `noeta update: this noeta (…) runs from source …, so nothing is changed` | noeta runs from a checkout or an editable install, which `noeta update` leaves alone. | Update the checkout, or switch to the release with the command it prints. |
 
 ## Models and providers
 

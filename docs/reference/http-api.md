@@ -142,6 +142,21 @@ server's queue.
 With a `task_id`, commands are listed and run in that task's own agent and directory; with a
 `cwd`, the directory is checked as a new task's would be.
 
+## Projects and directories
+
+A project is a directory: one a person saved, or one where root tasks run. The web app lists
+them down its side and picks a new one with `GET /dirs`.
+
+| Method and path | Query / body | Answers |
+|---|---|---|
+| `GET /projects` | | `[{path, name, saved, sessions}]`: the saved directories in the order saved, then the other directories of unarchived root tasks, most recently used first. `path` is the real path (symlinks resolved), `name` its last part, `sessions` the count of unarchived root tasks there (of the 500 most recent) |
+| `POST /projects` | `{path}` | saves it and answers its `{path, name, saved, sessions}`; `path` is checked as a new task's `cwd` (relative to the server's directory; `403` outside the server's directories, `400` when it is not a directory) |
+| `DELETE /projects` | `{path}` | `{ok: true}`: no longer saved; its tasks stay |
+| `GET /dirs` | `?path=` (default: the server's directory) | `{path, parent, dirs: [{name, path}]}`: the subdirectories, by name, hidden ones (a leading `.`) left out; `parent` is `null` when it lies outside the server's directories. `403` outside them, `400` for a path that is not a readable directory |
+
+The saved list is kept in `projects.json` beside a sqlite store's database file, else in
+`~/.noeta/`.
+
 ## Plugins
 
 | Method and path | Query / body | Answers |
@@ -250,7 +265,8 @@ The control requests and message kinds are the ones `noeta -p` handles
 
 ## The web app's files
 
-With `noeta serve --web DIR` (the built web app, `web/dist`) every path not listed above
+With `noeta serve --web DIR` (the built web app, `web/dist`), or without `--web` when the
+installed package carries the web app (a wheel from PyPI does), every path not listed above
 serves that directory's files without a token: they hold none. They go out with a content
 security policy (the page's scripts, styles and requests are its own server's; images also
 `data:` and `blob:`), `X-Frame-Options: DENY` and `X-Content-Type-Options: nosniff`. The page

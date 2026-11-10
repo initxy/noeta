@@ -6,6 +6,53 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [1.1.2] - 2026-11-09
+
+`noeta web` opens the web app with no build step, the web and desktop apps become a local
+workbench of projects and their sessions, `noeta update` upgrades in place, an unexpected error
+prints one line instead of a traceback, and each release carries desktop installers.
+
+### Added
+
+- **`noeta web`**: the web app in your browser with no build step. It starts `noeta serve` on
+  `127.0.0.1` in the background (port 8642, else a free one) with its own token, waits until it
+  answers, prints the address and opens it; a second `noeta web` reuses the running server.
+  `noeta web status` and `noeta web stop`; `--port`, `--no-open`. The server may run tasks in
+  the directory it was started from and anywhere under your home directory.
+- **The wheel carries the built web app**, and `noeta serve` serves it when `--web` is not given.
+  `make build` and the release build it first (`make web-bundle`, needs npm).
+- **`noeta update`**: checks PyPI and upgrades in place, keeping what noeta was installed with:
+  a uv tool install is reinstalled with the extras, `--with` packages, Python and index its
+  receipt names; a pip install gets `pip install -U` with the extras installed; a checkout is
+  left alone (it prints the commands). A running `noeta web` server is restarted on the new
+  version.
+- **Projects in the HTTP API**: `GET /projects` lists the saved directories and those of
+  unarchived sessions, each with its count of sessions; `POST /projects` / `DELETE /projects`
+  save and unsave one (checked as a new task's `cwd`); `GET /dirs?path=` lists a directory's
+  subdirectories for a folder picker.
+- **Desktop installers on each GitHub Release**: macOS `.dmg` and Linux `.AppImage` / `.deb`,
+  built by the release workflow and not signed (on macOS, right-click the app and choose Open the
+  first time).
+
+### Changed
+
+- **The web and desktop apps are a local workbench**, as Codex's desktop app: the left column
+  lists projects (folders, by name with the path on hover), each with its sessions newest first,
+  a status dot and how long ago each moved; New session at the top starts one in the selected
+  project, a project's + starts one there, and the empty session names the project it will run
+  in. Add project opens a folder picker over the server's folders in a browser (`GET /dirs`,
+  saved with `POST /projects`; a folder the server may not use says why) and the system's picker
+  in the desktop app; a project you added can be removed from its menu. The page remembers the
+  last project; the desktop app opens on it. Search and the archived list work across all
+  projects. Against a server without `/projects`, the folders of its sessions are listed.
+- **Desktop**: File > Open Project Folder is now File > Add Project… (still `⌘O`), and the
+  chosen folder is saved as a project of the server. The install line it shows when `noeta` is
+  missing is `uv tool install 'noeta[tui,server]'`.
+- **An unexpected error prints one line** (`noeta: unexpected error: <type>: <message>`) and the
+  path of a crash report under `~/.noeta/logs/`, not a Python traceback; `--verbose` or
+  `NOETA_DEBUG=1` prints the traceback too. Ctrl+C exits with code 130 without a traceback. The
+  terminal UI no longer prints Textual's traceback, which showed every frame's local variables.
+
 ## [1.1.1] - 2026-11-09
 
 The terminal UI copies text, reopens long tasks at once, folds runs of tool calls as Claude Code

@@ -9,6 +9,7 @@ import {
   freshToken,
   INSTALL_LINE,
   isUnder,
+  saveProject,
   serveArgs,
   serveEnv,
   ServerError,
@@ -82,7 +83,7 @@ describe("findNoeta", () => {
   });
 
   it("names an install line with the server extra", () => {
-    expect(INSTALL_LINE).toContain("noeta[server]");
+    expect(INSTALL_LINE).toContain("noeta[tui,server]");
   });
 });
 
@@ -186,5 +187,19 @@ describe("startServer", () => {
     }) as unknown as Spawn;
     const err = await startServer(options, { spawn, fetch: async () => Promise.reject(new Error("no")) }).catch((e: unknown) => e);
     expect((err as Error).message).toContain("spawn EACCES");
+  });
+});
+
+describe("saveProject", () => {
+  it("posts the folder with the token, and says false when the server refuses it or keeps no projects", async () => {
+    const post = vi.fn(async () => ({ ok: true }));
+    expect(await saveProject({ url: "http://127.0.0.1:9", token: "tok" }, "/srv/repo", post)).toBe(true);
+    expect(post).toHaveBeenCalledWith("http://127.0.0.1:9/projects", {
+      method: "POST",
+      headers: { authorization: "Bearer tok", "content-type": "application/json" },
+      body: JSON.stringify({ path: "/srv/repo" }),
+    });
+    expect(await saveProject({ url: "u", token: "t" }, "/x", async () => ({ ok: false }))).toBe(false);
+    expect(await saveProject({ url: "u", token: "t" }, "/x", () => Promise.reject(new Error("down")))).toBe(false);
   });
 });

@@ -134,7 +134,7 @@ async def test_a_plugin_the_settings_keep_on_cannot_be_switched_off(
         await app.store.close()
 
 
-class _Stop(Exception):
+class _Stop(BaseException):  # not an Exception: past main()'s crash report
     pass
 
 

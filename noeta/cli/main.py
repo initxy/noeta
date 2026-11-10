@@ -9,6 +9,9 @@
                                ``--server URL`` drives a ``noeta serve`` server's tasks
     noeta worker               run tasks from the store until stopped (multi-machine)
     noeta serve                the client API over HTTP (and workers, unless --no-worker)
+    noeta web                  the web app on a local server in the background
+                               (``noeta web status``, ``noeta web stop``)
+    noeta update               upgrade noeta in place, keeping its extras
     noeta plugin ...           install (pinned), list and remove plugins
     noeta mcp ...              add, list, remove and sign in to MCP servers
 
@@ -30,11 +33,18 @@ from pathlib import Path
 from typing import Any
 
 from noeta.agents.agent_files import AgentFileError, PluginArgumentError
-from noeta.cli import home_dir, mcp_command, plugin_command
+from noeta.cli import (
+    crash_report,
+    home_dir,
+    mcp_command,
+    plugin_command,
+    update_command,
+    web_command,
+)
 from noeta.cli.config import ConfigError, Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
-SUBCOMMANDS = ("acp", "worker", "serve", "trust", "plugins", "plugin", "mcp")
+SUBCOMMANDS = ("acp", "worker", "serve", "web", "update", "trust", "plugins", "plugin", "mcp")
 
 #: The extras the README's install line names.
 README_EXTRAS: tuple[str, ...] = ()
@@ -126,8 +136,11 @@ def _parser() -> argparse.ArgumentParser:
                     help="let requests install and remove plugins (always allowed on a "
                          "loopback address without --allow-host or --allow-origin)")
     sv.add_argument("--web", metavar="DIR",
-                    help="also serve this directory's files (the built web app, web/dist) "
-                         "at the server's other paths")
+                    help="serve this directory's files (the built web app, web/dist) at the "
+                         "server's other paths (default: the web app noeta was built with, "
+                         "if any)")
+    web_command.add_parser(sub)
+    update_command.add_parser(sub)
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
@@ -285,9 +298,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
     from noeta.cli.home_dir import HOME
     from noeta.cli.server_token import server_token_digest
-    from noeta.host.http import LOOPBACK_HOSTS, create_app, redact_token_logs
+    from noeta.host.http import LOOPBACK_HOSTS, bundled_web_dir, create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
+    web = os.path.abspath(args.web) if args.web else bundled_web_dir()
     server = None if args.no_token else server_token_digest()
     if server is not None and server.shown is not None:
         print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "
@@ -309,14 +323,15 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
-                     web_dir=os.path.abspath(args.web) if args.web else None,
+                     web_dir=web,
                      # A Host or origin named besides the loopback ones: a
                      # reverse proxy may bring anyone to the loopback bind.
                      allow_plugin_install=args.allow_plugin_install
                      or (host in LOOPBACK_HOSTS and not args.allow_host
                          and not args.allow_origin),
-                     plugin_admin=app.plugin_admin)
-    if args.web:
+                     plugin_admin=app.plugin_admin,
+                     projects_file=str(home_dir.projects_file(s.store_url)))
+    if web:
         print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)
     redact_token_logs()
@@ -404,18 +419,23 @@ def _install_hint(module: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
+    words = list(sys.argv[1:] if argv is None else argv)
     try:
-        _main(list(sys.argv[1:] if argv is None else argv))
+        _main(words)
     except (ConfigError, AgentFileError, PluginArgumentError) as exc:
         sys.exit(f"noeta: {exc}")
+    except KeyboardInterrupt:
+        sys.exit(130)
     except ImportError as exc:
         extra = missing_extra(exc)
         if extra is None:
-            raise
+            sys.exit(crash_report.crash(exc, words))
         # A uv tool reinstall keeps only the extras it names.
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
                  f"{_pip(_noeta(extra))} (or, for a uv tool install, {_uv_reinstall(extra)}, "
                  "listing every extra you want: a reinstall drops the ones it does not name)")
+    except Exception as exc:  # noqa: BLE001 - any other error: one line and a report
+        sys.exit(crash_report.crash(exc, words))
 
 
 def _main(argv: list[str]) -> None:
@@ -434,6 +454,12 @@ def _main(argv: list[str]) -> None:
     if args.command == "plugins":
         _plugins(cwd)
         return
+    if args.command == "update":
+        sys.exit(update_command.run(args))
+    if args.command == "web":
+        if args.action is None and web_command.running() is None:
+            _settings(args)  # a new server needs a model: say so here, not in its log
+        sys.exit(web_command.run(args, cwd))
     if args.command == "plugin":
         sys.exit(plugin_command.run(args, cwd))
     if args.command == "mcp":

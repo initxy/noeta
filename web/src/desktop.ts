@@ -8,8 +8,11 @@ export interface DesktopBridge {
   platform: string;
   /** The project folder new sessions run in. */
   project(): Promise<string>;
-  /** Asks for a folder; null when the dialog was cancelled. */
+  /** Asks for a folder and saves it as a project (`POST /projects`); null
+   * when the dialog was cancelled. */
   chooseProject(): Promise<string | null>;
+  /** The project picked in the page, opened first next time (an older app has none). */
+  setProject?(path: string): void;
   /** A system notification, shown only while the window is not focused. */
   notify(n: { title: string; body: string; taskId?: string }): void;
   onCommand(cb: (c: DesktopCommand) => void): () => void;

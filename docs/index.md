@@ -43,7 +43,7 @@ features:
     link: /how-it-works/plugins
     linkText: The plugin system
   - title: Every way in
-    details: A terminal UI, Claude Code's -p and stream-json protocol, ACP for editors, an HTTP / WebSocket API, a Python SDK, and an experimental web app. All of them are one client API.
+    details: A terminal UI, Claude Code's -p and stream-json protocol, ACP for editors, an HTTP / WebSocket API, a Python SDK, a web app and a desktop app. All of them are one client API.
     link: /reference/cli
     linkText: The noeta command
 ---
