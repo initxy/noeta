@@ -5,7 +5,9 @@ keeping what it was installed with.
   --reinstall`` with the receipt's extras, ``--with`` packages, Python and index,
   noeta's version pin dropped (a reinstall keeps only what it names);
 * a pip install: ``pip install -U 'noeta[<the extras installed>]'``;
-* a source checkout or an editable install: the commands to run, nothing changed."""
+* a source checkout or an editable install: the commands to run, nothing changed.
+
+After an upgrade an installed ``noeta service`` is restarted onto the new code."""
 
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from noeta.cli import service_command
 
 PYPI_JSON = "https://pypi.org/pypi/noeta/json"
 
@@ -215,4 +219,9 @@ def run(_args: argparse.Namespace) -> int:
               file=sys.stderr)
         return code
     print(f"noeta update: now at {_reported_version() or latest}")
+    restarted = service_command.restart_if_installed()
+    if restarted is not None:
+        print("noeta update: restarted noeta service" if restarted else
+              "noeta update: could not restart noeta service; run noeta service restart",
+              file=sys.stdout if restarted else sys.stderr)
     return 0

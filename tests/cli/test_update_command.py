@@ -16,7 +16,7 @@ import respx
 
 import noeta.cli.main as cli
 import noeta.host.stream_json as stream_json
-from noeta.cli import update_command
+from noeta.cli import service_command, update_command
 
 RECEIPT = """\
 [tool]
@@ -56,6 +56,7 @@ def ran(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ran:
     monkeypatch.setattr(stream_json, "noeta_version", lambda: "1.1.0")
     monkeypatch.setattr(update_command.shutil, "which",
                         lambda name: f"/bin/{name}" if name == "uv" else None)
+    monkeypatch.setattr(service_command, "restart_if_installed", lambda: None)
     recorded = Ran()
     monkeypatch.setattr(update_command.subprocess, "run", recorded)
     return recorded
@@ -78,6 +79,19 @@ def test_a_uv_tool_install_is_reinstalled_with_its_extras_and_with(
     assert ran.commands[1] == [sys.executable, "-m", "noeta.cli.main", "--version"]
     out = capsys.readouterr().out
     assert "noeta update: 1.1.0 -> 1.2.0" in out and "noeta update: now at 1.2.0" in out
+
+
+def test_an_installed_service_is_restarted_after_the_upgrade(
+        ran: Ran, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    restarted: list[bool] = []
+    monkeypatch.setattr(service_command, "restart_if_installed",
+                        lambda: restarted.append(True) or True)
+    assert _update() == 0
+    assert restarted == [True] and ran.commands[0][:3] == ["/bin/uv", "tool", "install"]
+    assert "restarted noeta service" in capsys.readouterr().out
+    monkeypatch.setattr(service_command, "restart_if_installed", lambda: False)
+    assert _update() == 0
+    assert "noeta service restart" in capsys.readouterr().err
 
 
 def test_up_to_date_runs_nothing(ran: Ran, monkeypatch: pytest.MonkeyPatch,
