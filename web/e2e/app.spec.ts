@@ -356,7 +356,7 @@ test("a session without a project runs in a scratch folder, listed under Scratch
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const day = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  await expect(page.locator(".cwd")).toHaveText(new RegExp(`/scratch/${day}/[\\w-]{8}$`));
+  await expect(page.locator(".cwd")).toHaveAttribute("title", new RegExp(`/scratch/${day}/[\\w-]{8}$`));
   const scratch = nav.locator("section.scratch");
   await expect(scratch.getByRole("button", { name: "Scratch", exact: true })).toBeVisible();
   await expect(scratch.locator(`[data-day="${day}"] .scratch-day-label`)).toHaveText("Today");
