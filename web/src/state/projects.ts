@@ -12,6 +12,27 @@ export function shortPath(path: string): string {
   return parts.length > 3 ? `…/${parts.slice(-2).join("/")}` : path;
 }
 
+/** For projects sharing a name, the fewest parent folders that tell them
+ * apart (`web-ux/srv`), by path; a project whose name is its own has none. */
+export function projectWhere(projects: { path: string; name: string }[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const byName = new Map<string, string[]>();
+  for (const p of projects) byName.set(p.name, [...(byName.get(p.name) ?? []), p.path]);
+  for (const paths of byName.values()) {
+    if (paths.length < 2) continue;
+    const parents = paths.map((p) => p.replace(/\/+$/, "").split("/").slice(0, -1));
+    const most = Math.max(...parents.map((p) => p.length));
+    for (let k = 1; k <= most; k++) {
+      const labels = parents.map((p) => p.slice(-k).join("/") || "/");
+      if (new Set(labels).size === labels.length || k === most) {
+        paths.forEach((p, i) => out.set(p, labels[i]));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 /** The listed project a folder belongs to: the same path, else one that is
  * the other through a symlinked prefix (the server lists real paths; a
  * session keeps the path it was started with, e.g. `/home/me/x` for

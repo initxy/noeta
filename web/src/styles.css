@@ -222,6 +222,12 @@ code {
   white-space: nowrap;
 }
 
+.project-where {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
 .project-name:disabled {
   cursor: default;
 }

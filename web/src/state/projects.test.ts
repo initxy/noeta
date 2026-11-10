@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Project, TaskSummary } from "../api/types";
-import { dayLabel, projectFor, projectList, scratchDay, scratchRoot, shortPath } from "./projects";
+import { dayLabel, projectFor, projectList, projectWhere, scratchDay, scratchRoot, shortPath } from "./projects";
 
 const project = (path: string, saved = true): Project => ({ path, name: path.split("/").pop()!, saved, sessions: 0 });
 const session = (cwd: string, updated_at = 0): TaskSummary => ({
@@ -14,6 +14,20 @@ const session = (cwd: string, updated_at = 0): TaskSummary => ({
   title: "",
   cwd,
   prompt: "",
+});
+
+describe("projectWhere", () => {
+  it("tells projects of one name apart by the fewest parent folders", () => {
+    const where = projectWhere([
+      { path: "/t/web-ux/srv/work", name: "work" },
+      { path: "/t/web-feel/srv/work", name: "work" },
+      { path: "/home/me/app", name: "app" },
+    ]);
+    expect([...where]).toEqual([
+      ["/t/web-ux/srv/work", "web-ux/srv"],
+      ["/t/web-feel/srv/work", "web-feel/srv"],
+    ]);
+  });
 });
 
 describe("shortPath", () => {
