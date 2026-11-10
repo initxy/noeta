@@ -22,7 +22,7 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 # Released together with noeta, at the same version (docs/releasing.md).
-dependencies = ["noeta==1.2.1", "textual>=8.0"]
+dependencies = ["noeta==1.2.1", "textual>=8.0", "markdown-it-py>=2.1"]
 
 [project.urls]
 Homepage = "https://github.com/initxy/noeta"
