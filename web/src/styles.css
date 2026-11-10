@@ -1225,6 +1225,23 @@ code {
   white-space: pre-wrap;
 }
 
+.rewind-choices .choice {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 140px;
+  gap: 1px;
+}
+
+.choice-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.choice:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .scrim {
   display: none;
 }

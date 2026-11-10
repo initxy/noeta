@@ -5,6 +5,7 @@ import { ApiError, type Api } from "../api/client";
 import type { MarketEntry, PluginInfo, PluginListing } from "../api/types";
 import type { PartStatus } from "../plugins/host";
 import { uiApiProblem } from "../plugins/usePlugins";
+import { useEscape } from "./useEscape";
 
 /** What an install would fetch, shown before anything is. */
 interface Install {
@@ -260,6 +261,7 @@ export function PluginsDialog({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<"installed" | "discover" | "settings">("installed");
+  useEscape(onClose);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const switches = useTaskSwitches(api, taskId, taskOff, setError);
