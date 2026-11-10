@@ -266,7 +266,7 @@ since, and puts back what you choose:
 | Choice | What happens |
 |---|---|
 | Restore code and conversation | both of the below |
-| Restore conversation | a new task continues the log up to just before that prompt; the prompt is put back in the box to edit |
+| Restore conversation | the conversation up to just before that prompt is shown, and the prompt is put back in the box to edit; a new task continuing it is made when you send |
 | Restore code | the files go back to their content before that prompt; a file that did not exist is removed |
 
 The conversation is never cut in place: the old task stays in the store and the new one starts

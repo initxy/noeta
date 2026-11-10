@@ -6,6 +6,46 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+The TUI stays quick however long the conversation, shows a rewound conversation whole, and folds
+tool calls as Claude Code does.
+
+### Fixed
+
+- **The TUI got slower with every message**: every message stayed laid out, the spinner and the
+  footer laid out the whole screen several times a second, and each streamed fragment was parsed
+  and laid out on its own. At 500 messages the idle spinner held the CPU at 68%, a key took up to
+  650 ms to show, a resumed task took 10–18 s to appear and a 4000-character answer took two
+  minutes to stream. Only the transcript's end is laid out now (older messages come back as you
+  scroll up), the spinner and footer are redrawn without a layout, and a streamed reply is shown
+  once a frame.
+- **Scrolled up, the transcript was pulled back to the end** by every record; it now stays
+  where you are and follows again once you scroll back down. `PageUp` / `PageDown` scroll it
+  while the prompt has the keys.
+- **`Esc` took a moment to stop the turn on screen**: it now stops the spinner and says
+  Interrupted at once.
+- **Typing after `@` and `Ctrl+V` froze the screen** while the directory was walked or the
+  clipboard program answered; both run off the screen's loop, and in a git repository the `@`
+  list is git's (ignored files left out).
+- **A rewound conversation lost what came before the rewind point** on screen, and on every
+  later resume: the conversation it continues is now shown first. A rewind also left an empty
+  task behind when nothing was sent after it; its task is now made with the first message.
+- **`--resume` opened the newest task before listing**, and opening it reordered the list; it
+  now lists first and opens only the task picked. The list is this directory's conversations
+  (a last choice lists every directory's), every one of them, a rewound one as one line.
+
+### Changed
+
+- **`Ctrl+O` shows the detailed transcript** in the transcript's place, as Claude Code's
+  transcript mode does, instead of unfolding every call in place; the transcript stays folded.
+- **Tool calls fold as Claude Code's do**: a run shows as its line from its first call; short
+  remarks between calls, answered approvals and the task list no longer break it; a failed call
+  pops out with its first error lines; shell commands that only read, search or list count as
+  that, and commits, pushes and pull requests are named; reads count files, MCP calls name their
+  server; a running read shows its pattern as a hint; consecutive edits to one file are one line
+  (`Edited calc.py ×3 (+12 −4)`), and agents started together are one line with a line each.
+
 ## [1.2.2] - 2026-11-10
 
 Images reach gateway models again, switching between auto and bypass-permissions mode no longer
