@@ -45,10 +45,22 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # The wheel carries the built web app (noeta serve and noeta web serve it).
+      - name: Build the web app into the package
+        run: make web-bundle
       - name: Build both packages
         run: |
           uv build --all-packages
           ls -l dist/
+      - name: The noeta wheel carries the web app
+        run: |
+          python3 -m zipfile -l dist/noeta-*-py3-none-any.whl | grep -q 'noeta/host/web_dist/index.html' \
+            || { echo "::error::the noeta wheel has no noeta/host/web_dist/index.html"; exit 1; }
       - name: Both wheels' versions are the tag's
         if: startsWith(github.ref, 'refs/tags/v')
         run: |

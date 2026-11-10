@@ -71,8 +71,9 @@ events; when this process also runs workers, live model output streams too.
     POST /stream-json                 the same, one-way: the request body's JSON lines in,
                                       the reply's JSON lines out; permission prompts refused
 
-With ``web_dir`` (``noeta serve --web DIR``) the other paths serve that directory's
-files, the built web app (``web/``), without a token: it holds none. They go with
+With ``web_dir`` (``noeta serve --web DIR``, else the web app the package carries,
+:func:`bundled_web_dir`) the other paths serve that directory's files, the built web
+app (``web/``), without a token: it holds none. They go with
 :data:`WEB_HEADERS`: a content security policy (the page's scripts, styles and requests
 are its own server's, plus its import map by hash; images also ``data:`` and ``blob:``)
 and no framing.
@@ -89,6 +90,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -121,7 +123,7 @@ from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
 __all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "WEB_IMPORT_MAP_SHA256", "Refused",
-           "create_app", "redact_token_logs", "token_digest"]
+           "bundled_web_dir", "create_app", "redact_token_logs", "token_digest"]
 
 
 @dataclasses.dataclass
@@ -227,6 +229,13 @@ WEB_HEADERS = (
     (b"x-frame-options", b"DENY"),
     (b"x-content-type-options", b"nosniff"),
 )
+
+
+def bundled_web_dir() -> str | None:
+    """The built web app this package carries (``make web-bundle`` puts it
+    in the wheel), or ``None`` when it was built without one."""
+    found = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_dist")
+    return found if os.path.isfile(os.path.join(found, "index.html")) else None
 
 
 class _WebFiles(StaticFiles):

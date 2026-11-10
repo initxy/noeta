@@ -30,6 +30,9 @@ node_modules/
 # a plugin's built web part is what gets installed (examples/web-panel)
 !examples/*/web/dist/
 
+# the built web app the wheel carries (make web-bundle), built, never committed
+/noeta/host/web_dist/
+
 # web/ test output
 web/test-results/
 web/playwright-report/

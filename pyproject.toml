@@ -125,6 +125,11 @@ noeta-tui = { workspace = true }
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The built web app (make web-bundle) is not in the repository but goes in
+# both distributions, so a wheel built from the sdist carries it too.
+[tool.hatch.build]
+artifacts = ["/noeta/host/web_dist/"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["noeta"]
 

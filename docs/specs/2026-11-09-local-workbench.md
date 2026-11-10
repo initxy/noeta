@@ -45,7 +45,7 @@ A user who ran `uv tool install 'noeta[tui,server]'` gets, with no build step:
 
 - [x] Python: crash fallback in `main()` + crash report
 - [x] Python: `/projects` and `/dirs` endpoints (+ OpenAPI, `RemoteClient`/`AppAPI` only if the TUI needs them — it does not)
-- [ ] Python: bundled web app in the wheel; `make build` and release `build` job build `web/` first; smoke step asserts the wheel has `index.html`
+- [x] Python: bundled web app in the wheel; `make build` and release `build` job build `web/` first; smoke step asserts the wheel has `index.html`
 - [ ] Python: `noeta web`, `noeta web stop`, `noeta web status`
 - [ ] Python: `noeta update`
 - [ ] Web: workbench layout — projects column with sessions, add project (folder picker over `/dirs`, desktop native picker), new session in the selected project
@@ -72,3 +72,4 @@ A user who ran `uv tool install 'noeta[tui,server]'` gets, with no build step:
 - 2026-11-09 owner: Codex-style local workbench; do all five proposals.
 - 2026-11-09 crash fallback: `-v` is already `--version` (Claude Code's flag), so the traceback switch is `--verbose` (anywhere on the command line) or `NOETA_DEBUG=1`. The TUI hands an error that ended it back to `main()` (Textual's own traceback, with every frame's locals, is no longer printed); `-p` goes through `main()` already.
 - 2026-11-09 `/projects` and `/dirs` (`noeta/host/projects.py`, `_http_routes.py`), as decided, plus these details the web app can rely on: `path` is the directory's real path (symlinks resolved; sessions are counted by their cwd's real path); the list is the saved projects in the order saved, then the other session directories, most recently used first; the count covers the 500 most recent root tasks; `POST /projects` answers 200 with the project (400 when the path is not a directory), `DELETE /projects` answers `{ok: true}`; `GET /dirs` without `path` lists the server's own directory, a relative `path` is taken from it, and `parent` is `null` when the parent is outside the allowed directories. The saved list is `projects.json` beside a sqlite store's file, else in noeta's home.
+- 2026-11-09 bundled web app: `make web-bundle` builds `web/` and copies `web/dist` to `noeta/host/web_dist/` (ignored by git, a hatch `artifacts` entry so both the sdist and the wheel built from it carry it; wheel 1.36 MB). `make build` and the release `build` job run it first; the job fails when the wheel lacks `noeta/host/web_dist/index.html`. `noeta serve` without `--web` serves it when present (`noeta.host.http.bundled_web_dir`).

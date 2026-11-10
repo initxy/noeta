@@ -126,8 +126,9 @@ def _parser() -> argparse.ArgumentParser:
                     help="let requests install and remove plugins (always allowed on a "
                          "loopback address without --allow-host or --allow-origin)")
     sv.add_argument("--web", metavar="DIR",
-                    help="also serve this directory's files (the built web app, web/dist) "
-                         "at the server's other paths")
+                    help="serve this directory's files (the built web app, web/dist) at the "
+                         "server's other paths (default: the web app noeta was built with, "
+                         "if any)")
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
@@ -285,9 +286,10 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
     from noeta.cli.home_dir import HOME
     from noeta.cli.server_token import server_token_digest
-    from noeta.host.http import LOOPBACK_HOSTS, create_app, redact_token_logs
+    from noeta.host.http import LOOPBACK_HOSTS, bundled_web_dir, create_app, redact_token_logs
 
     host, with_worker = args.host, not args.no_worker
+    web = os.path.abspath(args.web) if args.web else bundled_web_dir()
     server = None if args.no_token else server_token_digest()
     if server is not None and server.shown is not None:
         print(f"noeta: bearer token (shown only now; {HOME / 'server-token'} keeps its "
@@ -309,7 +311,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      origins=args.allow_origin,
                      allow_bypass=args.allow_bypass_permissions, cwd=cwd,
                      roots=[os.path.abspath(r) for r in args.allow_root],
-                     web_dir=os.path.abspath(args.web) if args.web else None,
+                     web_dir=web,
                      # A Host or origin named besides the loopback ones: a
                      # reverse proxy may bring anyone to the loopback bind.
                      allow_plugin_install=args.allow_plugin_install
@@ -317,7 +319,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                          and not args.allow_origin),
                      plugin_admin=app.plugin_admin,
                      projects_file=str(home_dir.projects_file(s.store_url)))
-    if args.web:
+    if web:
         print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)
     redact_token_logs()
