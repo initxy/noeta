@@ -52,6 +52,7 @@ from noeta.host.pending import (
     choices,
     follow_tree,
 )
+from noeta.host.rewind import lineage
 from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
 from noeta.toolkit.plugin_records import TITLE, AutoCompact, auto_compact
@@ -465,29 +466,36 @@ class TranscriptView(App[None]):
                 and self.stream_key[1] <= failed_attempt:
             await self._end_stream(drop=True)
 
-    async def show_log(self, task_id: str, head: Collection[Widget] = ()) -> int:
+    async def show_log(self, task_id: str, head: Collection[Widget] = (), *,
+                       through: int | None = None) -> int:
         """What ``task_id``'s log holds now, shown at once after ``head``
-        (the welcome box): its records rendered into widgets first, mounted
-        in one go (one by one, Textual lays the screen out again for each),
-        only the last ones (``TailScroll.show_all``). The seq of its last
-        record, for :meth:`follow` to go on after."""
+        (the welcome box), the conversations it continues first (a rewind's
+        fork continues its source's): their records rendered into widgets
+        first, mounted in one go (one by one, Textual lays the screen out
+        again for each), only the last ones (``TailScroll.show_all``). The
+        seq of its last record, for :meth:`follow` to go on after.
+        ``through``: ``task_id``'s log only up to that seq, as the
+        conversation the screen's task will continue (a fork not yet made)."""
         # Open before the log is read: live output meanwhile waits for it.
         batch: list[Widget] = list(head)
         self._batch = batch
         try:
             try:
-                found = await self.local.client.events(task_id)
+                logs = await lineage(self.local.client, task_id)
             except Exception:  # the follower reads it then, and says so if it cannot
                 log.warning("reading the log of %s failed", task_id, exc_info=True)
                 return 0
-            for rec in found:
-                try:
-                    await self.render_event(rec)
-                except Exception:
-                    log.exception("rendering %s failed", type(rec.event).__name__)
+            if through is not None:
+                logs[-1] = (logs[-1][0], [r for r in logs[-1][1] if r.seq <= through])
+            earlier, own = (logs, []) if through is not None else (logs[:-1], logs[-1][1])
+            for _, records in earlier:
+                await self._render_all(records)
+            if earlier:
+                await self._continued()
+            await self._render_all(own)
         finally:
             self._batch = None
-        if task_id != self.task_id:
+        if self.task_id != (task_id if through is None else ""):
             return 0
         transcript = self.transcript()
         with self.batch_update():
@@ -495,10 +503,28 @@ class TranscriptView(App[None]):
             transcript.scroll_end(animate=False)
         # Kept at the end as what comes next (a warning that wraps) grows it.
         self.call_after_refresh(self._follow_end)
-        self._refresh_cost(task_id)
+        if self.task_id:
+            self._refresh_cost(task_id)
         self._ui_wanted.set()
         self.update_status()
-        return found[-1].seq if found else 0
+        return own[-1].seq if own else 0
+
+    async def _render_all(self, found: list[Recorded]) -> None:
+        for rec in found:
+            try:
+                await self.render_event(rec)
+            except Exception:
+                log.exception("rendering %s failed", type(rec.event).__name__)
+
+    async def _continued(self) -> None:
+        """The conversation the task continues is shown: what it left open
+        is not the task's (its model calls are numbered in its own log)."""
+        await self._close_cards()
+        self._set_question("", "", {})
+        self.called = self.replied = 0
+        self.streamed.clear()
+        self.attempts.clear()
+        self.set_busy(False)
 
     @work(exclusive=True, group="follow", exit_on_error=False)
     async def follow(self, task_id: str, after: int = 0) -> None:

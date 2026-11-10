@@ -23,7 +23,7 @@ from rich.text import Text
 from noeta.core import models
 from noeta.core.events import ExtensionRecorded, ModelReplied
 from noeta.host.app import change_config, model_choices, prepare_model
-from noeta.host.rewind import RewindPoint, rewind_points
+from noeta.host.rewind import RewindPoint, lineage, rewind_points
 from noeta.host.usage import cost_text, tree_usage
 from noeta.toolkit.permission_modes import MODE_NAMES
 from noeta.toolkit.plugin_records import MEMORY
@@ -303,8 +303,8 @@ async def _replies(app: NoetaApp) -> list[str]:
     tool calls only says nothing)."""
     if not app.task_id:
         return []
-    return [said for rec in await app.local.client.events(app.task_id)
-            if isinstance(rec.event, ModelReplied)
+    return [said for _, records in await lineage(app.local.client, app.task_id)
+            for rec in records if isinstance(rec.event, ModelReplied)
             and (said := rec.event.response.message.text.strip())]
 
 
@@ -461,13 +461,17 @@ async def _rewind(app: NoetaApp, arg: str) -> None:
 
 
 async def rewind_to(app: NoetaApp, points: list[RewindPoint], n: int, what: str) -> None:
+    """The files now (by the task rewound); the conversation is shown up to
+    the point at once, its task made with the first message sent."""
     point = points[n - 1]
-    done = await app.local.rewind(app.task_id, point,
-                                  conversation=what != "code", files=what != "conversation")
-    if done.task_id != app.task_id:
-        await app.open_task(done.task_id, resumed=False)
-        app.prefill(done.prompt)
-    restored = f"; {len(done.files)} file(s) restored" if done.files else ""
+    files: tuple[str, ...] = ()
+    if what != "conversation":
+        files = (await app.local.rewind(app.task_id, point, conversation=False,
+                                        files=True)).files
+    if what != "code":
+        await app.open_fork(app.task_id, point)
+        app.prefill(point.text)
+    restored = f"; {len(files)} file(s) restored" if files else ""
     await app.say_notice(f"rewound to before prompt {n}{restored}")
 
 

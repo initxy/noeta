@@ -26,6 +26,7 @@ from noeta.host.app import FrontEndStart
 from noeta.host.local import UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
+from noeta.host.rewind import RewindPoint
 from noeta.host.stream_json import find_latest_task
 from noeta.toolkit.interactive import BASH_MODE_KEY, follow
 from noeta.toolkit.local_env import local_timezone
@@ -165,6 +166,9 @@ class NoetaApp(TranscriptView):
         self._batch = None
         self._drawn = {}
         self._stopped_here = False
+        #: The rewind the screen's task will continue, made on the first
+        #: message: the task rewound and the point (``None``: no rewind).
+        self.fork_from: tuple[str, RewindPoint] | None = None
         self._record_at = 0.0
         self.turn_started_at = 0.0
         #: A delta is taken off the queue but not yet written.
@@ -332,7 +336,15 @@ class NoetaApp(TranscriptView):
             # task's files are): the prompt may suggest one.
             if not self.on_server:
                 config[BASH_MODE_KEY] = True
-            tid: str = await self.local.client.create(self.agent, None, config=config)
+            if self.fork_from is not None:
+                # A rewind's conversation: made now, from its first message,
+                # so a rewind nobody goes on with leaves no empty task.
+                source, point = self.fork_from
+                done = await self.local.rewind(source, point, conversation=True, files=False)
+                tid: str = done.task_id
+                self.fork_from = None
+            else:
+                tid = str(await self.local.client.create(self.agent, None, config=config))
             await self.local.adopt(tid)
             self.task_id = tid
             self._follower = self.follow(tid)
@@ -359,6 +371,17 @@ class NoetaApp(TranscriptView):
         self._load_commands()
         self.update_status()
 
+    async def open_fork(self, source: str, point: RewindPoint) -> None:
+        """A rewind of ``source``'s conversation to before ``point``: its
+        conversation up to there shown, on a screen whose task (that
+        conversation's continuation) is made when the first message is
+        sent (:meth:`ensure_task`)."""
+        head = await self._clear("", mount=False)
+        self.fork_from = (source, point)
+        await self.show_log(point.task_id, head, through=point.seq - 1)
+        self._load_commands()
+        self.update_status()
+
     async def _clear(self, task_id: str, *, refused: str = "",
                      mount: bool = True) -> list[Widget]:
         """Forget what was shown and show ``task_id``'s welcome box (``""``:
@@ -369,6 +392,7 @@ class NoetaApp(TranscriptView):
             self._follower = None
         self.read_only = bool(refused)
         self.task_id = task_id
+        self.fork_from = None
         self.task_cwd = self._default_task_cwd()
         self.effort = self.task_config.get("effort")
         self.context_tokens = 0

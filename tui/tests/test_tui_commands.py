@@ -25,7 +25,7 @@ from noeta.plugins.fs import FileTools
 from noeta.testing import ScriptedProvider, reply
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta_tui.app import NoetaApp
-from noeta_tui.widgets import Choices, Picker, PromptInput
+from noeta_tui.widgets import Choices, Picker, PromptInput, UserMessage
 
 from support import png as a_png
 from support import settle, shown, type_line
@@ -145,7 +145,7 @@ async def test_rewind_on_a_server(tmp_path: Path) -> None:
     provider = ScriptedProvider([
         reply("", ("Write", {"file_path": str(target), "content": "one\n"})), reply("wrote"),
         reply("", ("Edit", {"file_path": str(target), "old_string": "one",
-                            "new_string": "two"})), reply("edited")])
+                            "new_string": "two"})), reply("edited"), reply("again")])
     agent = Agent(name="main", model=MODEL, extensions=[FileTools(), Checkpoints()])
     server = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
                       env_for=lambda _s: LocalExecEnv(str(work)),
@@ -169,10 +169,17 @@ async def test_rewind_on_a_server(tmp_path: Path) -> None:
             created = (await server.client.events(first))[0].event
             assert isinstance(created, TaskCreated) and "prompts" in created.config
             await type_line(pilot, "/rewind 2")
-            await settle(pilot, lambda: app.task_id != first and target.read_text() == "one\n")
+            await settle(pilot, lambda: target.read_text() == "one\n")
             await settle(pilot, lambda: "rewound to before prompt 2; 1 file(s) restored"
                          in shown(app))
             assert app.query_one(PromptInput).text == "change them"
+            # The conversation up to there is shown; its task is made (by
+            # the server) with the first message.
+            assert app.task_id == "" and "write notes" in shown(app)
+            assert "change them" not in [m.text for m in app.query(UserMessage)]
+            await type_line(pilot, "change them later")
+            await settle(pilot, lambda: bool(app.task_id) and len(provider.requests) == 5
+                         and not app.busy)
             fork = (await server.client.events(app.task_id))[0].event
             assert isinstance(fork, TaskCreated) and fork.history_from == first
             assert fork.config["continued_as"] == "rewind"
