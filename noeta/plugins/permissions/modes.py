@@ -11,7 +11,7 @@ from noeta.core.extension import Reminder, TaskView
 from noeta.core.types import ToolResult
 from noeta.plugins.permissions import policy as p
 from noeta.plugins.permissions import wording as w
-from noeta.plugins.permissions.state import NAME, auto_active, state_of
+from noeta.plugins.permissions.state import EXIT_NOTES, NAME, shell_first, state_of
 
 #: Place in the joined system turn (``Reminder.order``): before the token
 #: budget, after the plan-mode notes.
@@ -37,12 +37,13 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
     out: list[Reminder] = []
     sent: list[str] = []
     auto_noted = st.auto_noted
-    active = auto_active(mode, st.plan)
-    if "auto_exited" in st.due and not active:
+    exits = [k for k in st.due if k in EXIT_NOTES]
+    if exits and not shell_first(mode, st.plan):
         if view.state.parent_id is None:
-            out.append(Reminder(text=w.AUTO_MODE_EXITED, kind="auto_exited", role="system",
-                                order=ORDER_AUTO))
-            sent.append("auto_exited")
+            kind = exits[0]
+            text = w.AUTO_MODE_EXITED if kind == "auto_exited" else w.BYPASS_MODE_EXITED
+            out.append(Reminder(text=text, kind=kind, role="system", order=ORDER_AUTO))
+            sent.append(kind)
         auto_noted = False
     if mode in ("auto", "bypassPermissions") and not auto_noted and _shell_first(view) \
             and _guidance_due(view, st.guidance_after):
@@ -50,9 +51,9 @@ async def mode_reminders(view: TaskView, mode: str) -> Sequence[Reminder]:
         out.append(Reminder(text=text, kind="auto_guidance", role="system", order=ORDER_AUTO))
         sent.append("auto_guidance")
         auto_noted = True
-    # Owed notes a later switch made moot: the exit from auto mode when it
-    # is back on (or in a sub-agent).
-    stale = [k for k in st.due if k not in sent and k == "auto_exited"]
+    # Owed notes a later switch made moot: the exit note when a shell-first
+    # mode is back on (or in a sub-agent).
+    stale = [k for k in st.due if k not in sent and k in EXIT_NOTES]
     if sent or stale or auto_noted != st.auto_noted:
         view.record(NAME, "noted", {"kinds": [*sent, *stale], "auto_noted": auto_noted})
     return out
