@@ -30,6 +30,13 @@ describe("ToolCard", () => {
     expect(container.querySelector("pre.input")).toHaveTextContent('"flag": true');
   });
 
+  it("shows a one-line error as one red line, without the tags the model reads", () => {
+    const { container } = render(<ToolCard t={tool({ status: "error", result: "<tool_use_error>Error: No such tool available: Grep</tool_use_error>" })} />);
+    expect(container.querySelector(".tool-error")).toHaveTextContent(/^Error: No such tool available: Grep$/);
+    expect(container).not.toHaveTextContent("tool_use_error");
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
   it("shows a yes's words under the call's result", () => {
     const { container, rerender } = render(<ToolCard t={tool({ input: { command: "ls" }, result: "a", note: "then run the tests" })} />);
     expect(container.querySelector(".tool-note")).toHaveTextContent("⎿ then run the tests");

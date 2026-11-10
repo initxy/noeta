@@ -135,7 +135,7 @@ describe("todos", () => {
     );
     expect(container.querySelector(".side-panels")).toBeEmptyDOMElement();
     expect(container.querySelector(".tool")).toHaveClass("tool-compact");
-    expect(container.querySelector(".tool-head")).toHaveTextContent("· 1 lines");
+    expect(container.querySelector(".tool-head")).toHaveTextContent("· 1 line");
   });
 });
 

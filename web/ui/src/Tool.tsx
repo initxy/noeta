@@ -1,11 +1,19 @@
 import { useState } from "react";
 
-/** A tool's output: long output folded to its first lines until asked for. */
-export function ToolOutput({ text, error, open }: { text: string; error?: boolean; open?: boolean }) {
+/** A tool's error without the `<tool_use_error>` tags the model reads it in. */
+export function toolError(text: string): string {
+  return text.replace(/^\s*<tool_use_error>([\s\S]*?)<\/tool_use_error>\s*$/, "$1").trim();
+}
+
+/** A tool's output: long output folded to its first lines until asked for;
+ * a one-line error as one red line. */
+export function ToolOutput({ text: given, error, open }: { text: string; error?: boolean; open?: boolean }) {
+  const text = error ? toolError(given) : given;
   const lines = text.split("\n");
   const long = lines.length > 12 || text.length > 1500;
   const [expanded, setExpanded] = useState(open ?? !long);
   if (!text) return null;
+  if (error && lines.length === 1) return <div className="tool-error">{text}</div>;
   return (
     <div className="tool-output">
       <pre className={error ? "error" : ""}>{expanded ? text : lines.slice(0, 6).join("\n").slice(0, 600)}</pre>

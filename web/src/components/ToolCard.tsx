@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Item } from "../state/transcript";
-import { ToolOutput } from "@initxy/noeta-ui";
+import { toolError, ToolOutput } from "@initxy/noeta-ui";
 import { Slot, toolSlot, useSlotCount, type ToolCall, type ToolSlotProps } from "@initxy/noeta-web-sdk";
 
 type Tool = Extract<Item, { kind: "tool" }>;
@@ -56,14 +56,17 @@ export const ToolCard = memo(function ToolCard({ t }: { t: Tool }) {
   }, [open, contributed, call]);
   const mcp = t.name.startsWith("mcp__");
   const label = mcp ? t.name.slice(5).split("__").join(" · ") : t.name;
-  const summary = compact && t.result !== undefined && !open ? `${t.result.split("\n").length} lines` : "";
+  const lines = t.result?.split("\n").length ?? 0;
+  const failed = t.status === "error" && t.result ? toolError(t.result).split("\n")[0] : "";
+  const summary = compact && t.result !== undefined && !open && !failed ? `${lines} ${lines === 1 ? "line" : "lines"}` : "";
   return (
     <div className={`tool tool-${compact ? "compact" : "full"}`} data-tool={t.name} data-status={t.status}>
       <div className="tool-head" onClick={() => setOpen(!open)}>
         <StatusDot status={t.status} />
         <span className="tool-name">{label}</span>
         <span className="tool-target">{toolTarget(t.input)}</span>
-        {summary && <span className="muted"> · {summary}</span>}
+        {summary && <span className="tool-summary">· {summary}</span>}
+        {compact && failed && !open && <span className="tool-summary tool-error">· {failed}</span>}
         {t.status === "waiting" && <span className="badge">waiting for you</span>}
       </div>
       {/* The generic view is the slot's own content: a plugin's `single` view replaces it. */}

@@ -683,6 +683,23 @@ code {
   color: var(--error);
 }
 
+.notice .link {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+/* the raw error a one-line notice was made from */
+.notice-detail {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--code);
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
 .banner {
   margin: 0;
   padding: 6px 16px;
@@ -770,6 +787,25 @@ code {
 }
 
 .tool-body pre.error {
+  color: var(--error);
+}
+
+.tool-error {
+  color: var(--error);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.tool-summary {
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.tool-summary.tool-error {
   color: var(--error);
 }
 

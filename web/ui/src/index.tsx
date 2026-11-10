@@ -4,7 +4,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export { Markdown } from "./Markdown";
-export { DiffView, proposedDiff, ToolOutput } from "./Tool";
+export { DiffView, proposedDiff, toolError, ToolOutput } from "./Tool";
 
 /** A line of muted text, or an error's. */
 export function Notice({ tone = "info", children }: { tone?: "info" | "warn" | "error"; children: ReactNode }) {
