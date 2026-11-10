@@ -404,6 +404,50 @@ describe("Sidebar", () => {
     rerender(<Sidebar sessions={[]} current={null} archived onOpen={() => undefined} onNew={() => undefined} onArchive={onArchive} onShowArchived={onShowArchived} />);
     expect(screen.getByText("No archived sessions")).toBeInTheDocument();
   });
+
+  it("lists each project with its sessions newest first, a project without any too, and folds one", async () => {
+    localStorage.clear();
+    const onSelectProject = vi.fn();
+    const onNewIn = vi.fn();
+    const onRemoveProject = vi.fn();
+    const older = { ...row("a", "Older", "", "/w/app"), updated_at: 10 };
+    const newer = { ...row("b", "Newer", "", "/w/app"), updated_at: 20 };
+    render(
+      <Sidebar
+        sessions={[older, newer, row("c", "Lint", "", "/w/lib")]}
+        projects={[{ path: "/w/empty", name: "empty", saved: true, sessions: 0 }]}
+        project="/w/empty"
+        current={null}
+        onOpen={() => undefined}
+        onNew={() => undefined}
+        onSelectProject={onSelectProject}
+        onNewIn={onNewIn}
+        onRemoveProject={onRemoveProject}
+      />,
+    );
+    const names = [...document.querySelectorAll(".project-name")].map((b) => b.textContent);
+    expect(names).toEqual(["empty", "app", "lib"]); // the server's, then the sessions' folders
+    expect(screen.getByRole("button", { name: "app" })).toHaveAttribute("title", "/w/app");
+    expect(document.querySelector(".project-row.selected")?.textContent).toContain("empty");
+    const app = document.querySelector('[data-project="/w/app"]')!;
+    expect([...app.querySelectorAll(".session-title")].map((t) => t.textContent)).toEqual(["Newer", "Older"]);
+    expect(document.querySelector('[data-project="/w/empty"]')).toHaveTextContent("No sessions yet");
+
+    await userEvent.click(screen.getByRole("button", { name: "Fold app" }));
+    expect(screen.queryByText("Newer")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("noeta.folded")!)).toEqual(["/w/app"]);
+    await userEvent.click(screen.getByRole("button", { name: "app" })); // selecting unfolds it
+    expect(onSelectProject).toHaveBeenCalledWith("/w/app");
+    expect(screen.getByText("Newer")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "New session in lib" }));
+    expect(onNewIn).toHaveBeenCalledWith("/w/lib");
+    // Only a saved project can be removed (the others are its sessions' folders).
+    expect(screen.queryByRole("button", { name: "app options" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "empty options" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove project" }));
+    expect(onRemoveProject).toHaveBeenCalledWith("/w/empty");
+  });
 });
 
 describe("Markdown", () => {

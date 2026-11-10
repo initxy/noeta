@@ -150,8 +150,11 @@ code {
 .sidebar {
   background: var(--sidebar);
   border-right: 1px solid var(--border);
-  overflow-y: auto;
-  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 8px 0;
 }
 
 .new-session {
@@ -164,13 +167,129 @@ code {
   margin-bottom: 12px;
 }
 
+/* the projects column: each folder, then its sessions */
+.project-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 4px -8px 0;
+  padding: 0 8px 8px;
+}
+
+.project {
+  margin-top: 2px;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+}
+
+.project-row:hover,
+.project-row.selected {
+  background: var(--user);
+}
+
+.project-row .fold {
+  padding: 4px 4px 4px 8px;
+  border: none;
+  line-height: 0;
+}
+
+.project-row .fold:disabled {
+  cursor: default;
+}
+
 .project-name {
-  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 6px 4px;
+  text-align: left;
   font-weight: 600;
-  color: var(--muted);
-  padding: 8px 8px 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-name:disabled {
+  cursor: default;
+}
+
+.project-row .row-action {
+  padding: 2px 6px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.project-row:hover .row-action,
+.project-row .row-action:focus-visible,
+.project-row .row-action[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.sidebar .project ul {
+  padding-left: 18px;
+}
+
+.no-sessions {
+  font-size: 13px;
+  padding: 4px 8px;
+}
+
+.project-menu {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 5;
+  min-width: 150px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
+}
+
+.menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.menu button:hover,
+.menu button:focus-visible {
+  background: var(--user);
+}
+
+.add-project {
+  padding: 0 6px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.sidebar-footer {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  margin: 0 -8px;
+  padding: 10px 16px;
+}
+
+.sidebar-footer:empty {
+  display: none;
 }
 
 .project ul,
@@ -331,21 +450,80 @@ code {
   font-weight: 400;
 }
 
-/* the desktop app's project folder */
-.project-pick {
-  font: inherit;
-  font-family: ui-monospace, monospace;
-  font-size: 0.9em;
-  color: var(--text);
-  background: var(--user);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1px 8px;
-  cursor: pointer;
+/* the project a new session runs in */
+.welcome-project {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
 }
 
-.project-pick:hover {
-  border-color: var(--accent);
+.welcome-project-name {
+  font-weight: 600;
+  font-size: 1.1em;
+}
+
+.welcome-project-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome .link {
+  font-size: inherit;
+  color: var(--accent);
+}
+
+/* the browser's folder picker */
+.path-row {
+  display: flex;
+  gap: 8px;
+}
+
+.path-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.dir-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.dir {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir:hover,
+.dir:focus-visible {
+  background: var(--user);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 16px;
 }
 
 /* transcript */
@@ -1024,9 +1202,7 @@ code {
 }
 
 .disconnect {
-  display: block;
-  margin: 16px 8px 0;
-  color: var(--muted);
+  margin-left: auto;
 }
 
 .card:focus {
@@ -1059,7 +1235,7 @@ code {
 .list-heading {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   padding: 4px 8px 0;
   font-size: 12px;
   color: var(--muted);
@@ -1090,7 +1266,8 @@ code {
 }
 
 @media (hover: none) {
-  .session-row .row-action {
+  .session-row .row-action,
+  .project-row .row-action {
     opacity: 1;
   }
 

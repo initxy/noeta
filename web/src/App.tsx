@@ -1,9 +1,10 @@
 import { Slot, SLOTS, SlotsContext } from "@initxy/noeta-web-sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
-import type { Command, Input, ModelInfo, Pending, TaskSummary, TreeUsage } from "./api/types";
+import type { Command, Input, ModelInfo, Pending, Project, TaskSummary, TreeUsage } from "./api/types";
 import { Composer, newComposerKeep, type Attachment } from "./components/Composer";
 import { ModelPicker, NEW_SESSION_MODES, NewSessionMode, RewindDialog, UsageBadge } from "./components/Controls";
+import { FolderPicker } from "./components/FolderPicker";
 import { PendingCards } from "./components/PendingCard";
 import { PluginsDialog } from "./components/PluginsDialog";
 import { Notices, StatusBar, Widgets } from "./components/PluginUi";
@@ -14,6 +15,7 @@ import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
 import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
+import { basename, loadLastProject, saveLastProject } from "./state/projects";
 import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask } from "./state/useTask";
 
@@ -190,13 +192,16 @@ function Workspace({
   const [error, setError] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const desk = desktop();
-  const [project, setProject] = useState("");
+  const [project, setProject] = useState(() => (desk ? "" : loadLastProject()));
+  // The server's projects; null: it has no `/projects` (the list comes from the sessions).
+  const [served, setServed] = useState<Project[] | null>(null);
+  const [picking, setPicking] = useState(false);
   const listed = useRef<TaskSummary[] | null>(null);
   const pinned = useRef(true); // the view follows new output while it is at the bottom
   const [themeSource] = useState(() => new ThemeSource(theme === "dark" ? "dark" : "light"));
   useEffect(() => themeSource.set(theme === "dark" ? "dark" : "light"), [theme, themeSource]);
   // A task's web parts start once its log is read (what it runs without is known then).
-  const plugins = usePlugins(api, state.lastSeq ? events : null, state.pluginsOff, themeSource, state.cwd || (desk ? project : ""));
+  const plugins = usePlugins(api, state.lastSeq ? events : null, state.pluginsOff, themeSource, state.cwd || project);
   const uiItems = useUiItems(api, taskId, state.lastSeq);
   // The title as the server lists it; the title plugin shows it live.
   const title = sessions.find((s) => s.task_id === taskId)?.title ?? "";
@@ -233,15 +238,66 @@ function Workspace({
     [api, fail, desk, showArchived],
   );
 
+  const refreshProjects = useCallback(
+    () =>
+      api.projects().then(setServed, (e: unknown) => {
+        if (e instanceof ApiError && (e.status === 404 || e.status === 405)) setServed(null);
+        else fail(e);
+      }),
+    [api, fail],
+  );
+  useEffect(() => void refreshProjects(), [refreshProjects]);
+
+  /** The project new sessions run in, remembered for next time. */
+  const pickProject = useCallback(
+    (path: string) => {
+      setProject(path);
+      if (desk) desk.setProject?.(path);
+      else saveLastProject(path);
+    },
+    [desk],
+  );
+
   useEffect(() => {
     if (!desk) return;
     void desk.project().then(setProject);
     return desk.onCommand((c) => {
       if (c.name === "new-session") open(null);
       else if (c.name === "open-session") open(c.taskId);
-      else setProject(c.path);
+      else {
+        setProject(c.path);
+        open(null);
+        void refreshProjects();
+      }
     });
-  }, [desk, open]);
+  }, [desk, open, refreshProjects]);
+
+  // A browser's remembered project the server no longer lists is forgotten.
+  useEffect(() => {
+    if (!desk && served && project && !served.some((p) => p.path === project) && !sessions.some((s) => s.cwd === project)) pickProject("");
+  }, [desk, served, sessions, project, pickProject]);
+
+  // Opening a session makes its folder the project a new session goes to.
+  useEffect(() => {
+    if (taskId && state.cwd) pickProject(state.cwd);
+  }, [taskId, state.cwd, pickProject]);
+
+  const addProject = () => {
+    if (!desk) return setPicking(true);
+    desk.chooseProject().then((dir) => {
+      if (!dir) return;
+      pickProject(dir);
+      open(null);
+      void refreshProjects();
+    }, fail);
+  };
+  const removeProject = (path: string) => {
+    api.removeProject(path).then(() => {
+      if (path === project) pickProject("");
+      void refreshProjects();
+    }, fail);
+  };
+  const projectName = served?.find((p) => p.path === project)?.name ?? basename(project);
   useEffect(() => {
     void refreshSessions();
     const timer = setInterval(refreshSessions, 3000);
@@ -296,7 +352,7 @@ function Workspace({
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const config = taskId
       ? continuationConfig({ model: state.model, cwd: state.cwd }, timezone)
-      : newSessionConfig({ mode: newMode, model: newModel, project: desk ? project : "" }, timezone);
+      : newSessionConfig({ mode: newMode, model: newModel, project }, timezone);
     const id = await api.create(null, config, "main", taskId ?? undefined);
     if (taskId) replace(taskId);
     open(id);
@@ -316,7 +372,7 @@ function Workspace({
       if (name === "rename" && !arg) return rename();
       if (name && (!taskId || ended)) {
         // A local command answers here: no session is made for it.
-        const typed = await api.runCommand(text, taskId, !taskId && desk ? project : undefined);
+        const typed = await api.runCommand(text, taskId, !taskId ? project : undefined);
         if (typed?.local) return dispatch({ type: "notice", text: typed.text, tone: "info" });
       }
       // A first message takes the same path as every later one: the task
@@ -359,10 +415,22 @@ function Workspace({
     <div className={navOpen ? "layout nav-open" : "layout"}>
       <Sidebar
         sessions={sessions.filter((s) => !replaced.has(s.task_id))}
+        projects={served}
+        project={project}
         current={taskId}
         live={taskId && state.lastSeq ? { title, status: liveStatus(state) } : undefined}
         onOpen={open}
         onNew={() => open(null)}
+        onSelectProject={(path) => {
+          pickProject(path);
+          open(null);
+        }}
+        onNewIn={(path) => {
+          pickProject(path);
+          open(null);
+        }}
+        onAddProject={addProject}
+        onRemoveProject={removeProject}
         archived={showArchived}
         onShowArchived={(show) => {
           listed.current = null; // another list: nothing in it is news
@@ -410,20 +478,19 @@ function Workspace({
             {!taskId && (
               <div className="welcome">
                 <h1>What should we work on?</h1>
-                {desk ? (
-                  <p className="muted">
-                    A new session runs in{" "}
-                    <button
-                      className="project-pick"
-                      title="Choose the project folder"
-                      onClick={() => void desk.chooseProject().then((dir) => dir && setProject(dir))}
-                    >
-                      {project || "a project folder"}
-                    </button>{" "}
-                    with the mode and model below.
-                  </p>
+                {project ? (
+                  <div className="welcome-project" title={project}>
+                    <span className="welcome-project-name">{projectName}</span>
+                    <span className="muted welcome-project-path">{project}</span>
+                  </div>
                 ) : (
-                  <p className="muted">A new session runs in the server's directory with the mode and model below.</p>
+                  <p className="muted">
+                    A new session runs in the server's directory.{" "}
+                    <button className="link" onClick={addProject}>
+                      Add a project
+                    </button>{" "}
+                    to work in another folder.
+                  </p>
                 )}
               </div>
             )}
@@ -478,6 +545,20 @@ function Workspace({
               open(id);
             }
             void refreshSessions();
+          }}
+        />
+      )}
+      {picking && (
+        <FolderPicker
+          api={api}
+          start={project}
+          onClose={() => setPicking(false)}
+          onAdd={async (path) => {
+            const added = await api.addProject(path);
+            setPicking(false);
+            pickProject(added.path);
+            open(null);
+            void refreshProjects();
           }}
         />
       )}

@@ -2,12 +2,14 @@
 import type {
   Command,
   Delta,
+  DirListing,
   Input,
   MarketEntry,
   ModelInfo,
   Pending,
   PluginInfo,
   PluginListing,
+  Project,
   Recorded,
   RewindPoint,
   TaskSummary,
@@ -88,6 +90,7 @@ export class Api {
       }
       throw new ApiError(resp.status, message);
     }
+    if (resp.status === 204) return undefined as T;
     return (await resp.json()) as T;
   }
 
@@ -100,6 +103,26 @@ export class Api {
   archive(taskId: string, archived = true): Promise<unknown> {
     // The list reads it from the inbox: an idle session is not woken.
     return this.signal(taskId, "archive", { archived }, false);
+  }
+
+  /** The saved projects, then the directories of unarchived sessions. */
+  projects(): Promise<Project[]> {
+    return this.call("GET", "/projects");
+  }
+
+  /** Saves a folder as a project; 403 when the server may not run sessions there. */
+  addProject(path: string): Promise<Project> {
+    return this.call("POST", "/projects", { path });
+  }
+
+  /** Unsaves a project; its sessions stay. */
+  removeProject(path: string): Promise<void> {
+    return this.call("DELETE", "/projects", { path });
+  }
+
+  /** The subdirectories of `path` (the server's own directory when unset). */
+  dirs(path?: string): Promise<DirListing> {
+    return this.call("GET", `/dirs${query({ path })}`);
   }
 
   /** A new task; `historyFrom` continues that task's conversation. */

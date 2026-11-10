@@ -46,6 +46,33 @@ describe("Api", () => {
     expect(JSON.parse(init.body)).toEqual({ name: "archive", data: { archived: false }, wake: false });
   });
 
+  it("lists, saves and unsaves projects, and lists a folder's folders", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("[]"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ path: "/w/a", name: "a", saved: true, sessions: 0 })))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ path: "/w", parent: "/", dirs: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ path: "/w a", parent: "/", dirs: [] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "outside the allowed directories" }), { status: 403 }));
+    vi.stubGlobal("fetch", fetch);
+    const api = new Api({ server: "", token: "" });
+    expect(await api.projects()).toEqual([]);
+    expect((await api.addProject("/w/a")).saved).toBe(true);
+    expect(await api.removeProject("/w/a")).toBeUndefined();
+    await api.dirs();
+    await api.dirs("/w a");
+    await expect(api.addProject("/etc")).rejects.toEqual(new ApiError(403, "outside the allowed directories"));
+    expect(fetch.mock.calls.map((c) => `${c[1].method} ${c[0]}${c[1].body ? " " + c[1].body : ""}`)).toEqual([
+      "GET /projects",
+      'POST /projects {"path":"/w/a"}',
+      'DELETE /projects {"path":"/w/a"}',
+      "GET /dirs",
+      "GET /dirs?path=%2Fw%20a",
+      'POST /projects {"path":"/etc"}',
+    ]);
+  });
+
   it("watches events and deltas until the server ends the stream", async () => {
     const body = 'event: event\ndata: {"seq":3,"at":0,"event":{"type":"Waiting","on":"input"}}\n\n' + 'event: delta\ndata: {"kind":"text","text":"hi"}\n\nevent: end\ndata: {}\n\n';
     const fetch = vi.fn().mockResolvedValue(new Response(body));
