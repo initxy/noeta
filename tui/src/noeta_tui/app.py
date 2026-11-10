@@ -90,6 +90,9 @@ class NoetaApp(TranscriptView):
         Binding("ctrl+t", "toggle_tasks", "Tasks", show=False, priority=True),
         Binding("ctrl+c", "interrupt", "Quit", show=False, priority=True),
         Binding("ctrl+r", "search_history", "History", show=False, priority=True),
+        # The transcript's, whatever has the focus (the prompt keeps it).
+        Binding("pageup", "page(-1)", show=False, priority=True),
+        Binding("pagedown", "page(1)", show=False, priority=True),
     ]
 
     def __init__(self, local: Any, *, agent: str, model: str, cwd: str,
@@ -744,6 +747,16 @@ class NoetaApp(TranscriptView):
         self.query_one("#prompt-box").set_class(bash, "-bash")
 
     # ------------------------------------------------------------ keys
+
+    def action_page(self, step: int) -> None:
+        """PageUp / PageDown: a page of what is shown (the transcript, or
+        the view in its place)."""
+        views = self.query(".agent-log")
+        target = views.first() if views else self.transcript()
+        if step < 0:
+            target.scroll_page_up(animate=False)
+        else:
+            target.scroll_page_down(animate=False)
 
     async def action_stop_turn(self) -> None:
         if self.task_id and self.busy:

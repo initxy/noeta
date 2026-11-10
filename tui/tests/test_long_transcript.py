@@ -126,6 +126,25 @@ async def test_scrolled_up_the_transcript_stays_put_as_the_task_goes_on(
         assert transcript.scroll_y == transcript.max_scroll_y
 
 
+async def test_page_keys_scroll_the_transcript_while_the_prompt_has_the_keys(
+        tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("\n\n".join(f"Paragraph {i}." for i in range(60)))])
+    app = make_app(tmp_path, provider)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await type_line(pilot, "a")
+        await settle(pilot, lambda: not provider.steps and not app.busy)
+        await pilot.pause(0.2)
+        transcript = app.query_one("#transcript", tail.TailScroll)
+        assert app.query_one("#prompt").has_focus
+        end = transcript.scroll_y
+        await pilot.press("pageup")
+        await pilot.pause(0.1)
+        assert transcript.scroll_y < end and app.query_one("#prompt").has_focus
+        await pilot.press("pagedown")
+        await pilot.pause(0.1)
+        assert transcript.scroll_y == end
+
+
 async def test_esc_shows_the_turn_stopped_at_once_and_once(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
