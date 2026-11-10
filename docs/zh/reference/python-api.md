@@ -179,7 +179,7 @@ changelog 里会写明。
 | `await cancel(task_id, reason="", *, turn_only=False)` | 结束任务，或只停下当前这一轮 |
 | `await get(task_id) -> TaskRow` | 任务行；不存在时抛 `UnknownTask` |
 | `await tasks(*, parent_id=None, status=None, limit=100, roots_only=False) -> list[TaskRow]` | 任务表里的行，最近更新的在前（`roots_only`：只列没有父任务的任务） |
-| `await events(task_id, after=0) -> list[Recorded]` | 序号 `after` 之后的日志 |
+| `await events(task_id, after=0, *, limit=None) -> list[Recorded]` | 序号 `after` 之后的日志（给了 `limit` 只取前 `limit` 个） |
 | `watch(task_id, after=0) -> AsyncIterator[Recorded]` | 从 `after` 开始实时吐出日志，任务结束为止 |
 | `await wait(task_id, *, timeout=None) -> TaskRow` | 等到任务开始等待或已结束 |
 

@@ -188,7 +188,7 @@ The client API on a store, in this process (`noeta/core/client.py`). It writes t
 | `await cancel(task_id, reason="", *, turn_only=False)` | end the task, or stop only its current turn |
 | `await get(task_id) -> TaskRow` | the task's row; raises `UnknownTask` |
 | `await tasks(*, parent_id=None, status=None, limit=100, roots_only=False) -> list[TaskRow]` | rows of the task table, the most recently updated first (`roots_only`: only tasks without a parent) |
-| `await events(task_id, after=0) -> list[Recorded]` | the log after seq `after` |
+| `await events(task_id, after=0, *, limit=None) -> list[Recorded]` | the log after seq `after` (only its first `limit` events with `limit`) |
 | `watch(task_id, after=0) -> AsyncIterator[Recorded]` | the log from `after` on, live, until the task ends |
 | `await wait(task_id, *, timeout=None) -> TaskRow` | until the task is waiting or ended |
 
