@@ -20,7 +20,7 @@ from noeta.core.agent import Agent
 from noeta.core.events import TaskCreated
 from noeta.core.extension import CommandContext
 from noeta.core.types import Image, Message, Text
-from noeta.host._http_guard import REQUEST_CONFIG, Refused, scope
+from noeta.host._http_guard import REQUEST_CONFIG, scope
 from noeta.host._http_openapi import OPENAPI
 from noeta.host.app import AppAPI
 from noeta.host.files import file_matches
@@ -129,7 +129,8 @@ class Routes:
         client = scope(request).client
         live = await root_summaries(client, SCAN_ROWS, self._summaries,
                                     inbox=client.store.inbox, archived=False)
-        return projects(await asyncio.to_thread(self._saved.paths), live)
+        return projects(await asyncio.to_thread(self._saved.paths), live,
+                        scratch=scope(request).guarded.scratch)
 
     async def list_projects(self, request: Request) -> Response:
         return _json(await self._projects(request))
@@ -140,6 +141,9 @@ class Routes:
         real = os.path.realpath(scope(request).guarded.check_cwd(path))
         if not await asyncio.to_thread(os.path.isdir, real):
             raise ValueError(f"{path} is not a directory")
+        root = scope(request).guarded.scratch
+        if root is not None and (real == root or real.startswith(root + "/")):
+            raise ValueError(f"{path} is a scratch directory, which is no project")
         await asyncio.to_thread(self._saved.add, real)
         return _json(next(p for p in await self._projects(request) if p["path"] == real))
 
@@ -148,15 +152,10 @@ class Routes:
         return _json({"ok": True})
 
     async def dirs(self, request: Request) -> Response:
-        guarded = scope(request).guarded
         asked = request.query_params.get("path") or "."
-        here = os.path.realpath(guarded.check_cwd(asked))
+        here = os.path.realpath(scope(request).guarded.check_cwd(asked))
         found = await asyncio.to_thread(list_dirs, here)
-        parent: str | None = os.path.dirname(here)
-        try:
-            guarded.check_cwd(parent)
-        except Refused:
-            parent = None
+        parent = os.path.dirname(here)
         return _json({"path": here, "parent": parent if parent != here else None,
                       "dirs": found})
 

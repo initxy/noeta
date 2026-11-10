@@ -5,7 +5,7 @@
 <text x="76.0" y="115.0" class="ntd-mini" text-anchor="middle">HTTP or WebSocket</text>
 <rect x="166" y="50" width="196" height="100" rx="10" class="ntd-chip"/>
 <text x="264.0" y="86.0" class="ntd-chiptext" text-anchor="middle">Host and origin</text>
-<text x="264.0" y="105.0" class="ntd-mini" text-anchor="middle">loopback names or --allow-host</text>
+<text x="264.0" y="105.0" class="ntd-mini" text-anchor="middle">own names or --allow-host</text>
 <text x="264.0" y="124.0" class="ntd-mini" text-anchor="middle">own page or --allow-origin</text>
 <rect x="392" y="50" width="196" height="100" rx="10" class="ntd-chip"/>
 <text x="490.0" y="86.0" class="ntd-chiptext" text-anchor="middle">Bearer token</text>
@@ -28,7 +28,7 @@
 <rect x="634" y="146" width="274" height="36" rx="10" class="ntd-chip"/>
 <text x="771.0" y="169.0" class="ntd-mini" text-anchor="middle">bypassPermissions: only if the server allows</text>
 <rect x="634" y="190" width="274" height="36" rx="10" class="ntd-chip"/>
-<text x="771.0" y="213.0" class="ntd-mini" text-anchor="middle">cwd: server's directory or --allow-root</text>
+<text x="771.0" y="213.0" class="ntd-mini" text-anchor="middle">cwd: an existing directory (else 400)</text>
 <path d="M 588 100 L 616 100" class="ntd-line" marker-end="url(#ref-request-guard-arrow)"/>
 <rect x="618" y="290" width="150" height="40" rx="10" class="ntd-chip ntd-chip-red"/>
 <text x="693.0" y="315.0" class="ntd-chiptext" text-anchor="middle">403 refused</text>

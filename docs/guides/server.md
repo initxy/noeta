@@ -32,8 +32,42 @@ noeta serve                       # http://127.0.0.1:8642, a worker in the same 
 
 With no `--store` / `NOETA_STORE` the store is sqlite at `~/.noeta/tasks.db`. `noeta serve`
 without `--no-worker` runs a worker in its own process (queue `default`, 8 tasks at once), so
-this is a complete server. On the first start it makes a bearer token and prints it once
-([below](#the-token)).
+this is a complete server. Every start prints the address to open, with the bearer token in its
+fragment ([below](#the-token)):
+
+```text
+noeta: web app at http://127.0.0.1:8642/#token=…
+```
+
+A task created without a directory (a new session with no project picked in the web app) runs
+in a scratch directory of its own, `~/.noeta/scratch/<YYYY-MM-DD>/<first 8 characters of its
+id>/`, made when the task is.
+
+## Keep it running: `noeta service`
+
+`noeta service install` runs `noeta serve` as your user's service: it starts at login (or at
+boot, with lingering) and again after a crash. It takes the same flags as `noeta serve`, and
+the common flags go before `service`:
+
+```sh
+noeta --model sonnet service install --host 0.0.0.0
+noeta service status      # active or not, and the addresses to open
+noeta service logs        # its output (--no-follow: the last 200 lines and stop)
+noeta service restart     # also stop, start; uninstall removes it
+```
+
+- **Linux**: a systemd user unit, `~/.config/systemd/user/noeta.service`. If lingering is off
+  for your user the service stops when you log out; `install` says so and prints the command
+  that turns it on (`loginctl enable-linger $USER`).
+- **macOS**: a LaunchAgent, `~/Library/LaunchAgents/dev.noeta.serve.plist`, its output in
+  `~/.noeta/logs/serve.log`.
+- **Its environment** is a copy of the installing shell's `NOETA_*`, `ANTHROPIC_*`, `OPENAI_*`,
+  `DEEPSEEK_*`, proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, either case), `PATH`
+  and `HOME` variables, in an owner-only file (`noeta.env` beside the unit; the plist on macOS).
+  After changing a key, run `install` again: it replaces the service.
+- Without a systemd user instance or launchd (a container, say), `noeta service` says so; run
+  `noeta serve` in `tmux` instead.
+- `noeta update` restarts an installed service after upgrading.
 
 ## Many workers
 
@@ -82,9 +116,8 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # the API, on
 | `--port` | 8642 | port |
 | `--no-worker` | off | API only; workers run elsewhere |
 | `--no-token` | off | serve without a bearer token; refused on any address but loopback |
-| `--allow-host NAME` | — | a `Host` header name the server answers (repeatable) |
+| `--allow-host NAME` | — | a `Host` header name the server answers besides its own names (repeatable): a reverse proxy's, say |
 | `--allow-origin ORIGIN` | — | a web origin (`https://host:port`) whose pages may call the API (repeatable) |
-| `--allow-root PATH` | — | a directory besides the server's own that tasks may run in (repeatable) |
 | `--allow-bypass-permissions` | off | let requests start or switch tasks into `bypassPermissions` |
 | `--web DIR` | — | also serve the built web app from `DIR` at the other paths |
 
@@ -124,17 +157,19 @@ plugin that keeps landing on workers without it fails after three claims.
 the HTTP API creates tasks that run commands with the server's rights, and even a loopback
 port is reachable from other local processes and from web pages in a browser.
 
-- The token is `NOETA_SERVER_TOKEN`, else one made on the first start and printed that once.
-- `~/.noeta/server-token` (owner-only) keeps only its SHA-256
-  ([ADR-013](https://github.com/initxy/noeta/blob/main/docs/adr/013-server-token-kept-as-a-digest.md)),
-  so a client (`noeta --server`, `noeta acp --server`) needs the token in its own
-  `NOETA_SERVER_TOKEN`. Delete the file and restart for a new one. A file an older noeta left
-  holding the token itself is rewritten to its digest on the next start, which prints the
-  token one last time.
-- `--no-token` works only on a loopback address.
+- The token is `NOETA_SERVER_TOKEN`, else the one in `~/.noeta/server-token` (owner-only),
+  made on the first start
+  ([ADR-034](https://github.com/initxy/noeta/blob/main/docs/adr/034-the-server-token-file-holds-the-token-and-a-request-may-name-any-directory.md)).
+  Every start prints the addresses with it in the `#token=` fragment; `NOETA_SERVER_TOKEN` is
+  never written to the file. Delete the file and restart for a new token.
+- A client on the same machine (`noeta --server`, `noeta acp --server`) takes
+  `NOETA_SERVER_TOKEN`, else that file; on another machine, set `NOETA_SERVER_TOKEN`.
+- A file an older noeta left holding only the token's digest gets a new token on the next start.
+- `--no-token` works only on a loopback address; the addresses are then printed without a token.
 - On a loopback bind only the loopback `Host` names are answered (DNS rebinding). On any other
-  bind `Host` is checked only against the names given with `--allow-host`, so name them;
-  without any, `noeta serve` warns on stderr at startup that every `Host` is answered.
+  bind the server also answers this machine's hostname, its fully qualified name and its
+  addresses, and prints an address for each; name any other name clients use (a reverse
+  proxy's) with `--allow-host`. Any other `Host` is refused.
 - A request from a web page of another origin is refused unless that origin is given with
   `--allow-origin`.
 - Host code embedding the API uses `create_app(client, token=...)` (or `token_sha256=`); it
@@ -146,8 +181,10 @@ A request may set only the task config a client may (`noeta/host/_http_guard.py`
 `REQUEST_CONFIG`): `model`, `effort`, `max_turns`, `cwd`, `permission_mode`, `output_schema`,
 `timezone`, `interactive`, `permission_prompt_tool`, `ultracode`, `max_budget_usd`,
 `continued_as`, `bash_mode`. Any other key is refused (403); a `max_budget_usd` that is not a number above 0
-is `400`, at creation and in a config signal. It may post only the signals front ends send, and create tasks only in the
-server's directory and its `--allow-root` paths (a relative `cwd` is taken from the server's).
+is `400`, at creation and in a config signal. It may post only the signals front ends send. A
+`cwd` may be any directory (a relative one is taken from the server's); one that does not exist
+or is not a directory is `400`. A task created without a `cwd` runs in its own scratch
+directory (above).
 
 - `timezone` is the person's IANA zone (`Europe/Berlin`), which noeta's own front ends send:
   without it the model is given the UTC date, marked as UTC's, never the server's local one.
@@ -185,8 +222,8 @@ A model's provider route is the server's to record, never a client's.
 - **Your own program**: `noeta.RemoteClient` or plain HTTP; `noeta.connect(url)` gives a client
   for a store URL or a server URL.
 
-Front ends attached with `--server` need the token in `NOETA_SERVER_TOKEN` and no model of
-their own: a new task runs on the server's model, in the server's directory, unless `--model`
+Front ends attached with `--server` take the token from `NOETA_SERVER_TOKEN`, else from the
+server's token file on the same machine, and need no model of their own: a new task runs on the server's model, in the server's directory, unless `--model`
 names one or `--cwd PATH` names a directory on the server. `noeta -p` always runs its task in
 its own process and refuses `--server`. More on each in
 [Web, desktop and editors](./front-ends.md).

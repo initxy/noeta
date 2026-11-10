@@ -285,7 +285,7 @@ A reopened task's history appears at once, folded as it was shown live; what it 
 ## Attach to a server
 
 ```bash
-export NOETA_SERVER_TOKEN=...             # the token noeta serve printed
+export NOETA_SERVER_TOKEN=...             # on another machine; on the server's, it is read from its token file
 noeta --server http://api.internal:8642
 ```
 

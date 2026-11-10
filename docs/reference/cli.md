@@ -1,7 +1,7 @@
 # The noeta command
 
 Every `noeta` subcommand and flag, read from `noeta/cli/main.py`, `noeta/cli/headless.py`,
-`noeta/cli/web_command.py`, `noeta/cli/update_command.py`, `noeta/cli/plugin_command.py` and
+`noeta/cli/service_command.py`, `noeta/cli/update_command.py`, `noeta/cli/plugin_command.py` and
 `noeta/cli/mcp_command.py`, and the slash commands of the
 terminal UI. For a guided tour see [The terminal UI and -p](../guides/terminal.md).
 
@@ -13,7 +13,8 @@ terminal UI. For a guided tour see [The terminal UI and -p](../guides/terminal.m
 noeta [flags] [prompt]          the terminal UI; headless with -p, --output-format or --input-format stream-json
 noeta acp [--server URL]        Agent Client Protocol on stdio, for editors
 noeta serve [flags]             the HTTP / WebSocket API, with workers unless --no-worker
-noeta web [status|stop]         the web app on a local server in the background
+noeta service install|status|logs|start|stop|restart|uninstall
+                                noeta serve as this user's service (systemd, launchd)
 noeta update                    upgrade noeta to the latest release, keeping its extras
 noeta worker [flags]            run tasks from the store until stopped
 noeta trust                     trust the current folder
@@ -74,7 +75,7 @@ asks whether to trust it; "No, exit" quits.
 |---|---|
 | `-c`, `--continue` | open the newest conversation started in this folder |
 | `-r`, `--resume [ID]` | open task `ID`; without an id, pick from a list |
-| `--server URL` | drive the tasks of a `noeta serve` server instead of running them here (token in `NOETA_SERVER_TOKEN`). New tasks run on the server's model and directory unless `--model` / `--cwd` name others. The flags that shape the tasks this process runs (`--plugin-dir`, the permission, settings, MCP, `--agents` and system prompt file flags) are refused with it |
+| `--server URL` | drive the tasks of a `noeta serve` server instead of running them here (token: `NOETA_SERVER_TOKEN`, else the server's `~/.noeta/server-token` on the same machine). New tasks run on the server's model and directory unless `--model` / `--cwd` name others. The flags that shape the tasks this process runs (`--plugin-dir`, the permission, settings, MCP, `--agents` and system prompt file flags) are refused with it |
 | `--agent NAME` | the agent new tasks start with (default: the settings files' `agent`, else `main`) |
 | `--plugin-dir PATH` | load a plugin file, plugin folder or folder of them for this run only (repeatable) |
 | `-v`, `--version` | print the version and exit |
@@ -156,7 +157,7 @@ is a task.
 
 | Flag | Meaning |
 |---|---|
-| `--server URL` | drive a `noeta serve` server's tasks instead (token in `NOETA_SERVER_TOKEN`); the model is the server's unless `--model` names one, and the editor's local directory is not sent |
+| `--server URL` | drive a `noeta serve` server's tasks instead (token: `NOETA_SERVER_TOKEN`, else the server's `~/.noeta/server-token` on the same machine); the model is the server's unless `--model` names one, and the editor's local directory is not sent |
 | `--cwd PATH` | as the shared flag (taken after `acp` too; the later wins) |
 | `--model MODEL` | as the shared flag (taken after `acp` too) |
 
@@ -173,47 +174,48 @@ enables and, unless `--no-worker`, workers, all in the same process. Endpoints a
 | `--port PORT` | `8642` | the port |
 | `--no-worker` | off | API only; workers run elsewhere (`noeta worker`) |
 | `--no-token` | off | serve without a bearer token; refused unless `--host` is a loopback address |
-| `--allow-host NAME` | none | a `Host` header name the server answers (repeatable). On a loopback bind the loopback names are always allowed; on another bind without it, `Host` is not checked |
+| `--allow-host NAME` | none | a `Host` header name the server answers (repeatable) besides its own: on a loopback bind the loopback names, on another bind also this machine's hostname, fully qualified name and addresses. Any other `Host` is refused |
 | `--allow-origin ORIGIN` | none | a web origin (`https://host:port`) whose pages may call the API (repeatable) |
 | `--allow-bypass-permissions` | off | let requests start or switch tasks into `bypassPermissions` |
-| `--allow-root PATH` | none | a directory besides the server's own that tasks may run in (repeatable) |
 | `--allow-plugin-install` | off (on for a loopback `--host` without `--allow-host` / `--allow-origin`) | let requests install and remove plugins (`POST /plugins/install`, `DELETE /plugins/{name}`) |
 | `--web DIR` | the bundled web app, if any | serve this directory's files (the built web app, `web/dist`) at the other paths. Without it, the web app built into the installed package is served (a wheel from PyPI has one; a checkout has one after `make web-bundle`) |
 
-The token is `NOETA_SERVER_TOKEN`, else one made on the first start and printed that once;
-`~/.noeta/server-token` keeps only its SHA-256. Delete that file and restart for a new one.
-Without `--allow-bypass-permissions` the permissions plugin itself refuses
-`bypassPermissions`, however it is asked for. On an address that is not loopback without
-`--allow-host`, the server warns once on stderr at startup that any `Host` header is answered
-(DNS rebinding) and names `--allow-host` as the fix; the bearer token still guards it.
-
-## `noeta web`
-
-The web app in your browser, against a `noeta serve` started in the background for you. The
-server listens on `127.0.0.1` only, with its own bearer token, and may run tasks in the
-directory you started it from and anywhere under your home directory (`--allow-root ~`).
+The token is `NOETA_SERVER_TOKEN`, else the one in `~/.noeta/server-token` (owner only), made
+on the first start; delete that file and restart for a new one. Every start prints, on stderr,
+the address to open with the token after `#` (one per name and address on a bind that is not
+loopback; without a token under `--no-token`):
 
 ```text
-$ noeta web
-noeta web is running at http://127.0.0.1:8642/#token=…
-Stop it with: noeta web stop
+$ noeta serve
+noeta: web app at http://127.0.0.1:8642/#token=…
 ```
+
+The page reads the token and takes it off the address bar; it never reaches the server's
+logs. A task a request creates without a `cwd` runs in its own directory,
+`~/.noeta/scratch/<YYYY-MM-DD>/<first 8 characters of its id>/`. Without
+`--allow-bypass-permissions` the permissions plugin itself refuses `bypassPermissions`,
+however it is asked for.
+
+## `noeta service`
+
+Runs `noeta serve` as your user's service, started at login and again after a crash: a
+systemd user unit on Linux (`~/.config/systemd/user/noeta.service`), a launchd LaunchAgent on
+macOS (`~/Library/LaunchAgents/dev.noeta.serve.plist`, output in `~/.noeta/logs/serve.log`).
 
 | Command | Meaning |
 |---|---|
-| `noeta web` | start the server (or reuse the one running), wait until it answers, print the address and open it in the browser |
-| `  --port N` | the port of a new server (default `8642`, else a free one); a port in use is refused |
-| `  --no-open` | print the address only |
-| `noeta web status` | whether it runs, on which port, its pid and log; exit code 1 when it does not |
-| `noeta web stop` | stop it |
+| `noeta service install [serve flags]` | write the service running `noeta serve` with these flags (the shared flags go before `service`), then start it; run again to replace it. On Linux without lingering it says the service stops at logout and prints `loginctl enable-linger` |
+| `noeta service status` | the service's state and the addresses to open (from its flags and the token) |
+| `noeta service logs` | its last 200 lines, then what follows (`--no-follow`: stop after them) |
+| `noeta service start` / `stop` / `restart` | start, stop or restart it |
+| `noeta service uninstall` | stop it and remove it |
 
-The address carries the token after `#`, which the page reads and takes off the address bar;
-it never reaches the server's logs. A second `noeta web` reuses the running server and prints
-the same address. The shared flags (`--model`, `--provider`, `--base-url`, `--store`,
-`--effort`) apply to a new server only. The pid, port and token are kept in
-`~/.noeta/web.json` (owner only), the server's output in `~/.noeta/logs/web.log`. It needs the
-`server` extra, a model configured, and a noeta built with the web app (from a checkout:
-`make web-bundle`).
+The service runs in your home directory with the `NOETA_*`, `ANTHROPIC_*`, `OPENAI_*`,
+`DEEPSEEK_*`, proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, either case), `PATH`
+and `HOME` variables of the shell that ran `install`, kept in an owner-only file (`noeta.env`
+beside the unit; the plist on macOS): after changing one, run `install` again. Without a
+systemd user instance or launchd it says so and suggests `noeta serve` in `tmux`. The guide is
+[Run it as a server](../guides/server.md#keep-it-running-noeta-service).
 
 ## `noeta update`
 
@@ -226,8 +228,8 @@ Upgrades noeta to the latest release on PyPI, keeping what it was installed with
 | a checkout or an editable install | nothing; it prints the commands to run |
 
 It says `noeta is up to date` when PyPI has nothing newer, and changes nothing when PyPI cannot
-be reached (proxies come from `HTTPS_PROXY` / `ALL_PROXY`). A running `noeta web` server is
-stopped first and started again after.
+be reached (proxies come from `HTTPS_PROXY` / `ALL_PROXY`). After an upgrade an installed
+`noeta service` is restarted.
 
 ## `noeta worker`
 

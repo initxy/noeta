@@ -120,6 +120,7 @@ async def test_stream_json_init_names_the_directory_the_server_chose(
                                content="")
         assert json.loads(resp.text.splitlines()[0])["cwd"] == str(tmp_path.resolve())
     Gate.listed_in.clear()
+    (tmp_path / "sub").mkdir()
     async with websockets.connect(f"ws://{host}/stream-json?token=secret&cwd=sub") as ws:
         assert json.loads(await ws.recv())["cwd"] == str((tmp_path / "sub").resolve())
     assert set(Gate.listed_in) == {str((tmp_path / "sub").resolve())}
@@ -189,21 +190,24 @@ async def test_web_pages_and_rebound_names_are_refused(
         assert local.status_code == 200
 
 
-async def test_requests_cannot_bypass_permissions_or_leave_the_directory(
+async def test_requests_cannot_bypass_permissions_or_name_a_missing_directory(
         served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
     host, _ = served
-    for query in ("permission_mode=bypassPermissions", "cwd=/"):
+    (tmp_path / "sub").mkdir()
+    for query in ("permission_mode=bypassPermissions", "cwd=nope"):
         async with websockets.connect(f"ws://{host}/stream-json?token=secret&{query}") as ws:
             with pytest.raises(websockets.ConnectionClosed) as closed:
                 await asyncio.wait_for(ws.recv(), 10)
         assert closed.value.rcvd is not None and closed.value.rcvd.code == 4403, query
         assert closed.value.rcvd.reason, query  # what was refused
     async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
-        assert (await http.post("/stream-json?cwd=/etc", content="")).status_code == 403
-        for config in ({"permission_mode": "bypassPermissions"}, {"cwd": "/"},
-                       {"cwd": str(tmp_path / ".." / "elsewhere")}):
+        assert (await http.post("/stream-json?cwd=nope", content="")).status_code == 400
+        for config, status in (({"permission_mode": "bypassPermissions"}, 403),
+                               ({"cwd": str(tmp_path / ".." / "elsewhere")}, 400)):
             got = await http.post("/tasks", json={"agent": "main", "config": config})
-            assert got.status_code == 403, config
+            assert got.status_code == status, config
+        anywhere = await http.post("/tasks", json={"agent": "main", "config": {"cwd": "/"}})
+        assert anywhere.status_code == 201
         ok = await http.post("/tasks", json={"agent": "main", "config": {
             "cwd": str(tmp_path / "sub"), "permission_mode": "acceptEdits"}})
         assert ok.status_code == 201
@@ -257,13 +261,13 @@ async def test_requests_cannot_set_the_config_plugins_own(
         assert bad.status_code == 400 and '"type": "object"' in bad.json()["error"]
 
 
-async def test_commands_run_only_in_the_servers_directories(
+async def test_commands_run_in_a_task_s_directory_or_an_existing_one(
         served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
     host, _ = served
     async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
-        assert (await http.get("/commands", params={"cwd": "/etc"})).status_code == 403
-        run = await http.post("/commands/run", json={"text": "/hi x", "cwd": "/etc"})
-        assert run.status_code == 403
+        assert (await http.get("/commands", params={"cwd": "/nope-x"})).status_code == 400
+        run = await http.post("/commands/run", json={"text": "/hi x", "cwd": "/nope-x"})
+        assert run.status_code == 400
         (tmp_path / "sub").mkdir()
         task_id = (await http.post("/tasks", json={"agent": "main", "config": {
             "cwd": str(tmp_path / "sub")}})).json()["task_id"]
@@ -295,27 +299,30 @@ async def test_requests_post_only_the_signals_front_ends_send(
             assert got.status_code == 200, name
 
 
-async def test_a_relative_cwd_is_the_servers_and_more_roots_can_be_allowed(
+async def test_a_relative_cwd_is_the_servers_and_any_directory_is_allowed(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from noeta.core.client import Client
 
     served, other = tmp_path / "served", tmp_path / "other"
     (served / "sub").mkdir(parents=True)
     other.mkdir()
-    monkeypatch.chdir(tmp_path)  # the process's directory is not the server's
+    (tmp_path / "a-file").write_text("x")
+    monkeypatch.chdir(other)  # the process's directory is not the server's
     store = SqliteStore(str(tmp_path / "t.db"))
     client = Client(store)
-    app = create_app(client, auth=False, cwd=str(served), roots=[str(other)])
+    app = create_app(client, auth=False, cwd=str(served))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                  base_url="http://127.0.0.1") as http:
-        for cwd, where in (("sub", served / "sub"), (str(other), other)):
+        for cwd, where in (("sub", served / "sub"), ("../other", other),
+                           (str(tmp_path), tmp_path)):
             got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}})
             assert got.status_code == 201, cwd
             first = (await client.events(got.json()["task_id"]))[0].event
             assert first.config["cwd"] == str(where)  # type: ignore[attr-defined]
-        for cwd in ("../elsewhere", str(tmp_path)):
+        for cwd, why in (("../elsewhere", "does not exist"),
+                         (str(tmp_path / "a-file"), "is not a directory")):
             got = await http.post("/tasks", json={"agent": "main", "config": {"cwd": cwd}})
-            assert got.status_code == 403 and "--allow-root" in got.json()["error"], cwd
+            assert got.status_code == 400 and why in got.json()["error"], cwd
     await store.close()
 
 
@@ -421,6 +428,7 @@ async def test_a_budget_is_set_at_create_and_changed_by_signal_alike(
 async def test_continued_as_takes_only_its_values(
         served: tuple[str, ScriptedProvider], tmp_path: Path) -> None:
     host, _ = served
+    (tmp_path / "sub").mkdir()
     async with httpx.AsyncClient(base_url=f"http://{host}", headers=H, timeout=10) as http:
         bad = await http.post("/tasks", json={"agent": "main", "config": {
             "cwd": str(tmp_path / "sub"), "continued_as": "bogus"}})

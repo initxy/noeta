@@ -85,7 +85,7 @@ async def test_a_trusted_project_loads_them(home: Path, project: Path) -> None:
 async def test_permissions_trust_each_tasks_directory_not_the_servers(
         home: Path, project: Path, tmp_path: Path) -> None:
     """A server started in a trusted project still treats a task elsewhere
-    (an --allow-root directory) as untrusted."""
+    (another directory a request names) as untrusted."""
     trust_project(str(project))
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()

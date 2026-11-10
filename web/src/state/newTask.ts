@@ -1,7 +1,7 @@
 // The config a session the page makes starts with.
 
 /** A new session's: the mode and model picked for it, and the project it
- * runs in ("": the server's directory). */
+ * runs in ("": none, the server gives it a scratch folder of its own). */
 export function newSessionConfig(pick: { mode: string; model: string; project: string }, timezone: string): Record<string, unknown> {
   const config: Record<string, unknown> = { timezone, permission_mode: pick.mode };
   if (pick.model) config.model = pick.model;

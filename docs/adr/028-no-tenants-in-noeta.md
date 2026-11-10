@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-29
+- Refined by: [ADR-034](034-the-server-token-file-holds-the-token-and-a-request-may-name-any-directory.md) (the token file holds the token)
 - Supersedes: [ADR-007](007-tenants.md), [ADR-014](014-tenants-separated-at-the-api-tools-need-an-os-boundary.md),
   [ADR-018](018-each-tenant-has-its-own-places-on-disk.md),
   [ADR-019](019-tenant-limits-are-enforced-by-the-kernel.md),

@@ -5,7 +5,9 @@ events; when this process also runs workers, live model output streams too.
     POST /tasks                       {agent, input?, config?, queue?, dedupe_key?,
                                       history_from?, history_through?} -> {task_id};
                                       config takes only the keys in _http_guard's
-                                      REQUEST_CONFIG (any other: 403)
+                                      REQUEST_CONFIG (any other: 403); without a cwd the
+                                      task runs in a scratch directory of its own, if the
+                                      server keeps them (``scratch``)
     GET  /tasks?parent_id=&status=&limit=&roots_only=
     GET  /summaries?limit=&archived=  the root tasks, each with its title, cwd, first
                                       prompt and ``archived`` (``noeta.host.summaries``);
@@ -14,13 +16,14 @@ events; when this process also runs workers, live model output streams too.
                                       holding ``q``, for a prompt's ``@`` mentions
     GET  /projects                    the saved directories, then the other directories of
                                       unarchived root tasks: each {path, name, saved,
-                                      sessions} (``noeta.host.projects``)
+                                      sessions, scratch}; the sessions in scratch
+                                      directories last, as one entry (``noeta.host.projects``)
     POST /projects                    {path} -> the project, saved; path checked as a new
-                                      task's cwd (403 outside the server's directories)
+                                      task's cwd (400 when it is no directory or a scratch one)
     DELETE /projects                  {path} -> {ok}: no longer saved (its tasks stay)
     GET  /dirs?path=                  {path, parent, dirs: [{name, path}]}: the subdirectories
-                                      of an allowed directory (default: the server's), hidden
-                                      ones left out; parent null when it is not allowed
+                                      of a directory (default: the server's), hidden ones left
+                                      out; parent null at /
     GET  /tasks/{id}
     GET  /tasks/{id}/events?after=N
     GET  /tasks/{id}/pending          approvals and questions waiting on a person, sub-agents'
@@ -82,8 +85,8 @@ A bearer token is required (``NOETA_SERVER_TOKEN``; ``?token=`` for a
 WebSocket from a browser) unless the host turns auth off. A request from a web page of
 another origin is refused, and so is one whose ``Host`` is not in
 ``allowed_hosts`` (DNS rebinding). No request starts or switches a task into
-``bypassPermissions`` unless ``allow_bypass``, or runs it outside ``cwd`` and
-the ``roots`` (a relative ``cwd`` is taken from ``cwd``). Needs the ``server`` extra.
+``bypassPermissions`` unless ``allow_bypass``, or runs it in a ``cwd`` that is no
+directory (a relative ``cwd`` is taken from ``cwd``). Needs the ``server`` extra.
 """
 
 from __future__ import annotations
@@ -106,8 +109,6 @@ from noeta.core.commands import Typed
 from noeta.core.extension import Command, CommandContext, UnknownUiCall
 from noeta.host._http_guard import (
     LOOPBACK_HOSTS,
-    OUTSIDE_HINT,
-    WEB_OUTSIDE_HINT,
     Guard,
     Refused,
     token_digest,
@@ -129,9 +130,8 @@ from noeta.host.projects import SavedProjects
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
-__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "OUTSIDE_HINT", "WEB_HEADERS", "WEB_IMPORT_MAP_SHA256",
-           "WEB_OUTSIDE_HINT", "Refused", "bundled_web_dir", "create_app", "redact_token_logs",
-           "token_digest"]
+__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "WEB_IMPORT_MAP_SHA256", "Refused",
+           "bundled_web_dir", "create_app", "redact_token_logs", "token_digest"]
 
 
 @dataclasses.dataclass
@@ -285,11 +285,11 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
                auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
                origins: Sequence[str] = (), allow_bypass: bool = False,
-               cwd: str | None = None, roots: Sequence[str] = (),
+               cwd: str | None = None,
                web_dir: str | None = None, allow_plugin_install: bool = False,
                plugin_admin: PluginAdmin | None = None,
                projects_file: str | None = None,
-               outside_hint: str = OUTSIDE_HINT) -> Starlette:
+               scratch: str | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -304,14 +304,17 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
-    ``bypassPermissions``; ``cwd``: tasks a request creates run in it or
-    below it, or below one of ``roots`` (anywhere when ``None``); ``web_dir``:
+    ``bypassPermissions``; ``cwd``: the directory a request's relative ``cwd``
+    is taken from and a task without one runs in (``None``: a ``cwd`` passes
+    unchecked); ``web_dir``:
     a directory of static files served at every other path (a web app);
     ``allow_plugin_install``: requests may install and remove plugins (the
     ``noeta`` command allows it on a loopback bind); ``plugin_admin``: the
     machine's plugins as an API-only server (no ``app``) lists them;
     ``projects_file``: the JSON file the saved projects are kept in (only in
-    memory without one)."""
+    memory without one); ``scratch``: where a task a request creates without
+    a ``cwd`` gets a directory of its own (``<scratch>/<YYYY-MM-DD>/<first 8 of
+    its id>``), else it runs in ``cwd``."""
     if auth and not token and not token_sha256:
         raise ValueError("create_app needs a bearer token (token= or token_sha256=); pass "
                          "auth=False to serve every request without one")
@@ -324,8 +327,7 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         client=client, agents=agents or {}, live=deltas, admin=admin)
     guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, roots=roots, fixed=lambda: admin.fixed(),
-                  outside_hint=outside_hint)
+                  cwd=cwd, fixed=lambda: admin.fixed(), scratch=scratch)
     r = Routes(serving, app, agents, SavedProjects(projects_file))
     s = StreamRoutes(guard, deltas)
     running = agents or {}

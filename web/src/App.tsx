@@ -15,7 +15,7 @@ import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
 import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
-import { basename, loadLastProject, projectFor, saveLastProject } from "./state/projects";
+import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot } from "./state/projects";
 import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask } from "./state/useTask";
 
@@ -248,6 +248,23 @@ function Workspace({
   );
   useEffect(() => void refreshProjects(), [refreshProjects]);
 
+  // A session in a folder the projects do not cover yet (the first scratch
+  // session, one made elsewhere) asks the server again, once per folder.
+  const askedFor = useRef(new Set<string>());
+  useEffect(() => {
+    if (!served) return;
+    const scratch = scratchRoot(served);
+    const unknown = sessions.some(
+      (s) =>
+        s.cwd &&
+        !askedFor.current.has(s.cwd) &&
+        !projectFor(s.cwd, served) &&
+        !scratchDay(s.cwd, scratch) &&
+        askedFor.current.add(s.cwd),
+    );
+    if (unknown) void refreshProjects();
+  }, [sessions, served, refreshProjects]);
+
   /** The project new sessions run in, remembered for next time. */
   const pickProject = useCallback(
     (path: string) => {
@@ -281,9 +298,12 @@ function Workspace({
     remembered.current = null;
   }, [desk, served, project, pickProject]);
 
-  // Opening a session makes its folder the project a new session goes to.
+  // Opening a session makes its folder the project a new session goes to;
+  // a scratch session's makes none (the next one gets a scratch folder of its own).
   useEffect(() => {
-    if (taskId && state.cwd) pickProject(projectFor(state.cwd, served ?? [])?.path ?? state.cwd);
+    if (!taskId || !state.cwd) return;
+    if (scratchDay(state.cwd, scratchRoot(served))) pickProject("");
+    else pickProject(projectFor(state.cwd, served ?? [])?.path ?? state.cwd);
   }, [taskId, state.cwd, served, pickProject]);
 
   const addProject = () => {
@@ -483,17 +503,22 @@ function Workspace({
               <div className="welcome">
                 <h1>What should we work on?</h1>
                 {project ? (
-                  <div className="welcome-project" title={project}>
-                    <span className="welcome-project-name">{projectName}</span>
-                    <span className="muted welcome-project-path">{project}</span>
-                  </div>
+                  <>
+                    <div className="welcome-project" title={project}>
+                      <span className="welcome-project-name">{projectName}</span>
+                      <span className="muted welcome-project-path">{project}</span>
+                    </div>
+                    <button className="link welcome-no-project" onClick={() => pickProject("")}>
+                      Use a scratch folder instead
+                    </button>
+                  </>
                 ) : (
-                  <p className="muted">
-                    A new session runs in the server's directory.{" "}
+                  <p className="muted welcome-scratch">
+                    No project: this session gets its own scratch folder.{" "}
                     <button className="link" onClick={addProject}>
                       Add a project
                     </button>{" "}
-                    to work in another folder.
+                    to work in one of yours.
                   </p>
                 )}
               </div>

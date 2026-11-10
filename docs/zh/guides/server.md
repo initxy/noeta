@@ -23,7 +23,30 @@ export NOETA_MODEL=claude-sonnet-5-5 NOETA_API_KEY=sk-ant-...
 noeta serve                       # http://127.0.0.1:8642，同一进程里带一个工人
 ```
 
-没设 `--store` / `NOETA_STORE` 时，存储是 `~/.noeta/tasks.db` 这个 sqlite 文件。不加 `--no-worker` 的 `noeta serve` 会在自己进程里跑一个工人（队列 `default`，同时跑 8 个任务），所以这样就是一个完整的服务端。第一次启动时它会生成访问令牌并打印一次（见[下文](#访问令牌)）。
+没设 `--store` / `NOETA_STORE` 时，存储是 `~/.noeta/tasks.db` 这个 sqlite 文件。不加 `--no-worker` 的 `noeta serve` 会在自己进程里跑一个工人（队列 `default`，同时跑 8 个任务），所以这样就是一个完整的服务端。每次启动都会打印能直接打开的地址，访问令牌就放在地址的 `#token=` 片段里（见[下文](#访问令牌)）：
+
+```text
+noeta: web app at http://127.0.0.1:8642/#token=…
+```
+
+没指定目录就新建的任务（比如在网页里没选项目就开新会话），会在自己专属的临时目录里跑：`~/.noeta/scratch/<YYYY-MM-DD>/<任务 id 前 8 位>/`，建任务时一并建好。
+
+## 让它一直跑着：`noeta service`
+
+`noeta service install` 把 `noeta serve` 装成当前用户的系统服务：登录时自动启动（开了 lingering 的话开机就启动），崩了会自动重启。它接受和 `noeta serve` 一样的参数，通用参数写在 `service` 前面：
+
+```sh
+noeta --model sonnet service install --host 0.0.0.0
+noeta service status      # 在不在跑，以及能打开的地址
+noeta service logs        # 服务的输出（--no-follow：只看最后 200 行）
+noeta service restart     # 另有 stop、start；uninstall 把它删掉
+```
+
+- **Linux**：装成 systemd 用户服务，`~/.config/systemd/user/noeta.service`。如果你这个用户没开 lingering，退出登录后服务就会停；`install` 会提醒你，并给出打开它的命令（`loginctl enable-linger $USER`）。
+- **macOS**：装成 LaunchAgent，`~/Library/LaunchAgents/dev.noeta.serve.plist`，输出写到 `~/.noeta/logs/serve.log`。
+- **服务的环境变量**是安装那一刻 shell 里这些变量的一份拷贝：`NOETA_*`、`ANTHROPIC_*`、`OPENAI_*`、`DEEPSEEK_*`、代理（`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`，大小写都算）、`PATH` 和 `HOME`，存在只有属主可读的文件里（Linux 是服务文件旁边的 `noeta.env`，macOS 就是那个 plist）。换了密钥之后要再跑一次 `install`，它会替换掉原来的服务。
+- 没有 systemd 用户实例也没有 launchd 的地方（比如容器里），`noeta service` 会直接说明这一点；这时就在 `tmux` 里跑 `noeta serve`。
+- `noeta update` 升级完会顺手重启已装好的服务。
 
 ## 多个工人
 
@@ -58,9 +81,8 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 | `--port` | 8642 | 端口 |
 | `--no-worker` | 关 | 只提供接口，工人在别处跑 |
 | `--no-token` | 关 | 不要访问令牌；只能用在本机回环地址上 |
-| `--allow-host NAME` | — | 允许的 `Host` 请求头名字（可重复） |
+| `--allow-host NAME` | — | 除本机自己的名字外，还应答哪个 `Host` 请求头名字（可重复），比如反向代理的域名 |
 | `--allow-origin ORIGIN` | — | 允许调用接口的网页来源（`https://host:port`，可重复） |
-| `--allow-root PATH` | — | 除服务端自己的目录外，任务还能在哪些目录里跑（可重复） |
 | `--allow-bypass-permissions` | 关 | 允许请求把任务启动成或切换到 `bypassPermissions` |
 | `--web DIR` | — | 同时在其他路径上提供 `DIR` 里构建好的网页端 |
 
@@ -78,16 +100,17 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 
 `noeta serve` 总是要求带 bearer 令牌（[ADR-009](https://github.com/initxy/noeta/blob/main/docs/adr/009-serve-requires-a-token.md)）：HTTP 接口创建的任务会以服务端的权限执行命令，而哪怕只监听本机回环地址，本机的其他进程和浏览器里的网页也都能访问到它。
 
-- 令牌取自 `NOETA_SERVER_TOKEN`；没设的话第一次启动时生成一个，只打印这一次。
-- `~/.noeta/server-token`（只有属主可读）里只存它的 SHA-256（[ADR-013](https://github.com/initxy/noeta/blob/main/docs/adr/013-server-token-kept-as-a-digest.md)），所以客户端（`noeta --server`、`noeta acp --server`）要在自己的 `NOETA_SERVER_TOKEN` 里放令牌。删掉这个文件再重启就会换一个新令牌。旧版 noeta 留下的明文令牌文件会在下次启动时改写成摘要，并最后打印一次令牌。
-- `--no-token` 只能用在回环地址上。
-- 绑定回环地址时，只回应回环地址的 `Host` 名（防 DNS 重绑定）。绑定其他地址时，只会对照 `--allow-host` 给出的名字检查 `Host`，所以要把名字写上；一个都没给的话，`noeta serve` 启动时会在 stderr 上提醒：任何 `Host` 都会应答。
+- 令牌取自 `NOETA_SERVER_TOKEN`；没设的话用 `~/.noeta/server-token`（只有属主可读）里存的那个，第一次启动时生成（[ADR-034](https://github.com/initxy/noeta/blob/main/docs/adr/034-the-server-token-file-holds-the-token-and-a-request-may-name-any-directory.md)）。每次启动都会把它放进打印出来的地址的 `#token=` 片段里；`NOETA_SERVER_TOKEN` 不会写进这个文件。删掉文件再重启就换一个新令牌。
+- 同一台机器上的客户端（`noeta --server`、`noeta acp --server`）先看 `NOETA_SERVER_TOKEN`，没有就读这个文件；在别的机器上就设 `NOETA_SERVER_TOKEN`。
+- 旧版 noeta 留下的、只存了令牌摘要的文件，下次启动时会换成一个新令牌。
+- `--no-token` 只能用在回环地址上，打印的地址里也就不带令牌。
+- 绑定回环地址时，只回应回环地址的 `Host` 名（防 DNS 重绑定）。绑定其他地址时，还会回应本机的主机名、完整域名和本机的各个地址，并为每个都打印一行地址；客户端用的其他名字（比如反向代理的域名）用 `--allow-host` 加上。其余的 `Host` 一律拒绝。
 - 来自其他来源网页的请求会被拒绝，除非用 `--allow-origin` 允许了这个来源。
 - 在自己程序里嵌入这套接口时，用 `create_app(client, token=...)`（或 `token_sha256=`）；不给令牌它会拒绝创建，除非明确传 `auth=False`。
 
 ## 请求能设置什么
 
-请求只能设置客户端被允许设置的任务配置（`noeta/host/_http_guard.py` 的 `REQUEST_CONFIG`）：`model`、`effort`、`max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、`permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`、`bash_mode`。其他键一律拒绝（403）；`max_budget_usd` 不是大于 0 的数时返回 400，创建任务和配置信号都一样。请求只能发前端会发的那些信号，而且只能在服务端自己的目录和 `--allow-root` 目录里创建任务（相对路径的 `cwd` 以服务端目录为基准）。
+请求只能设置客户端被允许设置的任务配置（`noeta/host/_http_guard.py` 的 `REQUEST_CONFIG`）：`model`、`effort`、`max_turns`、`cwd`、`permission_mode`、`output_schema`、`timezone`、`interactive`、`permission_prompt_tool`、`ultracode`、`max_budget_usd`、`continued_as`、`bash_mode`。其他键一律拒绝（403）；`max_budget_usd` 不是大于 0 的数时返回 400，创建任务和配置信号都一样。请求只能发前端会发的那些信号。`cwd` 可以是任何目录（相对路径以服务端目录为基准）；不存在或者不是目录的返回 400。没给 `cwd` 的任务在自己的临时目录里跑（见上文）。
 
 - `timezone` 是用户的 IANA 时区（如 `Europe/Berlin`），noeta 自己的前端都会带上：不带的话，模型拿到的是 UTC 日期，并注明是 UTC，绝不会用服务器本地时区。定时任务（`CronCreate`）和 `ScheduleWakeup` 显示的时间也按它来；不带时按跑任务那台机器的时区。
 - `output_schema`（根为 `"type": "object"` 的 JSON Schema）让模型通过 `StructuredOutput` 工具作答，对应 Claude Code 的 `--json-schema`；答案在任务的 `structured_output` `answer` 记录里（`noeta.toolkit.structured_output.structured_answer`）。
@@ -106,7 +129,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 - **网页端**：`noeta serve` 直接在 `/` 提供安装包里自带的那份（`--web DIR` 可以换成别的构建）。页面会问一次令牌，或者从地址的 `#token=…` 片段里取（片段不会发到服务端，只存在浏览器里）。网页文件本身不需要令牌就能访问，带有内容安全策略：只允许服务端自己的脚本、样式和请求，不允许被嵌入别的页面。
 - **你自己的程序**：用 `noeta.RemoteClient` 或直接发 HTTP；`noeta.connect(url)` 给存储地址或服务端地址都能返回一个客户端。
 
-用 `--server` 连上的前端需要在 `NOETA_SERVER_TOKEN` 里放令牌，自己不需要配模型：新任务用服务端的模型、在服务端的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务端上的某个目录。`noeta -p` 总是在自己进程里跑任务，不接受 `--server`。各个前端的细节见[网页、桌面与编辑器](./front-ends.md)。
+用 `--server` 连上的前端从 `NOETA_SERVER_TOKEN` 取令牌，没有就读同一台机器上服务端的令牌文件，自己不需要配模型：新任务用服务端的模型、在服务端的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务端上的某个目录。`noeta -p` 总是在自己进程里跑任务，不接受 `--server`。各个前端的细节见[网页、桌面与编辑器](./front-ends.md)。
 
 ## 命令在哪里执行
 

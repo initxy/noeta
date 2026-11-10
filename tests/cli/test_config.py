@@ -304,7 +304,7 @@ def test_serve_refuses_bypass_in_the_plugin_itself(
     for allow in (False, True):
         args = types.SimpleNamespace(host="127.0.0.1", no_worker=True, no_token=True,
                                      allow_origin=[], allow_bypass_permissions=allow,
-                                     allow_root=[], allow_host=[], port=0, web=None,
+                                     allow_host=[], port=0, web=None,
                                      allow_plugin_install=False,
                                      permission_mode=None)
         asyncio.run(main._serve(load_settings(cwd=str(home)), args, str(home)))

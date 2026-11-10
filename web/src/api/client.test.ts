@@ -54,7 +54,7 @@ describe("Api", () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ path: "/w", parent: "/", dirs: [] })))
       .mockResolvedValueOnce(new Response(JSON.stringify({ path: "/w a", parent: "/", dirs: [] })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "outside the allowed directories" }), { status: 403 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "/nope does not exist" }), { status: 400 }));
     vi.stubGlobal("fetch", fetch);
     const api = new Api({ server: "", token: "" });
     expect(await api.projects()).toEqual([]);
@@ -62,14 +62,14 @@ describe("Api", () => {
     expect(await api.removeProject("/w/a")).toBeUndefined();
     await api.dirs();
     await api.dirs("/w a");
-    await expect(api.addProject("/etc")).rejects.toEqual(new ApiError(403, "outside the allowed directories"));
+    await expect(api.addProject("/nope")).rejects.toEqual(new ApiError(400, "/nope does not exist"));
     expect(fetch.mock.calls.map((c) => `${c[1].method} ${c[0]}${c[1].body ? " " + c[1].body : ""}`)).toEqual([
       "GET /projects",
       'POST /projects {"path":"/w/a"}',
       'DELETE /projects {"path":"/w/a"}',
       "GET /dirs",
       "GET /dirs?path=%2Fw%20a",
-      'POST /projects {"path":"/etc"}',
+      'POST /projects {"path":"/nope"}',
     ]);
   });
 

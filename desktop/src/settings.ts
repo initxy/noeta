@@ -13,10 +13,8 @@ export interface WindowState {
 export interface Settings {
   /** The `noeta` to run; found on PATH when unset. */
   noetaPath?: string;
-  /** The project folder new sessions run in. */
+  /** The project folder new sessions run in; unset: each gets a scratch folder. */
   project?: string;
-  /** Folders chosen outside the home directory: the server may run sessions there. */
-  roots: string[];
   window: WindowState;
 }
 
@@ -26,7 +24,9 @@ function num(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : undefined;
 }
 
-/** A settings file's content, its bad or missing fields replaced by defaults. */
+/** A settings file's content, its bad or missing fields replaced by defaults
+ * (and fields an older app wrote, such as `roots`, dropped: the next save
+ * leaves them out). */
 export function parseSettings(text: string): Settings {
   let raw: Record<string, unknown> = {};
   try {
@@ -41,7 +41,6 @@ export function parseSettings(text: string): Settings {
   return {
     noetaPath: typeof raw.noetaPath === "string" && raw.noetaPath ? raw.noetaPath : undefined,
     project: typeof raw.project === "string" && raw.project ? raw.project : undefined,
-    roots: Array.isArray(raw.roots) ? raw.roots.filter((r): r is string => typeof r === "string").reduce(addRoot, []) : [],
     window: {
       x: num(w.x),
       y: num(w.y),
@@ -50,12 +49,6 @@ export function parseSettings(text: string): Settings {
       maximized: w.maximized === true,
     },
   };
-}
-
-/** `roots` with `dir` added last, once. None is dropped: a session made in
- * one goes on only while the server may run there. */
-export function addRoot(roots: string[], dir: string): string[] {
-  return [...roots.filter((r) => r !== dir), dir];
 }
 
 export function loadSettings(path: string): Settings {

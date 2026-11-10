@@ -197,7 +197,7 @@ noeta -r 3f9c…        # 按 id 打开
 ## 连到服务器
 
 ```bash
-export NOETA_SERVER_TOKEN=...             # noeta serve 打印出来的令牌
+export NOETA_SERVER_TOKEN=...             # 在别的机器上才需要；在服务器那台机器上会直接读它的令牌文件
 noeta --server http://api.internal:8642
 ```
 

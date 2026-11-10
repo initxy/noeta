@@ -97,7 +97,8 @@ export interface TaskSummary {
 }
 
 /** A folder sessions run in (`GET /projects`): one the person saved, or
- * the directory of an existing session. */
+ * the directory of an existing session; or (`scratch`) the root of the
+ * scratch folders sessions started without a project run in. */
 export interface Project {
   path: string;
   name: string;
@@ -105,6 +106,8 @@ export interface Project {
   saved: boolean;
   /** Its unarchived sessions. */
   sessions: number;
+  /** The scratch root, listed last (an older server leaves it out: false). */
+  scratch?: boolean;
 }
 
 /** A directory's subdirectories, for the folder picker (`GET /dirs`). */

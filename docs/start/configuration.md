@@ -187,7 +187,9 @@ Everything under `~/.noeta` is noeta's home; set `NOETA_HOME` to move it.
 | `~/.noeta/plugin-sources.json` | where each `noeta plugin add` install came from |
 | `~/.noeta/plugin-data/<name>/` | a Claude Code plugin's `${CLAUDE_PLUGIN_DATA}` |
 | `~/.noeta/mcp-auth/` | MCP sign-ins and OAuth client secrets (owner-only) |
-| `~/.noeta/server-token` | the SHA-256 of `noeta serve`'s token |
+| `~/.noeta/server-token` | `noeta serve`'s bearer token (owner-only), read by clients on the same machine |
+| `~/.noeta/scratch/<date>/<id>/` | the directories of tasks created without one through `noeta serve` |
+| `~/.noeta/logs/serve.log` | `noeta service`'s output on macOS |
 | `~/.noeta/cache/models/` | providers' model listings, kept a day |
 | `~/.noeta/tool-results/<task>/` | tool outputs too long to return inline |
 | `~/.noeta/image-cache/<task>/` | images pasted into a prompt |

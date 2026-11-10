@@ -21,29 +21,47 @@
 
 ## 网页版
 
-网页版就装在 `noeta` 包里，不用自己构建。装了 `server` 这个 extra（`uv tool install 'noeta[tui,server]'`）之后：
+网页版就装在 `noeta` 包里，不用自己构建。装了 `server` 这个 extra（`uv tool install 'noeta[tui,server]'`）之后，起一个服务器，打开它打印出来的地址：
 
 ```bash
-noeta web            # 在后台起一个本机服务器，打开页面，令牌已经带好
-noeta web status     # 看它在不在跑、地址是什么
-noeta web stop       # 停掉它
+noeta serve
+# noeta serve: http://127.0.0.1:8642/#token=…
 ```
 
-`noeta web` 在后台起一个只听 `127.0.0.1` 的 `noeta serve`，用的是 noeta 安装包里自带的网页，并在浏览器里打开，令牌已经带好，不用再输；再运行一次 `noeta web` 会接着用已经在跑的那个服务器（详见 [noeta 命令](../reference/cli.md#noeta-web)）。
+每次启动它都会在 stderr 打印这一行，令牌就在地址里，打开就已经登录好了。`#` 后面的部分不会发给服务器：页面把令牌存进浏览器本地存储，再从地址栏里去掉。服务器重启后令牌不变，收藏的地址一直能用；点"Disconnect"会让这个浏览器忘掉它。不带令牌打开时，页面会让你输入一次。
+
+### 让它一直开着
+
+`noeta serve` 在前台运行。想让它开机或登录后自动启动、崩了自己重启，就把它装成操作系统的用户服务（Linux 上是 systemd，macOS 上是 launchd）：
+
+```bash
+noeta service install            # 参数和 noeta serve 一样
+noeta service status             # 在不在跑，地址是什么
+noeta service logs
+```
+
+另外还有 `restart`、`stop`、`start`、`uninstall`；装了服务的话，`noeta update` 升级完会顺手重启它。具体写了哪些文件、放在哪里，见 [noeta 命令](../reference/cli.md#noeta-service)。
+
+### 从别的机器访问
+
+`noeta serve` 默认只在 `127.0.0.1` 上应答。想从别处访问，有两种办法：
+
+- **监听所有地址**：`noeta serve --host 0.0.0.0`（或 `noeta service install --host 0.0.0.0`）。它会把这台机器的每个主机名和 IP 各打印一个带令牌的地址，并且这些名字不用 `--allow-host` 就能访问；通过别的名字访问（DNS 别名、反向代理）时再加 `--allow-host`。走的是明文 HTTP，只在你信得过的网络里这样用。
+- **SSH 隧道**，服务器继续只听本机：`ssh -L 8642:127.0.0.1:8642 那台机器`，然后在自己电脑上打开服务器打印的那个地址。
+
+### 页面
 
 页面是本地工作台的样子。左边一栏最上面是 **New session**，下面是你的项目：每个项目就是一个文件夹，显示文件夹名（鼠标悬停看完整路径），展开是它的会话，新的在上，每条带一个状态点（在跑、等你处理、在等输入、已结束）和最后一次动静是多久以前。项目要么是你加进来的文件夹，要么是已有会话所在的文件夹。选中一个项目，右边会在输入框上方显示它的名字和路径，接下来新开的会话就在那里跑。项目行上的 **+** 直接在这个项目里开新会话；**⋯** 菜单可以把你加的项目移掉（它的会话还在）。搜索框一次过滤所有项目的会话；最下面的 **Archived** 列出归档了的会话。页面会记住你上次打开的项目。
 
-**Add project**（"Projects" 旁边的 **+**）打开一个文件夹选择框，浏览的是服务器上的文件夹：点进去，或者直接输入路径，然后加进来。服务器只在自己的目录和允许它去的文件夹里跑会话（`--allow-root`；`noeta web` 允许整个主目录），选到范围外的文件夹时选择框会直接告诉你。
+没选项目时，新会话会拿到一个只属于它的临时文件夹 `~/.noeta/scratch/<日期>/<编号>/`（在 `NOETA_HOME` 下），想随手试点东西，不用先挑文件夹。这些会话列在项目后面的 **Scratch** 里，按天分组，新的在上。点 **Scratch**，或者在已选项目下面点 **Use a scratch folder instead**，下一个会话就又回到临时文件夹。Scratch 不能移除，也没有 **+**。
+
+**Add project**（"Projects" 旁边的 **+**）打开一个文件夹选择框，浏览的是服务器所在机器上的文件夹：点进去，或者直接输入路径，然后加进来。任何已存在的目录都能当项目；路径不存在或者不是目录时，选择框会说明原因。
 
 右边是会话本身：流式显示的 markdown 对话、工具卡片（Bash 输出、改文件显示成 diff、子代理嵌套显示）、和 Claude Code 选项一致的审批卡片、`AskUserQuestion` 表单、计划审阅、任务清单面板、斜杠命令菜单、从会话目录补全的 `@` 引用、粘贴和拖入图片、模式和模型选择、用量和上下文占用、回退、重命名、亮暗两种主题，以及手机尺寸的布局（`web/screenshots/README.md` 逐项配了截图）。
 
-### 连别的服务器
-
-任何一个 `noeta serve` 都带着同一个页面。它第一次生成令牌时会打印出来；打开它打印的地址（默认 `http://127.0.0.1:8642/`），页面会要你输入一次令牌。也可以直接放在地址里：`http://127.0.0.1:8642/#token=…`（`#` 后面的部分不会发给服务器；页面把令牌存进浏览器本地存储，并从地址栏里去掉）。点"Disconnect"会忘掉它。
-
 页面文件本身不需要令牌就能取到（里面不含令牌），并带一条内容安全策略，只允许页面和自己的服务器通信。如果页面放在别的地方，只有你点名的来源才能调接口：`noeta serve --allow-origin https://ui.example.com`。
 
-没有的东西：云端环境、仓库和分支选择（noeta 就在服务器的目录里跑）、终端面板和文件树。会话不能删除，因为存储会保留每个任务的日志；想让它不出现在列表里就归档。
+没有的东西：云端环境、仓库和分支选择（noeta 就在服务器那台机器的文件夹里跑）、终端面板和文件树。会话不能删除，因为存储会保留每个任务的日志；想让它不出现在列表里就归档。
 
 ### 改页面本身
 
@@ -51,21 +69,21 @@ noeta web stop       # 停掉它
 
 ## 桌面版
 
-桌面版就是放进独立窗口的网页版，后面连一个它自己启动、自己关闭的本地 `noeta serve`。每次发版，[GitHub Releases](https://github.com/initxy/noeta/releases) 里都附有 macOS（`.dmg`）和 Linux（`.AppImage`、`.deb`）的安装包。安装包没有签名：macOS 上第一次打开要右键点应用、选 **打开**（直接双击会提示无法验证开发者）；AppImage 要先 `chmod +x`。应用本身不带 noeta，要另外装（`uv tool install 'noeta[tui,server]'`）；没装的话窗口里会显示这条命令。
+桌面版就是放进独立窗口的网页版，后面连一个它自己启动、自己关闭的本地 `noeta serve`。每次发版，[GitHub Releases](https://github.com/initxy/noeta/releases) 里都附有 macOS（`.dmg`）和 Linux（`.AppImage`、`.deb`）的安装包。安装包没有签名：macOS 上第一次打开要右键点应用、选 **打开**（直接双击会提示无法验证开发者）；AppImage 要先 `chmod +x`。应用本身不带 noeta，要在同一台机器上另外装，并带上 server 这个 extra（`uv tool install 'noeta[tui,server]'`）；没装的话窗口里会显示这条命令。
 
-不用连接、不用粘贴任何东西：启动时它找到 `noeta`，挑一个空闲的本机端口，为这次运行生成一个新令牌，然后启动
+不用连接、不用粘贴任何东西：启动时它找到 `noeta`，挑一个空闲的本机端口，为这次运行生成一个新令牌，然后在你的主目录里启动
 
 ```text
-noeta serve --host 127.0.0.1 --port <空闲端口> --web <应用自带的网页> [--allow-root DIR …]
+noeta serve --host 127.0.0.1 --port <空闲端口> --web <应用自带的网页>
 ```
 
 令牌放在服务器进程的环境变量里（`NOETA_SERVER_TOKEN`），从不出现在命令行上（`desktop/src/server.ts`）。退出应用时服务器随之停止。
 
 它在 `PATH` 以及 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找 `noeta`（从程序坞启动的应用拿不到登录 shell 的 `PATH`）；要指定别的位置，设 `NOETA_DESKTOP_NOETA`，或在应用的 `settings.json`（Settings，`⌘,`）里写 `noetaPath`。
 
-**Add project**（左栏的 **+**、File > Add Project…、`⌘O`）弹出系统的文件夹选择框，选中的文件夹存成项目。服务器在你的主目录里运行，所以主目录下的文件夹直接就能用；主目录以外的文件夹会加成服务器的 `--allow-root`，服务器因此要重启（有会话正在跑或在等你时会先问一句；`desktop/src/main.ts`）。窗口打开时停在你上次用的项目上。本地服务器挂了，窗口会显示它最后的输出，View > Reload 重新启动它。窗口在后台时，某个会话需要你、或者跑完了，会弹系统通知。
+**Add project**（左栏的 **+**、File > Add Project…、`⌘O`）弹出系统的文件夹选择框，选中的文件夹不管在哪儿，都直接存成服务器的项目。窗口打开时停在你上次用的项目上（没有的话，新会话用临时文件夹，和浏览器里一样）。本地服务器挂了，窗口会显示它最后的输出，View > Reload 重新启动它。窗口在后台时，某个会话需要你、或者跑完了，会弹系统通知。
 
-桌面版总是跑自己的本地服务器；要连远端服务器，打开那台服务器提供的网页版。
+桌面版只跑它自己的本地服务器；要用另一台机器上的服务器，打开那台服务器提供的网页版。
 
 想自己构建：`cd desktop && npm install && npm start`（用的是 `../web/dist`，`npm run web` 会先构建它），`npm run dist` 把安装包输出到 `desktop/release/`。
 
@@ -114,17 +132,16 @@ uv tool install --reinstall 'noeta[tui,acp]'
 
 ```bash
 # 在服务器上
-export NOETA_SERVER_TOKEN=$(openssl rand -hex 32)
-noeta serve --host 0.0.0.0 --allow-host api.internal
+noeta serve --host 0.0.0.0           # 打印它的地址，每个都带 #token=…
 
 # 在你的机器上
-export NOETA_SERVER_TOKEN=...                   # 同一个令牌
+export NOETA_SERVER_TOKEN=...                   # 地址里的那个令牌
 noeta --server http://api.internal:8642         # 终端界面
 noeta acp --server http://api.internal:8642     # 编辑器（写进 agent_servers）
 ```
 
-`noeta serve` 总是要求 bearer 令牌（只有监听本机回环地址时才能用 `--no-token`）；没设 `NOETA_SERVER_TOKEN` 时，它第一次启动会生成一个、只打印这一次，`~/.noeta/server-token` 里只存它的 SHA-256。客户端启动前会带着令牌请求一次 `GET /agents`，不通就说清楚哪里不对（`noeta/cli/server_token.py`）。
+`noeta serve` 总是要求 bearer 令牌（只有监听本机回环地址时才能用 `--no-token`）。在服务器那台机器上，客户端自己就能找到令牌，只有从别的机器连时才需要设 `NOETA_SERVER_TOKEN`（见[作为服务端运行 › 访问令牌](./server.md#访问令牌)）。客户端启动前会带着令牌请求一次 `GET /agents`，不通就说清楚哪里不对（`noeta/cli/server_token.py`）。
 
-连到服务器的前端不需要自己的模型。新任务用服务器的模型、在服务器的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务器上的目录（不在服务器目录和它的 `--allow-root` 范围内的会被拒绝）。插件、代理、技能和设置都是服务器那边的：`--plugin-dir` 以及其他影响本机任务的参数（`--settings`、`--mcp-config`、`--allowedTools` 等）会被拒绝，`/reload-plugins` 会让你去重启工人。请求只能设置客户端被允许设置的那些任务配置（模型、推理强度、权限模式等）；服务器启动时没加 `--allow-bypass-permissions`，`bypassPermissions` 一律拒绝。`noeta -p` 总在本地跑，拒绝 `--server`；程序想对服务器用无界面协议，就连它的 `/stream-json` WebSocket。
+连到服务器的前端不需要自己的模型。新任务用服务器的模型，在一个只属于它的临时文件夹里跑；`--cwd PATH` 可以指定服务器上的目录（任何已存在的都行），`--model` 可以指定模型。插件、代理、技能和设置都是服务器那边的：`--plugin-dir` 以及其他影响本机任务的参数（`--settings`、`--mcp-config`、`--allowedTools` 等）会被拒绝，`/reload-plugins` 会让你去重启工人。请求只能设置客户端被允许设置的那些任务配置（模型、推理强度、权限模式等）；服务器启动时没加 `--allow-bypass-permissions`，`bypassPermissions` 一律拒绝。`noeta -p` 总在本地跑，拒绝 `--server`；程序想对服务器用无界面协议，就连它的 `/stream-json` WebSocket。
 
 部署、工人、工作区和令牌的细节见[作为服务端运行](./server.md)；所有接口见 [HTTP / WebSocket 接口](../reference/http-api.md)。

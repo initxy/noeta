@@ -6,6 +6,66 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [1.2.0] - 2026-11-09
+
+One command runs the backend, `noeta serve`, and `noeta service` keeps it running as your
+user's service; a session without a project gets a scratch directory of its own.
+
+### Removed
+
+- **`noeta web`** (and `noeta web status` / `stop`): run `noeta serve`, which prints the
+  address to open, or install it as a service with `noeta service install`.
+- **`noeta serve --allow-root`**: a request may name any existing directory as a task's,
+  project's or folder listing's `cwd`; only one that does not exist or is not a directory is
+  refused (`400`, was `403` outside the server's directories). A token holder can run any
+  command as the server's user, so the old check guarded nothing.
+- The warning that a non-loopback `noeta serve` without `--allow-host` answers any `Host`
+  header: it no longer does (below).
+
+### Added
+
+- **`noeta service install|uninstall|start|stop|restart|status|logs`**: `noeta serve` as a
+  systemd user unit (Linux) or a launchd LaunchAgent (macOS), started at login and again
+  after a crash. `install` takes `noeta serve`'s flags and copies the shell's `NOETA_*`,
+  provider, proxy, `PATH` and `HOME` variables into an owner-only file; on Linux without
+  lingering it says the service stops at logout. `noeta update` restarts an installed service
+  after upgrading.
+- **Every `noeta serve` start prints the address to open with the token**
+  (`http://127.0.0.1:8642/#token=…`; one line per name and address on a non-loopback bind).
+- **Scratch directories**: a task created over HTTP without a `cwd` runs in
+  `~/.noeta/scratch/<YYYY-MM-DD>/<first 8 characters of its id>/`. `GET /projects` never lists
+  them as projects; it ends with one `Scratch` entry (`scratch: true`) counting their sessions,
+  and every entry has a `scratch` field.
+- **Scratch sessions in the web and desktop apps**: "New session" with no project picked makes
+  a session without a directory, which the server runs in a scratch folder of its own. The
+  sidebar lists those sessions after the projects under **Scratch**, grouped by day ("Today",
+  "Nov 9"), newest first; picking Scratch, or **Use a scratch folder instead** on the welcome
+  screen, goes back to scratch for the next session.
+
+### Changed
+
+- **`~/.noeta/server-token` holds the token itself** (owner-only) instead of its digest
+  (ADR-034, superseding ADR-013); a digest-only file from an older noeta gets a new token on
+  the next start. `noeta --server` and `noeta acp --server` on the same machine read it when
+  `NOETA_SERVER_TOKEN` is unset.
+- **A non-loopback `noeta serve` answers this machine's own names**: its hostname, fully
+  qualified name and addresses, besides the loopback names and `--allow-host` ones; any other
+  `Host` is refused.
+- `GET /dirs` lists any directory; its `parent` is `null` only at `/`.
+- **The web app's folder picker goes anywhere**: any existing directory can be added as a
+  project; a path that does not exist or is not a directory shows the server's reason. The
+  hints about allowed folders are gone.
+- **The desktop app starts its server without `--allow-root`** and no longer restarts it for a
+  folder outside your home directory: a folder picked anywhere is saved as a project at once.
+  The `roots` an older version kept in `settings.json` are dropped on the next save. With no
+  project saved, new sessions get scratch folders, as in the browser.
+
+### Fixed
+
+- **A foreground command that leaves a child running returns sooner on macOS**: the up-to-one-second
+  wait for its output started a `sleep` every 20 ms, which on macOS stretched the second to two or
+  three; it now ticks every 50 ms.
+
 ## [1.1.3] - 2026-11-09
 
 `noeta web` tells you how to use a folder it refuses, and the web app's browser tests stop

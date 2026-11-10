@@ -1,6 +1,6 @@
 """The projects the web app lists down its side (saved directories and the
 directories of unarchived sessions, with their session counts) and the
-folder picker's directory listing, both inside the server's directories."""
+folder picker's directory listing, of any directory."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import httpx
 
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
-from noeta.host.http import WEB_OUTSIDE_HINT, create_app
+from noeta.host.http import create_app
 from noeta.host.local import LocalApp
 from noeta.host.projects import SavedProjects, list_dirs, projects
 from noeta.testing import ScriptedProvider
@@ -56,12 +56,13 @@ async def test_projects_are_saved_ones_then_session_directories(
         await http.post(f"/tasks/{gone}/signals",
                         json={"name": "archive", "data": {"archived": True}, "wake": False})
         assert (await http.get("/projects")).json() == [
-            {"path": gamma, "name": "gamma", "saved": False, "sessions": 1},
-            {"path": alpha, "name": "alpha", "saved": False, "sessions": 2}]
+            {"path": gamma, "name": "gamma", "saved": False, "sessions": 1, "scratch": False},
+            {"path": alpha, "name": "alpha", "saved": False, "sessions": 2, "scratch": False}]
 
         added = await http.post("/projects", json={"path": beta})
         assert added.status_code == 200
-        assert added.json() == {"path": beta, "name": "Beta", "saved": True, "sessions": 0}
+        assert added.json() == {"path": beta, "name": "Beta", "saved": True, "sessions": 0,
+                                "scratch": False}
         # Saving again, or by a relative path, keeps one entry.
         await http.post("/projects", json={"path": "alpha"})
         await http.post("/projects", json={"path": alpha + "/"})
@@ -78,18 +79,14 @@ async def test_projects_are_saved_ones_then_session_directories(
             (beta, True), (gamma, False), (alpha, False)]
 
 
-async def test_a_project_outside_the_servers_directories_is_refused(
+async def test_a_project_is_any_directory_and_nothing_else(
         tmp_path: Path, tree: Path) -> None:
     _, http, saved = _api(tmp_path, tree)
     async with http:
-        refused = await http.post("/projects", json={"path": str(tmp_path / "outside")})
-        assert refused.status_code == 403 and "--allow-root" in refused.json()["error"]
-        sneaky = await http.post("/projects", json={"path": "../outside"})
-        assert sneaky.status_code == 403
         missing = await http.post("/projects", json={"path": str(tree / "nope")})
-        assert missing.status_code == 400
+        assert missing.status_code == 400 and "does not exist" in missing.json()["error"]
         a_file = await http.post("/projects", json={"path": str(tree / "a-file.txt")})
-        assert a_file.status_code == 400
+        assert a_file.status_code == 400 and "not a directory" in a_file.json()["error"]
         assert (await http.post("/projects", json={})).status_code == 400
         assert (await http.post("/projects", json={"path": 3})).status_code == 400
         unauthorized = await http.get("/projects", headers={"authorization": "Bearer no"})
@@ -97,12 +94,52 @@ async def test_a_project_outside_the_servers_directories_is_refused(
     assert not saved.exists()
 
 
-async def test_dirs_lists_subdirectories_inside_the_allowed_ones(
+async def test_a_task_without_a_cwd_runs_in_todays_scratch_directory(
+        tmp_path: Path, tree: Path) -> None:
+    import time
+
+    scratch = tmp_path / "noeta-home" / "scratch"
+    app, http, _ = _api(tmp_path, tree, scratch=str(scratch))
+    async with http:
+        assert (await http.get("/projects")).json() == []
+        made = await http.post("/tasks", json={"agent": "main", "config": {
+            "interactive": False}})
+        task_id = made.json()["task_id"]
+        where = scratch / time.strftime("%Y-%m-%d") / task_id[:8]
+        assert where.is_dir() and where.stat().st_mode & 0o777 == 0o700
+        first = (await app.client.events(task_id))[0].event
+        assert first.config["cwd"] == str(where)  # type: ignore[attr-defined]
+        # A repeated dedupe_key gets the first task; no second directory stays.
+        for _ in range(2):
+            await http.post("/tasks", json={"agent": "main", "dedupe_key": "k"})
+        assert len(list(where.parent.iterdir())) == 2
+        await http.post("/tasks", json={"agent": "main", "config": {"cwd": str(tree / "alpha")}})
+        listed = (await http.get("/projects")).json()
+        assert listed == [
+            {"path": str(tree / "alpha"), "name": "alpha", "saved": False, "sessions": 1,
+             "scratch": False},
+            {"path": str(scratch), "name": "Scratch", "saved": False, "sessions": 2,
+             "scratch": True}]
+        refused = await http.post("/projects", json={"path": str(where)})
+        assert refused.status_code == 400 and "scratch" in refused.json()["error"]
+
+
+async def test_a_project_outside_the_servers_directory_is_saved(
+        tmp_path: Path, tree: Path) -> None:
+    _, http, saved = _api(tmp_path, tree)
+    async with http:
+        outside = str(tmp_path / "outside")
+        added = await http.post("/projects", json={"path": "../outside"})
+        assert added.status_code == 200 and added.json()["path"] == outside
+    assert json.loads(saved.read_text())["projects"] == [outside]
+
+
+async def test_dirs_lists_the_subdirectories_of_any_directory(
         tmp_path: Path, tree: Path) -> None:
     _, http, _ = _api(tmp_path, tree)
     async with http:
         top = (await http.get("/dirs")).json()
-        assert top == {"path": str(tree), "parent": None, "dirs": [
+        assert top == {"path": str(tree), "parent": str(tmp_path), "dirs": [
             {"name": "alpha", "path": str(tree / "alpha")},
             {"name": "Beta", "path": str(tree / "Beta")},
             {"name": "gamma", "path": str(tree / "gamma")}]}
@@ -110,8 +147,9 @@ async def test_dirs_lists_subdirectories_inside_the_allowed_ones(
         assert inner == {"path": str(tree / "gamma"), "parent": str(tree),
                          "dirs": [{"name": "inner", "path": str(tree / "gamma" / "inner")}]}
         assert (await http.get("/dirs", params={"path": "gamma"})).json() == inner
-        outside = await http.get("/dirs", params={"path": str(tmp_path)})
-        assert outside.status_code == 403
+        up = (await http.get("/dirs", params={"path": str(tmp_path)})).json()
+        assert {"name": "outside", "path": str(tmp_path / "outside")} in up["dirs"]
+        assert (await http.get("/dirs", params={"path": "/"})).json()["parent"] is None
         assert (await http.get("/dirs", params={"path": str(tree / "a-file.txt")})
                 ).status_code == 400
         assert (await http.get("/dirs", params={"path": str(tree / "nope")})).status_code == 400
@@ -141,7 +179,8 @@ def test_projects_compare_directories_by_their_real_path(tmp_path: Path) -> None
     (tmp_path / "link").symlink_to(real)
     got = projects([str(tmp_path / "link")], [{"cwd": str(real)}, {"cwd": ""},
                                               {"cwd": str(tmp_path / "link")}])
-    assert got == [{"path": str(real), "name": "real", "saved": True, "sessions": 2}]
+    assert got == [{"path": str(real), "name": "real", "saved": True, "sessions": 2,
+                    "scratch": False}]
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")
@@ -162,13 +201,3 @@ def test_the_saved_list_lives_beside_a_sqlite_store_else_in_noetas_home(
     monkeypatch.setattr(home_dir, "HOME", tmp_path / "home")
     assert home_dir.projects_file(f"sqlite:///{tmp_path}/s/t.db") == tmp_path / "s" / "projects.json"
     assert home_dir.projects_file("postgres://db/x") == tmp_path / "home" / "projects.json"
-
-
-async def test_noeta_webs_refusal_says_what_its_user_can_do(
-        tmp_path: Path, tree: Path) -> None:
-    _, http, _ = _api(tmp_path, tree, outside_hint=WEB_OUTSIDE_HINT)
-    async with http:
-        refused = await http.post("/projects", json={"path": str(tmp_path / "outside")})
-    error = refused.json()["error"]
-    assert refused.status_code == 403
-    assert "--allow-root" not in error and "noeta web stop" in error

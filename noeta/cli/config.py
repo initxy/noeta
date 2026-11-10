@@ -526,7 +526,7 @@ def _permission_settings(found: FileSettings, cwd: str | None,
         log.warning("permission mode bypassPermissions is disabled here; ignored")
         del permission_args["mode"]
     # Each task's own working directory, not the server's: a task may run in
-    # an --allow-root directory.
+    # any directory.
     permission_args.setdefault("trusted_workspace", project_trusted)
     return permission_args
 
