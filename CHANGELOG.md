@@ -6,7 +6,11 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
-## [Unreleased]
+## [1.1.2] - 2026-11-09
+
+`noeta web` opens the web app with no build step, the web and desktop apps become a local
+workbench of projects and their sessions, `noeta update` upgrades in place, an unexpected error
+prints one line instead of a traceback, and each release carries desktop installers.
 
 ### Added
 

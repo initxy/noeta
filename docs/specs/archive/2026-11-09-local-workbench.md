@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 created: 2026-11-09
 branch: feat/local-workbench-2026-11-09
 ---
