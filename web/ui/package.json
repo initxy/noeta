@@ -1,6 +1,6 @@
 {
   "name": "@initxy/noeta-ui",
-  "version": "1.0.6",
+  "version": "1.2.3",
   "description": "The noeta web app's own components (markdown, buttons, switches, panels) for a plugin's web part; the page provides this module at run time.",
   "license": "Apache-2.0",
   "repository": {
@@ -28,7 +28,7 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@initxy/noeta-web-sdk": "1.0.6",
+    "@initxy/noeta-web-sdk": "1.2.3",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1"
