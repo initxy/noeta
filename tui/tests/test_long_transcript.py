@@ -31,6 +31,13 @@ def steps(n: int) -> list[Any]:
             for i in range(n)] + [reply("All done.")]
 
 
+def to_the_top(transcript: tail.TailScroll) -> bool:
+    """Scrolled to the top again (what came in moved it down): ``True``
+    once nothing older is left."""
+    transcript.scroll_home(animate=False)
+    return not transcript.has_older
+
+
 def said(app: Any) -> list[str]:
     """The replies laid out (mounted and shown), in order: their first lines."""
     return [m.source.splitlines()[0] for m in app.query(AssistantMessage)
@@ -52,10 +59,7 @@ async def test_a_long_live_transcript_lays_out_only_its_end(tmp_path: Path) -> N
         assert said(app)[-1] == "All done."
         assert "Step 0." not in said(app)
         # Scrolled to the top, what was hidden comes back, oldest last.
-        for _ in range(12):
-            transcript.scroll_home(animate=False)
-            await pilot.pause(0.05)
-        await settle(pilot, lambda: not transcript.has_older)
+        await settle(pilot, lambda: to_the_top(transcript), timeout=60)
         assert said(app)[:2] == ["Step 0.", "Step 1."]
 
 
@@ -88,10 +92,7 @@ async def test_a_reopened_long_task_mounts_its_last_items_and_the_rest_on_scroll
         await pilot.pause(0.2)
         assert first.virtual_region.y - transcript.scroll_y == \
             before - 2 * transcript.size.height
-        for _ in range(20):
-            transcript.scroll_home(animate=False)
-            await pilot.pause(0.05)
-        await settle(pilot, lambda: not transcript.has_older)
+        await settle(pilot, lambda: to_the_top(transcript), timeout=60)
         assert said(again)[0] == "Step 0."
 
 
@@ -206,12 +207,12 @@ async def test_at_completion_lists_a_repositorys_files_off_the_event_loop(
 
 async def test_a_streamed_reply_is_appended_once_a_frame_not_once_a_fragment(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from noeta_tui.widgets import ReplyStream
+    from noeta_tui.widgets import LiveReply, ReplyStream
 
     app = make_app(tmp_path, ScriptedProvider([]))
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(pilot, lambda: bool(app.query("#prompt")))
-        widget = AssistantMessage("")
+        widget = LiveReply("")
         await app.transcript().mount(widget)
         appends: list[str] = []
         append = widget.append
@@ -229,22 +230,30 @@ async def test_a_streamed_reply_is_appended_once_a_frame_not_once_a_fragment(
         assert len(appends) <= 2
 
 
-async def test_a_streamed_table_is_shown_once_its_rows_are_in(tmp_path: Path) -> None:
-    from noeta_tui.widgets import ReplyStream, TableText
+async def test_a_streamed_reply_keeps_live_only_the_block_being_written(
+        tmp_path: Path) -> None:
+    from textual.containers import Vertical
+
+    from noeta_tui.widgets import LiveReply, ReplyStream, TableText
 
     app = make_app(tmp_path, ScriptedProvider([]))
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(pilot, lambda: bool(app.query("#prompt")))
-        widget = AssistantMessage("")
-        await app.transcript().mount(widget)
+        widget = LiveReply("")
+        box = Vertical(widget, classes="streaming")
+        await app.transcript().mount(box)
         stream = ReplyStream(widget)
+        # A table shows once its rows are in.
         stream.write("Here:\n\n| name | value |\n|---|---|\n| a | 1 |\n")
-        await pilot.pause(0.2)
+        await pilot.pause(0.3)
         assert widget.source.startswith("Here:") and "|" not in widget.source
         stream.write("| b | 2 |\n\nThat is all.")
-        await pilot.pause(0.2)
-        assert "| b | 2 |" in widget.source and not widget.source.endswith("|\n")
-        await stream.stop()
-        await pilot.pause(0.1)
-        [table] = widget.query(TableText)
+        await pilot.pause(0.3)
+        # The blocks done are drawn as a finished reply above the live one,
+        # which holds only the block being written.
+        assert widget.source == "That is all."
+        done = box.query(AssistantMessage)
+        assert "".join(m.source for m in done).startswith("Here:")
+        [table] = box.query(TableText)
         assert table.tsv == "name\tvalue\na\t1\nb\t2"
+        await stream.stop()

@@ -77,8 +77,10 @@ async def test_a_run_of_calls_is_one_counted_line_a_click_opens(tmp_path: Path) 
         assert plain(seven.head) == ("● Searched for 2 patterns, read 3 files, ran 2 shell commands "
                                      "(ctrl+o to expand)")
         assert len(seven.calls) == 7 and not any(c.display for c in seven.calls)
-        # After a reply of its own, a new run, shown as one from its first call.
-        assert plain(one.head) == "● Read 1 file (ctrl+o to expand)" and not one.calls[0].display
+        # After a reply of its own, a new run: one call shows as itself, its
+        # result under its line.
+        assert plain(one.head) == "● Read(a.py)" and one.calls[0].display
+        assert not one.calls[0].head.display and "Read 1 line" in plain(one.calls[0].body)
         # Paths under the task's directory are relative; the directory itself is ".".
         heads = [plain(c.head) for c in seven.calls]
         assert "● Read(a.py)" in heads and '● Search(pattern: "def sub", path: ".")' in heads

@@ -84,19 +84,21 @@ async def test_a_run_goes_on_past_an_answered_approval_and_the_task_list(
 async def test_a_running_read_shows_as_a_hint_under_its_runs_line(tmp_path: Path) -> None:
     lines = Lines()
     lines.release.clear()
-    provider = ScriptedProvider([reply("", ("Bash", {"command": "cat notes.txt", "n": 2})),
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "cat todo.txt", "n": 1}),
+                                       ("Bash", {"command": "cat notes.txt", "n": 2})),
                                  reply("read")])
     app = make_app(tmp_path, provider, tools=[lines])
     async with app.run_test(size=(120, 40)) as pilot:
         await type_line(pilot, "read it")
-        await settle(pilot, lambda: any(c.state == "running" for c in app.calls.values()))
+        await settle(pilot, lambda: len(app.calls) == 2
+                     and any(c.state == "running" for c in app.calls.values()))
         [run] = app.query(ToolGroup)
         await settle(pilot, lambda: run.hint.display)
-        assert plain(run.head) == "● Reading 1 file… (ctrl+o to expand)"
-        assert "cat notes.txt" in plain(run.hint) and not run.calls[0].display
+        assert plain(run.head) == "● Reading 2 files… (ctrl+o to expand)"
+        assert "cat notes.txt" in plain(run.hint) and not any(c.display for c in run.calls)
         lines.release.set()
         await settle(pilot, lambda: not app.busy)
-        assert plain(run.head) == "● Read 1 file (ctrl+o to expand)" and not run.hint.display
+        assert plain(run.head) == "● Read 2 files (ctrl+o to expand)" and not run.hint.display
 
 
 async def test_edits_to_one_file_one_after_another_are_one_line(tmp_path: Path) -> None:
@@ -152,3 +154,30 @@ async def test_agents_started_together_are_one_line_with_a_line_each(tmp_path: P
         provider.release.set()
         await settle(pilot, lambda: plain(agents.head).startswith("● Ran 2 agents"))
         assert all("Done" in plain(c.body) for c in agents.calls)
+
+
+async def test_one_call_shows_as_itself_and_its_line_counts_once_a_second_joins(
+        tmp_path: Path) -> None:
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "a.py").write_text("x = 1\n")
+    lines = Lines()
+    lines.release.clear()
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "pytest -x", "n": 2})),
+                                 reply("", ("Read", {"file_path": str(work / "a.py")})),
+                                 reply("ok")])
+    app = make_app(tmp_path, provider, tools=[lines])
+    async with app.run_test(size=(120, 40)) as pilot:
+        await type_line(pilot, "test")
+        await settle(pilot, lambda: bool(app.query(ToolGroup)))
+        [run] = app.query(ToolGroup)
+        await pilot.pause(0.1)
+        head, at = run.head, run.head.region.y
+        assert plain(head) == "● Bash(pytest -x)" and run.calls[0].display
+        lines.release.set()
+        await settle(pilot, lambda: not provider.steps and not app.busy)
+        # The same line, in the same place, now counting: nothing remounted.
+        assert app.query(ToolGroup).first() is run and run.head is head
+        assert run.head.region.y == at
+        assert plain(head) == "● Read 1 file, ran 1 shell command (ctrl+o to expand)"
+        assert not any(c.display for c in run.calls)

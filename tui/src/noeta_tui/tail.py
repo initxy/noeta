@@ -163,12 +163,17 @@ class TailScroll(VerticalScroll):
             self._revealing = False
             raise
 
-        def keep_place() -> None:
-            grown = self.virtual_size.height - before
+        def keep_place(last: int, passes: int) -> None:
+            # What came in grows over a refresh or two (a reply draws its
+            # pieces once mounted): the view moves down by each growth.
+            grown = self.virtual_size.height - last
             # Followed, the end stays in view by itself (the anchor).
             if grown > 0 and not (self.is_anchored and not self._anchor_released):
                 self.set_scroll(None, self.scroll_y + grown)
+            if grown and passes:
+                self.call_after_refresh(keep_place, self.virtual_size.height, passes - 1)
+                return
             self._revealing = False
             self._fill()  # still near the top: more
 
-        self.call_after_refresh(keep_place)
+        self.call_after_refresh(keep_place, before, 3)

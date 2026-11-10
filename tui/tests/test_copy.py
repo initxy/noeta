@@ -78,13 +78,8 @@ async def drag(pilot: Any, start: Widget, start_at: tuple[int, int], end: Widget
 
 
 async def a_bash_call(pilot: Any, provider: ScriptedProvider) -> None:
-    """The call run, its run's line clicked open (it folds once done)."""
-    from noeta_tui.widgets import ToolGroup
-
     await type_line(pilot, "count")
     await settle(pilot, lambda: provider.steps == [] and not pilot.app.busy)
-    await pilot.click(pilot.app.query_one(ToolGroup).head)
-    await pilot.pause()
 
 
 def bash_script() -> ScriptedProvider:
@@ -120,7 +115,7 @@ async def test_a_reply_copies_as_shown(tmp_path: Path, copies: Copies) -> None:
         # A blank line where the screen has one, the table's cells a row to a
         # line, the reply's bullet left out.
         assert copies.osc == ["line 3\n\nHere is the plan.\n\nname\tvalue\na\t1\n\n"
-                              "•  first item"]
+                              "• first item"]
 
 
 async def test_a_click_copies_nothing_and_a_double_click_its_block(tmp_path: Path,

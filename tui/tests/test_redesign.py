@@ -13,7 +13,13 @@ from noeta.core.events import ChildEnded
 from noeta.core.types import Delta, Thinking, ToolUse
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui import render
-from noeta_tui.widgets import Completions, ThinkingBlock, ToolCall, dropped_paths
+from noeta_tui.widgets import (
+    AssistantMessage,
+    Completions,
+    ThinkingBlock,
+    ToolCall,
+    dropped_paths,
+)
 
 from support import MODEL, make_app, open_detail, plain, ready, settle, shown, type_line
 
@@ -47,7 +53,7 @@ async def test_a_short_transcript_stays_at_the_top(tmp_path: Path) -> None:
         await settle(pilot, lambda: ready(app))
         await type_line(pilot, "hi")
         await settle(pilot, lambda: not app.busy and "hello there" in str(
-            [m.source for m in app.query("Markdown")]))
+            [m.source for m in app.query(AssistantMessage)]))
         await pilot.pause(0.1)
         transcript = app.query_one("#transcript")
         assert transcript.scroll_y >= 0 and transcript.max_scroll_y == 0

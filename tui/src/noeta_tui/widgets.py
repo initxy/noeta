@@ -14,7 +14,6 @@ from typing import Any
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
-from rich import box
 from rich.table import Table
 from rich.text import Text
 from textual import events
@@ -29,7 +28,7 @@ from textual.widgets._markdown import MarkdownBlock, MarkdownTable
 from noeta.core.events import Answer
 from noeta.core.types import ToolUse
 from noeta.toolkit.commands import parse_command_message
-from noeta_tui import render
+from noeta_tui import render, reply
 from noeta_tui.selection import Unselectable
 
 
@@ -92,8 +91,8 @@ class TableText(Static):
     """A reply's table drawn as one piece; selected, it copies as rows of
     tab-separated cells."""
 
-    def __init__(self, table: Any, tsv: str) -> None:
-        super().__init__(table)
+    def __init__(self, table: Any, tsv: str, *, classes: str = "") -> None:
+        super().__init__(table, classes=classes)
         self.tsv = tsv
 
     def show(self, table: Any, tsv: str) -> None:
@@ -114,16 +113,7 @@ class FlatTable(MarkdownTable):
         yield TableText(*self._drawn())
 
     def _drawn(self) -> tuple[Table, str]:
-        table = Table(box=box.SQUARE, show_lines=True, border_style="bright_black",
-                      header_style="bold", expand=False, highlight=False)
-        for header in self._headers:
-            table.add_column(render.clean(header.plain), overflow="fold")
-        cells = [[render.clean(c.plain) for c in row] for row in self._rows]
-        for row in cells:
-            table.add_row(*row)
-        tsv = "\n".join("\t".join(row) for row in
-                        [[render.clean(h.plain) for h in self._headers], *cells])
-        return table, tsv
+        return reply.drawn_table(self._headers, self._rows)
 
     async def _update_from_block(self, block: MarkdownBlock) -> None:
         if isinstance(block, MarkdownTable):
@@ -152,28 +142,67 @@ class CleanMarkdown(Markdown):
         return super().append(render.clean(markdown))
 
 
-class AssistantMessage(CleanMarkdown):
+class LiveReply(CleanMarkdown):
+    """The reply being streamed, as Textual's Markdown (it grows block by
+    block); once done it gives way to an :class:`AssistantMessage`."""
+
     DEFAULT_CLASSES = "assistant-message"
+
+
+class AssistantMessage(Vertical):
+    """A finished reply of the model's, drawn as a few pieces
+    (``reply.parts``): its text, selectable, and each table as one piece.
+    ``source`` is its markdown."""
+
+    DEFAULT_CLASSES = "assistant-message reply"
+
+    def __init__(self, markdown: str) -> None:
+        super().__init__()
+        self.source = markdown
+
+    def compose(self) -> ComposeResult:
+        yield from self._pieces()
+
+    def _pieces(self) -> list[Widget]:
+        found = reply.parts(self.source, dark=self.app.current_theme.dark)
+        out: list[Widget] = []
+        for n, part in enumerate(found):
+            last = " -last" if n == len(found) - 1 else ""
+            if isinstance(part, reply.Table):
+                out.append(TableText(*part.drawn(), classes=f"reply-table{last}"))
+            else:
+                out.append(Static(part, classes=f"reply-text{last}"))
+        return out
+
+    async def show(self, markdown: str) -> None:
+        """Draw ``markdown`` instead (a streamed reply's blocks done so far)."""
+        self.source = markdown
+        with self.app.batch_update():
+            await self.remove_children()
+            await self.mount_all(self._pieces())
 
 
 #: Seconds a streamed reply gathers what comes before it is shown: about a
 #: frame. Each append parses the reply's last block again and lays out the
 #: screen; per fragment (a model sends hundreds a second) it fell behind.
-STREAM_FRAME = 0.05
+STREAM_FRAME = 0.1
 
 
 class ReplyStream:
-    """What the model streams, appended to ``widget`` at most once per
-    :data:`STREAM_FRAME`; :meth:`stop` appends what is left. A table is
+    """What the model streams into ``widget`` (a :class:`LiveReply` in a
+    box of its own), appended at most once per :data:`STREAM_FRAME`;
+    :meth:`stop` appends what is left. The blocks done (one after them has
+    started) move into a finished reply above the live one, so Textual's
+    Markdown widgets exist only for the block being written. A table is
     shown once its rows are in (the block after it starts, or the reply
     ends): Textual's table is a widget per cell, made again for every row
     appended."""
 
     def __init__(self, widget: Markdown) -> None:
         self.widget = widget
-        #: The end of what was appended: the last two lines (a block starts
-        #: after a blank line).
-        self._tail = ""
+        #: What was appended so far, and how much of it is drawn as done.
+        self._shown = ""
+        self._done_upto = 0
         self._pending: list[str] = []
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
@@ -196,16 +225,38 @@ class ReplyStream:
         self._wake.clear()
         text = "".join(self._pending)
         self._pending.clear()
-        if not all and (held := _open_table(self._tail, text)):
+        if not all and (held := _open_table(self._shown, text)):
             text, self._pending = text[:len(text) - len(held)], [held]
-        if text:
-            self._tail = (self._tail + text)[-2000:]
+        if not text:
+            return
+        self._shown += text
+        done = 0 if all else _settled(self._shown)
+        box = self.widget.parent
+        if done > self._done_upto and isinstance(box, Widget):
+            # Only what is newly done is drawn (each piece a blank line apart).
+            done_now = self._shown[self._done_upto:done]
+            self._done_upto = done
+            with self.widget.app.batch_update():
+                await box.mount(AssistantMessage(done_now), before=self.widget)
+                await asyncio.shield(self.widget.update(self._shown[done:]))
+        else:
             await asyncio.shield(self.widget.append(text))
 
     async def stop(self) -> None:
         self._stopping.set()
         self._wake.set()
         await self._task
+
+
+def _settled(text: str) -> int:
+    """Where the last top-level block of ``text`` starts (those before it
+    are done); ``0`` when it has only one."""
+    starts = [t.map[0] for t in _markdown_parser().parse(text)
+              if t.level == 0 and t.map is not None and t.nesting >= 0]
+    if len(starts) < 2:
+        return 0
+    lines = text.splitlines(keepends=True)
+    return sum(len(line) for line in lines[:starts[-1]])
 
 
 def _open_table(shown: str, text: str) -> str:
@@ -605,7 +656,16 @@ class ToolGroup(Vertical):
         await self.add(GroupWords(render.Hanging(render.plain(text, "dim"), 2)))
 
     def toggle(self) -> None:
-        self.set_expanded(not self.expanded)
+        if self._single():
+            self.calls[0].toggle_result()  # its line is the call's own: its result opens
+        else:
+            self.set_expanded(not self.expanded)
+
+    def _single(self) -> bool:
+        """A run of one call: its line is the call's own (``● Bash(pytest -x)``,
+        its result under it), as Claude Code shows one call; the count comes
+        with the second, on the same line."""
+        return self.kind == "run" and len(self.calls) == 1
 
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
@@ -626,13 +686,17 @@ class ToolGroup(Vertical):
     def show_head(self) -> None:
         line_shown = self._shows_line()
         self.head.display = line_shown
-        folded = line_shown and not self.expanded
+        single = self._single()
+        folded = line_shown and not self.expanded and not single
         hint = ""
         for part in self.parts:
             if isinstance(part, ToolCall):
                 live = folded and self._live(part)
                 part.display = not folded or live
+                if self.kind == "run":
+                    part.head.display = not single
                 part.set_class(live, "-live", update=part.is_attached)
+                part.set_class(single, "-single", update=part.is_attached)
                 if folded and not live and part.state in ("pending", "running"):
                     hint = render.running_hint(part.call, part.cwd)
             else:
@@ -647,6 +711,9 @@ class ToolGroup(Vertical):
         if not line_shown:
             return
         calls = self.calls
+        if single:
+            self.head.update(calls[0]._header())
+            return
         running = any(c.state not in ("done", "error") for c in calls)
         waiting = any(c.state == "waiting" for c in calls)
         failed = sum(c.state == "error" for c in calls)

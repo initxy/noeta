@@ -32,7 +32,8 @@ sessions, a rewound conversation shows whole, and both fold tool calls as Claude
 - Projects that share a name show the parent folders that tell them apart.
 - **`Ctrl+O` shows the detailed transcript** in the transcript's place, as Claude Code's
   transcript mode does, instead of unfolding every call in place; the transcript stays folded.
-- **Tool calls fold as Claude Code's do**: a run shows as its line from its first call; short
+- **Tool calls fold as Claude Code's do**: a single call shows as itself and its line turns into
+  the count, in place, when a second joins; short
   remarks between calls, answered approvals and the task list no longer break it; a failed call
   pops out with its first error lines; shell commands that only read, search or list count as
   that, and commits, pushes and pull requests are named; reads count files, MCP calls name their
@@ -75,7 +76,9 @@ sessions, a rewound conversation shows whole, and both fold tool calls as Claude
   650 ms to show, a resumed task took 10–18 s to appear and a 4000-character answer took two
   minutes to stream. Only the transcript's end is laid out now (older messages come back as you
   scroll up), the spinner and footer are redrawn without a layout, a streamed reply is shown
-  once a frame, and a reply's table is one widget (it was a widget per cell).
+  once a frame, and a finished reply is drawn as a few pieces of text (tables one piece each)
+  instead of Textual's widget per block and per table cell; while a reply streams only the
+  block being written stays live.
 - **Scrolled up, the transcript was pulled back to the end** by every record; it now stays
   where you are and follows again once you scroll back down. `PageUp` / `PageDown` scroll it
   while the prompt has the keys.

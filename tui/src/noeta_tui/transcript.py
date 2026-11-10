@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 from textual import work
 from textual.app import App, ScreenStackError
+from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Static
@@ -72,6 +73,7 @@ from noeta_tui.widgets import (
     ApprovalCard,
     AssistantMessage,
     CleanMarkdown,
+    LiveReply,
     Notice,
     PromptInput,
     QuestionCard,
@@ -137,7 +139,7 @@ class TranscriptView(App[None]):
     task_id: str
     calls: dict[str, ToolCall]
     stream: ReplyStream | None
-    stream_widget: AssistantMessage | None
+    stream_widget: LiveReply | None
     stream_key: tuple[int, int]
     stream_text: str
     streamed: set[int]
@@ -465,8 +467,9 @@ class TranscriptView(App[None]):
             same_call = delta.call_seq == self.stream_key[0]
             await self._end_stream(drop=same_call)  # a retry replaces its failed attempt
         if self.stream is None:
-            widget = AssistantMessage("")
-            await transcript.mount(bulleted(widget))
+            widget = LiveReply("")
+            # In a box of its own: the blocks done go above it (``ReplyStream``).
+            await transcript.mount(bulleted(Vertical(widget, classes="streaming")))
             self._follow_end()
             self.stream, self.stream_widget, self.stream_key = \
                 ReplyStream(widget), widget, key
@@ -511,9 +514,14 @@ class TranscriptView(App[None]):
                 # may not have reached the widget.
                 if not drop and widget is not None:
                     await widget.update(text)
+        box = widget.parent if widget is not None else None
         if drop and widget is not None:
-            row = widget.parent  # the bullet's row
+            row = box.parent if box is not None else None  # the bullet's row
             await (row if isinstance(row, Widget) else widget).remove()
+        elif widget is not None and isinstance(box, Widget) and isinstance(box.parent, Widget):
+            # Done: drawn as a few pieces, not a widget per block.
+            await box.parent.mount(AssistantMessage(text), after=box)
+            await box.remove()
 
     async def _retried(self, failed_attempt: int) -> None:
         """A model call's attempt failed: what it streamed is dropped."""
@@ -667,15 +675,17 @@ class TranscriptView(App[None]):
             # fragments wait for it.
             while self._batch is None and any(seq <= self.called for seq in self._unshown):
                 await asyncio.sleep(0.01)
-            streamed = self.stream_widget if self.stream_key[0] == self.called else None
+            # The row it streamed into (its reply is drawn anew in it).
+            box = self.stream_widget.parent if self.stream_widget is not None \
+                and self.stream_key[0] == self.called else None
+            streamed = box.parent if box is not None else None
             await self._end_stream()
             self.replied = self.called
             msg = ev.response.message
             text = msg.text.strip()
             said: Widget | None = None
             if self.called in self.streamed:
-                said = streamed.parent if streamed is not None and \
-                    isinstance(streamed.parent, Widget) else None
+                said = streamed if isinstance(streamed, Widget) else None
             elif text and not (msg.tool_uses and render.interstitial(text)
                                and render.call_kind(msg.tool_uses[0])
                                and self._joinable() is not None):

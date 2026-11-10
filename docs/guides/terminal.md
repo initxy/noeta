@@ -59,8 +59,9 @@ shows, and on any other model nothing is sent and nothing shows. The line under 
 the plugins' status items; the shipped `project_status` plugin puts the project and its git
 branch there (`noeta  ·  ⎇ main* ↑1`). `?` on an empty prompt shows the shortcuts.
 
-Tool calls in a row fold into one line, as Claude Code's do, from the first call on: `● Searched
-for 2 patterns, read 3 files, ran 2 shell commands (ctrl+o to expand)`. Reads, searches,
+Tool calls in a row fold into one line, as Claude Code's do: `● Searched for 2 patterns, read 3
+files, ran 2 shell commands (ctrl+o to expand)`. A single call shows as itself (`● Bash(pytest
+-x)` with its result under it); when a second joins, that same line turns into the count. Reads, searches,
 listings, web fetches and searches, shell commands and other tools fold, with the model's
 thinking between them and its short remarks (a line or two, such as "Let me check the tests.";
 the latest shows dimmed under the line); a longer reply starts a new line, an answered approval
