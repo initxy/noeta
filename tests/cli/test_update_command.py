@@ -186,6 +186,24 @@ def test_versions_compare_by_their_numbers() -> None:
     assert update_command._newer("1.2.0rc1", "1.1.0")
 
 
+@pytest.mark.parametrize(("recorded", "source"), [
+    (None, False),  # from an index
+    ('{"url": "file:///d/noeta-1.1.0-py3-none-any.whl", "archive_info": {}}', False),
+    ('{"url": "file:///src/noeta", "dir_info": {"editable": true}}', True),
+    ('{"url": "file:///src/noeta", "dir_info": {}}', True),
+    ('{"url": "https://github.com/initxy/noeta", "vcs_info": {"vcs": "git"}}', True),
+    ("{broken", True),  # unreadable: changed nothing rather than guessed
+])
+def test_only_a_directory_or_a_repository_counts_as_source(
+        recorded: str | None, source: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Dist:
+        def read_text(self, _name: str) -> str | None:
+            return recorded
+
+    monkeypatch.setattr(update_command, "_distribution", lambda: Dist())
+    assert (update_command.direct_url() is not None) == source
+
+
 def test_what_this_environment_is_installed_from_and_with() -> None:
     # The test environment: an editable install with every extra.
     found = update_command.direct_url()

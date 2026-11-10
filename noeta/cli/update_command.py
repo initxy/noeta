@@ -66,20 +66,21 @@ def _distribution() -> importlib.metadata.Distribution | None:
 
 
 def direct_url() -> dict[str, Any] | None:
-    """What noeta was installed from when not from an index (PEP 610's
-    ``direct_url.json``: a path, an editable checkout, a git URL), else
-    ``None``. ``{}`` when no installed distribution is found at all."""
+    """Where noeta was installed from when that is source (PEP 610's
+    ``direct_url.json`` naming a directory, editable or not, or a git
+    repository), else ``None`` (an index, or a wheel or sdist file, which
+    an update replaces from PyPI). ``{}`` when no installed distribution is
+    found at all (running from a checkout on ``sys.path``)."""
     dist = _distribution()
     if dist is None:
         return {}
-    text = dist.read_text("direct_url.json")
-    if not text:
-        return None
     try:
-        found = json.loads(text)
+        found = json.loads(dist.read_text("direct_url.json") or "null")
     except ValueError:
         return {}
-    return found if isinstance(found, dict) else {}
+    if not isinstance(found, dict):
+        return None
+    return found if "dir_info" in found or "vcs_info" in found else None
 
 
 _NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
