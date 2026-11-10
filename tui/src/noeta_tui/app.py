@@ -561,7 +561,8 @@ class NoetaApp(TranscriptView):
         box.display = bool(self.image_names)
 
     async def action_paste_image(self) -> None:
-        image = mentions.clipboard_image()
+        # Its programs may take seconds (a clipboard owner that is slow to answer).
+        image = await asyncio.to_thread(mentions.clipboard_image)
         if image is None:
             await self.say_notice("no image on the clipboard (on Linux it needs wl-paste or "
                                   "xclip; over ssh, drop the image file on the terminal "
@@ -735,10 +736,18 @@ class NoetaApp(TranscriptView):
         if start == 0 and word.startswith("/"):  # the command word, cursor anywhere in it
             menu.show(slash.matches(self, word[1:]))
         elif word.startswith("@") and not self.on_server:
-            menu.show([(f"@{p}", f"+ {p}", "") for p in
-                       files.matches(self.task_cwd or self.cwd, word[1:])])
+            self._complete_path(word)
         else:
             menu.hide()
+
+    @work(exclusive=True, group="paths", exit_on_error=False)
+    async def _complete_path(self, word: str) -> None:
+        """The ``@`` menu for ``word``, the tree listed off the event loop
+        (a large one takes a while), shown if the word is still being typed."""
+        found = await asyncio.to_thread(files.matches, self.task_cwd or self.cwd, word[1:])
+        start, end = self._word()
+        if self._box().text[start:end] == word:
+            self.query_one(Completions).show([(f"@{p}", f"+ {p}", "") for p in found])
 
     def _set_marker(self, marker: str) -> None:
         bash = marker == "!"

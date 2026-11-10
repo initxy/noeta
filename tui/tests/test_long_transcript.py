@@ -175,6 +175,34 @@ async def test_esc_shows_the_turn_stopped_at_once_and_once(
         assert shown(app).count("Interrupted") == 1
 
 
+async def test_at_completion_lists_a_repositorys_files_off_the_event_loop(
+        tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    from noeta_tui import files
+    from noeta_tui.widgets import Completions
+
+    if shutil.which("git") is None:
+        pytest.skip("no git")
+    work = tmp_path / "w"
+    (work / "src").mkdir(parents=True)
+    (work / "src" / "calc.py").write_text("x = 1\n")
+    (work / "calc_notes.txt").write_text("")
+    (work / "calc.log").write_text("")
+    (work / ".gitignore").write_text("*.log\n")
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    files._cache.clear()
+    assert files.matches(str(work), "calc") == ["src/calc.py", "calc_notes.txt"]
+    app = make_app(tmp_path, ScriptedProvider([]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot, lambda: bool(app.query("#prompt")))
+        await pilot.press(*"look at @src/")
+        menu = app.query_one(Completions)
+        await settle(pilot, lambda: menu.display)
+        assert [label for _, label, _ in menu.items] == ["+ src/", "+ src/calc.py"]
+
+
 async def test_a_streamed_reply_is_appended_once_a_frame_not_once_a_fragment(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from noeta_tui.widgets import ReplyStream
