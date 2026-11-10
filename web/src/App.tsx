@@ -1,10 +1,11 @@
 import { Slot, SLOTS, SlotsContext } from "@initxy/noeta-web-sdk";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, Project, TaskSummary, TreeUsage } from "./api/types";
 import { Composer, newComposerKeep, type Attachment } from "./components/Composer";
 import { ModelPicker, NEW_SESSION_MODES, NewSessionMode, RewindDialog, UsageBadge } from "./components/Controls";
 import { FolderPicker } from "./components/FolderPicker";
+import { FollowScroll } from "./components/FollowScroll";
 import { PendingCards } from "./components/PendingCard";
 import { PluginsDialog } from "./components/PluginsDialog";
 import { Notices, StatusBar, Widgets } from "./components/PluginUi";
@@ -17,7 +18,7 @@ import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
 import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot } from "./state/projects";
 import type { TaskState } from "./state/transcript";
-import { ApiContext, useTask, useTaskView, type TaskStore } from "./state/useTask";
+import { ApiContext, useTask, useTaskView } from "./state/useTask";
 
 /** Commands the page runs itself, as Claude Code's app does. */
 const PAGE_COMMANDS: Command[] = [
@@ -128,15 +129,6 @@ function liveStatus(state: Pick<TaskState, "ended" | "waitingOn" | "busy">): Ses
   return state.busy ? "running" : "idle";
 }
 
-const outputOf = (s: TaskState) => ({ items: s.items, live: s.live, queued: s.queued });
-
-/** Calls `follow` after every change to what the transcript shows. */
-function FollowOutput({ store, follow }: { store: TaskStore; follow: () => void }) {
-  const output = useTaskView(store, outputOf);
-  useLayoutEffect(follow, [output, follow]);
-  return null;
-}
-
 function sessionFromHash(): string | null {
   const m = /^#session=([\w.-]+)$/.exec(window.location.hash);
   return m ? m[1] : null;
@@ -212,23 +204,18 @@ function Workspace({
   const [rewinding, setRewinding] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [draft, setDraft] = useState<{ text: string; n: number } | undefined>();
+  const [sent, setSent] = useState(0); // a message sent takes the view to the end
   const [composerKeep] = useState(newComposerKeep);
   const [replaced, setReplaced] = useState(loadReplaced);
   const [navOpen, setNavOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [error, setError] = useState("");
-  const scroller = useRef<HTMLDivElement>(null);
   const desk = desktop();
   const [project, setProject] = useState(() => (desk ? "" : loadLastProject()));
   // The server's projects; null: it has no `/projects` (the list comes from the sessions).
   const [served, setServed] = useState<Project[] | null>(null);
   const [picking, setPicking] = useState(false);
   const listed = useRef<TaskSummary[] | null>(null);
-  const pinned = useRef(true); // the view follows new output while it is at the bottom
-  const follow = useCallback(() => {
-    const el = scroller.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, []);
   const [themeSource] = useState(() => new ThemeSource(theme === "dark" ? "dark" : "light"));
   useEffect(() => themeSource.set(theme === "dark" ? "dark" : "light"), [theme, themeSource]);
   // A task's web parts start once its log is read (what it runs without is known then).
@@ -237,7 +224,6 @@ function Workspace({
   // The title as the server lists it; the title plugin shows it live.
   const title = sessions.find((s) => s.task_id === taskId)?.title ?? "";
 
-  useLayoutEffect(follow, [pending, follow]);
 
   const fail = useCallback(
     (e: unknown) => {
@@ -249,7 +235,6 @@ function Workspace({
 
   const open = useCallback((id: string | null) => {
     setTaskId(id);
-    pinned.current = true;
     setPending([]);
     setUsage(null);
     setNavOpen(false);
@@ -413,6 +398,7 @@ function Workspace({
 
   const send = async (text: string, images: Attachment[]) => {
     setError("");
+    setSent((n) => n + 1);
     const [name, ...rest] = text.startsWith("/") ? text.slice(1).split(" ") : [""];
     const arg = rest.join(" ").trim();
     try {
@@ -519,14 +505,7 @@ function Workspace({
           </button>
         </header>
         <div className="body">
-          <div
-            className="scroll"
-            ref={scroller}
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-            }}
-          >
+          <FollowScroll resetKey={`${taskId ?? ""}#${sent}`}>
             {!taskId && (
               <div className="welcome">
                 <h1>What should we work on?</h1>
@@ -552,9 +531,8 @@ function Workspace({
               </div>
             )}
             <LiveTranscript key={taskId ?? ""} store={store} />
-            <FollowOutput store={store} follow={follow} />
             <PendingCards pending={pending} api={api} answered={refreshPending} />
-          </div>
+          </FollowScroll>
           <aside className="side-panels" aria-label="Plugin panels">
             <Slot name={SLOTS.sidebar} />
           </aside>

@@ -435,7 +435,32 @@ code {
 .scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none; /* the page holds the view itself (it follows the end, or stays put) */
   padding: 24px 16px 16px;
+}
+
+/* the way back to the end of a conversation scrolled away from */
+.jump-wrap {
+  position: sticky;
+  bottom: 12px;
+  height: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.jump {
+  transform: translateY(-100%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  padding: 4px 12px;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.1);
+}
+
+.jump:hover {
+  border-color: var(--muted);
 }
 
 .transcript,
