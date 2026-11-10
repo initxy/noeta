@@ -6,6 +6,37 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+The web app keeps up with a long session: streaming, opening and scrolling one no longer drag the
+page, and errors, diffs and dialogs read better.
+
+### Fixed
+
+- **Typing lagged while a long session streamed**: every streamed chunk re-rendered the whole page
+  (about 1,200 components in a 700-event session) and re-parsed the whole answer. Only the
+  streaming message redraws now, once per frame, parsing just the paragraph being written; typing
+  answers in ~14 ms instead of 120–230 ms.
+- **Opening a long session was slow and downloaded its log twice**: it now draws the latest
+  messages first and the earlier ones while the page is idle, and reads the log once (a 700-event
+  session shows its end in ~170 ms instead of ~490 ms).
+- **Scrolling up while the model wrote snapped back to the bottom**: the view now stays where you
+  scroll it, with a "Jump to latest" button to return.
+- **Errors showed Python exception text** (`RuntimeError('…')`) and tool errors their
+  `<tool_use_error>` tags: each is one plain line now, the raw text under "Details".
+- **Esc did not close the rewind and plugins dialogs.**
+- **With a side panel open, the message box did not line up with the conversation**, and the
+  session's folder squeezed its title in the header.
+- **The message box did not grow for wrapped lines** on a narrow screen.
+- The session list and approval cards are no longer polled while the page is hidden.
+
+### Changed
+
+- Long diffs fold after 12 lines ("Show N more lines") and show line numbers.
+- Tool calls are drawn as lines without boxes; dark mode has its own error and status colors.
+- The rewind dialog says what each choice does (Both / Conversation / Code).
+- ↑ in an empty message box brings back your earlier prompts.
+
 ## [1.2.2] - 2026-11-10
 
 Images reach gateway models again, switching between auto and bypass-permissions mode no longer
