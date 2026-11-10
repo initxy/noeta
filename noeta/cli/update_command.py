@@ -134,12 +134,17 @@ class Plan:
     note: str = ""
 
 
+#: uv asks the index again for noeta's packages: a cached listing from before a
+#: release would reinstall the version already there.
+REFRESH = ("--refresh-package", "noeta", "--refresh-package", "noeta-tui")
+
+
 def uv_plan(receipt: Path) -> Plan:
     """The ``uv tool install --reinstall`` that keeps what ``receipt`` names."""
     tool = tomllib.loads(receipt.read_text("utf-8")).get("tool", {})
     requirements = [r for r in tool.get("requirements", []) if isinstance(r, dict)]
     mine = next((r for r in requirements if r.get("name") == "noeta"), {})
-    cmd = [shutil.which("uv") or "uv", "tool", "install", "--reinstall",
+    cmd = [shutil.which("uv") or "uv", "tool", "install", "--reinstall", *REFRESH,
            _requirement("noeta", list(mine.get("extras") or []))]
     for entry in requirements:
         if entry is not mine and entry.get("name"):
@@ -166,8 +171,9 @@ def plan() -> Plan:
     requirement = _requirement("noeta", extras)
     if importlib.util.find_spec("pip") is None and shutil.which("uv"):
         return Plan("pip", [shutil.which("uv") or "uv", "pip", "install", "--python",
-                            sys.executable, "-U", requirement])
-    return Plan("pip", [sys.executable, "-m", "pip", "install", "-U", requirement])
+                            sys.executable, "-U", *REFRESH, requirement])
+    return Plan("pip", [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir",
+                        requirement])
 
 
 def _shown(cmd: list[str]) -> str:
@@ -218,7 +224,12 @@ def run(_args: argparse.Namespace) -> int:
         print(f"noeta update: the update failed (exit {code}); see the output above",
               file=sys.stderr)
         return code
-    print(f"noeta update: now at {_reported_version() or latest}")
+    now = _reported_version()
+    if now and _newer(latest, now):
+        print(f"noeta update: the index still serves {now}, not {latest}; try again in a few "
+              "minutes", file=sys.stderr)
+        return 1
+    print(f"noeta update: now at {now or latest}")
     restarted = service_command.restart_if_installed()
     if restarted is not None:
         print("noeta update: restarted noeta service" if restarted else

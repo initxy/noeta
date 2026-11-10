@@ -28,12 +28,14 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
+import tomllib
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from noeta.cli import home_dir
+from noeta.toolkit.local_env import env_refs
 
 UNIT = "noeta.service"
 LABEL = "dev.noeta.serve"
@@ -83,10 +85,23 @@ def add_parser(sub: Any, serve_arguments: AddArguments) -> None:
     logs.add_argument("--no-follow", action="store_true", help="print the last lines and stop")
 
 
-def service_env(environ: Mapping[str, str]) -> dict[str, str]:
-    """The variables of ``environ`` the service runs with."""
+def service_env(environ: Mapping[str, str], named: Collection[str] = ()) -> dict[str, str]:
+    """The variables of ``environ`` the service runs with: noeta's and the
+    providers' own, ``PATH``, ``HOME``, the proxy ones, and ``named`` (those
+    noeta's ``config.toml`` refers to as ``{env:NAME}``)."""
     return {k: v for k, v in sorted(environ.items())
-            if k.startswith(ENV_PREFIXES) or k in ENV_NAMES}
+            if k.startswith(ENV_PREFIXES) or k in ENV_NAMES or k in named}
+
+
+def config_env_refs() -> set[str]:
+    """The variables noeta's ``config.toml`` names in ``{env:NAME}``
+    references (its keys and headers); none when it is missing or invalid,
+    which ``noeta serve`` itself reports."""
+    path = home_dir.HOME / "config.toml"
+    try:
+        return env_refs(tomllib.loads(path.read_text("utf-8")))
+    except (OSError, tomllib.TOMLDecodeError):
+        return set()
 
 
 def flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
@@ -404,7 +419,12 @@ def _install(service: Service, args: argparse.Namespace, serve_arguments: AddArg
     serving = argparse.ArgumentParser(add_help=False)
     serve_arguments(serving)
     argv = [*noeta_command(), *flags(top, args), "serve", *flags(serving, args)]
-    env = service_env(environ)
+    named = config_env_refs()
+    env = service_env(environ, named)
+    if missing := sorted(n for n in named if n not in environ):
+        print(f"noeta service: config.toml refers to {', '.join(missing)}, which this shell "
+              "does not set; set it and install again, or the service cannot use it",
+              file=sys.stderr)
     if not args.no_token and "NOETA_SERVER_TOKEN" not in env:
         serve_token()  # made now, so status can show it before the service first starts
     replacing = service.installed()

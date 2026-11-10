@@ -72,7 +72,8 @@ def test_a_uv_tool_install_is_reinstalled_with_its_extras_and_with(
         ran: Ran, capsys: pytest.CaptureFixture[str]) -> None:
     assert _update() == 0
     assert ran.commands[0] == [
-        "/bin/uv", "tool", "install", "--reinstall", "noeta[tui,server]",
+        "/bin/uv", "tool", "install", "--reinstall",
+        "--refresh-package", "noeta", "--refresh-package", "noeta-tui", "noeta[tui,server]",
         "--with", "socksio", "--with", "rich[jupyter]>=13",
         "--with", "mytool @ git+https://example.com/mytool.git",
         "--python", "3.12", "--default-index", "https://pypi.org/simple"]
@@ -140,13 +141,14 @@ def test_a_pip_install_is_upgraded_with_its_installed_extras(
     (tmp_path / "uv-receipt.toml").unlink()
     monkeypatch.setattr(update_command.importlib.util, "find_spec", lambda _name: object())
     assert _update() == 0
-    assert ran.commands[0] == [sys.executable, "-m", "pip", "install", "-U",
+    assert ran.commands[0] == [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir",
                                "noeta[server,tui]"]
     # An environment without pip (made by uv) is upgraded with uv pip.
     monkeypatch.setattr(update_command.importlib.util, "find_spec", lambda _name: None)
     ran.commands.clear()
     assert _update() == 0
     assert ran.commands[0] == ["/bin/uv", "pip", "install", "--python", sys.executable, "-U",
+                               "--refresh-package", "noeta", "--refresh-package", "noeta-tui",
                                "noeta[server,tui]"]
 
 
@@ -203,3 +205,12 @@ def test_what_this_environment_is_installed_from_and_with() -> None:
     found = update_command.direct_url()
     assert found is not None and str(found.get("url", "")).startswith("file://")
     assert {"server", "tui"} <= set(update_command.installed_extras())
+
+
+def test_an_index_still_serving_the_old_version_is_said(
+        ran: Ran, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    # The install ran but the index (or a mirror) still served 1.1.0.
+    monkeypatch.setattr(update_command, "_reported_version", lambda: "1.1.0")
+    assert _update() == 1
+    err = capsys.readouterr().err
+    assert "the index still serves 1.1.0, not 1.2.0" in err
