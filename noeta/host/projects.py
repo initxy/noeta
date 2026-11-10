@@ -1,7 +1,8 @@
 """The projects a front end lists down its side: the directories a person
 saved, and the directories of their sessions (the root tasks not archived),
-each with how many sessions it has; and the subdirectories of a directory,
-for a folder picker."""
+each with how many sessions it has, then the sessions run in scratch
+directories as one entry; and the subdirectories of a directory, for a
+folder picker."""
 
 from __future__ import annotations
 
@@ -65,30 +66,46 @@ class SavedProjects:
         os.replace(fresh, self._path)
 
 
-def _project(path: str, saved: bool, sessions: int) -> dict[str, Any]:
-    return {"path": path, "name": os.path.basename(path.rstrip("/")) or path,
-            "saved": saved, "sessions": sessions}
+def _project(path: str, saved: bool, sessions: int, *, scratch: bool = False,
+             name: str = "") -> dict[str, Any]:
+    return {"path": path, "name": name or os.path.basename(path.rstrip("/")) or path,
+            "saved": saved, "sessions": sessions, "scratch": scratch}
 
 
-def projects(saved: Iterable[str], summaries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def projects(saved: Iterable[str], summaries: Iterable[dict[str, Any]],
+             scratch: str | None = None) -> list[dict[str, Any]]:
     """The saved directories in the order saved, then the other directories
     of ``summaries`` (root task summaries, most recent first, the archived
     left out), the most recently used first; each ``{path, name, saved,
-    sessions}``. Directories compare by their real path, which ``path`` is."""
+    sessions, scratch}``. Directories compare by their real path, which
+    ``path`` is. No directory under ``scratch`` (a real path: where tasks
+    created without a directory run) is a project: their sessions are one
+    last entry, ``{path: scratch, name: "Scratch", scratch: true}``, when
+    there are any."""
     counts: dict[str, int] = {}
+    in_scratch = 0
     for summary in summaries:
         cwd = str(summary.get("cwd") or "")
         if cwd:
             real = os.path.realpath(cwd)
-            counts[real] = counts.get(real, 0) + 1
+            if scratch is not None and _within(real, scratch):
+                in_scratch += 1
+            else:
+                counts[real] = counts.get(real, 0) + 1
     out: list[dict[str, Any]] = []
     listed: set[str] = set()
     for path in saved:
         real = os.path.realpath(path)
-        if real not in listed:
+        if real not in listed and not (scratch is not None and _within(real, scratch)):
             listed.add(real)
             out.append(_project(real, True, counts.get(real, 0)))
     out += [_project(p, False, n) for p, n in counts.items() if p not in listed]
+    if scratch is not None and in_scratch:
+        out.append(_project(scratch, False, in_scratch, scratch=True, name="Scratch"))
     return out
 
 

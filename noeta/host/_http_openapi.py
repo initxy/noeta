@@ -41,7 +41,9 @@ OPENAPI: dict[str, Any] = {
     "security": [{"bearer": []}],
     "paths": {
         "/tasks": {
-            "post": _op("Create a task", body=_props(
+            "post": _op("Create a task (without a cwd, noeta serve runs it in a scratch "
+                        "directory of its own: ~/.noeta/scratch/<YYYY-MM-DD>/<first 8 of its "
+                        "id>)", body=_props(
                 "agent", input="string", config="object", queue="string",
                 dedupe_key="string", history_from="string", history_through="integer")),
             "get": _op("List tasks", query=("parent_id", "status", "limit", "roots_only"))},
@@ -51,8 +53,10 @@ OPENAPI: dict[str, Any] = {
                               query=("q", "task_id", "cwd", "limit"))},
         "/projects": {
             "get": _op("The saved directories and those of unarchived sessions, each with "
-                       "path, name, saved and its count of sessions"),
-            "post": _op("Save a directory as a project (checked as a new task's cwd)",
+                       "path, name, saved, scratch and its count of sessions; the sessions "
+                       "in scratch directories last, as one entry named Scratch"),
+            "post": _op("Save a directory as a project (checked as a new task's cwd; not "
+                        "a scratch directory)",
                         body=_props("path")),
             "delete": _op("Stop saving a project (its sessions stay)", body=_props("path"))},
         "/dirs": {"get": _op("The subdirectories of a directory (hidden ones left "

@@ -5,7 +5,9 @@ events; when this process also runs workers, live model output streams too.
     POST /tasks                       {agent, input?, config?, queue?, dedupe_key?,
                                       history_from?, history_through?} -> {task_id};
                                       config takes only the keys in _http_guard's
-                                      REQUEST_CONFIG (any other: 403)
+                                      REQUEST_CONFIG (any other: 403); without a cwd the
+                                      task runs in a scratch directory of its own, if the
+                                      server keeps them (``scratch``)
     GET  /tasks?parent_id=&status=&limit=&roots_only=
     GET  /summaries?limit=&archived=  the root tasks, each with its title, cwd, first
                                       prompt and ``archived`` (``noeta.host.summaries``);
@@ -14,9 +16,10 @@ events; when this process also runs workers, live model output streams too.
                                       holding ``q``, for a prompt's ``@`` mentions
     GET  /projects                    the saved directories, then the other directories of
                                       unarchived root tasks: each {path, name, saved,
-                                      sessions} (``noeta.host.projects``)
+                                      sessions, scratch}; the sessions in scratch
+                                      directories last, as one entry (``noeta.host.projects``)
     POST /projects                    {path} -> the project, saved; path checked as a new
-                                      task's cwd (403 when it is not a directory)
+                                      task's cwd (400 when it is no directory or a scratch one)
     DELETE /projects                  {path} -> {ok}: no longer saved (its tasks stay)
     GET  /dirs?path=                  {path, parent, dirs: [{name, path}]}: the subdirectories
                                       of a directory (default: the server's), hidden ones left
@@ -285,7 +288,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
                cwd: str | None = None,
                web_dir: str | None = None, allow_plugin_install: bool = False,
                plugin_admin: PluginAdmin | None = None,
-               projects_file: str | None = None) -> Starlette:
+               projects_file: str | None = None,
+               scratch: str | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -308,7 +312,9 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     ``noeta`` command allows it on a loopback bind); ``plugin_admin``: the
     machine's plugins as an API-only server (no ``app``) lists them;
     ``projects_file``: the JSON file the saved projects are kept in (only in
-    memory without one)."""
+    memory without one); ``scratch``: where a task a request creates without
+    a ``cwd`` gets a directory of its own (``<scratch>/<YYYY-MM-DD>/<first 8 of
+    its id>``), else it runs in ``cwd``."""
     if auth and not token and not token_sha256:
         raise ValueError("create_app needs a bearer token (token= or token_sha256=); pass "
                          "auth=False to serve every request without one")
@@ -321,7 +327,7 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         client=client, agents=agents or {}, live=deltas, admin=admin)
     guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, fixed=lambda: admin.fixed())
+                  cwd=cwd, fixed=lambda: admin.fixed(), scratch=scratch)
     r = Routes(serving, app, agents, SavedProjects(projects_file))
     s = StreamRoutes(guard, deltas)
     running = agents or {}

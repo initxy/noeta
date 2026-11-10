@@ -358,7 +358,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      or (host in LOOPBACK_HOSTS and not args.allow_host
                          and not args.allow_origin),
                      plugin_admin=app.plugin_admin,
-                     projects_file=str(home_dir.projects_file(s.store_url)))
+                     projects_file=str(home_dir.projects_file(s.store_url)),
+                     scratch=str(HOME / "scratch"))
     what = "web app" if web else "API (no web app)"
     for url in addresses(host, args.port, server.token if server else None, args.allow_host,
                          machine):

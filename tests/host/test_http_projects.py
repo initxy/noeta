@@ -56,12 +56,13 @@ async def test_projects_are_saved_ones_then_session_directories(
         await http.post(f"/tasks/{gone}/signals",
                         json={"name": "archive", "data": {"archived": True}, "wake": False})
         assert (await http.get("/projects")).json() == [
-            {"path": gamma, "name": "gamma", "saved": False, "sessions": 1},
-            {"path": alpha, "name": "alpha", "saved": False, "sessions": 2}]
+            {"path": gamma, "name": "gamma", "saved": False, "sessions": 1, "scratch": False},
+            {"path": alpha, "name": "alpha", "saved": False, "sessions": 2, "scratch": False}]
 
         added = await http.post("/projects", json={"path": beta})
         assert added.status_code == 200
-        assert added.json() == {"path": beta, "name": "Beta", "saved": True, "sessions": 0}
+        assert added.json() == {"path": beta, "name": "Beta", "saved": True, "sessions": 0,
+                                "scratch": False}
         # Saving again, or by a relative path, keeps one entry.
         await http.post("/projects", json={"path": "alpha"})
         await http.post("/projects", json={"path": alpha + "/"})
@@ -91,6 +92,36 @@ async def test_a_project_is_any_directory_and_nothing_else(
         unauthorized = await http.get("/projects", headers={"authorization": "Bearer no"})
         assert unauthorized.status_code == 401
     assert not saved.exists()
+
+
+async def test_a_task_without_a_cwd_runs_in_todays_scratch_directory(
+        tmp_path: Path, tree: Path) -> None:
+    import time
+
+    scratch = tmp_path / "noeta-home" / "scratch"
+    app, http, _ = _api(tmp_path, tree, scratch=str(scratch))
+    async with http:
+        assert (await http.get("/projects")).json() == []
+        made = await http.post("/tasks", json={"agent": "main", "config": {
+            "interactive": False}})
+        task_id = made.json()["task_id"]
+        where = scratch / time.strftime("%Y-%m-%d") / task_id[:8]
+        assert where.is_dir() and where.stat().st_mode & 0o777 == 0o700
+        first = (await app.client.events(task_id))[0].event
+        assert first.config["cwd"] == str(where)  # type: ignore[attr-defined]
+        # A repeated dedupe_key gets the first task; no second directory stays.
+        for _ in range(2):
+            await http.post("/tasks", json={"agent": "main", "dedupe_key": "k"})
+        assert len(list(where.parent.iterdir())) == 2
+        await http.post("/tasks", json={"agent": "main", "config": {"cwd": str(tree / "alpha")}})
+        listed = (await http.get("/projects")).json()
+        assert listed == [
+            {"path": str(tree / "alpha"), "name": "alpha", "saved": False, "sessions": 1,
+             "scratch": False},
+            {"path": str(scratch), "name": "Scratch", "saved": False, "sessions": 2,
+             "scratch": True}]
+        refused = await http.post("/projects", json={"path": str(where)})
+        assert refused.status_code == 400 and "scratch" in refused.json()["error"]
 
 
 async def test_a_project_outside_the_servers_directory_is_saved(
@@ -148,7 +179,8 @@ def test_projects_compare_directories_by_their_real_path(tmp_path: Path) -> None
     (tmp_path / "link").symlink_to(real)
     got = projects([str(tmp_path / "link")], [{"cwd": str(real)}, {"cwd": ""},
                                               {"cwd": str(tmp_path / "link")}])
-    assert got == [{"path": str(real), "name": "real", "saved": True, "sessions": 2}]
+    assert got == [{"path": str(real), "name": "real", "saved": True, "sessions": 2,
+                    "scratch": False}]
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads any directory")

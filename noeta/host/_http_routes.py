@@ -129,7 +129,8 @@ class Routes:
         client = scope(request).client
         live = await root_summaries(client, SCAN_ROWS, self._summaries,
                                     inbox=client.store.inbox, archived=False)
-        return projects(await asyncio.to_thread(self._saved.paths), live)
+        return projects(await asyncio.to_thread(self._saved.paths), live,
+                        scratch=scope(request).guarded.scratch)
 
     async def list_projects(self, request: Request) -> Response:
         return _json(await self._projects(request))
@@ -140,6 +141,9 @@ class Routes:
         real = os.path.realpath(scope(request).guarded.check_cwd(path))
         if not await asyncio.to_thread(os.path.isdir, real):
             raise ValueError(f"{path} is not a directory")
+        root = scope(request).guarded.scratch
+        if root is not None and (real == root or real.startswith(root + "/")):
+            raise ValueError(f"{path} is a scratch directory, which is no project")
         await asyncio.to_thread(self._saved.add, real)
         return _json(next(p for p in await self._projects(request) if p["path"] == real))
 
