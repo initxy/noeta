@@ -520,22 +520,31 @@ class Choices(Static, can_focus=True):
         self.index = max(0, min(index, len(self.options) - 1))
         self.update(self._text())
 
+    #: Options shown at once; a longer list scrolls with the pick.
+    ROWS = 12
+
     def _text(self) -> Text:
         out = Text()
-        for n, option in enumerate(self.options):
+        top = max(0, min(self.index - self.ROWS // 2, len(self.options) - self.ROWS))
+        shown = self.options[top:top + self.ROWS]
+        if top:
+            out.append(f"  ↑ {top} more\n", style="dim")
+        for n, option in enumerate(shown, top):
             here = n == self.index
-            out.append("\n" if n else "")
+            out.append("\n" if n > top else "")
             out.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
             out.append(f"{n + 1}. {render.clean(option.label)}",
                        style=f"bold {render.ACCENT}" if here else "")
             if option.detail:
                 out.append(f"  {render.clean(option.detail)}", style="dim")
+        if (below := len(self.options) - top - len(shown)) > 0:
+            out.append(f"\n  ↓ {below} more", style="dim")
         return out
 
     def action_move(self, step: int) -> None:
         if self.options:
             self.index = (self.index + step) % len(self.options)
-            self.update(self._text(), layout=False)
+            self.update(self._text(), layout=len(self.options) > self.ROWS)
 
     async def action_pick(self) -> None:
         if self.options:
@@ -544,7 +553,7 @@ class Choices(Static, can_focus=True):
     async def action_number(self, n: int) -> None:
         if 1 <= n <= len(self.options):
             self.index = n - 1
-            self.update(self._text(), layout=False)
+            self.update(self._text(), layout=len(self.options) > self.ROWS)
             await self.on_pick(self.options[n - 1].id)
 
     async def action_cancel(self) -> None:

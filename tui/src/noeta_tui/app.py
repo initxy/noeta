@@ -46,6 +46,7 @@ from noeta_tui.widgets import (
     CleanMarkdown,
     Completions,
     Notice,
+    Picker,
     PromptInput,
     QuestionCard,
     ToolCall,
@@ -71,8 +72,6 @@ DOUBLE_PRESS = 0.8
 COPIED_FLASH = 2.0
 #: Seconds the mode key waits for a new task's start to record its mode.
 MODE_WAIT = 2.0
-#: The tasks ``/resume`` offers: the most recently updated roots.
-RESUME_ROWS = 10
 
 
 #: What ``-c`` says, before it exits, when nothing was started here.
@@ -297,7 +296,8 @@ class NoetaApp(TranscriptView):
                 loop.call_soon_threadsafe(self.call_later, self._say_warning, line, level)
 
             self.start.warnings.show_with(show, shown=list(getattr(self.local, "notices", ())))
-        if not self.open_cards:  # a reopened task's open approval keeps the keys
+        # A reopened task's open approval keeps the keys, as the list to pick from does.
+        if not self.open_cards and not self.query(Picker):
             self.query_one(PromptInput).focus()
         if prompt and self.resume == "":
             self.query_one(PromptInput).text = prompt
@@ -443,14 +443,11 @@ class NoetaApp(TranscriptView):
         return str(self.task_config.get("cwd") or ("" if self.on_server else self.cwd))
 
     async def pick_task(self) -> None:
-        """Open the latest task and offer the others (``/resume``'s picker)."""
-        roots = await self.local.client.tasks(roots_only=True, limit=RESUME_ROWS)
-        if not roots:
-            await self.new_task()
-            return
-        await self.open_task(roots[0].task_id)
-        self.listed = [r.task_id for r in roots]
-        await slash.resume_picker(self, roots)
+        """``--resume`` with no task: a new screen and the tasks to pick
+        from (``/resume``'s picker); only the one picked is opened (opening
+        one tells it it was resumed, which reorders the list)."""
+        await self.new_task()
+        await self.resume_command("")
 
     @work(exclusive=True, group="commands", exit_on_error=False)
     async def _load_commands(self) -> None:
@@ -536,9 +533,7 @@ class NoetaApp(TranscriptView):
         elif arg:
             await self.open_task(arg)
         else:
-            roots = await self.local.client.tasks(roots_only=True, limit=RESUME_ROWS)
-            self.listed = [r.task_id for r in roots]
-            await slash.resume_picker(self, roots)
+            await slash.resume_picker(self)
 
     async def _say_warning(self, line: str, level: int) -> None:
         """A warning noeta logged (its stderr is under this screen)."""
