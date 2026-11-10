@@ -14,6 +14,8 @@ NAME = PERMISSIONS
 #: In a plan record: whether this plan runs with the auto-mode classifier,
 #: settled when plan mode is entered.
 AUTO_DURING_PLAN = "auto_during_plan"
+#: The exit notes, by the shell-first mode that was left.
+EXIT_NOTES = ("auto_exited", "bypass_exited")
 #: Decisions kept in the folded state (per call id).
 _KEEP = 256
 #: Task config key a child reads its parent's remembered rules from.
@@ -46,7 +48,7 @@ class PermState:
     total_denials: int = 0
     #: The classifier moved to the main model.
     demoted: bool = False
-    #: Notes owed to the next request: ``auto_exited``.
+    #: Notes owed to the next request: one of ``EXIT_NOTES``.
     due: tuple[str, ...] = ()
     #: An auto-mode note was sent since auto mode was last left or the task
     #: last compacted (Claude Code sends the next one only after that).
@@ -113,7 +115,7 @@ def fold(state: Any, kind: str, data: Any) -> PermState:
         # The notes sent before are gone: the auto-mode note goes out again
         # (with input newer than the compaction), and leaving auto mode owes
         # no exit note.
-        due = tuple(k for k in st.due if k != "auto_exited")
+        due = tuple(k for k in st.due if k not in EXIT_NOTES)
         return replace(st, due=due, compacted=True, auto_noted=False,
                        guidance_after=int(d.get("seq") or st.guidance_after))
     if kind == "probed":
@@ -144,13 +146,21 @@ def auto_active(mode: str | None, plan: dict[str, Any] | None) -> bool:
     return (plan or {}).get(AUTO_DURING_PLAN) is True
 
 
+def shell_first(mode: str | None, plan: dict[str, Any] | None) -> bool:
+    """Whether the mode lets the shell do small jobs (the shell-first note):
+    auto mode in force, or bypass-permissions mode."""
+    return auto_active(mode, plan) or mode == "bypassPermissions"
+
+
 def _auto_exit(st: PermState, due: tuple[str, ...], mode: str,
                plan: dict[str, Any] | None) -> tuple[str, ...]:
-    """``due`` with the exit note when this switch leaves auto mode after an
-    auto-mode note was sent."""
-    if st.auto_noted and auto_active(st.mode, st.plan) and not auto_active(mode, plan) \
-            and "auto_exited" not in due:
-        return (*due, "auto_exited")
+    """``due`` with the exit note when this switch leaves the shell-first
+    modes after their note was sent. Moving between auto and bypass-permissions
+    mode owes none: the note still holds (Claude Code sends the auto-mode exit
+    note and then the bypass one, which contradict each other)."""
+    if st.auto_noted and shell_first(st.mode, st.plan) and not shell_first(mode, plan) \
+            and not any(k in EXIT_NOTES for k in due):
+        return (*due, "bypass_exited" if st.mode == "bypassPermissions" else "auto_exited")
     return due
 
 

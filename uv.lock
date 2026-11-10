@@ -1026,7 +1026,7 @@ wheels = [
 
 [[package]]
 name = "noeta"
-version = "1.2.1"
+version = "1.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx", extra = ["socks"] },
@@ -1108,15 +1108,17 @@ dev = [
 
 [[package]]
 name = "noeta-tui"
-version = "1.2.1"
+version = "1.2.2"
 source = { editable = "tui" }
 dependencies = [
+    { name = "markdown-it-py" },
     { name = "noeta" },
     { name = "textual" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "markdown-it-py", specifier = ">=2.1" },
     { name = "noeta", editable = "." },
     { name = "textual", specifier = ">=8.0" },
 ]

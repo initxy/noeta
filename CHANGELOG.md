@@ -6,6 +6,25 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [1.2.2] - 2026-11-10
+
+Images reach gateway models again, switching between auto and bypass-permissions mode no longer
+sends contradicting notes, and the TUI shows link addresses.
+
+### Fixed
+
+- **Images never reached a model listed in a provider table or models file without
+  `supports_vision`**: such a row counted as text-only, so every image was replaced by
+  "[image omitted: model is not vision-capable]". A row that leaves the field out now sends images
+  and lets the provider judge, as a model nobody listed already did; `supports_vision = false`
+  still marks a text-only model.
+- **Switching from auto to bypass-permissions mode told the model two opposite things**: "auto
+  mode has ended, go back to the dedicated tools", then "the shell may also do small jobs". Moving
+  between the two modes now sends no note, and leaving bypass-permissions mode for another mode
+  sends its own exit note.
+- **The TUI hid link addresses**: a link showed only its text, which a terminal reached over ssh
+  cannot open. A link now reads `text (address)`, unless its text already is the address.
+
 ## [1.2.1] - 2026-11-10
 
 `noeta update` installs the new version even when uv cached the old listing, and `noeta service`

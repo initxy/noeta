@@ -476,7 +476,8 @@ def _register_rows(rows: Sequence[Mapping[str, Any]]) -> None:
         specs[row["id"]] = ModelSpec(
             real_model_id=row["id"], context_window=int(row["context_window"]),
             max_output_tokens=int(row["max_output_tokens"]),
-            supports_vision=bool(row.get("supports_vision", False)),
+            # Left out = unknown, not text-only: images go and the provider judges.
+            supports_vision=row.get("supports_vision") is not False,
             is_reasoning=bool(row.get("efforts")), vendor=row.get("family"))
     if specs:
         register_models(specs)

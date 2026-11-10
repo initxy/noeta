@@ -1,6 +1,6 @@
 """The notes a permission-mode switch owes the model, as Claude Code sends
 them: the shell-first note in auto and bypass-permissions mode (once until
-auto mode is left or the task compacts), the auto-mode exit note, and the
+both are left or the task compacts), the exit note on leaving them, and the
 plan-exit note on any way out of plan mode."""
 
 from __future__ import annotations
@@ -134,6 +134,32 @@ async def test_bypass_permissions_mode_gets_the_shell_first_note(
     _client, _tid, provider, _rt = await _start(store, tmp_path, "bypassPermissions")
     first = notes(provider.requests[0])
     assert BYPASS in first and GUIDANCE not in first
+
+
+async def test_auto_to_bypass_and_back_sends_no_exit_note(
+        store: SqliteStore, tmp_path: Path) -> None:
+    # The shell-first note holds in both modes: an exit note followed by the
+    # bypass note would tell the model two opposite things.
+    client, tid, provider, rt = await _start(store, tmp_path, "auto")
+    await _prompt(client, tid, rt, "p2", "bypassPermissions")
+    second = notes(provider.requests[1])
+    assert EXITED not in second and BYPASS not in second
+    await _prompt(client, tid, rt, "p3", "auto")
+    third = notes(provider.requests[2])
+    assert EXITED not in third and GUIDANCE not in third
+    await _prompt(client, tid, rt, "p4", "bypassPermissions")
+    await _prompt(client, tid, rt, "p5", "default")
+    assert notes(provider.requests[4]).startswith(w.BYPASS_MODE_EXITED)
+
+
+async def test_leaving_bypass_permissions_mode_is_told(
+        store: SqliteStore, tmp_path: Path) -> None:
+    client, tid, provider, rt = await _start(store, tmp_path, "bypassPermissions")
+    await _prompt(client, tid, rt, "p2", "acceptEdits")
+    second = notes(provider.requests[1])
+    assert w.BYPASS_MODE_EXITED in second and EXITED not in second
+    await _prompt(client, tid, rt, "p3", "bypassPermissions")
+    assert BYPASS in notes(provider.requests[2])
 
 
 async def test_an_agent_without_a_writing_tool_gets_no_auto_mode_note(

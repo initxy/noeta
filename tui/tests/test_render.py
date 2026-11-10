@@ -104,3 +104,24 @@ def test_context_left_warns_only_near_the_point_it_counts_to() -> None:
     assert off is not None and off.plain.startswith("Context low (10% remaining)")
     full = render.context_left(130_000, 100_000, 120_000, True)
     assert full is not None and full.plain == "0% until auto-compact"
+
+
+def _inline_text(markdown: str) -> str:
+    from noeta_tui.widgets import _markdown_parser
+
+    return "".join(child.content for block in _markdown_parser().parse(markdown)
+                   if block.type == "inline" for child in block.children or ()
+                   if child.type in ("text", "code_inline"))
+
+
+def test_a_link_shows_its_address() -> None:
+    # Over ssh a click opens nothing: the address must be on screen to copy.
+    assert _inline_text("Done: [the doc](https://x.example/d/1).") == \
+        "Done: the doc (https://x.example/d/1)."
+    assert _inline_text("[notes](draft/review.md)") == "notes (draft/review.md)"
+    # A link that already reads as its address is not doubled.
+    assert _inline_text("<https://x.example/a>") == "https://x.example/a"
+    assert _inline_text("see https://x.example/b") == "see https://x.example/b"
+    assert _inline_text("[https://x.example/c](https://x.example/c)") == "https://x.example/c"
+    # Inside code nothing changes.
+    assert _inline_text("`[a](b)`") == "[a](b)"

@@ -66,7 +66,8 @@ know, so they run at their real limits:
 
 `id`, `context_window` and `max_output_tokens` are needed for a row to count; `supports_vision`,
 `family` (the wire family) and `efforts` (marks a reasoning model) are optional; `provider`
-routes the model to a configured provider by name. A bare list of rows works too.
+routes the model to a configured provider by name. A bare list of rows works too. A row without
+`supports_vision` sends images and lets the provider judge; write `false` for a text-only model.
 
 A model's limits come from noeta's catalog first, then a models file or table rows, then its
 provider's listing, else 128,000 tokens of window and 16,384 of output with a warning.

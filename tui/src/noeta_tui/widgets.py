@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -45,11 +47,43 @@ class UserMessage(Static):
         super().__init__(out)
 
 
+def _show_link_targets(state: Any) -> None:
+    """After a link whose text is not its address, the address in brackets:
+    ``[doc](https://x)`` reads ``doc (https://x)``. A terminal reached over
+    ssh cannot open a click, so the address must be readable to copy."""
+    for block in state.tokens:
+        if block.type != "inline" or not block.children:
+            continue
+        out: list[Token] = []
+        href, shown = "", ""
+        for token in block.children:
+            out.append(token)
+            if token.type == "link_open":
+                href, shown = str(token.attrs.get("href") or ""), ""
+            elif token.type in ("text", "code_inline") and href:
+                shown += token.content
+            elif token.type == "link_close" and href:
+                bare = href.split("://", 1)[-1].removeprefix("mailto:")
+                if shown.strip() not in (href, bare):
+                    tail = Token("text", "", 0)
+                    tail.content = f" ({href})"
+                    out.append(tail)
+                href = ""
+        block.children = out
+
+
+def _markdown_parser() -> MarkdownIt:
+    parser = MarkdownIt("gfm-like")
+    parser.core.ruler.push("show_link_targets", _show_link_targets)
+    return parser
+
+
 class CleanMarkdown(Markdown):
     """Markdown of what a task recorded (the model's reply, a plugin's
     notice), shown without the control sequences in it."""
 
     def __init__(self, markdown: str | None = None, **kw: Any) -> None:
+        kw.setdefault("parser_factory", _markdown_parser)
         super().__init__(render.clean(markdown) if markdown else markdown, **kw)
 
     def update(self, markdown: str) -> Any:
