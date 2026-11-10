@@ -546,13 +546,25 @@ async def _listed(app: NoetaApp, row: Any) -> Listed:
                    prompt, source)
 
 
+def _superseded(listed: list[Listed]) -> set[str]:
+    """The tasks a listed rewind's task continues and that nothing was done
+    in since: the continuation stands for them. One worked on again after
+    (resumed and sent to) is listed as well."""
+    latest: dict[str, float] = {}
+    for x in listed:
+        if x.continues:
+            latest[x.continues] = max(latest.get(x.continues, 0.0), x.row.updated_at)
+    return {x.row.task_id for x in listed
+            if x.row.task_id in latest and latest[x.row.task_id] > x.row.updated_at}
+
+
 async def resume_picker(app: NoetaApp, *, everywhere: bool = False) -> None:
     """``/resume``: the conversations to pick from, the latest first, each
     with its first prompt, as Claude Code lists them: those started in this
     directory (a last choice lists every directory's), one conversation
     per line however often it was rewound (a rewind's continuation stands
-    for what it continues). Listing changes nothing: only the task picked
-    is opened."""
+    for what it continues, unless that was worked on since). Listing
+    changes nothing: only the task picked is opened."""
     rows = await app.local.client.tasks(roots_only=True, limit=RESUME_LIMIT)
     listed = list(await asyncio.gather(*(_listed(app, r) for r in rows)))
     here = str(app.task_config.get("cwd") or ("" if app.on_server else app.cwd))
@@ -561,8 +573,8 @@ async def resume_picker(app: NoetaApp, *, everywhere: bool = False) -> None:
         listed = [x for x in listed if x.cwd == here]
     else:
         others = 0
-    continued = {x.continues for x in listed if x.continues}
-    listed = [x for x in listed if x.row.task_id not in continued]
+    superseded = _superseded(listed)
+    listed = [x for x in listed if x.row.task_id not in superseded]
     if not listed and not others:
         await app.say_notice("no tasks to resume")
         return

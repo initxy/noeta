@@ -132,3 +132,27 @@ async def test_the_resume_list_is_this_directorys_with_a_way_to_every_one(
                      and "every directory" not in here.query_one(Choices).options[-1].label)
         assert any(elsewhere in o.detail for o in here.query_one(Choices).options)
 
+
+async def test_a_conversation_worked_on_after_its_rewind_is_listed_again(
+        tmp_path: Path) -> None:
+    provider = ScriptedProvider([reply("one"), reply("two"), reply("again"), reply("more")])
+    app = make_app(tmp_path, provider)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await type_line(pilot, "first")
+        await settle(pilot, lambda: not app.busy and "one" in shown(app))
+        await type_line(pilot, "second")
+        await settle(pilot, lambda: not app.busy and "two" in shown(app))
+        original = app.task_id
+        await type_line(pilot, "/rewind 2 conversation")
+        await settle(pilot, lambda: app.fork_from is not None)
+        await type_line(pilot, "second, again")
+        await settle(pilot, lambda: bool(app.task_id) and not app.busy and "again" in shown(app))
+        fork = app.task_id
+        # Back in the original, and on with it there.
+        await app.open_task(original)
+        await settle(pilot, lambda: app.task_id == original and "two" in shown(app))
+        await type_line(pilot, "third")
+        await settle(pilot, lambda: not provider.steps and not app.busy and "more" in shown(app))
+        await type_line(pilot, "/resume")
+        await settle(pilot, lambda: bool(app.query(Picker)))
+        assert [o.id for o in app.query_one(Choices).options] == [original, fork]
