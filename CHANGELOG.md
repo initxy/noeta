@@ -60,6 +60,12 @@ user's service; a session without a project gets a scratch directory of its own.
   The `roots` an older version kept in `settings.json` are dropped on the next save. With no
   project saved, new sessions get scratch folders, as in the browser.
 
+### Fixed
+
+- **A foreground command that leaves a child running returns sooner on macOS**: the up-to-one-second
+  wait for its output started a `sleep` every 20 ms, which on macOS stretched the second to two or
+  three; it now ticks every 50 ms.
+
 ## [1.1.3] - 2026-11-09
 
 `noeta web` tells you how to use a folder it refuses, and the web app's browser tests stop

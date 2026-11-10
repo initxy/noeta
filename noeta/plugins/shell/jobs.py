@@ -109,9 +109,12 @@ GUARD_TICK_MIN_S = 0.05
 #: third of the claim's lease, so it is dead before another worker may
 #: take the task.
 ALIVE_S = 30.0
-#: Ticks of 20 ms a foreground command's keeper is given to write what came
-#: once the command's shell exited.
-FOREGROUND_DRAIN_TICKS = 50
+#: Ticks of :data:`FOREGROUND_DRAIN_TICK_S` a foreground command's keeper is
+#: given to write what came once the command's shell exited (1 s). Each tick
+#: starts a ``sleep`` process, which costs tens of ms on macOS: few, longer
+#: ticks keep the wait near its nominal second.
+FOREGROUND_DRAIN_TICKS = 20
+FOREGROUND_DRAIN_TICK_S = 0.05
 #: Bytes of a job's output (and, for a monitor, of its stdout alone) its
 #: logs keep.
 DEFAULT_LOG_MAX_BYTES = 64 * 1024 * 1024
@@ -480,7 +483,8 @@ class Registry:
                 pipeline = (f': > {flag}\nexec >/dev/null 2>&1\n'
                             f'"$@" > >({keep_out}; rm -f {flag}) 2>&1\n'
                             f'code=$?\nn=0\nwhile [ -e {flag} ] && [ "$n" -lt '
-                            f'{FOREGROUND_DRAIN_TICKS} ]; do sleep 0.02; n=$((n + 1)); done\n'
+                            f'{FOREGROUND_DRAIN_TICKS} ]; do sleep {FOREGROUND_DRAIN_TICK_S}; '
+                            'n=$((n + 1)); done\n'
                             f'rm -f {flag}\nexit "$code"')
             else:
                 pipeline = f'"$@" 2>&1 | {keep_out}\nexit "${{PIPESTATUS[0]}}"'
