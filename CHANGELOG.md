@@ -6,7 +6,7 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
-## [Unreleased]
+## [1.2.3] - 2026-11-10
 
 Noeta stays quick however long the conversation. New messages no longer wait on the skills
 directory, tasks start in bypass-permissions mode, the TUI and the web app keep up with long
