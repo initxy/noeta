@@ -365,7 +365,7 @@ function Workspace({
   useEffect(() => {
     if (!asking) return setPending([]);
     refreshPending();
-  }, [refreshPending, asking, state.waitingIds]);
+  }, [refreshPending, asking, state.waitingIds.join()]);
   usePoll(refreshPending, asking ? 1500 : null, null);
 
   useEffect(() => {
