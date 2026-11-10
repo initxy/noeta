@@ -6,6 +6,29 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+### Added
+
+- **Desktop installers on each GitHub Release**: macOS `.dmg` and Linux `.AppImage` / `.deb`,
+  built by the release workflow and not signed (on macOS, right-click the app and choose Open the
+  first time).
+
+### Changed
+
+- **The web and desktop apps are a local workbench**, as Codex's desktop app: the left column
+  lists projects (folders, by name with the path on hover), each with its sessions newest first,
+  a status dot and how long ago each moved; New session at the top starts one in the selected
+  project, a project's + starts one there, and the empty session names the project it will run
+  in. Add project opens a folder picker over the server's folders in a browser (`GET /dirs`,
+  saved with `POST /projects`; a folder the server may not use says why) and the system's picker
+  in the desktop app; a project you added can be removed from its menu. The page remembers the
+  last project; the desktop app opens on it. Search and the archived list work across all
+  projects. Against a server without `/projects`, the folders of its sessions are listed.
+- **Desktop**: File > Open Project Folder is now File > Add Project… (still `⌘O`), and the
+  chosen folder is saved as a project of the server. The install line it shows when `noeta` is
+  missing is `uv tool install 'noeta[tui,server]'`.
+
 ## [1.1.1] - 2026-11-09
 
 The terminal UI copies text, reopens long tasks at once, folds runs of tool calls as Claude Code

@@ -121,5 +121,5 @@ Linux 沙箱（bubblewrap）需要用户命名空间和一个新挂载的 `/proc
 
 ## 网页版
 
-镜像里不带网页版，它还在[实验阶段，需要从源码构建](./front-ends.md#网页版)。要用的话，在主机上
-构建出 `web/dist`，挂进 `serve`（`- ../web/dist:/web:ro`），再在它的命令里加上 `--web /web`。
+镜像是直接拿源码、不装 node 构建的，所以不带发布包里那份[网页版](./front-ends.md#网页版)。要用的话，在主机上
+构建出 `web/dist`（`cd web && npm ci && npm run build`），挂进 `serve`（`- ../web/dist:/web:ro`），再在它的命令里加上 `--web /web`。

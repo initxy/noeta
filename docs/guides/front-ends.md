@@ -26,78 +26,99 @@ A new outside protocol is another translation in `noeta/host`, never a second AP
 
 ## The web app
 
-**Experimental.** The web and desktop apps are built from source: they are not published
-(no npm package, no installers in the releases), CI does not run their tests (`make frontends`
-runs them locally), and the desktop installers are not signed. The terminal UI, `noeta -p`,
-ACP and the HTTP API are the supported ways in.
-
-The web app is a React page over `noeta serve`'s HTTP API (the same calls `RemoteClient`
-makes). It has a sidebar of conversations grouped by directory, a streamed markdown transcript, tool
-cards (Bash output, edits as diffs, sub-agents nested), approval cards with Claude Code's
-choices, `AskUserQuestion` forms, plan review, the todo panel, the slash-command menu, `@`
-mentions completed from the task's directory, image paste and drop, mode and model pickers,
-usage and context fill, rewind, rename, archive and search, light and dark themes and a
-phone-sized layout (`web/screenshots/README.md` lists each with a screenshot).
-
-Build it, then let the server serve it:
+The web app ships inside the `noeta` package: there is nothing to build. With the `server`
+extra installed (`uv tool install 'noeta[tui,server]'`), open it with
 
 ```bash
-cd web && npm install && npm run build      # writes web/dist
-noeta serve --web web/dist                  # needs the server extra
+noeta web            # starts a local server in the background and opens the page, signed in
+noeta web status     # is it running, and where
+noeta web stop       # stops it
 ```
 
-`noeta serve` prints its bearer token the first time it makes one; open the address it prints
-(`http://127.0.0.1:8642/` by default) and the page asks for the token once. You can also hand it
-over in the address: `http://127.0.0.1:8642/#token=…` (the part after `#` never reaches the
-server; the page keeps the token in the browser's storage and drops it from the address).
-"Disconnect" forgets it.
+`noeta web` starts a `noeta serve` on `127.0.0.1` in the background with the web app noeta's
+wheel carries, and opens it in your browser, signed in; a second `noeta web` reuses the running
+server ([the noeta command](../reference/cli.md#noeta-web)).
+
+It is laid out as a local workbench. The left column starts with **New session**, then lists
+your projects: folders, by name (hover for the path), each with its sessions newest first, a
+status dot (running, needs you, waiting, ended) and how long ago each last moved. A project is a
+folder you added, or the folder of a session you already have. Pick a project and the main pane
+shows its name and path above the composer: the next session runs there. A project's **+** starts
+a session in it directly; its **⋯** menu removes a project you added (its sessions stay). The
+search box narrows every project's sessions at once; **Archived** at the bottom lists the
+archived ones. The page remembers the project you last opened.
+
+**Add project** (the **+** beside "Projects") opens a folder picker over the server's folders:
+walk into one or type a path, then add it. The server only runs sessions in its own directory and
+the folders it was allowed (`--allow-root`; `noeta web` allows your home directory), and the
+picker says so when you try a folder outside them.
+
+The main pane has a streamed markdown transcript, tool cards (Bash output, edits as diffs,
+sub-agents nested), approval cards with Claude Code's choices, `AskUserQuestion` forms, plan
+review, the todo panel, the slash-command menu, `@` mentions completed from the session's folder,
+image paste and drop, mode and model pickers, usage and context fill, rewind, rename, light and
+dark themes and a phone-sized layout (`web/screenshots/README.md` lists each with a screenshot).
+
+### Against another server
+
+Any `noeta serve` serves the same page. It prints its bearer token the first time it makes one;
+open the address it prints (`http://127.0.0.1:8642/` by default) and the page asks for the token
+once. You can also hand it over in the address: `http://127.0.0.1:8642/#token=…` (the part after
+`#` never reaches the server; the page keeps the token in the browser's storage and drops it from
+the address). "Disconnect" forgets it.
 
 The page's files are served without a token (they hold none) with a content security policy
 that lets the page talk only to its own server. A page served from somewhere else may call the
 API only from an origin you name: `noeta serve --allow-origin https://ui.example.com`.
 
-For working on the page itself, `npm run dev` in `web/` runs Vite and proxies the API to a
-running `noeta serve` (`NOETA_SERVER`, default `http://127.0.0.1:8642`).
-
 What it does not have: cloud environments, repository and branch pickers (noeta runs in the
-server's directories), a terminal pane and a file tree. A conversation cannot be deleted, since the
+server's directories), a terminal pane and a file tree. A session cannot be deleted, since the
 store keeps every task's log; archive hides it.
+
+### Developing the page
+
+The page's source is `web/` (React and Vite). `npm run dev` there runs Vite and proxies the API
+to a running `noeta serve` (`NOETA_SERVER`, default `http://127.0.0.1:8642`); `npm run build`
+writes `web/dist`, which `noeta serve --web web/dist` serves instead of the bundled copy.
+`make frontends` runs every front end's tests.
 
 ## The desktop app
 
-**Experimental**, like the web app: build it from source; its installers are not signed.
+The desktop app is the web app in its own window, over a local `noeta serve` it starts and
+stops. Installers for macOS (`.dmg`) and Linux (`.AppImage`, `.deb`) are attached to each
+[GitHub Release](https://github.com/initxy/noeta/releases). They are not signed: on macOS,
+right-click the app and choose **Open** the first time (double-clicking says it cannot be
+checked); an AppImage needs `chmod +x` first. The app does not carry noeta itself: install it
+too (`uv tool install 'noeta[tui,server]'`); when it is missing the window shows that line.
 
-The desktop app is the web app in an Electron window over a local `noeta serve` it starts and
-stops. Nothing to connect or paste: on launch it finds `noeta`, picks a free loopback port,
-makes a fresh token for that run, and starts
+Nothing to connect or paste: on launch it finds `noeta`, picks a free loopback port, makes a
+fresh token for that run, and starts
 
 ```text
-noeta serve --host 127.0.0.1 --port <free port> --web <the built web app> [--allow-root DIR …]
+noeta serve --host 127.0.0.1 --port <free port> --web <the app's web files> [--allow-root DIR …]
 ```
 
 with the token in the server's environment (`NOETA_SERVER_TOKEN`), never on its command line
 (`desktop/src/server.ts`). Quitting stops the server.
 
-```bash
-cd desktop && npm install
-npm run web          # build ../web first
-npm start            # build and open the app
-npm run dist         # installers: macOS dmg, Linux AppImage and deb (not signed)
-```
-
 It looks for `noeta` on `PATH` and in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`
 (an app started from the Dock does not get the login shell's `PATH`); set
 `NOETA_DESKTOP_NOETA` or `noetaPath` in the app's `settings.json` (Settings, `⌘,`) to name
-another. When it is missing the window shows the install line, which includes the `server`
-extra. File > Open Project Folder (`⌘O`) picks the directory new conversations run in. The server runs
-in your home directory, so a folder under it needs nothing more; a folder outside it is added as an
-`--allow-root` of the server, which restarts it (after asking, when sessions are working or
-waiting; `desktop/src/main.ts`). When the local server dies the window shows its
+another.
+
+**Add project** (the column's **+**, File > Add Project…, `⌘O`) opens the system's folder
+picker and saves the folder as a project. The server runs in your home directory, so a folder
+under it needs nothing more; a folder outside it is added as an `--allow-root` of the server,
+which restarts it (after asking, when sessions are working or waiting; `desktop/src/main.ts`).
+The window opens on the project you last used. When the local server dies the window shows its
 last output, and View > Reload starts it again. It also raises a system notification when a
-conversation needs you or finishes while the window is in the background.
+session needs you or finishes while the window is in the background.
 
 The desktop app always runs its own local server; to work against a remote one, open the web
 app that server serves.
+
+To build it yourself: `cd desktop && npm install && npm start` (it uses `../web/dist`; `npm run
+web` builds it), and `npm run dist` writes the installers to `desktop/release/`.
 
 ## Plugins in the web and desktop apps
 
@@ -124,7 +145,7 @@ question card shows of the call it asks about), `record:<plugin>/<kind>` (a reco
 conversation), `codeblock:<language>` (a fenced block in rendered markdown) and `theme`. A
 contribution that throws shows its plugin's name in its place, and the dialog names a plugin
 whose web part failed to load or that waited in vain for another plugin's slot. In the desktop
-app `ctx.desktop` is its bridge (`project`, `chooseProject`, `notify`); in a browser it is
+app `ctx.desktop` is its bridge (`project`, `chooseProject`, `setProject`, `notify`); in a browser it is
 `null`.
 
 The built-in plugins' views come the same way, from their own web parts in the page's

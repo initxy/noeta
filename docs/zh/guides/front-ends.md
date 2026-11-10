@@ -21,47 +21,53 @@
 
 ## 网页版
 
-**还在实验阶段。** 网页版和桌面版都要从源码构建：没有发布（没有 npm 包，Release 里也没有安装包），CI 不跑它们的测试（本地用 `make frontends` 跑），桌面版的安装包也没有签名。正式支持的入口是终端界面、`noeta -p`、ACP 和 HTTP 接口。
-
-网页版是一个 React 页面，调用 `noeta serve` 的 HTTP 接口（和 `RemoteClient` 调的是同一批）。它有按目录分组的对话列表、流式显示的 markdown 对话、工具卡片（Bash 输出、改文件显示成 diff、子代理嵌套显示）、和 Claude Code 选项一致的审批卡片、`AskUserQuestion` 表单、计划审阅、任务清单面板、斜杠命令菜单、从任务目录补全的 `@` 引用、粘贴和拖入图片、模式和模型选择、用量和上下文占用、回退、重命名、归档和搜索、亮暗两种主题，以及手机尺寸的布局（`web/screenshots/README.md` 逐项配了截图）。
-
-先构建，再让服务器顺带提供它：
+网页版就装在 `noeta` 包里，不用自己构建。装了 `server` 这个 extra（`uv tool install 'noeta[tui,server]'`）之后：
 
 ```bash
-cd web && npm install && npm run build      # 输出到 web/dist
-noeta serve --web web/dist                  # 需要 server 这个 extra
+noeta web            # 在后台起一个本机服务器，打开页面，令牌已经带好
+noeta web status     # 看它在不在跑、地址是什么
+noeta web stop       # 停掉它
 ```
 
-`noeta serve` 第一次生成令牌时会打印出来；打开它打印的地址（默认 `http://127.0.0.1:8642/`），页面会要你输入一次令牌。也可以直接放在地址里：`http://127.0.0.1:8642/#token=…`（`#` 后面的部分不会发给服务器；页面把令牌存进浏览器本地存储，并从地址栏里去掉）。点"Disconnect"会忘掉它。
+`noeta web` 在后台起一个只听 `127.0.0.1` 的 `noeta serve`，用的是 noeta 安装包里自带的网页，并在浏览器里打开，令牌已经带好，不用再输；再运行一次 `noeta web` 会接着用已经在跑的那个服务器（详见 [noeta 命令](../reference/cli.md#noeta-web)）。
+
+页面是本地工作台的样子。左边一栏最上面是 **New session**，下面是你的项目：每个项目就是一个文件夹，显示文件夹名（鼠标悬停看完整路径），展开是它的会话，新的在上，每条带一个状态点（在跑、等你处理、在等输入、已结束）和最后一次动静是多久以前。项目要么是你加进来的文件夹，要么是已有会话所在的文件夹。选中一个项目，右边会在输入框上方显示它的名字和路径，接下来新开的会话就在那里跑。项目行上的 **+** 直接在这个项目里开新会话；**⋯** 菜单可以把你加的项目移掉（它的会话还在）。搜索框一次过滤所有项目的会话；最下面的 **Archived** 列出归档了的会话。页面会记住你上次打开的项目。
+
+**Add project**（"Projects" 旁边的 **+**）打开一个文件夹选择框，浏览的是服务器上的文件夹：点进去，或者直接输入路径，然后加进来。服务器只在自己的目录和允许它去的文件夹里跑会话（`--allow-root`；`noeta web` 允许整个主目录），选到范围外的文件夹时选择框会直接告诉你。
+
+右边是会话本身：流式显示的 markdown 对话、工具卡片（Bash 输出、改文件显示成 diff、子代理嵌套显示）、和 Claude Code 选项一致的审批卡片、`AskUserQuestion` 表单、计划审阅、任务清单面板、斜杠命令菜单、从会话目录补全的 `@` 引用、粘贴和拖入图片、模式和模型选择、用量和上下文占用、回退、重命名、亮暗两种主题，以及手机尺寸的布局（`web/screenshots/README.md` 逐项配了截图）。
+
+### 连别的服务器
+
+任何一个 `noeta serve` 都带着同一个页面。它第一次生成令牌时会打印出来；打开它打印的地址（默认 `http://127.0.0.1:8642/`），页面会要你输入一次令牌。也可以直接放在地址里：`http://127.0.0.1:8642/#token=…`（`#` 后面的部分不会发给服务器；页面把令牌存进浏览器本地存储，并从地址栏里去掉）。点"Disconnect"会忘掉它。
 
 页面文件本身不需要令牌就能取到（里面不含令牌），并带一条内容安全策略，只允许页面和自己的服务器通信。如果页面放在别的地方，只有你点名的来源才能调接口：`noeta serve --allow-origin https://ui.example.com`。
 
-要改页面本身，在 `web/` 里运行 `npm run dev`：它启动 Vite，把接口请求转发给一个正在运行的 `noeta serve`（`NOETA_SERVER`，默认 `http://127.0.0.1:8642`）。
+没有的东西：云端环境、仓库和分支选择（noeta 就在服务器的目录里跑）、终端面板和文件树。会话不能删除，因为存储会保留每个任务的日志；想让它不出现在列表里就归档。
 
-没有的东西：云端环境、仓库和分支选择（noeta 就在服务器的目录里跑）、终端面板和文件树。对话不能删除，因为存储会保留每个任务的日志；想让它不出现在列表里就归档。
+### 改页面本身
+
+页面源码在 `web/`（React + Vite）。在那里运行 `npm run dev`：它启动 Vite，把接口请求转发给一个正在运行的 `noeta serve`（`NOETA_SERVER`，默认 `http://127.0.0.1:8642`）；`npm run build` 输出到 `web/dist`，用 `noeta serve --web web/dist` 就会用它替换自带的那份。`make frontends` 跑所有前端的测试。
 
 ## 桌面版
 
-和网页版一样**还在实验阶段**：要从源码构建，安装包没有签名。
+桌面版就是放进独立窗口的网页版，后面连一个它自己启动、自己关闭的本地 `noeta serve`。每次发版，[GitHub Releases](https://github.com/initxy/noeta/releases) 里都附有 macOS（`.dmg`）和 Linux（`.AppImage`、`.deb`）的安装包。安装包没有签名：macOS 上第一次打开要右键点应用、选 **打开**（直接双击会提示无法验证开发者）；AppImage 要先 `chmod +x`。应用本身不带 noeta，要另外装（`uv tool install 'noeta[tui,server]'`）；没装的话窗口里会显示这条命令。
 
-桌面版就是装进 Electron 窗口的网页版，后面连一个它自己启动、自己关闭的本地 `noeta serve`。不用连接、不用粘贴任何东西：启动时它找到 `noeta`，挑一个空闲的本机端口，为这次运行生成一个新令牌，然后启动
+不用连接、不用粘贴任何东西：启动时它找到 `noeta`，挑一个空闲的本机端口，为这次运行生成一个新令牌，然后启动
 
 ```text
-noeta serve --host 127.0.0.1 --port <空闲端口> --web <构建好的网页版> [--allow-root DIR …]
+noeta serve --host 127.0.0.1 --port <空闲端口> --web <应用自带的网页> [--allow-root DIR …]
 ```
 
 令牌放在服务器进程的环境变量里（`NOETA_SERVER_TOKEN`），从不出现在命令行上（`desktop/src/server.ts`）。退出应用时服务器随之停止。
 
-```bash
-cd desktop && npm install
-npm run web          # 先构建 ../web
-npm start            # 构建并打开应用
-npm run dist         # 安装包：macOS dmg、Linux AppImage 和 deb（未签名）
-```
+它在 `PATH` 以及 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找 `noeta`（从程序坞启动的应用拿不到登录 shell 的 `PATH`）；要指定别的位置，设 `NOETA_DESKTOP_NOETA`，或在应用的 `settings.json`（Settings，`⌘,`）里写 `noetaPath`。
 
-它在 `PATH` 以及 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找 `noeta`（从程序坞启动的应用拿不到登录 shell 的 `PATH`）；要指定别的位置，设 `NOETA_DESKTOP_NOETA`，或在应用的 `settings.json`（Settings，`⌘,`）里写 `noetaPath`。找不到时窗口里会显示安装命令，那条命令带着 `server` extra。File > Open Project Folder（`⌘O`）选新对话的工作目录。服务器在你的主目录里运行，所以主目录下的文件夹直接就能用；主目录以外的文件夹会加成服务器的 `--allow-root`，服务器因此要重启（有对话正在跑或在等你时会先问一句；`desktop/src/main.ts`）。本地服务器挂了，窗口会显示它最后的输出，View > Reload 重新启动它。窗口在后台时，某个对话需要你、或者跑完了，会弹系统通知。
+**Add project**（左栏的 **+**、File > Add Project…、`⌘O`）弹出系统的文件夹选择框，选中的文件夹存成项目。服务器在你的主目录里运行，所以主目录下的文件夹直接就能用；主目录以外的文件夹会加成服务器的 `--allow-root`，服务器因此要重启（有会话正在跑或在等你时会先问一句；`desktop/src/main.ts`）。窗口打开时停在你上次用的项目上。本地服务器挂了，窗口会显示它最后的输出，View > Reload 重新启动它。窗口在后台时，某个会话需要你、或者跑完了，会弹系统通知。
 
 桌面版总是跑自己的本地服务器；要连远端服务器，打开那台服务器提供的网页版。
+
+想自己构建：`cd desktop && npm install && npm start`（用的是 `../web/dist`，`npm run web` 会先构建它），`npm run dist` 把安装包输出到 `desktop/release/`。
 
 ## 网页版和桌面版里的插件
 
@@ -69,7 +75,7 @@ npm run dist         # 安装包：macOS dmg、Linux AppImage 和 deb（未签�
 
 插件不写前端代码也能显示的东西（`Extension.ui`）出现在输入框附近：状态项在状态行里，小部件在输入框上方或下方，提示可以关掉。会话日志一有新内容，页面稍等片刻就重新取一次。
 
-带网页部分的插件（见[写一个插件 › 网页部分](./plugins.md#网页部分)）只在当前打开的会话用到它时才在页面里运行：页面从服务器导入它的模块，调用 `activate(ctx)`；插件被关掉、或者你离开这个会话，它加进页面的东西全部撤掉。它的组件放进页面预留的位置：`statusbar`（输入框下面那一行，排在模型选择之后；`order` 为负数的排到它前面）、`sidebar`（对话旁边那一栏）、`settings`（对话框的 Settings 页）、`session.header`（会话标题）、`composer`、`tool:<Tool>`（工具卡片的正文）、`request:<Tool>`（审批卡片或提问卡片上，关于这次调用要展示的内容）、`record:<plugin>/<kind>`（对话里的一条记录）、`codeblock:<language>`（渲染后的 markdown 里的代码块）和 `theme`。某个组件抛了异常，原地只显示插件名和错误，页面其余部分照常；网页部分加载失败、或者一直没等到另一个插件的位置，对话框里会点名是哪个插件。在桌面版里，`ctx.desktop` 就是桌面版给页面的那几个接口（`project`、`chooseProject`、`notify`）；在浏览器里它是 `null`。
+带网页部分的插件（见[写一个插件 › 网页部分](./plugins.md#网页部分)）只在当前打开的会话用到它时才在页面里运行：页面从服务器导入它的模块，调用 `activate(ctx)`；插件被关掉、或者你离开这个会话，它加进页面的东西全部撤掉。它的组件放进页面预留的位置：`statusbar`（输入框下面那一行，排在模型选择之后；`order` 为负数的排到它前面）、`sidebar`（对话旁边那一栏）、`settings`（对话框的 Settings 页）、`session.header`（会话标题）、`composer`、`tool:<Tool>`（工具卡片的正文）、`request:<Tool>`（审批卡片或提问卡片上，关于这次调用要展示的内容）、`record:<plugin>/<kind>`（对话里的一条记录）、`codeblock:<language>`（渲染后的 markdown 里的代码块）和 `theme`。某个组件抛了异常，原地只显示插件名和错误，页面其余部分照常；网页部分加载失败、或者一直没等到另一个插件的位置，对话框里会点名是哪个插件。在桌面版里，`ctx.desktop` 就是桌面版给页面的那几个接口（`project`、`chooseProject`、`setProject`、`notify`）；在浏览器里它是 `null`。
 
 内置插件的界面也走这条路，各自的网页部分放在页面源码的 `web/src/plugins/<name>/` 下：待办列表（`todos`）、权限模式选择和 Shift+Tab 切换（`permissions`）、待审阅的计划（`plan_mode`）、自动压缩前的倒数（`compaction`）、会话标题（`title`）、命令和文件工具的卡片及 diff（`shell`、`fs`）、子代理和 workflow 的进度（`subtasks`、`workflow`）、代码审查的发现（`findings`），以及 Settings 页里记忆、MCP、hooks 三块。某个会话关掉其中一个，它的界面跟着消失；没有插件接管的工具显示成普通卡片（输入和输出）。审批和提问、回退（rewind）、对话本身和模型选择由页面自己负责。
 
