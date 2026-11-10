@@ -84,14 +84,18 @@ export function streamingBlocks(text: string): { blocks: string[]; open: boolean
 
 const REMARK = [remarkGfm];
 // Only a block that names its language is highlighted: guessing one costs
-// more than drawing the rest of the message.
-const HIGHLIGHT: NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]> = [rehypeHighlight];
+// more than drawing the rest of the message. The plugin makes its own
+// highlighter (every grammar registered) each time a processor is made,
+// which react-markdown does on every render: one is made here, the first time code is drawn.
+let highlighter: ReturnType<typeof rehypeHighlight> | undefined;
+const HIGHLIGHT: NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]> = [() => (highlighter ??= rehypeHighlight())];
 const PLAIN: typeof HIGHLIGHT = [];
+const hasCode = (text: string) => text.includes("```") || text.includes("~~~");
 const urlTransform = (url: string, key: string) => (key === "src" && LOCAL_IMAGE.test(url) ? url : defaultUrlTransform(url));
 
 const Parsed = memo(function Parsed({ text, highlight }: { text: string; highlight: boolean }) {
   return (
-    <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={highlight ? HIGHLIGHT : PLAIN} components={components} urlTransform={urlTransform}>
+    <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={highlight && hasCode(text) ? HIGHLIGHT : PLAIN} components={components} urlTransform={urlTransform}>
       {text}
     </ReactMarkdown>
   );
