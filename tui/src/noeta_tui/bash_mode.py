@@ -45,7 +45,7 @@ def context_text(command: str, out: str, err: str) -> str:
 async def run(app: NoetaApp, command: str) -> None:
     if not command:
         return
-    transcript = app.query_one("#transcript")
+    transcript = app.transcript()
     await transcript.mount(UserMessage(command, marker="!"))
     if app.on_server:
         await app.say_notice("bash mode runs commands on this machine; attached to a "
@@ -57,6 +57,6 @@ async def run(app: NoetaApp, command: str) -> None:
     if not rows:
         rows = [("(No content)" if code == 0 else f"exit code {code}", "dim")]
     await transcript.mount(Static(render.result_block(
-        render.folded(rows, diff=False, expanded=app.verbose)), classes="command-output"))
-    transcript.scroll_end(animate=False)
+        render.folded(rows, diff=False, expanded=False)), classes="command-output"))
+    transcript.stick()
     app.bash_context.append(context_text(command, out, err))

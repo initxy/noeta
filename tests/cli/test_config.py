@@ -270,9 +270,10 @@ def test_sandbox_settings_merge_and_reach_the_env(home: Path) -> None:
 
 def test_serve_refuses_bypass_in_the_plugin_itself(
         home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``noeta serve`` without ``--allow-bypass-permissions`` turns on the
-    plugin's own refusal, so no way in (a signal, an answer, a settings
-    file's ``defaultMode``) can switch a served task into bypassPermissions."""
+    """``noeta serve --disable-bypass-permissions`` turns on the plugin's own
+    refusal, so no way in (a signal, an answer, a settings file's
+    ``defaultMode``) can switch a served task into bypassPermissions;
+    without it bypass is allowed."""
     import asyncio
     import types
 
@@ -303,7 +304,7 @@ def test_serve_refuses_bypass_in_the_plugin_itself(
     monkeypatch.setattr(uvicorn, "Server", _Server)
     for allow in (False, True):
         args = types.SimpleNamespace(host="127.0.0.1", no_worker=True, no_token=True,
-                                     allow_origin=[], allow_bypass_permissions=allow,
+                                     allow_origin=[], disable_bypass_permissions=not allow,
                                      allow_host=[], port=0, web=None,
                                      allow_plugin_install=False,
                                      permission_mode=None)

@@ -92,8 +92,10 @@ class RemoteClient:
                   if v is not None}
         return msgspec.convert(await self._call("GET", "/tasks", params=params), list[TaskRow])
 
-    async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
-        data = await self._call("GET", f"/tasks/{task_id}/events", params={"after": after})
+    async def events(self, task_id: str, after: int = 0, *,
+                     limit: int | None = None) -> list[Recorded]:
+        params = {"after": after} if limit is None else {"after": after, "limit": limit}
+        data = await self._call("GET", f"/tasks/{task_id}/events", params=params)
         return msgspec.convert(data, list[Recorded])
 
     async def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]:

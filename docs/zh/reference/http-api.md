@@ -29,8 +29,9 @@
    `plugins_off` 是一串插件名，不能包含任务离不开的内置插件（能关哪些见
    [关掉插件](./plugins.md#switching-a-plugin-off)），否则返回 `403`。服务端
    启动时带的 `--effort`、`--permission-mode` 垫在请求的配置下面，请求自己给了的以请求为准。只能发前端会发的那几种信号：
-   `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。除非服务端带了
-   `--allow-bypass-permissions`，否则不能让任务以 `bypassPermissions` 启动或切过去（`403`）。`cwd`
+   `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。服务端带了
+   `--disable-bypass-permissions`、或者它的设置文件写了 `disableBypassPermissionsMode` 时，不能让任务以
+   `bypassPermissions` 启动或切过去（`403`，带 `"code": "bypass_permissions_disabled"`）。`cwd`
    可以是任何目录（相对路径按服务端的目录解析，并以绝对路径存下）；不存在或不是目录返回 `400`。没给
    `cwd` 的任务在自己的临时目录里跑：`~/.noeta/scratch/<YYYY-MM-DD>/<任务 id 前 8 位>/`，建任务时建好。其余被拒的情况返回 `403` 和原因。
 
@@ -51,7 +52,7 @@ token 取自 `NOETA_SERVER_TOKEN`；没有的话用服务端 `~/.noeta/server-to
 | `GET /tasks` | `?parent_id=&status=&limit=&roots_only=`（`status`：`ready`、`running`、`waiting`、`ended`；`limit` 默认 100；`roots_only=true` 只列没有父任务的任务） | 任务行的列表 |
 | `GET /tasks/{id}` | | 一个任务行 |
 | `GET /summaries` | `?limit=&archived=`（`limit` 默认 50；`archived=true` / `false` 只要归档的 / 只要没归档的） | 根任务列表，最近更新的在前，每项 `{task_id, agent, status, waiting_on, end_status, created_at, updated_at, title, cwd, prompt, archived}`（`prompt` 是第一次提问，前 200 字符） |
-| `GET /tasks/{id}/events` | `?after=N` | 序号 `N` 之后的事件，每个是 `Recorded`（`seq`、`at`、`event`） |
+| `GET /tasks/{id}/events` | `?after=N`、`?limit=K` | 序号 `N` 之后的事件（给了 `limit` 只要前 `K` 个），每个是 `Recorded`（`seq`、`at`、`event`） |
 | `GET /tasks/{id}/watch` | `?after=N` | `text/event-stream`，见下 |
 
 - `input` 是字符串，或一条用户消息 `{"role": "user", "content": [...]}`，里面只能有文字和图片块；

@@ -29,7 +29,7 @@ export function pluginContext(plugin: string, deps: { api: Api; events: TaskEven
   return {
     client: {
       taskId,
-      read: (after = 0) => api.events(taskId, after),
+      read: (after = 0) => events.read(after, (from) => api.events(taskId, from)),
       watch: (on) => events.watch(on),
       send: (input, when) => api.send(taskId, input, when),
       answer: (requestId, decision, options) => api.answer(taskId, requestId, decision, options),

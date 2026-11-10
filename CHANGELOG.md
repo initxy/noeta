@@ -6,6 +6,105 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [1.2.3] - 2026-11-10
+
+Noeta stays quick however long the conversation. New messages no longer wait on the skills
+directory, tasks start in bypass-permissions mode, the TUI and the web app keep up with long
+sessions, a rewound conversation shows whole, and both fold tool calls as Claude Code does.
+
+### Changed
+
+- **`Store.read` takes a keyword `limit`** (the head of a log; `ClientAPI.events` and
+  `GET /tasks/{id}/events?limit=` pass it through). A third-party store adapter must accept it;
+  `noeta.testing.store_contract` checks it.
+- **Tasks start in `bypassPermissions` by default**, in the TUI, `noeta -p`, ACP, sub-agents, the
+  web app and served tasks; deny rules, ask rules and protected paths still hold in it.
+  `noeta serve` and `noeta worker` allow it unless started with the new
+  `--disable-bypass-permissions`; `--allow-bypass-permissions` is still accepted and does nothing,
+  so an installed `noeta service` keeps starting. A settings file's
+  `permissions.disableBypassPermissionsMode: "disable"` still switches it off; where it is off,
+  tasks start in `auto` as before.
+- Long diffs fold after 12 lines ("Show N more lines") and show line numbers.
+- Tool calls are drawn as lines without boxes; dark mode has its own error and status colors.
+- The rewind dialog says what each choice does (Both / Conversation / Code).
+- ↑ in an empty message box brings back your earlier prompts.
+- Runs of tool calls fold into one line in Claude Code's words ("Searched for 2 patterns, read 3
+  files, ran 1 shell command"), opened on a click; a failed call still shows on its own, edits of
+  one file in a row and agents started together are merged, and task-list calls are left out (the
+  task panel shows the list).
+- Projects that share a name show the parent folders that tell them apart.
+- **`Ctrl+O` shows the detailed transcript** in the transcript's place, as Claude Code's
+  transcript mode does, instead of unfolding every call in place; the transcript stays folded.
+- **Tool calls fold as Claude Code's do**: a single call shows as itself and its line turns into
+  the count, in place, when a second joins; short
+  remarks between calls, answered approvals and the task list no longer break it; a failed call
+  pops out with its first error lines; shell commands that only read, search or list count as
+  that, and commits, pushes and pull requests are named; reads count files, MCP calls name their
+  server; a running read shows its pattern as a hint; consecutive edits to one file are one line
+  (`Edited calc.py ×3 (+12 −4)`), and agents started together are one line with a line each.
+
+### Fixed
+
+- **Every new message was slow with a large skills directory**: the skills were indexed again for
+  each message, and indexing compared every file with every skill (57 skills over 2,174 files took
+  1.2 s). The index is built in one pass (43 ms) and only again when a skill file changes; a
+  message after the first now answers in about 50 ms instead of 1.4 s against a zero-latency model.
+- **Each model call first ran `find | cat | cksum` over every skills directory** to notice a skill
+  added mid-turn (about 15 ms a step). On this machine the look is now made by `stat`; a sandbox
+  or remote exec env still runs the command through the env.
+- **A `Bash` call waited at least 50 ms after its command ended**, polling for its output to be
+  written: `echo hi` took about 60 ms. The shell now wakes as soon as the output is written (a few
+  ms), still giving a child left running with `&` at most a second.
+- **Typing lagged while a long session streamed**: every streamed chunk re-rendered the whole page
+  (about 1,200 components in a 700-event session) and re-parsed the whole answer. Only the
+  streaming message redraws now, once per frame, parsing just the paragraph being written; typing
+  answers in ~14 ms instead of 120–230 ms.
+- **Opening a long session was slow and downloaded its log twice**: it now draws the latest
+  messages first and the earlier ones while the page is idle, and reads the log once (a 700-event
+  session shows its end in ~170 ms instead of ~490 ms).
+- **Scrolling up while the model wrote snapped back to the bottom**: the view now stays where you
+  scroll it, with a "Jump to latest" button to return.
+- **Errors showed Python exception text** (`RuntimeError('…')`) and tool errors their
+  `<tool_use_error>` tags: each is one plain line now, the raw text under "Details".
+- **Esc did not close the rewind and plugins dialogs.**
+- **With a side panel open, the message box did not line up with the conversation**, and the
+  session's folder squeezed its title in the header.
+- **The message box did not grow for wrapped lines** on a narrow screen.
+- The session list and approval cards are no longer polled while the page is hidden.
+- A new web session on a server started with `--disable-bypass-permissions` starts in `auto`
+  instead of failing; any other refusal is shown, not retried in another mode.
+- **`noeta serve` let requests start tasks in `bypassPermissions` when only a settings file
+  disabled it** (`permissions.disableBypassPermissionsMode: "disable"`): the plugin then ran them
+  in `auto` while the web app and the headless protocol's init message said
+  `bypassPermissions`. The server now refuses it as with `--disable-bypass-permissions`, and the
+  init message names the mode the settings start a task in (their `defaultMode` too).
+- **The TUI got slower with every message**: every message stayed laid out, the spinner and the
+  footer laid out the whole screen several times a second, and each streamed fragment was parsed
+  and laid out on its own. At 500 messages the idle spinner held the CPU at 68%, a key took up to
+  650 ms to show, a resumed task took 10–18 s to appear and a 4000-character answer took two
+  minutes to stream. Only the transcript's end is laid out now (older messages come back as you
+  scroll up), the spinner and footer are redrawn without a layout, a streamed reply is shown
+  once a frame, and a finished reply is drawn as a few pieces of text (tables one piece each)
+  instead of Textual's widget per block and per table cell; while a reply streams only the
+  block being written stays live.
+- **Scrolled up, the transcript was pulled back to the end** by every record; it now stays
+  where you are and follows again once you scroll back down. `PageUp` / `PageDown` scroll it
+  while the prompt has the keys.
+- **`Esc` took a moment to stop the turn on screen**: it now stops the spinner and says
+  Interrupted at once.
+- **Typing after `@` and `Ctrl+V` froze the screen** while the directory was walked or the
+  clipboard program answered; both run off the screen's loop, and in a git repository the `@`
+  list is git's (ignored files left out).
+- **A rewound conversation lost what came before the rewind point** on screen, and on every
+  later resume: the conversation it continues is now shown first. A rewind also left an empty
+  task behind when nothing was sent after it; its task is now made with the first message.
+- **`--resume` opened the newest task before listing**, and opening it reordered the list; it
+  now lists first and opens only the task picked. The list is this directory's conversations
+  (a last choice lists every directory's), every one of them, a rewound one as one line
+  (the conversation it continues is listed again once you go on with it). It reads only the
+  start of each conversation's log: 200 conversations list in 0.1 s instead of 0.6 s, and over
+  `--server` without fetching every whole log.
+
 ## [1.2.2] - 2026-11-10
 
 Images reach gateway models again, switching between auto and bypass-permissions mode no longer

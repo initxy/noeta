@@ -77,7 +77,7 @@ def _common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--effort", choices=("low", "medium", "high", "xhigh", "max"))
     ap.add_argument("--permission-mode", default=None,
                     choices=(*PERMISSION_MODES, *MODE_ALIASES),
-                    help="the starting permission mode (default: auto)")
+                    help="the starting permission mode (default: bypassPermissions)")
     ap.add_argument("--provider", choices=("anthropic", "openai_compat", "openai_responses"))
     ap.add_argument("--base-url")
     ap.add_argument("--store", help="sqlite:///path or postgres://... (default ~/.noeta/tasks.db)")
@@ -102,8 +102,12 @@ def _serve_arguments(sv: argparse.ArgumentParser) -> None:
                          "names and addresses (a reverse proxy's name, say)")
     sv.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
                     help="a web origin (https://host:port) whose pages may call the API")
+    sv.add_argument("--disable-bypass-permissions", action="store_true",
+                    help="refuse bypassPermissions, however a request asks for it")
+    # Bypass is allowed by default; the old opt-in stays accepted (installed
+    # services pass it).
     sv.add_argument("--allow-bypass-permissions", action="store_true",
-                    help="let requests start or switch tasks into bypassPermissions")
+                    help=argparse.SUPPRESS)
     sv.add_argument("--allow-plugin-install", action="store_true",
                     help="let requests install and remove plugins (always allowed on a "
                          "loopback address without --allow-host or --allow-origin)")
@@ -139,8 +143,10 @@ def _parser() -> argparse.ArgumentParser:
                    help="restarts in a row a task gets after its worker died mid-run, with "
                         "no step finished in between, before it ends failed (default 3; 0 "
                         "no limit)")
+    w.add_argument("--disable-bypass-permissions", action="store_true",
+                   help="refuse bypassPermissions to the tasks run here")
     w.add_argument("--allow-bypass-permissions", action="store_true",
-                   help="let tasks run in bypassPermissions")
+                   help=argparse.SUPPRESS)
     _serve_arguments(sub.add_parser("serve", help="the client API over HTTP"))
     service_command.add_parser(sub, _serve_arguments)
     update_command.add_parser(sub)
@@ -255,8 +261,9 @@ def _check_serve(args: argparse.Namespace) -> None:
 
 
 def _refuse_bypass(args: argparse.Namespace) -> None:
-    if args.permission_mode == "bypassPermissions" and not args.allow_bypass_permissions:
-        sys.exit("noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions")
+    if args.permission_mode == "bypassPermissions" and args.disable_bypass_permissions:
+        sys.exit("noeta: --permission-mode bypassPermissions contradicts "
+                 "--disable-bypass-permissions")
 
 
 def _app(s: Settings, **kw: Any) -> Any:
@@ -323,6 +330,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     from noeta.cli.home_dir import HOME
     from noeta.cli.serve_address import addresses, allowed_hosts
     from noeta.cli.server_token import serve_token
+    from noeta.host.app import bypass_allowed
     from noeta.host.http import (
         LOOPBACK_HOSTS,
         bundled_web_dir,
@@ -339,8 +347,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
               file=sys.stderr)
     machine = await _machine_names(host)
     # The plugin refuses bypassPermissions itself, whatever way it is asked.
-    permissions: dict[str, Any] = {} if args.allow_bypass_permissions else {
-        "disable_bypass_mode": True}
+    permissions: dict[str, Any] = {"disable_bypass_mode": True} \
+        if args.disable_bypass_permissions else {}
     app = _app(s, cwd=cwd, with_channels=True, permissions=permissions)
     app.client.task_config.update(_task_defaults(s, args))
     await app.start(worker=with_worker)
@@ -350,7 +358,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      app=app if with_worker else None,
                      allowed_hosts=allowed_hosts(host, args.allow_host, machine),
                      origins=args.allow_origin,
-                     allow_bypass=args.allow_bypass_permissions, cwd=cwd,
+                     # The plugin's settings as they are now (the flag is among them).
+                     allow_bypass=lambda: bypass_allowed(app), cwd=cwd,
                      web_dir=web,
                      # A Host or origin named besides the loopback ones: a
                      # reverse proxy may bring anyone to the loopback bind.
@@ -374,7 +383,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
 async def _worker(s: Settings, queues: list[str], concurrency: int,
                   lease: float | None = None, snapshot_every: int | None = None, *,
-                  restart_limit: int | None = None, allow_bypass: bool = False,
+                  restart_limit: int | None = None, allow_bypass: bool = True,
                   task_defaults: dict[str, Any] | None = None,
                   flags: tuple[str, ...] = ()) -> None:
     """``task_defaults``: the config of the tasks this worker's channels
@@ -525,7 +534,7 @@ def _main(argv: list[str]) -> None:
                                      ("--permission-mode", args.permission_mode)) if v)
         asyncio.run(_worker(s, args.queue or ["default"], args.concurrency,
                             args.lease, args.snapshot_every, restart_limit=args.restart_limit,
-                            allow_bypass=args.allow_bypass_permissions,
+                            allow_bypass=not args.disable_bypass_permissions,
                             task_defaults=_task_defaults(s, args), flags=flags))
         return
     if args.command == "serve":

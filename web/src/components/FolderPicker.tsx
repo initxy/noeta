@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiError, type Api } from "../api/client";
 import type { DirListing } from "../api/types";
 import { basename } from "../state/projects";
+import { useEscape } from "./useEscape";
 
 function why(e: unknown, listing: boolean): string {
   if (e instanceof ApiError && e.status === 404) return listing ? "This server cannot list folders: update noeta on it." : "This server keeps no projects: update noeta on it.";
@@ -16,6 +17,7 @@ export function FolderPicker({ api, start, onAdd, onClose }: { api: Api; start?:
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  useEscape(onClose);
   const go = (path?: string) =>
     api.dirs(path).then(
       (l) => {
@@ -40,7 +42,7 @@ export function FolderPicker({ api, start, onAdd, onClose }: { api: Api; start?:
     }
   };
   return (
-    <div className="overlay" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+    <div className="overlay" onClick={onClose}>
       <div className="dialog folder-picker" role="dialog" aria-label="Add project" onClick={(e) => e.stopPropagation()}>
         <div className="card-title">Add a project folder</div>
         <form

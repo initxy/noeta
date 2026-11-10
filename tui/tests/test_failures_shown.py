@@ -14,7 +14,7 @@ import httpx
 
 from noeta.host.app import LoggedWarnings
 from noeta.testing import ScriptedProvider, reply
-from noeta_tui.widgets import Choices, Notice, Picker
+from noeta_tui.widgets import Choices, Notice
 
 from support import AskBash, Lines, make_app, ready, settle, shown, type_line
 
@@ -79,15 +79,14 @@ async def test_a_rewind_the_server_refuses(tmp_path: Path) -> None:
 
         app.local.client.create = refused
         await type_line(pilot, "/rewind 1 conversation")
-        await settle(pilot, lambda: "/rewind failed: a request may not set the task config "
-                     "key 'prompts'" in shown(app))
-        await pilot.press("escape", "escape")  # the picker's way: the same
-        await settle(pilot, lambda: len(app.query(Picker)) == 1)
-        await pilot.press("enter")
-        await settle(pilot, lambda: len(app.query(Picker)) == 1 and "Restore" in shown(app))
-        await pilot.press("enter")
-        await settle(pilot, lambda: shown(app).count("/rewind failed") == 2)
-        assert app.task_id == first
+        await settle(pilot, lambda: "rewound to before prompt 1" in shown(app))
+        # The rewound conversation's task is made with its first message:
+        # that is what the server refuses, and the rewind stays to go on with.
+        await type_line(pilot, "hello again")
+        await settle(pilot, lambda: "sending it failed: a request may not set the task "
+                     "config key 'prompts'" in shown(app))
+        assert app.task_id == "" and app.fork_from is not None
+        assert app.fork_from[0] == first
     assert app.return_code is None
 
 

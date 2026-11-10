@@ -66,8 +66,9 @@ def _worker_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     return permissions
 
 
-@pytest.mark.parametrize(("argv", "disabled"), [([], True),
-                                                (["--allow-bypass-permissions"], False)])
+@pytest.mark.parametrize(("argv", "disabled"), [([], False),
+                                                (["--allow-bypass-permissions"], False),
+                                                (["--disable-bypass-permissions"], True)])
 def test_a_worker_refuses_bypass_like_serve(argv: list[str], disabled: bool, tmp_path: Path,
                                             monkeypatch: pytest.MonkeyPatch) -> None:
     permissions = _worker_permissions(tmp_path, monkeypatch, argv)
@@ -120,5 +121,6 @@ def test_a_workers_effort_and_mode_are_for_the_tasks_it_starts(
     assert made[0].client.task_config == {"effort": "low", "permission_mode": "acceptEdits"}
     err = capsys.readouterr().err
     assert "--effort and --permission-mode apply " + said in err
-    with pytest.raises(SystemExit, match="needs --allow-bypass-permissions"):
-        cli.main(["--model", "m", "--permission-mode", "bypassPermissions", "worker"])
+    with pytest.raises(SystemExit, match="contradicts --disable-bypass-permissions"):
+        cli.main(["--model", "m", "--permission-mode", "bypassPermissions", "worker",
+                  "--disable-bypass-permissions"])

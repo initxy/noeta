@@ -1,23 +1,25 @@
 import { Slot, SLOTS, SlotsContext } from "@initxy/noeta-web-sdk";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Api, ApiError, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Api, ApiError, bypassRefused, forgetConnection, initialConnection, saveConnection, type Connection } from "./api/client";
 import type { Command, Input, ModelInfo, Pending, Project, TaskSummary, TreeUsage } from "./api/types";
 import { Composer, newComposerKeep, type Attachment } from "./components/Composer";
 import { ModelPicker, NEW_SESSION_MODES, NewSessionMode, RewindDialog, UsageBadge } from "./components/Controls";
 import { FolderPicker } from "./components/FolderPicker";
+import { FollowScroll } from "./components/FollowScroll";
 import { PendingCards } from "./components/PendingCard";
 import { PluginsDialog } from "./components/PluginsDialog";
 import { Notices, StatusBar, Widgets } from "./components/PluginUi";
 import { Sidebar, type SessionStatus } from "./components/Sidebar";
-import { Transcript } from "./components/Transcript";
+import { LiveTranscript } from "./components/Transcript";
 import { attentionChanges, desktop } from "./desktop";
 import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
 import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
-import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot } from "./state/projects";
+import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot, shortPath } from "./state/projects";
 import type { TaskState } from "./state/transcript";
-import { ApiContext, useTask } from "./state/useTask";
+import { usePoll } from "./state/usePoll";
+import { ApiContext, useTask, useTaskView } from "./state/useTask";
 
 /** Commands the page runs itself, as Claude Code's app does. */
 const PAGE_COMMANDS: Command[] = [
@@ -105,8 +107,24 @@ function saveReplaced(ids: Set<string>): void {
   }
 }
 
+/** What the page around the transcript reads of the open task: none of it
+ * changes while text streams, so streaming re-renders none of it. */
+const shellOf = (s: TaskState) => ({
+  lastSeq: s.lastSeq,
+  pluginsOff: s.pluginsOff,
+  cwd: s.cwd,
+  model: s.model,
+  busy: s.busy,
+  ended: s.ended,
+  waitingOn: s.waitingOn,
+  waitingIds: s.waitingIds,
+  running: s.running,
+  replied: s.replied,
+  contextTokens: s.contextTokens,
+});
+
 /** The open session's status from its event stream (fresher than a listing). */
-function liveStatus(state: TaskState): SessionStatus {
+function liveStatus(state: Pick<TaskState, "ended" | "waitingOn" | "busy">): SessionStatus {
   if (state.ended !== null) return "ended";
   if (state.waitingOn === "approval" || state.waitingOn === "question") return "needs-you";
   return state.busy ? "running" : "idle";
@@ -175,29 +193,30 @@ function Workspace({
   const [sessions, setSessions] = useState<TaskSummary[]>([]);
   const [taskId, setTaskId] = useState<string | null>(sessionFromHash);
   const events = useMemo(() => (taskId ? new TaskEvents(taskId) : null), [taskId]);
-  const [state, dispatch] = useTask(api, taskId, events ? (rec, from) => (from ? events.keep(rec) : events.emit(rec)) : undefined);
+  const store = useTask(api, taskId, events ? (rec, from) => (from ? events.keep(rec) : events.emit(rec)) : undefined);
+  const state = useTaskView(store, shellOf);
+  const dispatch = store.dispatch;
   const [pending, setPending] = useState<Pending[]>([]);
   const [commands, setCommands] = useState<Command[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [usage, setUsage] = useState<TreeUsage | null>(null);
-  const [newMode, setNewMode] = useState("default");
+  const [newMode, setNewMode] = useState("bypassPermissions");
   const [newModel, setNewModel] = useState("");
   const [rewinding, setRewinding] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
   const [draft, setDraft] = useState<{ text: string; n: number } | undefined>();
+  const [sent, setSent] = useState(0); // a message sent takes the view to the end
   const [composerKeep] = useState(newComposerKeep);
   const [replaced, setReplaced] = useState(loadReplaced);
   const [navOpen, setNavOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [error, setError] = useState("");
-  const scroller = useRef<HTMLDivElement>(null);
   const desk = desktop();
   const [project, setProject] = useState(() => (desk ? "" : loadLastProject()));
   // The server's projects; null: it has no `/projects` (the list comes from the sessions).
   const [served, setServed] = useState<Project[] | null>(null);
   const [picking, setPicking] = useState(false);
   const listed = useRef<TaskSummary[] | null>(null);
-  const pinned = useRef(true); // the view follows new output while it is at the bottom
   const [themeSource] = useState(() => new ThemeSource(theme === "dark" ? "dark" : "light"));
   useEffect(() => themeSource.set(theme === "dark" ? "dark" : "light"), [theme, themeSource]);
   // A task's web parts start once its log is read (what it runs without is known then).
@@ -206,10 +225,6 @@ function Workspace({
   // The title as the server lists it; the title plugin shows it live.
   const title = sessions.find((s) => s.task_id === taskId)?.title ?? "";
 
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [state.items, state.live, state.queued, pending]);
 
   const fail = useCallback(
     (e: unknown) => {
@@ -221,7 +236,6 @@ function Workspace({
 
   const open = useCallback((id: string | null) => {
     setTaskId(id);
-    pinned.current = true;
     setPending([]);
     setUsage(null);
     setNavOpen(false);
@@ -322,11 +336,9 @@ function Workspace({
     }, fail);
   };
   const projectName = (served && projectFor(project, served)?.name) || basename(project);
-  useEffect(() => {
-    void refreshSessions();
-    const timer = setInterval(refreshSessions, 3000);
-    return () => clearInterval(timer);
-  }, [refreshSessions]);
+  // The listing, while the page is hidden less often (a desktop app's
+  // notifications come from it, so it keeps looking).
+  usePoll(refreshSessions, 3000, desk ? 10_000 : 60_000);
 
   useEffect(() => {
     api.models().then(setModels, fail);
@@ -339,7 +351,7 @@ function Workspace({
   // The sidebar's row of the open session follows its stream; the listing
   // is read again when the stream shows it changed.
   useEffect(() => {
-    if (taskId) void refreshSessions();
+    void refreshSessions();
   }, [taskId, state.busy, state.ended, refreshSessions]);
 
   // Cards are asked for only while the session waits on a person, or a
@@ -348,18 +360,20 @@ function Workspace({
     if (taskId) api.pending(taskId).then(setPending, fail);
   }, [api, taskId, fail]);
   const asking = state.waitingOn === "approval" || state.waitingOn === "question" || state.running.length > 0;
+  // Asked again at once when the stream shows a new wait; sub-agents' own
+  // approvals are not in it, so the cards are also polled (not while hidden).
   useEffect(() => {
     if (!asking) return setPending([]);
     refreshPending();
-    const timer = setInterval(refreshPending, 1500);
-    return () => clearInterval(timer);
-  }, [refreshPending, asking]);
+  }, [refreshPending, asking, state.waitingIds.join()]);
+  usePoll(refreshPending, asking ? 1500 : null, null);
 
   useEffect(() => {
     if (taskId && state.replied) api.usage(taskId).then(setUsage, () => undefined);
   }, [api, taskId, state.replied]);
 
   const findFiles = useCallback((q: string) => api.files(q, taskId), [api, taskId]);
+  const recall = useCallback(() => store.get().items.flatMap((i) => (i.kind === "user" && i.text ? [i.text] : [])), [store]);
 
   const replace = (id: string) => {
     const next = new Set(replaced).add(id);
@@ -377,7 +391,16 @@ function Workspace({
     const config = taskId
       ? continuationConfig({ model: state.model, cwd: state.cwd }, timezone)
       : newSessionConfig({ mode: newMode, model: newModel, project }, timezone);
-    const id = await api.create(null, config, "main", taskId ?? undefined);
+    let id: string;
+    try {
+      id = await api.create(null, config, "main", taskId ?? undefined);
+    } catch (e) {
+      // A server whose flag or settings disable bypassPermissions refuses
+      // the default mode: start in auto, as that server's own default does.
+      if (!(bypassRefused(e) && config.permission_mode === "bypassPermissions")) throw e;
+      setNewMode("auto");
+      id = await api.create(null, { ...config, permission_mode: "auto" }, "main", taskId ?? undefined);
+    }
     if (taskId) replace(taskId);
     open(id);
     return id;
@@ -385,6 +408,7 @@ function Workspace({
 
   const send = async (text: string, images: Attachment[]) => {
     setError("");
+    setSent((n) => n + 1);
     const [name, ...rest] = text.startsWith("/") ? text.slice(1).split(" ") : [""];
     const arg = rest.join(" ").trim();
     try {
@@ -475,7 +499,11 @@ function Workspace({
                 {taskId ? title || "Untitled session" : "New session"}
               </button>
             </Slot>
-            {state.cwd && <span className="cwd muted">{state.cwd}</span>}
+            {state.cwd && (
+              <span className="cwd muted" title={state.cwd}>
+                {shortPath(state.cwd)}
+              </span>
+            )}
           </div>
           <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} />
           {taskId && (
@@ -491,14 +519,7 @@ function Workspace({
           </button>
         </header>
         <div className="body">
-          <div
-            className="scroll"
-            ref={scroller}
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-            }}
-          >
+          <FollowScroll resetKey={`${taskId ?? ""}#${sent}`}>
             {!taskId && (
               <div className="welcome">
                 <h1>What should we work on?</h1>
@@ -523,9 +544,9 @@ function Workspace({
                 )}
               </div>
             )}
-            <Transcript state={state} />
+            <LiveTranscript key={taskId ?? ""} store={store} />
             <PendingCards pending={pending} api={api} answered={refreshPending} />
-          </div>
+          </FollowScroll>
           <aside className="side-panels" aria-label="Plugin panels">
             <Slot name={SLOTS.sidebar} />
           </aside>
@@ -549,6 +570,7 @@ function Workspace({
             placeholder={ended ? "This session has ended. Send a message to continue it." : undefined}
             draft={draft}
             keep={composerKeep}
+            recall={recall}
           />
           </Slot>
           <Widgets items={uiItems} placement="below" />

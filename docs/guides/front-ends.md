@@ -255,8 +255,8 @@ model, and in a scratch folder of its own unless `--cwd PATH` names a directory 
 server's: `--plugin-dir` and the other flags that shape the tasks run here (`--settings`,
 `--mcp-config`, `--allowedTools`, …) are refused, and `/reload-plugins` asks you to restart the
 workers. A request may set only the task config a client may (model, effort, permission mode,
-…); `bypassPermissions` is refused unless the server was started with
-`--allow-bypass-permissions`. `noeta -p` always runs here and refuses `--server`; a program that
+…); `bypassPermissions` is refused when the server was started with
+`--disable-bypass-permissions`. `noeta -p` always runs here and refuses `--server`; a program that
 wants the headless protocol against a server uses its `/stream-json` WebSocket.
 
 Deployment, workers, workspaces and the token in depth: [Run it as a server](./server.md); every

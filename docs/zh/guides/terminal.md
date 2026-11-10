@@ -29,7 +29,7 @@ noeta
 |---|---|
 | `prompt`（`noeta "把测试修好"`） | 任务打开后作为第一条消息发出（`-c`、`-r ID` 也一样；只写 `-r` 时先留在输入框里，等你挑好任务） |
 | `--model NAME`、`--effort LEVEL` | 新任务用的模型和推理强度（`low`、`medium`、`high`、`xhigh`、`max`） |
-| `--permission-mode MODE` | 起始权限模式（默认 `auto`，见[权限](./permissions.md)） |
+| `--permission-mode MODE` | 起始权限模式（默认 `bypassPermissions`，见[权限](./permissions.md)） |
 | `--agent NAME` | 用 `main` 以外的代理开始 |
 | `--cwd PATH` | 换一个工作目录 |
 | `-c`、`--continue` | 打开在这个目录里开始的最新一次对话 |
@@ -42,7 +42,11 @@ noeta
 
 对话记录占满屏幕，输入框在底部。底栏左边是权限模式，右边是模型和推理强度（effort）、上下文用了多少（快到自动压缩时改成显示还差多少）、目前的花费。任务设了 effort 就显示，不管是什么模型；没设时，内置目录里的推理模型显示它的默认值，其他模型什么都不发，也不显示。底栏下面一行是插件的状态项，自带的 `project_status` 插件在这里显示项目名和 git 分支（`noeta  ·  ⎇ main* ↑1`）。输入框为空时按 `?` 显示快捷键。
 
-连续的工具调用和 Claude Code 一样合成一行：`● Searched for 2 patterns, read 3 files, ran 2 shell commands (ctrl+o to expand)`。读文件、搜索、列目录、抓网页和网页搜索、shell 命令以及其他工具（比如 MCP 服务器的）会合并，夹在中间的模型思考也算进去；改文件的调用照样显示改动内容，子代理、工作流、任务清单和提问各占一行。正在跑或等你审批的调用会显示在这一行下面，结束后收起；失败的个数用红字标出。点一下这一行，或者点某个调用折叠起来的输出，就能展开；`Ctrl+O` 展开全部。任务目录下的路径显示成相对路径。
+连续的工具调用和 Claude Code 一样合成一行：`● Searched for 2 patterns, read 3 files, ran 2 shell commands (ctrl+o to expand)`。只有一个调用时照常显示这个调用本身（`● Bash(pytest -x)`，结果在下面）；第二个调用加进来时，同一行原地变成计数。读文件、搜索、列目录、抓网页和网页搜索、shell 命令以及其他工具会合并，夹在中间的模型思考和简短的过渡话（一两行，比如"Let me check the tests."，最新一句淡色显示在这一行下面）也算进去；长一点的回复会另起一行，已经答过的审批卡片和任务清单不会打断。只读、只搜、只列目录的 shell 命令（`cat`、`grep`、`ls`、`git status` / `log` / `diff` 等）按它干的事计数；提交、推送、开 PR 会直接写出来（`committed a1b2c3d, pushed to main`）。读文件按文件数算（同一个文件读两次算一个）；MCP 调用写服务器名（`called github 3 times`）。读文件或搜索正在跑时，它的路径或模式淡色显示在这一行下面；正在跑的 shell 命令、等你审批的调用会带着输出显示在下面，失败的调用留在下面并显示前几行报错，个数照样用红字标出。连着改同一个文件合成一行，`● Edited calc.py ×3 (+12 −4)`（只改一次就照常显示 diff）；一起启动的几个子代理合成一行 `● Running 3 agents`，每个代理下面一行。除此之外，子代理、工作流、任务清单和提问各占一行。点一下某一行，或者点某个调用折叠起来的输出，就能展开。任务目录下的路径显示成相对路径。
+
+`Ctrl+O` 在对话区的位置显示详细记录，和 Claude Code 的 transcript 模式一样：每个调用单独一行、带完整结果，每段思考完整显示；再按 `Ctrl+O`（或 `Esc`）回到对话区，对话区本身一直是折叠的。
+
+对话再长也不卡：只排版最后一段，往上翻时再把更早的消息补回来。往上翻着看的时候，任务继续跑，画面也停在你看的地方；翻回底部，又会跟着新内容走。
 
 ![对话记录](https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/transcript.svg)
 
@@ -55,12 +59,13 @@ noeta
 | `Enter` | 发送 |
 | `Shift+Enter`（能区分它的终端：Ghostty、kitty、iTerm2、WezTerm 等），`\` 再 `Enter`，或 `Ctrl+J` | 换行 |
 | `Esc` | 停止这一轮（已经说过的内容都保留） |
+| `PageUp` / `PageDown` | 对话区翻一页，不管焦点在哪儿 |
 | `Esc` `Esc` | 清空输入框；输入框已空时打开 `/rewind` |
 | `Ctrl+C` | 有选中的文字时复制；没有时清空输入框，已空时连按两次退出 |
 | `Shift+Tab` | 切到下一个权限模式 |
 | `↑` / `↓` | 翻之前的提问（光标在第一行或最后一行时）；输入框为空时 `↓` 进到子代理列表 |
 | `Ctrl+R` | 搜索之前的提问；`Enter` 把选中的放进输入框，`Esc` 留空 |
-| `Ctrl+O` | 展开所有工具调用的输出（再按一次折叠） |
+| `Ctrl+O` | 显示详细记录（再按一次回来） |
 | `Ctrl+T` | 显示或隐藏任务清单（todos） |
 | `Ctrl+B` | 进到底栏下面的子代理列表（再按一次回到输入框） |
 | `Ctrl+V` | 贴上剪贴板里的图片（macOS 直接可用；Linux 需要 `wl-paste` 或 `xclip`） |
@@ -76,7 +81,7 @@ noeta
 
 界面用终端自己的颜色画：终端的背景（背景图、透明也一样）和文字颜色直接透出来，边框用终端的灰色，次要文字用终端的暗淡样式。
 
-`Shift+Tab` 按 Claude Code 的顺序在任务的权限插件公布的模式之间切换：`default` → `acceptEdits` → `plan` → `auto` → `bypassPermissions`。服务器或工人启动时没加 `--allow-bypass-permissions`，就不会出现 `bypassPermissions`；没有规划模式插件就不会出现 `plan`。`dontAsk` 只能通过配置设置。
+`Shift+Tab` 按 Claude Code 的顺序在任务的权限插件公布的模式之间切换：`default` → `acceptEdits` → `plan` → `auto` → `bypassPermissions`。服务器或工人启动时加了 `--disable-bypass-permissions`，就不会出现 `bypassPermissions`；没有规划模式插件就不会出现 `plan`。`dontAsk` 只能通过配置设置。
 
 ### 审批和提问
 
@@ -184,15 +189,15 @@ noeta
 
 ```bash
 noeta -c              # 这个目录里最新的那次对话
-noeta -r              # 打开最新的任务，并列出其他的（最新 10 个，按第一句提问显示）
+noeta -r              # 从这个目录的对话里挑一个，按第一句提问显示
 noeta -r 3f9c…        # 按 id 打开
 ```
 
-没有可继续的对话时，`noeta -c` 打印 `No conversation found to continue` 并以退出码 1 结束，和 Claude Code 一样。界面里的 `/resume` 给出同样的列表。
+没有可继续的对话时，`noeta -c` 打印 `No conversation found to continue` 并以退出码 1 结束，和 Claude Code 一样。界面里的 `/resume` 给出同样的列表：这个目录里开始的对话，最新的在前，最后一项可以列出所有目录的。只打开你挑的那一个。回退过的对话只占一行，标着 `rewound from …`。
 
 重新打开任务时会通知它的插件"被恢复了"（发一个 `resumed` 信号，SessionStart hook 看到的是 `resume`）；如果任务原先是无界面运行起来的，从此就变成有人在跟的任务（会起标题，也可以提问）。任务的代理不在这个前端能跑的范围内时，任务以只读方式打开，能看历史。
 
-重新打开的任务会一次性显示全部历史，折叠方式和当时实时看到的一样；之后新的内容接着往下显示。
+重新打开的任务会一次性显示全部历史，折叠方式和当时实时看到的一样，回退过的任务连同它接着的那段对话一起显示；之后新的内容接着往下显示。
 
 ## 连到服务器
 

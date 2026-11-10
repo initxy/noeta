@@ -34,6 +34,17 @@ describe("SlotRegistry", () => {
     expect(r.contributions("statusbar")).toEqual([]);
   });
 
+  it("versions each slot and family apart, so a slot renders again only for its own changes", () => {
+    const r = new SlotRegistry();
+    r.add("a", "record:todos/list", {}, Text("t"));
+    const remove = r.add("a", "tool:Bash", {}, Text("b"));
+    expect([r.slotVersion("tool:Bash"), r.slotVersion("tool:"), r.slotVersion("record:"), r.slotVersion("sidebar")]).toEqual([1, 1, 1, 0]);
+    remove();
+    expect([r.slotVersion("tool:Bash"), r.slotVersion("record:todos/list")]).toEqual([2, 1]);
+    r.withdraw("a");
+    expect([r.slotVersion("tool:Bash"), r.slotVersion("record:todos/list"), r.slotVersion("record:")]).toEqual([2, 2, 2]);
+  });
+
   it("resolves a wait once a plugin's slot is rendered", async () => {
     const r = new SlotRegistry();
     await expect(r.wait("p", "statusbar", 10)).resolves.toBeUndefined();

@@ -15,7 +15,19 @@ from noeta.testing import ScriptedProvider, reply
 from noeta_tui.app import NoetaApp
 from noeta_tui.widgets import ApprovalCard, Completions, PromptInput, ToolCall, Welcome
 
-from support import MODEL, AskBash, Lines, make_app, plain, ready, settle, shown, type_line
+from support import (
+    MODEL,
+    AskBash,
+    Lines,
+    detail,
+    make_app,
+    open_detail,
+    plain,
+    ready,
+    settle,
+    shown,
+    type_line,
+)
 
 
 def footer(app: NoetaApp) -> str:
@@ -123,10 +135,14 @@ async def test_tool_calls_fold_long_output_and_show_diffs(tmp_path: Path) -> Non
         body = plain(edit.body)
         assert "Added 1 line, removed 1 line" in body
         assert "2 -    return a - b" in body and "2 +    return a + b" in body
+        # Ctrl+O: the detailed transcript, every result in full; the
+        # transcript itself stays folded.
+        view = await open_detail(pilot)
+        assert "line 9" in shown(view) and "line 9" not in plain(bash.body)
+        assert not app.query_one("#transcript").display
         await pilot.press("ctrl+o")
-        assert "line 9" in plain(bash.body)
-        await pilot.press("ctrl+o")
-        assert "line 9" not in plain(bash.body)
+        await settle(pilot, lambda: detail(app) is None)
+        assert app.query_one("#transcript").display
         assert "✻ Worked for" in shown(app)
 
 

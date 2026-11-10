@@ -315,6 +315,20 @@ describe("ctx", () => {
     expect([ctx.theme.mode, modes]).toEqual(["dark", ["dark"]]);
   });
 
+  it("reads the log from the events the page holds, fetching only what came after them", async () => {
+    const rec = (seq: number): Recorded => ({ seq, at: 0, event: { type: "ExtensionRecorded", extension: "p", kind: "k", data: seq } });
+    const api = { events: vi.fn().mockResolvedValue([rec(3)]) };
+    const events = new TaskEvents("t1");
+    const ctx = pluginContext("p", { api: api as unknown as Api, events, registry: new SlotRegistry(), theme: new ThemeSource("light") });
+    expect(await ctx.client.read(0)).toEqual([rec(3)]); // nothing held: the server's log
+    expect(api.events).toHaveBeenLastCalledWith("t1", 0);
+    events.emit(rec(1));
+    events.emit(rec(2));
+    expect((await ctx.client.read(0)).map((r) => r.seq)).toEqual([1, 2, 3]);
+    expect(api.events).toHaveBeenLastCalledWith("t1", 2);
+    expect((await ctx.client.read(1)).map((r) => r.seq)).toEqual([2, 3]);
+  });
+
   it("the shared modules are the page's own", async () => {
     provideSharedModules();
     const shared = globalThis.__noetaShared!;

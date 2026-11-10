@@ -7,8 +7,9 @@ formats are Claude Code's; the files are noeta's own (`~/.noeta/settings.json`,
 
 ## Permission modes
 
-Every task runs in one permission mode, recorded in its log. The default is `auto`, as in Claude
-Code.
+Every task runs in one permission mode, recorded in its log. The default is `bypassPermissions`
+(Claude Code's is `auto`); deny rules, ask rules and protected paths still hold in it. Where
+bypass mode is switched off, the default is `auto`.
 
 | Mode | Shown as | What asks |
 |---|---|---|
@@ -26,8 +27,8 @@ the SDK's `set_permission_mode`, a card's "Yes, and switch to …" choice, or th
 signal over the client API. A sub-agent starts in its caller's mode.
 
 `bypassPermissions` can be switched off: `"disableBypassPermissionsMode": "disable"` in a
-settings file's `permissions`. `noeta serve` and `noeta worker` refuse it unless started with
-`--allow-bypass-permissions`, whatever the request says.
+settings file's `permissions`, or `noeta serve` / `noeta worker` started with
+`--disable-bypass-permissions`, which refuse it whatever the request says.
 
 ## Rules
 
@@ -266,7 +267,7 @@ since, and puts back what you choose:
 | Choice | What happens |
 |---|---|
 | Restore code and conversation | both of the below |
-| Restore conversation | a new task continues the log up to just before that prompt; the prompt is put back in the box to edit |
+| Restore conversation | the conversation up to just before that prompt is shown, and the prompt is put back in the box to edit; a new task continuing it is made when you send |
 | Restore code | the files go back to their content before that prompt; a file that did not exist is removed |
 
 The conversation is never cut in place: the old task stays in the store and the new one starts

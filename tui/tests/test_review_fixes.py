@@ -13,7 +13,7 @@ from noeta.testing import ScriptedProvider, reply
 from noeta_tui import render
 from noeta_tui.widgets import ApprovalCard, Completions, Picker, PromptInput, ToolCall, ToolGroup
 
-from support import MODEL, make_app, plain, ready, settle, shown, type_line
+from support import MODEL, make_app, open_detail, plain, ready, settle, shown, type_line
 
 
 async def test_a_task_is_created_by_the_first_message_not_by_opening(tmp_path: Path) -> None:
@@ -167,13 +167,14 @@ async def test_reads_one_after_another_are_one_line(tmp_path: Path) -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await type_line(pilot, "read them")
         await settle(pilot, lambda: not app.busy and provider.steps == [])
-        three, one = app.query(ToolGroup)
-        assert plain(three.head) == "● Read 3 files (ctrl+o to expand)"
-        assert not any(c.display for c in three.calls)
-        assert not one.head.display and one.calls[0].display  # alone: shown as itself
-        await pilot.press("ctrl+o")
-        assert all(c.display for c in three.calls) and plain(three.head) == "● Read 3 files"
-        assert len(app.query(ToolCall)) == 4
+        # A short remark between calls goes on the run (the latest under its
+        # line); a file read twice is one.
+        [run] = app.query(ToolGroup)
+        assert plain(run.head) == "● Read 3 files (ctrl+o to expand)"
+        assert len(run.calls) == 4 and not any(c.display for c in run.calls)
+        assert run.words.display and "Now one more." in plain(run.words)
+        view = await open_detail(pilot)  # each call on its own line there
+        assert len(view.query(ToolCall)) == 4 and not run.expanded
         assert MODEL in plain(app.query_one("#status"))
 
 

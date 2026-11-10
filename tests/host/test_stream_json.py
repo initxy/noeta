@@ -557,3 +557,36 @@ async def test_structured_output_over_the_protocol(tmp_path: Path) -> None:
                  and m["response"]["request_id"] == "array"]
     assert refused["subtype"] == "error" and '"type": "object"' in refused["error"]
     assert len(provider.requests) == 6
+
+
+
+async def test_init_names_the_mode_the_task_runs_in(tmp_path: Path) -> None:
+    from noeta.cli.config import permission_start_mode
+    from noeta.plugins.permissions import Permissions
+
+    # Settings with bypass disabled and another default mode.
+    args = {"disable_bypass_mode": True, "mode": "acceptEdits"}
+    app = local(tmp_path, ScriptedProvider([]),
+                Agent(name="main", model=MODEL, extensions=[Permissions(**args)]))
+    app.start_mode = lambda asked: permission_start_mode(args, asked)
+    async with app:
+        for asked, shown in ((None, "acceptEdits"), ("bypassPermissions", "acceptEdits"),
+                             ("default", "default")):
+            c = Client()
+            conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path),
+                                                   permission_mode=asked), c.emit)
+            await conv.start()
+            init = await c.until(lambda m: m.get("subtype") == "init")
+            assert init["permissionMode"] == shown, asked
+            await app.client.wait(conv.task_id, timeout=10)
+            await conv.close()
+        # Resumed, a task keeps its mode unless it may switch to the one asked.
+        for asked, shown in (("bypassPermissions", "default"), ("dontAsk", "dontAsk")):
+            c = Client()
+            conv = StreamJson(app, HeadlessOptions(model=MODEL, cwd=str(tmp_path),
+                                                   resume=conv.task_id, permission_mode=asked),
+                              c.emit)
+            await conv.start()
+            init = await c.until(lambda m: m.get("subtype") == "init")
+            assert init["permissionMode"] == shown, asked
+            await conv.close()

@@ -113,9 +113,10 @@ Then type what you want, as you would in Claude Code:
 
 A few things to know on the first day:
 
-- **Permission mode.** New tasks start in `auto`. Shift+Tab cycles the modes
-  (`default` asks before changes, `acceptEdits`, `plan`, `auto`, `bypassPermissions`);
-  `--permission-mode` picks the starting one. Approvals show as cards you answer in place
+- **Permission mode.** New tasks start in `bypassPermissions`: nothing asks but deny and ask rules
+  and protected paths. Shift+Tab cycles the modes (`default` asks before changes, `acceptEdits`,
+  `plan`, `auto`, `bypassPermissions`); `--permission-mode` picks the starting one. Approvals show
+  as cards you answer in place
   ([Permissions and hooks](../guides/permissions.md)).
 - **Slash commands.** `/help` lists them; `/model`, `/effort`, `/context`, `/cost`, `/compact`,
   `/rewind`, `/resume` and the rest are in [The noeta command](../reference/cli.md#slash-commands).

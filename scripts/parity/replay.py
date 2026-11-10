@@ -480,9 +480,9 @@ class SessionReplay:
                     # Recorded in Claude Code's interactive terminal, which
                     # runs ``!`` commands: a terminal UI task.
                     config[BASH_MODE_KEY] = True
-                    if self.spec.get("permission_mode"):
-                        # The mode Claude Code was started in (``--permission-mode``).
-                        config["permission_mode"] = self.spec["permission_mode"]
+                    # The mode Claude Code was started in (``--permission-mode``;
+                    # without it, its default, auto: noeta's own is bypass).
+                    config["permission_mode"] = self.spec.get("permission_mode") or "auto"
                     task_id = await app.client.create("main", text, config=config)
                 else:
                     await app.client.send(task_id, text)

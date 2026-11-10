@@ -120,11 +120,22 @@ describe("reduce", () => {
     expect(st.items.map((i) => (i.kind === "notice" ? `${i.tone}:${i.text}` : i.kind))).toEqual([
       "assistant",
       "info:Interrupted by you",
-      "error:Turn failed: provider: 429",
+      "error:The turn failed: provider: 429",
       "compaction",
       "error:Session failed: boom",
     ]);
     expect(st.ended).toBe("failed");
+  });
+
+  it("shows a failure as one line in words, the raw error behind details", () => {
+    let st = reduce(emptyTask(), record("core", "turn_failed", { reason: "internal_error", detail: "RuntimeError('upstream 529 overloaded: it\\'s busy')" }));
+    st = reduce(st, ev({ type: "TaskEnded", status: "failed", error: "llm_error: TimeoutError(\"no reply\")" }));
+    st = reduce(st, record("core", "retry", { attempt: 2, error: "APIError('rate limited')" }));
+    expect(st.items).toMatchObject([
+      { text: "Something went wrong: upstream 529 overloaded: it's busy", detail: "internal_error: RuntimeError('upstream 529 overloaded: it\\'s busy')" },
+      { text: "Session failed: The model call failed: no reply", detail: 'llm_error: TimeoutError("no reply")' },
+      { text: "Retrying (attempt 2): rate limited" },
+    ]);
   });
 
   it("keeps a queued message until the task takes it", () => {

@@ -4,7 +4,7 @@
 
 ## 权限模式
 
-每个任务都处在某个权限模式下，模式记在它的日志里。默认是 `auto`，和 Claude Code 一样。
+每个任务都处在某个权限模式下，模式记在它的日志里。默认是 `bypassPermissions`（Claude Code 默认是 `auto`）；这个模式下拒绝规则、询问规则和受保护路径照样管用。关掉了 bypass 模式的地方，默认是 `auto`。
 
 | 模式 | 界面上的名字 | 哪些要问 |
 |---|---|---|
@@ -17,7 +17,7 @@
 
 起始模式可以用 `--permission-mode MODE`（`manual` 视同 `default`）、设置文件里的 `permissions.defaultMode`、代理文件的 `permissionMode`，或任务配置来设。任务运行中切换：终端界面里按 `Shift+Tab`，网页版或编辑器里用模式选择器，SDK 的 `set_permission_mode`，审批卡片上"Yes, and switch to …"那个选项，或者通过客户端接口发 `permission_mode` 信号。子代理一开始和调用者处在同一模式。
 
-`bypassPermissions` 可以整个关掉：在设置文件的 `permissions` 里写 `"disableBypassPermissionsMode": "disable"`。`noeta serve` 和 `noeta worker` 启动时不加 `--allow-bypass-permissions`，不管请求怎么说都拒绝这个模式。
+`bypassPermissions` 可以整个关掉：在设置文件的 `permissions` 里写 `"disableBypassPermissionsMode": "disable"`，或者启动 `noeta serve` / `noeta worker` 时加 `--disable-bypass-permissions`，这样不管请求怎么说都拒绝这个模式。
 
 ## 规则
 
@@ -181,7 +181,7 @@ command hook 的环境变量是 noeta 的（去掉它自己的凭据），再加
 | 选项 | 效果 |
 |---|---|
 | Restore code and conversation | 下面两项都做 |
-| Restore conversation | 新开一个任务，延续日志到那句提问之前为止；那句提问放回输入框，你可以改了再发 |
+| Restore conversation | 显示到那句提问之前为止的对话，那句提问放回输入框，你可以改了再发；接着这段对话的新任务在你发出时才建 |
 | Restore code | 文件恢复到那句提问之前的内容；当时不存在的文件会被删掉 |
 
 对话从不原地截断：旧任务留在存储里，新任务从它的历史开始（`history_from`），所以回退不会丢任何东西。文件通过任务自己的执行环境写回，不管任务在哪儿跑；只写日志为那个路径记录过的内容，其他的都报告为未恢复（`noeta/host/rewind.py`）。所有前端用的是同一套辅助函数：终端界面和 ACP 里的 `/rewind`、网页版的回退对话框、无界面协议里的 `rewind_files`，以及 HTTP 上的 `GET` / `POST /tasks/{id}/rewind`。

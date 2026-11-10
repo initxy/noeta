@@ -15,6 +15,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Static, TextArea
 
 from noeta.core.events import InputTaken, Say, Waiting
@@ -25,6 +26,7 @@ from noeta.host.app import FrontEndStart
 from noeta.host.local import UnknownAgent
 from noeta.host.pending import answer_choice
 from noeta.host.questions import next_question, typed_answer
+from noeta.host.rewind import RewindPoint
 from noeta.host.stream_json import find_latest_task
 from noeta.toolkit.interactive import BASH_MODE_KEY, follow
 from noeta.toolkit.local_env import local_timezone
@@ -38,16 +40,16 @@ from noeta.toolkit.permission_modes import (
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta_tui import bash_mode, clipboard, files, history, mentions, render, selection, slash, wrap
 from noeta_tui.agents import MAIN, AgentsPanel, AgentView, WorkflowView
+from noeta_tui.tail import TailScroll
 from noeta_tui.transcript import SERVER_DIRECTORY, WORKFLOW_KEY, TranscriptView, _short_path
 from noeta_tui.widgets import (
     CleanMarkdown,
     Completions,
     Notice,
+    Picker,
     PromptInput,
     QuestionCard,
-    ThinkingBlock,
     ToolCall,
-    ToolGroup,
     UserMessage,
     Welcome,
 )
@@ -70,8 +72,6 @@ DOUBLE_PRESS = 0.8
 COPIED_FLASH = 2.0
 #: Seconds the mode key waits for a new task's start to record its mode.
 MODE_WAIT = 2.0
-#: The tasks ``/resume`` offers: the most recently updated roots.
-RESUME_ROWS = 10
 
 
 #: What ``-c`` says, before it exits, when nothing was started here.
@@ -86,10 +86,13 @@ class NoetaApp(TranscriptView):
         Binding("ctrl+b", "agents", "Agents", show=False),
         Binding("shift+tab", "cycle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+v", "paste_image", "Paste image", show=False),
-        Binding("ctrl+o", "toggle_verbose", "Verbose", show=False, priority=True),
+        Binding("ctrl+o", "detailed_transcript", "Transcript", show=False, priority=True),
         Binding("ctrl+t", "toggle_tasks", "Tasks", show=False, priority=True),
         Binding("ctrl+c", "interrupt", "Quit", show=False, priority=True),
         Binding("ctrl+r", "search_history", "History", show=False, priority=True),
+        # The transcript's, whatever has the focus (the prompt keeps it).
+        Binding("pageup", "page(-1)", show=False, priority=True),
+        Binding("pagedown", "page(1)", show=False, priority=True),
     ]
 
     def __init__(self, local: Any, *, agent: str, model: str, cwd: str,
@@ -160,6 +163,11 @@ class NoetaApp(TranscriptView):
         self.called = 0
         self.replied = 0
         self._batch = None
+        self._drawn = {}
+        self._stopped_here = False
+        #: The rewind the screen's task will continue, made on the first
+        #: message: the task rewound and the point (``None``: no rewind).
+        self.fork_from: tuple[str, RewindPoint] | None = None
         self._record_at = 0.0
         self.turn_started_at = 0.0
         #: A delta is taken off the queue but not yet written.
@@ -182,7 +190,6 @@ class NoetaApp(TranscriptView):
         self.read_only = False
         self.waiting_for = ""
         self.todos: dict[str, dict[str, Any]] = {}
-        self.verbose = False
         self.show_tasks = True
         self.queued: list[str] = []
         self.echoed: list[str] = []
@@ -231,7 +238,7 @@ class NoetaApp(TranscriptView):
         self._close_messages_no_wait()
 
     def compose(self) -> ComposeResult:
-        yield VerticalScroll(id="transcript")
+        yield TailScroll(id="transcript")
         yield Static("", id="spinner")
         yield Static("", id="tasks")
         yield Static("", id="queued")
@@ -289,7 +296,8 @@ class NoetaApp(TranscriptView):
                 loop.call_soon_threadsafe(self.call_later, self._say_warning, line, level)
 
             self.start.warnings.show_with(show, shown=list(getattr(self.local, "notices", ())))
-        if not self.open_cards:  # a reopened task's open approval keeps the keys
+        # A reopened task's open approval keeps the keys, as the list to pick from does.
+        if not self.open_cards and not self.query(Picker):
             self.query_one(PromptInput).focus()
         if prompt and self.resume == "":
             self.query_one(PromptInput).text = prompt
@@ -328,7 +336,15 @@ class NoetaApp(TranscriptView):
             # task's files are): the prompt may suggest one.
             if not self.on_server:
                 config[BASH_MODE_KEY] = True
-            tid: str = await self.local.client.create(self.agent, None, config=config)
+            if self.fork_from is not None:
+                # A rewind's conversation: made now, from its first message,
+                # so a rewind nobody goes on with leaves no empty task.
+                source, point = self.fork_from
+                done = await self.local.rewind(source, point, conversation=True, files=False)
+                tid: str = done.task_id
+                self.fork_from = None
+            else:
+                tid = str(await self.local.client.create(self.agent, None, config=config))
             await self.local.adopt(tid)
             self.task_id = tid
             self._follower = self.follow(tid)
@@ -347,22 +363,36 @@ class NoetaApp(TranscriptView):
             # A person follows it now, whatever headless run had it before.
             await follow(self.local.client, task_id)
             await self.local.client.signal(task_id, RESUMED_SIGNAL)
-        await self._clear(task_id, refused=refused)
-        after = await self.show_log(task_id)
+        head = await self._clear(task_id, refused=refused, mount=False)
+        after = await self.show_log(task_id, head)
         if task_id != self.task_id:  # another task was opened meanwhile
             return
         self._follower = self.follow(task_id, after)
         self._load_commands()
         self.update_status()
 
-    async def _clear(self, task_id: str, *, refused: str = "") -> None:
+    async def open_fork(self, source: str, point: RewindPoint) -> None:
+        """A rewind of ``source``'s conversation to before ``point``: its
+        conversation up to there shown, on a screen whose task (that
+        conversation's continuation) is made when the first message is
+        sent (:meth:`ensure_task`)."""
+        head = await self._clear("", mount=False)
+        self.fork_from = (source, point)
+        await self.show_log(point.task_id, head, through=point.seq - 1)
+        self._load_commands()
+        self.update_status()
+
+    async def _clear(self, task_id: str, *, refused: str = "",
+                     mount: bool = True) -> list[Widget]:
         """Forget what was shown and show ``task_id``'s welcome box (``""``:
-        a new task's)."""
+        a new task's); ``mount=False``: the box is returned instead, to show
+        with the task's log."""
         if self._follower is not None:
             self._follower.cancel()
             self._follower = None
         self.read_only = bool(refused)
         self.task_id = task_id
+        self.fork_from = None
         self.task_cwd = self._default_task_cwd()
         self.effort = self.task_config.get("effort")
         self.context_tokens = 0
@@ -393,17 +423,19 @@ class NoetaApp(TranscriptView):
         self.queued.clear()
         self.echoed.clear()
         self._show_queued()
-        transcript = self.query_one("#transcript")
-        transcript.anchor(False)  # a short transcript anchored sinks to the bottom
-        await transcript.remove_children()
-        await transcript.mount(Welcome(version=self.start.version, model=self.model,
-                                       cwd=_short_path(self.task_cwd, 72) or SERVER_DIRECTORY,
-                                       task_id=task_id))
-        for notice in getattr(self.local, "notices", ()):
-            await transcript.mount(Notice(notice))
+        transcript = self.transcript()
+        await transcript.clear()
+        head: list[Widget] = [Welcome(version=self.start.version, model=self.model,
+                                      cwd=_short_path(self.task_cwd, 72) or SERVER_DIRECTORY,
+                                      task_id=task_id)]
+        head += [Notice(notice) for notice in getattr(self.local, "notices", ())]
         if refused:
-            await transcript.mount(Notice(f"read-only: {refused}. Its history is shown; "
-                                          "/new starts a task here.", classes="-error"))
+            head.append(Notice(f"read-only: {refused}. Its history is shown; "
+                               "/new starts a task here.", classes="-error"))
+        if not mount:
+            return head
+        await transcript.mount_all(head)
+        return []
 
     def _default_task_cwd(self) -> str:
         """The task's directory until its ``TaskCreated`` says: the one new
@@ -411,14 +443,11 @@ class NoetaApp(TranscriptView):
         return str(self.task_config.get("cwd") or ("" if self.on_server else self.cwd))
 
     async def pick_task(self) -> None:
-        """Open the latest task and offer the others (``/resume``'s picker)."""
-        roots = await self.local.client.tasks(roots_only=True, limit=RESUME_ROWS)
-        if not roots:
-            await self.new_task()
-            return
-        await self.open_task(roots[0].task_id)
-        self.listed = [r.task_id for r in roots]
-        await slash.resume_picker(self, roots)
+        """``--resume`` with no task: a new screen and the tasks to pick
+        from (``/resume``'s picker); only the one picked is opened (opening
+        one tells it it was resumed, which reorders the list)."""
+        await self.new_task()
+        await self.resume_command("")
 
     @work(exclusive=True, group="commands", exit_on_error=False)
     async def _load_commands(self) -> None:
@@ -470,9 +499,9 @@ class NoetaApp(TranscriptView):
             self._show_queued()
         else:  # shown at once, as typed; the task's log confirms it
             self.echoed.append(body)
-            transcript = self.query_one("#transcript")
+            transcript = self.transcript()
             await transcript.mount(UserMessage(text))
-            transcript.scroll_end(animate=False)
+            transcript.stick()
         # Busy before the send: the turn may run, and its end be shown,
         # before the send returns.
         was_busy = self.busy
@@ -504,27 +533,25 @@ class NoetaApp(TranscriptView):
         elif arg:
             await self.open_task(arg)
         else:
-            roots = await self.local.client.tasks(roots_only=True, limit=RESUME_ROWS)
-            self.listed = [r.task_id for r in roots]
-            await slash.resume_picker(self, roots)
+            await slash.resume_picker(self)
 
     async def _say_warning(self, line: str, level: int) -> None:
         """A warning noeta logged (its stderr is under this screen)."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(Notice(line, classes="-error" if level >= logging.ERROR
                                       else "-warn"))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
 
     async def say_markdown(self, text: str) -> None:
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(CleanMarkdown(text, classes="notice"))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
 
     async def say_text(self, text: Text) -> None:
         """Rich text, as a command's output (``  ⎿`` under the command)."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(Static(text, classes="command-output"))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
 
     def prefill(self, text: str) -> None:
         """Put ``text`` in the input box for the person to edit and send."""
@@ -553,7 +580,8 @@ class NoetaApp(TranscriptView):
         box.display = bool(self.image_names)
 
     async def action_paste_image(self) -> None:
-        image = mentions.clipboard_image()
+        # Its programs may take seconds (a clipboard owner that is slow to answer).
+        image = await asyncio.to_thread(mentions.clipboard_image)
         if image is None:
             await self.say_notice("no image on the clipboard (on Linux it needs wl-paste or "
                                   "xclip; over ssh, drop the image file on the terminal "
@@ -727,24 +755,43 @@ class NoetaApp(TranscriptView):
         if start == 0 and word.startswith("/"):  # the command word, cursor anywhere in it
             menu.show(slash.matches(self, word[1:]))
         elif word.startswith("@") and not self.on_server:
-            menu.show([(f"@{p}", f"+ {p}", "") for p in
-                       files.matches(self.task_cwd or self.cwd, word[1:])])
+            self._complete_path(word)
         else:
             menu.hide()
 
+    @work(exclusive=True, group="paths", exit_on_error=False)
+    async def _complete_path(self, word: str) -> None:
+        """The ``@`` menu for ``word``, the tree listed off the event loop
+        (a large one takes a while), shown if the word is still being typed."""
+        found = await asyncio.to_thread(files.matches, self.task_cwd or self.cwd, word[1:])
+        start, end = self._word()
+        if self._box().text[start:end] == word:
+            self.query_one(Completions).show([(f"@{p}", f"+ {p}", "") for p in found])
+
     def _set_marker(self, marker: str) -> None:
         bash = marker == "!"
-        self.query_one("#marker", Static).update(Text(marker or "❯",
-                                                      style=f"bold {render.BASH}" if bash else ""))
+        self.query_one("#marker", Static).update(
+            Text(marker or "❯", style=f"bold {render.BASH}" if bash else ""), layout=False)
         self.query_one("#prompt-box").set_class(bash, "-bash")
 
     # ------------------------------------------------------------ keys
 
+    def action_page(self, step: int) -> None:
+        """PageUp / PageDown: a page of what is shown (the transcript, or
+        the view in its place)."""
+        views = self.query(".agent-log")
+        target = views.first() if views else self.transcript()
+        if step < 0:
+            target.scroll_page_up(animate=False)
+        else:
+            target.scroll_page_down(animate=False)
+
     async def action_stop_turn(self) -> None:
         if self.task_id and self.busy:
-            async with self.failures_shown("stopping"):
-                await self.local.client.cancel(self.task_id, "stopped from the terminal",
-                                               turn_only=True)
+            # Shown stopped at once; the task's record of it follows, and
+            # the keys go on meanwhile (a server's answer takes a while).
+            await self.interrupted()
+            self._cancel_turn(self.task_id)
             return
         now = time.monotonic()
         double = now - self._last_escape <= DOUBLE_PRESS
@@ -756,6 +803,11 @@ class NoetaApp(TranscriptView):
             box.clear()  # Claude Code: double Esc clears the input
         elif self.task_id and not self.read_only:
             await slash.run(self, "rewind", "")
+
+    @work(group="stop", exit_on_error=False)
+    async def _cancel_turn(self, task_id: str) -> None:
+        async with self.failures_shown("stopping"):
+            await self.local.client.cancel(task_id, "stopped from the terminal", turn_only=True)
 
     async def action_interrupt(self) -> None:
         """Ctrl+C: copy the selection (it is then gone), else clear the
@@ -843,7 +895,7 @@ class NoetaApp(TranscriptView):
             if c is None:
                 return
             view = AgentView(key, c["name"] or "agent", kind=c.get("kind", ""), child=c,
-                             expanded=self.verbose, on_back=self.close_agent)
+                             on_back=self.close_agent)
         await self.query(".agent-view").remove()
         self.query_one("#transcript").display = False
         await self.mount(view, after="#transcript")
@@ -858,16 +910,23 @@ class NoetaApp(TranscriptView):
         self._show_agents()
         self._box().focus()
 
-    def action_toggle_verbose(self) -> None:
-        self.verbose = not self.verbose
-        for view in self.query(AgentView):
-            view.set_expanded(self.verbose)
-        for call in self.query(ToolCall):
-            call.set_expanded(self.verbose)
-        for group in self.query(ToolGroup):
-            group.set_expanded(self.verbose)
-        for block in self.query(ThinkingBlock):
-            block.set_expanded(self.verbose)
+    async def action_detailed_transcript(self) -> None:
+        """Ctrl+O, Claude Code's transcript mode: the whole conversation
+        with every result and thought unfolded, in the transcript's place
+        (the transcript itself stays folded); again goes back. In a
+        sub-agent's view it unfolds (or folds) that view."""
+        view = next(iter(self.query(AgentView)), None)
+        if view is not None and view.detail:
+            await self.close_agent()
+            return
+        if view is not None:
+            view.set_expanded(not view.expanded)
+            return
+        if not self.task_id or self.query(".agent-view"):
+            return
+        detail = AgentView(self.task_id, "transcript", detail=True, on_back=self.close_agent)
+        self.query_one("#transcript").display = False
+        await self.mount(detail, after="#transcript")
 
     def action_toggle_tasks(self) -> None:
         self.show_tasks = not self.show_tasks
@@ -922,8 +981,9 @@ class NoetaApp(TranscriptView):
         """The typed line answers the pending question (one line per part of
         a question with several); the answer is sent once all are in. A
         number picks that option."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(UserMessage(text))
+        transcript.stick()
         answers = typed_answer(self.question_detail, self._numbered(text),
                                self.question_answers)
         nxt = next_question(self.question_detail, answers)

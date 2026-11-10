@@ -75,7 +75,8 @@ class ClientAPI(Protocol):
     async def tasks(self, *, parent_id: str | None = None, status: Status | None = None,
                     limit: int = 100, roots_only: bool = False) -> list[TaskRow]: ...
 
-    async def events(self, task_id: str, after: int = 0) -> list[Recorded]: ...
+    async def events(self, task_id: str, after: int = 0, *,
+                     limit: int | None = None) -> list[Recorded]: ...
 
     def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]: ...
 
@@ -206,8 +207,11 @@ class Client:
         return await self.store.tasks(parent_id=parent_id, status=status, limit=limit,
                                       roots_only=roots_only)
 
-    async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
-        return await self.store.read(task_id, after)
+    async def events(self, task_id: str, after: int = 0, *,
+                     limit: int | None = None) -> list[Recorded]:
+        """The task's events after ``after``; ``limit``: only the first
+        that many (what a listing of many tasks needs from each)."""
+        return await self.store.read(task_id, after, limit=limit)
 
     async def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]:
         """Yield the task's events from ``after`` on, live, until it ends."""

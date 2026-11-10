@@ -94,8 +94,8 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # the API, on
 - **Queues.** A task is created on a queue (`POST /tasks` `queue`, default `default`); a worker
   takes only the queues it names (`noeta worker --queue NAME`, repeatable). Use it to keep
   some tasks on machines that have what they need.
-- **Bypass mode.** Like `noeta serve`, a worker refuses `bypassPermissions` unless started with
-  `--allow-bypass-permissions`.
+- **Bypass mode.** Tasks may run in `bypassPermissions` (the default mode); like `noeta serve`, a
+  worker started with `--disable-bypass-permissions` refuses it.
 
 ### `noeta worker` flags
 
@@ -106,7 +106,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # the API, on
 | `--lease SECONDS` | 30 | how long a claim lasts without renewal; a dead worker's tasks wait about this long before another takes them |
 | `--snapshot-every EVENTS` | 100 | write a task's fold snapshot at most every this many events (`0`: never) |
 | `--restart-limit N` | 3 | restarts in a row, with no step finished, a task that keeps killing its worker gets before it fails (`0`: no limit) |
-| `--allow-bypass-permissions` | off | let tasks run in `bypassPermissions` |
+| `--disable-bypass-permissions` | off | refuse `bypassPermissions` to the tasks run here (`--allow-bypass-permissions`, the old opt-in, is still taken and does nothing) |
 
 ### `noeta serve` flags
 
@@ -118,14 +118,14 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # the API, on
 | `--no-token` | off | serve without a bearer token; refused on any address but loopback |
 | `--allow-host NAME` | — | a `Host` header name the server answers besides its own names (repeatable): a reverse proxy's, say |
 | `--allow-origin ORIGIN` | — | a web origin (`https://host:port`) whose pages may call the API (repeatable) |
-| `--allow-bypass-permissions` | off | let requests start or switch tasks into `bypassPermissions` |
+| `--disable-bypass-permissions` | off | refuse `bypassPermissions`, however a request asks for it (`--allow-bypass-permissions` is still taken and does nothing) |
 | `--web DIR` | — | also serve the built web app from `DIR` at the other paths |
 
 Both also take the common flags (`--model`, `--store`, `--provider`, `--base-url`, `--cwd`, …);
 see [the noeta command](../reference/cli.md). `--effort` and `--permission-mode` set the
 starting config of the tasks clients create through `noeta serve` (a request's own value wins);
 on `noeta worker` they reach only the tasks its channels start. Either refuses
-`--permission-mode bypassPermissions` without `--allow-bypass-permissions`. The endpoints are
+`--permission-mode bypassPermissions` together with `--disable-bypass-permissions`. The endpoints are
 listed in [HTTP / WebSocket API](../reference/http-api.md).
 
 ## Postgres

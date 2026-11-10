@@ -10,12 +10,18 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core.events import ChildEnded
-from noeta.core.types import Delta, ToolUse
+from noeta.core.types import Delta, Thinking, ToolUse
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui import render
-from noeta_tui.widgets import Completions, ThinkingBlock, ToolCall, dropped_paths
+from noeta_tui.widgets import (
+    AssistantMessage,
+    Completions,
+    ThinkingBlock,
+    ToolCall,
+    dropped_paths,
+)
 
-from support import MODEL, make_app, plain, ready, settle, type_line
+from support import MODEL, make_app, open_detail, plain, ready, settle, shown, type_line
 
 
 class Thinks(ScriptedProvider):
@@ -24,7 +30,9 @@ class Thinks(ScriptedProvider):
     async def complete(self, request: Any, on_delta: Any = None) -> Any:
         if on_delta is not None:
             on_delta(Delta(kind="thinking", text="weighing it up " * 20))
-        return await super().complete(request, on_delta)
+        out = await super().complete(request, on_delta)
+        out.message.content.insert(0, Thinking(text="weighing it up " * 20))
+        return out
 
 
 async def test_reasoning_streams_into_its_line_and_counts(tmp_path: Path) -> None:
@@ -35,8 +43,8 @@ async def test_reasoning_streams_into_its_line_and_counts(tmp_path: Path) -> Non
         await settle(pilot, lambda: not app.busy and bool(app.query(ThinkingBlock)))
         block = app.query_one(ThinkingBlock)
         assert plain(block).startswith("∴ Thought for ") and "ctrl+o to show" in plain(block)
-        await pilot.press("ctrl+o")
-        assert "weighing it up" in plain(block)
+        view = await open_detail(pilot)  # the thought in full there, not here
+        assert "weighing it up" in shown(view) and "weighing it up" not in plain(block)
 
 
 async def test_a_short_transcript_stays_at_the_top(tmp_path: Path) -> None:
@@ -45,7 +53,7 @@ async def test_a_short_transcript_stays_at_the_top(tmp_path: Path) -> None:
         await settle(pilot, lambda: ready(app))
         await type_line(pilot, "hi")
         await settle(pilot, lambda: not app.busy and "hello there" in str(
-            [m.source for m in app.query("Markdown")]))
+            [m.source for m in app.query(AssistantMessage)]))
         await pilot.pause(0.1)
         transcript = app.query_one("#transcript")
         assert transcript.scroll_y >= 0 and transcript.max_scroll_y == 0

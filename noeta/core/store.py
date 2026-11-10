@@ -233,7 +233,11 @@ class Store(Protocol):
         that does not exist is skipped (the rest still lands)."""
         ...
 
-    async def read(self, task_id: str, after: int = 0) -> list[Recorded]: ...
+    async def read(self, task_id: str, after: int = 0, *,
+                   limit: int | None = None) -> list[Recorded]:
+        """The task's events after ``after``, oldest first; ``limit``: at
+        most that many (the head of the log, without reading the rest)."""
+        ...
 
     async def post(self, post: Post) -> tuple[int, bool]:
         """Add to the task's inbox; returns ``(inbox_seq, created)``. A

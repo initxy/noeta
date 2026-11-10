@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Api, ApiError, forgetConnection, initialConnection, parseSse, type SseMessage } from "./client";
+import { Api, ApiError, BYPASS_REFUSED, bypassRefused, forgetConnection, initialConnection, parseSse, type SseMessage } from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -112,6 +112,23 @@ describe("Api plugins", () => {
       ["DELETE", "http://h:1/plugins/p", undefined],
     ]);
     expect(api.webEntry("/plugins/p/web/index.js?v=1")).toBe("http://h:1/plugins/p/web/index.js?v=1");
+  });
+
+  it("tells a refused bypassPermissions from any other refusal", async () => {
+    const refuse = (body: object) => new Response(JSON.stringify(body), { status: 403 });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(refuse({ error: "no bypass", code: BYPASS_REFUSED }))
+        .mockResolvedValueOnce(refuse({ error: "cross-site request refused" })),
+    );
+    const api = new Api({ server: "", token: "" });
+    const bypass = await api.create(null, { permission_mode: "bypassPermissions" }).catch((e: unknown) => e);
+    expect(bypass).toEqual(new ApiError(403, "no bypass", BYPASS_REFUSED));
+    expect(bypassRefused(bypass)).toBe(true);
+    const other = await api.create(null, { permission_mode: "bypassPermissions" }).catch((e: unknown) => e);
+    expect(bypassRefused(other)).toBe(false);
   });
 
   it("names a refused install by its status", async () => {

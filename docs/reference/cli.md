@@ -36,7 +36,7 @@ Taken by the terminal UI, `-p`, `acp`, `serve`, `web` and `worker`.
 |---|---|
 | `--model MODEL` | the model id or an alias (`opus`, `sonnet`, `haiku`, `fable`); else `NOETA_MODEL`, `config.toml`, a settings file's `model` |
 | `--effort {low,medium,high,xhigh,max}` | how hard the model thinks; else `NOETA_EFFORT`, `config.toml` `effort` |
-| `--permission-mode MODE` | the starting permission mode: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, or `manual` (an alias of `default`). Default: `auto`, or the settings files' `permissions.defaultMode` |
+| `--permission-mode MODE` | the starting permission mode: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, or `manual` (an alias of `default`). Default: `bypassPermissions` (`auto` where bypass mode is switched off), or the settings files' `permissions.defaultMode` |
 | `--provider {anthropic,openai_compat,openai_responses}` | the default provider's family; else `NOETA_PROVIDER`, `config.toml` `provider` (which may also name a `[providers.<name>]` table) |
 | `--base-url URL` | the default provider's base URL; else `NOETA_BASE_URL` |
 | `--store URL` | `sqlite:///path` or `postgres://…`; else `NOETA_STORE`, `config.toml` `store`, then `~/.noeta/tasks.db` |
@@ -59,8 +59,8 @@ whichever process later runs it:
 - `worker`: only the tasks its channels start (it runs tasks others created, which keep their
   own); it says so on stderr when `--effort` or `--permission-mode` is given.
 
-`serve` and `worker` exit with `noeta: --permission-mode bypassPermissions needs
---allow-bypass-permissions` when given that mode without the flag.
+`serve` and `worker` exit with `noeta: --permission-mode bypassPermissions contradicts
+--disable-bypass-permissions` when given both.
 
 ## The terminal UI: `noeta`
 
@@ -176,7 +176,7 @@ enables and, unless `--no-worker`, workers, all in the same process. Endpoints a
 | `--no-token` | off | serve without a bearer token; refused unless `--host` is a loopback address |
 | `--allow-host NAME` | none | a `Host` header name the server answers (repeatable) besides its own: on a loopback bind the loopback names, on another bind also this machine's hostname, fully qualified name and addresses. Any other `Host` is refused |
 | `--allow-origin ORIGIN` | none | a web origin (`https://host:port`) whose pages may call the API (repeatable) |
-| `--allow-bypass-permissions` | off | let requests start or switch tasks into `bypassPermissions` |
+| `--disable-bypass-permissions` | off | refuse `bypassPermissions`, however a request asks for it. `--allow-bypass-permissions`, the old opt-in, is still taken and does nothing |
 | `--allow-plugin-install` | off (on for a loopback `--host` without `--allow-host` / `--allow-origin`) | let requests install and remove plugins (`POST /plugins/install`, `DELETE /plugins/{name}`) |
 | `--web DIR` | the bundled web app, if any | serve this directory's files (the built web app, `web/dist`) at the other paths. Without it, the web app built into the installed package is served (a wheel from PyPI has one; a checkout has one after `make web-bundle`) |
 
@@ -192,8 +192,8 @@ noeta: web app at http://127.0.0.1:8642/#token=…
 
 The page reads the token and takes it off the address bar; it never reaches the server's
 logs. A task a request creates without a `cwd` runs in its own directory,
-`~/.noeta/scratch/<YYYY-MM-DD>/<first 8 characters of its id>/`. Without
-`--allow-bypass-permissions` the permissions plugin itself refuses `bypassPermissions`,
+`~/.noeta/scratch/<YYYY-MM-DD>/<first 8 characters of its id>/`. With
+`--disable-bypass-permissions` the permissions plugin itself refuses `bypassPermissions`,
 however it is asked for.
 
 ## `noeta service`
@@ -243,7 +243,7 @@ Claims and runs tasks from the store until SIGINT or SIGTERM, with the channels
 | `--lease SECONDS` | `30` | how long a claim lasts without renewal; a dead worker's tasks wait about this long before another takes them |
 | `--snapshot-every EVENTS` | `100` | write a task's fold snapshot at most every this many events; `0` never |
 | `--restart-limit N` | `3` | restarts in a row a task gets after its worker died mid-run, with no step finished in between; the next crash ends it `failed` (`restart_limit`); `0` no limit ([why](../how-it-works/recovery.md#a-task-that-keeps-killing-its-worker)) |
-| `--allow-bypass-permissions` | off | let tasks run in `bypassPermissions` |
+| `--disable-bypass-permissions` | off | refuse `bypassPermissions` to the tasks run here (`--allow-bypass-permissions` is still taken and does nothing) |
 
 A worker also runs the daily sweep of old saved tool outputs on its machine
 ([Cleaning up](../guides/server.md#cleaning-up)). On the way out, running tasks are handed back at once; tasks keeping a claim for a background

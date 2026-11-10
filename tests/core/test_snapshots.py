@@ -37,9 +37,10 @@ class Counting(SqliteStore):
         super().__init__(path)
         self.reads: list[int] = []
 
-    async def read(self, task_id: str, after: int = 0) -> list[Recorded]:
+    async def read(self, task_id: str, after: int = 0, *,
+                   limit: int | None = None) -> list[Recorded]:
         self.reads.append(after)
-        return await super().read(task_id, after)
+        return await super().read(task_id, after, limit=limit)
 
 
 class Note(Extension):

@@ -8,7 +8,7 @@ import { ApiContext } from "../state/useTask";
 import { ApiError } from "../api/client";
 import { Composer, menuQuery } from "./Composer";
 import { UsageBadge } from "./Controls";
-import { Markdown } from "@initxy/noeta-ui";
+import { DiffView, Markdown } from "@initxy/noeta-ui";
 import { SlotRegistry, SlotsContext, type RequestSlotProps } from "@initxy/noeta-web-sdk";
 import { PendingCards } from "./PendingCard";
 import { Sidebar } from "./Sidebar";
@@ -28,6 +28,13 @@ describe("ToolCard", () => {
     expect(container.querySelector("pre.input")).toBeNull();
     await userEvent.click(screen.getByText("some_tool"));
     expect(container.querySelector("pre.input")).toHaveTextContent('"flag": true');
+  });
+
+  it("shows a one-line error as one red line, without the tags the model reads", () => {
+    const { container } = render(<ToolCard t={tool({ status: "error", result: "<tool_use_error>Error: No such tool available: Grep</tool_use_error>" })} />);
+    expect(container.querySelector(".tool-error")).toHaveTextContent(/^Error: No such tool available: Grep$/);
+    expect(container).not.toHaveTextContent("tool_use_error");
+    expect(container.querySelector("pre")).toBeNull();
   });
 
   it("shows a yes's words under the call's result", () => {
@@ -88,6 +95,34 @@ describe("Transcript", () => {
     expect(screen.getByTestId("streaming")).toHaveTextContent("streaming");
     expect(screen.getByText("later")).toBeInTheDocument();
     expect(screen.getByText("queued")).toBeInTheDocument();
+  });
+
+  it("folds a run of calls into one line, opened on a click; a failed call shows on its own", async () => {
+    const items: Item[] = [
+      tool({ id: "r1", name: "Read", input: { file_path: "/w/a.py" }, result: "x" }),
+      { kind: "assistant", id: "t1", text: "Now the tests." },
+      tool({ id: "g1", name: "Grep", input: { pattern: "def" }, result: "a.py:1" }),
+      tool({ id: "b1", name: "Bash", input: { command: "npm test" }, status: "error", result: "2 failed" }),
+      tool({ id: "b2", name: "Bash", input: { command: "npm run build" }, status: "running" }),
+    ];
+    const { container } = render(<Transcript state={{ ...emptyTask(), items }} />);
+    const head = screen.getByRole("button", { name: /Searching for 1 pattern, reading 1 file, running 2 shell commands…/ });
+    expect(container.querySelector(".group-text")).toHaveTextContent("Now the tests.");
+    expect(container.querySelector(".group-hint")).toHaveTextContent("npm run build");
+    expect([...container.querySelectorAll(".tool")].map((t) => t.getAttribute("data-tool"))).toEqual(["Bash"]); // the failed one
+    expect(container.querySelector(".msg.assistant")).toBeNull();
+    await userEvent.click(head);
+    expect(container.querySelectorAll(".tool")).toHaveLength(4);
+    expect(container.querySelector(".msg.assistant")).toHaveTextContent("Now the tests.");
+  });
+
+  it("draws a long conversation's last items first and the earlier ones after", async () => {
+    const items = Array.from({ length: 100 }, (_, i): Item => ({ kind: "user", id: `u${i}`, text: `prompt ${i}`, images: [] }));
+    const { container } = render(<Transcript state={{ ...emptyTask(), items }} />);
+    expect(container.querySelectorAll(".msg.user")).toHaveLength(40);
+    expect(screen.getByText("prompt 99")).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelectorAll(".msg.user")).toHaveLength(100));
+    expect(container.querySelector(".msg.user")).toHaveTextContent("prompt 0");
   });
 });
 
@@ -223,6 +258,23 @@ describe("Composer", () => {
   });
 
   const commands = [{ name: "compact", description: "Summarize", argument_hint: "[focus]", local: false }];
+
+  it("brings earlier prompts back with ↑ in an empty box, and ↓ goes forward again", async () => {
+    render(<Composer busy={false} commands={[]} findFiles={async () => []} onSend={() => undefined} onStop={() => undefined} recall={() => ["first", "second"]} />);
+    const box = screen.getByLabelText("Message");
+    await userEvent.click(box);
+    await userEvent.keyboard("{ArrowUp}");
+    expect(box).toHaveValue("second");
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(box).toHaveValue("first"); // no further back than the first
+    await userEvent.keyboard("{ArrowDown}");
+    expect(box).toHaveValue("second");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(box).toHaveValue("");
+    await userEvent.type(box, "typed");
+    await userEvent.keyboard("{ArrowUp}");
+    expect(box).toHaveValue("typed"); // a box with text keeps it
+  });
 
   it("sends on Enter, lists slash commands, stops on Esc", async () => {
     const onSend = vi.fn();
@@ -461,9 +513,40 @@ describe("Markdown", () => {
     expect(container.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw==");
   });
 
+  it("while streaming, keeps finished blocks and highlights a code block once it is closed", () => {
+    const head = "# Title\n\nFirst paragraph.\n\n```python\nx = 1\n";
+    const { container, rerender } = render(<Markdown text={head} streaming />);
+    const title = container.querySelector("h1");
+    expect(container.querySelector("code.hljs")).toBeNull(); // still open
+    rerender(<Markdown text={head + "```\n\n- one\n\n- two"} streaming />);
+    expect(container.querySelector("h1")).toBe(title); // not drawn again
+    expect(container.querySelector("code.hljs")).not.toBeNull();
+    expect(container.querySelectorAll("ul")).toHaveLength(1); // a loose list stays one list
+    rerender(<Markdown text={"no language\n\n```\nplain\n```"} />);
+    expect(container.querySelector("code.hljs")).toBeNull(); // no guessing a language
+  });
+
   it("drops a javascript: link", () => {
     render(<Markdown text={"[x](javascript:alert(1))"} />);
     expect(screen.getByText("x").closest("a")?.getAttribute("href") ?? "").not.toMatch(/javascript/);
+  });
+});
+
+describe("DiffView", () => {
+  it("numbers lines from the hunk header and folds a long diff", async () => {
+    const body = Array.from({ length: 20 }, (_, i) => `+line ${i + 1}`).join("\n");
+    const { container } = render(<DiffView diff={`@@ -10,2 +10,21 @@\n ctx\n-gone\n${body}\n`} />);
+    const rows = [...container.querySelectorAll(".diff > div")];
+    expect(rows.map((r) => [...r.querySelectorAll(".ln")].map((n) => n.textContent).join("|")).slice(1, 4)).toEqual(["10|10", "11|", "|11"]);
+    expect(rows).toHaveLength(12);
+    await userEvent.click(screen.getByRole("button", { name: "Show 11 more lines" }));
+    expect(container.querySelectorAll(".diff > div")).toHaveLength(23);
+  });
+
+  it("shows a proposed change unnumbered and a short one whole", () => {
+    const { container } = render(<DiffView diff={"-a\n+b"} />);
+    expect(container.querySelectorAll(".ln")).toHaveLength(0);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
 

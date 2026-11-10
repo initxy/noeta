@@ -3,7 +3,11 @@ approval and question cards, pickers, the completion menu and the prompt."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import functools
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -11,6 +15,7 @@ from typing import Any
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
+from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -19,11 +24,12 @@ from textual.containers import Horizontal, Vertical
 from textual.geometry import Offset
 from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static, TextArea
+from textual.widgets._markdown import MarkdownBlock, MarkdownTable
 
 from noeta.core.events import Answer
 from noeta.core.types import ToolUse
 from noeta.toolkit.commands import parse_command_message
-from noeta_tui import render
+from noeta_tui import render, reply
 from noeta_tui.selection import Unselectable
 
 
@@ -72,15 +78,59 @@ def _show_link_targets(state: Any) -> None:
         block.children = out
 
 
+@functools.cache
 def _markdown_parser() -> MarkdownIt:
+    """The one parser every reply is read with (Textual asks for a parser
+    on every append of a streamed reply; building one costs more than
+    parsing a fragment)."""
     parser = MarkdownIt("gfm-like")
     parser.core.ruler.push("show_link_targets", _show_link_targets)
     return parser
 
 
+class TableText(Static):
+    """A reply's table drawn as one piece; selected, it copies as rows of
+    tab-separated cells."""
+
+    def __init__(self, table: Any, tsv: str, *, classes: str = "") -> None:
+        super().__init__(table, classes=classes)
+        self.tsv = tsv
+
+    def show(self, table: Any, tsv: str) -> None:
+        self.tsv = tsv
+        self.update(table)
+
+    def get_selection(self, selection: Any) -> tuple[str, str] | None:
+        return self.tsv, "\n"
+
+
+class FlatTable(MarkdownTable):
+    """A reply's table as one widget. Textual's own is a widget per cell,
+    every one laid out again whenever anything on the screen changes size:
+    a reply with a few tables made each keypress and streamed line slow."""
+
+    def compose(self) -> ComposeResult:
+        self._headers, self._rows = self._get_headers_and_rows()
+        yield TableText(*self._drawn())
+
+    def _drawn(self) -> tuple[Table, str]:
+        return reply.drawn_table(self._headers, self._rows)
+
+    async def _update_from_block(self, block: MarkdownBlock) -> None:
+        if isinstance(block, MarkdownTable):
+            self._headers, self._rows = block._get_headers_and_rows()
+            for drawn in self.query(TableText):
+                drawn.show(*self._drawn())
+            return
+        await super()._update_from_block(block)
+
+
 class CleanMarkdown(Markdown):
     """Markdown of what a task recorded (the model's reply, a plugin's
-    notice), shown without the control sequences in it."""
+    notice), shown without the control sequences in it; its tables drawn
+    as one piece each."""
+
+    BLOCKS = {**Markdown.BLOCKS, "table_open": FlatTable}
 
     def __init__(self, markdown: str | None = None, **kw: Any) -> None:
         kw.setdefault("parser_factory", _markdown_parser)
@@ -93,8 +143,139 @@ class CleanMarkdown(Markdown):
         return super().append(render.clean(markdown))
 
 
-class AssistantMessage(CleanMarkdown):
+class LiveReply(CleanMarkdown):
+    """The reply being streamed, as Textual's Markdown (it grows block by
+    block); once done it gives way to an :class:`AssistantMessage`."""
+
     DEFAULT_CLASSES = "assistant-message"
+
+
+class AssistantMessage(Vertical):
+    """A finished reply of the model's, drawn as a few pieces
+    (``reply.parts``): its text, selectable, and each table as one piece.
+    ``source`` is its markdown."""
+
+    DEFAULT_CLASSES = "assistant-message reply"
+
+    def __init__(self, markdown: str) -> None:
+        super().__init__()
+        self.source = markdown
+
+    def compose(self) -> ComposeResult:
+        yield from self._pieces()
+
+    def _pieces(self) -> list[Widget]:
+        found = reply.parts(self.source, dark=self.app.current_theme.dark)
+        out: list[Widget] = []
+        for n, part in enumerate(found):
+            last = " -last" if n == len(found) - 1 else ""
+            if isinstance(part, reply.Table):
+                out.append(TableText(*part.drawn(), classes=f"reply-table{last}"))
+            else:
+                out.append(Static(part, classes=f"reply-text{last}"))
+        return out
+
+    async def show(self, markdown: str) -> None:
+        """Draw ``markdown`` instead (a streamed reply's blocks done so far)."""
+        self.source = markdown
+        with self.app.batch_update():
+            await self.remove_children()
+            await self.mount_all(self._pieces())
+
+
+#: Seconds a streamed reply gathers what comes before it is shown: about a
+#: frame. Each append parses the reply's last block again and lays out the
+#: screen; per fragment (a model sends hundreds a second) it fell behind.
+STREAM_FRAME = 0.1
+
+
+class ReplyStream:
+    """What the model streams into ``widget`` (a :class:`LiveReply` in a
+    box of its own), appended at most once per :data:`STREAM_FRAME`;
+    :meth:`stop` appends what is left. The blocks done (one after them has
+    started) move into a finished reply above the live one, so Textual's
+    Markdown widgets exist only for the block being written. A table is
+    shown once its rows are in (the block after it starts, or the reply
+    ends): Textual's table is a widget per cell, made again for every row
+    appended."""
+
+    def __init__(self, widget: Markdown) -> None:
+        self.widget = widget
+        #: What was appended so far, and how much of it is drawn as done.
+        self._shown = ""
+        self._done_upto = 0
+        self._pending: list[str] = []
+        self._wake = asyncio.Event()
+        self._stopping = asyncio.Event()
+        self._task = asyncio.create_task(self._run())
+
+    def write(self, text: str) -> None:
+        if text:
+            self._pending.append(text)
+            self._wake.set()
+
+    async def _run(self) -> None:
+        while not self._stopping.is_set():
+            await self._wake.wait()
+            with contextlib.suppress(TimeoutError):  # a frame's worth gathers meanwhile
+                await asyncio.wait_for(self._stopping.wait(), STREAM_FRAME)
+            await self._flush()
+        await self._flush(all=True)
+
+    async def _flush(self, *, all: bool = False) -> None:
+        self._wake.clear()
+        text = "".join(self._pending)
+        self._pending.clear()
+        if not all and (held := _open_table(self._shown, text)):
+            text, self._pending = text[:len(text) - len(held)], [held]
+        if not text:
+            return
+        self._shown += text
+        done = 0 if all else _settled(self._shown)
+        box = self.widget.parent
+        if done > self._done_upto and isinstance(box, Widget):
+            # Only what is newly done is drawn (each piece a blank line apart).
+            done_now = self._shown[self._done_upto:done]
+            self._done_upto = done
+            with self.widget.app.batch_update():
+                await box.mount(AssistantMessage(done_now), before=self.widget)
+                await asyncio.shield(self.widget.update(self._shown[done:]))
+        else:
+            await asyncio.shield(self.widget.append(text))
+
+    async def stop(self) -> None:
+        self._stopping.set()
+        self._wake.set()
+        await self._task
+
+
+#: CommonMark's line endings, as markdown-it normalizes them.
+_LINE_ENDING = re.compile(r"\r\n?|\n")
+
+
+def _settled(text: str) -> int:
+    """Where the last top-level block of ``text`` starts (those before it
+    are done); ``0`` when it has only one."""
+    starts = [t.map[0] for t in _markdown_parser().parse(text)
+              if t.level == 0 and t.map is not None and t.nesting >= 0]
+    if len(starts) < 2:
+        return 0
+    # Lines as markdown-it counts them: only CommonMark's line endings (not
+    # U+2028, U+0085 or a form feed, which str.splitlines also splits on).
+    ends = [m.end() for m in _LINE_ENDING.finditer(text)]
+    return ends[starts[-1] - 1] if starts[-1] <= len(ends) else len(text)
+
+
+def _open_table(shown: str, text: str) -> str:
+    """The end of ``text`` that is a table still being written (after what
+    was ``shown``): from the start of its block on, ``""`` when the reply
+    does not end in one."""
+    whole = shown + text
+    start = max(whole.rfind("\n\n"), whole.rfind("\n\r\n")) + 1 if "\n\n" in whole else 0
+    block = whole[start:]
+    if not block.lstrip().startswith("|"):
+        return ""
+    return text[max(0, start - len(shown)):]
 
 
 def bulleted(widget: Any, *, classes: str = "") -> Horizontal:
@@ -245,6 +426,17 @@ class ToolCall(Vertical):
         self.child: dict[str, Any] | None = None
         #: A ``Workflow`` call's run (its records folded), or ``None``.
         self.workflow: dict[str, Any] | None = None
+        #: What it did to the repository (a commit, a push), once done.
+        self.git: tuple[tuple[str, str], ...] = ()
+        #: The lines an edit added and removed, once done.
+        self.added = self.removed = 0
+        #: An agent of several started together: one line.
+        self.compact = False
+
+    @property
+    def facts(self) -> render.CallFacts:
+        """What the line of the run it is in counts of it."""
+        return render.CallFacts(render.call_kind(self.call), render.call_key(self.call), self.git)
 
     @property
     def title(self) -> str:
@@ -266,9 +458,10 @@ class ToolCall(Vertical):
 
     def set_state(self, state: str) -> None:
         self.state = state
-        self.head.update(self._header())
-        self.set_class(state == "error", "-error")
-        self.set_class(state == "done", "-done")
+        self.head.update(self._header(), layout=False)  # the bullet's colour: the same size
+        # Styled when mounted (styling one not yet mounted is work done twice).
+        self.set_class(state == "error", "-error", update=self.is_attached)
+        self.set_class(state == "done", "-done", update=self.is_attached)
         if self.group is not None:
             self.group.show_head()
 
@@ -283,7 +476,7 @@ class ToolCall(Vertical):
     def pulse(self, frame: int) -> None:
         """A frame of the bullet's spinner while its work runs in the background."""
         if self.state == "background":
-            self.head.update(self._header(frame))
+            self.head.update(self._header(frame), layout=False)
 
     def set_result(self, text: str, *, is_error: bool, meta: dict[str, Any] | None = None,
                    at: float | None = None) -> None:
@@ -306,6 +499,9 @@ class ToolCall(Vertical):
                 self.set_state("background")
             self.show_workflow()
             return
+        if not is_error:
+            self.git = tuple(render.git_ops(self.call, text))
+            self.added, self.removed = int(meta.get("added") or 0), int(meta.get("removed") or 0)
         self.set_state("error" if is_error else "done")
         self.rows = render.result_rows(self.call, text, meta or {}, is_error=is_error,
                                        cwd=self.cwd)
@@ -345,6 +541,21 @@ class ToolCall(Vertical):
         took = c["took"] if c["took"] is not None else time.time() - c["started"]
         stats = render.agent_line(c["tools"], c["tokens"], took)
         rows: list[tuple[str, str]] = []
+        if self.compact and not self.expanded:
+            self.head.display = False
+            name = str(self.call.input.get("description") or self.call.input.get("subagent_type")
+                       or "agent")
+            if c["status"] == "done":
+                rows.append((f"{name} · Done · {stats}", "dim"))
+            elif c["status"] in ("failed", "cancelled"):
+                what = "Stopped" if c["status"] == "cancelled" else "Failed"
+                rows.append((f"{name} · {what}{': ' + c['error'] if c['error'] else ''}", "red"))
+            else:
+                rows.append((f"{name} · {c['last'] or 'Starting…'} · {stats}", ""))
+            self.body.update(render.result_block(rows))
+            self.body.display = True
+            return
+        self.head.display = True
         if self.expanded:
             rows.append((f"Prompt: {self.call.input.get('prompt', '')}", "dim"))
         if c["status"] == "done":
@@ -388,66 +599,148 @@ class ToolCall(Vertical):
         self.body.display = True
 
 
+class GroupWords(Static):
+    """A short remark of the model's between two calls of a run (``Let me
+    check X.``): shown when the run is open; the latest is under its line."""
+
+    DEFAULT_CLASSES = "group-words"
+
+
 class ToolGroup(Vertical):
-    """Quiet calls one after another (reads, searches, shell commands, other
-    tools) and the model's thoughts between them as one counted line, Claude
-    Code's ``Thought for 4s, searched for 2 patterns, read 3 files``; a click
-    on it or ctrl+o shows each part. While a call runs or waits for an
-    approval it shows under the line. A single call shows as itself."""
+    """Calls one after another as one line. A run (``kind`` ``run``) is the
+    quiet calls (reads, searches, shell commands, other tools), the model's
+    thoughts and short remarks between them, Claude Code's ``Thought for 4s,
+    searched for 2 patterns, read 3 files``, shown so from its first call;
+    ``edit``: consecutive edits to one file (``Edited calc.py ×3 (+12 −4)``,
+    a single one shows as itself); ``agents``: a reply's agents started
+    together (``Running 3 agents``, a line each). A click on the line or
+    ctrl+o's transcript shows each part. Folded, what waits for an approval,
+    a shell command running (with its output) and a call that failed show
+    under the line; a read or search running shows as a dim hint, and the
+    latest remark too."""
 
     DEFAULT_CLASSES = "tool-group"
 
-    def __init__(self, *, expanded: bool = False) -> None:
+    def __init__(self, *, kind: str = "run", expanded: bool = False) -> None:
         super().__init__()
+        self.kind = kind
         self.expanded = expanded
-        #: The calls and thoughts, in order.
-        self.parts: list[ToolCall | ThinkingBlock] = []
+        #: The calls, thoughts and remarks, in order.
+        self.parts: list[ToolCall | ThinkingBlock | GroupWords] = []
         self.head = Toggle("", on_toggle=self.toggle, classes="group-head")
+        #: The latest remark, and what runs now (folded only).
+        self.words = Static("", classes="group-note")
+        self.hint = Static("", classes="group-note")
+        self.words.display = self.hint.display = False
 
     @property
     def calls(self) -> list[ToolCall]:
         return [p for p in self.parts if isinstance(p, ToolCall)]
 
+    @property
+    def path(self) -> str:
+        """The file an edit run edits."""
+        calls = self.calls
+        return render.edited_path(calls[0].call) if calls else ""
+
     def compose(self) -> ComposeResult:
         yield self.head
+        yield self.words
+        yield self.hint
         yield from self.parts
 
-    async def add(self, part: ToolCall | ThinkingBlock) -> None:
+    async def add(self, part: ToolCall | ThinkingBlock | GroupWords) -> None:
         self.parts.append(part)
         if isinstance(part, ToolCall):
             part.group = self
+            part.compact = self.kind == "agents"
         if composed(self):
             await self.mount(part)
         self.show_head()
 
+    async def say(self, text: str) -> None:
+        """A remark between the run's calls."""
+        await self.add(GroupWords(render.Hanging(render.plain(text, "dim"), 2)))
+
     def toggle(self) -> None:
-        self.set_expanded(not self.expanded)
+        if self._single():
+            self.calls[0].toggle_result()  # its line is the call's own: its result opens
+        else:
+            self.set_expanded(not self.expanded)
+
+    def _single(self) -> bool:
+        """A run of one call: its line is the call's own (``● Bash(pytest -x)``,
+        its result under it), as Claude Code shows one call; the count comes
+        with the second, on the same line."""
+        return self.kind == "run" and len(self.calls) == 1
 
     def set_expanded(self, expanded: bool) -> None:
         self.expanded = expanded
         self.show_head()
 
+    def _shows_line(self) -> bool:
+        return self.kind != "edit" or len(self.calls) > 1
+
+    def _live(self, call: ToolCall) -> bool:
+        """``call`` shows under the folded line: it waits for an approval,
+        runs a shell command (its output shows), failed (it pops out), or is
+        one of the agents (a line each)."""
+        if self.kind == "agents" or call.state in ("waiting", "error"):
+            return True
+        return call.state == "running" and (self.kind != "run"
+                                             or render.call_kind(call.call) == "shell")
+
     def show_head(self) -> None:
-        calls = self.calls
-        many = len(calls) > 1
-        self.head.display = many
+        line_shown = self._shows_line()
+        self.head.display = line_shown
+        single = self._single()
+        folded = line_shown and not self.expanded and not single
+        hint = ""
         for part in self.parts:
-            live = many and not self.expanded and isinstance(part, ToolCall) \
-                and part.state in ("running", "waiting")
-            part.display = self.expanded or not many or live
-            part.set_class(live, "-live")
-        if not many:
+            if isinstance(part, ToolCall):
+                live = folded and self._live(part)
+                part.display = not folded or live
+                if self.kind == "run":
+                    part.head.display = not single
+                part.set_class(live, "-live", update=part.is_attached)
+                part.set_class(single, "-single", update=part.is_attached)
+                if folded and not live and part.state in ("pending", "running"):
+                    hint = render.running_hint(part.call, part.cwd)
+            else:
+                part.display = not folded
+        remarks = [p for p in self.parts if isinstance(p, GroupWords)]
+        self.words.display = folded and bool(remarks)
+        if remarks:
+            self.words.update(remarks[-1].render())
+        self.hint.display = folded and bool(hint) and self.kind == "run"
+        if hint:
+            self.hint.update(render.result_block([(hint, "dim")]))
+        if not line_shown:
+            return
+        calls = self.calls
+        if single:
+            self.head.update(calls[0]._header())
             return
         running = any(c.state not in ("done", "error") for c in calls)
         waiting = any(c.state == "waiting" for c in calls)
+        failed = sum(c.state == "error" for c in calls)
         # The bullet in a call's colours: what the run is doing, green once done.
         bullet = "waiting" if waiting else "running" if running else "done"
         line = Text().append("● ", style=ToolCall.STYLES[bullet])
-        line.append_text(render.run_line(
-            (render.call_kind(c.call) for c in calls),
-            thought=sum(p.took or 0.0 for p in self.parts if isinstance(p, ThinkingBlock)),
-            running=running, waiting=waiting,
-            failed=sum(c.state == "error" for c in calls), expanded=self.expanded))
+        if self.kind == "edit":
+            line.append_text(render.edit_line(
+                render.display_path(self.path, calls[0].cwd), len(calls),
+                sum(c.added for c in calls), sum(c.removed for c in calls),
+                running=running, failed=failed, expanded=self.expanded))
+        elif self.kind == "agents":
+            line.append_text(render.agents_line(len(calls), running=running, failed=failed,
+                                                expanded=self.expanded))
+        else:
+            line.append_text(render.run_line(
+                (c.facts for c in calls),
+                thought=sum(p.took or 0.0 for p in self.parts
+                            if isinstance(p, ThinkingBlock) and (p.took or 0) > 0),
+                running=running, waiting=waiting, failed=failed, expanded=self.expanded))
         self.head.update(render.Hanging(line, 2))
 
 
@@ -469,22 +762,31 @@ class Choices(Static, can_focus=True):
         self.index = max(0, min(index, len(self.options) - 1))
         self.update(self._text())
 
+    #: Options shown at once; a longer list scrolls with the pick.
+    ROWS = 12
+
     def _text(self) -> Text:
         out = Text()
-        for n, option in enumerate(self.options):
+        top = max(0, min(self.index - self.ROWS // 2, len(self.options) - self.ROWS))
+        shown = self.options[top:top + self.ROWS]
+        if top:
+            out.append(f"  ↑ {top} more\n", style="dim")
+        for n, option in enumerate(shown, top):
             here = n == self.index
-            out.append("\n" if n else "")
+            out.append("\n" if n > top else "")
             out.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
             out.append(f"{n + 1}. {render.clean(option.label)}",
                        style=f"bold {render.ACCENT}" if here else "")
             if option.detail:
                 out.append(f"  {render.clean(option.detail)}", style="dim")
+        if (below := len(self.options) - top - len(shown)) > 0:
+            out.append(f"\n  ↓ {below} more", style="dim")
         return out
 
     def action_move(self, step: int) -> None:
         if self.options:
             self.index = (self.index + step) % len(self.options)
-            self.update(self._text())
+            self.update(self._text(), layout=len(self.options) > self.ROWS)
 
     async def action_pick(self) -> None:
         if self.options:
@@ -493,7 +795,7 @@ class Choices(Static, can_focus=True):
     async def action_number(self, n: int) -> None:
         if 1 <= n <= len(self.options):
             self.index = n - 1
-            self.update(self._text())
+            self.update(self._text(), layout=len(self.options) > self.ROWS)
             await self.on_pick(self.options[n - 1].id)
 
     async def action_cancel(self) -> None:
@@ -761,7 +1063,7 @@ class Completions(Static):
             out.append(render.clean(" ".join(description.split())), style="" if here else "dim")
         if len(self.items) > self.ROWS:
             out.append(f"  {self.index + 1}/{len(self.items)}", style="dim")
-        self.update(out)
+        self.update(out, layout=False)  # its height is fixed
 
 
 #: ``on_key(key) -> handled``: the app's turn at a key before the box's.

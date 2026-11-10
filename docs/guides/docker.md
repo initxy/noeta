@@ -64,10 +64,10 @@ Or attach the terminal UI from any machine that has noeta installed:
 `noeta --server http://127.0.0.1:8642`. Every endpoint is in
 [HTTP / WebSocket API](../reference/http-api.md).
 
-A task created over HTTP starts in the `auto` permission mode unless the request sets
-`permission_mode`; anything that needs a person waits in `GET /tasks/{id}/pending` until it is
-answered. `bypassPermissions` is refused unless both `serve` and the workers are started with
-`--allow-bypass-permissions`.
+A task created over HTTP starts in the `bypassPermissions` permission mode unless the request
+sets `permission_mode`; anything that needs a person waits in `GET /tasks/{id}/pending` until it is
+answered. Start both `serve` and the workers with `--disable-bypass-permissions` to refuse
+`bypassPermissions` (tasks then start in `auto`).
 
 ## What the containers share
 

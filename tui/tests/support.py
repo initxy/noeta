@@ -75,6 +75,20 @@ def shown(app: Any) -> str:
     return "\n".join(out)
 
 
+def detail(app: Any) -> Any:
+    """The detailed transcript (ctrl+o) when it is shown, else ``None``."""
+    from noeta_tui.agents import AgentView
+
+    return next((v for v in app.query(AgentView) if v.detail), None)
+
+
+async def open_detail(pilot: Any) -> Any:
+    """Ctrl+O: the detailed transcript, once it shows the task's log."""
+    await pilot.press("ctrl+o")
+    await settle(pilot, lambda: (view := detail(pilot.app)) is not None and view.seq > 0)
+    return detail(pilot.app)
+
+
 async def type_line(pilot: Any, text: str) -> None:
     pilot.app.query_one("#prompt").text = text
     await pilot.press("enter")

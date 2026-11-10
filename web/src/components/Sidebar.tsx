@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Project, TaskSummary } from "../api/types";
-import { basename, dayLabel, loadFolded, projectFor, projectList, saveFolded, scratchDay, scratchRoot } from "../state/projects";
+import { basename, dayLabel, loadFolded, projectFor, projectList, projectWhere, saveFolded, scratchDay, scratchRoot } from "../state/projects";
 import { sessionStatus } from "../state/transcript";
 
 export type SessionStatus = ReturnType<typeof sessionStatus>;
@@ -143,6 +143,7 @@ export function Sidebar({
     byDir.set(dir, [...(byDir.get(dir) ?? []), s]);
   }
   const shown = listed.filter((p) => byDir.has(p.path) || (!archived && (!q || holds(`${p.name}\n${p.path}`, q))));
+  const where = projectWhere(shown);
   const days = [...byDay.keys()].sort().reverse();
   const fold = (path: string) => {
     const next = new Set(folded);
@@ -233,6 +234,7 @@ export function Sidebar({
                   }}
                 >
                   {p.name}
+                  {where.has(p.path) && <span className="project-where"> · {where.get(p.path)}</span>}
                 </button>
                 {!archived && onNewIn && (
                   <button className="icon-button row-action" aria-label={`New session in ${p.name}`} title="New session here" onClick={() => onNewIn(p.path)}>

@@ -391,11 +391,12 @@ class PostgresStore:
         self._deliver(changes)
         return done
 
-    async def read(self, task_id: str, after: int = 0) -> list[Recorded]:
+    async def read(self, task_id: str, after: int = 0, *,
+                   limit: int | None = None) -> list[Recorded]:
         async def q(conn: Conn) -> list[Recorded]:
             cur = await conn.execute(self._q(
                 "SELECT seq, at, data FROM {s}.events WHERE task_id = %s AND seq > %s"
-                " ORDER BY seq"), (task_id, after))
+                " ORDER BY seq LIMIT %s"), (task_id, after, limit))
             return [Recorded(seq=s, at=a, event=event_decoder.decode(d))
                     for s, a, d in await cur.fetchall()]
 

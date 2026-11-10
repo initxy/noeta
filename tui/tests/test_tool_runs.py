@@ -11,12 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import Delta, ToolUse
+from noeta.core.types import Delta, Thinking, ToolUse
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui import render
 from noeta_tui.widgets import ApprovalCard, ThinkingBlock, ToolCall, ToolGroup
 
-from support import AskBash, Lines, make_app, plain, settle, shown, type_line
+from support import AskBash, Lines, make_app, open_detail, plain, settle, shown, type_line
 
 
 class Grep:
@@ -40,7 +40,9 @@ class Thinks(ScriptedProvider):
     async def complete(self, request: Any, on_delta: Any = None) -> Any:
         if on_delta is not None:
             on_delta(Delta(kind="thinking", text="weighing it up"))
-        return await super().complete(request, on_delta)
+        out = await super().complete(request, on_delta)
+        out.message.content.insert(0, Thinking(text="weighing it up"))
+        return out
 
 
 def _files(tmp_path: Path) -> Path:
@@ -65,7 +67,7 @@ async def test_a_run_of_calls_is_one_counted_line_a_click_opens(tmp_path: Path) 
               ("Grep", {"pattern": "def sub", "path": str(work)}),
               ("Read", {"file_path": str(work / "c.py")})),
         reply("", ("Bash", {"command": "seq 2", "n": 2})),
-        reply("Done.", ("Read", {"file_path": str(work / "a.py")})),
+        reply("Done looking:\n\n- a\n- b", ("Read", {"file_path": str(work / "a.py")})),
         reply("ok")])
     app = make_app(tmp_path, provider, tools=[Lines(), Grep()])
     async with app.run_test(size=(120, 50)) as pilot:
@@ -75,7 +77,10 @@ async def test_a_run_of_calls_is_one_counted_line_a_click_opens(tmp_path: Path) 
         assert plain(seven.head) == ("● Searched for 2 patterns, read 3 files, ran 2 shell commands "
                                      "(ctrl+o to expand)")
         assert len(seven.calls) == 7 and not any(c.display for c in seven.calls)
-        assert not one.head.display and one.calls[0].display  # after text: alone, as itself
+        # After a reply of its own, a new run: one call shows as itself, its
+        # result under its line.
+        assert plain(one.head) == "● Read(a.py)" and one.calls[0].display
+        assert not one.calls[0].head.display and "Read 1 line" in plain(one.calls[0].body)
         # Paths under the task's directory are relative; the directory itself is ".".
         heads = [plain(c.head) for c in seven.calls]
         assert "● Read(a.py)" in heads and '● Search(pattern: "def sub", path: ".")' in heads
@@ -90,8 +95,8 @@ async def test_a_run_of_calls_is_one_counted_line_a_click_opens(tmp_path: Path) 
         assert "line 9" not in plain(bash.body)
         await pilot.click(seven.head)
         assert not seven.expanded and not any(c.display for c in seven.calls)
-        await pilot.press("ctrl+o")  # still opens everything
-        assert seven.expanded and "line 9" in plain(bash.body)
+        view = await open_detail(pilot)  # every call and result in full
+        assert "line 9" in shown(view) and not seven.expanded
 
 
 async def test_a_running_call_shows_under_its_runs_present_tense_line(tmp_path: Path) -> None:
@@ -135,7 +140,8 @@ async def test_a_call_waiting_for_approval_shows_and_a_failure_is_counted(
         head = getattr(head, "_renderable", head)
         assert plain(group.head).startswith("● Searching for 1 pattern, running 1 shell command…")
         assert "(1 failed)" in plain(group.head) and "red" in _styles(head)
-        assert "yellow" in _styles(head) and bash.display and not grep.display
+        # What waits shows under the line, and what failed pops out of it.
+        assert "yellow" in _styles(head) and bash.display and grep.display
         assert "rm -rf build" in shown(app)  # what would run, on the card
         await pilot.press("y")
         await settle(pilot, lambda: not app.busy)
@@ -146,7 +152,7 @@ async def test_a_call_waiting_for_approval_shows_and_a_failure_is_counted(
 async def test_the_models_thoughts_between_calls_join_their_run(tmp_path: Path) -> None:
     work = _files(tmp_path)
     provider = Thinks([reply("", ("Read", {"file_path": str(work / "a.py")})),
-                       reply("", ("Bash", {"command": "ls", "n": 1})),
+                       reply("", ("Bash", {"command": "make", "n": 1})),
                        reply("Done.")])
     app = make_app(tmp_path, provider, tools=[Lines()])
     async with app.run_test(size=(120, 40)) as pilot:
@@ -160,19 +166,21 @@ async def test_the_models_thoughts_between_calls_join_their_run(tmp_path: Path) 
         thoughts = [p for p in group.parts if isinstance(p, ThinkingBlock)]
         assert len(thoughts) == 2 and not any(t.display for t in thoughts)
         assert len(app.query(ThinkingBlock)) == 3  # the last one, before the reply, on its own
-        await pilot.press("ctrl+o")
-        assert all(t.display and "weighing it up" in plain(t) for t in thoughts)
+        view = await open_detail(pilot)
+        assert sum("weighing it up" in plain(t) for t in view.query(ThinkingBlock)) == 3
 
 
 def test_the_run_line_names_each_kind_in_claude_codes_order() -> None:
     def use(name: str) -> ToolUse:
         return ToolUse(id=name, name=name, input={})
 
-    kinds = [render.call_kind(use(n)) for n in
-             ("Bash", "WebFetch", "mcp__github__get_issue", "LS", "Glob", "WebSearch")]
-    line = render.run_line(kinds, running=False, waiting=False, failed=0, expanded=True)
-    assert line.plain == ("Searched for 1 pattern, listed 1 directory, fetched 1 page, "
-                          "ran 1 web search, called 1 tool, ran 1 shell command")
+    facts = [render.CallFacts(render.call_kind(use(n)), render.call_key(use(n))) for n in
+             ("Bash", "WebFetch", "mcp__github__get_issue", "LS", "Glob", "WebSearch",
+              "Translate", "mcp__github__list_prs", "mcp__slack__post")]
+    line = render.run_line(facts, running=False, waiting=False, failed=0, expanded=True)
+    assert line.plain == ("Searched for 1 pattern, listed 1 directory, called github, slack 3 "
+                          "times, fetched 1 page, ran 1 web search, called 1 tool, "
+                          "ran 1 shell command")
     assert [render.call_kind(use(n)) for n in ("Edit", "Write", "Agent", "TaskCreate",
                                                 "AskUserQuestion", "Skill")] == [""] * 6
 

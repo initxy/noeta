@@ -66,7 +66,7 @@ the repository. The scenarios (`scripts/parity/scenarios.json`):
 
 | Session | What it covers |
 |---|---|
-| `m1` | Auto mode (the default): the main tour, an interrupt, plan mode, `/compact` |
+| `m1` | Auto mode (Claude Code's default): the main tour, an interrupt, plan mode, `/compact` |
 | `m2` | Default permission mode: approve, "don't ask again", deny, and a sub-agent's approval |
 | `m3` | Automatic compaction on a small window (100K × 30%) |
 | `m4` | `--continue`: `m1` resumed in a new process |

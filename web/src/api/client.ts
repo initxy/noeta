@@ -23,13 +23,25 @@ export interface Connection {
   token: string;
 }
 
+/** A refused request: its HTTP status, the server's message and, for a
+ * refusal a client acts on, the server's `code` for it ("" otherwise). */
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code: string = "",
   ) {
     super(message);
   }
+}
+
+/** The server's code for a refused bypassPermissions (it runs with
+ * --disable-bypass-permissions, or its settings disable that mode). */
+export const BYPASS_REFUSED = "bypass_permissions_disabled";
+
+/** Whether `e` is the server refusing bypassPermissions, not another 403. */
+export function bypassRefused(e: unknown): boolean {
+  return e instanceof ApiError && e.code === BYPASS_REFUSED;
 }
 
 const enc = encodeURIComponent;
@@ -83,12 +95,15 @@ export class Api {
     });
     if (!resp.ok) {
       let message = resp.statusText;
+      let code = "";
       try {
-        message = ((await resp.json()) as { error?: string }).error ?? message;
+        const body = (await resp.json()) as { error?: string; code?: string };
+        message = body.error ?? message;
+        code = body.code ?? "";
       } catch {
         // not JSON
       }
-      throw new ApiError(resp.status, message);
+      throw new ApiError(resp.status, message, code);
     }
     if (resp.status === 204) return undefined as T;
     return (await resp.json()) as T;

@@ -109,10 +109,13 @@ GUARD_TICK_MIN_S = 0.05
 #: third of the claim's lease, so it is dead before another worker may
 #: take the task.
 ALIVE_S = 30.0
-#: Ticks of :data:`FOREGROUND_DRAIN_TICK_S` a foreground command's keeper is
-#: given to write what came once the command's shell exited (1 s). Each tick
-#: starts a ``sleep`` process, which costs tens of ms on macOS: few, longer
-#: ticks keep the wait near its nominal second.
+#: The seconds a foreground command's keeper is given to write what came
+#: once the command's shell exited: the shell waits on the keeper's done
+#: signal (a FIFO, so it wakes the moment the keeper is done) that long.
+FOREGROUND_DRAIN_S = 1
+#: Where no FIFO can be made: ticks of :data:`FOREGROUND_DRAIN_TICK_S`
+#: (1 s). Each tick starts a ``sleep`` process, which costs tens of ms on
+#: macOS: few, longer ticks keep the wait near its nominal second.
 FOREGROUND_DRAIN_TICKS = 20
 FOREGROUND_DRAIN_TICK_S = 0.05
 #: Bytes of a job's output (and, for a monitor, of its stdout alone) its
@@ -311,14 +314,22 @@ def _label(text: str) -> str:
 
 
 def _keeping(out_path: str) -> str:
-    """The file a foreground command's output keeper removes once done."""
+    """The file a foreground command's output keeper removes once done
+    (where no FIFO could be made)."""
     return f"{out_path}.keeping"
+
+
+def _done_fifo(out_path: str) -> str:
+    """The FIFO a foreground command's output keeper writes a line to once
+    done."""
+    return f"{out_path}.done"
 
 
 def _files(job: Job) -> list[str]:
     """The job's files in its env."""
-    keeping = _keeping(job.out_path) if job.cwd_path else ""
-    return [p for p in (job.out_path, job.events_path, job.alive_path, job.cwd_path, keeping) if p]
+    keeping = (_keeping(job.out_path), _done_fifo(job.out_path)) if job.cwd_path else ()
+    return [p for p in (job.out_path, job.events_path, job.alive_path, job.cwd_path, *keeping)
+            if p]
 
 
 class Registry:
@@ -435,9 +446,14 @@ class Registry:
         alive = (posixpath.join(log_dir, f"{job_id}.alive")
                  if kept is not None or foreground else "")
         cwd_file = posixpath.join(log_dir, f"{job_id}.cwd") if foreground else ""
+        setup = 'umask 077 && for f; do : > "$f" || exit 1; done'
+        if foreground:
+            # No FIFO (a filesystem without them): the keeper's flag file is
+            # polled instead.
+            setup += f" && {{ mkfifo {shlex.quote(_done_fifo(out))} 2>/dev/null || :; }}"
         made = await env.run(
-            ["sh", "-c", 'umask 077 && for f; do : > "$f" || exit 1; done', "sh",
-             *[p for p in (out, events, alive, cwd_file) if p]], timeout=10)
+            ["sh", "-c", setup, "sh", *[p for p in (out, events, alive, cwd_file) if p]],
+            timeout=10)
         if made.exit_code != 0:
             return "background jobs are unavailable: could not create the job's log file"
         job = Job(job_id=job_id, task_id=task_id, command=command,
@@ -478,14 +494,20 @@ class Registry:
                 # so the keeper is given a moment to write what came (its
                 # flag file gone), not waited for. Nothing but the shell
                 # may hold the run's own output: the keeper, a process
-                # substitution, gets /dev/null.
+                # substitution, gets /dev/null. The keeper says it is done
+                # on fd 7, the FIFO held open both ways (so no open blocks
+                # and a line written before the read waits in it); the
+                # command itself does not get fd 7.
                 flag = shlex.quote(_keeping(out))
-                pipeline = (f': > {flag}\nexec >/dev/null 2>&1\n'
-                            f'"$@" > >({keep_out}; rm -f {flag}) 2>&1\n'
-                            f'code=$?\nn=0\nwhile [ -e {flag} ] && [ "$n" -lt '
+                fifo = shlex.quote(_done_fifo(out))
+                pipeline = (f'if [ -p {fifo} ] && exec 7<>{fifo}; then w=1; '
+                            f'else w=; : > {flag}; fi\nexec >/dev/null 2>&1\n'
+                            f'"$@" > >({keep_out}; if [ -n "$w" ]; then echo >&7; '
+                            f'else rm -f {flag}; fi) 2>&1 7>&-\n'
+                            f'code=$?\nif [ -n "$w" ]; then read -t {FOREGROUND_DRAIN_S} -u 7 _\n'
+                            f'else n=0; while [ -e {flag} ] && [ "$n" -lt '
                             f'{FOREGROUND_DRAIN_TICKS} ]; do sleep {FOREGROUND_DRAIN_TICK_S}; '
-                            'n=$((n + 1)); done\n'
-                            f'rm -f {flag}\nexit "$code"')
+                            f'n=$((n + 1)); done; rm -f {flag}; fi\nexit "$code"')
             else:
                 pipeline = f'"$@" 2>&1 | {keep_out}\nexit "${{PIPESTATUS[0]}}"'
             fd3 = f"exec 3>{shlex.quote(cwd_file)}\n" if cwd_file else ""

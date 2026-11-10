@@ -45,7 +45,18 @@ def token_digest(token: str) -> str:
 
 
 class Refused(Exception):
-    """A request asked for what this server does not allow."""
+    """A request asked for what this server does not allow; ``code``, when
+    set, names the refusal for a client to tell it from the others (the
+    response's ``code``)."""
+
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+#: The ``code`` of a refused ``bypassPermissions`` (a client starts in
+#: another mode instead).
+BYPASS_REFUSED = "bypass_permissions_disabled"
 
 
 class NotOpen(Exception):
@@ -94,7 +105,8 @@ class GuardedClient:
     server take its tree over (``noeta.host.local.take_over``) onto
     :attr:`queue`, so it runs here, unless a front end holds it now."""
 
-    def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
+    def __init__(self, client: ClientAPI, *, allow_bypass: bool | Callable[[], bool],
+                 cwd: str | None,
                  fixed: Callable[[], Collection[str]] = lambda: (),
                  scratch: str | None = None) -> None:
         self._client = client
@@ -109,9 +121,11 @@ class GuardedClient:
         self._cwd = os.path.realpath(cwd) if cwd else None
 
     def _mode(self, mode: Any) -> None:
-        if mode == _BYPASS and not self._allow_bypass:
-            raise Refused("this server does not allow bypassPermissions "
-                          "(start it with --allow-bypass-permissions)")
+        allowed = self._allow_bypass() if callable(self._allow_bypass) else self._allow_bypass
+        if mode == _BYPASS and not allowed:
+            raise Refused("this server does not allow bypassPermissions (it runs with "
+                          "--disable-bypass-permissions, or its settings' "
+                          "disableBypassPermissionsMode is \"disable\")", BYPASS_REFUSED)
 
     def check_cwd(self, cwd: Any) -> Any:
         """``cwd`` made absolute (a real path); raises ``ValueError`` when it
@@ -252,8 +266,9 @@ class GuardedClient:
         return await self._client.tasks(parent_id=parent_id, status=status, limit=limit,
                                         roots_only=roots_only)
 
-    async def events(self, task_id: str, after: int = 0) -> list[Recorded]:
-        return await self._client.events(task_id, after)
+    async def events(self, task_id: str, after: int = 0, *,
+                     limit: int | None = None) -> list[Recorded]:
+        return await self._client.events(task_id, after, limit=limit)
 
     def watch(self, task_id: str, after: int = 0) -> AsyncIterator[Recorded]:
         return self._client.watch(task_id, after)
@@ -302,7 +317,7 @@ class Guard:
 
     def __init__(self, client: Any, serving: Any, *, token_sha256: str | None, auth: bool,
                  allowed_hosts: Sequence[str] | None, origins: Sequence[str],
-                 allow_bypass: bool, cwd: str | None,
+                 allow_bypass: bool | Callable[[], bool], cwd: str | None,
                  fixed: Callable[[], Collection[str]] = lambda: (),
                  scratch: str | None = None) -> None:
         self._auth = auth
@@ -352,7 +367,8 @@ class Guard:
             except UnknownTask as exc:
                 return JSONResponse({"error": f"unknown task {exc}"}, status_code=404)
             except Refused as exc:
-                return JSONResponse({"error": str(exc)}, status_code=403)
+                return JSONResponse({"error": str(exc), **({"code": exc.code} if exc.code else {})},
+                                    status_code=403)
             except NotOpen as exc:
                 return JSONResponse({"error": str(exc)}, status_code=409)
             except (msgspec.ValidationError, ValueError, KeyError, IndexError) as exc:

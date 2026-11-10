@@ -659,7 +659,21 @@ def test_settings_files_can_disable_bypass_mode(tmp_path: Path) -> None:
                                                    "disableBypassPermissionsMode": "enable"}}))
     args = permission_arguments(load([user, project]), {"mode", "disable_bypass_mode"})
     assert args == {"disable_bypass_mode": True}
-    Permissions(**args)
+    assert Permissions(**args).mode == "auto"  # bypass is the default only where allowed
+
+
+async def test_tasks_start_in_bypass_mode_by_default_and_deny_rules_still_hold(
+        store: SqliteStore, tmp_path: Path) -> None:
+    write = Fake("Write")
+    provider = ScriptedProvider([
+        reply("", ("Write", {"file_path": "/etc/x"}), ("Write", {"file_path": "/opt/y"})),
+        reply("ok")])
+    perms = Permissions(deny=["Edit(//etc/**)"])
+    assert perms.mode == "bypassPermissions"
+    client, tid, _ = await start(store, provider, perms, [write], cwd=tmp_path)
+    assert write.runs == [{"file_path": "/opt/y"}]  # outside the workspace, never asked
+    [(text, err)] = [x for x in results(await events(client, tid)) if x[1]]
+    assert err and "Edit(//etc/**)" in text
 
 
 def test_settings_files_can_keep_plan_mode_off_the_classifier(tmp_path: Path) -> None:

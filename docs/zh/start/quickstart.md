@@ -106,7 +106,7 @@ noeta
 
 头一天值得知道的几件事：
 
-- **权限模式。** 新任务默认是 `auto`。Shift+Tab 在几种模式间切换（`default` 改东西前先问、
+- **权限模式。** 新任务默认是 `bypassPermissions`：除了拒绝规则、询问规则和受保护路径，什么都不问。Shift+Tab 在几种模式间切换（`default` 改东西前先问、
   `acceptEdits`、`plan`、`auto`、`bypassPermissions`）；`--permission-mode` 指定起始模式。需要
   确认的操作会弹出卡片，直接在界面里回答（[权限与 hooks](../guides/permissions.md)）。
 - **斜杠命令。** `/help` 列出全部；`/model`、`/effort`、`/context`、`/cost`、`/compact`、

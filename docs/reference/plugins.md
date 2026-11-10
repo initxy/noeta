@@ -344,7 +344,7 @@ Hooks: `reminders`, `on_start`, `before_model`, `before_tool`, `resolve_ask`, `o
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `mode` | `"auto"` | the starting permission mode (`defaultMode`) |
+| `mode` | `"bypassPermissions"` (`"auto"` with `disable_bypass_mode`) | the starting permission mode (`defaultMode`) |
 | `allow`, `deny`, `ask` | `[]` | rule strings: `Bash(git push *)`, `Read(./.env)`, `WebFetch(domain:example.com)`, `mcp__server` |
 | `additional_directories` | `[]` | directories file tools may read and edit as if inside the working directory |
 | `auto_mode` | | Claude Code's `autoMode` object (`allow`, `soft_deny`, `hard_deny`, `environment`) for the classifier |
