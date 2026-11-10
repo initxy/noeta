@@ -126,3 +126,4 @@ branch: feat/serve-service-2026-11-09
   - `logs` follows by default as the spec says; `--no-follow` prints the last 200 lines.
   - Friction: the token appears in the service's journal / log file on every start (the
     address lines go to stderr); same user, same exposure as the token file.
+- 2026-11-09 integration: the first scratch session never showed (projects fetched only on mount/add/remove); the app now re-asks /projects once for a session folder no project covers. Web e2e 20/20, desktop e2e 4/4.

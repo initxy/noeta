@@ -248,6 +248,23 @@ function Workspace({
   );
   useEffect(() => void refreshProjects(), [refreshProjects]);
 
+  // A session in a folder the projects do not cover yet (the first scratch
+  // session, one made elsewhere) asks the server again, once per folder.
+  const askedFor = useRef(new Set<string>());
+  useEffect(() => {
+    if (!served) return;
+    const scratch = scratchRoot(served);
+    const unknown = sessions.some(
+      (s) =>
+        s.cwd &&
+        !askedFor.current.has(s.cwd) &&
+        !projectFor(s.cwd, served) &&
+        !scratchDay(s.cwd, scratch) &&
+        askedFor.current.add(s.cwd),
+    );
+    if (unknown) void refreshProjects();
+  }, [sessions, served, refreshProjects]);
+
   /** The project new sessions run in, remembered for next time. */
   const pickProject = useCallback(
     (path: string) => {
