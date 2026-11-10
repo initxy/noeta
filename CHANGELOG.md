@@ -6,7 +6,10 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
-## [Unreleased]
+## [1.2.2] - 2026-11-10
+
+Images reach gateway models again, switching between auto and bypass-permissions mode no longer
+sends contradicting notes, and the TUI shows link addresses.
 
 ### Fixed
 
