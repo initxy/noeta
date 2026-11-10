@@ -258,6 +258,20 @@ async def model_choices(app: Any, *, catalog: bool = True) -> list[tuple[str, st
     return [(m, "") for m in models.catalog_models()]
 
 
+def start_mode(app: Any, asked: str | None) -> str:
+    """The permission mode a new task asking for ``asked`` starts in
+    (``LocalApp.start_mode``); without that, ``asked`` or the permissions
+    plugin's default, ``bypassPermissions``."""
+    find = getattr(app, "start_mode", None)
+    return (find(asked) if find is not None else None) or asked or "bypassPermissions"
+
+
+def bypass_allowed(app: Any) -> bool:
+    """Whether a task may start in ``bypassPermissions`` by the settings as
+    they are now (:func:`start_mode`)."""
+    return start_mode(app, "bypassPermissions") == "bypassPermissions"
+
+
 async def prepare_model(app: Any, model: str) -> str | None:
     """Settle ``model`` before a switch to it (``LocalApp.prepare_model``):
     what the person should know about it, or ``None``."""

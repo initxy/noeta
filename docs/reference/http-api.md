@@ -35,7 +35,8 @@ app and the desktop app all use it.
    [Switching a plugin off](./plugins.md#switching-a-plugin-off)): `403`. Keys the server runs
    with (`--effort`, `--permission-mode`) are laid under the request's, which win. It may post only the signals front ends send: `permission_mode`, `config`,
    `resumed`, `restore_files`, `rename`, `archive`. It may not start or switch a task into
-   `bypassPermissions` when the server runs with `--disable-bypass-permissions` (`403`). A `cwd`
+   `bypassPermissions` when the server runs with `--disable-bypass-permissions` or its settings
+   set `disableBypassPermissionsMode` (`403` with `"code": "bypass_permissions_disabled"`). A `cwd`
    may be any directory (a relative one is taken from the server's directory and stored
    absolute); one that does not exist or is not a directory is `400`. A task created without
    one runs in a scratch directory of its own, `~/.noeta/scratch/<YYYY-MM-DD>/<first 8

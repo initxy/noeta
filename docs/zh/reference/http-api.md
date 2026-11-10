@@ -30,7 +30,8 @@
    [关掉插件](./plugins.md#switching-a-plugin-off)），否则返回 `403`。服务端
    启动时带的 `--effort`、`--permission-mode` 垫在请求的配置下面，请求自己给了的以请求为准。只能发前端会发的那几种信号：
    `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。服务端带了
-   `--disable-bypass-permissions` 时，不能让任务以 `bypassPermissions` 启动或切过去（`403`）。`cwd`
+   `--disable-bypass-permissions`、或者它的设置文件写了 `disableBypassPermissionsMode` 时，不能让任务以
+   `bypassPermissions` 启动或切过去（`403`，带 `"code": "bypass_permissions_disabled"`）。`cwd`
    可以是任何目录（相对路径按服务端的目录解析，并以绝对路径存下）；不存在或不是目录返回 `400`。没给
    `cwd` 的任务在自己的临时目录里跑：`~/.noeta/scratch/<YYYY-MM-DD>/<任务 id 前 8 位>/`，建任务时建好。其余被拒的情况返回 `403` 和原因。
 

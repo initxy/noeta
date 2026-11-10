@@ -58,14 +58,14 @@ from noeta.core.types import Delta, Message, Text, Usage
 from noeta.host._errors import error_text
 from noeta.host._stream_json_control import ControlRequests
 from noeta.host._stream_json_wire import PartialMessages, block_json, message_from, usage_json
-from noeta.host.app import AppAPI
+from noeta.host.app import AppAPI, start_mode
 from noeta.host.pending import Pending, pending_tree
 from noeta.host.pending import follow_tree as _follow_tree
 from noeta.host.pending import tree_busy as _tree_busy
 from noeta.host.usage import TreeUsage, add_events, tree_usage
 from noeta.toolkit.hook_callbacks import CLIENT_HOOKS_KEY, HookCallbacks
 from noeta.toolkit.interactive import INTERACTIVE_KEY, PROMPT_TOOL_KEY
-from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL
+from noeta.toolkit.permission_modes import MODE_ALIASES, MODE_SIGNAL, current_mode
 from noeta.toolkit.plugin_records import PERMISSIONS
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta.toolkit.structured_output import ANSWER_KIND, PLUGIN, RETRIES_REASON, SCHEMA_KEY
@@ -316,10 +316,15 @@ class StreamJson(ControlRequests):
                 model = parts.get("model") or model
         commands = await self._commands()
         agents = await self.app.agent_names()
-        mode = MODE_ALIASES.get(self.options.permission_mode or "", self.options.permission_mode)
+        asked = MODE_ALIASES.get(self.options.permission_mode or "", self.options.permission_mode)
+        # What the settings make of the mode asked for; a resumed task keeps
+        # its own unless it may switch to the one asked for.
+        mode = start_mode(self.app, asked)
+        if self.options.resume and not self.options.fork and mode != asked:
+            mode = current_mode(await self.client.events(self.task_id)) or mode
         return self._message(
             type="system", subtype="init", cwd=self.options.cwd, tools=tools, mcp_servers=[],
-            model=model, permissionMode=mode or "bypassPermissions",
+            model=model, permissionMode=mode,
             slash_commands=[c["name"] for c in commands], apiKeySource="none",
             claude_code_version=noeta_version(), output_style="default", agents=agents,
             skills=[], plugins=[])

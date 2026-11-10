@@ -82,6 +82,7 @@ from noeta.core.execenv import ExecEnv
 from noeta.core.loop.state import MODEL_ROUTE
 from noeta.core.provider import Provider
 from noeta.toolkit.local_env import withhold_env_refs
+from noeta.toolkit.permission_modes import PERMISSION_MODES
 from noeta.toolkit.sandbox import SandboxSettings
 
 if TYPE_CHECKING:
@@ -554,6 +555,18 @@ def _base_plugin_settings(found: FileSettings, cwd: str | None,
          "environment": environment_arguments(found)})
 
 
+def permission_start_mode(args: Mapping[str, Any], asked: str | None) -> str:
+    """The mode a task asking for ``asked`` starts in under the permissions
+    plugin's arguments ``args``: ``asked``, else their ``mode``, else the
+    plugin's default — never ``bypassPermissions`` when
+    ``disable_bypass_mode`` refuses it (``auto`` then, as the plugin)."""
+    off = bool(args.get("disable_bypass_mode"))
+    for mode in (asked, args.get("mode")):
+        if mode in PERMISSION_MODES and not (mode == "bypassPermissions" and off):
+            return str(mode)
+    return "auto" if off else "bypassPermissions"
+
+
 def environment_arguments(found: FileSettings) -> dict[str, Any]:
     """The environment plugin's arguments the settings files give:
     ``language`` and the ``attribution`` lines."""
@@ -745,11 +758,16 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
             isinstance(setting, Mapping) and setting.get("enabled") is False))
         fixed[:] = sorted(name for name, setting in table.items()
                           if isinstance(setting, Mapping) and setting.get("switchable") is False)
+        start_permissions.clear()
+        if isinstance(perms := table.get("permissions"), Mapping):
+            start_permissions.update(perms)
         unjoined[:] =[*_unjoined_notices(agents, table), *missing]
         notices.extend(n for n in unjoined if n not in notices)
         return agents
 
     unjoined: list[str] = []
+    #: The permissions plugin's arguments, as the agents were last made.
+    start_permissions: dict[str, Any] = {}
     turned_off: list[str] = []
     fixed: list[str] = []
     agents = make_agents()
@@ -775,6 +793,7 @@ def from_settings(settings: Settings, *, cwd: str | None = None,
         return models.unknown_model_notice(model)
 
     app.list_models = router.available
+    app.start_mode = lambda asked: permission_start_mode(start_permissions, asked)
     app.prepare_model = prepare_model
     if router.several:
         app.client.route_model = router.route_record

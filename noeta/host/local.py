@@ -231,6 +231,11 @@ class LocalApp:
         #: returning what the person should know (an unknown model) or
         #: ``None``; ``None`` when only the catalog is known. Off the loop.
         self.prepare_model: Callable[[str], str | None] | None = None
+        #: The permission mode a task asking for ``mode`` (``None``: none)
+        #: starts in, by the settings as they are now (their
+        #: ``defaultMode``, ``disableBypassPermissionsMode``); set by the
+        #: ``noeta`` command, ``None`` otherwise (:func:`noeta.host.app.start_mode`).
+        self.start_mode: Callable[[str | None], str] | None = None
         #: The machine's plugins as the ``noeta`` command lets front ends
         #: manage them (switches for new tasks, install, remove, the
         #: marketplaces); the default can do none of that.

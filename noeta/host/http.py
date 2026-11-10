@@ -95,7 +95,7 @@ import dataclasses
 import logging
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -284,7 +284,8 @@ def redact_token_logs() -> None:
 def create_app(client: Client, *, token: str | None = None, token_sha256: str | None = None,
                auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
-               origins: Sequence[str] = (), allow_bypass: bool = True,
+               origins: Sequence[str] = (),
+               allow_bypass: bool | Callable[[], bool] = True,
                cwd: str | None = None,
                web_dir: str | None = None, allow_plugin_install: bool = False,
                plugin_admin: PluginAdmin | None = None,
@@ -304,7 +305,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
-    ``bypassPermissions`` (the default); ``cwd``: the directory a request's relative ``cwd``
+    ``bypassPermissions`` (the default; a function: asked at each request,
+    as the settings may change); ``cwd``: the directory a request's relative ``cwd``
     is taken from and a task without one runs in (``None``: a ``cwd`` passes
     unchecked); ``web_dir``:
     a directory of static files served at every other path (a web app);

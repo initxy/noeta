@@ -330,6 +330,7 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
     from noeta.cli.home_dir import HOME
     from noeta.cli.serve_address import addresses, allowed_hosts
     from noeta.cli.server_token import serve_token
+    from noeta.host.app import bypass_allowed
     from noeta.host.http import (
         LOOPBACK_HOSTS,
         bundled_web_dir,
@@ -357,7 +358,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      app=app if with_worker else None,
                      allowed_hosts=allowed_hosts(host, args.allow_host, machine),
                      origins=args.allow_origin,
-                     allow_bypass=not args.disable_bypass_permissions, cwd=cwd,
+                     # The plugin's settings as they are now (the flag is among them).
+                     allow_bypass=lambda: bypass_allowed(app), cwd=cwd,
                      web_dir=web,
                      # A Host or origin named besides the loopback ones: a
                      # reverse proxy may bring anyone to the loopback bind.

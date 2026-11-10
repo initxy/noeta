@@ -69,7 +69,12 @@ sessions, a rewound conversation shows whole, and both fold tool calls as Claude
 - **The message box did not grow for wrapped lines** on a narrow screen.
 - The session list and approval cards are no longer polled while the page is hidden.
 - A new web session on a server started with `--disable-bypass-permissions` starts in `auto`
-  instead of failing.
+  instead of failing; any other refusal is shown, not retried in another mode.
+- **`noeta serve` let requests start tasks in `bypassPermissions` when only a settings file
+  disabled it** (`permissions.disableBypassPermissionsMode: "disable"`): the plugin then ran them
+  in `auto` while the web app and the headless protocol's init message said
+  `bypassPermissions`. The server now refuses it as with `--disable-bypass-permissions`, and the
+  init message names the mode the settings start a task in (their `defaultMode` too).
 - **The TUI got slower with every message**: every message stayed laid out, the spinner and the
   footer laid out the whole screen several times a second, and each streamed fragment was parsed
   and laid out on its own. At 500 messages the idle spinner held the CPU at 68%, a key took up to

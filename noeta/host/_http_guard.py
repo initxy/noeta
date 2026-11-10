@@ -105,7 +105,8 @@ class GuardedClient:
     server take its tree over (``noeta.host.local.take_over``) onto
     :attr:`queue`, so it runs here, unless a front end holds it now."""
 
-    def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
+    def __init__(self, client: ClientAPI, *, allow_bypass: bool | Callable[[], bool],
+                 cwd: str | None,
                  fixed: Callable[[], Collection[str]] = lambda: (),
                  scratch: str | None = None) -> None:
         self._client = client
@@ -120,9 +121,11 @@ class GuardedClient:
         self._cwd = os.path.realpath(cwd) if cwd else None
 
     def _mode(self, mode: Any) -> None:
-        if mode == _BYPASS and not self._allow_bypass:
-            raise Refused("this server does not allow bypassPermissions "
-                          "(it runs with --disable-bypass-permissions)", BYPASS_REFUSED)
+        allowed = self._allow_bypass() if callable(self._allow_bypass) else self._allow_bypass
+        if mode == _BYPASS and not allowed:
+            raise Refused("this server does not allow bypassPermissions (it runs with "
+                          "--disable-bypass-permissions, or its settings' "
+                          "disableBypassPermissionsMode is \"disable\")", BYPASS_REFUSED)
 
     def check_cwd(self, cwd: Any) -> Any:
         """``cwd`` made absolute (a real path); raises ``ValueError`` when it
@@ -314,7 +317,7 @@ class Guard:
 
     def __init__(self, client: Any, serving: Any, *, token_sha256: str | None, auth: bool,
                  allowed_hosts: Sequence[str] | None, origins: Sequence[str],
-                 allow_bypass: bool, cwd: str | None,
+                 allow_bypass: bool | Callable[[], bool], cwd: str | None,
                  fixed: Callable[[], Collection[str]] = lambda: (),
                  scratch: str | None = None) -> None:
         self._auth = auth
