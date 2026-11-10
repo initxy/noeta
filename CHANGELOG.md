@@ -18,8 +18,8 @@ tool calls as Claude Code does.
   and laid out on its own. At 500 messages the idle spinner held the CPU at 68%, a key took up to
   650 ms to show, a resumed task took 10–18 s to appear and a 4000-character answer took two
   minutes to stream. Only the transcript's end is laid out now (older messages come back as you
-  scroll up), the spinner and footer are redrawn without a layout, and a streamed reply is shown
-  once a frame.
+  scroll up), the spinner and footer are redrawn without a layout, a streamed reply is shown
+  once a frame, and a reply's table is one widget (it was a widget per cell).
 - **Scrolled up, the transcript was pulled back to the end** by every record; it now stays
   where you are and follows again once you scroll back down. `PageUp` / `PageDown` scroll it
   while the prompt has the keys.
