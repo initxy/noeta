@@ -58,6 +58,8 @@ page, and errors, diffs and dialogs read better.
   session's folder squeezed its title in the header.
 - **The message box did not grow for wrapped lines** on a narrow screen.
 - The session list and approval cards are no longer polled while the page is hidden.
+- A new web session on a server started with `--disable-bypass-permissions` starts in `auto`
+  instead of failing.
 
 ## [1.2.2] - 2026-11-10
 

@@ -391,7 +391,16 @@ function Workspace({
     const config = taskId
       ? continuationConfig({ model: state.model, cwd: state.cwd }, timezone)
       : newSessionConfig({ mode: newMode, model: newModel, project }, timezone);
-    const id = await api.create(null, config, "main", taskId ?? undefined);
+    let id: string;
+    try {
+      id = await api.create(null, config, "main", taskId ?? undefined);
+    } catch (e) {
+      // A server started with --disable-bypass-permissions refuses the
+      // default mode: start in auto, as that server's own default does.
+      if (!(e instanceof ApiError && e.status === 403 && config.permission_mode === "bypassPermissions")) throw e;
+      setNewMode("auto");
+      id = await api.create(null, { ...config, permission_mode: "auto" }, "main", taskId ?? undefined);
+    }
     if (taskId) replace(taskId);
     open(id);
     return id;
