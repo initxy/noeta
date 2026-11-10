@@ -92,12 +92,6 @@ export function linkTarget(url: string, appUrl: string): "app" | "browser" | "re
  * clipboard (copying a code block); camera, location and the rest are refused. */
 export const GRANTED_PERMISSIONS: ReadonlySet<string> = new Set(["notifications", "clipboard-sanitized-write"]);
 
-/** How many sessions in a `/summaries` listing are mid-turn or wait on a
- * person: what a server restart would interrupt. */
-export function liveSessions(list: { status: string; waiting_on: string | null }[]): number {
-  return list.filter((s) => s.status === "running" || (s.status === "waiting" && s.waiting_on !== "input")).length;
-}
-
 function escape(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
