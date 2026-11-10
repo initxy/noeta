@@ -23,6 +23,10 @@
 
 **还在实验阶段。** 网页版和桌面版都要从源码构建：没有发布（没有 npm 包，Release 里也没有安装包），CI 不跑它们的测试（本地用 `make frontends` 跑），桌面版的安装包也没有签名。正式支持的入口是终端界面、`noeta -p`、ACP 和 HTTP 接口。
 
+最省事的用法是 `noeta web`（需要 `server` 这个 extra）：它在后台起一个只听 `127.0.0.1` 的 `noeta serve`，
+用的是 noeta 安装包里自带的网页，并在浏览器里打开，令牌已经带好，不用再输；`noeta web stop` 停掉它（详见
+[noeta 命令](../reference/cli.md#noeta-web)）。
+
 网页版是一个 React 页面，调用 `noeta serve` 的 HTTP 接口（和 `RemoteClient` 调的是同一批）。它有按目录分组的对话列表、流式显示的 markdown 对话、工具卡片（Bash 输出、改文件显示成 diff、子代理嵌套显示）、和 Claude Code 选项一致的审批卡片、`AskUserQuestion` 表单、计划审阅、任务清单面板、斜杠命令菜单、从任务目录补全的 `@` 引用、粘贴和拖入图片、模式和模型选择、用量和上下文占用、回退、重命名、归档和搜索、亮暗两种主题，以及手机尺寸的布局（`web/screenshots/README.md` 逐项配了截图）。
 
 先构建，再让服务器顺带提供它：

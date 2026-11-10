@@ -31,6 +31,10 @@ A new outside protocol is another translation in `noeta/host`, never a second AP
 runs them locally), and the desktop installers are not signed. The terminal UI, `noeta -p`,
 ACP and the HTTP API are the supported ways in.
 
+The quickest way in is `noeta web` (the `server` extra): it starts a `noeta serve` on
+`127.0.0.1` in the background with the web app noeta's wheel carries, and opens it in your
+browser, signed in; `noeta web stop` stops it ([the noeta command](../reference/cli.md#noeta-web)).
+
 The web app is a React page over `noeta serve`'s HTTP API (the same calls `RemoteClient`
 makes). It has a sidebar of conversations grouped by directory, a streamed markdown transcript, tool
 cards (Bash output, edits as diffs, sub-agents nested), approval cards with Claude Code's

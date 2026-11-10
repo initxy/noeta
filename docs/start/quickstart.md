@@ -40,6 +40,10 @@ A `uv tool install --reinstall` keeps only the extras and `--with` packages it n
 all of them each time. When a command needs an extra you do not have, noeta says which one
 and prints the install line.
 
+**Upgrade** with `noeta update`: it checks PyPI and reinstalls the latest release with the
+extras and `--with` packages you installed it with (a pip install gets `pip install -U`; a
+checkout is left to you). It says `noeta is up to date` when there is nothing newer.
+
 ## 2. Pick a model and a provider
 
 noeta needs a model id and a way to reach it. The quickest is environment variables.
@@ -164,7 +168,14 @@ noeta -p -r <task id> --fork-session "try another way"   # go on in a new task
 Inside the terminal UI, `/resume` lists earlier conversations and `/rewind` (or Esc Esc) goes
 back to before one of your prompts, restoring the conversation, the files, or both.
 
-## 6. Trust, in one paragraph
+## 6. The web app
+
+With the `server` extra (`uv tool install 'noeta[tui,server]'`), `noeta web` starts a local
+server in the background and opens the web app in your browser: your projects down the side,
+each with its sessions. `noeta web status` says whether it runs, `noeta web stop` stops it
+([the noeta command](../reference/cli.md#noeta-web)).
+
+## 7. Trust, in one paragraph
 
 A cloned repository must not be able to configure your agent or start a process by itself.
 So a project's `.noeta/settings.json`, `.noeta/settings.local.json`, `.noeta/agents/`,

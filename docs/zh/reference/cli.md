@@ -1,7 +1,8 @@
 # noeta 命令
 
 `noeta` 的每个子命令和参数，以及终端界面里的斜杠命令。内容来自 `noeta/cli/main.py`、
-`noeta/cli/headless.py`、`noeta/cli/plugin_command.py` 和 `noeta/cli/mcp_command.py`。想按使用场景
+`noeta/cli/headless.py`、`noeta/cli/web_command.py`、`noeta/cli/update_command.py`、
+`noeta/cli/plugin_command.py` 和 `noeta/cli/mcp_command.py`。想按使用场景
 了解，看[终端界面与 -p](../guides/terminal.md)。
 
 <Diagram name="ref-ways-in" caption="前端要么在自己进程里的 LocalApp 上跑（只管自己的任务），要么通过 RemoteApp 连服务端；serve 和 worker 运行存储里的所有任务。" />
@@ -12,6 +13,8 @@
 noeta [参数] [提示词]           终端界面；带 -p、--output-format 或 --input-format stream-json 就是无界面模式
 noeta acp [--server URL]        在标准输入输出上提供 Agent Client Protocol，给编辑器用
 noeta serve [参数]              HTTP / WebSocket 接口，默认同时跑 worker（--no-worker 关掉）
+noeta web [status|stop]         在后台起一个本机服务，用浏览器打开网页版
+noeta update                    升级到最新版，装时带的 extra 都保留
 noeta worker [参数]             从存储里认领并运行任务，直到被停止
 noeta trust                     信任当前目录
 noeta plugins                   列出所有插件及其来源
@@ -25,7 +28,7 @@ noeta mcp add|add-json|list|get|remove|login|logout
 
 ## 通用参数
 
-终端界面、`-p`、`acp`、`serve`、`worker` 都接受。
+终端界面、`-p`、`acp`、`serve`、`web`、`worker` 都接受。
 
 | 参数 | 含义 |
 |---|---|
@@ -167,11 +170,49 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 | `--allow-bypass-permissions` | 关 | 允许请求让任务以 `bypassPermissions` 启动或切换过去 |
 | `--allow-root PATH` | 无 | 除服务端自己的目录外，任务还可以在哪个目录里跑（可重复） |
 | `--allow-plugin-install` | 关（`--host` 是回环地址、且没带 `--allow-host` / `--allow-origin` 时开） | 允许请求安装和删除插件（`POST /plugins/install`、`DELETE /plugins/{name}`） |
-| `--web DIR` | 无 | 在其余路径上提供这个目录里的文件（构建好的网页，`web/dist`） |
+| `--web DIR` | 包里自带的网页（有的话） | 在其余路径上提供这个目录里的文件（构建好的网页，`web/dist`）。不给的话，就用安装包里自带的那份：从 PyPI 装的都有，源码目录里要先跑一次 `make web-bundle` |
 
 token 取自 `NOETA_SERVER_TOKEN`；没有的话，第一次启动时生成一个，只打印这一次。
 `~/.noeta/server-token` 只存它的 SHA-256。删掉这个文件再重启就会换一个新的。没加
 `--allow-bypass-permissions` 时，不管通过什么途径要 `bypassPermissions`，权限插件自己都会拒绝。绑在非回环地址上又没给 `--allow-host` 时，服务端启动时会在 stderr 上提醒一次：任何 `Host` 请求头都会应答（有 DNS 重绑定的风险），并指出用 `--allow-host` 解决；bearer token 照样起保护作用。
+
+## `noeta web`
+
+在浏览器里用网页版：它替你在后台起一个 `noeta serve`。这个服务只监听 `127.0.0.1`，用自己单独的令牌，
+任务可以跑在你执行 `noeta web` 的那个目录，以及家目录下的任何地方（`--allow-root ~`）。
+
+```text
+$ noeta web
+noeta web is running at http://127.0.0.1:8642/#token=…
+Stop it with: noeta web stop
+```
+
+| 命令 | 作用 |
+|---|---|
+| `noeta web` | 起服务（已经在跑就直接用那个），等它能应答了，打印地址并在浏览器里打开 |
+| `  --port N` | 新服务用的端口（默认 `8642`，被占了就随便挑个空闲的）；明确指定的端口被占用会直接报错 |
+| `  --no-open` | 只打印地址，不开浏览器 |
+| `noeta web status` | 看它在不在跑、哪个端口、进程号和日志位置；没在跑时退出码是 1 |
+| `noeta web stop` | 停掉它 |
+
+令牌放在地址 `#` 后面，网页读走后会从地址栏里去掉，不会出现在服务端日志里。再执行一次
+`noeta web` 会接着用正在跑的服务，打印同一个地址。通用参数（`--model`、`--provider`、`--base-url`、
+`--store`、`--effort`）只对新起的服务生效。进程号、端口和令牌记在 `~/.noeta/web.json`（只有自己能读），
+服务的输出写在 `~/.noeta/logs/web.log`。需要装 `server` extra、配好模型，而且装的 noeta 里带着网页
+（源码目录里先跑 `make web-bundle`）。
+
+## `noeta update`
+
+把 noeta 升到 PyPI 上的最新版，装的时候带了什么就还带什么：
+
+| 当初怎么装的 | 它会执行 |
+|---|---|
+| `uv tool install` | `uv tool install --reinstall 'noeta[<extra>]'`，`uv-receipt.toml` 里记的每个 `--with`、Python 版本和包索引都原样带上，只去掉版本锁定 |
+| pip | `pip install -U 'noeta[<已装的 extra>]'`（环境里没有 pip 就用 `uv pip install`） |
+| 源码目录或可编辑安装 | 什么都不动，只打印该执行的命令 |
+
+PyPI 上没有更新的版本时，它会说 `noeta is up to date`；连不上 PyPI 时什么也不改（代理照
+`HTTPS_PROXY` / `ALL_PROXY` 走）。如果 `noeta web` 的服务正在跑，会先停掉，升级完再起来。
 
 ## `noeta worker`
 
@@ -242,6 +283,18 @@ Code 插件目录（带版本号）。加载失败的插件文件打印到 stder
 | `noeta mcp logout NAME` | 清掉登录信息 |
 
 客户端密钥和登录 token 存在 `~/.noeta/mcp-auth/` 下，从不写进设置文件。详见 [MCP 服务器](../guides/mcp.md)。
+
+## 出错时 {#errors}
+
+noeta 没料到的错误只打印一行，再告诉你完整报告存在哪：
+
+```text
+noeta: unexpected error: RuntimeError: …
+noeta: the full report is in ~/.noeta/logs/crash-20261109-101500-4242.txt (--verbose or NOETA_DEBUG=1 prints it here)
+```
+
+报告里有调用栈、版本号和完整命令行。命令行里任意位置加 `--verbose`，或者设 `NOETA_DEBUG=1`，调用栈也会
+直接打在终端上。按 Ctrl+C 退出时退出码是 130。
 
 ## 斜杠命令 {#slash-commands}
 

@@ -37,6 +37,10 @@ extra 会装上对应的版本。不装它，`noeta` 照样能跑 `-p`、`serve`
 注意 `uv tool install --reinstall` 只保留这次写出来的 extra 和 `--with` 包，所以每次都要写全。
 某个命令缺组件时，noeta 会说缺哪个，并打印安装命令。
 
+**升级**直接跑 `noeta update`：它先去 PyPI 看有没有新版，有就按你当初装的 extra 和 `--with` 包重装
+最新版（pip 装的就跑 `pip install -U`；源码目录它不动，交给你自己更新）。已经是最新时会说
+`noeta is up to date`。
+
 ## 2. 选模型和 provider
 
 noeta 需要知道用哪个模型、怎么连上它。最快的办法是设环境变量。
@@ -151,7 +155,13 @@ noeta -p -r <任务 id> --fork-session "换个办法试试"       # 从那次对
 在终端界面里，`/resume` 列出以前的对话；`/rewind`（或连按两次 Esc）回到你某次提问之前，可以选择
 恢复对话、恢复文件，或两者都恢复。
 
-## 6. 一段话讲清信任
+## 6. 网页版
+
+装了 `server` 这个 extra（`uv tool install 'noeta[tui,server]'`）之后，跑 `noeta web` 就会在后台起一个本机
+服务，并在浏览器里打开网页版：左边一列是你的项目，每个项目下面是它的会话。`noeta web status` 看它在不在跑，
+`noeta web stop` 停掉它（详见 [noeta 命令](../reference/cli.md#noeta-web)）。
+
+## 7. 一段话讲清信任
 
 克隆下来的仓库不能自己改你的 agent 配置，也不能自己启动进程。所以项目里的
 `.noeta/settings.json`、`.noeta/settings.local.json`、`.noeta/agents/`、`.noeta/skills/`、

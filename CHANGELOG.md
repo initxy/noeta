@@ -6,6 +6,34 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+### Added
+
+- **`noeta web`**: the web app in your browser with no build step. It starts `noeta serve` on
+  `127.0.0.1` in the background (port 8642, else a free one) with its own token, waits until it
+  answers, prints the address and opens it; a second `noeta web` reuses the running server.
+  `noeta web status` and `noeta web stop`; `--port`, `--no-open`. The server may run tasks in
+  the directory it was started from and anywhere under your home directory.
+- **The wheel carries the built web app**, and `noeta serve` serves it when `--web` is not given.
+  `make build` and the release build it first (`make web-bundle`, needs npm).
+- **`noeta update`**: checks PyPI and upgrades in place, keeping what noeta was installed with:
+  a uv tool install is reinstalled with the extras, `--with` packages, Python and index its
+  receipt names; a pip install gets `pip install -U` with the extras installed; a checkout is
+  left alone (it prints the commands). A running `noeta web` server is restarted on the new
+  version.
+- **Projects in the HTTP API**: `GET /projects` lists the saved directories and those of
+  unarchived sessions, each with its count of sessions; `POST /projects` / `DELETE /projects`
+  save and unsave one (checked as a new task's `cwd`); `GET /dirs?path=` lists a directory's
+  subdirectories for a folder picker.
+
+### Changed
+
+- **An unexpected error prints one line** (`noeta: unexpected error: <type>: <message>`) and the
+  path of a crash report under `~/.noeta/logs/`, not a Python traceback; `--verbose` or
+  `NOETA_DEBUG=1` prints the traceback too. Ctrl+C exits with code 130 without a traceback. The
+  terminal UI no longer prints Textual's traceback, which showed every frame's local variables.
+
 ## [1.1.1] - 2026-11-09
 
 The terminal UI copies text, reopens long tasks at once, folds runs of tool calls as Claude Code
