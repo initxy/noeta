@@ -5,6 +5,7 @@
   "description": "The noeta desktop app: the web app in a window, over a local noeta serve it starts.",
   "author": "The Noeta Authors <initxy0@gmail.com>",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/initxy/noeta",
   "main": "build/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
