@@ -10,6 +10,7 @@ export const NEW_SESSION_MODES: [string, string][] = [
   ["acceptEdits", "Accept edits"],
   ["plan", "Plan mode"],
   ["auto", "Auto"],
+  ["bypassPermissions", "Bypass permissions"],
 ];
 
 /** The mode a new session starts in. */

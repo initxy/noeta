@@ -135,7 +135,7 @@ async def test_the_auto_mode_note_waits_for_new_input_after_a_compaction(
     from noeta.plugins.permissions import Permissions
 
     a = Agent(name="a", model="claude-opus-5-5", tools=[_Safe(), _Shell(), _Write()],
-              extensions=(Permissions(), Compaction(auto_compact_window=SMALL)))
+              extensions=(Permissions(mode="auto"), Compaction(auto_compact_window=SMALL)))
     model = Model([call("ReportFindings"), big_call("ReportFindings"),
                    big_call("ReportFindings"), answer("done"), answer("ok")])
     client, tid = await run(store, a, model)

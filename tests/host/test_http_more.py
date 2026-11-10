@@ -66,8 +66,9 @@ async def served(tmp_path: Path) -> AsyncIterator[tuple[str, ScriptedProvider]]:
     local = LocalApp(SqliteStore(str(tmp_path / "t.db")), [agent], provider,
                      env_for=lambda _s: None)
     await local.start()
+    # A server started with --disable-bypass-permissions.
     app = create_app(local.client, token="secret", deltas=local.deltas, app=local,
-                     allowed_hosts=LOOPBACK_HOSTS, cwd=str(tmp_path))
+                     allowed_hosts=LOOPBACK_HOSTS, cwd=str(tmp_path), allow_bypass=False)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error"))
     serving = asyncio.create_task(server.serve())
     while not server.started:

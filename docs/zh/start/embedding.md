@@ -52,7 +52,7 @@ asyncio.run(main())
   `TaskEnded.answer` 里。不加它，任务就是一场对话：每轮结束后等下一条消息（`Waiting`，等的是
   `"input"`），你再 `send` 给它。
 - `config` 是任务的配置。`cwd` 是工具干活的目录。`permission_mode` 取 `default`、`acceptEdits`、
-  `plan`、`auto`（默认）、`dontAsk`、`bypassPermissions` 之一。`auto` 模式下，本来要问人的操作由
+  `plan`、`auto`、`dontAsk`、`bypassPermissions`（默认）之一。`auto` 模式下，本来要问人的操作由
   一次分类模型调用来判断；`default` 模式下它们会等人回答（见下文）。其他可设的键：`model`、
   `effort`、`max_turns`、`output_schema`、`timezone`。
 - `run_until_idle()` 不断认领、执行任务，直到没有可认领的。等审批的任务不可认领，所以它会返回；

@@ -60,7 +60,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 - **实时输出能跨机器。** 工人把模型正在生成的文字通过 Postgres 发出去（`noeta_deltas` 通知通道，尽力而为，不落库）；`noeta serve` 收到后在 `/tasks/{id}/watch` 上推给前端，所以连在任何一台服务端上的前端都能边生成边看到。用 sqlite（单机）时，实时输出只留在跑任务的那个进程里；已记录的事件仍然人人可见。
 - **每台机器的配置一样。** 每个进程读自己的 `~/.noeta`（`NOETA_HOME`）：agent、插件、`config.toml`、settings 文件、MCP 服务器。把同一份配置发到每台机器上。如果某台工人缺了任务启动时用的插件，它绝不会在缺插件的情况下跑这个任务：它让租约自然过期，等有这个插件的工人来接；连续三次这样认领、日志里又没有新内容，任务以 `plugin_missing` 失败（见[写一个插件](./plugins.md)）。
 - **队列。** 任务创建时指定一个队列（`POST /tasks` 的 `queue`，默认 `default`）；工人只拿它列出的队列（`noeta worker --queue NAME`，可重复）。可以用它把一些任务留在具备特定条件的机器上。
-- **跳过审批模式。** 和 `noeta serve` 一样，工人默认拒绝 `bypassPermissions`，除非启动时加了 `--allow-bypass-permissions`。
+- **跳过审批模式。** 任务可以在 `bypassPermissions`（默认模式）下跑；和 `noeta serve` 一样，工人启动时加了 `--disable-bypass-permissions` 就拒绝它。
 
 ### `noeta worker` 参数
 
@@ -71,7 +71,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 | `--lease SECONDS` | 30 | 认领不续期能维持多久；工人挂掉后，它的任务大约等这么久才被别人接走 |
 | `--snapshot-every EVENTS` | 100 | 最多每隔这么多个事件写一次任务快照（`0`：不写） |
 | `--restart-limit N` | 3 | 任务反复把工人弄死时，最多连续重启这么多次（期间一步没做完），再崩就让它失败（`0`：不限） |
-| `--allow-bypass-permissions` | 关 | 允许任务以 `bypassPermissions` 运行 |
+| `--disable-bypass-permissions` | 关 | 不许这里跑的任务用 `bypassPermissions`（旧的 `--allow-bypass-permissions` 仍然接受，不起作用） |
 
 ### `noeta serve` 参数
 
@@ -83,10 +83,10 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 | `--no-token` | 关 | 不要访问令牌；只能用在本机回环地址上 |
 | `--allow-host NAME` | — | 除本机自己的名字外，还应答哪个 `Host` 请求头名字（可重复），比如反向代理的域名 |
 | `--allow-origin ORIGIN` | — | 允许调用接口的网页来源（`https://host:port`，可重复） |
-| `--allow-bypass-permissions` | 关 | 允许请求把任务启动成或切换到 `bypassPermissions` |
+| `--disable-bypass-permissions` | 关 | 不管请求怎么要，都拒绝 `bypassPermissions`（旧的 `--allow-bypass-permissions` 仍然接受，不起作用） |
 | `--web DIR` | — | 同时在其他路径上提供 `DIR` 里构建好的网页端 |
 
-两者也接受通用参数（`--model`、`--store`、`--provider`、`--base-url`、`--cwd` 等），见 [noeta 命令](../reference/cli.md)。`--effort` 和 `--permission-mode` 在 `noeta serve` 上是客户端新建任务的起始配置（请求自己给了的以请求为准）；在 `noeta worker` 上只作用于它的渠道开的任务。两者给了 `--permission-mode bypassPermissions` 却没给 `--allow-bypass-permissions` 都会报错退出。接口列表见 [HTTP / WebSocket 接口](../reference/http-api.md)。
+两者也接受通用参数（`--model`、`--store`、`--provider`、`--base-url`、`--cwd` 等），见 [noeta 命令](../reference/cli.md)。`--effort` 和 `--permission-mode` 在 `noeta serve` 上是客户端新建任务的起始配置（请求自己给了的以请求为准）；在 `noeta worker` 上只作用于它的渠道开的任务。两者同时给了 `--permission-mode bypassPermissions` 和 `--disable-bypass-permissions` 都会报错退出。接口列表见 [HTTP / WebSocket 接口](../reference/http-api.md)。
 
 ## Postgres
 

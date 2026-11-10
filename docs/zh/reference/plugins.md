@@ -257,7 +257,7 @@ noeta 自带的每个插件：做什么、哪些代理在用、加了哪些工�
 
 | 配置项 | 默认 | 含义 |
 |---|---|---|
-| `mode` | `"auto"` | 起始权限模式（`defaultMode`） |
+| `mode` | `"bypassPermissions"`（开了 `disable_bypass_mode` 时是 `"auto"`） | 起始权限模式（`defaultMode`） |
 | `allow`、`deny`、`ask` | `[]` | 规则字符串：`Bash(git push *)`、`Read(./.env)`、`WebFetch(domain:example.com)`、`mcp__server` |
 | `additional_directories` | `[]` | 文件工具可以像在工作目录里一样读写的其他目录 |
 | `auto_mode` | | 给分类器用的 Claude Code `autoMode` 对象（`allow`、`soft_deny`、`hard_deny`、`environment`） |

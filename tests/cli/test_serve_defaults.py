@@ -45,12 +45,15 @@ def test_serves_tasks_with_the_effort_and_mode_asked(
         main.main([*argv, "--permission-mode", "plan", "serve", "--no-token"])
     assert made[-1].client.task_config == {"prompts": {}, "effort": "max",
                                            "permission_mode": "plan"}
-    with pytest.raises(SystemExit, match="needs --allow-bypass-permissions"):
-        main.main([*argv, "--permission-mode", "bypassPermissions", "serve", "--no-token"])
+    with pytest.raises(SystemExit, match="contradicts --disable-bypass-permissions"):
+        main.main([*argv, "--permission-mode", "bypassPermissions", "serve", "--no-token",
+                   "--disable-bypass-permissions"])
     with pytest.raises(_Started):
-        main.main([*argv, "--permission-mode", "bypassPermissions",
-                   "serve", "--no-token", "--allow-bypass-permissions"])
+        main.main([*argv, "--permission-mode", "bypassPermissions", "serve", "--no-token"])
     assert made[-1].client.task_config["permission_mode"] == "bypassPermissions"
+    # The old opt-in (an installed service may pass it) still starts.
+    with pytest.raises(_Started):
+        main.main([*argv, "serve", "--no-token", "--allow-bypass-permissions"])
 
 
 @pytest.mark.parametrize(("argv", "bundled", "served"), [

@@ -164,8 +164,8 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 | `noeta: the server at <url> refused the token: …`，或 HTTP 401 `{"error": "unauthorized"}` | 令牌不对或过期了：服务端的令牌文件被删过，或者服务端自己设了 `NOETA_SERVER_TOKEN`。 | 用服务端最近一次启动时打印的地址里的令牌（或 `noeta service status` 显示的）。 |
 | HTTP 403 `{"error": "cross-site request refused"}` | 请求的 `Host` 不在服务端应答的名单里（回环名字；绑非回环地址时还有本机自己的名字和地址；以及 `--allow-host` 给的名字），或者是别的源的网页发来的浏览器请求。 | 用 `--allow-host NAME` 加上客户端用的名字（比如反向代理的域名）；页面放在别处的话用 `--allow-origin ORIGIN`。 |
 | `noeta: --no-token serves only a loopback address` | `--no-token` 配了一个非回环的 `--host`。 | 保留令牌，或者绑到 `127.0.0.1`。 |
-| `this server does not allow bypassPermissions (start it with --allow-bypass-permissions)` | `noeta serve` 和 `noeta worker` 默认拒绝 bypass 模式。任务运行中切换时，会收到通知 `bypassPermissions is disabled here`。 | 确实需要的话，每台工人和服务端都带上 `--allow-bypass-permissions` 启动。 |
-| `noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions` | 启动 `noeta serve` 或 `noeta worker` 时给了 bypass 模式，却没允许它。 | 加上 `--allow-bypass-permissions`，或者换个模式。 |
+| `this server does not allow bypassPermissions (it runs with --disable-bypass-permissions)` | 服务端启动时加了 `--disable-bypass-permissions`。任务运行中切换时，会收到通知 `bypassPermissions is disabled here`（设置文件里写了 `disableBypassPermissionsMode` 时也一样）。 | 换个模式，或者每台工人和服务端都去掉 `--disable-bypass-permissions` 重新启动。 |
+| `noeta: --permission-mode bypassPermissions contradicts --disable-bypass-permissions` | 启动 `noeta serve` 或 `noeta worker` 时两个都给了。 | 去掉其中一个。 |
 | `POST /tasks/{id}/answers` 返回 HTTP 409 `task … is not waiting on a request '…' (unknown, or already answered)` | `request_id` 打错了、来自过期的卡片、是别的任务的，或者已经答过并被取走。 | 重新读一遍 `GET /tasks/{id}/pending`，回答上面列着的。 |
 | `/stream-json` 的 WebSocket 以关闭码 `4401` / `4403` 断开 | `4401`：没有有效 token。`4403`：要的权限模式被拒，或者给的 `cwd` 不是目录，关闭原因里写着为什么。 | 带上 token（`?token=` 或请求头）；换成允许的模式或一个存在的目录。 |
 | HTTP 400 `cwd '…' does not exist (…)` / `cwd '…' is not a directory (…)` | 新建任务、保存项目或列目录时，给的路径在服务端那台机器上不是目录（相对路径从服务端的目录算起）。 | 换成服务端机器上一个存在的目录。 |

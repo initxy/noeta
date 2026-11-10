@@ -4,7 +4,7 @@
 
 ## 权限模式
 
-每个任务都处在某个权限模式下，模式记在它的日志里。默认是 `auto`，和 Claude Code 一样。
+每个任务都处在某个权限模式下，模式记在它的日志里。默认是 `bypassPermissions`（Claude Code 默认是 `auto`）；这个模式下拒绝规则、询问规则和受保护路径照样管用。关掉了 bypass 模式的地方，默认是 `auto`。
 
 | 模式 | 界面上的名字 | 哪些要问 |
 |---|---|---|
@@ -17,7 +17,7 @@
 
 起始模式可以用 `--permission-mode MODE`（`manual` 视同 `default`）、设置文件里的 `permissions.defaultMode`、代理文件的 `permissionMode`，或任务配置来设。任务运行中切换：终端界面里按 `Shift+Tab`，网页版或编辑器里用模式选择器，SDK 的 `set_permission_mode`，审批卡片上"Yes, and switch to …"那个选项，或者通过客户端接口发 `permission_mode` 信号。子代理一开始和调用者处在同一模式。
 
-`bypassPermissions` 可以整个关掉：在设置文件的 `permissions` 里写 `"disableBypassPermissionsMode": "disable"`。`noeta serve` 和 `noeta worker` 启动时不加 `--allow-bypass-permissions`，不管请求怎么说都拒绝这个模式。
+`bypassPermissions` 可以整个关掉：在设置文件的 `permissions` 里写 `"disableBypassPermissionsMode": "disable"`，或者启动 `noeta serve` / `noeta worker` 时加 `--disable-bypass-permissions`，这样不管请求怎么说都拒绝这个模式。
 
 ## 规则
 
