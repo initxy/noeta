@@ -385,9 +385,17 @@ async def index_dir(env: ExecEnv, root: str, plugin: str | None = None, *,
     candidates = [r for r in rels if posixpath.basename(r) == "SKILL.md"
                   and (r.count("/") == 1 or (plugin is not None and r == "SKILL.md"))]
     if plugin is None:
+        have = set(rels)
         _warn_deep(root, [r for r in rels if posixpath.basename(r) == "SKILL.md"
                           and r.count("/") > 1
-                          and posixpath.join(r.split("/", 1)[0], "SKILL.md") not in rels])
+                          and posixpath.join(r.split("/", 1)[0], "SKILL.md") not in have])
+    # Each skill's files, by its directory (one pass: a relpath per file per
+    # skill was quadratic in a large skills root).
+    below: dict[str, list[str]] = {}
+    for r in rels:
+        top, sep, rest = r.partition("/")
+        if sep:
+            below.setdefault(top, []).append(rest)
     skills: dict[str, SkillDescription] = {}
     for rel in candidates:
         path = posixpath.join(root, rel)
@@ -401,8 +409,8 @@ async def index_dir(env: ExecEnv, root: str, plugin: str | None = None, *,
             _log.warning("skill: %s: failed to read; skipped", path)
             continue
         resources = tuple(sorted(
-            r2 for r2 in (_rel(r, skill_dir) if skill_dir else r for r in rels)
-            if r2 is not None and posixpath.basename(r2) != "SKILL.md"
+            r2 for r2 in (below.get(skill_dir, ()) if skill_dir else rels)
+            if posixpath.basename(r2) != "SKILL.md"
         ))
         if plugin is not None:
             front = None

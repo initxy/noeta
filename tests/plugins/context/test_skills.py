@@ -1128,3 +1128,33 @@ async def test_an_unknown_slash_command_gets_claude_codes_note(h: Harness) -> No
     # A known skill, a path, or a plain message gets no note.
     await h.say(agent(), tid, "/usr/bin/python crashes")
     assert len(await h.records(tid, "skills", "unknown_command")) == 1
+
+
+async def test_indexing_a_skills_directory_is_linear_in_its_files(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each skill's bundled files are found in one pass over the directory's
+    listing, never by comparing every file against every skill (57 skills
+    over 2,174 files took 124k path comparisons, over a second)."""
+    import posixpath
+
+    root = tmp_path / "skills"
+    for i in range(30):
+        d = write_skill(root, f"s{i}", f"Skill {i}.")
+        for j in range(20):
+            (d / "ref").mkdir(exist_ok=True)
+            (d / "ref" / f"{j}.md").write_text("x")
+    calls = 0
+    relpath = posixpath.relpath
+
+    def counted(path: str, start: str | None = None) -> str:
+        nonlocal calls
+        calls += 1
+        return relpath(path, start)
+
+    monkeypatch.setattr(posixpath, "relpath", counted)
+    registry = await load_registry(LocalExecEnv(str(tmp_path)), [(str(root), 4)])
+    assert len(registry.names()) == 30
+    assert registry.get("s7").resources == tuple(  # type: ignore[union-attr]
+        sorted(f"ref/{j}.md" for j in range(20)))
+    files = 30 * 21
+    assert calls <= 2 * files  # quadratic would be 30 * files
