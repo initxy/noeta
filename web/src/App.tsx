@@ -272,10 +272,14 @@ function Workspace({
     });
   }, [desk, open, refreshProjects]);
 
-  // A browser's remembered project the server no longer lists is forgotten.
+  // A browser's remembered project the server no longer lists is forgotten
+  // (once, and only while it is still the one picked).
+  const remembered = useRef<string | null>(project);
   useEffect(() => {
-    if (!desk && served && project && !served.some((p) => p.path === project) && !sessions.some((s) => s.cwd === project)) pickProject("");
-  }, [desk, served, sessions, project, pickProject]);
+    if (desk || !served || remembered.current === null) return;
+    if (project === remembered.current && project && !served.some((p) => p.path === project)) pickProject("");
+    remembered.current = null;
+  }, [desk, served, project, pickProject]);
 
   // Opening a session makes its folder the project a new session goes to.
   useEffect(() => {

@@ -17,12 +17,14 @@ on the offline scripted provider, so they are rewritten on every run.
 | `12-rewind.png` | rewind to before a prompt (conversation, code or both) |
 | `13-theme.png`, `14-phone.png`, `15-phone-sessions.png` | dark theme; a phone-sized screen and its sessions drawer |
 | `16-search-archive.png` | the session search narrowing the list; a row's archive button |
+| `19-add-project.png` | adding a project in a browser: the folder picker over the server's folders |
+| `20-projects.png`, `21-projects-dark.png` | the projects column: each folder with its sessions, a session in the added project (light, dark) |
 
 ## Claude Code's web and desktop app features
 
 | Feature | Here |
 | --- | --- |
-| Sessions sidebar: list, new, resume, grouped by project directory, status (running / needs you / waiting / ended) | done |
+| Projects column: each project (folder) with its sessions, newest first, status (running / needs you / waiting / ended); new session in a project; add a project (native picker in the desktop app, a folder picker over `GET /dirs` in a browser), remove one; the last project remembered | done |
 | Rename a session (title button, `/rename`) | done |
 | Transcript: markdown, code highlighting, streamed text, collapsible thinking | done |
 | Tool cards: Bash command and output (long output folded), Read and the task tools compact, Edit/Write/MultiEdit as diffs, WebFetch, MCP tools, sub-agents nested (each built-in plugin's view is its web part, `web/src/plugins/<name>/`) | done |
