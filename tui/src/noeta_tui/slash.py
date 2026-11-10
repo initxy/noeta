@@ -488,7 +488,7 @@ EVERYWHERE = "*everywhere"
 
 
 @dataclass(frozen=True)
-class Session:
+class Listed:
     """A root task as the resume list shows it: where it started, what was
     first said in it (in the conversation it continues, for a rewind's),
     and the task it continues (``""``: none)."""
@@ -499,13 +499,13 @@ class Session:
     continues: str
 
 
-async def _session(app: NoetaApp, row: Any) -> Session:
+async def _listed(app: NoetaApp, row: Any) -> Listed:
     from noeta_tui.app import first_prompt
 
     try:
         events = await app.local.client.events(row.task_id)
     except Exception:  # noqa: BLE001 — a listing shows what it can
-        return Session(row, "", "", "")
+        return Listed(row, "", "", "")
     first = events[0].event if events else None
     created = first if isinstance(first, TaskCreated) else None
     source = str(created.history_from or "") if created is not None else ""
@@ -514,7 +514,7 @@ async def _session(app: NoetaApp, row: Any) -> Session:
         with contextlib.suppress(Exception):
             prompt = next((said for _, records in await lineage(app.local.client, row.task_id)
                            if (said := first_prompt(records))), "")
-    return Session(row, str(created.config.get("cwd") or "") if created is not None else "",
+    return Listed(row, str(created.config.get("cwd") or "") if created is not None else "",
                    prompt or first_prompt(events), source)
 
 
@@ -526,21 +526,21 @@ async def resume_picker(app: NoetaApp, *, everywhere: bool = False) -> None:
     for what it continues). Listing changes nothing: only the task picked
     is opened."""
     rows = await app.local.client.tasks(roots_only=True, limit=RESUME_LIMIT)
-    sessions = list(await asyncio.gather(*(_session(app, r) for r in rows)))
+    listed = list(await asyncio.gather(*(_listed(app, r) for r in rows)))
     here = str(app.task_config.get("cwd") or ("" if app.on_server else app.cwd))
     if here and not everywhere:
-        others = sum(1 for x in sessions if x.cwd != here)
-        sessions = [x for x in sessions if x.cwd == here]
+        others = sum(1 for x in listed if x.cwd != here)
+        listed = [x for x in listed if x.cwd == here]
     else:
         others = 0
-    continued = {x.continues for x in sessions if x.continues}
-    sessions = [x for x in sessions if x.row.task_id not in continued]
-    if not sessions and not others:
+    continued = {x.continues for x in listed if x.continues}
+    listed = [x for x in listed if x.row.task_id not in continued]
+    if not listed and not others:
         await app.say_notice("no tasks to resume")
         return
-    app.listed = [x.row.task_id for x in sessions]
+    app.listed = [x.row.task_id for x in listed]
     options = []
-    for x in sessions:
+    for x in listed:
         detail = f"{_ago(x.row.updated_at)} · {x.row.status} · {x.row.task_id[:8]}"
         if x.continues:
             detail += f" · rewound from {x.continues[:8]}"
