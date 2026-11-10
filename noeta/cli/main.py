@@ -33,7 +33,14 @@ from pathlib import Path
 from typing import Any
 
 from noeta.agents.agent_files import AgentFileError, PluginArgumentError
-from noeta.cli import crash_report, home_dir, mcp_command, plugin_command, web_command
+from noeta.cli import (
+    crash_report,
+    home_dir,
+    mcp_command,
+    plugin_command,
+    update_command,
+    web_command,
+)
 from noeta.cli.config import ConfigError, Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
@@ -133,6 +140,7 @@ def _parser() -> argparse.ArgumentParser:
                          "server's other paths (default: the web app noeta was built with, "
                          "if any)")
     web_command.add_parser(sub)
+    update_command.add_parser(sub)
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
     sub.add_parser("plugins", help="list the plugins and where each comes from")
     plugin_command.add_parser(sub)
@@ -446,6 +454,8 @@ def _main(argv: list[str]) -> None:
     if args.command == "plugins":
         _plugins(cwd)
         return
+    if args.command == "update":
+        sys.exit(update_command.run(args))
     if args.command == "web":
         if args.action is None and web_command.running() is None:
             _settings(args)  # a new server needs a model: say so here, not in its log
