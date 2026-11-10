@@ -7,6 +7,7 @@ export const CHANNELS = {
   config: "noeta:config",
   project: "noeta:project",
   chooseProject: "noeta:choose-project",
+  setProject: "noeta:set-project",
   notify: "noeta:notify",
   /** main -> page: a menu command or a notification clicked. */
   command: "noeta:command",
@@ -31,7 +32,7 @@ export function menuTemplate(platform: string, dev: boolean, a: MenuActions): Me
   const settings: MenuItemConstructorOptions = { label: "Settings…", accelerator: "CmdOrCtrl+,", click: a.openSettings };
   const file: MenuItemConstructorOptions[] = [
     { label: "New Session", accelerator: "CmdOrCtrl+N", click: a.newSession },
-    { label: "Open Project Folder…", accelerator: "CmdOrCtrl+O", click: a.chooseProject },
+    { label: "Add Project…", accelerator: "CmdOrCtrl+O", click: a.chooseProject },
     { type: "separator" },
     ...(mac ? [] : [settings, { type: "separator" } as const]),
     mac ? { role: "close" } : { role: "quit" },

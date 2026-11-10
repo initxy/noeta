@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { delimiter, join, relative, isAbsolute } from "node:path";
 
 /** What to run when `noeta` is missing (`serve` needs the server extra). */
-export const INSTALL_LINE = "uv tool install 'noeta[server] @ git+https://github.com/initxy/noeta'";
+export const INSTALL_LINE = "uv tool install 'noeta[tui,server]'";
 
 function executable(path: string): boolean {
   try {
@@ -117,6 +117,26 @@ export class ServerError extends Error {
     readonly output = "",
   ) {
     super(message);
+  }
+}
+
+/** Saves `dir` as one of the server's projects (`POST /projects`): the page
+ * lists it from then on. False when the server refused it or keeps none
+ * (an older noeta): the page still runs sessions there. */
+export async function saveProject(
+  s: { url: string; token: string },
+  dir: string,
+  post: (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<{ ok: boolean }> = fetch,
+): Promise<boolean> {
+  try {
+    const resp = await post(`${s.url}/projects`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${s.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ path: dir }),
+    });
+    return resp.ok;
+  } catch {
+    return false;
   }
 }
 
