@@ -217,6 +217,8 @@ class TranscriptView(App[None]):
     #: While a task's log is shown at once (:meth:`show_log`): the widgets
     #: rendered from it, not yet mounted; ``None`` when rendering live.
     _batch: list[Widget] | None
+    #: What the footer's one-row parts show now, by selector.
+    _drawn: dict[str, Text]
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, message: str = "", *,
@@ -322,8 +324,11 @@ class TranscriptView(App[None]):
         if show:
             frame = int((time.monotonic() - self.turn_started) / SPINNER_TICK)
             verb = render.active_form(self.todos) or self.turn_verb
+            # One row whatever it says: redrawn, not laid out again (a layout
+            # is the whole screen's, every frame).
             spinner.update(render.spinner_line(frame, verb, time.monotonic() - self.turn_started,
-                                               self.turn_tokens, thinking=self.thinking_now))
+                                               self.turn_tokens, thinking=self.thinking_now),
+                           layout=False)
 
     async def _turn_done(self) -> None:
         if self.busy and self.turn_started:
@@ -941,6 +946,17 @@ class TranscriptView(App[None]):
             return "none sent, the model's own default applies"
         return level if self.effort else f"{level}, the model's default"
 
+    def _redraw(self, selector: str, content: Text) -> None:
+        """The one-row ``selector`` shows ``content``: not drawn again when
+        it already does, laid out again only when its width changes (a
+        layout is the whole screen's, and the footer is drawn often)."""
+        shown = self._drawn.get(selector)
+        if shown is not None and shown == content:
+            return
+        self._drawn[selector] = content
+        self.query_one(selector, Static).update(
+            content, layout=shown is None or shown.cell_len != content.cell_len)
+
     def update_status(self) -> None:
         """The footer: on the left the mode (or what waits on the person, or
         a passing word) and the agents working in the background; on the
@@ -967,7 +983,7 @@ class TranscriptView(App[None]):
                          style=render.WORKING)
             hints.append(" · ↓ to view", style="dim")
         self._show_agents()
-        self.query_one("#hints", Static).update(hints)
+        self._redraw("#hints", hints)
         sep = ("  ·  ", "dim")
         status = Text(self.model, style="dim")
         level = self.effort_level()
@@ -981,7 +997,7 @@ class TranscriptView(App[None]):
         if self.cost_usd and len(status.plain) + 12 <= room:
             status.append(*sep)
             status.append(f"${self.cost_usd:.2f}", style="dim")
-        self.query_one("#status", Static).update(status)
+        self._redraw("#status", status)
         self._tick()
 
     @work(exclusive=True, group="plugin-ui", exit_on_error=False)
@@ -1010,7 +1026,7 @@ class TranscriptView(App[None]):
         items = plugin_ui.keyed(i for i in items if isinstance(i, dict))
         status = self.query_one("#plugin-status", Static)
         statuses = [i for i in items if i.get("type") == "status"]
-        status.update(plugin_ui.status_line(statuses))
+        self._redraw("#plugin-status", plugin_ui.status_line(statuses))
         status.set_class(bool(statuses), "-shown")
         for where in ("above", "below"):
             box = self.query_one(f"#widgets-{where}")

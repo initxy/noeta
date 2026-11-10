@@ -266,7 +266,7 @@ class ToolCall(Vertical):
 
     def set_state(self, state: str) -> None:
         self.state = state
-        self.head.update(self._header())
+        self.head.update(self._header(), layout=False)  # the bullet's colour: the same size
         self.set_class(state == "error", "-error")
         self.set_class(state == "done", "-done")
         if self.group is not None:
@@ -283,7 +283,7 @@ class ToolCall(Vertical):
     def pulse(self, frame: int) -> None:
         """A frame of the bullet's spinner while its work runs in the background."""
         if self.state == "background":
-            self.head.update(self._header(frame))
+            self.head.update(self._header(frame), layout=False)
 
     def set_result(self, text: str, *, is_error: bool, meta: dict[str, Any] | None = None,
                    at: float | None = None) -> None:
@@ -484,7 +484,7 @@ class Choices(Static, can_focus=True):
     def action_move(self, step: int) -> None:
         if self.options:
             self.index = (self.index + step) % len(self.options)
-            self.update(self._text())
+            self.update(self._text(), layout=False)
 
     async def action_pick(self) -> None:
         if self.options:
@@ -493,7 +493,7 @@ class Choices(Static, can_focus=True):
     async def action_number(self, n: int) -> None:
         if 1 <= n <= len(self.options):
             self.index = n - 1
-            self.update(self._text())
+            self.update(self._text(), layout=False)
             await self.on_pick(self.options[n - 1].id)
 
     async def action_cancel(self) -> None:
@@ -761,7 +761,7 @@ class Completions(Static):
             out.append(render.clean(" ".join(description.split())), style="" if here else "dim")
         if len(self.items) > self.ROWS:
             out.append(f"  {self.index + 1}/{len(self.items)}", style="dim")
-        self.update(out)
+        self.update(out, layout=False)  # its height is fixed
 
 
 #: ``on_key(key) -> handled``: the app's turn at a key before the box's.

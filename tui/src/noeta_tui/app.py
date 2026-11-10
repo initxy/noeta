@@ -160,6 +160,7 @@ class NoetaApp(TranscriptView):
         self.called = 0
         self.replied = 0
         self._batch = None
+        self._drawn = {}
         self._record_at = 0.0
         self.turn_started_at = 0.0
         #: A delta is taken off the queue but not yet written.
@@ -734,8 +735,8 @@ class NoetaApp(TranscriptView):
 
     def _set_marker(self, marker: str) -> None:
         bash = marker == "!"
-        self.query_one("#marker", Static).update(Text(marker or "❯",
-                                                      style=f"bold {render.BASH}" if bash else ""))
+        self.query_one("#marker", Static).update(
+            Text(marker or "❯", style=f"bold {render.BASH}" if bash else ""), layout=False)
         self.query_one("#prompt-box").set_class(bash, "-bash")
 
     # ------------------------------------------------------------ keys

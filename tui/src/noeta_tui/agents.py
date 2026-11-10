@@ -107,6 +107,8 @@ class AgentsPanel(Static, can_focus=True):
         #: The row shown in the transcript's place (``●`` when the list is
         #: not focused).
         self.viewing = MAIN
+        #: Rows drawn last (``-1``: none yet).
+        self._drawn_rows = -1
 
     @property
     def agents(self) -> list[Row]:
@@ -137,6 +139,7 @@ class AgentsPanel(Static, can_focus=True):
     def _draw(self) -> None:
         if not self.rows:
             self.update("")
+            self._drawn_rows = -1
             return
         grid = Table.grid(expand=True, padding=(0, 2, 0, 0))
         grid.add_column(no_wrap=True)
@@ -160,7 +163,10 @@ class AgentsPanel(Static, can_focus=True):
         if hidden > 0:
             grid.add_row(Text(f"  … {len(self.rows) - 1} agents (↑ ↓ to scroll)", style="dim"),
                          Text(""), Text(""))
-        self.update(grid)
+        # Laid out again only when it gains or loses a row (update_status draws it often).
+        rows = grid.row_count
+        self.update(grid, layout=rows != self._drawn_rows)
+        self._drawn_rows = rows
 
     def on_focus(self) -> None:
         if self.index == 0 and len(self.rows) > 1:
