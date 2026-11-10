@@ -1,5 +1,6 @@
-# Publish `noeta` and `noeta-tui` (same version) to PyPI when a `v*` tag is pushed. Procedure: docs/releasing.md.
-# Auth is PyPI Trusted Publishing (OIDC); no token is stored anywhere.
+# Publish `noeta` and `noeta-tui` to PyPI, and `@initxy/noeta-web-sdk` and `@initxy/noeta-ui` to npm
+# (all one version), when a `v*` tag is pushed. Procedure: docs/releasing.md.
+# Auth is PyPI's and npm's Trusted Publishing (OIDC); no token is stored anywhere.
 
 name: Release
 
@@ -89,6 +90,46 @@ jobs:
         with: { name: dist, path: dist/ }
       - uses: astral-sh/setup-uv@v6
       - run: uv publish --trusted-publishing always dist/*
+
+  # The web packages a plugin's web part builds against. Also run by hand (workflow_dispatch on
+  # main) to publish a version no tag published; a version already on npm is skipped.
+  npm:
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write   # npm trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11
+      - name: The packages' version is the tag's
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          for p in sdk ui; do
+            test "$(node -p "require('./web/$p/package.json').version")" = "${GITHUB_REF_NAME#v}" \
+              || { echo "::error::web/$p/package.json is not at ${GITHUB_REF_NAME#v}"; exit 1; }
+          done
+      - name: Build
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web/sdk
+          npm run build --prefix web/ui
+      - name: Publish (the SDK first; the UI package depends on it)
+        run: |
+          for p in sdk ui; do
+            name=$(node -p "require('./web/$p/package.json').name")
+            version=$(node -p "require('./web/$p/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is on npm"; continue
+            fi
+            (cd "web/$p" && npm publish --access public)
+          done
 
   # The GitHub Release, its notes the tagged version's CHANGELOG section. Skipped when it exists
   # (a re-run after a hang).
