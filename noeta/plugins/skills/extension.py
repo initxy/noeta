@@ -4,10 +4,13 @@ activation, ``/<name>``, ``run_skill_script`` and ``allowed-tools``."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import logging
 import os
 import re
+import stat
+import time
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
@@ -132,6 +135,90 @@ FORKS_KEEP = 32
 _FINGERPRINT = ('for a in "$@"; do d="${a#?:}"; case "$a" in c:*) n="*.md" ;; *) n=SKILL.md ;; '
                 'esac; [ -d "$d" ] && find -L "$d" -type f -name "$n" -print -exec cat {} + ; '
                 'done 2>/dev/null | cksum')
+#: How recent a file's write is for :func:`local_fingerprint` to read its
+#: text: file times move in clock ticks (a few milliseconds on Linux, up to
+#: seconds on some filesystems).
+RACY_NS = 3_000_000_000
+
+
+def local_fingerprint(roots: Sequence[str]) -> str:
+    """What :data:`_FINGERPRINT` watches, looked at on this machine by
+    ``stat`` alone (no process, no file read; a walk over a large skills
+    directory took longer than the model call it ran before): for each
+    ``s:`` root, itself and each directory in it with its ``SKILL.md`` (a
+    skill is one level down; a plugin's root may hold one too); for each
+    ``c:`` root, every directory and ``*.md`` below it. A file's change
+    time and size change with every write, a directory's with every entry
+    added, removed or renamed; a file written in the last
+    :data:`RACY_NS` counts by its text too. Symlinks are followed; a directory seen
+    before is not entered again, so a cycle ends."""
+    parts: list[str] = []
+    recent = time.time_ns() - RACY_NS
+
+    def note(path: str) -> bool:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return False
+        parts.append(f"{path}\0{st.st_ino}:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}")
+        if stat.S_ISREG(st.st_mode) and max(st.st_mtime_ns, st.st_ctime_ns) >= recent:
+            # Written within a clock tick of now: a second write of the same
+            # size may keep these times, so its text counts too (git's racy
+            # timestamps).
+            try:
+                with open(path, "rb") as f:
+                    parts.append(hashlib.sha256(f.read()).hexdigest())
+            except OSError:
+                pass
+        return stat.S_ISDIR(st.st_mode)
+
+    for arg in roots:
+        kind, root = arg[:2], arg[2:]
+        if kind != "c:":
+            if not note(root):
+                continue
+            note(os.path.join(root, "SKILL.md"))
+            try:
+                with os.scandir(root) as it:
+                    subdirs = sorted(e.path for e in it if _is_dir(e))
+            except OSError:
+                continue
+            for d in subdirs:
+                note(d)
+                note(os.path.join(d, "SKILL.md"))
+            continue
+        seen: set[tuple[int, int]] = set()
+        stack = [root]
+        while stack:
+            d = stack.pop()
+            try:
+                st = os.stat(d)
+            except OSError:
+                continue
+            if (st.st_dev, st.st_ino) in seen or not stat.S_ISDIR(st.st_mode):
+                continue
+            seen.add((st.st_dev, st.st_ino))
+            note(d)
+            try:
+                with os.scandir(d) as it:
+                    entries = sorted(it, key=lambda e: e.name)
+            except OSError:
+                continue
+            for entry in reversed(entries):
+                if _is_dir(entry):
+                    stack.append(entry.path)
+                elif entry.name.endswith(".md"):
+                    note(entry.path)
+    return hashlib.sha256("\n".join(parts).encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def _is_dir(entry: os.DirEntry[str]) -> bool:
+    try:
+        return entry.is_dir()
+    except OSError:
+        return False
+
+
 #: Calls whose file makes a skill with matching ``paths`` available and
 #: finds the skill directories on its way (Claude Code's: not a file a
 #: ``Bash`` command showed, which counts only for instruction files).
@@ -565,7 +652,8 @@ class Skills(Extension):
 
     async def _refresh(self, view: TaskView) -> None:
         """Note what the task's ``SKILL.md`` files hold now (one command over
-        every skill directory), so a skill installed or changed mid-turn is
+        every skill directory through a remote env, :func:`local_fingerprint`
+        on this machine), so a skill installed or changed mid-turn is
         found before the next model call (Claude Code watches the
         directories)."""
         env = task_env(view.env, view.state.config)
@@ -573,11 +661,17 @@ class Skills(Extension):
         commands = self.commands_dirs(tiers)
         roots = [f"{'c' if root in commands else 's'}:{root}" for root, _tier in tiers]
         try:
-            out = await env.run(["sh", "-c", _FINGERPRINT, "sh", *roots], timeout=10,
-                                output_cap=256)
+            if is_local(env):
+                # The same look without starting four processes before every
+                # model call; in the loop, as a thread hop costs more (waiting
+                # for the GIL) than the stats take.
+                now = local_fingerprint(roots)
+            else:
+                out = await env.run(["sh", "-c", _FINGERPRINT, "sh", *roots], timeout=10,
+                                    output_cap=256)
+                now = out.stdout.decode("ascii", errors="replace")
         except Exception:  # noqa: BLE001 — any exec env failure skips the look, not the call
             return
-        now = out.stdout.decode("ascii", errors="replace")
         cached = self._turn_registries.get(view.task_id)
         if view.task_id not in self._fingerprints and cached is not None:
             # The first look: the registry loaded this turn stands for it.

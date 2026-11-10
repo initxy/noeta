@@ -1158,3 +1158,67 @@ async def test_indexing_a_skills_directory_is_linear_in_its_files(
         sorted(f"ref/{j}.md" for j in range(20)))
     files = 30 * 21
     assert calls <= 2 * files  # quadratic would be 30 * files
+
+
+class _RemoteLike(LocalExecEnv):
+    """This machine's files, but said to be another machine's: the skills
+    are looked at through the env's commands, as in a sandbox."""
+
+    local = False  # type: ignore[assignment]
+    looks = 0
+
+    async def run(self, argv: Any, **kw: Any) -> Any:
+        if argv[:2] == ["sh", "-c"] and "cksum" in argv[2]:
+            type(self).looks += 1
+        return await super().run(argv, **kw)
+
+
+@pytest.mark.parametrize("remote", [False, True])
+async def test_a_skill_edited_mid_turn_is_seen_on_this_machine_and_through_the_env(
+        h: Harness, remote: bool) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    _RemoteLike.looks = 0
+    if remote:
+        h.env_for = lambda _s: _RemoteLike(str(h.work))
+
+    class Edit:
+        name = "Touch"
+        description = "touch"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = False
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            write_skill(skills_dir(h), "deploy", "Ship and tag.")
+            write_skill(skills_dir(h), "review", "Review code.")
+            return text_output("done")
+
+    a = Agent(name="a", model="m", tools=[Edit()], extensions=[FileTools(), Skills()])
+    h.provider.add(reply("", ("Touch", {})), reply("ok"))
+    await h.start(a)
+    assert h.provider.requests[1].messages[-1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship and tag.\n- review: Review code.")
+    assert (_RemoteLike.looks > 0) is remote
+
+
+def test_the_local_fingerprint_follows_skill_files_and_ends_at_a_cycle(
+        tmp_path: Path) -> None:
+    from noeta.plugins.skills.extension import local_fingerprint
+
+    root = tmp_path / "skills"
+    write_skill(root, "deploy", "Ship.")
+    roots = [f"s:{root}", f"s:{tmp_path / 'missing'}"]
+    first = local_fingerprint(roots)
+    assert local_fingerprint(roots) == first
+    # Same size, likely within one clock tick of the last write.
+    write_skill(root, "deploy", "Ship!")
+    edited = local_fingerprint(roots)
+    assert edited != first
+    write_skill(root, "review", "Review.")
+    assert local_fingerprint(roots) != edited
+    commands = tmp_path / "commands"
+    (commands / "sp").mkdir(parents=True)
+    (commands / "sp" / "loop").symlink_to(commands)
+    before = local_fingerprint([f"c:{commands}"])
+    (commands / "sp" / "ship.md").write_text("Ship.\n")
+    assert local_fingerprint([f"c:{commands}"]) != before
