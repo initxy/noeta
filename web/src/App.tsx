@@ -15,7 +15,7 @@ import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
 import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
-import { basename, loadLastProject, saveLastProject } from "./state/projects";
+import { basename, loadLastProject, projectFor, saveLastProject } from "./state/projects";
 import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask } from "./state/useTask";
 
@@ -277,14 +277,14 @@ function Workspace({
   const remembered = useRef<string | null>(project);
   useEffect(() => {
     if (desk || !served || remembered.current === null) return;
-    if (project === remembered.current && project && !served.some((p) => p.path === project)) pickProject("");
+    if (project === remembered.current && project && !projectFor(project, served)) pickProject("");
     remembered.current = null;
   }, [desk, served, project, pickProject]);
 
   // Opening a session makes its folder the project a new session goes to.
   useEffect(() => {
-    if (taskId && state.cwd) pickProject(state.cwd);
-  }, [taskId, state.cwd, pickProject]);
+    if (taskId && state.cwd) pickProject(projectFor(state.cwd, served ?? [])?.path ?? state.cwd);
+  }, [taskId, state.cwd, served, pickProject]);
 
   const addProject = () => {
     if (!desk) return setPicking(true);
@@ -301,7 +301,7 @@ function Workspace({
       void refreshProjects();
     }, fail);
   };
-  const projectName = served?.find((p) => p.path === project)?.name ?? basename(project);
+  const projectName = (served && projectFor(project, served)?.name) || basename(project);
   useEffect(() => {
     void refreshSessions();
     const timer = setInterval(refreshSessions, 3000);

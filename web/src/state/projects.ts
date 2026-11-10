@@ -6,15 +6,24 @@ export function basename(path: string): string {
   return path.replace(/\/+$/, "").split("/").pop() || path || "server";
 }
 
+/** The listed project a folder belongs to: the same path, else one that is
+ * the other through a symlinked prefix (the server lists real paths; a
+ * session keeps the path it was started with, e.g. `/home/me/x` for
+ * `/data/home/me/x`). Undefined when none is. */
+export function projectFor<P extends { path: string }>(path: string, projects: P[]): P | undefined {
+  const same = projects.find((p) => p.path === path);
+  if (same || !path.startsWith("/")) return same;
+  const tail = (a: string, b: string) => b.split("/").length > 2 && a.endsWith(b);
+  return projects.find((p) => tail(p.path, path) || tail(path, p.path));
+}
+
 /** The projects to list: the server's (`null`: a server without
- * `/projects`), then the directories of the listed sessions it did not
- * name, then the one picked here if it is in neither. */
+ * `/projects`), then the directories of the listed sessions none of them
+ * is, then the one picked here if it is in neither. */
 export function projectList(server: Project[] | null, sessions: TaskSummary[], picked = ""): Project[] {
   const out = [...(server ?? [])];
-  const known = new Set(out.map((p) => p.path));
   const add = (path: string) => {
-    if (known.has(path)) return;
-    known.add(path);
+    if (projectFor(path, out)) return;
     out.push({ path, name: basename(path), saved: false, sessions: 0 });
   };
   for (const s of [...sessions].sort((a, b) => b.updated_at - a.updated_at)) if (s.cwd) add(s.cwd);

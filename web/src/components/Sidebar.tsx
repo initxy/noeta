@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Project, TaskSummary } from "../api/types";
-import { basename, loadFolded, projectList, saveFolded } from "../state/projects";
+import { basename, loadFolded, projectFor, projectList, saveFolded } from "../state/projects";
 import { sessionStatus } from "../state/transcript";
 
 export type SessionStatus = ReturnType<typeof sessionStatus>;
@@ -122,15 +122,17 @@ export function Sidebar({
   const [query, setQuery] = useState("");
   const [folded, setFolded] = useState(loadFolded);
   const q = query.trim();
+  const listed: Project[] = archived
+    ? [...new Set(sessions.map((s) => s.cwd))].map((path) => ({ path, name: basename(path), saved: false, sessions: 0 }))
+    : projectList(projects, sessions, project);
+  // Sessions by the project they run in (its path, which may be a session's own spelled through a symlink).
   const byDir = new Map<string, TaskSummary[]>();
   for (const s of [...sessions].sort((a, b) => b.updated_at - a.updated_at)) {
     const title = (s.task_id === current ? live?.title : "") || s.title;
     if (q && !matches(s, q, title)) continue;
-    byDir.set(s.cwd, [...(byDir.get(s.cwd) ?? []), s]);
+    const dir = projectFor(s.cwd, listed)?.path ?? s.cwd;
+    byDir.set(dir, [...(byDir.get(dir) ?? []), s]);
   }
-  const listed: Project[] = archived
-    ? [...new Set(sessions.map((s) => s.cwd))].map((path) => ({ path, name: basename(path), saved: false, sessions: 0 }))
-    : projectList(projects, sessions, project);
   const shown = listed.filter((p) => byDir.has(p.path) || (!archived && (!q || holds(`${p.name}\n${p.path}`, q))));
   const fold = (path: string) => {
     const next = new Set(folded);
