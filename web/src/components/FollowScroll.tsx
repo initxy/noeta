@@ -15,6 +15,9 @@ export function FollowScroll({ resetKey, children }: { resetKey: string; childre
   const following = useRef(true);
   const lastTop = useRef(0);
   const touched = useRef(0); // when the person last clicked or pressed a key in it: what grows then is theirs (a run opened)
+  // How much lay below the screen, at its width, when last looked: only more of it is new output
+  // (earlier rows drawn in above, the screen kept in place, add nothing below).
+  const below = useRef({ px: 0, width: 0 });
   const [away, setAway] = useState(false);
   const [unseen, setUnseen] = useState(false);
 
@@ -23,6 +26,16 @@ export function FollowScroll({ resetKey, children }: { resetKey: string; childre
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     lastTop.current = el.scrollTop;
+  };
+
+  /** Whether more lies below the screen than when last looked, the width the same. */
+  const grewBelow = (): boolean => {
+    const el = scroller.current;
+    if (!el) return false;
+    const now = { px: el.scrollHeight - el.scrollTop - el.clientHeight, width: el.clientWidth };
+    const grew = now.width === below.current.width && now.px > below.current.px + 1;
+    below.current = now;
+    return grew;
   };
 
   const leave = () => {
@@ -42,7 +55,7 @@ export function FollowScroll({ resetKey, children }: { resetKey: string; childre
     if (!el || typeof ResizeObserver === "undefined") return;
     const watch = new ResizeObserver(() => {
       if (following.current) toEnd();
-      else if (performance.now() - touched.current > 600) setUnseen(true);
+      if (grewBelow() && !following.current && performance.now() - touched.current > 600) setUnseen(true);
     });
     watch.observe(el);
     return () => watch.disconnect();
@@ -67,6 +80,7 @@ export function FollowScroll({ resetKey, children }: { resetKey: string; childre
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 2) following.current = true;
     else if (el.scrollTop < lastTop.current - 1) following.current = false; // moved up: the scrollbar, a find
     lastTop.current = el.scrollTop;
+    grewBelow(); // a scroll moves what lies below; nothing new came
   };
 
   const jump = () => {
