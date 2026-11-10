@@ -59,13 +59,30 @@ shows, and on any other model nothing is sent and nothing shows. The line under 
 the plugins' status items; the shipped `project_status` plugin puts the project and its git
 branch there (`noeta  ·  ⎇ main* ↑1`). `?` on an empty prompt shows the shortcuts.
 
-Tool calls in a row fold into one line, as Claude Code's do: `● Searched for 2 patterns, read 3
-files, ran 2 shell commands (ctrl+o to expand)`. Reads, searches, listings, web fetches and
-searches, shell commands and other tools (an MCP server's) fold, with the model's thinking
-between them; an edit keeps its diff on screen, and agents, workflows, the task list and
-questions keep their own lines. A call that runs, or waits for your approval, shows under the
-line until it ends; a failed one is counted in red. A click on the line, or on a call's folded
-output, opens it; `Ctrl+O` opens everything. Paths under the task's directory show relative to it.
+Tool calls in a row fold into one line, as Claude Code's do, from the first call on: `● Searched
+for 2 patterns, read 3 files, ran 2 shell commands (ctrl+o to expand)`. Reads, searches,
+listings, web fetches and searches, shell commands and other tools fold, with the model's
+thinking between them and its short remarks (a line or two, such as "Let me check the tests.";
+the latest shows dimmed under the line); a longer reply starts a new line, an answered approval
+and the task list do not. A shell command that only reads, searches or lists (`cat`, `grep`,
+`ls`, `git status` / `log` / `diff`…) counts as that; a commit, a push or a pull request is named
+(`committed a1b2c3d, pushed to main`). Reads count files (one read twice is one); MCP calls
+name their server (`called github 3 times`). While a read or search runs its pattern shows
+dimmed under the line; a shell command that runs, or a call that waits for your approval,
+shows under it with its output, and a failed call stays there with its first error lines,
+still counted in red. Edits to one file one after another are one line, `● Edited calc.py ×3
+(+12 −4)` (a single edit shows its diff); agents started together are one line, `● Running 3
+agents`, with a line each. Agents, workflows, the task list and questions otherwise keep their
+own lines. A click on a line, or on a call's folded output, opens it. Paths under the task's
+directory show relative to it.
+
+`Ctrl+O` shows the detailed transcript in the transcript's place, as Claude Code's transcript
+mode does: every call on its own line with its whole result, every thought in full; `Ctrl+O`
+again (or `Esc`) goes back to the transcript, which stays folded.
+
+A long conversation stays quick: only its end is laid out, and older messages come back as you
+scroll up to them. Scrolled up, the transcript stays where you are while the task goes on;
+back at the end, it follows again.
 
 ![The transcript](https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/transcript.svg)
 
@@ -80,12 +97,13 @@ from its first message).
 | `Enter` | Send |
 | `Shift+Enter` (terminals that report it: Ghostty, kitty, iTerm2, WezTerm…), `\` then `Enter`, or `Ctrl+J` | New line |
 | `Esc` | Stop the turn (the task keeps everything said so far) |
+| `PageUp` / `PageDown` | Scroll the transcript a page, whatever has the focus |
 | `Esc` `Esc` | Clear the input; on an empty input, open `/rewind` |
 | `Ctrl+C` | Copy the selected text; with none, clear the input, and on an empty input press twice to quit |
 | `Shift+Tab` | Step to the next permission mode |
 | `↑` / `↓` | Earlier prompts (from the first or last line of the box); `↓` on an empty prompt moves to the agents' list |
 | `Ctrl+R` | Search earlier prompts; `Enter` puts the pick in the box, `Esc` leaves it empty |
-| `Ctrl+O` | Unfold every tool call's output (and fold it again) |
+| `Ctrl+O` | Show the detailed transcript (and back) |
 | `Ctrl+T` | Show or hide the task list (the todos) |
 | `Ctrl+B` | Move to the agents' list under the footer (again: back to the prompt) |
 | `Ctrl+V` | Attach the image on the clipboard (macOS as is; Linux needs `wl-paste` or `xclip`) |
@@ -268,19 +286,23 @@ be opened again:
 
 ```bash
 noeta -c              # the newest conversation started in this directory
-noeta -r              # open the newest task and offer the others (the newest 10, by first prompt)
+noeta -r              # pick from this directory's conversations, by first prompt
 noeta -r 3f9c…        # a task by id
 ```
 
 `noeta -c` with nothing to continue prints `No conversation found to continue` and exits with
-code 1, as Claude Code does. Inside the UI, `/resume` offers the same list.
+code 1, as Claude Code does. Inside the UI, `/resume` offers the same list. It lists the
+conversations started in this directory, the latest first; its last choice lists every
+directory's. Only the one you pick is opened. A rewound conversation is one line, marked
+`rewound from …`.
 
 Opening a task again tells its plugins it was resumed (a `resumed` signal: SessionStart hooks see
 `resume`), and a task a headless run started becomes one a person follows (it gets a title and
 may ask questions). A task you cannot run here (its agent is not one this front end runs) opens
 read-only, with its history.
 
-A reopened task's history appears at once, folded as it was shown live; what it records next follows.
+A reopened task's history appears at once, folded as it was shown live, the conversation a
+rewound task continues included; what it records next follows.
 
 ## Attach to a server
 

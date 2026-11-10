@@ -21,8 +21,7 @@ from textual import work
 from textual.app import App, ScreenStackError
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Markdown, Static
-from textual.widgets.markdown import MarkdownStream
+from textual.widgets import Static
 
 from noeta.core import models, records
 from noeta.core.events import (
@@ -43,7 +42,7 @@ from noeta.core.events import (
 )
 from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF, off_names
 from noeta.core.runner.texts import REJECTED_MARKER
-from noeta.core.types import Delta
+from noeta.core.types import Delta, ToolUse
 from noeta.host.feed import failure_text
 from noeta.host.pending import (
     Pending,
@@ -53,6 +52,7 @@ from noeta.host.pending import (
     choices,
     follow_tree,
 )
+from noeta.host.rewind import lineage
 from noeta.host.usage import tree_usage
 from noeta.toolkit.permission_modes import Modes, current_mode, published_modes
 from noeta.toolkit.plugin_records import TITLE, AutoCompact, auto_compact
@@ -67,6 +67,7 @@ from noeta_tui.agents import (
     stats_text,
     took,
 )
+from noeta_tui.tail import TailScroll
 from noeta_tui.widgets import (
     ApprovalCard,
     AssistantMessage,
@@ -74,6 +75,7 @@ from noeta_tui.widgets import (
     Notice,
     PromptInput,
     QuestionCard,
+    ReplyStream,
     ThinkingBlock,
     ToolCall,
     ToolGroup,
@@ -91,6 +93,8 @@ WORKFLOW_KINDS = ("run", "agent", "result", "agent_failed", "ended")
 SPINNER_TICK = 0.12
 #: The agents' list key of a workflow run's line, before its run id.
 WORKFLOW_KEY = "workflow:"
+#: What a stopped turn says.
+INTERRUPTED = "  ⎿  Interrupted · what should noeta do instead?"
 #: What the footer says while the task waits on one of its approval cards.
 WAITING_APPROVAL = "waiting for your approval"
 #: Seconds the plugins' UI is fetched after the task's log advanced: the
@@ -132,7 +136,7 @@ class TranscriptView(App[None]):
     modes_published: bool
     task_id: str
     calls: dict[str, ToolCall]
-    stream: MarkdownStream | None
+    stream: ReplyStream | None
     stream_widget: AssistantMessage | None
     stream_key: tuple[int, int]
     stream_text: str
@@ -163,8 +167,6 @@ class TranscriptView(App[None]):
     _unshown: Counter[int]
     #: The task list (the todos plugin's records), by id.
     todos: dict[str, dict[str, Any]]
-    #: Every call's result shown in full (ctrl+o).
-    verbose: bool
     #: Messages sent while a turn ran, not yet taken by the task.
     queued: list[str]
     #: Messages shown as they were sent, not yet seen in the task's log.
@@ -217,12 +219,19 @@ class TranscriptView(App[None]):
     #: While a task's log is shown at once (:meth:`show_log`): the widgets
     #: rendered from it, not yet mounted; ``None`` when rendering live.
     _batch: list[Widget] | None
+    #: The turn was stopped here (Esc): shown so before the task records it.
+    _stopped_here: bool
+    #: What the footer's one-row parts show now, by selector.
+    _drawn: dict[str, Text]
 
     if TYPE_CHECKING:
         async def decide(self, call_id: str, choice: str, message: str = "", *,
                          task_id: str = "") -> None: ...
 
         async def close_agent(self) -> None: ...
+
+    def transcript(self) -> TailScroll:
+        return self.query_one("#transcript", TailScroll)
 
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
         self.waiting_question = call_id
@@ -233,7 +242,7 @@ class TranscriptView(App[None]):
     async def show_requests(self, found: list[Pending]) -> None:
         """Sub-agents' approvals and questions, shown with the sub-agent's
         name and answered on its task."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         for p in found:
             key = (p.task_id, p.request_id)
             if key in self.shown_requests:
@@ -257,7 +266,7 @@ class TranscriptView(App[None]):
                 self.waiting_for = f"{who} waits for your answer"
                 self._set_question(p.request_id, p.task_id, p.detail)
                 await transcript.mount(QuestionCard(p.detail, who=who))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
         self.update_status()
 
     async def _add(self, widget: Widget) -> None:
@@ -266,30 +275,87 @@ class TranscriptView(App[None]):
         if self._batch is not None:
             self._batch.append(widget)
         else:
-            await self.query_one("#transcript").mount(widget)
+            await self.transcript().mount(widget)
 
     def _last_shown(self) -> Widget | None:
         if self._batch:
             return self._batch[-1]
-        shown = self.query_one("#transcript").children
+        shown = self.transcript().children
         return shown[-1] if shown else None
 
-    async def _run_to_join(self) -> ToolGroup:
-        """The run of calls a quiet call joins: the one the transcript ends
-        with, else a new one. The model's thought just before the call
-        (shown while it streamed) joins the run first."""
+    def _joinable(self, kind: str = "run", path: str = "",
+                  said: Widget | None = None) -> ToolGroup | None:
+        """The group the transcript ends with that a call of ``kind`` joins
+        (an edit's: of the same file), past what does not end a run: an
+        approval card answered, the task list's calls, and for a run the
+        thought and the remark (``said``) that join it with the call."""
+        shown = self._batch if self._batch is not None else self.transcript().children
+        for widget in reversed(shown):
+            if (isinstance(widget, ApprovalCard) and widget.done) or \
+                    (isinstance(widget, ToolCall) and widget.call.name in render.PASSING) or \
+                    (kind == "run" and (widget is said or (isinstance(widget, ThinkingBlock)
+                                                           and widget.took is not None))):
+                continue
+            if isinstance(widget, ToolGroup) and widget.kind == kind \
+                    and (kind != "edit" or widget.path == path):
+                return widget
+            return None
+        return None
+
+    async def _run_to_join(self, *, kind: str = "run", path: str = "",
+                           words: str = "", said: Widget | None = None) -> ToolGroup:
+        """The group a call joins (:meth:`_joinable`), else a new one. The
+        model's thought just before the call and, for a run, its short
+        remark (``words``; ``said``: the row it streamed into) join the run
+        first."""
+        if said is not None:
+            await said.remove()
         last = self._last_shown()
-        thought = last if isinstance(last, ThinkingBlock) and last.took is not None else None
+        thought = last if isinstance(last, ThinkingBlock) and last.took is not None \
+            and kind == "run" else None
         if thought is not None:
             await thought.remove()
-            last = self._last_shown()
-        group = last if isinstance(last, ToolGroup) else None
+        group = self._joinable(kind, path)
         if group is None:
-            group = ToolGroup(expanded=self.verbose)
+            group = ToolGroup(kind=kind)
             await self._add(group)
         if thought is not None:
             await group.add(thought.copy())
+        if words:
+            await group.say(words)
         return group
+
+    async def _show_calls(self, calls: list[ToolUse], text: str, said: Widget | None) -> None:
+        """A reply's calls: quiet ones into the run the transcript ends with
+        (a short remark before them too), edits into the run of edits to
+        their file, agents started together as one line, the rest on their
+        own. ``said``: the row the reply's text streamed into."""
+        blocks = []
+        for call in calls:
+            block = ToolCall(call, cwd=self.task_cwd)
+            self.calls[call.id] = block
+            if (early := self.early_progress.pop(call.id, None)) is not None:
+                block.set_progress(early)
+            blocks.append(block)
+        agents = [b for b in blocks if b.call.name in render.AGENT_TOOLS]
+        agent_group: ToolGroup | None = None
+        words = text if blocks and render.call_kind(blocks[0].call) and text \
+            and render.interstitial(text) and self._joinable(said=said) is not None else ""
+        for block in blocks:
+            if len(agents) > 1 and block in agents:
+                if agent_group is None:
+                    agent_group = ToolGroup(kind="agents")
+                    await self._add(agent_group)
+                await agent_group.add(block)
+            elif block.call.name in render.EDIT_TOOLS:
+                path = render.edited_path(block.call)
+                await (await self._run_to_join(kind="edit", path=path)).add(block)
+            elif render.call_kind(block.call):
+                group = await self._run_to_join(words=words, said=said if words else None)
+                words = ""
+                await group.add(block)
+            else:
+                await self._add(block)
 
     # ------------------------------------------------------------ busy
 
@@ -301,6 +367,7 @@ class TranscriptView(App[None]):
     def set_busy(self, busy: bool) -> None:
         """A turn starts or ends: the spinner runs while it does."""
         if busy and not self.busy:
+            self._stopped_here = False
             self.turn_started = time.monotonic() - self._since()
             self.turn_started_at = self._record_at
             self.turn_tokens, self.turn_output = 0, 0
@@ -322,8 +389,11 @@ class TranscriptView(App[None]):
         if show:
             frame = int((time.monotonic() - self.turn_started) / SPINNER_TICK)
             verb = render.active_form(self.todos) or self.turn_verb
+            # One row whatever it says: redrawn, not laid out again (a layout
+            # is the whole screen's, every frame).
             spinner.update(render.spinner_line(frame, verb, time.monotonic() - self.turn_started,
-                                               self.turn_tokens, thinking=self.thinking_now))
+                                               self.turn_tokens, thinking=self.thinking_now),
+                           layout=False)
 
     async def _turn_done(self) -> None:
         if self.busy and self.turn_started:
@@ -376,14 +446,14 @@ class TranscriptView(App[None]):
         key = (delta.call_seq, delta.attempt)
         if delta.attempt < self.attempts.get(delta.call_seq, 1) or delta.call_seq <= self.replied:
             return  # the tail of an attempt that failed, or of a reply shown
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         self.turn_tokens += estimate_tokens(delta.text)
         if delta.kind == "thinking":
             self.thinking_now = True
             if self.thinking is not None and self.thinking_key != key:
                 await self._end_thinking(drop=self.thinking_key[0] == key[0])
             if self.thinking is None:
-                self.thinking = ThinkingBlock(expanded=self.verbose, started=time.monotonic())
+                self.thinking = ThinkingBlock(started=time.monotonic())
                 self.thinking_key = key
                 await transcript.mount(self.thinking)
                 self._follow_end()
@@ -399,21 +469,16 @@ class TranscriptView(App[None]):
             await transcript.mount(bulleted(widget))
             self._follow_end()
             self.stream, self.stream_widget, self.stream_key = \
-                Markdown.get_stream(widget), widget, key
+                ReplyStream(widget), widget, key
         self.attempts[delta.call_seq] = delta.attempt
         self.streamed.add(delta.call_seq)
         self.stream_text += delta.text
-        await self.stream.write(delta.text)
+        self.stream.write(delta.text)
 
     def _follow_end(self) -> None:
-        """Keep the transcript at its end as live output grows — once it
-        fills the screen: Textual's anchor on a shorter one pushes it to the
-        bottom of the screen."""
-        transcript = self.query_one("#transcript")
-        if transcript.max_scroll_y > 0:
-            transcript.anchor()
-        else:
-            transcript.scroll_end(animate=False)
+        """Keep the transcript at its end as live output grows, unless the
+        person scrolled up (``TailScroll.stick``)."""
+        self.transcript().stick()
 
     async def _end_thinking(self, *, drop: bool = False) -> None:
         block, self.thinking = self.thinking, None
@@ -441,9 +506,9 @@ class TranscriptView(App[None]):
                 task = asyncio.current_task()
                 if task is not None and task.cancelling():
                     raise
-                # Textual's stream task was cancelled before it first ran
-                # (a loaded loop): the cancel surfaces here and what was
-                # written never reached the widget.
+                # The stream's task was cancelled (a loaded loop, the app
+                # closing): the cancel surfaces here and what was written
+                # may not have reached the widget.
                 if not drop and widget is not None:
                     await widget.update(text)
         if drop and widget is not None:
@@ -458,39 +523,65 @@ class TranscriptView(App[None]):
                 and self.stream_key[1] <= failed_attempt:
             await self._end_stream(drop=True)
 
-    async def show_log(self, task_id: str) -> int:
-        """What ``task_id``'s log holds now, shown at once: its records
-        rendered into widgets first, mounted in one go (one by one, Textual
-        lays the screen out again for each). The seq of its last record, for
-        :meth:`follow` to go on after."""
+    async def show_log(self, task_id: str, head: Collection[Widget] = (), *,
+                       through: int | None = None) -> int:
+        """What ``task_id``'s log holds now, shown at once after ``head``
+        (the welcome box), the conversations it continues first (a rewind's
+        fork continues its source's): their records rendered into widgets
+        first, mounted in one go (one by one, Textual lays the screen out
+        again for each), only the last ones (``TailScroll.show_all``). The
+        seq of its last record, for :meth:`follow` to go on after.
+        ``through``: ``task_id``'s log only up to that seq, as the
+        conversation the screen's task will continue (a fork not yet made)."""
         # Open before the log is read: live output meanwhile waits for it.
-        batch: list[Widget] = []
+        batch: list[Widget] = list(head)
         self._batch = batch
         try:
             try:
-                found = await self.local.client.events(task_id)
+                logs = await lineage(self.local.client, task_id)
             except Exception:  # the follower reads it then, and says so if it cannot
                 log.warning("reading the log of %s failed", task_id, exc_info=True)
                 return 0
-            for rec in found:
-                try:
-                    await self.render_event(rec)
-                except Exception:
-                    log.exception("rendering %s failed", type(rec.event).__name__)
+            if through is not None:
+                logs[-1] = (logs[-1][0], [r for r in logs[-1][1] if r.seq <= through])
+            earlier, own = (logs, []) if through is not None else (logs[:-1], logs[-1][1])
+            for _, records in earlier:
+                await self._render_all(records)
+            if earlier:
+                await self._continued()
+            await self._render_all(own)
         finally:
             self._batch = None
-        if task_id != self.task_id:
+        if self.task_id != (task_id if through is None else ""):
             return 0
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         with self.batch_update():
-            await transcript.mount_all(batch)
+            await transcript.show_all(batch)
             transcript.scroll_end(animate=False)
         # Kept at the end as what comes next (a warning that wraps) grows it.
         self.call_after_refresh(self._follow_end)
-        self._refresh_cost(task_id)
+        if self.task_id:
+            self._refresh_cost(task_id)
         self._ui_wanted.set()
         self.update_status()
-        return found[-1].seq if found else 0
+        return own[-1].seq if own else 0
+
+    async def _render_all(self, found: list[Recorded]) -> None:
+        for rec in found:
+            try:
+                await self.render_event(rec)
+            except Exception:
+                log.exception("rendering %s failed", type(rec.event).__name__)
+
+    async def _continued(self) -> None:
+        """The conversation the task continues is shown: what it left open
+        is not the task's (its model calls are numbered in its own log)."""
+        await self._close_cards()
+        self._set_question("", "", {})
+        self.called = self.replied = 0
+        self.streamed.clear()
+        self.attempts.clear()
+        self.set_busy(False)
 
     @work(exclusive=True, group="follow", exit_on_error=False)
     async def follow(self, task_id: str, after: int = 0) -> None:
@@ -516,7 +607,9 @@ class TranscriptView(App[None]):
         await self.say_notice("the task has ended")
 
     async def say_notice(self, text: str) -> None:
-        await self.query_one("#transcript").mount(Notice(text))
+        transcript = self.transcript()
+        await transcript.mount(Notice(text))
+        transcript.stick()
 
     @contextlib.asynccontextmanager
     async def failures_shown(self, what: str) -> AsyncIterator[None]:
@@ -574,21 +667,21 @@ class TranscriptView(App[None]):
             # fragments wait for it.
             while self._batch is None and any(seq <= self.called for seq in self._unshown):
                 await asyncio.sleep(0.01)
+            streamed = self.stream_widget if self.stream_key[0] == self.called else None
             await self._end_stream()
             self.replied = self.called
             msg = ev.response.message
-            if msg.text.strip() and self.called not in self.streamed:
+            text = msg.text.strip()
+            said: Widget | None = None
+            if self.called in self.streamed:
+                said = streamed.parent if streamed is not None and \
+                    isinstance(streamed.parent, Widget) else None
+            elif text and not (msg.tool_uses and render.interstitial(text)
+                               and render.call_kind(msg.tool_uses[0])
+                               and self._joinable() is not None):
                 await self._add(bulleted(AssistantMessage(msg.text)))
             self.streamed.discard(self.called)
-            for call in msg.tool_uses:
-                block = ToolCall(call, expanded=self.verbose, cwd=self.task_cwd)
-                self.calls[call.id] = block
-                if (early := self.early_progress.pop(call.id, None)) is not None:
-                    block.set_progress(early)
-                if not render.call_kind(call):
-                    await self._add(block)
-                    continue
-                await (await self._run_to_join()).add(block)
+            await self._show_calls(msg.tool_uses, text, said)
             self.context_tokens = ev.response.usage.input + ev.response.usage.output
             # The reply's real count replaces what its stream was estimated at.
             self.turn_output += ev.response.usage.output
@@ -624,7 +717,7 @@ class TranscriptView(App[None]):
                 self._refresh_cost(self.task_id)
             await self._add(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error else "")))
         if self._batch is None:
-            self.query_one("#transcript").scroll_end(animate=False)
+            self.transcript().stick()
             self.update_status()
 
     async def _render_record(self, rec: Recorded, ev: ExtensionRecorded) -> None:
@@ -649,11 +742,10 @@ class TranscriptView(App[None]):
             await self._add(Notice(f"retrying (attempt {core.attempt}): "
                                    f"{str(core.error or '')[:120]}"))
         elif isinstance(core, records.TurnStopped):
-            await self._close_cards()
-            await self._end_stream()
-            self._set_question("", "", {})
-            await self._add(Notice(Text("  ⎿  Interrupted · what should noeta do instead?",
-                                        style="red")))
+            if self._stopped_here and self._batch is None:
+                self._stopped_here = False  # shown when Esc was pressed
+                return
+            await self._stop_shown()
         elif isinstance(core, records.TurnFailed):
             await self._add(Notice(f"turn failed: {failure_text(data)}", classes="-error"))
         elif isinstance(core, records.Notice) and core.notice_kind == "workflow" \
@@ -663,6 +755,22 @@ class TranscriptView(App[None]):
             # Structured news (a review's findings) reads as a list.
             await self._add(CleanMarkdown(core.text, classes="notice")
                             if core.notice_kind else Notice(core.text))
+
+    async def _stop_shown(self) -> None:
+        await self._close_cards()
+        await self._end_stream()
+        self._set_question("", "", {})
+        await self._add(Notice(Text(INTERRUPTED, style="red")))
+
+    async def interrupted(self) -> None:
+        """Esc stopped the turn: shown so now (the spinner stops, what was
+        streaming ends, what it still streams is not shown), not when the
+        task records it a moment later."""
+        self._stopped_here = True
+        self.replied = max(self.replied, self.called)
+        await self._stop_shown()
+        await self._turn_done()
+        self.transcript().stick()
 
     def _agent_ended(self, ended: ChildEnded, at: float) -> None:
         call = self.agents.pop(ended.child_id, None)
@@ -941,6 +1049,17 @@ class TranscriptView(App[None]):
             return "none sent, the model's own default applies"
         return level if self.effort else f"{level}, the model's default"
 
+    def _redraw(self, selector: str, content: Text) -> None:
+        """The one-row ``selector`` shows ``content``: not drawn again when
+        it already does, laid out again only when its width changes (a
+        layout is the whole screen's, and the footer is drawn often)."""
+        shown = self._drawn.get(selector)
+        if shown is not None and shown == content:
+            return
+        self._drawn[selector] = content
+        self.query_one(selector, Static).update(
+            content, layout=shown is None or shown.cell_len != content.cell_len)
+
     def update_status(self) -> None:
         """The footer: on the left the mode (or what waits on the person, or
         a passing word) and the agents working in the background; on the
@@ -967,7 +1086,7 @@ class TranscriptView(App[None]):
                          style=render.WORKING)
             hints.append(" · ↓ to view", style="dim")
         self._show_agents()
-        self.query_one("#hints", Static).update(hints)
+        self._redraw("#hints", hints)
         sep = ("  ·  ", "dim")
         status = Text(self.model, style="dim")
         level = self.effort_level()
@@ -981,7 +1100,7 @@ class TranscriptView(App[None]):
         if self.cost_usd and len(status.plain) + 12 <= room:
             status.append(*sep)
             status.append(f"${self.cost_usd:.2f}", style="dim")
-        self.query_one("#status", Static).update(status)
+        self._redraw("#status", status)
         self._tick()
 
     @work(exclusive=True, group="plugin-ui", exit_on_error=False)
@@ -1010,7 +1129,7 @@ class TranscriptView(App[None]):
         items = plugin_ui.keyed(i for i in items if isinstance(i, dict))
         status = self.query_one("#plugin-status", Static)
         statuses = [i for i in items if i.get("type") == "status"]
-        status.update(plugin_ui.status_line(statuses))
+        self._redraw("#plugin-status", plugin_ui.status_line(statuses))
         status.set_class(bool(statuses), "-shown")
         for where in ("above", "below"):
             box = self.query_one(f"#widgets-{where}")
@@ -1022,7 +1141,7 @@ class TranscriptView(App[None]):
                 await box.remove_children()
                 await box.mount_all(CleanMarkdown(m, classes="plugin-widget") for m in drawn)
                 box.set_class(bool(drawn), "-shown")
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         for i in items:
             key, text = (str(i.get("plugin") or ""), str(i.get("key") or "")), \
                 str(i.get("text") or "")
@@ -1032,7 +1151,7 @@ class TranscriptView(App[None]):
             level = str(i.get("level") or "")
             await transcript.mount(Notice(f"{key[0]}: {text}", classes=f"-{level}"
                                           if level in ("warn", "error") else ""))
-            transcript.scroll_end(animate=False)
+            transcript.stick()
         self._sync_footer()
 
     async def clear_ui(self) -> None:

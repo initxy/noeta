@@ -24,7 +24,7 @@ from noeta.core.loop.state import PLUGINS_OFF
 from noeta.toolkit.plugin_records import CHECKPOINTS
 
 __all__ = ["CHECKPOINTS", "RESTORE_SIGNAL", "FilePlan", "RewindPoint", "Rewound",
-           "diff_stats", "file_plan", "rewind", "rewind_points"]
+           "diff_stats", "file_plan", "lineage", "rewind", "rewind_points"]
 
 #: The checkpoints plugin's signal (its documented records).
 RESTORE_SIGNAL = "restore_files"
@@ -65,7 +65,7 @@ class Rewound:
     files: tuple[str, ...] = ()
 
 
-async def _lineage(client: ClientAPI, task_id: str) -> list[tuple[str, list[Recorded]]]:
+async def lineage(client: ClientAPI, task_id: str) -> list[tuple[str, list[Recorded]]]:
     """The task's log and, oldest first, each log it continues (trimmed to
     the event it continues from)."""
     out: list[tuple[str, list[Recorded]]] = []
@@ -97,7 +97,7 @@ async def _snapshots(client: ClientAPI, task_id: str) -> tuple[list[tuple[float,
     snaps: list[tuple[float, dict[str, Any]]] = []
     blobs: dict[str, str] = {}
     seen: set[str] = set()
-    for tid, _events in await _lineage(client, task_id):
+    for tid, _events in await lineage(client, task_id):
         for member in await _tree(client, tid):
             if member in seen:
                 continue
@@ -117,7 +117,7 @@ async def rewind_points(client: ClientAPI, task_id: str) -> list[RewindPoint]:
     """The person's prompts in the conversation, oldest first, each with
     the files changed since."""
     points: list[RewindPoint] = []
-    for tid, events in await _lineage(client, task_id):
+    for tid, events in await lineage(client, task_id):
         for rec in events:
             if not isinstance(rec.event, InputTaken):
                 continue

@@ -181,7 +181,7 @@ command hook 的环境变量是 noeta 的（去掉它自己的凭据），再加
 | 选项 | 效果 |
 |---|---|
 | Restore code and conversation | 下面两项都做 |
-| Restore conversation | 新开一个任务，延续日志到那句提问之前为止；那句提问放回输入框，你可以改了再发 |
+| Restore conversation | 显示到那句提问之前为止的对话，那句提问放回输入框，你可以改了再发；接着这段对话的新任务在你发出时才建 |
 | Restore code | 文件恢复到那句提问之前的内容；当时不存在的文件会被删掉 |
 
 对话从不原地截断：旧任务留在存储里，新任务从它的历史开始（`history_from`），所以回退不会丢任何东西。文件通过任务自己的执行环境写回，不管任务在哪儿跑；只写日志为那个路径记录过的内容，其他的都报告为未恢复（`noeta/host/rewind.py`）。所有前端用的是同一套辅助函数：终端界面和 ACP 里的 `/rewind`、网页版的回退对话框、无界面协议里的 `rewind_files`，以及 HTTP 上的 `GET` / `POST /tasks/{id}/rewind`。

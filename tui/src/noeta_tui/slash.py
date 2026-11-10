@@ -10,20 +10,22 @@ run through ``AppAPI.run_command``."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import shlex
 import subprocess
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
 from noeta.core import models
-from noeta.core.events import ExtensionRecorded, ModelReplied
+from noeta.core.events import ExtensionRecorded, ModelReplied, TaskCreated
 from noeta.host.app import change_config, model_choices, prepare_model
-from noeta.host.rewind import RewindPoint, rewind_points
+from noeta.host.rewind import RewindPoint, lineage, rewind_points
 from noeta.host.usage import cost_text, tree_usage
 from noeta.toolkit.permission_modes import MODE_NAMES
 from noeta.toolkit.plugin_records import MEMORY
@@ -303,8 +305,8 @@ async def _replies(app: NoetaApp) -> list[str]:
     tool calls only says nothing)."""
     if not app.task_id:
         return []
-    return [said for rec in await app.local.client.events(app.task_id)
-            if isinstance(rec.event, ModelReplied)
+    return [said for _, records in await lineage(app.local.client, app.task_id)
+            for rec in records if isinstance(rec.event, ModelReplied)
             and (said := rec.event.response.message.text.strip())]
 
 
@@ -462,13 +464,17 @@ async def _rewind(app: NoetaApp, arg: str) -> None:
 
 
 async def rewind_to(app: NoetaApp, points: list[RewindPoint], n: int, what: str) -> None:
+    """The files now (by the task rewound); the conversation is shown up to
+    the point at once, its task made with the first message sent."""
     point = points[n - 1]
-    done = await app.local.rewind(app.task_id, point,
-                                  conversation=what != "code", files=what != "conversation")
-    if done.task_id != app.task_id:
-        await app.open_task(done.task_id, resumed=False)
-        app.prefill(done.prompt)
-    restored = f"; {len(done.files)} file(s) restored" if done.files else ""
+    files: tuple[str, ...] = ()
+    if what != "conversation":
+        files = (await app.local.rewind(app.task_id, point, conversation=False,
+                                        files=True)).files
+    if what != "code":
+        await app.open_fork(app.task_id, point)
+        app.prefill(point.text)
+    restored = f"; {len(files)} file(s) restored" if files else ""
     await app.say_notice(f"rewound to before prompt {n}{restored}")
 
 
@@ -476,29 +482,86 @@ def _ago(at: float) -> str:
     return render.elapsed_text(max(time.time() - at, 0)) + " ago" if at else ""
 
 
-async def resume_picker(app: NoetaApp, rows: list[Any]) -> None:
-    """``/resume``: the tasks to pick from, each with its first prompt."""
+#: Conversations the resume list reads at most, the most recently updated.
+RESUME_LIMIT = 200
+#: The resume list's choice that lists every directory's conversations.
+EVERYWHERE = "*everywhere"
+
+
+@dataclass(frozen=True)
+class Listed:
+    """A root task as the resume list shows it: where it started, what was
+    first said in it (in the conversation it continues, for a rewind's),
+    and the task it continues (``""``: none)."""
+
+    row: Any
+    cwd: str
+    prompt: str
+    continues: str
+
+
+async def _listed(app: NoetaApp, row: Any) -> Listed:
     from noeta_tui.app import first_prompt
 
-    if not rows:
+    try:
+        events = await app.local.client.events(row.task_id)
+    except Exception:  # noqa: BLE001 — a listing shows what it can
+        return Listed(row, "", "", "")
+    first = events[0].event if events else None
+    created = first if isinstance(first, TaskCreated) else None
+    source = str(created.history_from or "") if created is not None else ""
+    prompt = ""
+    if source:
+        with contextlib.suppress(Exception):
+            prompt = next((said for _, records in await lineage(app.local.client, row.task_id)
+                           if (said := first_prompt(records))), "")
+    return Listed(row, str(created.config.get("cwd") or "") if created is not None else "",
+                   prompt or first_prompt(events), source)
+
+
+async def resume_picker(app: NoetaApp, *, everywhere: bool = False) -> None:
+    """``/resume``: the conversations to pick from, the latest first, each
+    with its first prompt, as Claude Code lists them: those started in this
+    directory (a last choice lists every directory's), one conversation
+    per line however often it was rewound (a rewind's continuation stands
+    for what it continues). Listing changes nothing: only the task picked
+    is opened."""
+    rows = await app.local.client.tasks(roots_only=True, limit=RESUME_LIMIT)
+    listed = list(await asyncio.gather(*(_listed(app, r) for r in rows)))
+    here = str(app.task_config.get("cwd") or ("" if app.on_server else app.cwd))
+    if here and not everywhere:
+        others = sum(1 for x in listed if x.cwd != here)
+        listed = [x for x in listed if x.cwd == here]
+    else:
+        others = 0
+    continued = {x.continues for x in listed if x.continues}
+    listed = [x for x in listed if x.row.task_id not in continued]
+    if not listed and not others:
         await app.say_notice("no tasks to resume")
         return
+    app.listed = [x.row.task_id for x in listed]
     options = []
-    for row in rows:
-        try:
-            prompt = first_prompt(await app.local.client.events(row.task_id))
-        except Exception:  # noqa: BLE001 — a listing shows what it can
-            prompt = ""
-        options.append(Option(row.task_id, (prompt.splitlines()[0][:60] if prompt else
-                                            "(no prompt)"),
-                              f"{_ago(row.updated_at)} · {row.status} · {row.task_id[:8]}"))
+    for x in listed:
+        detail = f"{_ago(x.row.updated_at)} · {x.row.status} · {x.row.task_id[:8]}"
+        if x.continues:
+            detail += f" · rewound from {x.continues[:8]}"
+        if everywhere and x.cwd:
+            detail += f" · {x.cwd}"
+        options.append(Option(x.row.task_id, x.prompt.splitlines()[0][:60] if x.prompt
+                              else "(no prompt)", detail))
+    if others:
+        options.append(Option(EVERYWHERE, f"Show conversations from every directory "
+                                          f"({others} more)"))
 
     async def picked(task_id: str) -> None:
         app._box().focus()
-        if task_id and task_id != app.task_id:
+        if task_id == EVERYWHERE:
+            await resume_picker(app, everywhere=True)
+        elif task_id and task_id != app.task_id:
             await app.open_task(task_id)
 
-    await _picker(app, Picker("Resume a task", options, picked), "/resume")
+    title = "Resume a conversation" + ("" if everywhere or not here else " in this directory")
+    await _picker(app, Picker(title, options, picked), "/resume")
 
 
 #: Claude Code's question on first opening a folder.
