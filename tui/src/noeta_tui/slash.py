@@ -408,7 +408,8 @@ async def _config(app: NoetaApp, arg: str) -> None:
         problem = open_in_editor(app, target)
         await app.say_notice(problem or f"edited {target}; it applies to tasks started from now")
         return
-    rows = [("model", app.model), ("permission mode", app.mode or app.permission_mode or "auto"),
+    rows = [("model", app.model),
+            ("permission mode", app.mode or app.permission_mode or "bypassPermissions"),
             ("working directory", app.task_cwd or SERVER_DIRECTORY), *app.start.settings()]
     out = _rows("Config", rows)
     out.append("  /config edit user|project|local opens a settings file", style="dim")

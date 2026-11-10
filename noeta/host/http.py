@@ -85,7 +85,7 @@ A bearer token is required (``NOETA_SERVER_TOKEN``; ``?token=`` for a
 WebSocket from a browser) unless the host turns auth off. A request from a web page of
 another origin is refused, and so is one whose ``Host`` is not in
 ``allowed_hosts`` (DNS rebinding). No request starts or switches a task into
-``bypassPermissions`` unless ``allow_bypass``, or runs it in a ``cwd`` that is no
+``bypassPermissions`` when ``allow_bypass`` is off, or runs it in a ``cwd`` that is no
 directory (a relative ``cwd`` is taken from ``cwd``). Needs the ``server`` extra.
 """
 
@@ -284,7 +284,7 @@ def redact_token_logs() -> None:
 def create_app(client: Client, *, token: str | None = None, token_sha256: str | None = None,
                auth: bool = True, deltas: Any = None, agents: Mapping[str, Agent] | None = None,
                app: Any = None, allowed_hosts: Sequence[str] | None = None,
-               origins: Sequence[str] = (), allow_bypass: bool = False,
+               origins: Sequence[str] = (), allow_bypass: bool = True,
                cwd: str | None = None,
                web_dir: str | None = None, allow_plugin_install: bool = False,
                plugin_admin: PluginAdmin | None = None,
@@ -304,7 +304,7 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     ``allowed_hosts``: the ``Host`` names served (any when ``None``);
     ``origins``: web origins (``https://host:port``) allowed besides the
     server's own; ``allow_bypass``: requests may ask for
-    ``bypassPermissions``; ``cwd``: the directory a request's relative ``cwd``
+    ``bypassPermissions`` (the default); ``cwd``: the directory a request's relative ``cwd``
     is taken from and a task without one runs in (``None``: a ``cwd`` passes
     unchecked); ``web_dir``:
     a directory of static files served at every other path (a web app);

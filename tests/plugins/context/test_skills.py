@@ -250,6 +250,33 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
     assert len(await h.records(tid, "skills", "listing")) == 2
 
 
+async def test_the_skills_are_loaded_once_until_their_files_change(
+        h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A new message looks at the skill files, not loads them all again; a
+    skill installed between turns is still there for the typed command."""
+    from noeta.plugins.skills import extension
+
+    loads = 0
+    real = extension.load_registry
+
+    async def counted(*args: Any, **kw: Any) -> Any:
+        nonlocal loads
+        loads += 1
+        return await real(*args, **kw)
+
+    monkeypatch.setattr(extension, "load_registry", counted)
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    await h.say(a, tid, "next")
+    assert loads == 1
+    write_skill(skills_dir(h), "review", "Review code.", body="Review it.\n")
+    await h.say(a, tid, "/review now")
+    assert loads == 2
+    assert any(m.text.endswith("Review it.\n\nARGUMENTS: now") for m in h.last_messages())
+
+
 async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> None:
     """Installed mid-turn, listed with its description before the next model
     call, as Claude Code lists a skill its watcher found."""
@@ -1128,3 +1155,97 @@ async def test_an_unknown_slash_command_gets_claude_codes_note(h: Harness) -> No
     # A known skill, a path, or a plain message gets no note.
     await h.say(agent(), tid, "/usr/bin/python crashes")
     assert len(await h.records(tid, "skills", "unknown_command")) == 1
+
+
+async def test_indexing_a_skills_directory_is_linear_in_its_files(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each skill's bundled files are found in one pass over the directory's
+    listing, never by comparing every file against every skill (57 skills
+    over 2,174 files took 124k path comparisons, over a second)."""
+    import posixpath
+
+    root = tmp_path / "skills"
+    for i in range(30):
+        d = write_skill(root, f"s{i}", f"Skill {i}.")
+        for j in range(20):
+            (d / "ref").mkdir(exist_ok=True)
+            (d / "ref" / f"{j}.md").write_text("x")
+    calls = 0
+    relpath = posixpath.relpath
+
+    def counted(path: str, start: str | None = None) -> str:
+        nonlocal calls
+        calls += 1
+        return relpath(path, start)
+
+    monkeypatch.setattr(posixpath, "relpath", counted)
+    registry = await load_registry(LocalExecEnv(str(tmp_path)), [(str(root), 4)])
+    assert len(registry.names()) == 30
+    assert registry.get("s7").resources == tuple(  # type: ignore[union-attr]
+        sorted(f"ref/{j}.md" for j in range(20)))
+    files = 30 * 21
+    assert calls <= 2 * files  # quadratic would be 30 * files
+
+
+class _RemoteLike(LocalExecEnv):
+    """This machine's files, but said to be another machine's: the skills
+    are looked at through the env's commands, as in a sandbox."""
+
+    local = False  # type: ignore[assignment]
+    looks = 0
+
+    async def run(self, argv: Any, **kw: Any) -> Any:
+        if argv[:2] == ["sh", "-c"] and "cksum" in argv[2]:
+            type(self).looks += 1
+        return await super().run(argv, **kw)
+
+
+@pytest.mark.parametrize("remote", [False, True])
+async def test_a_skill_edited_mid_turn_is_seen_on_this_machine_and_through_the_env(
+        h: Harness, remote: bool) -> None:
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    _RemoteLike.looks = 0
+    if remote:
+        h.env_for = lambda _s: _RemoteLike(str(h.work))
+
+    class Edit:
+        name = "Touch"
+        description = "touch"
+        input_schema: dict[str, Any] = {"type": "object"}
+        read_only = False
+        clearable = False
+
+        async def run(self, input: dict[str, Any], ctx: ToolContext) -> ToolOutput:
+            write_skill(skills_dir(h), "deploy", "Ship and tag.")
+            write_skill(skills_dir(h), "review", "Review code.")
+            return text_output("done")
+
+    a = Agent(name="a", model="m", tools=[Edit()], extensions=[FileTools(), Skills()])
+    h.provider.add(reply("", ("Touch", {})), reply("ok"))
+    await h.start(a)
+    assert h.provider.requests[1].messages[-1].text == (
+        f"{ROSTER_HEADER}\n\n- deploy: Ship and tag.\n- review: Review code.")
+    assert (_RemoteLike.looks > 0) is remote
+
+
+def test_the_local_fingerprint_follows_skill_files_and_ends_at_a_cycle(
+        tmp_path: Path) -> None:
+    from noeta.plugins.skills.extension import local_fingerprint
+
+    root = tmp_path / "skills"
+    write_skill(root, "deploy", "Ship.")
+    roots = [f"s:{root}", f"s:{tmp_path / 'missing'}"]
+    first = local_fingerprint(roots)
+    assert local_fingerprint(roots) == first
+    # Same size, likely within one clock tick of the last write.
+    write_skill(root, "deploy", "Ship!")
+    edited = local_fingerprint(roots)
+    assert edited != first
+    write_skill(root, "review", "Review.")
+    assert local_fingerprint(roots) != edited
+    commands = tmp_path / "commands"
+    (commands / "sp").mkdir(parents=True)
+    (commands / "sp" / "loop").symlink_to(commands)
+    before = local_fingerprint([f"c:{commands}"])
+    (commands / "sp" / "ship.md").write_text("Ship.\n")
+    assert local_fingerprint([f"c:{commands}"]) != before

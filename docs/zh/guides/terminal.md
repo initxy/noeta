@@ -29,7 +29,7 @@ noeta
 |---|---|
 | `prompt`（`noeta "把测试修好"`） | 任务打开后作为第一条消息发出（`-c`、`-r ID` 也一样；只写 `-r` 时先留在输入框里，等你挑好任务） |
 | `--model NAME`、`--effort LEVEL` | 新任务用的模型和推理强度（`low`、`medium`、`high`、`xhigh`、`max`） |
-| `--permission-mode MODE` | 起始权限模式（默认 `auto`，见[权限](./permissions.md)） |
+| `--permission-mode MODE` | 起始权限模式（默认 `bypassPermissions`，见[权限](./permissions.md)） |
 | `--agent NAME` | 用 `main` 以外的代理开始 |
 | `--cwd PATH` | 换一个工作目录 |
 | `-c`、`--continue` | 打开在这个目录里开始的最新一次对话 |
@@ -76,7 +76,7 @@ noeta
 
 界面用终端自己的颜色画：终端的背景（背景图、透明也一样）和文字颜色直接透出来，边框用终端的灰色，次要文字用终端的暗淡样式。
 
-`Shift+Tab` 按 Claude Code 的顺序在任务的权限插件公布的模式之间切换：`default` → `acceptEdits` → `plan` → `auto` → `bypassPermissions`。服务器或工人启动时没加 `--allow-bypass-permissions`，就不会出现 `bypassPermissions`；没有规划模式插件就不会出现 `plan`。`dontAsk` 只能通过配置设置。
+`Shift+Tab` 按 Claude Code 的顺序在任务的权限插件公布的模式之间切换：`default` → `acceptEdits` → `plan` → `auto` → `bypassPermissions`。服务器或工人启动时加了 `--disable-bypass-permissions`，就不会出现 `bypassPermissions`；没有规划模式插件就不会出现 `plan`。`dontAsk` 只能通过配置设置。
 
 ### 审批和提问
 

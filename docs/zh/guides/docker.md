@@ -59,9 +59,9 @@ curl -sN http://127.0.0.1:8642/tasks/<任务 id>/watch -H "$H"
 也可以在任何装了 noeta 的机器上用终端界面连过来：`noeta --server http://127.0.0.1:8642`。
 所有接口见 [HTTP / WebSocket 接口](../reference/http-api.md)。
 
-通过 HTTP 建的任务，请求里没写 `permission_mode` 时按 `auto` 模式开始；需要人拍板的事会挂在
-`GET /tasks/{id}/pending` 里，等有人回答。`bypassPermissions` 一律拒绝，除非 `serve` 和工人启动时
-都加了 `--allow-bypass-permissions`。
+通过 HTTP 建的任务，请求里没写 `permission_mode` 时按 `bypassPermissions` 模式开始；需要人拍板的事会挂在
+`GET /tasks/{id}/pending` 里，等有人回答。想拒绝 `bypassPermissions`，`serve` 和工人启动时都加上
+`--disable-bypass-permissions`（这时任务按 `auto` 开始）。
 
 ## 容器之间共享什么
 

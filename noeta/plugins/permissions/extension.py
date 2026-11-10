@@ -72,6 +72,11 @@ log = logging.getLogger("noeta.permissions")
 #: The approval callback: ``(tool_name, input) -> bool`` (or awaitable).
 CanUseTool = Callable[[str, dict[str, Any]], "bool | Awaitable[bool]"]
 
+#: The starting mode when none is given, and where bypassPermissions is
+#: disabled.
+DEFAULT_MODE = "bypassPermissions"
+DEFAULT_MODE_NO_BYPASS = "auto"
+
 #: Text a call refused by ``can_use_tool`` returns (0.6's deny default).
 DENIED_BY_HUMAN = "denied by human"
 
@@ -96,7 +101,8 @@ class Permissions(Extension):
     lists of every settings file concatenated):
 
     * ``mode`` — the starting permission mode, one of
-      :data:`policy.PERMISSION_MODES` (default ``auto``, as Claude Code). A
+      :data:`policy.PERMISSION_MODES` (default ``bypassPermissions``;
+      ``auto`` where ``disable_bypass_mode`` refuses it). A
       task can start in another with ``config["permission_mode"]``; front
       ends switch it with the ``permission_mode`` signal
       (``Client.signal(task_id, "permission_mode", {"mode": ...})``).
@@ -160,7 +166,7 @@ class Permissions(Extension):
     def __init__(
         self,
         *,
-        mode: str = "auto",
+        mode: str | None = None,
         allow: Sequence[str] = (),
         deny: Sequence[str] = (),
         ask: Sequence[str] = (),
@@ -181,8 +187,10 @@ class Permissions(Extension):
         pre_tool_use: Sequence[g.PreToolUseRule] = (),
         can_use_tool: CanUseTool | None = None,
     ) -> None:
-        self.mode = p.check_mode(mode)
         self.disable_bypass = bool(disable_bypass_mode)
+        if mode is None:
+            mode = DEFAULT_MODE if not self.disable_bypass else DEFAULT_MODE_NO_BYPASS
+        self.mode = p.check_mode(mode)
         #: What front ends offer for this task (published on start).
         self._modes = pm.Modes().without("bypassPermissions") if self.disable_bypass \
             else pm.Modes()

@@ -40,7 +40,7 @@ Flags for a run (all in [the CLI reference](../reference/cli.md)):
 |---|---|
 | `prompt` (`noeta "fix the tests"`) | Sent as the first message once the task opens (also with `-c` and `-r ID`; with `-r` alone it waits in the input box while you pick) |
 | `--model NAME`, `--effort LEVEL` | The model and effort new tasks start with (`low`, `medium`, `high`, `xhigh`, `max`) |
-| `--permission-mode MODE` | The starting permission mode (default `auto`; see [permissions](./permissions.md)) |
+| `--permission-mode MODE` | The starting permission mode (default `bypassPermissions`; see [permissions](./permissions.md)) |
 | `--agent NAME` | Start with another agent than `main` |
 | `--cwd PATH` | Work in another directory |
 | `-c`, `--continue` | Open the newest conversation started in this directory |
@@ -117,7 +117,7 @@ text colour show through, borders use its grey, secondary text is dimmed.
 
 `Shift+Tab` steps through the modes the task's permissions plugin publishes, in Claude Code's
 order: `default` → `acceptEdits` → `plan` → `auto` → `bypassPermissions` (a server or worker
-started without `--allow-bypass-permissions` leaves `bypassPermissions` out, and `plan` is there
+started with `--disable-bypass-permissions` leaves `bypassPermissions` out, and `plan` is there
 only with the plan-mode plugin). `dontAsk` is set only by configuration.
 
 ### Approvals and questions

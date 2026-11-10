@@ -339,6 +339,18 @@ async def test_a_foreground_command_returns_when_its_shell_exits(h: Harness) -> 
     assert h.registry.jobs == {} or all(not jobs for jobs in h.registry.jobs.values())
 
 
+async def test_without_a_fifo_the_keepers_flag_file_is_polled(
+        h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A filesystem without FIFOs: the shell waits on the keeper's flag file.
+    from noeta.plugins.shell import jobs
+
+    monkeypatch.setattr(jobs, "_done_fifo", lambda out: f"{out}.missing/done")
+    out = await h.call("Bash", command="echo before; sleep 5 & echo hi", timeout=20000)
+    assert not out.is_error and text(out) == "before\nhi"
+    out = await h.call("Bash", command="echo again")
+    assert not out.is_error and text(out) == "again"
+
+
 async def test_a_child_left_running_keeps_printing_after_the_call_returns(h: Harness) -> None:
     # `npm run dev &`: the call's log is removed once it returns, and the
     # child, still writing to the inherited output, must not die of a broken

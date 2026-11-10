@@ -319,7 +319,7 @@ class StreamJson(ControlRequests):
         mode = MODE_ALIASES.get(self.options.permission_mode or "", self.options.permission_mode)
         return self._message(
             type="system", subtype="init", cwd=self.options.cwd, tools=tools, mcp_servers=[],
-            model=model, permissionMode=mode or "auto",
+            model=model, permissionMode=mode or "bypassPermissions",
             slash_commands=[c["name"] for c in commands], apiKeySource="none",
             claude_code_version=noeta_version(), output_style="default", agents=agents,
             skills=[], plugins=[])

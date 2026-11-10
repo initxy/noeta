@@ -111,7 +111,7 @@ class GuardedClient:
     def _mode(self, mode: Any) -> None:
         if mode == _BYPASS and not self._allow_bypass:
             raise Refused("this server does not allow bypassPermissions "
-                          "(start it with --allow-bypass-permissions)")
+                          "(it runs with --disable-bypass-permissions)")
 
     def check_cwd(self, cwd: Any) -> Any:
         """``cwd`` made absolute (a real path); raises ``ValueError`` when it

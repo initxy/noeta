@@ -56,7 +56,7 @@ What each line does:
   and `TaskEnded.answer` holds the last reply. Without it a task is a conversation: after
   each turn it waits for the next message (`Waiting` on `"input"`), and you `send` it more.
 - `config` is the task's config. `cwd` is where its tools work. `permission_mode` is one of
-  `default`, `acceptEdits`, `plan`, `auto` (the default), `dontAsk`, `bypassPermissions`. In
+  `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions` (the default). In
   `auto` a classifier model call judges actions that would otherwise ask; in `default` they
   wait for an answer (below). Other keys: `model`, `effort`, `max_turns`, `output_schema`,
   `timezone`.

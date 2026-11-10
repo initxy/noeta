@@ -180,7 +180,7 @@ function Workspace({
   const [commands, setCommands] = useState<Command[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [usage, setUsage] = useState<TreeUsage | null>(null);
-  const [newMode, setNewMode] = useState("default");
+  const [newMode, setNewMode] = useState("bypassPermissions");
   const [newModel, setNewModel] = useState("");
   const [rewinding, setRewinding] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);

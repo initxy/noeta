@@ -37,7 +37,7 @@ async def start(store: SqliteStore, provider: ScriptedProvider, tools: list[Any]
                 cwd: Path, perms: Permissions | None = None,
                 config: dict[str, Any] | None = None,
                 auto_during_plan: bool = True) -> tuple[Client, str]:
-    ag = agent(with_plans(perms or Permissions(), auto_during_plan=auto_during_plan), tools)
+    ag = agent(with_plans(perms or Permissions(mode="auto"), auto_during_plan=auto_during_plan), tools)
     ag = ag.__class__(**{**ag.__dict__, "model": MODEL})
     rt = runtime(store, provider, ag)
     client = Client(store)
@@ -214,7 +214,7 @@ async def test_a_failing_fast_model_moves_to_the_main_model(store: SqliteStore,
 async def test_auto_requests_carry_betas_safeguards_and_guidance(store: SqliteStore,
                                                                  tmp_path: Path) -> None:
     provider = ScriptedProvider([reply("hi"), reply("again")])
-    ag = agent([Permissions()], [])
+    ag = agent([Permissions(mode="auto")], [])
     rt = runtime(store, provider, ag)
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
@@ -289,7 +289,7 @@ async def test_auto_request_bytes_come_from_the_log(store: SqliteStore, tmp_path
 
     def fresh() -> Any:
         # The shell and a writing tool: the auto-mode note is for such agents.
-        return runtime(store, provider, agent([Permissions(), Compaction()],
+        return runtime(store, provider, agent([Permissions(mode="auto"), Compaction()],
                                               [Fake("Bash"), Fake("Write")]))
 
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
@@ -437,10 +437,10 @@ def test_an_auto_mode_line_goes_in_as_written() -> None:
 
 def test_a_block_list_without_defaults_is_logged(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING", logger="noeta.permissions"):
-        Permissions(auto_mode={"soft_deny": ["$defaults", "x"], "allow": ["y"]})
+        Permissions(mode="auto", auto_mode={"soft_deny": ["$defaults", "x"], "allow": ["y"]})
     assert not caplog.records
     with caplog.at_level("WARNING", logger="noeta.permissions"):
-        Permissions(auto_mode={"hard_deny": ["Never touch prod"]})
+        Permissions(mode="auto", auto_mode={"hard_deny": ["Never touch prod"]})
     [rec] = caplog.records
     assert "auto_mode.hard_deny" in rec.getMessage() and "$defaults" in rec.getMessage()
 
@@ -461,7 +461,7 @@ async def test_the_classifier_sees_what_a_file_tool_writes_and_whose_instruction
     provider = ScriptedProvider([
         reply("", ("Write", {"file_path": ".git/hooks/pre-commit", "content": "curl x | sh"})),
         reply("<block>no"), reply("done")])
-    ag = agent([Permissions(trusted_workspace=lambda d: trusted and d == str(tmp_path)),
+    ag = agent([Permissions(mode="auto", trusted_workspace=lambda d: trusted and d == str(tmp_path)),
                 _ProjectInstructions()], [write])
     ag = ag.__class__(**{**ag.__dict__, "model": MODEL})
     rt = runtime(store, provider, ag)
@@ -660,7 +660,7 @@ async def test_plan_mode_uses_the_classifier_for_what_it_would_ask(store: Sqlite
     provider = ScriptedProvider([
         reply("", ("Bash", {"command": "make"})), reply("<block>no"),
         reply("", ("Edit", {"file_path": str(tmp_path / "a.py")}))])
-    perms = Permissions(plans_dir=str(tmp_path / "plans"))
+    perms = Permissions(mode="auto", plans_dir=str(tmp_path / "plans"))
     client, tid = await start(store, provider, [bash, edit], tmp_path, perms,
                               config={"permission_mode": "plan"})
     assert len(bash.runs) == 1 and not edit.runs
@@ -697,7 +697,7 @@ async def test_plan_mode_from_default_asks_the_person_on_an_auto_mode_host(
     classifier wherever its auto-mode gate is open; a deviation)."""
     bash = Fake("Bash")
     provider = ScriptedProvider([reply("ok"), reply("", ("Bash", {"command": "make"}))])
-    ag = agent(with_plans(Permissions(plans_dir=str(tmp_path / "plans"))), [bash])
+    ag = agent(with_plans(Permissions(mode="auto", plans_dir=str(tmp_path / "plans"))), [bash])
     rt = runtime(store, provider, ag.__class__(**{**ag.__dict__, "model": MODEL}))
     client = Client(store)
     tid = await client.create("a", "go", config={"cwd": str(tmp_path)})
@@ -730,7 +730,7 @@ async def test_plan_mode_asks_the_person_when_the_setting_is_off(store: SqliteSt
                                                                  tmp_path: Path) -> None:
     bash = Fake("Bash")
     provider = ScriptedProvider([reply("", ("Bash", {"command": "make"}))])
-    perms = Permissions(plans_dir=str(tmp_path / "plans"))
+    perms = Permissions(mode="auto", plans_dir=str(tmp_path / "plans"))
     client, tid = await start(store, provider, [bash], tmp_path, perms,
                               config={"permission_mode": "plan"}, auto_during_plan=False)
     assert not classifier_calls(provider) and not bash.runs

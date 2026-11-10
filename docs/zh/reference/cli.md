@@ -35,7 +35,7 @@ noeta mcp add|add-json|list|get|remove|login|logout
 |---|---|
 | `--model MODEL` | 模型 id 或别名（`opus`、`sonnet`、`haiku`、`fable`）；不给就依次看 `NOETA_MODEL`、`config.toml`、设置文件里的 `model` |
 | `--effort {low,medium,high,xhigh,max}` | 模型思考的力度；不给就看 `NOETA_EFFORT`、`config.toml` 的 `effort` |
-| `--permission-mode MODE` | 起始权限模式：`default`、`acceptEdits`、`plan`、`auto`、`dontAsk`、`bypassPermissions`，或 `manual`（`default` 的别名）。默认 `auto`，或设置文件里的 `permissions.defaultMode` |
+| `--permission-mode MODE` | 起始权限模式：`default`、`acceptEdits`、`plan`、`auto`、`dontAsk`、`bypassPermissions`，或 `manual`（`default` 的别名）。默认 `bypassPermissions`（关掉了 bypass 模式的地方是 `auto`），或设置文件里的 `permissions.defaultMode` |
 | `--provider {anthropic,openai_compat,openai_responses}` | 默认 provider 的类型；不给就看 `NOETA_PROVIDER`、`config.toml` 的 `provider`（后者也可以是某个 `[providers.<name>]` 表的名字） |
 | `--base-url URL` | 默认 provider 的地址；不给就看 `NOETA_BASE_URL` |
 | `--store URL` | `sqlite:///path` 或 `postgres://…`；不给就看 `NOETA_STORE`、`config.toml` 的 `store`，最后是 `~/.noeta/tasks.db` |
@@ -56,8 +56,8 @@ noeta mcp add|add-json|list|get|remove|login|logout
 - `worker`：只管它的渠道开的任务（它跑的其他任务是别人建的，保留各自的配置）；给了 `--effort` 或
   `--permission-mode` 时，它会在 stderr 上说明这一点。
 
-`serve` 和 `worker` 给了 `--permission-mode bypassPermissions` 却没给 `--allow-bypass-permissions`
-时直接报错退出：`noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions`。
+`serve` 和 `worker` 同时给了 `--permission-mode bypassPermissions` 和 `--disable-bypass-permissions`
+时直接报错退出：`noeta: --permission-mode bypassPermissions contradicts --disable-bypass-permissions`。
 
 ## 终端界面：`noeta`
 
@@ -168,7 +168,7 @@ Claude Code 的打印模式和 stream-json 协议（`noeta/host/stream_json.py`�
 | `--no-token` | 关 | 不要 bearer token；只有 `--host` 是回环地址时才允许 |
 | `--allow-host NAME` | 无 | 除服务端自己的名字之外，还认可哪个 `Host` 头名字（可重复）。自己的名字：绑回环地址时是回环名字，绑其他地址时还包括本机的主机名、完整域名和本机地址。其余 `Host` 一律拒绝 |
 | `--allow-origin ORIGIN` | 无 | 允许调用接口的网页来源（`https://host:port`，可重复） |
-| `--allow-bypass-permissions` | 关 | 允许请求让任务以 `bypassPermissions` 启动或切换过去 |
+| `--disable-bypass-permissions` | 关 | 不管请求怎么要，都拒绝 `bypassPermissions`。旧的 `--allow-bypass-permissions` 仍然接受，不起作用 |
 | `--allow-plugin-install` | 关（`--host` 是回环地址、且没带 `--allow-host` / `--allow-origin` 时开） | 允许请求安装和删除插件（`POST /plugins/install`、`DELETE /plugins/{name}`） |
 | `--web DIR` | 包里自带的网页（有的话） | 在其余路径上提供这个目录里的文件（构建好的网页，`web/dist`）。不给的话，就用安装包里自带的那份：从 PyPI 装的都有，源码目录里要先跑一次 `make web-bundle` |
 
@@ -182,7 +182,7 @@ noeta: web app at http://127.0.0.1:8642/#token=…
 ```
 
 网页读走令牌后会把它从地址栏里去掉，不会出现在服务端日志里。请求新建任务时没给 `cwd` 的话，任务在自己的目录里跑：
-`~/.noeta/scratch/<YYYY-MM-DD>/<任务 id 前 8 位>/`。没加 `--allow-bypass-permissions` 时，不管通过什么途径要
+`~/.noeta/scratch/<YYYY-MM-DD>/<任务 id 前 8 位>/`。加了 `--disable-bypass-permissions` 时，不管通过什么途径要
 `bypassPermissions`，权限插件自己都会拒绝。
 
 ## `noeta service`
@@ -230,7 +230,7 @@ Postgres 存储就能把任务分到多台机器上跑。
 | `--lease SECONDS` | `30` | 一次认领不续约能维持多久；worker 挂了，它的任务大约等这么久后被别人接手 |
 | `--snapshot-every EVENTS` | `100` | 最多每隔多少个事件写一次任务的重放快照；`0` 表示不写 |
 | `--restart-limit N` | `3` | 工人跑到一半死掉后，任务最多连续重启这么多次（期间一步也没做完）；再崩一次就以 `failed`（`restart_limit`）结束；`0` 表示不限（[原因](../how-it-works/recovery.md#a-task-that-keeps-killing-its-worker)） |
-| `--allow-bypass-permissions` | 关 | 允许任务以 `bypassPermissions` 运行 |
+| `--disable-bypass-permissions` | 关 | 不许这里跑的任务用 `bypassPermissions`（旧的 `--allow-bypass-permissions` 仍然接受，不起作用） |
 
 worker 也会每天清理一次本机存下来的旧工具输出（见[清理](../guides/server.md#清理)）。退出时，正在跑的任务立刻交还；为后台作业保留着认领的任务会被释放，并在下一轮被告知作业已经没了。
 
