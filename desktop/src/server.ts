@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { delimiter, join, relative, isAbsolute } from "node:path";
+import { delimiter, join } from "node:path";
 
 /** What to run when `noeta` is missing (`serve` needs the server extra). */
 export const INSTALL_LINE = "uv tool install 'noeta[tui,server]'";
@@ -55,35 +55,20 @@ export function freshToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-/** Whether `dir` is `root` or below it. */
-export function isUnder(dir: string, root: string): boolean {
-  const rel = relative(root, dir);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
 export interface ServeOptions {
   noeta: string;
   port: number;
   token: string;
   /** The built web app the server also serves. */
   webDir: string;
-  /** The server's own directory: where a session without a folder runs. */
+  /** The server's own directory (the home directory). */
   cwd: string;
-  /** Directories besides `cwd` sessions may run in. */
-  roots: string[];
 }
 
 /** `noeta serve`'s arguments. The token is not among them (a process list
  * shows arguments): it goes in the environment, see {@link serveEnv}. */
 export function serveArgs(o: ServeOptions): string[] {
-  const roots = o.roots.filter((r) => !isUnder(r, o.cwd));
-  return [
-    "serve",
-    "--host", "127.0.0.1",
-    "--port", String(o.port),
-    "--web", o.webDir,
-    ...[...new Set(roots)].flatMap((r) => ["--allow-root", r]),
-  ];
+  return ["serve", "--host", "127.0.0.1", "--port", String(o.port), "--web", o.webDir];
 }
 
 /** The server's environment: this app's, plus the token it checks. */

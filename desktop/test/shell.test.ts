@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MenuItemConstructorOptions } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import { addRoot, DEFAULT_WINDOW, loadSettings, parseSettings, saveSettings, visibleBounds } from "../src/settings";
-import { errorPage, GRANTED_PERMISSIONS, linkTarget, liveSessions, menuTemplate } from "../src/shell";
+import { DEFAULT_WINDOW, loadSettings, parseSettings, saveSettings, visibleBounds } from "../src/settings";
+import { errorPage, GRANTED_PERMISSIONS, linkTarget, menuTemplate } from "../src/shell";
 
 function items(menu: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
   return menu.flatMap((m) => [m, ...(Array.isArray(m.submenu) ? items(m.submenu) : [])]);
@@ -71,17 +71,6 @@ describe("permissions and restarts", () => {
     expect([...GRANTED_PERMISSIONS].sort()).toEqual(["clipboard-sanitized-write", "notifications"]);
     expect(GRANTED_PERMISSIONS.has("media")).toBe(false);
   });
-
-  it("counts the sessions a restart would interrupt", () => {
-    expect(
-      liveSessions([
-        { status: "running", waiting_on: null },
-        { status: "waiting", waiting_on: "approval" },
-        { status: "waiting", waiting_on: "input" },
-        { status: "ended", waiting_on: null },
-      ]),
-    ).toBe(2);
-  });
 });
 
 describe("error page", () => {
@@ -96,30 +85,30 @@ describe("error page", () => {
 describe("settings", () => {
   it("starts from defaults on a missing or broken file", () => {
     const dir = mkdtempSync(join(tmpdir(), "noeta-desktop-settings-"));
-    expect(loadSettings(join(dir, "none.json"))).toEqual({ noetaPath: undefined, project: undefined, roots: [], window: DEFAULT_WINDOW });
+    expect(loadSettings(join(dir, "none.json"))).toEqual({ noetaPath: undefined, project: undefined, window: DEFAULT_WINDOW });
     expect(parseSettings("{nope").window).toEqual(DEFAULT_WINDOW);
   });
 
   it("round-trips and drops bad fields", () => {
     const dir = mkdtempSync(join(tmpdir(), "noeta-desktop-settings-"));
     const path = join(dir, "sub", "settings.json");
-    const s = { noetaPath: "/x/noeta", project: "/p", roots: ["/p"], window: { x: 10, y: 20, width: 900, height: 700, maximized: true } };
+    const s = { noetaPath: "/x/noeta", project: "/p", window: { x: 10, y: 20, width: 900, height: 700, maximized: true } };
     saveSettings(path, s);
     expect(loadSettings(path)).toEqual(s);
-    writeFileSync(path, JSON.stringify({ roots: ["/a", 3], window: { width: 10, height: "x" } }));
+    writeFileSync(path, JSON.stringify({ project: 3, window: { width: 10, height: "x" } }));
     const got = loadSettings(path);
-    expect(got.roots).toEqual(["/a"]);
-    writeFileSync(path, JSON.stringify({ roots: ["/a", "/b", "/a"] }));
-    expect(loadSettings(path).roots).toEqual(["/b", "/a"]);
+    expect(got.project).toBeUndefined();
     expect(got.window).toMatchObject({ width: DEFAULT_WINDOW.width, height: DEFAULT_WINDOW.height });
-    expect(readFileSync(path, "utf-8")).toContain("roots");
   });
 
-  it("adds a root once, newest last, and keeps the old ones (their sessions go on)", () => {
-    expect(addRoot(["/a", "/b"], "/a")).toEqual(["/b", "/a"]);
-    const many = Array.from({ length: 20 }, (_, i) => `/r${i}`).reduce(addRoot, []);
-    expect(many).toHaveLength(20);
-    expect(many[0]).toBe("/r0");
+  it("reads an older app's file, its allowed folders (`roots`) dropped on the next save", () => {
+    const dir = mkdtempSync(join(tmpdir(), "noeta-desktop-settings-"));
+    const path = join(dir, "settings.json");
+    writeFileSync(path, JSON.stringify({ project: "/p", roots: ["/srv/a", "/p"] }));
+    const got = loadSettings(path);
+    expect(got).toEqual({ noetaPath: undefined, project: "/p", window: DEFAULT_WINDOW });
+    saveSettings(path, got);
+    expect(readFileSync(path, "utf-8")).not.toContain("roots");
   });
 
   it("forgets a position no display shows", () => {

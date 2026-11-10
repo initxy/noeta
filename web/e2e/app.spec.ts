@@ -22,7 +22,22 @@ async function say(page: Page, text: string) {
 
 test.describe.configure({ mode: "serial" });
 
+// The server's working directory, saved as a project and picked: the scripted
+// model writes there and @ mentions complete from it. A session without a
+// project gets a scratch folder of its own (the scratch test).
+const WORK = join(process.env.NOETA_E2E_DIR!, "work");
+const auth = { authorization: `Bearer ${TOKEN}` };
+
+test.beforeAll(async ({ request }) => {
+  expect((await request.post("/projects", { headers: auth, data: { path: WORK } })).ok()).toBe(true);
+});
+
 test.beforeEach(async ({ page }) => {
+  // Picked on the first load only: a reload keeps what the test picked since.
+  await page.addInitScript((work) => {
+    if (!sessionStorage.getItem("e2e.started")) localStorage.setItem("noeta.project", work);
+    sessionStorage.setItem("e2e.started", "1");
+  }, WORK);
   await page.goto(`/#token=${TOKEN}`);
   await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible();
 });
@@ -317,14 +332,43 @@ test("a project added from the folder picker gets its own sessions", async ({ pa
   await expect(project.locator(".session")).toHaveCount(1);
 });
 
-test("the folder picker says why the server refuses a folder", async ({ page }) => {
+test("the folder picker goes anywhere, and says why a path is no folder", async ({ page }) => {
   await page.getByRole("navigation", { name: "Sessions" }).getByRole("button", { name: "Add project" }).click();
   const picker = page.getByRole("dialog", { name: "Add project" });
   await picker.getByLabel("Folder path").fill("/");
   await picker.getByLabel("Folder path").press("Enter");
-  await expect(picker.locator(".notice.error")).toBeVisible();
+  await expect(picker.getByRole("button", { name: "Add /" })).toBeEnabled();
+  await expect(picker.locator(".notice.error")).toHaveCount(0);
+  await picker.getByLabel("Folder path").fill(join(WORK, "no-such-folder"));
+  await picker.getByLabel("Folder path").press("Enter");
+  await expect(picker.locator(".notice.error")).toContainText("no-such-folder");
   await picker.getByRole("button", { name: "Cancel" }).click();
   await expect(picker).toBeHidden();
+});
+
+test("a session without a project runs in a scratch folder, listed under Scratch by date", async ({ page }) => {
+  const nav = page.getByRole("navigation", { name: "Sessions" });
+  await page.getByRole("button", { name: "Use a scratch folder instead" }).click();
+  await expect(page.locator(".welcome-scratch")).toContainText("its own scratch folder");
+  await page.getByLabel("Permission mode").selectOption("acceptEdits");
+  await say(page, "hello from scratch");
+  await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const day = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  await expect(page.locator(".cwd")).toHaveText(new RegExp(`/scratch/${day}/[\\w-]{8}$`));
+  const scratch = nav.locator("section.scratch");
+  await expect(scratch.getByRole("button", { name: "Scratch", exact: true })).toBeVisible();
+  await expect(scratch.locator(`[data-day="${day}"] .scratch-day-label`)).toHaveText("Today");
+  await expect(scratch.locator(".session.active")).toContainText("hello from scratch");
+  // Its folder is not listed as a project; the Scratch row has no "+" and no menu.
+  await expect(nav.locator(`section.project[data-project*="/scratch/"]`)).toHaveCount(0);
+  await expect(scratch.locator(".project-row .row-action")).toHaveCount(0);
+  await shot(page, "22-scratch");
+  // A new session from here gets another scratch folder, not this one.
+  await page.getByRole("button", { name: "+ New session" }).click();
+  await expect(page.locator(".welcome-scratch")).toBeVisible();
+  await expect(scratch.locator(".project-row.selected")).toBeVisible();
 });
 
 // Last: the plugin it installs stays in the server's home.

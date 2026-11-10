@@ -8,7 +8,6 @@ import {
   freePort,
   freshToken,
   INSTALL_LINE,
-  isUnder,
   saveProject,
   serveArgs,
   serveEnv,
@@ -32,7 +31,6 @@ const options: ServeOptions = {
   token: "tok",
   webDir: "/app/web",
   cwd: "/home/me",
-  roots: [],
 };
 
 /** A child process that exits when killed, or with `exitCode` right away. */
@@ -97,15 +95,8 @@ describe("serve arguments", () => {
     expect(serveEnv("tok", { PATH: "/bin" })).toEqual({ PATH: "/bin", NOETA_SERVER_TOKEN: "tok" });
   });
 
-  it("allows each root outside the server's directory once", () => {
-    const args = serveArgs({ ...options, roots: ["/srv/a", "/home/me/code", "/srv/a"] });
-    expect(args.slice(7)).toEqual(["--allow-root", "/srv/a"]);
-  });
-
-  it("isUnder compares whole path segments", () => {
-    expect(isUnder("/home/me", "/home/me")).toBe(true);
-    expect(isUnder("/home/me/x", "/home/me")).toBe(true);
-    expect(isUnder("/home/meow", "/home/me")).toBe(false);
+  it("names no allowed folders: the server runs sessions in any directory", () => {
+    expect(serveArgs(options)).not.toContain("--allow-root");
   });
 });
 

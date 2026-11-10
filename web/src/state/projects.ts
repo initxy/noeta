@@ -17,13 +17,45 @@ export function projectFor<P extends { path: string }>(path: string, projects: P
   return projects.find((p) => tail(p.path, path) || tail(path, p.path));
 }
 
+/** The server's scratch root (`scratch: true`), if it lists one. */
+export function scratchRoot(server: Project[] | null): Project | undefined {
+  return server?.find((p) => p.scratch === true);
+}
+
+/** The date directory (`YYYY-MM-DD`) of a scratch session's folder
+ * (`<root>/<date>/<id>`, the root maybe spelled through a symlink); null
+ * when the folder is not one. */
+export function scratchDay(cwd: string, root: { path: string } | undefined): string | null {
+  if (!root) return null;
+  const parts = cwd.replace(/\/+$/, "").split("/");
+  if (parts.length < 3) return null;
+  const day = parts[parts.length - 2];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  return projectFor(parts.slice(0, -2).join("/"), [root]) ? day : null;
+}
+
+/** A scratch date's label: "Today", "Yesterday", else "Nov 9" (with the
+ * year when it is not this one). */
+export function dayLabel(day: string, now = new Date()): string {
+  const [y, m, d] = day.split("-").map(Number);
+  const at = new Date(y, m - 1, d);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((today.getTime() - at.getTime()) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", ...(y === now.getFullYear() ? {} : { year: "numeric" }) };
+  return at.toLocaleDateString("en-US", opts);
+}
+
 /** The projects to list: the server's (`null`: a server without
- * `/projects`), then the directories of the listed sessions none of them
- * is, then the one picked here if it is in neither. */
+ * `/projects`) but its scratch root, then the directories of the listed
+ * sessions none of them is (a scratch session's is not one), then the one
+ * picked here if it is in neither. */
 export function projectList(server: Project[] | null, sessions: TaskSummary[], picked = ""): Project[] {
-  const out = [...(server ?? [])];
+  const scratch = scratchRoot(server);
+  const out = (server ?? []).filter((p) => !p.scratch);
   const add = (path: string) => {
-    if (projectFor(path, out)) return;
+    if (projectFor(path, out) || scratchDay(path, scratch)) return;
     out.push({ path, name: basename(path), saved: false, sessions: 0 });
   };
   for (const s of [...sessions].sort((a, b) => b.updated_at - a.updated_at)) if (s.cwd) add(s.cwd);

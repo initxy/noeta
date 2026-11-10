@@ -77,9 +77,9 @@ branch: feat/serve-service-2026-11-09
 - [x] Python: token file holds the token (new ADR superseding 013), clients read it, address lines on start, auto Host names
 - [x] Python: `noeta service` (systemd user / launchd) + `noeta update` restart
 - [x] Python: scratch directory for tasks without `cwd`; `/projects` scratch entry
-- [ ] Web: Scratch group; new session without a project; drop `noeta web` mentions and refusal-hint UI that no longer applies
-- [ ] Desktop: no `--allow-root`, no restart for outside-home folders
-- [ ] Docs (en + zh): front-ends, server guide, quickstart, CLI reference, troubleshooting, HTTP API; CHANGELOG
+- [x] Web: Scratch group; new session without a project; drop `noeta web` mentions and refusal-hint UI that no longer applies
+- [x] Desktop: no `--allow-root`, no restart for outside-home folders
+- [x] Docs (en + zh): front-ends, server guide, quickstart, CLI reference, troubleshooting, HTTP API; CHANGELOG
 - [ ] Release 1.2.0; on this server: `uv tool` upgrade, `noeta service install --host 0.0.0.0`
 
 ## Acceptance criteria

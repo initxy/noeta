@@ -134,12 +134,27 @@ describe("the app inside the desktop app", () => {
     expect(localStorage.getItem("noeta.token")).toBeNull();
   });
 
-  it("without a project, a new session runs in the server's directory", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
+  it("without a project, a new session gets its own scratch folder: no cwd is sent", async () => {
+    const posts: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url === "/tasks") {
+          posts.push(JSON.parse(String(init.body)));
+          return new Response(JSON.stringify({ task_id: "t9" }), { status: 201 });
+        }
+        if (init?.method === "POST" && url === "/tasks/t9/messages") return new Response(JSON.stringify({ inbox_seq: 1 }));
+        if (url.includes("/watch")) return new Response("event: end\ndata: {}\n\n");
+        return new Response("[]");
+      }),
+    );
     window.NOETA_CONFIG = { server: "", token: "web" };
     render(<App />);
-    expect(await screen.findByText(/runs in the server's directory/)).toBeInTheDocument();
+    expect(await screen.findByText(/gets its own scratch folder/)).toBeInTheDocument();
     expect(document.querySelector(".welcome-project")).toBeNull();
+    await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect((posts[0] as { config: Record<string, unknown> }).config).not.toHaveProperty("cwd");
   });
 });
 
@@ -165,14 +180,14 @@ describe("projects in a browser", () => {
         if (url === "/projects" && method === "GET") return json(saved);
         if (url === "/projects" && method === "POST") {
           const { path } = JSON.parse(String(init?.body)) as { path: string };
-          if (path === "/etc") return json({ error: "/etc is outside the server's directories" }, 403);
+          if (path === "/nope") return json({ error: "/nope does not exist" }, 400);
           const p = { path, name: path.split("/").pop() ?? path, saved: true, sessions: 0 };
           saved = [...saved, p];
           return json(p);
         }
         if (url === "/dirs" || url === "/dirs?path=%2Fw") return json({ path: "/w", parent: "/", dirs: [{ name: "app", path: "/w/app" }, { name: "lib", path: "/w/lib" }] });
         if (url === "/dirs?path=%2Fw%2Flib") return json({ path: "/w/lib", parent: "/w", dirs: [] });
-        if (url === "/dirs?path=%2Fetc") return json({ path: "/etc", parent: "/", dirs: [] });
+        if (url === "/dirs?path=%2Fnope") return json({ path: "/nope", parent: "/", dirs: [] });
         if (url === "/dirs?path=%2F") return json({ path: "/", parent: null, dirs: [{ name: "w", path: "/w" }] });
         if (url.startsWith("/summaries")) return json([summary({ task_id: "t1", cwd: "/w/app", status: "waiting", waiting_on: "input" })]);
         if (url === "/tasks" && method === "POST") {
@@ -194,9 +209,9 @@ describe("projects in a browser", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add project" });
     // A folder the server refuses says why, and the dialog stays.
     await userEvent.clear(screen.getByLabelText("Folder path"));
-    await userEvent.type(screen.getByLabelText("Folder path"), "/etc{Enter}");
-    await userEvent.click(await screen.findByRole("button", { name: "Add etc" }));
-    expect(await screen.findByText(/outside the server's directories/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Folder path"), "/nope{Enter}");
+    await userEvent.click(await screen.findByRole("button", { name: "Add nope" }));
+    expect(await screen.findByText("/nope does not exist")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: ".." }));
     await waitFor(() => expect(calls).toContain("GET /dirs?path=%2F"));
     await userEvent.clear(screen.getByLabelText("Folder path"));
@@ -243,5 +258,75 @@ describe("projects in a browser", () => {
     await userEvent.click(await screen.findByRole("button", { name: "saved options" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Remove project" }));
     await waitFor(() => expect(calls).toContain("DELETE /projects"));
+  });
+
+  it("lists scratch sessions last, by date, and a new session from there gets a scratch folder", async () => {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const now = new Date();
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const root = "/h/.noeta/scratch";
+    const posts: { config: Record<string, unknown> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        if (url === "/projects")
+          return json([
+            { path: "/w/app", name: "app", saved: true, sessions: 1, scratch: false },
+            { path: root, name: "Scratch", saved: false, sessions: 3, scratch: true },
+          ]);
+        if (url.startsWith("/summaries"))
+          return json([
+            summary({ task_id: "a1", cwd: "/w/app", title: "In the app", updated_at: 5 }),
+            summary({ task_id: "s1", cwd: `${root}/2025-03-04/s1aaaaaa`, title: "Old scratch", updated_at: 1 }),
+            summary({ task_id: "s2", cwd: `${root}/${today}/s2bbbbbb`, title: "Today's scratch", updated_at: 9, status: "waiting", waiting_on: "input" }),
+            // the same root through a symlinked prefix
+            summary({ task_id: "s3", cwd: `/data${root}/${today}/s3cccccc`, title: "Another today", updated_at: 7 }),
+          ]);
+        if (url.startsWith("/tasks/s2/events"))
+          return json([{ seq: 1, at: 0, event: { type: "TaskCreated", agent: "main", config: { cwd: `${root}/${today}/s2bbbbbb` } } }]);
+        if (url === "/tasks" && method === "POST") {
+          posts.push(JSON.parse(String(init?.body)) as { config: Record<string, unknown> });
+          return json({ task_id: "t9" }, 201);
+        }
+        if (url === "/tasks/t9/messages") return json({ inbox_seq: 1 });
+        if (url.includes("/watch")) return new Response("event: end\ndata: {}\n\n");
+        return new Response("[]");
+      }),
+    );
+    localStorage.setItem("noeta.project", "/w/app");
+    window.NOETA_CONFIG = { server: "", token: "web" };
+    render(<App />);
+    const nav = await screen.findByRole("navigation", { name: "Sessions" });
+    await screen.findByText("Old scratch");
+    // Projects first, then Scratch; no project row per scratch folder.
+    const sections = [...nav.querySelectorAll("section.project")].map((s) => s.getAttribute("data-project"));
+    expect(sections).toEqual(["/w/app", root]);
+    const days = [...nav.querySelectorAll(".scratch-day")];
+    expect(days.map((d) => d.querySelector(".scratch-day-label")?.textContent)).toEqual(["Today", "Mar 4, 2025"]);
+    expect([...days[0].querySelectorAll(".session-title")].map((t) => t.textContent)).toEqual(["Today's scratch", "Another today"]);
+    // Scratch has no "+" and nothing to remove.
+    expect(screen.queryByRole("button", { name: "New session in Scratch" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Scratch options" })).toBeNull();
+
+    // The welcome screen lets go of the project...
+    await userEvent.click(await screen.findByRole("button", { name: "Use a scratch folder instead" }));
+    expect(await screen.findByText(/gets its own scratch folder/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "app" }));
+    await waitFor(() => expect(document.querySelector(".welcome-project-path")?.textContent).toBe("/w/app"));
+    // ...and so does picking Scratch: the next session gets a scratch folder of its own.
+    await userEvent.click(screen.getByRole("button", { name: "Scratch" }));
+    expect(await screen.findByText(/gets its own scratch folder/)).toBeInTheDocument();
+    expect(nav.querySelector(`[data-project="${root}"] .project-row.selected`)).not.toBeNull();
+    await userEvent.type(screen.getByLabelText("Message"), "hello{Enter}");
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0].config).not.toHaveProperty("cwd");
+
+    // Opening a scratch session, then New session: not into that session's folder.
+    await userEvent.click(screen.getByText("Today's scratch"));
+    await waitFor(() => expect(document.querySelector(".cwd")?.textContent).toBe(`${root}/${today}/s2bbbbbb`));
+    await userEvent.click(screen.getByRole("button", { name: "+ New session" }));
+    expect(await screen.findByText(/gets its own scratch folder/)).toBeInTheDocument();
+    expect(localStorage.getItem("noeta.project")).toBeNull();
   });
 });

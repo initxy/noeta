@@ -236,6 +236,11 @@ code {
   padding-left: 18px;
 }
 
+.scratch-day-label {
+  font-size: 12px;
+  padding: 4px 8px 2px 26px;
+}
+
 .no-sessions {
   font-size: 13px;
   padding: 4px 8px;
@@ -476,6 +481,12 @@ code {
 .welcome .link {
   font-size: inherit;
   color: var(--accent);
+}
+
+.welcome .welcome-no-project {
+  display: block;
+  margin: 8px auto 0;
+  font-size: 13px;
 }
 
 /* the browser's folder picker */

@@ -3,9 +3,9 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, s
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { findNoeta, freePort, freshToken, INSTALL_LINE, isUnder, saveProject, ServerError, startServer, type PageConfig, type Running } from "./server";
-import { addRoot, loadSettings, saveSettings, visibleBounds, type Settings } from "./settings";
-import { CHANNELS, errorPage, GRANTED_PERMISSIONS, linkTarget, liveSessions, menuTemplate, type PageCommand } from "./shell";
+import { findNoeta, freePort, freshToken, INSTALL_LINE, saveProject, ServerError, startServer, type PageConfig, type Running } from "./server";
+import { loadSettings, saveSettings, visibleBounds, type Settings } from "./settings";
+import { CHANNELS, errorPage, GRANTED_PERMISSIONS, linkTarget, menuTemplate, type PageCommand } from "./shell";
 
 const DOCS_URL = "https://github.com/initxy/noeta#readme";
 const dev = !app.isPackaged;
@@ -24,8 +24,9 @@ function webDir(): string {
 let server: Running | null = null;
 let window: BrowserWindow | null = null;
 
+/** The project new sessions run in; "" (none saved, or it is gone): each gets a scratch folder. */
 function project(): string {
-  return settings.project && existsSync(settings.project) ? settings.project : homedir();
+  return settings.project && existsSync(settings.project) ? settings.project : "";
 }
 
 function pageConfig(): PageConfig {
@@ -48,7 +49,6 @@ async function launch(): Promise<Running> {
     token: freshToken(),
     webDir: webDir(),
     cwd: homedir(),
-    roots: settings.roots,
   });
 }
 
@@ -100,56 +100,19 @@ function reload(): void {
   else void openPage();
 }
 
-/** Whether to go on with a restart that would interrupt sessions mid-turn. */
-async function confirmRestart(): Promise<boolean> {
-  if (!window || !server) return true;
-  let live = 0;
-  try {
-    const resp = await fetch(`${server.url}/summaries`, { headers: { authorization: `Bearer ${server.token}` } });
-    if (resp.ok) live = liveSessions((await resp.json()) as { status: string; waiting_on: string | null }[]);
-  } catch {
-    // unreachable: nothing to interrupt
-  }
-  if (!live) return true;
-  const got = await dialog.showMessageBox(window, {
-    type: "warning",
-    message: "Restart the local server?",
-    detail: `A folder outside your home directory needs the server restarted. ${live} session(s) are working or waiting for you; they stop now and go on after the restart.`,
-    buttons: ["Restart", "Cancel"],
-    defaultId: 1,
-    cancelId: 1,
-  });
-  return got.response === 0;
-}
-
-async function restartServer(): Promise<void> {
-  const old = server;
-  server = null;
-  await old?.stop();
-  await openPage();
-}
-
 async function chooseProject(): Promise<string | null> {
   if (!window) return null;
   const got = await dialog.showOpenDialog(window, {
     title: "Add a project folder",
-    defaultPath: project(),
+    defaultPath: project() || homedir(),
     properties: ["openDirectory", "createDirectory"],
   });
   const dir = got.canceled ? undefined : got.filePaths[0];
   if (!dir) return null;
-  // The server runs sessions below its own directory (the home directory) and
-  // the roots it was started with: a folder elsewhere needs a restart.
-  const outside = !isUnder(dir, homedir()) && !settings.roots.some((r) => isUnder(dir, r));
-  if (outside && !(await confirmRestart())) return null;
-  settings = { ...settings, project: dir, roots: outside ? addRoot(settings.roots, dir) : settings.roots };
+  settings = { ...settings, project: dir };
   saveSettings(settingsPath, settings);
-  // A restart saves it as the server's project on the way up.
-  if (outside) await restartServer();
-  else {
-    if (server) await saveProject(server, dir);
-    send({ name: "project", path: dir });
-  }
+  if (server) await saveProject(server, dir);
+  send({ name: "project", path: dir });
   return dir;
 }
 
@@ -214,10 +177,10 @@ function wire(): void {
   });
   ipcMain.handle(CHANNELS.project, () => project());
   ipcMain.handle(CHANNELS.chooseProject, () => chooseProject());
-  // The project picked in the page: the window opens on it next time.
+  // The project picked in the page ("": none, scratch folders): the window opens on it next time.
   ipcMain.on(CHANNELS.setProject, (_e, path: unknown) => {
-    if (typeof path !== "string" || !path || path === settings.project || !existsSync(path)) return;
-    settings = { ...settings, project: path };
+    if (typeof path !== "string" || path === (settings.project ?? "") || (path && !existsSync(path))) return;
+    settings = { ...settings, project: path || undefined };
     saveSettings(settingsPath, settings);
   });
   ipcMain.on(CHANNELS.notify, (_e, n: { title?: unknown; body?: unknown; taskId?: unknown }) => {

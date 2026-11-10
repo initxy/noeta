@@ -16,7 +16,7 @@ function profile(settings: Record<string, unknown>): { dir: string; work: string
   mkdirSync(work);
   mkdirSync(join(dir, "home"));
   mkdirSync(join(dir, "profile"));
-  writeFileSync(join(dir, "profile", "settings.json"), JSON.stringify({ project: work, roots: [work], ...settings }));
+  writeFileSync(join(dir, "profile", "settings.json"), JSON.stringify({ project: work, ...settings }));
   return { dir, work };
 }
 
