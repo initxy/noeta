@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Project, TaskSummary } from "../api/types";
-import { basename, loadFolded, projectFor, projectList, saveFolded } from "../state/projects";
+import { basename, dayLabel, loadFolded, projectFor, projectList, saveFolded, scratchDay, scratchRoot } from "../state/projects";
 import { sessionStatus } from "../state/transcript";
 
 export type SessionStatus = ReturnType<typeof sessionStatus>;
@@ -80,7 +80,8 @@ function ProjectMenu({ name, onRemove }: { name: string; onRemove: () => void })
 }
 
 /** The left column: a new session, then each project (folder) with its
- * sessions newest first, narrowed by the search box. The open one shows
+ * sessions newest first, then the scratch sessions (started without a
+ * project) by date, newest first, narrowed by the search box. The open one shows
  * its `live` title and status (what its event stream says now).
  * `archived`: the list is of archived sessions, by folder; each row's
  * button archives or restores it (`onArchive`). */
@@ -104,7 +105,7 @@ export function Sidebar({
   sessions: TaskSummary[];
   /** The server's projects (null: it keeps none); the sessions' folders and the selected one are added. The archived list shows its sessions' folders only. */
   projects?: Project[] | null;
-  /** The selected project's path. */
+  /** The selected project's path ("": none, a new session gets a scratch folder). */
   project?: string;
   current: string | null;
   live?: { title: string; status: SessionStatus };
@@ -125,15 +126,24 @@ export function Sidebar({
   const listed: Project[] = archived
     ? [...new Set(sessions.map((s) => s.cwd))].map((path) => ({ path, name: basename(path), saved: false, sessions: 0 }))
     : projectList(projects, sessions, project);
-  // Sessions by the project they run in (its path, which may be a session's own spelled through a symlink).
+  const scratch = scratchRoot(projects);
+  // Sessions by the project they run in (its path, which may be a session's
+  // own spelled through a symlink); scratch ones by their date directory.
   const byDir = new Map<string, TaskSummary[]>();
+  const byDay = new Map<string, TaskSummary[]>();
   for (const s of [...sessions].sort((a, b) => b.updated_at - a.updated_at)) {
     const title = (s.task_id === current ? live?.title : "") || s.title;
     if (q && !matches(s, q, title)) continue;
+    const day = scratchDay(s.cwd, scratch);
+    if (day) {
+      byDay.set(day, [...(byDay.get(day) ?? []), s]);
+      continue;
+    }
     const dir = projectFor(s.cwd, listed)?.path ?? s.cwd;
     byDir.set(dir, [...(byDir.get(dir) ?? []), s]);
   }
   const shown = listed.filter((p) => byDir.has(p.path) || (!archived && (!q || holds(`${p.name}\n${p.path}`, q))));
+  const days = [...byDay.keys()].sort().reverse();
   const fold = (path: string) => {
     const next = new Set(folded);
     if (next.has(path)) next.delete(path);
@@ -141,9 +151,35 @@ export function Sidebar({
     saveFolded(next);
     setFolded(next);
   };
+  const rows = (list: TaskSummary[]) =>
+    list.map((s) => {
+      const mine = s.task_id === current ? live : undefined;
+      const status = mine?.status ?? sessionStatus(s.status, s.waiting_on);
+      const title = mine?.title || s.title || s.prompt || "Untitled session";
+      return (
+        <li key={s.task_id} className="session-row">
+          <button className={s.task_id === current ? "session active" : "session"} onClick={() => onOpen(s.task_id)} title={s.prompt}>
+            <span className={`status status-${status}`} aria-label={STATUS_NAMES[status]} title={STATUS_NAMES[status]} />
+            <span className="session-title">{title}</span>
+            <span className="muted ago">{ago(s.updated_at)}</span>
+          </button>
+          {onArchive && (
+            <button
+              className="icon-button row-action"
+              aria-label={archived ? "Unarchive" : "Archive"}
+              title={archived ? "Unarchive" : "Archive"}
+              onClick={() => onArchive(s.task_id, !archived)}
+            >
+              {archived ? "↺" : <ArchiveIcon />}
+            </button>
+          )}
+        </li>
+      );
+    });
+  const scratchOpen = !!q || archived || !scratch || !folded.has(scratch.path);
   return (
     <nav className="sidebar" aria-label="Sessions">
-      <button className="new-session" onClick={onNew} title={project ? `New session in ${project}` : "New session"}>
+      <button className="new-session" onClick={onNew} title={project ? `New session in ${project}` : "New session in its own scratch folder"}>
         + New session
       </button>
       <input
@@ -207,37 +243,49 @@ export function Sidebar({
               </div>
               {open && (
                 <ul>
-                  {list.map((s) => {
-                    const mine = s.task_id === current ? live : undefined;
-                    const status = mine?.status ?? sessionStatus(s.status, s.waiting_on);
-                    const title = mine?.title || s.title || s.prompt || "Untitled session";
-                    return (
-                      <li key={s.task_id} className="session-row">
-                        <button className={s.task_id === current ? "session active" : "session"} onClick={() => onOpen(s.task_id)} title={s.prompt}>
-                          <span className={`status status-${status}`} aria-label={STATUS_NAMES[status]} title={STATUS_NAMES[status]} />
-                          <span className="session-title">{title}</span>
-                          <span className="muted ago">{ago(s.updated_at)}</span>
-                        </button>
-                        {onArchive && (
-                          <button
-                            className="icon-button row-action"
-                            aria-label={archived ? "Unarchive" : "Archive"}
-                            title={archived ? "Unarchive" : "Archive"}
-                            onClick={() => onArchive(s.task_id, !archived)}
-                          >
-                            {archived ? "↺" : <ArchiveIcon />}
-                          </button>
-                        )}
-                      </li>
-                    );
-                  })}
+                  {rows(list)}
                   {!list.length && !q && <li className="muted empty no-sessions">No sessions yet</li>}
                 </ul>
               )}
             </section>
           );
         })}
-        {!shown.length && (
+        {scratch && days.length > 0 && (
+          <section className="project scratch" data-project={scratch.path}>
+            <div className={!archived && !project && !current ? "project-row selected" : "project-row"}>
+              <button
+                className="icon-button fold"
+                aria-label={scratchOpen ? "Fold Scratch" : "Unfold Scratch"}
+                aria-expanded={scratchOpen}
+                disabled={archived || !!q}
+                onClick={() => fold(scratch.path)}
+              >
+                <FolderIcon open={scratchOpen} />
+              </button>
+              <button
+                className="project-name"
+                title={`${scratch.path}: sessions started without a project, each in its own folder`}
+                disabled={archived}
+                onClick={() => {
+                  if (folded.has(scratch.path)) fold(scratch.path);
+                  onSelectProject?.("");
+                }}
+              >
+                {scratch.name || "Scratch"}
+              </button>
+            </div>
+            {scratchOpen &&
+              days.map((day) => (
+                <div key={day} className="scratch-day" data-day={day}>
+                  <div className="scratch-day-label muted" title={day}>
+                    {dayLabel(day)}
+                  </div>
+                  <ul>{rows(byDay.get(day) ?? [])}</ul>
+                </div>
+              ))}
+          </section>
+        )}
+        {!shown.length && !days.length && (
           <div className="muted empty">
             {q && (sessions.length || listed.length) ? "No sessions match" : archived ? "No archived sessions" : "No projects yet"}
           </div>

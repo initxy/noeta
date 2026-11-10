@@ -5,7 +5,7 @@ import { basename } from "../state/projects";
 
 function why(e: unknown, listing: boolean): string {
   if (e instanceof ApiError && e.status === 404) return listing ? "This server cannot list folders: update noeta on it." : "This server keeps no projects: update noeta on it.";
-  if (e instanceof ApiError && e.status === 403) return e.message || "The server may not run sessions there.";
+  // A 400 says what is wrong with the path (it does not exist, is not a folder).
   return String(e instanceof Error ? e.message : e);
 }
 

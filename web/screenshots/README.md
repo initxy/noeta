@@ -19,12 +19,13 @@ on the offline scripted provider, so they are rewritten on every run.
 | `16-search-archive.png` | the session search narrowing the list; a row's archive button |
 | `19-add-project.png` | adding a project in a browser: the folder picker over the server's folders |
 | `20-projects.png`, `21-projects-dark.png` | the projects column: each folder with its sessions, a session in the added project (light, dark) |
+| `22-scratch.png` | a session started without a project, in its own scratch folder, under Scratch by date |
 
 ## Claude Code's web and desktop app features
 
 | Feature | Here |
 | --- | --- |
-| Projects column: each project (folder) with its sessions, newest first, status (running / needs you / waiting / ended); new session in a project; add a project (native picker in the desktop app, a folder picker over `GET /dirs` in a browser), remove one; the last project remembered | done |
+| Projects column: each project (folder) with its sessions, newest first, status (running / needs you / waiting / ended); new session in a project or (no project) in a scratch folder of its own, listed under Scratch by date; add a project (native picker in the desktop app, a folder picker over `GET /dirs` in a browser), remove one; the last project remembered | done |
 | Rename a session (title button, `/rename`) | done |
 | Transcript: markdown, code highlighting, streamed text, collapsible thinking | done |
 | Tool cards: Bash command and output (long output folded), Read and the task tools compact, Edit/Write/MultiEdit as diffs, WebFetch, MCP tools, sub-agents nested (each built-in plugin's view is its web part, `web/src/plugins/<name>/`) | done |
@@ -45,7 +46,7 @@ on the offline scripted provider, so they are rewritten on every run.
 | Disconnect (forget the saved token) | done |
 | Todo list panel | done |
 | Light and dark themes, phone-sized layout | done |
-| Cloud environments, repository picker, branches and pull requests (claude.ai/code) | not here: noeta runs in the server's directories |
+| Cloud environments, repository picker, branches and pull requests (claude.ai/code) | not here: noeta runs in folders on the server's machine |
 | Diff review across a whole session, file tree, terminal pane (desktop) | not yet |
 | Search sessions (titles, first prompts, folders of the listed sessions) | done |
 | Archive a session, list the archived ones, bring one back | done (the `archive` signal; `GET /summaries?archived=`) |

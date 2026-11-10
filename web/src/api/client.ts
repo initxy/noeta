@@ -110,7 +110,7 @@ export class Api {
     return this.call("GET", "/projects");
   }
 
-  /** Saves a folder as a project; 403 when the server may not run sessions there. */
+  /** Saves a folder as a project; 400 when it is not an existing directory. */
   addProject(path: string): Promise<Project> {
     return this.call("POST", "/projects", { path });
   }
