@@ -18,6 +18,12 @@ Screen { layout: vertical; background: transparent; }
    restyle all its siblings.) */
 .assistant-message > * { margin: 0 0 1 0; }
 .assistant-message > MarkdownBlock:last-child { margin: 0; }
+/* A finished reply: its pieces (text, tables), the last one marked. */
+.reply { height: auto; }
+.reply > .-last { margin: 0; }
+/* A reply being streamed: its blocks done, then the one being written. */
+.streaming { height: auto; width: 1fr; }
+.streaming > .reply { margin: 0 0 1 0; }
 .assistant-message MarkdownHeader { margin: 0 0 1 0; color: $foreground; background: transparent; text-style: bold; content-align: left top; width: 1fr; }
 .assistant-message MarkdownFence > Label { padding: 0 2; }
 .assistant-message MarkdownTableContent > .header { color: $foreground; }

@@ -125,3 +125,19 @@ def test_a_link_shows_its_address() -> None:
     assert _inline_text("[https://x.example/c](https://x.example/c)") == "https://x.example/c"
     # Inside code nothing changes.
     assert _inline_text("`[a](b)`") == "[a](b)"
+
+
+def test_a_finished_reply_reads_as_text_and_tables_keep_their_styles() -> None:
+    from noeta_tui import reply
+
+    found = reply.parts("# Plan\n\nDo **this** with `x`.\n\n- one\n- two\n\n"
+                        "| a | b |\n|---|---|\n| **bold** | `code` |\n\n```py\nx = 1\n```")
+    text, table, code = found
+    assert isinstance(table, reply.Table) and not isinstance(text, reply.Table)
+    assert text.plain == "Plan\n\nDo this with x.\n\n• one\n• two"
+    assert "x = 1" in code.plain
+    _, tsv = table.drawn()
+    assert tsv == "a\tb\nbold\tcode"
+    cell = reply.rich_text(table.rows[0][0])
+    assert cell.plain == "bold" and any("bold" in str(span.style) for span in cell.spans)
+    assert reply.rich_text(table.rows[0][1]).spans  # inline code keeps its colour

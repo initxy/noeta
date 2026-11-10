@@ -13,7 +13,7 @@ from textual.content import Content
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui.widgets import AssistantMessage, PromptInput
 
-from support import make_app, ready, settle, type_line
+from support import make_app, plain, ready, settle, type_line
 
 
 async def test_a_paste_is_inserted_once(tmp_path: Path) -> None:
@@ -48,12 +48,13 @@ async def test_a_reply_starts_beside_its_bullet(tmp_path: Path) -> None:
         await type_line(pilot, "go")
         await settle(pilot, lambda: not app.busy and app.query(AssistantMessage))
         message = app.query_one(AssistantMessage)
-        await settle(pilot, lambda: len(message.children) == 3)
-        title, one, two = message.children
+        await settle(pilot, lambda: len(message.children) == 1)
+        [text] = message.children
         bullet = message.parent.children[0]  # type: ignore[union-attr]
-        assert title.region.y == bullet.region.y  # no blank line above the title
-        assert one.region.y == title.region.bottom + 1  # blocks one blank line apart
-        assert two.region.y == one.region.bottom + 1
+        await pilot.pause(0.1)
+        assert text.region.y == bullet.region.y  # no blank line above the title
+        # Blocks one blank line apart, the title bold.
+        assert plain(text).split("\n") == ["Title", "", "One.", "", "Two."]
 
 
 def test_cjk_text_breaks_between_characters() -> None:
