@@ -47,6 +47,9 @@
     --hl-number: #d19a66;
     --hl-comment: #7f848e;
     --hl-title: #61afef;
+    --warn: #e0a548;
+    --error: #f08a80;
+    --ok: #6cc28f;
     color-scheme: dark;
   }
 }
@@ -70,6 +73,9 @@
   --hl-number: #d19a66;
   --hl-comment: #7f848e;
   --hl-title: #61afef;
+  --warn: #e0a548;
+  --error: #f08a80;
+  --ok: #6cc28f;
   color-scheme: dark;
 }
 
@@ -477,10 +483,10 @@ code {
   height: 0;
   display: flex;
   justify-content: center;
+  align-items: flex-end;
 }
 
 .jump {
-  transform: translateY(-100%);
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
@@ -761,26 +767,27 @@ code {
 }
 
 /* tool cards */
+/* A tool call is a line (its dot, name and target) and, under it, indented
+ * to the name, what it shows: no box around it, only around its output. */
 .tool {
-  margin: 6px 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  margin: 4px 0;
   font-size: 14px;
-}
-
-.tool-compact {
-  border-color: transparent;
-  background: none;
 }
 
 .tool-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 3px 0;
   cursor: pointer;
   min-width: 0;
+  border-radius: 6px;
+}
+
+.tool-head:hover .tool-name {
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
 }
 
 .tool-name {
@@ -799,7 +806,7 @@ code {
 }
 
 .tool-body {
-  padding: 0 10px 8px;
+  padding: 0 0 4px 16px;
 }
 
 .tool-body:empty {
@@ -841,7 +848,7 @@ code {
 }
 
 .tool-note {
-  padding: 0 10px 8px;
+  padding: 0 0 4px 16px;
   color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;

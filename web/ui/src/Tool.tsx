@@ -95,7 +95,9 @@ export function DiffView({ diff, open }: { diff: string; open?: boolean }) {
 
 /** A diff for a change that has not happened yet: `before` replaced by `after`. */
 export function proposedDiff(before: string, after: string): string {
-  const old = before ? before.split("\n").map((l) => `-${l}`) : [];
-  const neu = after ? after.split("\n").map((l) => `+${l}`) : [];
+  // A text ending in a newline has no empty last line to show.
+  const lines = (text: string) => text.replace(/\n$/, "").split("\n");
+  const old = before ? lines(before).map((l) => `-${l}`) : [];
+  const neu = after ? lines(after).map((l) => `+${l}`) : [];
   return [...old, ...neu].join("\n");
 }
