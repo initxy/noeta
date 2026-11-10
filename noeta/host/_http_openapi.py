@@ -49,6 +49,14 @@ OPENAPI: dict[str, Any] = {
                                   "and whether they are archived", query=("limit", "archived"))},
         "/files": {"get": _op("Paths under a task's or a directory's tree holding q",
                               query=("q", "task_id", "cwd", "limit"))},
+        "/projects": {
+            "get": _op("The saved directories and those of unarchived sessions, each with "
+                       "path, name, saved and its count of sessions"),
+            "post": _op("Save a directory as a project (checked as a new task's cwd)",
+                        body=_props("path")),
+            "delete": _op("Stop saving a project (its sessions stay)", body=_props("path"))},
+        "/dirs": {"get": _op("The subdirectories of an allowed directory (hidden ones left "
+                             "out) and its parent", query=("path",))},
         "/tasks/{task_id}": {"get": _op("A task's row", params=_TASK)},
         "/tasks/{task_id}/events": {"get": _op("A task's events", params=_TASK,
                                                query=("after",))},

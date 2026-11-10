@@ -20,13 +20,14 @@ from noeta.core.agent import Agent
 from noeta.core.events import TaskCreated
 from noeta.core.extension import CommandContext
 from noeta.core.types import Image, Message, Text
-from noeta.host._http_guard import REQUEST_CONFIG, scope
+from noeta.host._http_guard import REQUEST_CONFIG, Refused, scope
 from noeta.host._http_openapi import OPENAPI
 from noeta.host.app import AppAPI
 from noeta.host.files import file_matches
 from noeta.host.pending import Pending, card_title, choices, pending_tree
+from noeta.host.projects import SavedProjects, list_dirs, projects
 from noeta.host.rewind import rewind, rewind_points
-from noeta.host.summaries import Cache, root_summaries
+from noeta.host.summaries import SCAN_ROWS, Cache, root_summaries
 from noeta.host.usage import tree_usage
 
 _enc = msgspec.json.Encoder()
@@ -61,6 +62,14 @@ def _flag(value: str | None) -> bool | None:
     raise ValueError(f"expected true or false, got {value!r}")
 
 
+def _path(body: Any) -> str:
+    """A projects request's ``path``."""
+    path = body.get("path") if isinstance(body, dict) else None
+    if not isinstance(path, str) or not path:
+        raise ValueError("a project request needs a non-empty 'path'")
+    return path
+
+
 async def _command_place(request: Request, agent: str | None, task_id: str | None,
                          cwd: str | None) -> tuple[str, CommandContext]:
     """The agent and context a slash command is listed or run in: a task's
@@ -81,12 +90,15 @@ async def _command_place(request: Request, agent: str | None, task_id: str | Non
 class Routes:
     """The handlers, on the front they serve: ``serving`` runs slash commands
     and previews context, ``app`` (the ``LocalApp`` whose workers run here,
-    if any) adopts a rewind's new task, ``agents`` are listed."""
+    if any) adopts a rewind's new task, ``agents`` are listed, ``saved`` are
+    the projects a person saved."""
 
-    def __init__(self, serving: AppAPI, app: Any, agents: Mapping[str, Agent] | None) -> None:
+    def __init__(self, serving: AppAPI, app: Any, agents: Mapping[str, Agent] | None,
+                 saved: SavedProjects | None = None) -> None:
         self._serving = serving
         self._app = app
         self._agents = agents
+        self._saved = saved or SavedProjects()
         self._summaries: Cache = {}
         self._pending: dict[str, tuple[int, list[Pending]]] = {}
 
@@ -112,6 +124,41 @@ class Routes:
         return _json(await root_summaries(client, limit, self._summaries,
                                           inbox=client.store.inbox,
                                           archived=_flag(q.get("archived"))))
+
+    async def _projects(self, request: Request) -> list[dict[str, Any]]:
+        client = scope(request).client
+        live = await root_summaries(client, SCAN_ROWS, self._summaries,
+                                    inbox=client.store.inbox, archived=False)
+        return projects(await asyncio.to_thread(self._saved.paths), live)
+
+    async def list_projects(self, request: Request) -> Response:
+        return _json(await self._projects(request))
+
+    async def save_project(self, request: Request) -> Response:
+        path = _path(await request.json())
+        # The check a new task's cwd passes: a project is where its sessions start.
+        real = os.path.realpath(scope(request).guarded.check_cwd(path))
+        if not await asyncio.to_thread(os.path.isdir, real):
+            raise ValueError(f"{path} is not a directory")
+        await asyncio.to_thread(self._saved.add, real)
+        return _json(next(p for p in await self._projects(request) if p["path"] == real))
+
+    async def unsave_project(self, request: Request) -> Response:
+        await asyncio.to_thread(self._saved.remove, _path(await request.json()))
+        return _json({"ok": True})
+
+    async def dirs(self, request: Request) -> Response:
+        guarded = scope(request).guarded
+        asked = request.query_params.get("path") or "."
+        here = os.path.realpath(guarded.check_cwd(asked))
+        found = await asyncio.to_thread(list_dirs, here)
+        parent: str | None = os.path.dirname(here)
+        try:
+            guarded.check_cwd(parent)
+        except Refused:
+            parent = None
+        return _json({"path": here, "parent": parent if parent != here else None,
+                      "dirs": found})
 
     async def files(self, request: Request) -> Response:
         q = request.query_params

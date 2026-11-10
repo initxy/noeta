@@ -12,6 +12,15 @@ events; when this process also runs workers, live model output streams too.
                                       archived=true / false keeps only those / the others
     GET  /files?q=&task_id=&cwd=&limit=  paths under a task's (or a cwd's) directory
                                       holding ``q``, for a prompt's ``@`` mentions
+    GET  /projects                    the saved directories, then the other directories of
+                                      unarchived root tasks: each {path, name, saved,
+                                      sessions} (``noeta.host.projects``)
+    POST /projects                    {path} -> the project, saved; path checked as a new
+                                      task's cwd (403 outside the server's directories)
+    DELETE /projects                  {path} -> {ok}: no longer saved (its tasks stay)
+    GET  /dirs?path=                  {path, parent, dirs: [{name, path}]}: the subdirectories
+                                      of an allowed directory (default: the server's), hidden
+                                      ones left out; parent null when it is not allowed
     GET  /tasks/{id}
     GET  /tasks/{id}/events?after=N
     GET  /tasks/{id}/pending          approvals and questions waiting on a person, sub-agents'
@@ -107,6 +116,7 @@ from noeta.host.plugins import (
     command_off,
     plugin_infos,
 )
+from noeta.host.projects import SavedProjects
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
@@ -260,7 +270,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
                origins: Sequence[str] = (), allow_bypass: bool = False,
                cwd: str | None = None, roots: Sequence[str] = (),
                web_dir: str | None = None, allow_plugin_install: bool = False,
-               plugin_admin: PluginAdmin | None = None) -> Starlette:
+               plugin_admin: PluginAdmin | None = None,
+               projects_file: str | None = None) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -280,7 +291,9 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     a directory of static files served at every other path (a web app);
     ``allow_plugin_install``: requests may install and remove plugins (the
     ``noeta`` command allows it on a loopback bind); ``plugin_admin``: the
-    machine's plugins as an API-only server (no ``app``) lists them."""
+    machine's plugins as an API-only server (no ``app``) lists them;
+    ``projects_file``: the JSON file the saved projects are kept in (only in
+    memory without one)."""
     if auth and not token and not token_sha256:
         raise ValueError("create_app needs a bearer token (token= or token_sha256=); pass "
                          "auth=False to serve every request without one")
@@ -294,7 +307,7 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
     guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
                   cwd=cwd, roots=roots, fixed=lambda: admin.fixed())
-    r = Routes(serving, app, agents)
+    r = Routes(serving, app, agents, SavedProjects(projects_file))
     s = StreamRoutes(guard, deltas)
     running = agents or {}
     p = PluginRoutes(serving, lambda: running, guard, allow_install=allow_plugin_install,
@@ -304,6 +317,10 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         Route("/tasks", guard(r.list_tasks), methods=["GET"]),
         Route("/summaries", guard(r.summaries), methods=["GET"]),
         Route("/files", guard(r.files), methods=["GET"]),
+        Route("/projects", guard(r.list_projects), methods=["GET"]),
+        Route("/projects", guard(r.save_project), methods=["POST"]),
+        Route("/projects", guard(r.unsave_project), methods=["DELETE"]),
+        Route("/dirs", guard(r.dirs), methods=["GET"]),
         Route("/tasks/{task_id}", guard(r.get_task), methods=["GET"]),
         Route("/tasks/{task_id}/events", guard(r.events), methods=["GET"]),
         Route("/tasks/{task_id}/pending", guard(r.pending), methods=["GET"]),

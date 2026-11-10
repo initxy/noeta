@@ -315,7 +315,8 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      allow_plugin_install=args.allow_plugin_install
                      or (host in LOOPBACK_HOSTS and not args.allow_host
                          and not args.allow_origin),
-                     plugin_admin=app.plugin_admin)
+                     plugin_admin=app.plugin_admin,
+                     projects_file=str(home_dir.projects_file(s.store_url)))
     if args.web:
         print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)
