@@ -42,6 +42,12 @@ def withhold_env_refs(config: Any) -> None:
     names, at any nesting: noeta's configuration hands those secrets to its
     own plugins and channels, so they are its credentials too. (A Claude
     Code plugin's own hooks and MCP servers name theirs; those pass.)"""
+    withhold(env_refs(config))
+
+
+def env_refs(config: Any) -> set[str]:
+    """The variables the ``{env:NAME}`` references in ``config`` name, at
+    any nesting."""
     found: set[str] = set()
 
     def walk(value: Any) -> None:
@@ -55,7 +61,7 @@ def withhold_env_refs(config: Any) -> None:
                 walk(item)
 
     walk(config)
-    withhold(found)
+    return found
 
 
 def child_env() -> dict[str, str]:

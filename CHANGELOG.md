@@ -6,6 +6,20 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [1.2.1] - 2026-11-10
+
+`noeta update` installs the new version even when uv cached the old listing, and `noeta service`
+takes along the keys `config.toml` refers to.
+
+### Fixed
+
+- **`noeta update` reinstalled the version already there** when uv had cached PyPI's listing from
+  before the release: it now asks uv to refresh noeta's packages (`pip` runs without its cache),
+  and says so when the index still serves the old version instead of reporting success.
+- **`noeta service install` left out the keys `config.toml` refers to** (`{env:NAME}`, for example
+  a provider's `api_key`), so the service could not reach its model: those variables now go into
+  its environment too, and one the shell does not set is named.
+
 ## [1.2.0] - 2026-11-09
 
 One command runs the backend, `noeta serve`, and `noeta service` keeps it running as your

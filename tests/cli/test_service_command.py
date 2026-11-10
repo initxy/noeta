@@ -62,6 +62,20 @@ def test_the_env_file_and_what_it_takes_from_the_shell() -> None:
         'OPENAI_BASE_URL="u"\nPATH="/usr/bin"\nhttps_proxy="http://p:1"\n')
 
 
+def test_the_variables_config_toml_refers_to_go_along(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "config.toml").write_text(
+        'api_key = "{env:MY_KEY}"\n[providers.relay]\nbase_url = "http://r"\n'
+        'api_key = "{env:RELAY_KEY}"\nextra_headers = { X = "{env:RELAY_HEADER}" }\n')
+    monkeypatch.setattr(service_command.home_dir, "HOME", tmp_path)
+    named = service_command.config_env_refs()
+    assert named == {"MY_KEY", "RELAY_KEY", "RELAY_HEADER"}
+    env = service_command.service_env({"RELAY_KEY": "k", "OTHER": "no", "PATH": "/b"}, named)
+    assert env == {"PATH": "/b", "RELAY_KEY": "k"}
+    (tmp_path / "config.toml").write_text("not = [valid")
+    assert service_command.config_env_refs() == set()
+
+
 def test_the_launch_agent_keeps_the_server_running_and_logs_to_noetas_home() -> None:
     data = service_command.launchd_plist(["/n", "serve"], home="/Users/me",
                                          env={"PATH": "/bin"}, log="/Users/me/.noeta/logs/serve.log")
