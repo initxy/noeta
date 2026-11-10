@@ -92,6 +92,8 @@ WORKFLOW_KINDS = ("run", "agent", "result", "agent_failed", "ended")
 SPINNER_TICK = 0.12
 #: The agents' list key of a workflow run's line, before its run id.
 WORKFLOW_KEY = "workflow:"
+#: What a stopped turn says.
+INTERRUPTED = "  ⎿  Interrupted · what should noeta do instead?"
 #: What the footer says while the task waits on one of its approval cards.
 WAITING_APPROVAL = "waiting for your approval"
 #: Seconds the plugins' UI is fetched after the task's log advanced: the
@@ -216,6 +218,8 @@ class TranscriptView(App[None]):
     #: While a task's log is shown at once (:meth:`show_log`): the widgets
     #: rendered from it, not yet mounted; ``None`` when rendering live.
     _batch: list[Widget] | None
+    #: The turn was stopped here (Esc): shown so before the task records it.
+    _stopped_here: bool
     #: What the footer's one-row parts show now, by selector.
     _drawn: dict[str, Text]
 
@@ -305,6 +309,7 @@ class TranscriptView(App[None]):
     def set_busy(self, busy: bool) -> None:
         """A turn starts or ends: the spinner runs while it does."""
         if busy and not self.busy:
+            self._stopped_here = False
             self.turn_started = time.monotonic() - self._since()
             self.turn_started_at = self._record_at
             self.turn_tokens, self.turn_output = 0, 0
@@ -654,11 +659,10 @@ class TranscriptView(App[None]):
             await self._add(Notice(f"retrying (attempt {core.attempt}): "
                                    f"{str(core.error or '')[:120]}"))
         elif isinstance(core, records.TurnStopped):
-            await self._close_cards()
-            await self._end_stream()
-            self._set_question("", "", {})
-            await self._add(Notice(Text("  ⎿  Interrupted · what should noeta do instead?",
-                                        style="red")))
+            if self._stopped_here and self._batch is None:
+                self._stopped_here = False  # shown when Esc was pressed
+                return
+            await self._stop_shown()
         elif isinstance(core, records.TurnFailed):
             await self._add(Notice(f"turn failed: {failure_text(data)}", classes="-error"))
         elif isinstance(core, records.Notice) and core.notice_kind == "workflow" \
@@ -668,6 +672,22 @@ class TranscriptView(App[None]):
             # Structured news (a review's findings) reads as a list.
             await self._add(CleanMarkdown(core.text, classes="notice")
                             if core.notice_kind else Notice(core.text))
+
+    async def _stop_shown(self) -> None:
+        await self._close_cards()
+        await self._end_stream()
+        self._set_question("", "", {})
+        await self._add(Notice(Text(INTERRUPTED, style="red")))
+
+    async def interrupted(self) -> None:
+        """Esc stopped the turn: shown so now (the spinner stops, what was
+        streaming ends, what it still streams is not shown), not when the
+        task records it a moment later."""
+        self._stopped_here = True
+        self.replied = max(self.replied, self.called)
+        await self._stop_shown()
+        await self._turn_done()
+        self.transcript().stick()
 
     def _agent_ended(self, ended: ChildEnded, at: float) -> None:
         call = self.agents.pop(ended.child_id, None)

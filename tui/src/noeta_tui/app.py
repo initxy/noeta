@@ -161,6 +161,7 @@ class NoetaApp(TranscriptView):
         self.replied = 0
         self._batch = None
         self._drawn = {}
+        self._stopped_here = False
         self._record_at = 0.0
         self.turn_started_at = 0.0
         #: A delta is taken off the queue but not yet written.
@@ -746,9 +747,10 @@ class NoetaApp(TranscriptView):
 
     async def action_stop_turn(self) -> None:
         if self.task_id and self.busy:
-            async with self.failures_shown("stopping"):
-                await self.local.client.cancel(self.task_id, "stopped from the terminal",
-                                               turn_only=True)
+            # Shown stopped at once; the task's record of it follows, and
+            # the keys go on meanwhile (a server's answer takes a while).
+            await self.interrupted()
+            self._cancel_turn(self.task_id)
             return
         now = time.monotonic()
         double = now - self._last_escape <= DOUBLE_PRESS
@@ -760,6 +762,11 @@ class NoetaApp(TranscriptView):
             box.clear()  # Claude Code: double Esc clears the input
         elif self.task_id and not self.read_only:
             await slash.run(self, "rewind", "")
+
+    @work(group="stop", exit_on_error=False)
+    async def _cancel_turn(self, task_id: str) -> None:
+        async with self.failures_shown("stopping"):
+            await self.local.client.cancel(task_id, "stopped from the terminal", turn_only=True)
 
     async def action_interrupt(self) -> None:
         """Ctrl+C: copy the selection (it is then gone), else clear the

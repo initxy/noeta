@@ -14,7 +14,7 @@ from noeta.testing import ScriptedProvider, reply
 from noeta_tui import tail
 from noeta_tui.widgets import AssistantMessage
 
-from support import Lines, make_app, settle, type_line
+from support import Lines, make_app, settle, shown, type_line
 
 
 @pytest.fixture(autouse=True)
@@ -124,6 +124,36 @@ async def test_scrolled_up_the_transcript_stays_put_as_the_task_goes_on(
         await type_line(pilot, "c")
         await pilot.pause(0.3)
         assert transcript.scroll_y == transcript.max_scroll_y
+
+
+async def test_esc_shows_the_turn_stopped_at_once_and_once(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    lines = Lines()
+    lines.release.clear()
+    provider = ScriptedProvider([reply("", ("Bash", {"command": "x", "n": 1})), reply("late")])
+    app = make_app(tmp_path, provider, tools=[lines])
+    async with app.run_test(size=(100, 30)) as pilot:
+        await type_line(pilot, "go")
+        await settle(pilot, lambda: app.busy and bool(app.calls))
+        cancel = app.local.client.cancel
+        sent = asyncio.Event()
+
+        async def slow(*a: Any, **kw: Any) -> Any:
+            await sent.wait()  # the task hears of it a while later
+            return await cancel(*a, **kw)
+
+        monkeypatch.setattr(app.local.client, "cancel", slow)
+        await pilot.press("escape")
+        await settle(pilot, lambda: not app.busy and "Interrupted" in shown(app))
+        assert not app.query_one("#spinner").display
+        sent.set()
+        lines.release.set()
+        await settle(pilot, lambda: app.local is not None and not app.busy
+                     and app._stopped_here is False)
+        await pilot.pause(0.3)
+        assert shown(app).count("Interrupted") == 1
 
 
 async def test_a_streamed_reply_is_appended_once_a_frame_not_once_a_fragment(
