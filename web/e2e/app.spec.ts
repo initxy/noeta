@@ -312,7 +312,7 @@ test("a project added from the folder picker gets its own sessions", async ({ pa
   await page.getByLabel("Permission mode").selectOption("acceptEdits");
   await say(page, "hello from a project");
   await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
-  await expect(page.locator(".cwd")).toHaveText(dir);
+  await expect(page.locator(".cwd")).toHaveAttribute("title", dir);
   await expect(project.locator(".session")).toContainText("hello from a project");
   await shot(page, "20-projects");
   await page.emulateMedia({ colorScheme: "dark" });
