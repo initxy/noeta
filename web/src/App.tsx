@@ -18,6 +18,7 @@ import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
 import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot, shortPath } from "./state/projects";
 import type { TaskState } from "./state/transcript";
+import { usePoll } from "./state/usePoll";
 import { ApiContext, useTask, useTaskView } from "./state/useTask";
 
 /** Commands the page runs itself, as Claude Code's app does. */
@@ -335,11 +336,9 @@ function Workspace({
     }, fail);
   };
   const projectName = (served && projectFor(project, served)?.name) || basename(project);
-  useEffect(() => {
-    void refreshSessions();
-    const timer = setInterval(refreshSessions, 3000);
-    return () => clearInterval(timer);
-  }, [refreshSessions]);
+  // The listing, while the page is hidden less often (a desktop app's
+  // notifications come from it, so it keeps looking).
+  usePoll(refreshSessions, 3000, desk ? 10_000 : 60_000);
 
   useEffect(() => {
     api.models().then(setModels, fail);
@@ -352,7 +351,7 @@ function Workspace({
   // The sidebar's row of the open session follows its stream; the listing
   // is read again when the stream shows it changed.
   useEffect(() => {
-    if (taskId) void refreshSessions();
+    void refreshSessions();
   }, [taskId, state.busy, state.ended, refreshSessions]);
 
   // Cards are asked for only while the session waits on a person, or a
@@ -361,12 +360,13 @@ function Workspace({
     if (taskId) api.pending(taskId).then(setPending, fail);
   }, [api, taskId, fail]);
   const asking = state.waitingOn === "approval" || state.waitingOn === "question" || state.running.length > 0;
+  // Asked again at once when the stream shows a new wait; sub-agents' own
+  // approvals are not in it, so the cards are also polled (not while hidden).
   useEffect(() => {
     if (!asking) return setPending([]);
     refreshPending();
-    const timer = setInterval(refreshPending, 1500);
-    return () => clearInterval(timer);
-  }, [refreshPending, asking]);
+  }, [refreshPending, asking, state.waitingIds]);
+  usePoll(refreshPending, asking ? 1500 : null, null);
 
   useEffect(() => {
     if (taskId && state.replied) api.usage(taskId).then(setUsage, () => undefined);
