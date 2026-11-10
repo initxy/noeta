@@ -100,7 +100,9 @@ class TailScroll(VerticalScroll):
             return
         # Where each item ends, from the last layout (margins as the
         # vertical layout keeps them: the larger of two neighbours').
-        far = self.max_scroll_y - 2 * self.size.height
+        # Measured from the view, not the end: scrolled up (the anchor not
+        # yet released by a programmatic scroll), what is read stays.
+        far = min(self.scroll_y, self.max_scroll_y) - 2 * self.size.height
         n, bottom, below = hidden, 0, 0
         while n < len(children) - SHOWN:
             child = children[n]
