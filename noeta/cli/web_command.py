@@ -194,7 +194,7 @@ def _serve_command(port: int, web_dir: str, flags: dict[str, str]) -> list[str]:
     for name, value in flags.items():
         cmd += [f"--{name.replace('_', '-')}", value]
     return [*cmd, "serve", "--host", HOST, "--port", str(port),
-            "--allow-root", str(Path.home()), "--web", web_dir]
+            "--allow-root", str(Path.home()), "--web", web_dir, "--for-noeta-web"]
 
 
 def start(*, port: int | None, open_browser: bool, cwd: str,

@@ -152,7 +152,7 @@ def test_the_server_command_and_whose_pid_it_is(
     assert cmd[:3] == [sys.executable, "-m", "noeta.cli.main"]
     assert cmd[3:] == ["--model", "opus", "--base-url", "http://x", "serve", "--host",
                        "127.0.0.1", "--port", "9", "--allow-root", os.environ["HOME"],
-                       "--web", "/w"]
+                       "--web", "/w", "--for-noeta-web"]
     stranger = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         server = web_command.Server(pid=stranger.pid, port=_free_port(), token="t", log="x")

@@ -73,6 +73,13 @@ def _within(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
+#: How to use a folder outside ``noeta serve``'s directories.
+OUTSIDE_HINT = "start it there or add the directory with --allow-root"
+#: The same for the server ``noeta web`` started, which its user did not configure.
+WEB_OUTSIDE_HINT = ("noeta web may use your home folder and the folder it was started in; "
+                    "to use this one, run noeta web stop, then noeta web from that folder")
+
+
 class GuardedClient:
     """``client`` refusing what a request may not ask for: a task in
     ``bypassPermissions`` (unless allowed) or with a ``cwd`` outside the
@@ -89,8 +96,11 @@ class GuardedClient:
 
     def __init__(self, client: ClientAPI, *, allow_bypass: bool, cwd: str | None,
                  roots: Sequence[str] = (),
-                 fixed: Callable[[], Collection[str]] = lambda: ()) -> None:
+                 fixed: Callable[[], Collection[str]] = lambda: (),
+                 outside_hint: str = OUTSIDE_HINT) -> None:
         self._client = client
+        #: What the refusal of a ``cwd`` outside the directories tells to do.
+        self._outside_hint = outside_hint
         #: The plugins the settings keep in every task (``PluginAdmin.fixed``).
         self._fixed = fixed
         #: The queue this server's workers take: a front end's task a request
@@ -114,7 +124,7 @@ class GuardedClient:
         if not any(_within(real, r) for r in self._roots):
             where = ", ".join(self._roots)
             raise Refused(f"cwd {cwd!r} is outside this server's directories ({where}); "
-                          "start it there or add the directory with --allow-root")
+                          f"{self._outside_hint}")
         return real
 
     def check_config(self, config: Any, allowed: Sequence[str] = REQUEST_CONFIG) -> Any:
@@ -283,11 +293,12 @@ class Guard:
     def __init__(self, client: Any, serving: Any, *, token_sha256: str | None, auth: bool,
                  allowed_hosts: Sequence[str] | None, origins: Sequence[str],
                  allow_bypass: bool, cwd: str | None, roots: Sequence[str],
-                 fixed: Callable[[], Collection[str]] = lambda: ()) -> None:
+                 fixed: Callable[[], Collection[str]] = lambda: (),
+                 outside_hint: str = OUTSIDE_HINT) -> None:
         self._auth = auth
         self._sha256 = token_sha256
         guarded = GuardedClient(client, allow_bypass=allow_bypass, cwd=cwd, roots=roots,
-                                fixed=fixed)
+                                fixed=fixed, outside_hint=outside_hint)
         self.scope = Scope(client, guarded, _GuardedFront(serving, guarded))
         self._hosts = None if allowed_hosts is None else {h.lower() for h in allowed_hosts}
         self._origins = {o.rstrip("/").lower() for o in origins}

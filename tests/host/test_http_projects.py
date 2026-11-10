@@ -16,7 +16,7 @@ import httpx
 
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
-from noeta.host.http import create_app
+from noeta.host.http import WEB_OUTSIDE_HINT, create_app
 from noeta.host.local import LocalApp
 from noeta.host.projects import SavedProjects, list_dirs, projects
 from noeta.testing import ScriptedProvider
@@ -34,12 +34,12 @@ def tree(tmp_path: Path) -> Path:
     return root
 
 
-def _api(tmp_path: Path, root: Path) -> tuple[LocalApp, httpx.AsyncClient, Path]:
+def _api(tmp_path: Path, root: Path, **kw: str) -> tuple[LocalApp, httpx.AsyncClient, Path]:
     app = LocalApp(SqliteStore(str(tmp_path / "t.db")), [Agent(name="main", model="m")],
                    ScriptedProvider(), env_for=lambda _s: None)
     saved = tmp_path / "projects.json"
     api = create_app(app.client, token="secret", app=app, cwd=str(root),
-                     projects_file=str(saved))
+                     projects_file=str(saved), **kw)
     http = httpx.AsyncClient(transport=httpx.ASGITransport(app=api),  # type: ignore[arg-type]
                              base_url="http://127.0.0.1", headers=H, timeout=10)
     return app, http, saved
@@ -162,3 +162,13 @@ def test_the_saved_list_lives_beside_a_sqlite_store_else_in_noetas_home(
     monkeypatch.setattr(home_dir, "HOME", tmp_path / "home")
     assert home_dir.projects_file(f"sqlite:///{tmp_path}/s/t.db") == tmp_path / "s" / "projects.json"
     assert home_dir.projects_file("postgres://db/x") == tmp_path / "home" / "projects.json"
+
+
+async def test_noeta_webs_refusal_says_what_its_user_can_do(
+        tmp_path: Path, tree: Path) -> None:
+    _, http, _ = _api(tmp_path, tree, outside_hint=WEB_OUTSIDE_HINT)
+    async with http:
+        refused = await http.post("/projects", json={"path": str(tmp_path / "outside")})
+    error = refused.json()["error"]
+    assert refused.status_code == 403
+    assert "--allow-root" not in error and "noeta web stop" in error
