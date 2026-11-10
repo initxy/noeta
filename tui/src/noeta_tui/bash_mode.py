@@ -57,6 +57,6 @@ async def run(app: NoetaApp, command: str) -> None:
     if not rows:
         rows = [("(No content)" if code == 0 else f"exit code {code}", "dim")]
     await transcript.mount(Static(render.result_block(
-        render.folded(rows, diff=False, expanded=app.verbose)), classes="command-output"))
+        render.folded(rows, diff=False, expanded=False)), classes="command-output"))
     transcript.stick()
     app.bash_context.append(context_text(command, out, err))

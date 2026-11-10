@@ -164,8 +164,6 @@ class TranscriptView(App[None]):
     _unshown: Counter[int]
     #: The task list (the todos plugin's records), by id.
     todos: dict[str, dict[str, Any]]
-    #: Every call's result shown in full (ctrl+o).
-    verbose: bool
     #: Messages sent while a turn ran, not yet taken by the task.
     queued: list[str]
     #: Messages shown as they were sent, not yet seen in the task's log.
@@ -291,7 +289,7 @@ class TranscriptView(App[None]):
             last = self._last_shown()
         group = last if isinstance(last, ToolGroup) else None
         if group is None:
-            group = ToolGroup(expanded=self.verbose)
+            group = ToolGroup()
             await self._add(group)
         if thought is not None:
             await group.add(thought.copy())
@@ -392,7 +390,7 @@ class TranscriptView(App[None]):
             if self.thinking is not None and self.thinking_key != key:
                 await self._end_thinking(drop=self.thinking_key[0] == key[0])
             if self.thinking is None:
-                self.thinking = ThinkingBlock(expanded=self.verbose, started=time.monotonic())
+                self.thinking = ThinkingBlock(started=time.monotonic())
                 self.thinking_key = key
                 await transcript.mount(self.thinking)
                 self._follow_end()
@@ -588,7 +586,7 @@ class TranscriptView(App[None]):
                 await self._add(bulleted(AssistantMessage(msg.text)))
             self.streamed.discard(self.called)
             for call in msg.tool_uses:
-                block = ToolCall(call, expanded=self.verbose, cwd=self.task_cwd)
+                block = ToolCall(call, cwd=self.task_cwd)
                 self.calls[call.id] = block
                 if (early := self.early_progress.pop(call.id, None)) is not None:
                     block.set_progress(early)

@@ -11,12 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from noeta.core.tool import ToolContext, ToolOutput, text_output
-from noeta.core.types import Delta, ToolUse
+from noeta.core.types import Delta, Thinking, ToolUse
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui import render
 from noeta_tui.widgets import ApprovalCard, ThinkingBlock, ToolCall, ToolGroup
 
-from support import AskBash, Lines, make_app, plain, settle, shown, type_line
+from support import AskBash, Lines, make_app, open_detail, plain, settle, shown, type_line
 
 
 class Grep:
@@ -40,7 +40,9 @@ class Thinks(ScriptedProvider):
     async def complete(self, request: Any, on_delta: Any = None) -> Any:
         if on_delta is not None:
             on_delta(Delta(kind="thinking", text="weighing it up"))
-        return await super().complete(request, on_delta)
+        out = await super().complete(request, on_delta)
+        out.message.content.insert(0, Thinking(text="weighing it up"))
+        return out
 
 
 def _files(tmp_path: Path) -> Path:
@@ -90,8 +92,8 @@ async def test_a_run_of_calls_is_one_counted_line_a_click_opens(tmp_path: Path) 
         assert "line 9" not in plain(bash.body)
         await pilot.click(seven.head)
         assert not seven.expanded and not any(c.display for c in seven.calls)
-        await pilot.press("ctrl+o")  # still opens everything
-        assert seven.expanded and "line 9" in plain(bash.body)
+        view = await open_detail(pilot)  # every call and result in full
+        assert "line 9" in shown(view) and not seven.expanded
 
 
 async def test_a_running_call_shows_under_its_runs_present_tense_line(tmp_path: Path) -> None:
@@ -160,8 +162,8 @@ async def test_the_models_thoughts_between_calls_join_their_run(tmp_path: Path) 
         thoughts = [p for p in group.parts if isinstance(p, ThinkingBlock)]
         assert len(thoughts) == 2 and not any(t.display for t in thoughts)
         assert len(app.query(ThinkingBlock)) == 3  # the last one, before the reply, on its own
-        await pilot.press("ctrl+o")
-        assert all(t.display and "weighing it up" in plain(t) for t in thoughts)
+        view = await open_detail(pilot)
+        assert sum("weighing it up" in plain(t) for t in view.query(ThinkingBlock)) == 3
 
 
 def test_the_run_line_names_each_kind_in_claude_codes_order() -> None:

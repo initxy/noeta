@@ -47,9 +47,7 @@ from noeta_tui.widgets import (
     Notice,
     PromptInput,
     QuestionCard,
-    ThinkingBlock,
     ToolCall,
-    ToolGroup,
     UserMessage,
     Welcome,
 )
@@ -88,7 +86,7 @@ class NoetaApp(TranscriptView):
         Binding("ctrl+b", "agents", "Agents", show=False),
         Binding("shift+tab", "cycle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+v", "paste_image", "Paste image", show=False),
-        Binding("ctrl+o", "toggle_verbose", "Verbose", show=False, priority=True),
+        Binding("ctrl+o", "detailed_transcript", "Transcript", show=False, priority=True),
         Binding("ctrl+t", "toggle_tasks", "Tasks", show=False, priority=True),
         Binding("ctrl+c", "interrupt", "Quit", show=False, priority=True),
         Binding("ctrl+r", "search_history", "History", show=False, priority=True),
@@ -185,7 +183,6 @@ class NoetaApp(TranscriptView):
         self.read_only = False
         self.waiting_for = ""
         self.todos: dict[str, dict[str, Any]] = {}
-        self.verbose = False
         self.show_tasks = True
         self.queued: list[str] = []
         self.echoed: list[str] = []
@@ -850,7 +847,7 @@ class NoetaApp(TranscriptView):
             if c is None:
                 return
             view = AgentView(key, c["name"] or "agent", kind=c.get("kind", ""), child=c,
-                             expanded=self.verbose, on_back=self.close_agent)
+                             on_back=self.close_agent)
         await self.query(".agent-view").remove()
         self.query_one("#transcript").display = False
         await self.mount(view, after="#transcript")
@@ -865,16 +862,23 @@ class NoetaApp(TranscriptView):
         self._show_agents()
         self._box().focus()
 
-    def action_toggle_verbose(self) -> None:
-        self.verbose = not self.verbose
-        for view in self.query(AgentView):
-            view.set_expanded(self.verbose)
-        for call in self.query(ToolCall):
-            call.set_expanded(self.verbose)
-        for group in self.query(ToolGroup):
-            group.set_expanded(self.verbose)
-        for block in self.query(ThinkingBlock):
-            block.set_expanded(self.verbose)
+    async def action_detailed_transcript(self) -> None:
+        """Ctrl+O, Claude Code's transcript mode: the whole conversation
+        with every result and thought unfolded, in the transcript's place
+        (the transcript itself stays folded); again goes back. In a
+        sub-agent's view it unfolds (or folds) that view."""
+        view = next(iter(self.query(AgentView)), None)
+        if view is not None and view.detail:
+            await self.close_agent()
+            return
+        if view is not None:
+            view.set_expanded(not view.expanded)
+            return
+        if not self.task_id or self.query(".agent-view"):
+            return
+        detail = AgentView(self.task_id, "transcript", detail=True, on_back=self.close_agent)
+        self.query_one("#transcript").display = False
+        await self.mount(detail, after="#transcript")
 
     def action_toggle_tasks(self) -> None:
         self.show_tasks = not self.show_tasks

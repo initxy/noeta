@@ -13,7 +13,7 @@ from noeta.testing import ScriptedProvider, reply
 from noeta_tui import render
 from noeta_tui.widgets import ApprovalCard, Completions, Picker, PromptInput, ToolCall, ToolGroup
 
-from support import MODEL, make_app, plain, ready, settle, shown, type_line
+from support import MODEL, make_app, open_detail, plain, ready, settle, shown, type_line
 
 
 async def test_a_task_is_created_by_the_first_message_not_by_opening(tmp_path: Path) -> None:
@@ -171,9 +171,8 @@ async def test_reads_one_after_another_are_one_line(tmp_path: Path) -> None:
         assert plain(three.head) == "● Read 3 files (ctrl+o to expand)"
         assert not any(c.display for c in three.calls)
         assert not one.head.display and one.calls[0].display  # alone: shown as itself
-        await pilot.press("ctrl+o")
-        assert all(c.display for c in three.calls) and plain(three.head) == "● Read 3 files"
-        assert len(app.query(ToolCall)) == 4
+        view = await open_detail(pilot)  # each call on its own line there
+        assert len(view.query(ToolCall)) == 4 and not three.expanded
         assert MODEL in plain(app.query_one("#status"))
 
 
