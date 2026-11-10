@@ -29,16 +29,18 @@
 | `noeta: this needs the server extra, which is not installed: pip install '…'`（也可能是 `postgres`、`acp`、`keyring`） | `noeta serve`、Postgres 存储、`noeta acp`、钥匙串密钥各自需要一个可选依赖组。 | 照打出来的那行装。用 `uv tool install --reinstall` 时要把你在用的可选依赖全写上，重装会丢掉没写的。 |
 | `noeta: the terminal UI is its own package, noeta-tui, which is not installed: …` | 不带子命令的 `noeta` 会启动终端界面，而终端界面是单独的 `noeta-tui` 包。 | 照打出来的那行装；只想问一句的话用 `noeta -p`。 |
 
-## `noeta web` 和 `noeta update`
+## `noeta service` 和 `noeta update`
 
 | 看到的报错 | 原因 | 怎么办 |
 |---|---|---|
-| `noeta web: this noeta has no web app built in (a source checkout without the built web/); …` | 装的这份 noeta 构建时没带网页：要么是源码目录，要么是在没有 npm 的机器上打的包。 | 在源码目录里跑 `make web-bundle`（需要 npm），或者改从 PyPI 装。 |
-| `noeta web: port N is in use; pick another with --port` | `--port` 指定的端口已经有别的程序在用。 | 换个端口，或者干脆不写 `--port`（默认 8642，被占了就自动挑空闲的）。 |
-| `noeta web: the server did not start; the end of its log (…/logs/web.log): …` | 后台的 `noeta serve` 退出了，或者 60 秒内没应答。下面贴出来的几行日志会说原因（存储打不开、缺 extra 等）。 | 按日志说的改好，再跑一次 `noeta web`。 |
-| `noeta web: the server (pid N) does not answer; …` | 之前 `noeta web` 起的服务进程还在，但不应答。 | 先 `noeta web stop`，再 `noeta web`。 |
+| `noeta serve` 启动时打印的是 `noeta: API (no web app) at http://…` | 装的这份 noeta 构建时没带网页：要么是源码目录，要么是在没有 npm 的机器上打的包。接口照常能用。 | 在源码目录里跑 `make web-bundle`（需要 npm），或者改从 PyPI 装。 |
+| `noeta service: no systemd user instance or launchd here to run a service; …` | 没有 `systemctl --user` 可用（比如在容器里，或者登录时没起用户级的 systemd），也不是 macOS。 | 在 `tmux` 里跑 `noeta serve`（`tmux new -d -s noeta 'noeta serve'`）。 |
+| `noeta service: not installed (noeta service install [serve flags])` | 还没装服务，就跑了 `status`、`logs`、`start`、`stop`、`restart` 或 `uninstall`。 | 先 `noeta service install`。 |
+| `noeta service: lingering is off for <user>, so the service stops when you log out; …` | Linux 上这个用户的 systemd 实例会随最后一个会话结束。 | 执行它给出的 `loginctl enable-linger <user>`（可能要 `sudo`）。 |
+| `noeta service: systemctl --user restart noeta.service: …`（`noeta service status` 显示 `failed`） | 服务没起来：没给它配模型、端口被占、存储打不开之类。 | `noeta service logs --no-follow` 会说原因；改好后再跑一次 `noeta service install`（环境变量是安装时拷进去的），或者 `noeta service restart`。 |
 | `noeta update: cannot reach PyPI to check for a new version (…); nothing changed` | 没网，或者需要代理而 noeta 不知道。 | 设好 `HTTPS_PROXY`（或 `ALL_PROXY`）再跑。 |
 | `noeta update: this noeta (…) runs from source …, so nothing is changed` | noeta 是从源码目录或可编辑安装跑的，`noeta update` 不碰这种安装。 | 自己更新源码目录，或者照它打印的命令换成正式发布版。 |
+| `noeta update: could not restart noeta service; run noeta service restart` | 升级成功了，但重启已装好的服务失败。 | 跑 `noeta service restart`；还不行就看 `noeta service logs --no-follow`。 |
 
 ## 模型与 provider
 
@@ -158,17 +160,15 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 
 | 看到的报错 | 原因 | 怎么办 |
 |---|---|---|
-| `noeta: the server at <url> needs its bearer token: set NOETA_SERVER_TOKEN to the token noeta serve printed when it made it` | 客户端没有令牌。 | 在客户端设 `NOETA_SERVER_TOKEN`。 |
-| `noeta: the server at <url> refused the token: …`，或 HTTP 401 `{"error": "unauthorized"}` | 令牌不对。服务端在 `~/.noeta/server-token` 里只存 SHA-256，没法再显示一次原文。 | 找出 `noeta serve` 第一次打印时你存下的令牌；或者删掉 `~/.noeta/server-token` 重启服务端，拿一个新的（只打印这一次）。 |
-| HTTP 403 `{"error": "cross-site request refused"}` | 请求的 `Host` 不在服务端应答的名单里（绑定回环地址时只认回环名字；绑别的地址时，只要给过 `--allow-host` 就只认这些名字），或者是别的源的网页发来的浏览器请求。 | 用 `--allow-host NAME` 加上客户端用的主机名；页面放在别处的话用 `--allow-origin ORIGIN`。 |
+| `noeta: the server at <url> needs its bearer token: set NOETA_SERVER_TOKEN to the token in its …/server-token (the #token= of the address it prints)` | 客户端没有令牌：它在另一台机器上，或者用的是另一个 `NOETA_HOME`。 | 在客户端把 `NOETA_SERVER_TOKEN` 设成服务端的令牌（服务端启动时的输出或 `noeta service status` 里都有）。 |
+| `noeta: the server at <url> refused the token: …`，或 HTTP 401 `{"error": "unauthorized"}` | 令牌不对或过期了：服务端的令牌文件被删过，或者服务端自己设了 `NOETA_SERVER_TOKEN`。 | 用服务端最近一次启动时打印的地址里的令牌（或 `noeta service status` 显示的）。 |
+| HTTP 403 `{"error": "cross-site request refused"}` | 请求的 `Host` 不在服务端应答的名单里（回环名字；绑非回环地址时还有本机自己的名字和地址；以及 `--allow-host` 给的名字），或者是别的源的网页发来的浏览器请求。 | 用 `--allow-host NAME` 加上客户端用的名字（比如反向代理的域名）；页面放在别处的话用 `--allow-origin ORIGIN`。 |
 | `noeta: --no-token serves only a loopback address` | `--no-token` 配了一个非回环的 `--host`。 | 保留令牌，或者绑到 `127.0.0.1`。 |
 | `this server does not allow bypassPermissions (start it with --allow-bypass-permissions)` | `noeta serve` 和 `noeta worker` 默认拒绝 bypass 模式。任务运行中切换时，会收到通知 `bypassPermissions is disabled here`。 | 确实需要的话，每台工人和服务端都带上 `--allow-bypass-permissions` 启动。 |
 | `noeta: --permission-mode bypassPermissions needs --allow-bypass-permissions` | 启动 `noeta serve` 或 `noeta worker` 时给了 bypass 模式，却没允许它。 | 加上 `--allow-bypass-permissions`，或者换个模式。 |
-| `noeta: on 0.0.0.0 any Host header is answered; name the names this server is reached by with --allow-host (DNS-rebinding protection)` | `noeta serve` 绑在非回环地址上，又没给 `--allow-host`。这只是提醒：服务照常运行，token 照样起保护作用。 | 客户端用哪些名字访问，就逐个用 `--allow-host NAME` 写上。 |
 | `POST /tasks/{id}/answers` 返回 HTTP 409 `task … is not waiting on a request '…' (unknown, or already answered)` | `request_id` 打错了、来自过期的卡片、是别的任务的，或者已经答过并被取走。 | 重新读一遍 `GET /tasks/{id}/pending`，回答上面列着的。 |
-| `/stream-json` 的 WebSocket 以关闭码 `4401` / `4403` 断开 | `4401`：没有有效 token。`4403`：要的权限模式或 `cwd` 被拒，关闭原因里写着为什么。 | 带上 token（`?token=` 或请求头）；换成允许的模式或目录。 |
-| `cwd '…' is outside this server's directories (…); start it there or add the directory with --allow-root` | 客户端要在服务端不负责的目录里建任务。 | 给 `noeta serve` 加 `--allow-root PATH`。 |
-| `cwd '…' is outside this server's directories (…); noeta web may use your home folder and the folder it was started in; …` | 在网页里添加项目或新建会话时，选的文件夹不在 `noeta web` 能用的范围里。 | 先 `noeta web stop`，再到那个文件夹（或它的上级目录）里运行 `noeta web`。 |
+| `/stream-json` 的 WebSocket 以关闭码 `4401` / `4403` 断开 | `4401`：没有有效 token。`4403`：要的权限模式被拒，或者给的 `cwd` 不是目录，关闭原因里写着为什么。 | 带上 token（`?token=` 或请求头）；换成允许的模式或一个存在的目录。 |
+| HTTP 400 `cwd '…' does not exist (…)` / `cwd '…' is not a directory (…)` | 新建任务、保存项目或列目录时，给的路径在服务端那台机器上不是目录（相对路径从服务端的目录算起）。 | 换成服务端机器上一个存在的目录。 |
 | `a request may not set the task config key 'x' (only model, effort, …)` | 客户端只能设一部分配置项，其余的会放松权限关卡。 | 把这一项写进服务端自己的配置或代理文件。 |
 | `the request failed on the server; its log has the details` | 出错的不是 noeta 自己的代码。原文可能带服务器路径，所以不发给客户端。 | 去看服务端的标准错误。 |
 | `noeta: -p runs its task here; --server attaches the terminal UI (or noeta acp --server) to a server` | `-p` 总是在本机跑。 | 去掉 `--server`，或改用终端界面、`noeta acp --server`。 |

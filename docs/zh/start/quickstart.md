@@ -157,9 +157,17 @@ noeta -p -r <任务 id> --fork-session "换个办法试试"       # 从那次对
 
 ## 6. 网页版
 
-装了 `server` 这个 extra（`uv tool install 'noeta[tui,server]'`）之后，跑 `noeta web` 就会在后台起一个本机
-服务，并在浏览器里打开网页版：左边一列是你的项目，每个项目下面是它的会话。`noeta web status` 看它在不在跑，
-`noeta web stop` 停掉它（详见 [noeta 命令](../reference/cli.md#noeta-web)）。
+装了 `server` 这个 extra（`uv tool install 'noeta[tui,server]'`）之后，`noeta serve` 会起一个带网页版的本机服务，
+并打印要打开的地址，令牌已经放在地址里了：
+
+```text
+$ noeta serve
+noeta: web app at http://127.0.0.1:8642/#token=…
+```
+
+在浏览器里打开它：左边一列是你的项目，每个项目下面是它的会话；不选项目就开的会话，在自己的临时目录里跑。
+想关掉终端后服务还在、登录时自动起来，就把它装成系统服务：`noeta service install`
+（见[作为服务端运行](../guides/server.md#让它一直跑着-noeta-service)）。
 
 ## 7. 一段话讲清信任
 

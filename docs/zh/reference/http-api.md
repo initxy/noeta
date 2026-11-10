@@ -14,7 +14,8 @@
 <Diagram name="ref-request-guard" />
 
 1. **Host 和来源。** 绑在回环地址上时，只认回环名字（`127.0.0.1`、`localhost`、`::1`）和
-   `--allow-host` 给的名字；绑在其他地址上时，只有给了 `--allow-host` 才检查 `Host`。浏览器从别的
+   `--allow-host` 给的名字；绑在其他地址上时，还认本机的主机名、完整域名和本机地址。其余 `Host`
+   一律拒绝（防 DNS 重绑定）。浏览器从别的
    来源发来的请求会被拒绝，除非来源就是服务端自己的页面，或者在 `--allow-origin` 里。被拒时返回
    `403 {"error": "cross-site request refused"}`。
 2. **Bearer token。** 每个请求都要带 `Authorization: Bearer <token>`。WebSocket 可以改用
@@ -29,17 +30,16 @@
    [关掉插件](./plugins.md#switching-a-plugin-off)），否则返回 `403`。服务端
    启动时带的 `--effort`、`--permission-mode` 垫在请求的配置下面，请求自己给了的以请求为准。只能发前端会发的那几种信号：
    `permission_mode`、`config`、`resumed`、`restore_files`、`rename`、`archive`。除非服务端带了
-   `--allow-bypass-permissions`，否则不能让任务以 `bypassPermissions` 启动或切过去。`cwd` 必须在
-   服务端的目录或某个 `--allow-root` 之内（相对路径按服务端的目录解析，并以绝对路径存下）；没给
-   `cwd` 的任务就在服务端的目录里跑。被拒时返回 `403` 和原因。
+   `--allow-bypass-permissions`，否则不能让任务以 `bypassPermissions` 启动或切过去（`403`）。`cwd`
+   可以是任何目录（相对路径按服务端的目录解析，并以绝对路径存下）；不存在或不是目录返回 `400`。没给
+   `cwd` 的任务在自己的临时目录里跑：`~/.noeta/scratch/<YYYY-MM-DD>/<任务 id 前 8 位>/`，建任务时建好。其余被拒的情况返回 `403` 和原因。
 
 其他错误：任务不存在返回 `404 {"error": "unknown task …"}`；请求体或查询参数有误返回 `400` 和原因。
 所有错误的响应体都是 JSON `{"error": …}`；不在本页列出的路径返回普通的 `404`（除非服务端还托管着
 网页文件，见下文）。
 
-token 取自 `NOETA_SERVER_TOKEN`；没有的话，服务端第一次启动时生成一个，只打印一次；
-`~/.noeta/server-token` 只存它的 SHA-256
-（[ADR-013](https://github.com/initxy/noeta/blob/main/docs/adr/013-server-token-kept-as-a-digest.md)）。
+token 取自 `NOETA_SERVER_TOKEN`；没有的话用服务端 `~/.noeta/server-token`（只有属主能读）里的那个，
+第一次启动时生成（[ADR-034](https://github.com/initxy/noeta/blob/main/docs/adr/034-the-server-token-file-holds-the-token-and-a-request-may-name-any-directory.md)）；每次启动都会打印带 `#token=…` 的地址。
 在自己的代码里构建这个应用时，调用 `noeta.host.http.create_app(client, token=…)` 或
 `token_sha256=…`；不要 token 只能显式传 `auth=False`。
 
@@ -134,10 +134,10 @@ worker 不会自己去取。只要通过这里给它发消息、回答、取消�
 
 | 方法与路径 | 查询参数 / 请求体 | 返回 |
 |---|---|---|
-| `GET /projects` | | `[{path, name, saved, sessions}]`：先是保存过的目录，按保存的先后；再是其余有未归档根任务的目录，最近用过的在前。`path` 是解开符号链接后的真实路径，`name` 是最后一级目录名，`sessions` 是那里未归档根任务的个数（只数最近 500 个） |
-| `POST /projects` | `{path}` | 保存这个目录，返回它的 `{path, name, saved, sessions}`。`path` 按新任务的 `cwd` 来检查（相对路径从服务端目录算起；不在服务端允许的目录里返回 `403`，不是目录返回 `400`） |
+| `GET /projects` | | `[{path, name, saved, sessions, scratch}]`：先是保存过的目录，按保存的先后；再是其余有未归档根任务的目录，最近用过的在前。`path` 是解开符号链接后的真实路径，`name` 是最后一级目录名，`sessions` 是那里未归档根任务的个数（只数最近 500 个）。临时目录不算项目：有根任务跑在临时目录里时，最后多一项 `{path: <临时目录的根>, name: "Scratch", saved: false, sessions: n, scratch: true}`；其余各项都是 `scratch: false` |
+| `POST /projects` | `{path}` | 保存这个目录，返回它那一项。`path` 按新任务的 `cwd` 来检查（相对路径从服务端目录算起；不是目录，或者是临时目录，返回 `400`） |
 | `DELETE /projects` | `{path}` | `{ok: true}`：不再保存它；里面的任务都还在 |
-| `GET /dirs` | `?path=`（默认是服务端的目录） | `{path, parent, dirs: [{name, path}]}`：按名字排好的子目录，隐藏目录（以 `.` 开头）不列；上一级不在允许范围内时 `parent` 为 `null`。目录不在允许范围内返回 `403`，不是能读的目录返回 `400` |
+| `GET /dirs` | `?path=`（默认是服务端的目录） | `{path, parent, dirs: [{name, path}]}`：任何目录下按名字排好的子目录，隐藏目录（以 `.` 开头）不列；只有到了 `/` 时 `parent` 才是 `null`。不是能读的目录返回 `400` |
 
 保存的列表存在 sqlite 数据库文件旁边的 `projects.json` 里；不用 sqlite 时存在 `~/.noeta/` 下。
 
@@ -246,7 +246,7 @@ printf '%s\n' '{"type":"user","message":{"role":"user","content":"这个目录�
 ## 示例
 
 ```bash
-export NOETA_SERVER_TOKEN=…        # 服务端打印出来的 token
+export NOETA_SERVER_TOKEN=$(cat ~/.noeta/server-token)   # 在服务端那台机器上
 H="Authorization: Bearer $NOETA_SERVER_TOKEN"
 S=http://127.0.0.1:8642
 

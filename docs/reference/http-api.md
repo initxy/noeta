@@ -17,8 +17,8 @@ app and the desktop app all use it.
 <Diagram name="ref-request-guard" />
 
 1. **Host and origin.** On a loopback bind only the loopback names (`127.0.0.1`, `localhost`,
-   `::1`) and the `--allow-host` names are answered; on another bind `Host` is checked only
-   against `--allow-host` names, when given. A request a browser sends from another origin is
+   `::1`) and the `--allow-host` names are answered; on another bind also this machine's
+   hostname, fully qualified name and addresses. Any other `Host` is refused (DNS rebinding). A request a browser sends from another origin is
    refused unless that origin is the server's own page or an `--allow-origin`. Refused: `403
    {"error": "cross-site request refused"}`.
 2. **Bearer token.** `Authorization: Bearer <token>` on every request. A WebSocket may pass it
@@ -35,18 +35,19 @@ app and the desktop app all use it.
    [Switching a plugin off](./plugins.md#switching-a-plugin-off)): `403`. Keys the server runs
    with (`--effort`, `--permission-mode`) are laid under the request's, which win. It may post only the signals front ends send: `permission_mode`, `config`,
    `resumed`, `restore_files`, `rename`, `archive`. It may not start or switch a task into
-   `bypassPermissions` unless the server runs with `--allow-bypass-permissions`. A `cwd` must
-   lie in the server's directory or an `--allow-root` (a relative one is taken from the
-   server's directory and stored absolute); a task created without one runs in the server's
-   directory. Refused: `403` with the reason.
+   `bypassPermissions` unless the server runs with `--allow-bypass-permissions` (`403`). A `cwd`
+   may be any directory (a relative one is taken from the server's directory and stored
+   absolute); one that does not exist or is not a directory is `400`. A task created without
+   one runs in a scratch directory of its own, `~/.noeta/scratch/<YYYY-MM-DD>/<first 8
+   characters of its id>/`, made then. Any other refusal is `403` with the reason.
 
 Other errors: an unknown task is `404 {"error": "unknown task …"}`; a malformed body or query
 is `400` with the reason. Every error body is JSON `{"error": …}`; a path not listed here
 is a plain `404` (unless the server serves the web app's files, below).
 
-The token is `NOETA_SERVER_TOKEN`, else one made on the server's first start and printed
-once; `~/.noeta/server-token` keeps only its SHA-256
-([ADR-013](https://github.com/initxy/noeta/blob/main/docs/adr/013-server-token-kept-as-a-digest.md)).
+The token is `NOETA_SERVER_TOKEN`, else the one in the server's `~/.noeta/server-token`
+(owner only), made on its first start ([ADR-034](https://github.com/initxy/noeta/blob/main/docs/adr/034-the-server-token-file-holds-the-token-and-a-request-may-name-any-directory.md)); every start prints the address to
+open with it as `#token=…`.
 Host code that builds the app itself calls `noeta.host.http.create_app(client, token=…)` or
 `token_sha256=…`; `auth=False` is the only way to serve without one.
 
@@ -149,10 +150,10 @@ them down its side and picks a new one with `GET /dirs`.
 
 | Method and path | Query / body | Answers |
 |---|---|---|
-| `GET /projects` | | `[{path, name, saved, sessions}]`: the saved directories in the order saved, then the other directories of unarchived root tasks, most recently used first. `path` is the real path (symlinks resolved), `name` its last part, `sessions` the count of unarchived root tasks there (of the 500 most recent) |
-| `POST /projects` | `{path}` | saves it and answers its `{path, name, saved, sessions}`; `path` is checked as a new task's `cwd` (relative to the server's directory; `403` outside the server's directories, `400` when it is not a directory) |
+| `GET /projects` | | `[{path, name, saved, sessions, scratch}]`: the saved directories in the order saved, then the other directories of unarchived root tasks, most recently used first. `path` is the real path (symlinks resolved), `name` its last part, `sessions` the count of unarchived root tasks there (of the 500 most recent). Scratch directories are never projects: when root tasks run in them, the last entry is `{path: <the scratch root>, name: "Scratch", saved: false, sessions: n, scratch: true}`; every other entry has `scratch: false` |
+| `POST /projects` | `{path}` | saves it and answers its entry; `path` is checked as a new task's `cwd` (relative to the server's directory; `400` when it is not a directory, or is a scratch directory) |
 | `DELETE /projects` | `{path}` | `{ok: true}`: no longer saved; its tasks stay |
-| `GET /dirs` | `?path=` (default: the server's directory) | `{path, parent, dirs: [{name, path}]}`: the subdirectories, by name, hidden ones (a leading `.`) left out; `parent` is `null` when it lies outside the server's directories. `403` outside them, `400` for a path that is not a readable directory |
+| `GET /dirs` | `?path=` (default: the server's directory) | `{path, parent, dirs: [{name, path}]}`: the subdirectories of any directory, by name, hidden ones (a leading `.`) left out; `parent` is `null` only at `/`. `400` for a path that is not a readable directory |
 
 The saved list is kept in `projects.json` beside a sqlite store's database file, else in
 `~/.noeta/`.
@@ -276,7 +277,7 @@ server.
 ## Examples
 
 ```bash
-export NOETA_SERVER_TOKEN=…        # the token the server printed
+export NOETA_SERVER_TOKEN=$(cat ~/.noeta/server-token)   # on the server's machine
 H="Authorization: Bearer $NOETA_SERVER_TOKEN"
 S=http://127.0.0.1:8642
 

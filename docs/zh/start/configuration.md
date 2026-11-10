@@ -171,7 +171,9 @@ noeta trust
 | `~/.noeta/plugin-sources.json` | 每个用 `noeta plugin add` 装的插件是从哪装的 |
 | `~/.noeta/plugin-data/<name>/` | Claude Code 插件的 `${CLAUDE_PLUGIN_DATA}` |
 | `~/.noeta/mcp-auth/` | MCP 登录凭据和 OAuth 客户端密钥（只有你能读） |
-| `~/.noeta/server-token` | `noeta serve` 的 token 的 SHA-256 |
+| `~/.noeta/server-token` | `noeta serve` 的访问令牌（只有你能读），同一台机器上的客户端会读它 |
+| `~/.noeta/scratch/<日期>/<id>/` | 通过 `noeta serve` 新建、没指定目录的任务所用的临时目录 |
+| `~/.noeta/logs/serve.log` | macOS 上 `noeta service` 的输出 |
 | `~/.noeta/cache/models/` | 各 provider 的模型列表，缓存一天 |
 | `~/.noeta/tool-results/<任务>/` | 太长、没法直接返回的工具输出 |
 | `~/.noeta/image-cache/<任务>/` | 粘贴进提示词的图片 |

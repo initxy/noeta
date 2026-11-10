@@ -63,18 +63,19 @@ What noeta defends, so you can tell a vulnerability from intended behavior:
   (`~/.noeta/plugins/<plugin>/`; a trusted project's `.noeta/plugins/<plugin>/` never starts
   its servers, and noeta tells you to copy them into the project's `.noeta/mcp.json`, which
   needs that project's consent).
-- **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or one made on first
-  start and printed once; `~/.noeta/server-token`, owner-only, keeps only its SHA-256);
+- **`noeta serve` always requires a bearer token** (`NOETA_SERVER_TOKEN`, or the one made on
+  first start into `~/.noeta/server-token`, owner-only, and printed in the address at every
+  start);
   `--no-token` is accepted only on a loopback address. Only the WebSocket route also takes the token as
   `?token=` (a browser cannot set the header there); `noeta serve` logs it as `REDACTED`
   (host code serving `create_app` calls `noeta.host.http.redact_token_logs`).
-  Other web origins are refused, and so are `Host` headers other than the loopback names
-  on a loopback bind and those named with `--allow-host` (on any other bind without
-  `--allow-host`, `Host` is not checked: put the server behind a proxy that checks it, or
-  name the hosts). No request may start or switch a
-  task into `bypassPermissions` unless the server allows it, and tasks run only inside the
-  server's directory or `--allow-root` paths; a request sets only the task config and
-  signals a client may. A way around any of this is a vulnerability.
+  Other web origins are refused, and so are `Host` headers other than the loopback names,
+  those named with `--allow-host` and, on a bind that is not loopback, this machine's own
+  hostname, fully qualified name and addresses. No request may start or switch a
+  task into `bypassPermissions` unless the server allows it; a request sets only the task
+  config and signals a client may. A task may run in any directory the server's user can
+  reach: the token holder can run any command as that user anyway. A way around any of this
+  is a vulnerability.
 - **One server serves one party.** Everyone holding the token has the same rights, and every
   task's tools run as the worker's OS user. To keep parties apart, run a server (and store)
   per party, or isolate commands with the sandbox or a container exec env.

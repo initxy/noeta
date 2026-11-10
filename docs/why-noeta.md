@@ -7,7 +7,7 @@ relates to Claude Code.
 
 noeta is an open-source coding agent that behaves, from the model's side, like Claude Code,
 and is built, from the operator's side, like a server program. It is one Python package
-(`noeta`) with a terminal UI (`noeta-tui`) on top of its API, plus a web app (`noeta web`) and a
+(`noeta`) with a terminal UI (`noeta-tui`) on top of its API, plus a web app (served by `noeta serve`) and a
 desktop app. What sets it apart is the pair: an agent that keeps Claude
 Code's contract with the model, and that you self-host on as many workers as you like, all
 sharing one Postgres store, any of them continuing any task.

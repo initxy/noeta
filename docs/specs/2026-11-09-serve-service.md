@@ -103,3 +103,26 @@ branch: feat/serve-service-2026-11-09
 ## Progress log
 
 - 2026-11-09 owner: drop `noeta web` and `--allow-root`, serve + OS service, scratch dirs by date, release 1.2.0.
+- 2026-11-09 Python half (branch `feat/serve-service-py`): items 1–4 done; docs except
+  `docs/*/guides/front-ends.md` (the UI agent's) updated, CHANGELOG Unreleased written. The
+  Docs item stays open until front-ends lands. ADR-034 supersedes ADR-013 and refines
+  ADR-009/028 (the directory check went with the token's digest).
+  Choices within the Decisions:
+  - A cwd that does not exist or is not a directory is `400` (a WebSocket closes `4403`, as
+    other refusals); `POST /projects` also refuses a scratch directory (`400`).
+  - The scratch directory's id is known before creation: the guard picks the task id itself
+    (`uuid4().hex`, as `Client.create` would) and makes the directory before creating the task;
+    a repeated `dedupe_key` removes the empty directory it made.
+  - Only `GuardedClient.create` (POST /tasks, stream-json, rewind without a cwd) gets scratch
+    directories; `create_app(scratch=None)` keeps the old behaviour for embedders.
+  - Address lines: a wildcard bind prints hostname, FQDN, addresses (routing-table probe plus
+    the hostname's resolved addresses, looked up in a thread, 5 s cap), `--allow-host` names,
+    then `127.0.0.1`; a specific non-loopback address prints itself and `--allow-host` names.
+  - `noeta service install` makes the token before starting the unit (unless `--no-token` or
+    `NOETA_SERVER_TOKEN` is in the copied env), so `install` and `status` show working
+    addresses before the server's first start; `status` takes `NOETA_SERVER_TOKEN` from the
+    unit's env file when it is set there. Shared flags (`--model` …) go before `service`
+    (`noeta --model m service install …`) and are written into `ExecStart` before `serve`.
+  - `logs` follows by default as the spec says; `--no-follow` prints the last 200 lines.
+  - Friction: the token appears in the service's journal / log file on every start (the
+    address lines go to stderr); same user, same exposure as the token file.

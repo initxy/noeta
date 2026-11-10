@@ -170,10 +170,18 @@ back to before one of your prompts, restoring the conversation, the files, or bo
 
 ## 6. The web app
 
-With the `server` extra (`uv tool install 'noeta[tui,server]'`), `noeta web` starts a local
-server in the background and opens the web app in your browser: your projects down the side,
-each with its sessions. `noeta web status` says whether it runs, `noeta web stop` stops it
-([the noeta command](../reference/cli.md#noeta-web)).
+With the `server` extra (`uv tool install 'noeta[tui,server]'`), `noeta serve` starts a local
+server with the web app and prints the address to open, the token already in it:
+
+```text
+$ noeta serve
+noeta: web app at http://127.0.0.1:8642/#token=…
+```
+
+Open it in your browser: your projects down the side, each with its sessions; a session
+started without a project runs in a scratch directory of its own. To keep the server running
+after you close the terminal, and start it at login, install it as a service:
+`noeta service install` ([Run it as a server](../guides/server.md#keep-it-running-noeta-service)).
 
 ## 7. Trust, in one paragraph
 
