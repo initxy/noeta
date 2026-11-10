@@ -48,10 +48,10 @@ A user who ran `uv tool install 'noeta[tui,server]'` gets, with no build step:
 - [x] Python: bundled web app in the wheel; `make build` and release `build` job build `web/` first; smoke step asserts the wheel has `index.html`
 - [x] Python: `noeta web`, `noeta web stop`, `noeta web status`
 - [x] Python: `noeta update`
-- [ ] Web: workbench layout — projects column with sessions, add project (folder picker over `/dirs`, desktop native picker), new session in the selected project
-- [ ] Desktop: register chosen folders via `/projects`; open on the last project
-- [ ] Release: desktop installers job attached to the GitHub Release
-- [ ] Docs (en + zh): front-ends, quickstart install/upgrade, CLI reference, troubleshooting; CHANGELOG Unreleased
+- [x] Web: workbench layout — projects column with sessions, add project (folder picker over `/dirs`, desktop native picker), new session in the selected project
+- [x] Desktop: register chosen folders via `/projects`; open on the last project
+- [x] Release: desktop installers job attached to the GitHub Release
+- [x] Docs (en + zh): front-ends, quickstart install/upgrade, CLI reference, troubleshooting; CHANGELOG Unreleased
 
 ## Acceptance criteria
 
@@ -76,3 +76,4 @@ A user who ran `uv tool install 'noeta[tui,server]'` gets, with no build step:
 - 2026-11-09 `noeta web` (`noeta/cli/web_command.py`): the server runs in the directory `noeta web` was started in (so that one is allowed too, and is where `/dirs` starts), besides `--allow-root <home>`; it is `python -m noeta.cli.main serve … --web <bundled dir>` with the global `--model/--provider/--base-url/--store/--effort` passed on; state `~/.noeta/web.json`, log `~/.noeta/logs/web.log` (rewritten per start). `stop` signals only a pid that answers the token or whose command line is `noeta.cli.main serve` (a reused pid is left alone), SIGTERM to its process group, SIGKILL after 10 s. `status` exits 1 when not running. A new server needs a model, checked before it starts.
 - 2026-11-09 `noeta update` (`noeta/cli/update_command.py`): the uv command also keeps the receipt's `python` and index options (`--default-index` / `--index`: a mirror lagging PyPI would otherwise reinstall the old version); verified that `uv tool install --reinstall NAME` without a pin moves a pinned tool to the latest. An environment without pip (made by uv) is upgraded with `uv pip install --python <it>`. "Already up to date" when PyPI's version is not newer (numeric compare: a checkout ahead of PyPI is not downgraded). A source/editable install (PEP 610 `direct_url.json`) prints the commands without asking PyPI. After the update it reports the version a new process prints.
 - 2026-11-09 docs (Python half): CLI reference (`noeta web`, `noeta update`, errors, `serve --web` default), quickstart (upgrade, the web app), troubleshooting, HTTP API reference (projects and directories), a short `noeta web` paragraph in front-ends, CHANGELOG Unreleased; en + zh. The rest of front-ends (its "built from source, not published" note now out of date) is the front-end side's.
+- 2026-11-09 merged py + ui branches; CHANGELOG combined, front-ends docs from ui.
