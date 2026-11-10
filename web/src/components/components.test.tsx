@@ -470,6 +470,19 @@ describe("Markdown", () => {
     expect(container.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw==");
   });
 
+  it("while streaming, keeps finished blocks and highlights a code block once it is closed", () => {
+    const head = "# Title\n\nFirst paragraph.\n\n```python\nx = 1\n";
+    const { container, rerender } = render(<Markdown text={head} streaming />);
+    const title = container.querySelector("h1");
+    expect(container.querySelector("code.hljs")).toBeNull(); // still open
+    rerender(<Markdown text={head + "```\n\n- one\n\n- two"} streaming />);
+    expect(container.querySelector("h1")).toBe(title); // not drawn again
+    expect(container.querySelector("code.hljs")).not.toBeNull();
+    expect(container.querySelectorAll("ul")).toHaveLength(1); // a loose list stays one list
+    rerender(<Markdown text={"no language\n\n```\nplain\n```"} />);
+    expect(container.querySelector("code.hljs")).toBeNull(); // no guessing a language
+  });
+
   it("drops a javascript: link", () => {
     render(<Markdown text={"[x](javascript:alert(1))"} />);
     expect(screen.getByText("x").closest("a")?.getAttribute("href") ?? "").not.toMatch(/javascript/);

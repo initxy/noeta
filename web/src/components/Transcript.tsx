@@ -168,7 +168,7 @@ function Tail({ live, queued, busy, waitingOn, nested }: TailState & { nested?: 
       {live?.thinking && !live.text && <Thinking text={live.thinking} live />}
       {live?.text && (
         <div className="msg assistant streaming" data-testid="streaming">
-          <Markdown text={live.text} />
+          <Markdown text={live.text} streaming />
         </div>
       )}
       {!nested &&

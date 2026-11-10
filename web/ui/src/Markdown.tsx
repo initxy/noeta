@@ -46,19 +46,75 @@ const components: Components = {
   },
 };
 
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/** A streaming text cut into its finished blocks and the one still being
+ * written: at a blank line outside a fenced block, before a line that starts
+ * a block of its own (not indented, not a list item, which may continue a
+ * list). `open`: the last block is a fenced block not closed yet. */
+export function streamingBlocks(text: string): { blocks: string[]; open: boolean } {
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let fence: string | null = null;
+  let blank = false;
+  for (const line of text.split("\n")) {
+    if (fence !== null) {
+      current.push(line);
+      const close = FENCE.exec(line);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length && !line.slice(close[0].length).trim()) fence = null;
+      continue;
+    }
+    if (!line.trim()) {
+      current.push(line);
+      blank = true;
+      continue;
+    }
+    if (blank && !/^\s/.test(line) && !/^([-*+]|\d+[.)])\s/.test(line)) {
+      blocks.push(current.join("\n"));
+      current = [];
+    }
+    blank = false;
+    current.push(line);
+    const open = FENCE.exec(line);
+    if (open) fence = open[1];
+  }
+  blocks.push(current.join("\n"));
+  return { blocks, open: fence !== null };
+}
+
+const REMARK = [remarkGfm];
+// Only a block that names its language is highlighted: guessing one costs
+// more than drawing the rest of the message.
+const HIGHLIGHT: NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]> = [rehypeHighlight];
+const PLAIN: typeof HIGHLIGHT = [];
+const urlTransform = (url: string, key: string) => (key === "src" && LOCAL_IMAGE.test(url) ? url : defaultUrlTransform(url));
+
+const Parsed = memo(function Parsed({ text, highlight }: { text: string; highlight: boolean }) {
+  return (
+    <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={highlight ? HIGHLIGHT : PLAIN} components={components} urlTransform={urlTransform}>
+      {text}
+    </ReactMarkdown>
+  );
+});
+
 /** GitHub-flavored markdown with highlighted code, as the model writes it;
- * parsed again only when the text changes. */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+ * parsed again only when the text changes. `streaming`: text still being
+ * written, of which only the block being written is parsed again, and a
+ * code block is highlighted once it is closed. */
+export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
+  if (!streaming) {
+    return (
+      <div className="md">
+        <Parsed text={text} highlight />
+      </div>
+    );
+  }
+  const { blocks, open } = streamingBlocks(text);
   return (
     <div className="md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
-        components={components}
-        urlTransform={(url, key) => (key === "src" && LOCAL_IMAGE.test(url) ? url : defaultUrlTransform(url))}
-      >
-        {text}
-      </ReactMarkdown>
+      {blocks.map((block, i) => (
+        <Parsed key={i} text={block} highlight={!open || i < blocks.length - 1} />
+      ))}
     </div>
   );
 });
