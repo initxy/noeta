@@ -26,9 +26,24 @@ this repository. Their versions are listed on PyPI.
   unarchived sessions, each with its count of sessions; `POST /projects` / `DELETE /projects`
   save and unsave one (checked as a new task's `cwd`); `GET /dirs?path=` lists a directory's
   subdirectories for a folder picker.
+- **Desktop installers on each GitHub Release**: macOS `.dmg` and Linux `.AppImage` / `.deb`,
+  built by the release workflow and not signed (on macOS, right-click the app and choose Open the
+  first time).
 
 ### Changed
 
+- **The web and desktop apps are a local workbench**, as Codex's desktop app: the left column
+  lists projects (folders, by name with the path on hover), each with its sessions newest first,
+  a status dot and how long ago each moved; New session at the top starts one in the selected
+  project, a project's + starts one there, and the empty session names the project it will run
+  in. Add project opens a folder picker over the server's folders in a browser (`GET /dirs`,
+  saved with `POST /projects`; a folder the server may not use says why) and the system's picker
+  in the desktop app; a project you added can be removed from its menu. The page remembers the
+  last project; the desktop app opens on it. Search and the archived list work across all
+  projects. Against a server without `/projects`, the folders of its sessions are listed.
+- **Desktop**: File > Open Project Folder is now File > Add Project… (still `⌘O`), and the
+  chosen folder is saved as a project of the server. The install line it shows when `noeta` is
+  missing is `uv tool install 'noeta[tui,server]'`.
 - **An unexpected error prints one line** (`noeta: unexpected error: <type>: <message>`) and the
   path of a crash report under `~/.noeta/logs/`, not a Python traceback; `--verbose` or
   `NOETA_DEBUG=1` prints the traceback too. Ctrl+C exits with code 130 without a traceback. The

@@ -134,7 +134,7 @@ stronger fence.
 
 ## The web app
 
-The image does not include the web app, which is
-[experimental and built from source](./front-ends.md#the-web-app). To serve it, build `web/dist`
-on the host, mount it into `serve` (`- ../web/dist:/web:ro`) and add `--web /web` to its
-command.
+The image is built from the source tree without node, so it does not include
+[the web app](./front-ends.md#the-web-app) the published package carries. To serve it, build
+`web/dist` on the host (`cd web && npm ci && npm run build`), mount it into `serve`
+(`- ../web/dist:/web:ro`) and add `--web /web` to its command.

@@ -19,7 +19,7 @@ describe("menu", () => {
     const byLabel = (l: string) => all.find((m) => m.label === l)!;
     expect(byLabel("New Session").accelerator).toBe("CmdOrCtrl+N");
     expect(byLabel("Settings…").accelerator).toBe("CmdOrCtrl+,");
-    expect(byLabel("Open Project Folder…").accelerator).toBe("CmdOrCtrl+O");
+    expect(byLabel("Add Project…").accelerator).toBe("CmdOrCtrl+O");
     (byLabel("New Session").click as () => void)();
     expect(a.newSession).toHaveBeenCalled();
   });

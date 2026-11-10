@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, s
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { findNoeta, freePort, freshToken, INSTALL_LINE, isUnder, ServerError, startServer, type PageConfig, type Running } from "./server";
+import { findNoeta, freePort, freshToken, INSTALL_LINE, isUnder, saveProject, ServerError, startServer, type PageConfig, type Running } from "./server";
 import { addRoot, loadSettings, saveSettings, visibleBounds, type Settings } from "./settings";
 import { CHANNELS, errorPage, GRANTED_PERMISSIONS, linkTarget, liveSessions, menuTemplate, type PageCommand } from "./shell";
 
@@ -84,6 +84,8 @@ async function openPage(): Promise<void> {
     if (!server) {
       server = await launch();
       watchExit(server);
+      // The page opens on the last project: the server lists it (one chosen by an older app too).
+      if (settings.project && existsSync(settings.project)) await saveProject(server, settings.project);
     }
     await window.loadURL(`${server.url}/`);
   } catch (e) {
@@ -130,7 +132,7 @@ async function restartServer(): Promise<void> {
 async function chooseProject(): Promise<string | null> {
   if (!window) return null;
   const got = await dialog.showOpenDialog(window, {
-    title: "Choose a project folder",
+    title: "Add a project folder",
     defaultPath: project(),
     properties: ["openDirectory", "createDirectory"],
   });
@@ -142,8 +144,12 @@ async function chooseProject(): Promise<string | null> {
   if (outside && !(await confirmRestart())) return null;
   settings = { ...settings, project: dir, roots: outside ? addRoot(settings.roots, dir) : settings.roots };
   saveSettings(settingsPath, settings);
+  // A restart saves it as the server's project on the way up.
   if (outside) await restartServer();
-  else send({ name: "project", path: dir });
+  else {
+    if (server) await saveProject(server, dir);
+    send({ name: "project", path: dir });
+  }
   return dir;
 }
 
@@ -208,6 +214,12 @@ function wire(): void {
   });
   ipcMain.handle(CHANNELS.project, () => project());
   ipcMain.handle(CHANNELS.chooseProject, () => chooseProject());
+  // The project picked in the page: the window opens on it next time.
+  ipcMain.on(CHANNELS.setProject, (_e, path: unknown) => {
+    if (typeof path !== "string" || !path || path === settings.project || !existsSync(path)) return;
+    settings = { ...settings, project: path };
+    saveSettings(settingsPath, settings);
+  });
   ipcMain.on(CHANNELS.notify, (_e, n: { title?: unknown; body?: unknown; taskId?: unknown }) => {
     if (!window || window.isFocused() || !Notification.isSupported()) return;
     const note = new Notification({ title: String(n.title ?? "noeta"), body: String(n.body ?? "") });

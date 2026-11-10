@@ -49,7 +49,7 @@ test("the app starts its own server, injects the token, and a session replies", 
     expect(page.url()).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
     expect(await page.evaluate(() => typeof (window as { require?: unknown }).require)).toBe("undefined");
     expect(await page.evaluate(() => typeof (window as { noetaDesktop?: unknown }).noetaDesktop)).toBe("object");
-    await expect(page.getByRole("button", { name: work })).toBeVisible();
+    await expect(page.locator(".welcome-project-path")).toHaveText(work);
     await page.getByLabel("Permission mode").selectOption("default");
     await page.screenshot({ path: `${SHOTS}/01-new-session.png` });
 
@@ -151,7 +151,7 @@ test("a missing noeta shows the install line", async () => {
   const { app, page } = await launch(dir, work, join(dir, "no-such-noeta"));
   try {
     await expect(page.getByRole("heading", { name: "noeta is not installed" })).toBeVisible();
-    await expect(page.locator("pre.command")).toContainText("noeta[server]");
+    await expect(page.locator("pre.command")).toContainText("noeta[tui,server]");
     await page.screenshot({ path: `${SHOTS}/03-missing-noeta.png` });
   } finally {
     await app.close();

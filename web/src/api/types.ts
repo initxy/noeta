@@ -96,6 +96,24 @@ export interface TaskSummary {
   archived?: boolean;
 }
 
+/** A folder sessions run in (`GET /projects`): one the person saved, or
+ * the directory of an existing session. */
+export interface Project {
+  path: string;
+  name: string;
+  /** Saved with `POST /projects` (removable); else known from its sessions. */
+  saved: boolean;
+  /** Its unarchived sessions. */
+  sessions: number;
+}
+
+/** A directory's subdirectories, for the folder picker (`GET /dirs`). */
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  dirs: { name: string; path: string }[];
+}
+
 export interface Choice {
   id: string;
   label: string;

@@ -279,6 +279,54 @@ test("near the auto-compact threshold the status bar counts down to it", async (
   await expect(page.locator(".usage")).not.toContainText("auto-compact");
 });
 
+test("a project added from the folder picker gets its own sessions", async ({ page }) => {
+  const dir = join(process.env.NOETA_E2E_DIR!, "work", "proj-e2e");
+  mkdirSync(dir, { recursive: true });
+  const nav = page.getByRole("navigation", { name: "Sessions" });
+  await nav.getByRole("button", { name: "Add project" }).click();
+  const picker = page.getByRole("dialog", { name: "Add project" });
+  await picker.getByRole("button", { name: "proj-e2e", exact: true }).click();
+  await expect(picker.getByLabel("Folder path")).toHaveValue(dir);
+  await shot(page, "19-add-project");
+  await picker.getByRole("button", { name: "Add proj-e2e" }).click();
+  await expect(picker).toBeHidden();
+  await expect(page.locator(".welcome-project-path")).toHaveText(dir);
+  const project = nav.locator(`[data-project="${dir}"]`);
+  await expect(project.getByRole("button", { name: "proj-e2e", exact: true })).toHaveAttribute("title", dir);
+
+  await page.getByLabel("Permission mode").selectOption("acceptEdits");
+  await say(page, "hello from a project");
+  await expect(page.locator(".msg.assistant").last()).toContainText("scripted model");
+  await expect(page.locator(".cwd")).toHaveText(dir);
+  await expect(project.locator(".session")).toContainText("hello from a project");
+  await shot(page, "20-projects");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await shot(page, "21-projects-dark");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // "+" on a project's row starts the next session there.
+  await project.locator(".project-row").hover();
+  await project.getByRole("button", { name: "New session in proj-e2e" }).click();
+  await expect(page.locator(".welcome-project-path")).toHaveText(dir);
+
+  // Removed, it is listed on as its session's folder only, with nothing to remove.
+  await project.locator(".project-row").hover();
+  await project.getByRole("button", { name: "proj-e2e options" }).click();
+  await project.getByRole("menuitem", { name: "Remove project" }).click();
+  await expect(project.getByRole("button", { name: "proj-e2e options" })).toHaveCount(0);
+  await expect(project.locator(".session")).toHaveCount(1);
+});
+
+test("the folder picker says why the server refuses a folder", async ({ page }) => {
+  await page.getByRole("navigation", { name: "Sessions" }).getByRole("button", { name: "Add project" }).click();
+  const picker = page.getByRole("dialog", { name: "Add project" });
+  await picker.getByLabel("Folder path").fill("/");
+  await picker.getByLabel("Folder path").press("Enter");
+  await expect(picker.locator(".notice.error")).toBeVisible();
+  await picker.getByRole("button", { name: "Cancel" }).click();
+  await expect(picker).toBeHidden();
+});
+
 // Last: the plugin it installs stays in the server's home.
 test("a plugin installed from the plugins page adds its panel and status item, and is switched off per session", async ({ page }) => {
   const plugin = resolve(import.meta.dirname, "../../examples/web-panel");

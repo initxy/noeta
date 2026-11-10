@@ -43,7 +43,7 @@ features:
     link: /zh/how-it-works/plugins
     linkText: 插件体系
   - title: 各种入口
-    details: 终端界面、Claude Code 的 -p 和 stream-json 协议、给编辑器用的 ACP、HTTP / WebSocket 接口、Python SDK，还有实验中的网页版。底下都是同一个客户端接口。
+    details: 终端界面、Claude Code 的 -p 和 stream-json 协议、给编辑器用的 ACP、HTTP / WebSocket 接口、Python SDK，还有网页版和桌面版。底下都是同一个客户端接口。
     link: /zh/reference/cli
     linkText: noeta 命令
 ---

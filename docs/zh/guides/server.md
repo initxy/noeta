@@ -103,7 +103,7 @@ noeta serve --no-worker --host 0.0.0.0 --allow-host api.internal   # 接口，�
 
 - **终端界面**：`noeta --server http://api.internal:8642`。
 - **编辑器**（ACP）：`noeta acp --server URL`。
-- **网页端**：先构建一次（`cd web && npm install && npm run build`），再用 `noeta serve --web web/dist` 提供。页面会问一次令牌，或者从地址的 `#token=…` 片段里取（片段不会发到服务端，只存在浏览器里）。网页文件本身不需要令牌就能访问，带有内容安全策略：只允许服务端自己的脚本、样式和请求，不允许被嵌入别的页面。
+- **网页端**：`noeta serve` 直接在 `/` 提供安装包里自带的那份（`--web DIR` 可以换成别的构建）。页面会问一次令牌，或者从地址的 `#token=…` 片段里取（片段不会发到服务端，只存在浏览器里）。网页文件本身不需要令牌就能访问，带有内容安全策略：只允许服务端自己的脚本、样式和请求，不允许被嵌入别的页面。
 - **你自己的程序**：用 `noeta.RemoteClient` 或直接发 HTTP；`noeta.connect(url)` 给存储地址或服务端地址都能返回一个客户端。
 
 用 `--server` 连上的前端需要在 `NOETA_SERVER_TOKEN` 里放令牌，自己不需要配模型：新任务用服务端的模型、在服务端的目录里跑，除非 `--model` 指定了模型，或 `--cwd PATH` 指定了服务端上的某个目录。`noeta -p` 总是在自己进程里跑任务，不接受 `--server`。各个前端的细节见[网页、桌面与编辑器](./front-ends.md)。
