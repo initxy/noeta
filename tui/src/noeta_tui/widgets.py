@@ -14,6 +14,8 @@ from typing import Any
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
+from rich import box
+from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -22,6 +24,7 @@ from textual.containers import Horizontal, Vertical
 from textual.geometry import Offset
 from textual.widget import Widget
 from textual.widgets import Input, Markdown, Static, TextArea
+from textual.widgets._markdown import MarkdownBlock, MarkdownTable
 
 from noeta.core.events import Answer
 from noeta.core.types import ToolUse
@@ -85,9 +88,58 @@ def _markdown_parser() -> MarkdownIt:
     return parser
 
 
+class TableText(Static):
+    """A reply's table drawn as one piece; selected, it copies as rows of
+    tab-separated cells."""
+
+    def __init__(self, table: Any, tsv: str) -> None:
+        super().__init__(table)
+        self.tsv = tsv
+
+    def show(self, table: Any, tsv: str) -> None:
+        self.tsv = tsv
+        self.update(table)
+
+    def get_selection(self, selection: Any) -> tuple[str, str] | None:
+        return self.tsv, "\n"
+
+
+class FlatTable(MarkdownTable):
+    """A reply's table as one widget. Textual's own is a widget per cell,
+    every one laid out again whenever anything on the screen changes size:
+    a reply with a few tables made each keypress and streamed line slow."""
+
+    def compose(self) -> ComposeResult:
+        self._headers, self._rows = self._get_headers_and_rows()
+        yield TableText(*self._drawn())
+
+    def _drawn(self) -> tuple[Table, str]:
+        table = Table(box=box.SQUARE, show_lines=True, border_style="bright_black",
+                      header_style="bold", expand=False, highlight=False)
+        for header in self._headers:
+            table.add_column(render.clean(header.plain), overflow="fold")
+        cells = [[render.clean(c.plain) for c in row] for row in self._rows]
+        for row in cells:
+            table.add_row(*row)
+        tsv = "\n".join("\t".join(row) for row in
+                        [[render.clean(h.plain) for h in self._headers], *cells])
+        return table, tsv
+
+    async def _update_from_block(self, block: MarkdownBlock) -> None:
+        if isinstance(block, MarkdownTable):
+            self._headers, self._rows = block._get_headers_and_rows()
+            for drawn in self.query(TableText):
+                drawn.show(*self._drawn())
+            return
+        await super()._update_from_block(block)
+
+
 class CleanMarkdown(Markdown):
     """Markdown of what a task recorded (the model's reply, a plugin's
-    notice), shown without the control sequences in it."""
+    notice), shown without the control sequences in it; its tables drawn
+    as one piece each."""
+
+    BLOCKS = {**Markdown.BLOCKS, "table_open": FlatTable}
 
     def __init__(self, markdown: str | None = None, **kw: Any) -> None:
         kw.setdefault("parser_factory", _markdown_parser)
@@ -112,10 +164,16 @@ STREAM_FRAME = 0.05
 
 class ReplyStream:
     """What the model streams, appended to ``widget`` at most once per
-    :data:`STREAM_FRAME`; :meth:`stop` appends what is left."""
+    :data:`STREAM_FRAME`; :meth:`stop` appends what is left. A table is
+    shown once its rows are in (the block after it starts, or the reply
+    ends): Textual's table is a widget per cell, made again for every row
+    appended."""
 
     def __init__(self, widget: Markdown) -> None:
         self.widget = widget
+        #: The end of what was appended: the last two lines (a block starts
+        #: after a blank line).
+        self._tail = ""
         self._pending: list[str] = []
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
@@ -132,19 +190,34 @@ class ReplyStream:
             with contextlib.suppress(TimeoutError):  # a frame's worth gathers meanwhile
                 await asyncio.wait_for(self._stopping.wait(), STREAM_FRAME)
             await self._flush()
-        await self._flush()
+        await self._flush(all=True)
 
-    async def _flush(self) -> None:
+    async def _flush(self, *, all: bool = False) -> None:
         self._wake.clear()
         text = "".join(self._pending)
         self._pending.clear()
+        if not all and (held := _open_table(self._tail, text)):
+            text, self._pending = text[:len(text) - len(held)], [held]
         if text:
+            self._tail = (self._tail + text)[-2000:]
             await asyncio.shield(self.widget.append(text))
 
     async def stop(self) -> None:
         self._stopping.set()
         self._wake.set()
         await self._task
+
+
+def _open_table(shown: str, text: str) -> str:
+    """The end of ``text`` that is a table still being written (after what
+    was ``shown``): from the start of its block on, ``""`` when the reply
+    does not end in one."""
+    whole = shown + text
+    start = max(whole.rfind("\n\n"), whole.rfind("\n\r\n")) + 1 if "\n\n" in whole else 0
+    block = whole[start:]
+    if not block.lstrip().startswith("|"):
+        return ""
+    return text[max(0, start - len(shown)):]
 
 
 def bulleted(widget: Any, *, classes: str = "") -> Horizontal:

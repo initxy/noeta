@@ -227,3 +227,24 @@ async def test_a_streamed_reply_is_appended_once_a_frame_not_once_a_fragment(
         await stream.stop()
         assert widget.source == "".join(f"w{n} " for n in range(200))
         assert len(appends) <= 2
+
+
+async def test_a_streamed_table_is_shown_once_its_rows_are_in(tmp_path: Path) -> None:
+    from noeta_tui.widgets import ReplyStream, TableText
+
+    app = make_app(tmp_path, ScriptedProvider([]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot, lambda: bool(app.query("#prompt")))
+        widget = AssistantMessage("")
+        await app.transcript().mount(widget)
+        stream = ReplyStream(widget)
+        stream.write("Here:\n\n| name | value |\n|---|---|\n| a | 1 |\n")
+        await pilot.pause(0.2)
+        assert widget.source.startswith("Here:") and "|" not in widget.source
+        stream.write("| b | 2 |\n\nThat is all.")
+        await pilot.pause(0.2)
+        assert "| b | 2 |" in widget.source and not widget.source.endswith("|\n")
+        await stream.stop()
+        await pilot.pause(0.1)
+        [table] = widget.query(TableText)
+        assert table.tsv == "name\tvalue\na\t1\nb\t2"
