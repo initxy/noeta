@@ -89,6 +89,15 @@ describe("Transcript", () => {
     expect(screen.getByText("later")).toBeInTheDocument();
     expect(screen.getByText("queued")).toBeInTheDocument();
   });
+
+  it("draws a long conversation's last items first and the earlier ones after", async () => {
+    const items = Array.from({ length: 100 }, (_, i): Item => ({ kind: "user", id: `u${i}`, text: `prompt ${i}`, images: [] }));
+    const { container } = render(<Transcript state={{ ...emptyTask(), items }} />);
+    expect(container.querySelectorAll(".msg.user")).toHaveLength(40);
+    expect(screen.getByText("prompt 99")).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelectorAll(".msg.user")).toHaveLength(100));
+    expect(container.querySelector(".msg.user")).toHaveTextContent("prompt 0");
+  });
 });
 
 const approval: Pending = {

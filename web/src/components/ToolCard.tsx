@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Item } from "../state/transcript";
 import { ToolOutput } from "@initxy/noeta-ui";
 import { Slot, toolSlot, useSlotCount, type ToolCall, type ToolSlotProps } from "@initxy/noeta-web-sdk";
@@ -39,7 +39,7 @@ function Generic({ call, open }: ToolSlotProps) {
  * the tool deserves (a command and its output, a diff, a sub-agent's work).
  * A card whose plugin shows nothing while it is closed is drawn as one
  * line, with how long its result is. */
-export function ToolCard({ t }: { t: Tool }) {
+export const ToolCard = memo(function ToolCard({ t }: { t: Tool }) {
   const [open, setOpen] = useState(false);
   const slot = toolSlot(t.name);
   const contributed = useSlotCount(slot) > 0;
@@ -47,12 +47,15 @@ export function ToolCard({ t }: { t: Tool }) {
   const [compact, setCompact] = useState(false);
   // Whether the plugin's view is empty is known once drawn; an opened card
   // keeps the look it had closed.
+  const call: ToolCall = useMemo(
+    () => ({ id: t.id, name: t.name, input: t.input, status: t.status, result: t.result, meta: t.meta, progress: t.progress, children: t.children }),
+    [t],
+  );
   useLayoutEffect(() => {
     if (!open) setCompact(contributed && body.current !== null && body.current.childNodes.length === 0);
-  });
+  }, [open, contributed, call]);
   const mcp = t.name.startsWith("mcp__");
   const label = mcp ? t.name.slice(5).split("__").join(" · ") : t.name;
-  const call: ToolCall = { id: t.id, name: t.name, input: t.input, status: t.status, result: t.result, meta: t.meta, progress: t.progress, children: t.children };
   const summary = compact && t.result !== undefined && !open ? `${t.result.split("\n").length} lines` : "";
   return (
     <div className={`tool tool-${compact ? "compact" : "full"}`} data-tool={t.name} data-status={t.status}>
@@ -72,4 +75,4 @@ export function ToolCard({ t }: { t: Tool }) {
       {t.note && <div className="tool-note">⎿ {t.note}</div>}
     </div>
   );
-}
+});

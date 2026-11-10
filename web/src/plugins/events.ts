@@ -7,6 +7,7 @@ import type { Recorded } from "../api/types";
 export class TaskEvents {
   private listeners = new Set<(r: Recorded) => void>();
   private kept = new Map<string, PluginRecord[]>();
+  private log: Recorded[] = [];
   private last = 0;
 
   constructor(readonly taskId: string) {}
@@ -24,6 +25,7 @@ export class TaskEvents {
   emit(rec: Recorded): void {
     if (rec.seq <= this.last) return; // a stream picked up again
     this.last = rec.seq;
+    this.log.push(rec);
     this.keep(rec);
     for (const l of [...this.listeners]) {
       try {
@@ -32,6 +34,16 @@ export class TaskEvents {
         console.error("a plugin's watcher failed", e);
       }
     }
+  }
+
+  /** The task's events after `after`: those the page holds, then any the
+   * server recorded since (`fetch`), so a plugin reading the log does not
+   * download again what the page just did. */
+  async read(after: number, fetch: (after: number) => Promise<Recorded[]>): Promise<Recorded[]> {
+    if (!this.log.length || this.log[0].seq > after + 1) return fetch(after);
+    const held = this.log.filter((r) => r.seq > after);
+    const newer = await fetch(Math.max(after, this.last));
+    return [...held, ...newer.filter((r) => r.seq > this.last)];
   }
 
   watch(listener: (r: Recorded) => void): () => void {

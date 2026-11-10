@@ -46,6 +46,8 @@ export class SlotRegistry {
   private waiters: Waiter[] = [];
   private listeners = new Set<() => void>();
   private problemList: SlotProblem[] = [];
+  /** By slot name, and by family prefix (`record:`): changes with what that slot (or any of the family) holds. */
+  private versions = new Map<string, number>();
   /** Changes with every addition, removal and problem (a snapshot for React). */
   version = 0;
 
@@ -65,12 +67,17 @@ export class SlotRegistry {
       Component: Component as ComponentType<Record<string, unknown>>,
     };
     this.items = [...this.items, item];
-    this.changed();
+    this.changed([slot]);
     return () => {
       if (!this.items.includes(item)) return;
       this.items = this.items.filter((i) => i !== item);
-      this.changed();
+      this.changed([slot]);
     };
+  }
+
+  /** Changes with what `slot` holds; a family prefix (`"record:"`) with what any of its slots holds. */
+  slotVersion(slot: string): number {
+    return this.versions.get(slot) ?? 0;
   }
 
   /** What `slot` shows, by `order` then the order added. */
@@ -85,11 +92,11 @@ export class SlotRegistry {
       w.reject(new Error(`${plugin} was switched off`));
     }
     this.waiters = this.waiters.filter((w) => w.plugin !== plugin);
-    const before = this.items.length;
+    const gone = this.items.filter((i) => i.plugin === plugin).map((i) => i.slot);
     this.items = this.items.filter((i) => i.plugin !== plugin);
     const problems = this.problemList.length;
     this.problemList = this.problemList.filter((p) => p.plugin !== plugin);
-    if (this.items.length !== before || this.problemList.length !== problems) this.changed();
+    if (gone.length || this.problemList.length !== problems) this.changed(gone);
   }
 
   /** Whether `slot` is on the page. */
@@ -139,7 +146,12 @@ export class SlotRegistry {
     return () => this.listeners.delete(listener);
   };
 
-  private changed(): void {
+  private changed(slots: string[] = []): void {
+    for (const slot of new Set(slots)) {
+      this.versions.set(slot, this.slotVersion(slot) + 1);
+      const family = FAMILIES.find((f) => slot.startsWith(f));
+      if (family) this.versions.set(family, this.slotVersion(family) + 1);
+    }
     this.version += 1;
     for (const l of [...this.listeners]) l();
   }
@@ -150,16 +162,17 @@ export const SlotsContext = createContext<SlotRegistry | null>(null);
 
 const noRegistry = new SlotRegistry(() => true);
 
-function useRegistry(given?: SlotRegistry): SlotRegistry {
+/** The registry, rendering again only when what `slot` holds changes. */
+function useRegistry(slot: string, given?: SlotRegistry): SlotRegistry {
   const provided = useContext(SlotsContext);
   const registry = given ?? provided ?? noRegistry;
-  useSyncExternalStore(registry.subscribe, () => registry.version);
+  useSyncExternalStore(registry.subscribe, () => registry.slotVersion(slot));
   return registry;
 }
 
 /** How many contributions `slot` has now (in `registry`, else the provided one). */
 export function useSlotCount(slot: string, registry?: SlotRegistry): number {
-  return useRegistry(registry).contributions(slot).length;
+  return useRegistry(slot, registry).contributions(slot).length;
 }
 
 interface BoundaryProps {
@@ -209,7 +222,7 @@ class Boundary extends Component<BoundaryProps, { error: string | null }> {
  * becomes its child, so one coming or going remounts what is inside, and
  * own content that must keep its state across that keeps it outside. */
 export function Slot({ name, props, children }: { name: string; props?: object; children?: ReactNode }) {
-  const registry = useRegistry();
+  const registry = useRegistry(name);
   useEffect(() => registry.provide(name), [registry, name]);
   const all = registry.contributions(name);
   const shown = (c: Contribution, extra: { children?: ReactNode } = {}, fallback?: ReactNode) => (

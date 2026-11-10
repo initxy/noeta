@@ -9,7 +9,7 @@ import { PendingCards } from "./components/PendingCard";
 import { PluginsDialog } from "./components/PluginsDialog";
 import { Notices, StatusBar, Widgets } from "./components/PluginUi";
 import { Sidebar, type SessionStatus } from "./components/Sidebar";
-import { Transcript } from "./components/Transcript";
+import { LiveTranscript } from "./components/Transcript";
 import { attentionChanges, desktop } from "./desktop";
 import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
@@ -17,7 +17,7 @@ import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
 import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot } from "./state/projects";
 import type { TaskState } from "./state/transcript";
-import { ApiContext, useTask } from "./state/useTask";
+import { ApiContext, useTask, useTaskView, type TaskStore } from "./state/useTask";
 
 /** Commands the page runs itself, as Claude Code's app does. */
 const PAGE_COMMANDS: Command[] = [
@@ -105,11 +105,36 @@ function saveReplaced(ids: Set<string>): void {
   }
 }
 
+/** What the page around the transcript reads of the open task: none of it
+ * changes while text streams, so streaming re-renders none of it. */
+const shellOf = (s: TaskState) => ({
+  lastSeq: s.lastSeq,
+  pluginsOff: s.pluginsOff,
+  cwd: s.cwd,
+  model: s.model,
+  busy: s.busy,
+  ended: s.ended,
+  waitingOn: s.waitingOn,
+  waitingIds: s.waitingIds,
+  running: s.running,
+  replied: s.replied,
+  contextTokens: s.contextTokens,
+});
+
 /** The open session's status from its event stream (fresher than a listing). */
-function liveStatus(state: TaskState): SessionStatus {
+function liveStatus(state: Pick<TaskState, "ended" | "waitingOn" | "busy">): SessionStatus {
   if (state.ended !== null) return "ended";
   if (state.waitingOn === "approval" || state.waitingOn === "question") return "needs-you";
   return state.busy ? "running" : "idle";
+}
+
+const outputOf = (s: TaskState) => ({ items: s.items, live: s.live, queued: s.queued });
+
+/** Calls `follow` after every change to what the transcript shows. */
+function FollowOutput({ store, follow }: { store: TaskStore; follow: () => void }) {
+  const output = useTaskView(store, outputOf);
+  useLayoutEffect(follow, [output, follow]);
+  return null;
 }
 
 function sessionFromHash(): string | null {
@@ -175,7 +200,9 @@ function Workspace({
   const [sessions, setSessions] = useState<TaskSummary[]>([]);
   const [taskId, setTaskId] = useState<string | null>(sessionFromHash);
   const events = useMemo(() => (taskId ? new TaskEvents(taskId) : null), [taskId]);
-  const [state, dispatch] = useTask(api, taskId, events ? (rec, from) => (from ? events.keep(rec) : events.emit(rec)) : undefined);
+  const store = useTask(api, taskId, events ? (rec, from) => (from ? events.keep(rec) : events.emit(rec)) : undefined);
+  const state = useTaskView(store, shellOf);
+  const dispatch = store.dispatch;
   const [pending, setPending] = useState<Pending[]>([]);
   const [commands, setCommands] = useState<Command[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -198,6 +225,10 @@ function Workspace({
   const [picking, setPicking] = useState(false);
   const listed = useRef<TaskSummary[] | null>(null);
   const pinned = useRef(true); // the view follows new output while it is at the bottom
+  const follow = useCallback(() => {
+    const el = scroller.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, []);
   const [themeSource] = useState(() => new ThemeSource(theme === "dark" ? "dark" : "light"));
   useEffect(() => themeSource.set(theme === "dark" ? "dark" : "light"), [theme, themeSource]);
   // A task's web parts start once its log is read (what it runs without is known then).
@@ -206,10 +237,7 @@ function Workspace({
   // The title as the server lists it; the title plugin shows it live.
   const title = sessions.find((s) => s.task_id === taskId)?.title ?? "";
 
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [state.items, state.live, state.queued, pending]);
+  useLayoutEffect(follow, [pending, follow]);
 
   const fail = useCallback(
     (e: unknown) => {
@@ -523,7 +551,8 @@ function Workspace({
                 )}
               </div>
             )}
-            <Transcript state={state} />
+            <LiveTranscript key={taskId ?? ""} store={store} />
+            <FollowOutput store={store} follow={follow} />
             <PendingCards pending={pending} api={api} answered={refreshPending} />
           </div>
           <aside className="side-panels" aria-label="Plugin panels">

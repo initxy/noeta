@@ -22,7 +22,8 @@ export type Item =
       /** The tasks the call started (the kernel's `spawned` records), each with how it ended. */
       children?: { id: string; status?: string }[];
     }
-  | { kind: "notice"; id: string; text: string; tone: "info" | "error" }
+  /** `detail`: what the person can open (the raw error a one-line notice was made from). */
+  | { kind: "notice"; id: string; text: string; tone: "info" | "error"; detail?: string }
   | { kind: "compaction"; id: string; summary: string };
 
 /** A plugin's record, shown (by a `record:<plugin>/<kind>` contribution, if
@@ -45,7 +46,7 @@ export interface RecordList {
 
 /** The records whose `record:<plugin>/<kind>` slot `shows`, by the number
  * of items they come after, in the order recorded. Walks only those kinds. */
-export function shownRecords(st: TaskState, shows: (slot: string) => boolean): Map<number, PluginRecordAt[]> {
+export function shownRecords(st: Pick<TaskState, "records">, shows: (slot: string) => boolean): Map<number, PluginRecordAt[]> {
   const found: PluginRecordAt[] = [];
   for (const [key, list] of Object.entries(st.records)) {
     if (!shows(`record:${key}`)) continue;

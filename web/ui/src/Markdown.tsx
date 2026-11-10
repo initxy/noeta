@@ -1,5 +1,6 @@
 import { codeblockSlot, Slot } from "@initxy/noeta-web-sdk";
 import type { Element, ElementContent } from "hast";
+import { memo } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -45,8 +46,9 @@ const components: Components = {
   },
 };
 
-/** GitHub-flavored markdown with highlighted code, as the model writes it. */
-export function Markdown({ text }: { text: string }) {
+/** GitHub-flavored markdown with highlighted code, as the model writes it;
+ * parsed again only when the text changes. */
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
       <ReactMarkdown
@@ -59,4 +61,4 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
