@@ -4,6 +4,7 @@ activation text, ``/<name>``, scripts, allowed-tools, budget fitting."""
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -1249,3 +1250,26 @@ def test_the_local_fingerprint_follows_skill_files_and_ends_at_a_cycle(
     before = local_fingerprint([f"c:{commands}"])
     (commands / "sp" / "ship.md").write_text("Ship.\n")
     assert local_fingerprint([f"c:{commands}"]) != before
+
+
+def test_the_local_fingerprint_sees_a_file_anywhere_below_a_skill(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """As the remote look (``find`` over the whole tree) does; a directory
+    listed before and not changed since is not listed again."""
+    import noeta.plugins.skills.extension as skills
+
+    root = tmp_path / "skills"
+    write_skill(root, "deploy", "Ship.")
+    deep = root / "deploy" / "scripts" / "lib" / "vendor"
+    deep.mkdir(parents=True)
+    roots = [f"s:{root}"]
+    monkeypatch.setattr(skills, "RACY_NS", 0)  # every directory's times count as settled
+    before = skills.local_fingerprint(roots)
+    listed = skills.os.scandir
+    calls: list[str] = []
+    monkeypatch.setattr(skills.os, "scandir", lambda d: calls.append(str(d)) or listed(d))
+    assert skills.local_fingerprint(roots) == before and not calls
+    time.sleep(0.05)  # past the file times' clock tick (racy timestamps are off here)
+    (deep / "helper.py").write_text("x = 1\n")
+    assert skills.local_fingerprint(roots) != before
+    assert calls == [str(deep)]  # only the directory that changed

@@ -136,6 +136,10 @@ FORKS_KEEP = 32
 _FINGERPRINT = ('for a in "$@"; do d="${a#?:}"; case "$a" in c:*) n="*.md" ;; *) n=SKILL.md ;; '
                 'esac; [ -d "$d" ] && find -L "$d" -type f -print -name "$n" -exec cat {} + ; '
                 'done 2>/dev/null | cksum')
+#: Directories :func:`local_fingerprint` looks at below one root at most:
+#: a skill that bundles a large tree (a ``node_modules``) is looked at only
+#: so far.
+FINGERPRINT_DIRS = 5_000
 #: How recent a file's write is for :func:`local_fingerprint` to read its
 #: text: file times move in clock ticks (a few milliseconds on Linux, up to
 #: seconds on some filesystems).
@@ -145,23 +149,19 @@ RACY_NS = 3_000_000_000
 def local_fingerprint(roots: Sequence[str]) -> str:
     """What :data:`_FINGERPRINT` watches, looked at on this machine by
     ``stat`` (no process; a walk over a large skills directory took longer
-    than the model call it ran before): for each ``s:`` root, itself and
-    each directory in it with its ``SKILL.md`` (a skill is one level down;
-    a plugin's root may hold one too) and the directories in that one (where
-    a skill's scripts are added); for each ``c:`` root, every directory and
-    ``*.md`` below it. A file's change
-    time and size change with every write, a directory's with every entry
-    added, removed or renamed; a file written in the last
-    :data:`RACY_NS` counts by its text too. Symlinks are followed; a directory seen
-    before is not entered again, so a cycle ends."""
+    than the model call it ran before): every directory below each root
+    (:data:`FINGERPRINT_DIRS` at most), with each ``SKILL.md`` in them (for
+    a ``c:`` root, each ``*.md``). A file's change time and size change
+    with every write, a directory's with every entry added, removed or
+    renamed, so a directory whose times did not move is not listed again
+    (:data:`_LISTINGS`); a file written in the last :data:`RACY_NS` counts
+    by its text too, and a directory changed in it is listed again.
+    Symlinks are followed; a directory seen before is not entered again, so
+    a cycle ends."""
     parts: list[str] = []
     recent = time.time_ns() - RACY_NS
 
-    def note(path: str) -> bool:
-        try:
-            st = os.stat(path)
-        except OSError:
-            return False
+    def note(path: str, st: os.stat_result) -> None:
         parts.append(f"{path}\0{st.st_ino}:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}")
         if stat.S_ISREG(st.st_mode) and max(st.st_mtime_ns, st.st_ctime_ns) >= recent:
             # Written within a clock tick of now: a second write of the same
@@ -172,33 +172,12 @@ def local_fingerprint(roots: Sequence[str]) -> str:
                     parts.append(hashlib.sha256(f.read()).hexdigest())
             except OSError:
                 pass
-        return stat.S_ISDIR(st.st_mode)
 
     for arg in roots:
         kind, root = arg[:2], arg[2:]
-        if kind != "c:":
-            if not note(root):
-                continue
-            note(os.path.join(root, "SKILL.md"))
-            try:
-                with os.scandir(root) as it:
-                    subdirs = sorted(e.path for e in it if _is_dir(e))
-            except OSError:
-                continue
-            for d in subdirs:
-                note(d)
-                note(os.path.join(d, "SKILL.md"))
-                try:
-                    with os.scandir(d) as it:
-                        inner = sorted(e.path for e in it if _is_dir(e))
-                except OSError:
-                    continue
-                for sub in inner:
-                    note(sub)
-            continue
         seen: set[tuple[int, int]] = set()
         stack = [root]
-        while stack:
+        while stack and len(seen) < FINGERPRINT_DIRS:
             d = stack.pop()
             try:
                 st = os.stat(d)
@@ -207,18 +186,51 @@ def local_fingerprint(roots: Sequence[str]) -> str:
             if (st.st_dev, st.st_ino) in seen or not stat.S_ISDIR(st.st_mode):
                 continue
             seen.add((st.st_dev, st.st_ino))
-            note(d)
-            try:
-                with os.scandir(d) as it:
-                    entries = sorted(it, key=lambda e: e.name)
-            except OSError:
+            note(d, st)
+            listing = _listing(d, st, recent)
+            if listing is None:
                 continue
-            for entry in reversed(entries):
-                if _is_dir(entry):
-                    stack.append(entry.path)
-                elif entry.name.endswith(".md"):
-                    note(entry.path)
+            subdirs, docs, skill = listing
+            for doc in docs if kind == "c:" else skill:
+                try:
+                    note(doc, os.stat(doc))
+                except OSError:
+                    pass
+            stack.extend(reversed(subdirs))
     return hashlib.sha256("\n".join(parts).encode("utf-8", "surrogateescape")).hexdigest()
+
+
+#: Per directory :func:`local_fingerprint` listed: its times then, its
+#: subdirectories, its ``*.md`` files and its ``SKILL.md`` (``[]`` or one),
+#: by name (at most :data:`LISTINGS_KEEP`, the oldest dropped).
+_LISTINGS: dict[str, tuple[int, int, list[str], list[str], list[str]]] = {}
+LISTINGS_KEEP = 50_000
+
+
+def _listing(d: str, st: os.stat_result,
+             recent: int) -> tuple[list[str], list[str], list[str]] | None:
+    """The subdirectories, ``*.md`` files and ``SKILL.md`` of the directory ``d`` (its
+    stat ``st``): the ones listed before while its times have not moved
+    (and moved before ``recent``), else listed now; ``None`` when it cannot
+    be listed."""
+    kept = _LISTINGS.get(d)
+    if kept is not None and kept[:2] == (st.st_mtime_ns, st.st_ctime_ns) \
+            and max(st.st_mtime_ns, st.st_ctime_ns) < recent:
+        return kept[2], kept[3], kept[4]
+    try:
+        with os.scandir(d) as it:
+            entries = sorted(it, key=lambda e: e.name)
+    except OSError:
+        _LISTINGS.pop(d, None)
+        return None
+    subdirs = [e.path for e in entries if _is_dir(e)]
+    docs = [e.path for e in entries if e.name.endswith(".md") and not _is_dir(e)]
+    skill = [p for p in docs if os.path.basename(p) == "SKILL.md"]
+    _LISTINGS.pop(d, None)  # the newest last
+    _LISTINGS[d] = (st.st_mtime_ns, st.st_ctime_ns, subdirs, docs, skill)
+    while len(_LISTINGS) > LISTINGS_KEEP:
+        del _LISTINGS[next(iter(_LISTINGS))]
+    return subdirs, docs, skill
 
 
 def _is_dir(entry: os.DirEntry[str]) -> bool:
