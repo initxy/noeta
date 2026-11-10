@@ -14,6 +14,7 @@ export function FollowScroll({ resetKey, children }: { resetKey: string; childre
   const bottom = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const lastTop = useRef(0);
+  const touched = useRef(0); // when the person last clicked or pressed a key in it: what grows then is theirs (a run opened)
   const [away, setAway] = useState(false);
   const [unseen, setUnseen] = useState(false);
 
@@ -41,7 +42,7 @@ export function FollowScroll({ resetKey, children }: { resetKey: string; childre
     if (!el || typeof ResizeObserver === "undefined") return;
     const watch = new ResizeObserver(() => {
       if (following.current) toEnd();
-      else setUnseen(true);
+      else if (performance.now() - touched.current > 600) setUnseen(true);
     });
     watch.observe(el);
     return () => watch.disconnect();
@@ -81,7 +82,11 @@ export function FollowScroll({ resetKey, children }: { resetKey: string; childre
       onScroll={onScroll}
       onWheel={(e) => e.deltaY < 0 && leave()}
       onTouchMove={leave}
-      onKeyDown={(e: KeyboardEvent) => UP_KEYS.has(e.key) && !(e.target instanceof HTMLTextAreaElement) && leave()}
+      onPointerDown={() => (touched.current = performance.now())}
+      onKeyDown={(e: KeyboardEvent) => {
+        touched.current = performance.now();
+        if (UP_KEYS.has(e.key) && !(e.target instanceof HTMLTextAreaElement)) leave();
+      }}
     >
       <div ref={content}>
         {children}
