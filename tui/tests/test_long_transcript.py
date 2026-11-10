@@ -124,3 +124,28 @@ async def test_scrolled_up_the_transcript_stays_put_as_the_task_goes_on(
         await type_line(pilot, "c")
         await pilot.pause(0.3)
         assert transcript.scroll_y == transcript.max_scroll_y
+
+
+async def test_a_streamed_reply_is_appended_once_a_frame_not_once_a_fragment(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from noeta_tui.widgets import ReplyStream
+
+    app = make_app(tmp_path, ScriptedProvider([]))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await settle(pilot, lambda: bool(app.query("#prompt")))
+        widget = AssistantMessage("")
+        await app.transcript().mount(widget)
+        appends: list[str] = []
+        append = widget.append
+
+        def counted(text: str) -> Any:
+            appends.append(text)
+            return append(text)
+
+        monkeypatch.setattr(widget, "append", counted)
+        stream = ReplyStream(widget)
+        for n in range(200):
+            stream.write(f"w{n} ")
+        await stream.stop()
+        assert widget.source == "".join(f"w{n} " for n in range(200))
+        assert len(appends) <= 2

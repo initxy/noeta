@@ -3,6 +3,9 @@ approval and question cards, pickers, the completion menu and the prompt."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import functools
 import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -72,7 +75,11 @@ def _show_link_targets(state: Any) -> None:
         block.children = out
 
 
+@functools.cache
 def _markdown_parser() -> MarkdownIt:
+    """The one parser every reply is read with (Textual asks for a parser
+    on every append of a streamed reply; building one costs more than
+    parsing a fragment)."""
     parser = MarkdownIt("gfm-like")
     parser.core.ruler.push("show_link_targets", _show_link_targets)
     return parser
@@ -95,6 +102,49 @@ class CleanMarkdown(Markdown):
 
 class AssistantMessage(CleanMarkdown):
     DEFAULT_CLASSES = "assistant-message"
+
+
+#: Seconds a streamed reply gathers what comes before it is shown: about a
+#: frame. Each append parses the reply's last block again and lays out the
+#: screen; per fragment (a model sends hundreds a second) it fell behind.
+STREAM_FRAME = 0.05
+
+
+class ReplyStream:
+    """What the model streams, appended to ``widget`` at most once per
+    :data:`STREAM_FRAME`; :meth:`stop` appends what is left."""
+
+    def __init__(self, widget: Markdown) -> None:
+        self.widget = widget
+        self._pending: list[str] = []
+        self._wake = asyncio.Event()
+        self._stopping = asyncio.Event()
+        self._task = asyncio.create_task(self._run())
+
+    def write(self, text: str) -> None:
+        if text:
+            self._pending.append(text)
+            self._wake.set()
+
+    async def _run(self) -> None:
+        while not self._stopping.is_set():
+            await self._wake.wait()
+            with contextlib.suppress(TimeoutError):  # a frame's worth gathers meanwhile
+                await asyncio.wait_for(self._stopping.wait(), STREAM_FRAME)
+            await self._flush()
+        await self._flush()
+
+    async def _flush(self) -> None:
+        self._wake.clear()
+        text = "".join(self._pending)
+        self._pending.clear()
+        if text:
+            await asyncio.shield(self.widget.append(text))
+
+    async def stop(self) -> None:
+        self._stopping.set()
+        self._wake.set()
+        await self._task
 
 
 def bulleted(widget: Any, *, classes: str = "") -> Horizontal:

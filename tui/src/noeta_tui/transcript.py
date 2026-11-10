@@ -21,8 +21,7 @@ from textual import work
 from textual.app import App, ScreenStackError
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Markdown, Static
-from textual.widgets.markdown import MarkdownStream
+from textual.widgets import Static
 
 from noeta.core import models, records
 from noeta.core.events import (
@@ -75,6 +74,7 @@ from noeta_tui.widgets import (
     Notice,
     PromptInput,
     QuestionCard,
+    ReplyStream,
     ThinkingBlock,
     ToolCall,
     ToolGroup,
@@ -133,7 +133,7 @@ class TranscriptView(App[None]):
     modes_published: bool
     task_id: str
     calls: dict[str, ToolCall]
-    stream: MarkdownStream | None
+    stream: ReplyStream | None
     stream_widget: AssistantMessage | None
     stream_key: tuple[int, int]
     stream_text: str
@@ -408,11 +408,11 @@ class TranscriptView(App[None]):
             await transcript.mount(bulleted(widget))
             self._follow_end()
             self.stream, self.stream_widget, self.stream_key = \
-                Markdown.get_stream(widget), widget, key
+                ReplyStream(widget), widget, key
         self.attempts[delta.call_seq] = delta.attempt
         self.streamed.add(delta.call_seq)
         self.stream_text += delta.text
-        await self.stream.write(delta.text)
+        self.stream.write(delta.text)
 
     def _follow_end(self) -> None:
         """Keep the transcript at its end as live output grows, unless the
@@ -445,9 +445,9 @@ class TranscriptView(App[None]):
                 task = asyncio.current_task()
                 if task is not None and task.cancelling():
                     raise
-                # Textual's stream task was cancelled before it first ran
-                # (a loaded loop): the cancel surfaces here and what was
-                # written never reached the widget.
+                # The stream's task was cancelled (a loaded loop, the app
+                # closing): the cancel surfaces here and what was written
+                # may not have reached the widget.
                 if not drop and widget is not None:
                     await widget.update(text)
         if drop and widget is not None:
