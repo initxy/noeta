@@ -57,7 +57,7 @@ test("the app starts its own server, injects the token, and a session replies", 
     await box.fill("hello there, noeta");
     await box.press("Enter");
     await expect(page.locator(".msg.assistant").last()).toContainText("I am the scripted model", { timeout: 30_000 });
-    await expect(page.locator(".cwd")).toHaveText(work);
+    await expect(page.locator(".cwd")).toHaveAttribute("title", work);
     await page.screenshot({ path: `${SHOTS}/02-reply.png` });
 
     // The menu's New Session (Cmd/Ctrl+N) goes back to the welcome screen.

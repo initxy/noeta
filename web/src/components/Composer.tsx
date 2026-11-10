@@ -42,6 +42,8 @@ interface Props {
   /** Where the box keeps what is typed in it, so a remount (a plugin's
    * `wrap` of the composer coming or going) loses none of it. */
   keep?: ComposerKeep;
+  /** The person's earlier prompts, oldest first: ↑ in an empty box brings them back. */
+  recall?: () => string[];
 }
 
 /** What the composer holds, kept outside it (`useState(newComposerKeep)` in its owner). */
@@ -58,7 +60,7 @@ export const newComposerKeep = (): ComposerKeep => ({ text: "", images: [] });
  * commands, `@` the files, pasted or dropped images go with the message,
  * Esc or the stop button interrupts. Sent while the model works, a message
  * waits in the queue for its next turn. */
-export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, onCycleMode, placeholder, draft, keep }: Props) {
+export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, onCycleMode, placeholder, draft, keep, recall }: Props) {
   const [text, setTextState] = useState(keep?.text ?? "");
   const [images, setImagesState] = useState<Attachment[]>(keep?.images ?? []);
   // Kept as set, not once rendered: the box can be remounted before then.
@@ -76,6 +78,8 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
   const box = useRef<HTMLTextAreaElement>(null);
   const placeCaret = useRef<number | null>(null); // after a completion, once its text is in
   const query = menuQuery(text, caret);
+  // ↑/↓ through earlier prompts: how far back, and the prompt shown (typing over it ends the walk).
+  const back = useRef<{ n: number; shown: string } | null>(null);
 
   useEffect(() => {
     if (!draft || keep?.draft === draft.n) return; // put in already, before a remount
@@ -89,6 +93,12 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
   useLayoutEffect(() => {
     if (placeCaret.current !== null) box.current?.setSelectionRange(placeCaret.current, placeCaret.current);
     placeCaret.current = null;
+    // As tall as its text, wrapped lines too (up to the stylesheet's max-height).
+    const el = box.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    }
   }, [text]);
 
   useEffect(() => {
@@ -124,6 +134,7 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
   const send = (typed = text) => {
     const t = typed.trim();
     if ((!t && !images.length) || disabled) return;
+    back.current = null;
     onSend(t, images);
     setText("");
     setImages([]);
@@ -154,6 +165,32 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
         choose(options[active].insert);
+        return;
+      }
+    }
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && recall && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      const walking = back.current !== null && back.current.shown === text;
+      if (e.key === "ArrowUp" && (walking || !text)) {
+        const earlier = recall();
+        const n = (walking ? back.current!.n : 0) + 1;
+        if (n <= earlier.length) {
+          e.preventDefault();
+          const shown = earlier[earlier.length - n];
+          back.current = { n, shown };
+          placeCaret.current = shown.length;
+          setText(shown);
+          setCaret(shown.length);
+        }
+        return;
+      }
+      if (e.key === "ArrowDown" && walking) {
+        e.preventDefault();
+        const n = back.current!.n - 1;
+        const shown = n > 0 ? recall()[recall().length - n] : "";
+        back.current = n > 0 ? { n, shown } : null;
+        placeCaret.current = shown.length;
+        setText(shown);
+        setCaret(shown.length);
         return;
       }
     }
@@ -225,7 +262,7 @@ export function Composer({ busy, disabled, commands, findFiles, onSend, onStop, 
         <textarea
           ref={box}
           aria-label="Message"
-          rows={Math.min(8, Math.max(1, text.split("\n").length))}
+          rows={1}
           placeholder={placeholder ?? "Reply to noeta… (/ for commands, @ for files)"}
           value={text}
           disabled={disabled}

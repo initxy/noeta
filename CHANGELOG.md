@@ -8,6 +8,9 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+The web app keeps up with a long session: streaming, opening and scrolling one no longer drag the
+page, and errors, diffs and dialogs read better.
+
 ### Changed
 
 - **Tasks start in `bypassPermissions` by default**, in the TUI, `noeta -p`, ACP, sub-agents, the
@@ -17,6 +20,15 @@ this repository. Their versions are listed on PyPI.
   so an installed `noeta service` keeps starting. A settings file's
   `permissions.disableBypassPermissionsMode: "disable"` still switches it off; where it is off,
   tasks start in `auto` as before.
+- Long diffs fold after 12 lines ("Show N more lines") and show line numbers.
+- Tool calls are drawn as lines without boxes; dark mode has its own error and status colors.
+- The rewind dialog says what each choice does (Both / Conversation / Code).
+- ↑ in an empty message box brings back your earlier prompts.
+- Runs of tool calls fold into one line in Claude Code's words ("Searched for 2 patterns, read 3
+  files, ran 1 shell command"), opened on a click; a failed call still shows on its own, edits of
+  one file in a row and agents started together are merged, and task-list calls are left out (the
+  task panel shows the list).
+- Projects that share a name show the parent folders that tell them apart.
 
 ### Fixed
 
@@ -30,6 +42,22 @@ this repository. Their versions are listed on PyPI.
 - **A `Bash` call waited at least 50 ms after its command ended**, polling for its output to be
   written: `echo hi` took about 60 ms. The shell now wakes as soon as the output is written (a few
   ms), still giving a child left running with `&` at most a second.
+- **Typing lagged while a long session streamed**: every streamed chunk re-rendered the whole page
+  (about 1,200 components in a 700-event session) and re-parsed the whole answer. Only the
+  streaming message redraws now, once per frame, parsing just the paragraph being written; typing
+  answers in ~14 ms instead of 120–230 ms.
+- **Opening a long session was slow and downloaded its log twice**: it now draws the latest
+  messages first and the earlier ones while the page is idle, and reads the log once (a 700-event
+  session shows its end in ~170 ms instead of ~490 ms).
+- **Scrolling up while the model wrote snapped back to the bottom**: the view now stays where you
+  scroll it, with a "Jump to latest" button to return.
+- **Errors showed Python exception text** (`RuntimeError('…')`) and tool errors their
+  `<tool_use_error>` tags: each is one plain line now, the raw text under "Details".
+- **Esc did not close the rewind and plugins dialogs.**
+- **With a side panel open, the message box did not line up with the conversation**, and the
+  session's folder squeezed its title in the header.
+- **The message box did not grow for wrapped lines** on a narrow screen.
+- The session list and approval cards are no longer polled while the page is hidden.
 
 ## [1.2.2] - 2026-11-10
 

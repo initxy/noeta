@@ -22,7 +22,8 @@ export type Item =
       /** The tasks the call started (the kernel's `spawned` records), each with how it ended. */
       children?: { id: string; status?: string }[];
     }
-  | { kind: "notice"; id: string; text: string; tone: "info" | "error" }
+  /** `detail`: what the person can open (the raw error a one-line notice was made from). */
+  | { kind: "notice"; id: string; text: string; tone: "info" | "error"; detail?: string }
   | { kind: "compaction"; id: string; summary: string };
 
 /** A plugin's record, shown (by a `record:<plugin>/<kind>` contribution, if
@@ -45,7 +46,7 @@ export interface RecordList {
 
 /** The records whose `record:<plugin>/<kind>` slot `shows`, by the number
  * of items they come after, in the order recorded. Walks only those kinds. */
-export function shownRecords(st: TaskState, shows: (slot: string) => boolean): Map<number, PluginRecordAt[]> {
+export function shownRecords(st: Pick<TaskState, "records">, shows: (slot: string) => boolean): Map<number, PluginRecordAt[]> {
   const found: PluginRecordAt[] = [];
   for (const [key, list] of Object.entries(st.records)) {
     if (!shows(`record:${key}`)) continue;
@@ -144,6 +145,44 @@ export function shownPrompt(t: string): string {
   return m ? [m[1], (m[2] ?? "").trim()].filter(Boolean).join(" ") : t;
 }
 
+/** What went wrong, as the turn-failure reasons name it (noeta.core.runner.texts). */
+const FAILURES: Record<string, string> = {
+  llm_error: "The model call failed",
+  llm_empty_response: "The model sent an empty reply",
+  llm_truncated: "The model's reply was cut off",
+  context_overflow: "The conversation no longer fits the model's context",
+  max_turns: "Stopped at the turn limit",
+  internal_error: "Something went wrong",
+  needs_human: "The sub-agent needed you and stopped",
+  unreadable_log: "The session's log could not be read",
+  plugin_missing: "A plugin this session runs with is missing",
+};
+
+/** An error as a person reads it: a raised exception's message without its
+ * Python dress (`RuntimeError('…')` reads `…`), on one line. */
+export function errorText(raw: string): string {
+  const m = /^[A-Za-z_][\w.]*\((['"])([\s\S]*)\1,?\)$/.exec(raw.trim());
+  const text = m ? m[2].replace(/\\n/g, " ").replace(/\\(['"\\])/g, "$1") : raw;
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** A failure's notice: what went wrong in words and the error's message on
+ * one line; the raw text behind "Details" when it says more. `reason`: one
+ * of FAILURES' keys, if the text starts with one ("reason: detail"). */
+function failure(id: string, lead: string, reason: string, detail: string): Item {
+  const head = FAILURES[reason] ?? reason.replace(/_/g, " ");
+  const said = detail ? errorText(detail) : "";
+  const text = [lead, head, said].filter(Boolean).join(": ") || lead;
+  const raw = [reason, detail].filter(Boolean).join(": ");
+  return { kind: "notice", id, text, tone: "error", detail: said !== detail.trim() ? raw : undefined };
+}
+
+/** "reason: detail" split, when it starts with a reason FAILURES knows. */
+function reasoned(error: string): [string, string] {
+  const m = /^([a-z_]+)(?::\s*([\s\S]*))?$/.exec(error);
+  return m && FAILURES[m[1]] ? [m[1], m[2] ?? ""] : ["", error];
+}
+
 const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 function updateTool(items: Item[], id: string, patch: Partial<Extract<Item, { kind: "tool" }>>): Item[] {
@@ -183,15 +222,18 @@ function record(st: TaskState, seq: number, ev: Extract<Event, { type: "Extensio
       return { ...st, items, running: started(st.running, children.map((c) => c.id)) };
     }
     case "core/retry":
-      return { ...notice(`Retrying (attempt ${data.attempt ?? "?"}): ${String(data.error ?? "").slice(0, 160)}`), live: null };
+      return { ...notice(`Retrying (attempt ${data.attempt ?? "?"}): ${errorText(String(data.error ?? "")).slice(0, 160)}`), live: null };
     case "core/turn_stopped": {
       // What streamed before the stop stays, as Claude Code keeps it.
       const partial = typeof data.partial === "string" && data.partial.trim() ? data.partial : "";
       if (partial) st = { ...st, items: [...st.items, { kind: "assistant", id: `p${seq}`, text: partial }] };
       return { ...notice("Interrupted by you"), live: null, busy: false };
     }
-    case "core/turn_failed":
-      return notice(`Turn failed: ${[data.reason, data.detail].filter(Boolean).join(": ")}`, "error");
+    case "core/turn_failed": {
+      const reason = String(data.reason ?? "");
+      const item = failure(`n${seq}`, FAILURES[reason] ? "" : "The turn failed", reason, String(data.detail ?? ""));
+      return { ...st, items: [...st.items, item] };
+    }
     case "core/notice":
       return notice(String(data.text ?? ""));
     default:
@@ -298,7 +340,9 @@ function event(st: TaskState, rec: Recorded): TaskState {
         ended: ev.status,
         items: [
           ...st.items,
-          { kind: "notice", id: `e${seq}`, text: `Session ${ev.status}${ev.error ? `: ${ev.error}` : ""}`, tone: ev.status === "failed" ? "error" : "info" },
+          ev.status === "failed" && ev.error
+            ? failure(`e${seq}`, "Session failed", ...reasoned(ev.error))
+            : { kind: "notice", id: `e${seq}`, text: `Session ${ev.status}${ev.error ? `: ${errorText(ev.error)}` : ""}`, tone: ev.status === "failed" ? "error" : "info" },
         ],
       };
     case "ExtensionRecorded":

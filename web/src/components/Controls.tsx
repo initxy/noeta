@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Api } from "../api/client";
 import type { ModelInfo, RewindPoint, TreeUsage } from "../api/types";
+import { useEscape } from "./useEscape";
 
 /** The permission modes a new session can start in (its `permission_mode`
  * config, Claude Code's), in Shift+Tab's order. Once the session runs, the
@@ -61,6 +62,7 @@ export function UsageBadge({ usage, contextTokens, window }: { usage: TreeUsage 
 export function RewindDialog({ api, taskId, onClose, onRewound }: { api: Api; taskId: string; onClose: () => void; onRewound: (taskId: string, prompt: string) => void }) {
   const [points, setPoints] = useState<RewindPoint[] | null>(null);
   const [error, setError] = useState("");
+  useEscape(onClose);
   useEffect(() => {
     api.rewindPoints(taskId).then(setPoints, (e: unknown) => setError(String(e)));
   }, [api, taskId]);
@@ -87,15 +89,18 @@ export function RewindDialog({ api, taskId, onClose, onRewound }: { api: Api; ta
               <li key={p.index}>
                 <div className="rewind-text">{p.text}</div>
                 <div className="muted">{p.files.length ? `${p.files.length} file(s) changed since` : "no file changes since"}</div>
-                <div className="choices inline">
+                <div className="choices inline rewind-choices">
                   <button className="choice" onClick={() => go(p, true, true)}>
                     Both
+                    <span className="choice-hint">Chat and files go back</span>
                   </button>
                   <button className="choice" onClick={() => go(p, true, false)}>
                     Conversation
+                    <span className="choice-hint">Chat goes back, files stay</span>
                   </button>
                   <button className="choice" disabled={!p.files.length} onClick={() => go(p, false, true)}>
                     Code
+                    <span className="choice-hint">Files go back, chat stays</span>
                   </button>
                 </div>
               </li>
