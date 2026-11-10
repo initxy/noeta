@@ -250,6 +250,33 @@ async def test_new_skills_are_announced_at_the_next_message(h: Harness) -> None:
     assert len(await h.records(tid, "skills", "listing")) == 2
 
 
+async def test_the_skills_are_loaded_once_until_their_files_change(
+        h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A new message looks at the skill files, not loads them all again; a
+    skill installed between turns is still there for the typed command."""
+    from noeta.plugins.skills import extension
+
+    loads = 0
+    real = extension.load_registry
+
+    async def counted(*args: Any, **kw: Any) -> Any:
+        nonlocal loads
+        loads += 1
+        return await real(*args, **kw)
+
+    monkeypatch.setattr(extension, "load_registry", counted)
+    write_skill(skills_dir(h), "deploy", "Ship.")
+    a = agent()
+    h.provider.add(reply("ok"), reply("ok"), reply("ok"))
+    tid = await h.start(a)
+    await h.say(a, tid, "next")
+    assert loads == 1
+    write_skill(skills_dir(h), "review", "Review code.", body="Review it.\n")
+    await h.say(a, tid, "/review now")
+    assert loads == 2
+    assert any(m.text.endswith("Review it.\n\nARGUMENTS: now") for m in h.last_messages())
+
+
 async def test_a_skill_installed_into_an_empty_task_is_announced(h: Harness) -> None:
     """Installed mid-turn, listed with its description before the next model
     call, as Claude Code lists a skill its watcher found."""
