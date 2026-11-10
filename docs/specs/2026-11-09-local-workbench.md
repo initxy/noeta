@@ -43,7 +43,7 @@ A user who ran `uv tool install 'noeta[tui,server]'` gets, with no build step:
 
 ## Plan
 
-- [ ] Python: crash fallback in `main()` + crash report
+- [x] Python: crash fallback in `main()` + crash report
 - [ ] Python: `/projects` and `/dirs` endpoints (+ OpenAPI, `RemoteClient`/`AppAPI` only if the TUI needs them — it does not)
 - [ ] Python: bundled web app in the wheel; `make build` and release `build` job build `web/` first; smoke step asserts the wheel has `index.html`
 - [ ] Python: `noeta web`, `noeta web stop`, `noeta web status`
@@ -70,3 +70,4 @@ A user who ran `uv tool install 'noeta[tui,server]'` gets, with no build step:
 ## Progress log
 
 - 2026-11-09 owner: Codex-style local workbench; do all five proposals.
+- 2026-11-09 crash fallback: `-v` is already `--version` (Claude Code's flag), so the traceback switch is `--verbose` (anywhere on the command line) or `NOETA_DEBUG=1`. The TUI hands an error that ended it back to `main()` (Textual's own traceback, with every frame's locals, is no longer printed); `-p` goes through `main()` already.

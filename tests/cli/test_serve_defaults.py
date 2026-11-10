@@ -11,7 +11,7 @@ import pytest
 from noeta.cli import home_dir, main
 
 
-class _Started(Exception):
+class _Started(BaseException):  # not an Exception: past main()'s crash report
     pass
 
 

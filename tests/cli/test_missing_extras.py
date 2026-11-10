@@ -78,15 +78,21 @@ def test_noeta_plugins_names_the_workflow_extra_when_its_engine_is_missing(
     assert "pip install 'noeta[workflow]'" in err
 
 
-def test_another_missing_module_is_not_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_another_missing_module_is_not_hidden(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                              capsys: pytest.CaptureFixture[str]) -> None:
     """Only the extras' own modules are translated; a bug importing
-    something else still raises."""
+    something else is reported as the unexpected error it is."""
+    from noeta.cli import home_dir
+
     def broken(_argv: list[str]) -> None:
         raise ModuleNotFoundError("No module named 'nowhere'", name="nowhere")
 
+    monkeypatch.setattr(home_dir, "HOME", tmp_path / "home")
     monkeypatch.setattr(cli, "_front", broken)
-    with pytest.raises(ModuleNotFoundError):
-        cli.main(["--model", "m"])
+    assert _exit_message(["--model", "m"]) == "1"
+    err = capsys.readouterr().err
+    assert "unexpected error: ModuleNotFoundError: No module named 'nowhere'" in err
+    assert "extra" not in err
 
 
 def test_the_terminal_ui_is_found_by_its_entry_point() -> None:

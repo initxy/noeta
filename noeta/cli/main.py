@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from noeta.agents.agent_files import AgentFileError, PluginArgumentError
-from noeta.cli import home_dir, mcp_command, plugin_command
+from noeta.cli import crash_report, home_dir, mcp_command, plugin_command
 from noeta.cli.config import ConfigError, Settings, load_settings
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
@@ -404,18 +404,23 @@ def _install_hint(module: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
+    words = list(sys.argv[1:] if argv is None else argv)
     try:
-        _main(list(sys.argv[1:] if argv is None else argv))
+        _main(words)
     except (ConfigError, AgentFileError, PluginArgumentError) as exc:
         sys.exit(f"noeta: {exc}")
+    except KeyboardInterrupt:
+        sys.exit(130)
     except ImportError as exc:
         extra = missing_extra(exc)
         if extra is None:
-            raise
+            sys.exit(crash_report.crash(exc, words))
         # A uv tool reinstall keeps only the extras it names.
         sys.exit(f"noeta: this needs the {extra} extra, which is not installed: "
                  f"{_pip(_noeta(extra))} (or, for a uv tool install, {_uv_reinstall(extra)}, "
                  "listing every extra you want: a reinstall drops the ones it does not name)")
+    except Exception as exc:  # noqa: BLE001 - any other error: one line and a report
+        sys.exit(crash_report.crash(exc, words))
 
 
 def _main(argv: list[str]) -> None:

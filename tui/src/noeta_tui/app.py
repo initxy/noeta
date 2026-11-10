@@ -215,6 +215,21 @@ class NoetaApp(TranscriptView):
 
     # ------------------------------------------------------------ layout
 
+    #: The error that ended the app; the ``noeta`` command reports it once
+    #: the terminal is restored (one line and a crash report file).
+    crashed: Exception | None = None
+
+    def _handle_exception(self, error: Exception) -> None:
+        if self.crashed is None:
+            self.crashed = error
+        super()._handle_exception(error)
+
+    def _fatal_error(self) -> None:
+        # Textual's own traceback shows every frame's locals; the noeta
+        # command prints one line instead and keeps the traceback in a file.
+        self.bell()
+        self._close_messages_no_wait()
+
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
         yield Static("", id="spinner")
