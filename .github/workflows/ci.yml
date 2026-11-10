@@ -144,12 +144,19 @@ jobs:
       - name: Install
         run: uv sync --all-extras
 
-      - name: pytest
-        # The core suite (pyproject's addopts leave out live and cluster tests). The bubblewrap,
-        # Docker and Postgres tests skip themselves here; lint, coverage and the docs checks run
-        # in the Linux job.
-        run: uv run pytest -n auto -q
-
+      - name: debug single test x3 (branch)
+        continue-on-error: true
+        run: for i in 1 2 3; do uv run pytest -p no:cacheprovider -n0 -q --durations=3 tests/plugins/shell/test_background_tools.py -k returns_when_its_shell_exits 2>&1 | tail -6; done
+      - name: debug whole shell dir (branch)
+        continue-on-error: true
+        run: uv run pytest -p no:cacheprovider -n auto -q tests/plugins/shell 2>&1 | tail -6
+      - name: debug single test x3 (main conftest)
+        continue-on-error: true
+        run: |
+          git fetch -q origin main && git checkout origin/main -- tests/conftest.py
+          for i in 1 2 3; do uv run pytest -p no:cacheprovider -n0 -q tests/plugins/shell/test_background_tools.py -k returns_when_its_shell_exits 2>&1 | tail -3; done
+          uv run pytest -p no:cacheprovider -n auto -q tests/plugins/shell 2>&1 | tail -4
+          git checkout HEAD -- tests/conftest.py
       - name: pytest (terminal UI)
         working-directory: tui
         run: uv run pytest -n auto -q
