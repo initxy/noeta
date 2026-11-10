@@ -139,6 +139,8 @@ def _parser() -> argparse.ArgumentParser:
                     help="serve this directory's files (the built web app, web/dist) at the "
                          "server's other paths (default: the web app noeta was built with, "
                          "if any)")
+    # Set by ``noeta web``: its refusals speak to someone who did not start ``noeta serve``.
+    sv.add_argument("--for-noeta-web", action="store_true", help=argparse.SUPPRESS)
     web_command.add_parser(sub)
     update_command.add_parser(sub)
     sub.add_parser("trust", help="load this project's plugins, agents, prompts and skills")
@@ -298,7 +300,14 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
 
     from noeta.cli.home_dir import HOME
     from noeta.cli.server_token import server_token_digest
-    from noeta.host.http import LOOPBACK_HOSTS, bundled_web_dir, create_app, redact_token_logs
+    from noeta.host.http import (
+        LOOPBACK_HOSTS,
+        OUTSIDE_HINT,
+        WEB_OUTSIDE_HINT,
+        bundled_web_dir,
+        create_app,
+        redact_token_logs,
+    )
 
     host, with_worker = args.host, not args.no_worker
     web = os.path.abspath(args.web) if args.web else bundled_web_dir()
@@ -330,7 +339,9 @@ async def _serve(s: Settings, args: argparse.Namespace, cwd: str) -> None:
                      or (host in LOOPBACK_HOSTS and not args.allow_host
                          and not args.allow_origin),
                      plugin_admin=app.plugin_admin,
-                     projects_file=str(home_dir.projects_file(s.store_url)))
+                     projects_file=str(home_dir.projects_file(s.store_url)),
+                     outside_hint=WEB_OUTSIDE_HINT if getattr(args, "for_noeta_web", False)
+                     else OUTSIDE_HINT)
     if web:
         print(f"noeta: web app at http://{host}:{args.port}/", file=sys.stderr)
     config = uvicorn.Config(api, host=host, port=args.port)

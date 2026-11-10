@@ -104,7 +104,14 @@ from noeta.core.agent import Agent
 from noeta.core.client import Client
 from noeta.core.commands import Typed
 from noeta.core.extension import Command, CommandContext, UnknownUiCall
-from noeta.host._http_guard import LOOPBACK_HOSTS, Guard, Refused, token_digest
+from noeta.host._http_guard import (
+    LOOPBACK_HOSTS,
+    OUTSIDE_HINT,
+    WEB_OUTSIDE_HINT,
+    Guard,
+    Refused,
+    token_digest,
+)
 from noeta.host._http_openapi import OPENAPI
 from noeta.host._http_plugins import PluginRoutes
 from noeta.host._http_routes import Routes
@@ -122,8 +129,9 @@ from noeta.host.projects import SavedProjects
 from noeta.host.rewind import RewindPoint, Rewound, rewind
 from noeta.host.summaries import root_summaries
 
-__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "WEB_HEADERS", "WEB_IMPORT_MAP_SHA256", "Refused",
-           "bundled_web_dir", "create_app", "redact_token_logs", "token_digest"]
+__all__ = ["LOOPBACK_HOSTS", "OPENAPI", "OUTSIDE_HINT", "WEB_HEADERS", "WEB_IMPORT_MAP_SHA256",
+           "WEB_OUTSIDE_HINT", "Refused", "bundled_web_dir", "create_app", "redact_token_logs",
+           "token_digest"]
 
 
 @dataclasses.dataclass
@@ -280,7 +288,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
                cwd: str | None = None, roots: Sequence[str] = (),
                web_dir: str | None = None, allow_plugin_install: bool = False,
                plugin_admin: PluginAdmin | None = None,
-               projects_file: str | None = None) -> Starlette:
+               projects_file: str | None = None,
+               outside_hint: str = OUTSIDE_HINT) -> Starlette:
     """``deltas`` is ``LocalApp.deltas`` when workers run in this process;
     ``agents`` (by name) lets a message run its task agent's slash commands;
     ``app`` (the ``LocalApp`` whose workers run here) previews requests
@@ -315,7 +324,8 @@ def create_app(client: Client, *, token: str | None = None, token_sha256: str | 
         client=client, agents=agents or {}, live=deltas, admin=admin)
     guard = Guard(client, serving, token_sha256=token_sha256, auth=auth,
                   allowed_hosts=allowed_hosts, origins=origins, allow_bypass=allow_bypass,
-                  cwd=cwd, roots=roots, fixed=lambda: admin.fixed())
+                  cwd=cwd, roots=roots, fixed=lambda: admin.fixed(),
+                  outside_hint=outside_hint)
     r = Routes(serving, app, agents, SavedProjects(projects_file))
     s = StreamRoutes(guard, deltas)
     running = agents or {}

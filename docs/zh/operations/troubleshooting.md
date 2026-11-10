@@ -168,6 +168,7 @@ them`，然后等租约到期，让别的工人来认领。如果同一台工人
 | `POST /tasks/{id}/answers` 返回 HTTP 409 `task … is not waiting on a request '…' (unknown, or already answered)` | `request_id` 打错了、来自过期的卡片、是别的任务的，或者已经答过并被取走。 | 重新读一遍 `GET /tasks/{id}/pending`，回答上面列着的。 |
 | `/stream-json` 的 WebSocket 以关闭码 `4401` / `4403` 断开 | `4401`：没有有效 token。`4403`：要的权限模式或 `cwd` 被拒，关闭原因里写着为什么。 | 带上 token（`?token=` 或请求头）；换成允许的模式或目录。 |
 | `cwd '…' is outside this server's directories (…); start it there or add the directory with --allow-root` | 客户端要在服务端不负责的目录里建任务。 | 给 `noeta serve` 加 `--allow-root PATH`。 |
+| `cwd '…' is outside this server's directories (…); noeta web may use your home folder and the folder it was started in; …` | 在网页里添加项目或新建会话时，选的文件夹不在 `noeta web` 能用的范围里。 | 先 `noeta web stop`，再到那个文件夹（或它的上级目录）里运行 `noeta web`。 |
 | `a request may not set the task config key 'x' (only model, effort, …)` | 客户端只能设一部分配置项，其余的会放松权限关卡。 | 把这一项写进服务端自己的配置或代理文件。 |
 | `the request failed on the server; its log has the details` | 出错的不是 noeta 自己的代码。原文可能带服务器路径，所以不发给客户端。 | 去看服务端的标准错误。 |
 | `noeta: -p runs its task here; --server attaches the terminal UI (or noeta acp --server) to a server` | `-p` 总是在本机跑。 | 去掉 `--server`，或改用终端界面、`noeta acp --server`。 |

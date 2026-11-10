@@ -6,6 +6,19 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [1.1.3] - 2026-11-09
+
+`noeta web` tells you how to use a folder it refuses, and the web app's browser tests stop
+reading the tester's own skills and settings.
+
+### Fixed
+
+- **`noeta web` says how to use a folder it refuses**: a project or session outside its folders
+  now tells you to run `noeta web stop` and start `noeta web` from that folder, not to pass
+  `--allow-root`, which only `noeta serve` takes.
+- **The web app's browser tests no longer read the tester's own skills and settings**: the test
+  server runs with its own `HOME`, so `~/.claude/skills` cannot crowd the slash-command menu.
+
 ## [1.1.2] - 2026-11-09
 
 `noeta web` opens the web app with no build step, the web and desktop apps become a local
