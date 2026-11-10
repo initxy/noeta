@@ -97,7 +97,10 @@ sessions, a rewound conversation shows whole, and both fold tool calls as Claude
   task behind when nothing was sent after it; its task is now made with the first message.
 - **`--resume` opened the newest task before listing**, and opening it reordered the list; it
   now lists first and opens only the task picked. The list is this directory's conversations
-  (a last choice lists every directory's), every one of them, a rewound one as one line.
+  (a last choice lists every directory's), every one of them, a rewound one as one line
+  (the conversation it continues is listed again once you go on with it). It reads only the
+  start of each conversation's log: 200 conversations list in 0.1 s instead of 0.6 s, and over
+  `--server` without fetching every whole log.
 
 ## [1.2.2] - 2026-11-10
 
