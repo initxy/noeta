@@ -240,6 +240,23 @@ describe("Composer", () => {
 
   const commands = [{ name: "compact", description: "Summarize", argument_hint: "[focus]", local: false }];
 
+  it("brings earlier prompts back with ↑ in an empty box, and ↓ goes forward again", async () => {
+    render(<Composer busy={false} commands={[]} findFiles={async () => []} onSend={() => undefined} onStop={() => undefined} recall={() => ["first", "second"]} />);
+    const box = screen.getByLabelText("Message");
+    await userEvent.click(box);
+    await userEvent.keyboard("{ArrowUp}");
+    expect(box).toHaveValue("second");
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(box).toHaveValue("first"); // no further back than the first
+    await userEvent.keyboard("{ArrowDown}");
+    expect(box).toHaveValue("second");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(box).toHaveValue("");
+    await userEvent.type(box, "typed");
+    await userEvent.keyboard("{ArrowUp}");
+    expect(box).toHaveValue("typed"); // a box with text keeps it
+  });
+
   it("sends on Enter, lists slash commands, stops on Esc", async () => {
     const onSend = vi.fn();
     const onStop = vi.fn();

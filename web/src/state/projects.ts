@@ -6,6 +6,12 @@ export function basename(path: string): string {
   return path.replace(/\/+$/, "").split("/").pop() || path || "server";
 }
 
+/** A path cut to its last two folders (`…/srv/work`), for a line with no room for all of it. */
+export function shortPath(path: string): string {
+  const parts = path.replace(/\/+$/, "").split("/");
+  return parts.length > 3 ? `…/${parts.slice(-2).join("/")}` : path;
+}
+
 /** The listed project a folder belongs to: the same path, else one that is
  * the other through a symlinked prefix (the server lists real paths; a
  * session keeps the path it was started with, e.g. `/home/me/x` for

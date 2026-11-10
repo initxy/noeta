@@ -324,7 +324,7 @@ describe("projects in a browser", () => {
 
     // Opening a scratch session, then New session: not into that session's folder.
     await userEvent.click(screen.getByText("Today's scratch"));
-    await waitFor(() => expect(document.querySelector(".cwd")?.textContent).toBe(`${root}/${today}/s2bbbbbb`));
+    await waitFor(() => expect(document.querySelector(".cwd")?.getAttribute("title")).toBe(`${root}/${today}/s2bbbbbb`));
     await userEvent.click(screen.getByRole("button", { name: "+ New session" }));
     expect(await screen.findByText(/gets its own scratch folder/)).toBeInTheDocument();
     expect(localStorage.getItem("noeta.project")).toBeNull();

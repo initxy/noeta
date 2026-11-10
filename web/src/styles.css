@@ -355,12 +355,30 @@ code {
   padding: 8px;
 }
 
+/* The header across; the conversation, an error and the composer in one
+ * column; the plugins' panels (when they show something) beside all three,
+ * so the composer lines up with the conversation above it. */
 .main {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-width: 0;
   min-height: 0;
   height: 100%;
+}
+
+.main > .header {
+  grid-column: 1 / -1;
+}
+
+.main > .banner {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.main > .footer {
+  grid-column: 1;
+  grid-row: 4;
 }
 
 .header {
@@ -388,19 +406,23 @@ code {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 50%;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .title:hover:not(:disabled) {
   background: var(--user);
 }
 
+/* The folder gives way before the title does. */
 .cwd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, monospace;
   font-size: 12px;
+  min-width: 0;
+  flex: 0 1000 auto;
 }
 
 .usage {
@@ -427,9 +449,18 @@ code {
 }
 
 .body {
-  flex: 1;
-  display: flex;
+  display: contents;
+}
+
+.body > .scroll {
+  grid-column: 1;
+  grid-row: 2;
   min-height: 0;
+}
+
+.body > .side-panels {
+  grid-column: 2;
+  grid-row: 2 / 5;
 }
 
 .scroll {

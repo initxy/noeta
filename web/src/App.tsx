@@ -16,7 +16,7 @@ import { ThemeSource } from "./plugins/context";
 import { TaskEvents } from "./plugins/events";
 import { usePlugins, useUiItems } from "./plugins/usePlugins";
 import { continuationConfig, newSessionConfig } from "./state/newTask";
-import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot } from "./state/projects";
+import { basename, loadLastProject, projectFor, saveLastProject, scratchDay, scratchRoot, shortPath } from "./state/projects";
 import type { TaskState } from "./state/transcript";
 import { ApiContext, useTask, useTaskView } from "./state/useTask";
 
@@ -373,6 +373,7 @@ function Workspace({
   }, [api, taskId, state.replied]);
 
   const findFiles = useCallback((q: string) => api.files(q, taskId), [api, taskId]);
+  const recall = useCallback(() => store.get().items.flatMap((i) => (i.kind === "user" && i.text ? [i.text] : [])), [store]);
 
   const replace = (id: string) => {
     const next = new Set(replaced).add(id);
@@ -489,7 +490,11 @@ function Workspace({
                 {taskId ? title || "Untitled session" : "New session"}
               </button>
             </Slot>
-            {state.cwd && <span className="cwd muted">{state.cwd}</span>}
+            {state.cwd && (
+              <span className="cwd muted" title={state.cwd}>
+                {shortPath(state.cwd)}
+              </span>
+            )}
           </div>
           <UsageBadge usage={usage} contextTokens={state.contextTokens} window={window_} />
           {taskId && (
@@ -556,6 +561,7 @@ function Workspace({
             placeholder={ended ? "This session has ended. Send a message to continue it." : undefined}
             draft={draft}
             keep={composerKeep}
+            recall={recall}
           />
           </Slot>
           <Widgets items={uiItems} placement="below" />

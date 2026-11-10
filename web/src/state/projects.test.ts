@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Project, TaskSummary } from "../api/types";
-import { dayLabel, projectFor, projectList, scratchDay, scratchRoot } from "./projects";
+import { dayLabel, projectFor, projectList, scratchDay, scratchRoot, shortPath } from "./projects";
 
 const project = (path: string, saved = true): Project => ({ path, name: path.split("/").pop()!, saved, sessions: 0 });
 const session = (cwd: string, updated_at = 0): TaskSummary => ({
@@ -14,6 +14,13 @@ const session = (cwd: string, updated_at = 0): TaskSummary => ({
   title: "",
   cwd,
   prompt: "",
+});
+
+describe("shortPath", () => {
+  it("keeps the last two folders of a long path", () => {
+    expect(shortPath("/home/me/src/noeta/web")).toBe("…/noeta/web");
+    expect(shortPath("/home/me")).toBe("/home/me");
+  });
 });
 
 describe("projectFor", () => {
