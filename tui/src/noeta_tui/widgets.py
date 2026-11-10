@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import functools
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -248,6 +249,10 @@ class ReplyStream:
         await self._task
 
 
+#: CommonMark's line endings, as markdown-it normalizes them.
+_LINE_ENDING = re.compile(r"\r\n?|\n")
+
+
 def _settled(text: str) -> int:
     """Where the last top-level block of ``text`` starts (those before it
     are done); ``0`` when it has only one."""
@@ -255,8 +260,10 @@ def _settled(text: str) -> int:
               if t.level == 0 and t.map is not None and t.nesting >= 0]
     if len(starts) < 2:
         return 0
-    lines = text.splitlines(keepends=True)
-    return sum(len(line) for line in lines[:starts[-1]])
+    # Lines as markdown-it counts them: only CommonMark's line endings (not
+    # U+2028, U+0085 or a form feed, which str.splitlines also splits on).
+    ends = [m.end() for m in _LINE_ENDING.finditer(text)]
+    return ends[starts[-1] - 1] if starts[-1] <= len(ends) else len(text)
 
 
 def _open_table(shown: str, text: str) -> str:

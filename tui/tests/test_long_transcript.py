@@ -257,3 +257,15 @@ async def test_a_streamed_reply_keeps_live_only_the_block_being_written(
         [table] = box.query(TableText)
         assert table.tsv == "name\tvalue\na\t1\nb\t2"
         await stream.stop()
+
+
+@pytest.mark.parametrize("text", [
+    "one two\x0cthree\u0085four\n\nThe last block.",
+    "one\r\ntwo\r\n\r\nThe last block.",
+    "one\rtwo\r\rThe last block.",
+])
+def test_a_streamed_reply_splits_where_its_last_block_starts(text: str) -> None:
+    from noeta_tui.widgets import _settled
+
+    # Lines as markdown counts them, not as str.splitlines does.
+    assert text[_settled(text):] == "The last block."
