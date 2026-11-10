@@ -67,7 +67,7 @@ async def test_a_run_of_calls_is_one_counted_line_a_click_opens(tmp_path: Path) 
               ("Grep", {"pattern": "def sub", "path": str(work)}),
               ("Read", {"file_path": str(work / "c.py")})),
         reply("", ("Bash", {"command": "seq 2", "n": 2})),
-        reply("Done.", ("Read", {"file_path": str(work / "a.py")})),
+        reply("Done looking:\n\n- a\n- b", ("Read", {"file_path": str(work / "a.py")})),
         reply("ok")])
     app = make_app(tmp_path, provider, tools=[Lines(), Grep()])
     async with app.run_test(size=(120, 50)) as pilot:
@@ -77,7 +77,8 @@ async def test_a_run_of_calls_is_one_counted_line_a_click_opens(tmp_path: Path) 
         assert plain(seven.head) == ("● Searched for 2 patterns, read 3 files, ran 2 shell commands "
                                      "(ctrl+o to expand)")
         assert len(seven.calls) == 7 and not any(c.display for c in seven.calls)
-        assert not one.head.display and one.calls[0].display  # after text: alone, as itself
+        # After a reply of its own, a new run, shown as one from its first call.
+        assert plain(one.head) == "● Read 1 file (ctrl+o to expand)" and not one.calls[0].display
         # Paths under the task's directory are relative; the directory itself is ".".
         heads = [plain(c.head) for c in seven.calls]
         assert "● Read(a.py)" in heads and '● Search(pattern: "def sub", path: ".")' in heads
@@ -137,7 +138,8 @@ async def test_a_call_waiting_for_approval_shows_and_a_failure_is_counted(
         head = getattr(head, "_renderable", head)
         assert plain(group.head).startswith("● Searching for 1 pattern, running 1 shell command…")
         assert "(1 failed)" in plain(group.head) and "red" in _styles(head)
-        assert "yellow" in _styles(head) and bash.display and not grep.display
+        # What waits shows under the line, and what failed pops out of it.
+        assert "yellow" in _styles(head) and bash.display and grep.display
         assert "rm -rf build" in shown(app)  # what would run, on the card
         await pilot.press("y")
         await settle(pilot, lambda: not app.busy)
@@ -148,7 +150,7 @@ async def test_a_call_waiting_for_approval_shows_and_a_failure_is_counted(
 async def test_the_models_thoughts_between_calls_join_their_run(tmp_path: Path) -> None:
     work = _files(tmp_path)
     provider = Thinks([reply("", ("Read", {"file_path": str(work / "a.py")})),
-                       reply("", ("Bash", {"command": "ls", "n": 1})),
+                       reply("", ("Bash", {"command": "make", "n": 1})),
                        reply("Done.")])
     app = make_app(tmp_path, provider, tools=[Lines()])
     async with app.run_test(size=(120, 40)) as pilot:
@@ -170,11 +172,13 @@ def test_the_run_line_names_each_kind_in_claude_codes_order() -> None:
     def use(name: str) -> ToolUse:
         return ToolUse(id=name, name=name, input={})
 
-    kinds = [render.call_kind(use(n)) for n in
-             ("Bash", "WebFetch", "mcp__github__get_issue", "LS", "Glob", "WebSearch")]
-    line = render.run_line(kinds, running=False, waiting=False, failed=0, expanded=True)
-    assert line.plain == ("Searched for 1 pattern, listed 1 directory, fetched 1 page, "
-                          "ran 1 web search, called 1 tool, ran 1 shell command")
+    facts = [render.CallFacts(render.call_kind(use(n)), render.call_key(use(n))) for n in
+             ("Bash", "WebFetch", "mcp__github__get_issue", "LS", "Glob", "WebSearch",
+              "Translate", "mcp__github__list_prs", "mcp__slack__post")]
+    line = render.run_line(facts, running=False, waiting=False, failed=0, expanded=True)
+    assert line.plain == ("Searched for 1 pattern, listed 1 directory, called github, slack 3 "
+                          "times, fetched 1 page, ran 1 web search, called 1 tool, "
+                          "ran 1 shell command")
     assert [render.call_kind(use(n)) for n in ("Edit", "Write", "Agent", "TaskCreate",
                                                 "AskUserQuestion", "Skill")] == [""] * 6
 

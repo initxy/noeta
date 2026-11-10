@@ -295,6 +295,17 @@ class ToolCall(Vertical):
         self.child: dict[str, Any] | None = None
         #: A ``Workflow`` call's run (its records folded), or ``None``.
         self.workflow: dict[str, Any] | None = None
+        #: What it did to the repository (a commit, a push), once done.
+        self.git: tuple[tuple[str, str], ...] = ()
+        #: The lines an edit added and removed, once done.
+        self.added = self.removed = 0
+        #: An agent of several started together: one line.
+        self.compact = False
+
+    @property
+    def facts(self) -> render.CallFacts:
+        """What the line of the run it is in counts of it."""
+        return render.CallFacts(render.call_kind(self.call), render.call_key(self.call), self.git)
 
     @property
     def title(self) -> str:
@@ -357,6 +368,9 @@ class ToolCall(Vertical):
                 self.set_state("background")
             self.show_workflow()
             return
+        if not is_error:
+            self.git = tuple(render.git_ops(self.call, text))
+            self.added, self.removed = int(meta.get("added") or 0), int(meta.get("removed") or 0)
         self.set_state("error" if is_error else "done")
         self.rows = render.result_rows(self.call, text, meta or {}, is_error=is_error,
                                        cwd=self.cwd)
@@ -396,6 +410,21 @@ class ToolCall(Vertical):
         took = c["took"] if c["took"] is not None else time.time() - c["started"]
         stats = render.agent_line(c["tools"], c["tokens"], took)
         rows: list[tuple[str, str]] = []
+        if self.compact and not self.expanded:
+            self.head.display = False
+            name = str(self.call.input.get("description") or self.call.input.get("subagent_type")
+                       or "agent")
+            if c["status"] == "done":
+                rows.append((f"{name} · Done · {stats}", "dim"))
+            elif c["status"] in ("failed", "cancelled"):
+                what = "Stopped" if c["status"] == "cancelled" else "Failed"
+                rows.append((f"{name} · {what}{': ' + c['error'] if c['error'] else ''}", "red"))
+            else:
+                rows.append((f"{name} · {c['last'] or 'Starting…'} · {stats}", ""))
+            self.body.update(render.result_block(rows))
+            self.body.display = True
+            return
+        self.head.display = True
         if self.expanded:
             rows.append((f"Prompt: {self.call.input.get('prompt', '')}", "dim"))
         if c["status"] == "done":
@@ -439,37 +468,68 @@ class ToolCall(Vertical):
         self.body.display = True
 
 
+class GroupWords(Static):
+    """A short remark of the model's between two calls of a run (``Let me
+    check X.``): shown when the run is open; the latest is under its line."""
+
+    DEFAULT_CLASSES = "group-words"
+
+
 class ToolGroup(Vertical):
-    """Quiet calls one after another (reads, searches, shell commands, other
-    tools) and the model's thoughts between them as one counted line, Claude
-    Code's ``Thought for 4s, searched for 2 patterns, read 3 files``; a click
-    on it or ctrl+o shows each part. While a call runs or waits for an
-    approval it shows under the line. A single call shows as itself."""
+    """Calls one after another as one line. A run (``kind`` ``run``) is the
+    quiet calls (reads, searches, shell commands, other tools), the model's
+    thoughts and short remarks between them, Claude Code's ``Thought for 4s,
+    searched for 2 patterns, read 3 files``, shown so from its first call;
+    ``edit``: consecutive edits to one file (``Edited calc.py ×3 (+12 −4)``,
+    a single one shows as itself); ``agents``: a reply's agents started
+    together (``Running 3 agents``, a line each). A click on the line or
+    ctrl+o's transcript shows each part. Folded, what waits for an approval,
+    a shell command running (with its output) and a call that failed show
+    under the line; a read or search running shows as a dim hint, and the
+    latest remark too."""
 
     DEFAULT_CLASSES = "tool-group"
 
-    def __init__(self, *, expanded: bool = False) -> None:
+    def __init__(self, *, kind: str = "run", expanded: bool = False) -> None:
         super().__init__()
+        self.kind = kind
         self.expanded = expanded
-        #: The calls and thoughts, in order.
-        self.parts: list[ToolCall | ThinkingBlock] = []
+        #: The calls, thoughts and remarks, in order.
+        self.parts: list[ToolCall | ThinkingBlock | GroupWords] = []
         self.head = Toggle("", on_toggle=self.toggle, classes="group-head")
+        #: The latest remark, and what runs now (folded only).
+        self.words = Static("", classes="group-note")
+        self.hint = Static("", classes="group-note")
+        self.words.display = self.hint.display = False
 
     @property
     def calls(self) -> list[ToolCall]:
         return [p for p in self.parts if isinstance(p, ToolCall)]
 
+    @property
+    def path(self) -> str:
+        """The file an edit run edits."""
+        calls = self.calls
+        return render.edited_path(calls[0].call) if calls else ""
+
     def compose(self) -> ComposeResult:
         yield self.head
+        yield self.words
+        yield self.hint
         yield from self.parts
 
-    async def add(self, part: ToolCall | ThinkingBlock) -> None:
+    async def add(self, part: ToolCall | ThinkingBlock | GroupWords) -> None:
         self.parts.append(part)
         if isinstance(part, ToolCall):
             part.group = self
+            part.compact = self.kind == "agents"
         if composed(self):
             await self.mount(part)
         self.show_head()
+
+    async def say(self, text: str) -> None:
+        """A remark between the run's calls."""
+        await self.add(GroupWords(render.Hanging(render.plain(text, "dim"), 2)))
 
     def toggle(self) -> None:
         self.set_expanded(not self.expanded)
@@ -478,27 +538,62 @@ class ToolGroup(Vertical):
         self.expanded = expanded
         self.show_head()
 
+    def _shows_line(self) -> bool:
+        return self.kind != "edit" or len(self.calls) > 1
+
+    def _live(self, call: ToolCall) -> bool:
+        """``call`` shows under the folded line: it waits for an approval,
+        runs a shell command (its output shows), failed (it pops out), or is
+        one of the agents (a line each)."""
+        if self.kind == "agents" or call.state in ("waiting", "error"):
+            return True
+        return call.state == "running" and (self.kind != "run"
+                                             or render.call_kind(call.call) == "shell")
+
     def show_head(self) -> None:
-        calls = self.calls
-        many = len(calls) > 1
-        self.head.display = many
+        line_shown = self._shows_line()
+        self.head.display = line_shown
+        folded = line_shown and not self.expanded
+        hint = ""
         for part in self.parts:
-            live = many and not self.expanded and isinstance(part, ToolCall) \
-                and part.state in ("running", "waiting")
-            part.display = self.expanded or not many or live
-            part.set_class(live, "-live", update=part.is_attached)
-        if not many:
+            if isinstance(part, ToolCall):
+                live = folded and self._live(part)
+                part.display = not folded or live
+                part.set_class(live, "-live", update=part.is_attached)
+                if folded and not live and part.state in ("pending", "running"):
+                    hint = render.running_hint(part.call, part.cwd)
+            else:
+                part.display = not folded
+        remarks = [p for p in self.parts if isinstance(p, GroupWords)]
+        self.words.display = folded and bool(remarks)
+        if remarks:
+            self.words.update(remarks[-1].render())
+        self.hint.display = folded and bool(hint) and self.kind == "run"
+        if hint:
+            self.hint.update(render.result_block([(hint, "dim")]))
+        if not line_shown:
             return
+        calls = self.calls
         running = any(c.state not in ("done", "error") for c in calls)
         waiting = any(c.state == "waiting" for c in calls)
+        failed = sum(c.state == "error" for c in calls)
         # The bullet in a call's colours: what the run is doing, green once done.
         bullet = "waiting" if waiting else "running" if running else "done"
         line = Text().append("● ", style=ToolCall.STYLES[bullet])
-        line.append_text(render.run_line(
-            (render.call_kind(c.call) for c in calls),
-            thought=sum(p.took or 0.0 for p in self.parts if isinstance(p, ThinkingBlock)),
-            running=running, waiting=waiting,
-            failed=sum(c.state == "error" for c in calls), expanded=self.expanded))
+        if self.kind == "edit":
+            line.append_text(render.edit_line(
+                render.display_path(self.path, calls[0].cwd), len(calls),
+                sum(c.added for c in calls), sum(c.removed for c in calls),
+                running=running, failed=failed, expanded=self.expanded))
+        elif self.kind == "agents":
+            line.append_text(render.agents_line(len(calls), running=running, failed=failed,
+                                                expanded=self.expanded))
+        else:
+            line.append_text(render.run_line(
+                (c.facts for c in calls),
+                thought=sum(p.took or 0.0 for p in self.parts
+                            if isinstance(p, ThinkingBlock) and (p.took or 0) > 0),
+                running=running, waiting=waiting, failed=failed, expanded=self.expanded))
         self.head.update(render.Hanging(line, 2))
 
 

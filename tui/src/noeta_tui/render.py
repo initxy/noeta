@@ -8,8 +8,9 @@ from __future__ import annotations
 import difflib
 import os
 import re
-from collections import Counter
+import shlex
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any
 
@@ -232,7 +233,8 @@ def folded(rows: list[tuple[str, str]], *, diff: bool, expanded: bool,
 # ------------------------------------------------------------- runs of calls
 
 #: What the line of a run of quiet calls counts a tool as; any other tool
-#: not in :data:`OWN_LINE` counts as ``tool`` (an MCP server's, say).
+#: not in :data:`OWN_LINE` counts as ``tool``, an MCP server's as ``mcp``,
+#: a shell command by what it runs (:func:`shell_kind`).
 CALL_KINDS = {"Grep": "search", "Glob": "search", "Read": "read", "LS": "list",
               "WebFetch": "fetch", "WebSearch": "web", "Bash": "shell", "PowerShell": "shell"}
 #: The tools shown on their own, never in a run: an edit keeps its diff, an
@@ -240,6 +242,12 @@ CALL_KINDS = {"Grep": "search", "Glob": "search", "Read": "read", "LS": "list",
 OWN_LINE = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit", "Agent", "Task", "Workflow",
                       "TodoWrite", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList",
                       "AskUserQuestion", "ExitPlanMode", "EnterPlanMode", "Skill"})
+#: The edits; consecutive ones to one file are one line.
+EDIT_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
+#: The agents; a reply's agents started together are one line.
+AGENT_TOOLS = frozenset({"Agent", "Task"})
+#: Calls a run goes on past (the task list's): they do not end it.
+PASSING = frozenset({"TodoWrite", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList"})
 #: Per kind, in the order the line names them (Claude Code's): the verb
 #: while a call runs, once all are done, and the thing counted (one, many).
 RUN_WORDS = (("search", "searching for", "searched for", "pattern", "patterns"),
@@ -249,39 +257,157 @@ RUN_WORDS = (("search", "searching for", "searched for", "pattern", "patterns"),
              ("web", "running", "ran", "web search", "web searches"),
              ("tool", "calling", "called", "tool", "tools"),
              ("shell", "running", "ran", "shell command", "shell commands"))
+#: Programs that only read (``cat``), search (``grep``) or list (``ls``):
+#: a shell command made of them counts as what it does.
+READ_PROGRAMS = frozenset({"cat", "head", "tail", "less", "more", "wc", "stat", "file", "nl",
+                           "strings", "od", "xxd", "hexdump", "bat"})
+SEARCH_PROGRAMS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack", "find", "fd", "locate",
+                             "which", "whereis"})
+LIST_PROGRAMS = frozenset({"ls", "tree", "du", "df", "pwd"})
+#: git's subcommands that only read.
+GIT_READS = frozenset({"status", "log", "diff", "show", "blame", "rev-parse", "ls-files",
+                       "shortlog", "describe"})
+#: ``find``'s actions that change or run something.
+_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fls"})
+_DISCARDED = re.compile(r"\s\d?>\s*/dev/null|\s2>&1")
+
+
+def shell_kind(command: str) -> str:
+    """What a shell command counts as in a run: ``read``, ``search`` or
+    ``list`` when every part of it only does that (a pipe of ``grep`` and
+    ``head`` searches), else ``shell``."""
+    text = _DISCARDED.sub(" ", command)
+    if re.search(r"[<>`]|\$\(", text):
+        return "shell"
+    kinds: list[str] = []
+    for part in re.split(r"\|\||&&|[|;\n&]", text):
+        try:
+            words = shlex.split(part)
+        except ValueError:
+            return "shell"
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words.pop(0)
+        if not words:
+            continue
+        program = os.path.basename(words[0])
+        if program == "cd":
+            continue
+        if program == "git":
+            sub = next((w for w in words[1:] if not w.startswith("-")), "")
+            kind = "read" if sub in GIT_READS else "search" if sub == "grep" else "shell"
+        elif program == "find" and _FIND_ACTIONS.intersection(words):
+            kind = "shell"
+        elif program in READ_PROGRAMS:
+            kind = "read"
+        elif program in SEARCH_PROGRAMS:
+            kind = "search"
+        elif program in LIST_PROGRAMS:
+            kind = "list"
+        else:
+            return "shell"
+        kinds.append(kind)
+    return kinds[0] if kinds else "shell"
 
 
 def call_kind(call: ToolUse) -> str:
     """What a run of quiet calls counts ``call`` as (``read``, ``shell``,
-    …); ``""`` for a call shown on its own."""
-    return "" if call.name in OWN_LINE else CALL_KINDS.get(call.name, "tool")
+    ``mcp``, …); ``""`` for a call shown on its own."""
+    if call.name in OWN_LINE:
+        return ""
+    if call.name.startswith("mcp__"):
+        return "mcp"
+    kind = CALL_KINDS.get(call.name, "tool")
+    if kind == "shell":
+        return shell_kind(str(call.input.get("command") or ""))
+    return kind
 
 
-def run_line(kinds: Iterable[str], *, thought: float = 0.0, running: bool, waiting: bool,
-             failed: int, expanded: bool) -> Text:
+def call_key(call: ToolUse) -> str:
+    """What makes two calls of a kind one: a read's file (the same file read
+    twice is one), an MCP tool's server; else the call itself."""
+    if call.name.startswith("mcp__"):
+        return call.name[5:].partition("__")[0]
+    if call.name == "Read":
+        return str(call.input.get("file_path") or call.id)
+    return call.id
+
+
+_COMMITTED = re.compile(r"^\[(\S+?)(?: \(root-commit\))? ([0-9a-f]{7,})\]", re.MULTILINE)
+_PUSHED = re.compile(r"\S+\s+->\s+(\S+)")
+_PULL = re.compile(r"/pull/(\d+)")
+
+
+def git_ops(call: ToolUse, output: str) -> list[tuple[str, str]]:
+    """What a finished shell command did to the repository, in Claude
+    Code's words: ``("committed", "a1b2c3d")``, ``("pushed to", "main")``,
+    ``("created", "PR #12")``; ``[]`` for anything else."""
+    command = str(call.input.get("command") or "") if call.name in ("Bash", "PowerShell") else ""
+    out: list[tuple[str, str]] = []
+    if re.search(r"\bgit\b[^|;&]*\bcommit\b", command) and (m := _COMMITTED.search(output)):
+        verb = "amended commit" if "--amend" in command else "committed"
+        out.append((verb, m.group(2)[:7]))
+    if re.search(r"\bgit\b[^|;&]*\bpush\b", command) and (m := _PUSHED.search(output)):
+        out.append(("pushed to", m.group(1)))
+    if re.search(r"\bgh\s+pr\s+create\b", command) and (m := _PULL.search(output)):
+        out.append(("created", f"PR #{m.group(1)}"))
+    return out
+
+
+@dataclass(frozen=True)
+class CallFacts:
+    """What the line of a run counts of one call: its kind, what makes two
+    of a kind one (:func:`call_key`) and what it did to the repository."""
+
+    kind: str
+    key: str
+    git: tuple[tuple[str, str], ...] = ()
+
+
+def run_line(facts: Iterable[CallFacts], *, thought: float = 0.0, running: bool,
+             waiting: bool, failed: int, expanded: bool) -> Text:
     """A run of calls as one line, Claude Code's: ``Thought for 4s, searched
     for 2 patterns, read 3 files (ctrl+o to expand)``; ``Reading 3 files,
     running 1 shell command…`` while one runs (yellow while one waits for an
-    approval), ``(1 failed)`` in red. ``thought``: seconds of the model's
-    reasoning between the calls."""
-    counts = Counter(kinds)
+    approval), ``(1 failed)`` in red. Reads count files (one read twice is
+    one), MCP calls their servers (``called github 3 times``), a commit,
+    push or pull request what it made (``committed a1b2c3d``) instead of a
+    shell command. ``thought``: seconds of the model's reasoning between
+    the calls."""
+    facts = list(facts)
     style = "yellow" if waiting else "dim"
     out = Text()
-    if thought:
-        out.append("Thought for ", style=style)
-        out.append(elapsed_text(thought), style="bold")
-    for kind, now, done, one, many in RUN_WORDS:
-        n = counts.get(kind, 0)
-        if not n:
-            continue
-        verb = now if running else done
+
+    def part(verb: str, *pieces: tuple[str, str]) -> None:
         if out:
             out.append(", ", style=style)
         else:
             verb = verb[0].upper() + verb[1:]
-        out.append(f"{verb} ", style=style)
-        out.append(str(n), style="bold")
-        out.append(f" {one if n == 1 else many}", style=style)
+        out.append(verb, style=style)
+        for text, piece_style in pieces:
+            out.append(text, style=piece_style or style)
+
+    if thought:
+        part("thought for ", (elapsed_text(thought), "bold"))
+    gits: dict[str, list[str]] = {}
+    for fact in facts:
+        for verb, what in fact.git:
+            gits.setdefault(verb, []).append(what)
+    for verb in ("committed", "amended commit", "pushed to", "created"):
+        if verb in gits:
+            part(f"{verb} ", (", ".join(dict.fromkeys(gits[verb])), "bold"))
+    counted = [f for f in facts if not f.git]
+    for kind, now, done, one, many in RUN_WORDS:
+        of_kind = [f for f in counted if f.kind == kind]
+        n = len({f.key for f in of_kind}) if kind == "read" else len(of_kind)
+        if n:
+            part(f"{now if running else done} ", (str(n), "bold"),
+                 (f" {one if n == 1 else many}", ""))
+        if kind == "list":  # Claude Code names the MCP servers after these
+            mcp = [f for f in counted if f.kind == "mcp"]
+            if mcp:
+                servers = ", ".join(dict.fromkeys(f.key for f in mcp))
+                times = [(" ", ""), (str(len(mcp)), "bold"), (" times", "")] if len(mcp) > 1 else []
+                part(f"{'calling' if running else 'called'} ", (clean(servers), ""), *times)
     if running:
         out.append("…", style=style)
     if failed:
@@ -289,6 +415,67 @@ def run_line(kinds: Iterable[str], *, thought: float = 0.0, running: bool, waiti
     if not expanded:
         out.append(f" {EXPAND_HINT}", style="dim")
     return out
+
+
+def edit_line(path: str, edits: int, added: int, removed: int, *, running: bool,
+              failed: int, expanded: bool) -> Text:
+    """Consecutive edits to one file as one line: ``Edited calc.py ×3 (+12 −4)``."""
+    out = Text()
+    out.append("Editing " if running else "Edited ", style="dim")
+    out.append(clean(path), style="bold")
+    out.append(f" ×{edits}", style="dim")
+    if added or removed:
+        out.append(" (", style="dim")
+        out.append(f"+{added}", style="green")
+        out.append(" ")
+        out.append(f"−{removed}", style="red")
+        out.append(")", style="dim")
+    if running:
+        out.append("…", style="dim")
+    if failed:
+        out.append(f" ({failed} failed)", style="red")
+    if not expanded:
+        out.append(f" {EXPAND_HINT}", style="dim")
+    return out
+
+
+def agents_line(agents: int, *, running: bool, failed: int, expanded: bool) -> Text:
+    """A reply's agents started together: ``Running 3 agents…``, then ``Ran 3 agents``."""
+    out = Text()
+    out.append("Running " if running else "Ran ", style="dim")
+    out.append(str(agents), style="bold")
+    out.append(" agents" + ("…" if running else ""), style="dim")
+    if failed:
+        out.append(f" ({failed} failed)", style="red")
+    if not expanded:
+        out.append(f" {EXPAND_HINT}", style="dim")
+    return out
+
+
+#: What a short reply between two calls is at most: a line or two of words
+#: (``Let me check X.``) goes into the run; anything longer breaks it.
+SHORT_WORDS = 200
+_NOT_WORDS = re.compile(r"^\s*(?:[-*+>|#]|\d+[.)]\s)|```")
+
+
+def interstitial(text: str) -> bool:
+    """``text`` is a remark between calls (one or two lines, no code, no
+    list or table), not something to read on its own."""
+    lines = text.strip().splitlines()
+    return 0 < len(lines) <= 2 and len(text.strip()) <= SHORT_WORDS \
+        and not any(_NOT_WORDS.search(line) for line in lines)
+
+
+def running_hint(call: ToolUse, cwd: str = "") -> str:
+    """What a running call in a folded run shows under its line: the
+    command, the pattern or the path."""
+    lines = clean(_main_argument(call, cwd)).splitlines()
+    return lines[0] if lines else tool_name(call)
+
+
+def edited_path(call: ToolUse) -> str:
+    """The file an edit changes."""
+    return str(call.input.get("file_path") or call.input.get("notebook_path") or "")
 
 
 def result_block(rows: Iterable[tuple[str, str]]) -> Hanging:

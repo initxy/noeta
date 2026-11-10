@@ -78,8 +78,13 @@ async def drag(pilot: Any, start: Widget, start_at: tuple[int, int], end: Widget
 
 
 async def a_bash_call(pilot: Any, provider: ScriptedProvider) -> None:
+    """The call run, its run's line clicked open (it folds once done)."""
+    from noeta_tui.widgets import ToolGroup
+
     await type_line(pilot, "count")
     await settle(pilot, lambda: provider.steps == [] and not pilot.app.busy)
+    await pilot.click(pilot.app.query_one(ToolGroup).head)
+    await pilot.pause()
 
 
 def bash_script() -> ScriptedProvider:

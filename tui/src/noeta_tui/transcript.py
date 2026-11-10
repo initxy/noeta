@@ -42,7 +42,7 @@ from noeta.core.events import (
 )
 from noeta.core.loop.state import CONFIG_SIGNAL, PLUGINS_OFF, off_names
 from noeta.core.runner.texts import REJECTED_MARKER
-from noeta.core.types import Delta
+from noeta.core.types import Delta, ToolUse
 from noeta.host.feed import failure_text
 from noeta.host.pending import (
     Pending,
@@ -283,22 +283,79 @@ class TranscriptView(App[None]):
         shown = self.transcript().children
         return shown[-1] if shown else None
 
-    async def _run_to_join(self) -> ToolGroup:
-        """The run of calls a quiet call joins: the one the transcript ends
-        with, else a new one. The model's thought just before the call
-        (shown while it streamed) joins the run first."""
+    def _joinable(self, kind: str = "run", path: str = "",
+                  said: Widget | None = None) -> ToolGroup | None:
+        """The group the transcript ends with that a call of ``kind`` joins
+        (an edit's: of the same file), past what does not end a run: an
+        approval card answered, the task list's calls, and for a run the
+        thought and the remark (``said``) that join it with the call."""
+        shown = self._batch if self._batch is not None else self.transcript().children
+        for widget in reversed(shown):
+            if (isinstance(widget, ApprovalCard) and widget.done) or \
+                    (isinstance(widget, ToolCall) and widget.call.name in render.PASSING) or \
+                    (kind == "run" and (widget is said or (isinstance(widget, ThinkingBlock)
+                                                           and widget.took is not None))):
+                continue
+            if isinstance(widget, ToolGroup) and widget.kind == kind \
+                    and (kind != "edit" or widget.path == path):
+                return widget
+            return None
+        return None
+
+    async def _run_to_join(self, *, kind: str = "run", path: str = "",
+                           words: str = "", said: Widget | None = None) -> ToolGroup:
+        """The group a call joins (:meth:`_joinable`), else a new one. The
+        model's thought just before the call and, for a run, its short
+        remark (``words``; ``said``: the row it streamed into) join the run
+        first."""
+        if said is not None:
+            await said.remove()
         last = self._last_shown()
-        thought = last if isinstance(last, ThinkingBlock) and last.took is not None else None
+        thought = last if isinstance(last, ThinkingBlock) and last.took is not None \
+            and kind == "run" else None
         if thought is not None:
             await thought.remove()
-            last = self._last_shown()
-        group = last if isinstance(last, ToolGroup) else None
+        group = self._joinable(kind, path)
         if group is None:
-            group = ToolGroup()
+            group = ToolGroup(kind=kind)
             await self._add(group)
         if thought is not None:
             await group.add(thought.copy())
+        if words:
+            await group.say(words)
         return group
+
+    async def _show_calls(self, calls: list[ToolUse], text: str, said: Widget | None) -> None:
+        """A reply's calls: quiet ones into the run the transcript ends with
+        (a short remark before them too), edits into the run of edits to
+        their file, agents started together as one line, the rest on their
+        own. ``said``: the row the reply's text streamed into."""
+        blocks = []
+        for call in calls:
+            block = ToolCall(call, cwd=self.task_cwd)
+            self.calls[call.id] = block
+            if (early := self.early_progress.pop(call.id, None)) is not None:
+                block.set_progress(early)
+            blocks.append(block)
+        agents = [b for b in blocks if b.call.name in render.AGENT_TOOLS]
+        agent_group: ToolGroup | None = None
+        words = text if blocks and render.call_kind(blocks[0].call) and text \
+            and render.interstitial(text) and self._joinable(said=said) is not None else ""
+        for block in blocks:
+            if len(agents) > 1 and block in agents:
+                if agent_group is None:
+                    agent_group = ToolGroup(kind="agents")
+                    await self._add(agent_group)
+                await agent_group.add(block)
+            elif block.call.name in render.EDIT_TOOLS:
+                path = render.edited_path(block.call)
+                await (await self._run_to_join(kind="edit", path=path)).add(block)
+            elif render.call_kind(block.call):
+                group = await self._run_to_join(words=words, said=said if words else None)
+                words = ""
+                await group.add(block)
+            else:
+                await self._add(block)
 
     # ------------------------------------------------------------ busy
 
@@ -610,21 +667,21 @@ class TranscriptView(App[None]):
             # fragments wait for it.
             while self._batch is None and any(seq <= self.called for seq in self._unshown):
                 await asyncio.sleep(0.01)
+            streamed = self.stream_widget if self.stream_key[0] == self.called else None
             await self._end_stream()
             self.replied = self.called
             msg = ev.response.message
-            if msg.text.strip() and self.called not in self.streamed:
+            text = msg.text.strip()
+            said: Widget | None = None
+            if self.called in self.streamed:
+                said = streamed.parent if streamed is not None and \
+                    isinstance(streamed.parent, Widget) else None
+            elif text and not (msg.tool_uses and render.interstitial(text)
+                               and render.call_kind(msg.tool_uses[0])
+                               and self._joinable() is not None):
                 await self._add(bulleted(AssistantMessage(msg.text)))
             self.streamed.discard(self.called)
-            for call in msg.tool_uses:
-                block = ToolCall(call, cwd=self.task_cwd)
-                self.calls[call.id] = block
-                if (early := self.early_progress.pop(call.id, None)) is not None:
-                    block.set_progress(early)
-                if not render.call_kind(call):
-                    await self._add(block)
-                    continue
-                await (await self._run_to_join()).add(block)
+            await self._show_calls(msg.tool_uses, text, said)
             self.context_tokens = ev.response.usage.input + ev.response.usage.output
             # The reply's real count replaces what its stream was estimated at.
             self.turn_output += ev.response.usage.output
