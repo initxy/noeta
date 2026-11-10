@@ -891,8 +891,34 @@ code {
 }
 
 .diff > div {
+  display: flex;
   padding: 0 10px;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* line numbers before and after, in a quiet gutter */
+.diff.numbered > div {
+  padding-left: 0;
+}
+
+.diff .ln {
+  flex: none;
+  width: 3.4em;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--muted);
+  opacity: 0.7;
+  user-select: none;
+}
+
+.diff-view > .link {
+  margin: 2px 0 4px;
 }
 
 .diff-add {

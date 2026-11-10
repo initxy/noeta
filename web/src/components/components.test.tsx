@@ -8,7 +8,7 @@ import { ApiContext } from "../state/useTask";
 import { ApiError } from "../api/client";
 import { Composer, menuQuery } from "./Composer";
 import { UsageBadge } from "./Controls";
-import { Markdown } from "@initxy/noeta-ui";
+import { DiffView, Markdown } from "@initxy/noeta-ui";
 import { SlotRegistry, SlotsContext, type RequestSlotProps } from "@initxy/noeta-web-sdk";
 import { PendingCards } from "./PendingCard";
 import { Sidebar } from "./Sidebar";
@@ -510,6 +510,24 @@ describe("Markdown", () => {
   it("drops a javascript: link", () => {
     render(<Markdown text={"[x](javascript:alert(1))"} />);
     expect(screen.getByText("x").closest("a")?.getAttribute("href") ?? "").not.toMatch(/javascript/);
+  });
+});
+
+describe("DiffView", () => {
+  it("numbers lines from the hunk header and folds a long diff", async () => {
+    const body = Array.from({ length: 20 }, (_, i) => `+line ${i + 1}`).join("\n");
+    const { container } = render(<DiffView diff={`@@ -10,2 +10,21 @@\n ctx\n-gone\n${body}\n`} />);
+    const rows = [...container.querySelectorAll(".diff > div")];
+    expect(rows.map((r) => [...r.querySelectorAll(".ln")].map((n) => n.textContent).join("|")).slice(1, 4)).toEqual(["10|10", "11|", "|11"]);
+    expect(rows).toHaveLength(12);
+    await userEvent.click(screen.getByRole("button", { name: "Show 11 more lines" }));
+    expect(container.querySelectorAll(".diff > div")).toHaveLength(23);
+  });
+
+  it("shows a proposed change unnumbered and a short one whole", () => {
+    const { container } = render(<DiffView diff={"-a\n+b"} />);
+    expect(container.querySelectorAll(".ln")).toHaveLength(0);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
 
