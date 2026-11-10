@@ -6,7 +6,7 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
-## [Unreleased]
+## [1.2.0] - 2026-11-09
 
 One command runs the backend, `noeta serve`, and `noeta service` keeps it running as your
 user's service; a session without a project gets a scratch directory of its own.
