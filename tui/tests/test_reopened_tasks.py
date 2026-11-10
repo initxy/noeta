@@ -72,8 +72,8 @@ async def test_a_reopened_task_is_shown_at_once_as_it_was_live(
     async with again.run_test(size=(120, 50)) as pilot:
         await settle(pilot, lambda: len(again.query(AssistantMessage)) == 3)
         transcript = again.query_one("#transcript")
-        # The welcome box, then the whole history in one mount.
-        assert mounts == [1, len(transcript.children) - 1]
+        # The welcome box and the whole history in one mount.
+        assert mounts == [len(transcript.children)]
         assert transcript_texts(again) == shown_live
         await type_line(pilot, "once more")
         await settle(pilot, lambda: not provider.steps and not again.busy

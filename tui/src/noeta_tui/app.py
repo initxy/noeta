@@ -15,6 +15,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Static, TextArea
 
 from noeta.core.events import InputTaken, Say, Waiting
@@ -38,6 +39,7 @@ from noeta.toolkit.permission_modes import (
 from noeta.toolkit.signals import RESUMED_SIGNAL
 from noeta_tui import bash_mode, clipboard, files, history, mentions, render, selection, slash, wrap
 from noeta_tui.agents import MAIN, AgentsPanel, AgentView, WorkflowView
+from noeta_tui.tail import TailScroll
 from noeta_tui.transcript import SERVER_DIRECTORY, WORKFLOW_KEY, TranscriptView, _short_path
 from noeta_tui.widgets import (
     CleanMarkdown,
@@ -232,7 +234,7 @@ class NoetaApp(TranscriptView):
         self._close_messages_no_wait()
 
     def compose(self) -> ComposeResult:
-        yield VerticalScroll(id="transcript")
+        yield TailScroll(id="transcript")
         yield Static("", id="spinner")
         yield Static("", id="tasks")
         yield Static("", id="queued")
@@ -348,17 +350,19 @@ class NoetaApp(TranscriptView):
             # A person follows it now, whatever headless run had it before.
             await follow(self.local.client, task_id)
             await self.local.client.signal(task_id, RESUMED_SIGNAL)
-        await self._clear(task_id, refused=refused)
-        after = await self.show_log(task_id)
+        head = await self._clear(task_id, refused=refused, mount=False)
+        after = await self.show_log(task_id, head)
         if task_id != self.task_id:  # another task was opened meanwhile
             return
         self._follower = self.follow(task_id, after)
         self._load_commands()
         self.update_status()
 
-    async def _clear(self, task_id: str, *, refused: str = "") -> None:
+    async def _clear(self, task_id: str, *, refused: str = "",
+                     mount: bool = True) -> list[Widget]:
         """Forget what was shown and show ``task_id``'s welcome box (``""``:
-        a new task's)."""
+        a new task's); ``mount=False``: the box is returned instead, to show
+        with the task's log."""
         if self._follower is not None:
             self._follower.cancel()
             self._follower = None
@@ -394,17 +398,19 @@ class NoetaApp(TranscriptView):
         self.queued.clear()
         self.echoed.clear()
         self._show_queued()
-        transcript = self.query_one("#transcript")
-        transcript.anchor(False)  # a short transcript anchored sinks to the bottom
-        await transcript.remove_children()
-        await transcript.mount(Welcome(version=self.start.version, model=self.model,
-                                       cwd=_short_path(self.task_cwd, 72) or SERVER_DIRECTORY,
-                                       task_id=task_id))
-        for notice in getattr(self.local, "notices", ()):
-            await transcript.mount(Notice(notice))
+        transcript = self.transcript()
+        await transcript.clear()
+        head: list[Widget] = [Welcome(version=self.start.version, model=self.model,
+                                      cwd=_short_path(self.task_cwd, 72) or SERVER_DIRECTORY,
+                                      task_id=task_id)]
+        head += [Notice(notice) for notice in getattr(self.local, "notices", ())]
         if refused:
-            await transcript.mount(Notice(f"read-only: {refused}. Its history is shown; "
-                                          "/new starts a task here.", classes="-error"))
+            head.append(Notice(f"read-only: {refused}. Its history is shown; "
+                               "/new starts a task here.", classes="-error"))
+        if not mount:
+            return head
+        await transcript.mount_all(head)
+        return []
 
     def _default_task_cwd(self) -> str:
         """The task's directory until its ``TaskCreated`` says: the one new
@@ -471,9 +477,9 @@ class NoetaApp(TranscriptView):
             self._show_queued()
         else:  # shown at once, as typed; the task's log confirms it
             self.echoed.append(body)
-            transcript = self.query_one("#transcript")
+            transcript = self.transcript()
             await transcript.mount(UserMessage(text))
-            transcript.scroll_end(animate=False)
+            transcript.stick()
         # Busy before the send: the turn may run, and its end be shown,
         # before the send returns.
         was_busy = self.busy
@@ -511,21 +517,21 @@ class NoetaApp(TranscriptView):
 
     async def _say_warning(self, line: str, level: int) -> None:
         """A warning noeta logged (its stderr is under this screen)."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(Notice(line, classes="-error" if level >= logging.ERROR
                                       else "-warn"))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
 
     async def say_markdown(self, text: str) -> None:
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(CleanMarkdown(text, classes="notice"))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
 
     async def say_text(self, text: Text) -> None:
         """Rich text, as a command's output (``  ⎿`` under the command)."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(Static(text, classes="command-output"))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
 
     def prefill(self, text: str) -> None:
         """Put ``text`` in the input box for the person to edit and send."""
@@ -923,8 +929,9 @@ class NoetaApp(TranscriptView):
         """The typed line answers the pending question (one line per part of
         a question with several); the answer is sent once all are in. A
         number picks that option."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         await transcript.mount(UserMessage(text))
+        transcript.stick()
         answers = typed_answer(self.question_detail, self._numbered(text),
                                self.question_answers)
         nxt = next_question(self.question_detail, answers)

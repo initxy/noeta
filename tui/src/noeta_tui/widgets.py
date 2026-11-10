@@ -267,8 +267,9 @@ class ToolCall(Vertical):
     def set_state(self, state: str) -> None:
         self.state = state
         self.head.update(self._header(), layout=False)  # the bullet's colour: the same size
-        self.set_class(state == "error", "-error")
-        self.set_class(state == "done", "-done")
+        # Styled when mounted (styling one not yet mounted is work done twice).
+        self.set_class(state == "error", "-error", update=self.is_attached)
+        self.set_class(state == "done", "-done", update=self.is_attached)
         if self.group is not None:
             self.group.show_head()
 
@@ -435,7 +436,7 @@ class ToolGroup(Vertical):
             live = many and not self.expanded and isinstance(part, ToolCall) \
                 and part.state in ("running", "waiting")
             part.display = self.expanded or not many or live
-            part.set_class(live, "-live")
+            part.set_class(live, "-live", update=part.is_attached)
         if not many:
             return
         running = any(c.state not in ("done", "error") for c in calls)

@@ -67,6 +67,7 @@ from noeta_tui.agents import (
     stats_text,
     took,
 )
+from noeta_tui.tail import TailScroll
 from noeta_tui.widgets import (
     ApprovalCard,
     AssistantMessage,
@@ -226,6 +227,9 @@ class TranscriptView(App[None]):
 
         async def close_agent(self) -> None: ...
 
+    def transcript(self) -> TailScroll:
+        return self.query_one("#transcript", TailScroll)
+
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
         self.waiting_question = call_id
         self.question_task = task_id
@@ -235,7 +239,7 @@ class TranscriptView(App[None]):
     async def show_requests(self, found: list[Pending]) -> None:
         """Sub-agents' approvals and questions, shown with the sub-agent's
         name and answered on its task."""
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         for p in found:
             key = (p.task_id, p.request_id)
             if key in self.shown_requests:
@@ -259,7 +263,7 @@ class TranscriptView(App[None]):
                 self.waiting_for = f"{who} waits for your answer"
                 self._set_question(p.request_id, p.task_id, p.detail)
                 await transcript.mount(QuestionCard(p.detail, who=who))
-        transcript.scroll_end(animate=False)
+        transcript.stick()
         self.update_status()
 
     async def _add(self, widget: Widget) -> None:
@@ -268,12 +272,12 @@ class TranscriptView(App[None]):
         if self._batch is not None:
             self._batch.append(widget)
         else:
-            await self.query_one("#transcript").mount(widget)
+            await self.transcript().mount(widget)
 
     def _last_shown(self) -> Widget | None:
         if self._batch:
             return self._batch[-1]
-        shown = self.query_one("#transcript").children
+        shown = self.transcript().children
         return shown[-1] if shown else None
 
     async def _run_to_join(self) -> ToolGroup:
@@ -381,7 +385,7 @@ class TranscriptView(App[None]):
         key = (delta.call_seq, delta.attempt)
         if delta.attempt < self.attempts.get(delta.call_seq, 1) or delta.call_seq <= self.replied:
             return  # the tail of an attempt that failed, or of a reply shown
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         self.turn_tokens += estimate_tokens(delta.text)
         if delta.kind == "thinking":
             self.thinking_now = True
@@ -411,14 +415,9 @@ class TranscriptView(App[None]):
         await self.stream.write(delta.text)
 
     def _follow_end(self) -> None:
-        """Keep the transcript at its end as live output grows — once it
-        fills the screen: Textual's anchor on a shorter one pushes it to the
-        bottom of the screen."""
-        transcript = self.query_one("#transcript")
-        if transcript.max_scroll_y > 0:
-            transcript.anchor()
-        else:
-            transcript.scroll_end(animate=False)
+        """Keep the transcript at its end as live output grows, unless the
+        person scrolled up (``TailScroll.stick``)."""
+        self.transcript().stick()
 
     async def _end_thinking(self, *, drop: bool = False) -> None:
         block, self.thinking = self.thinking, None
@@ -463,13 +462,14 @@ class TranscriptView(App[None]):
                 and self.stream_key[1] <= failed_attempt:
             await self._end_stream(drop=True)
 
-    async def show_log(self, task_id: str) -> int:
-        """What ``task_id``'s log holds now, shown at once: its records
-        rendered into widgets first, mounted in one go (one by one, Textual
-        lays the screen out again for each). The seq of its last record, for
-        :meth:`follow` to go on after."""
+    async def show_log(self, task_id: str, head: Collection[Widget] = ()) -> int:
+        """What ``task_id``'s log holds now, shown at once after ``head``
+        (the welcome box): its records rendered into widgets first, mounted
+        in one go (one by one, Textual lays the screen out again for each),
+        only the last ones (``TailScroll.show_all``). The seq of its last
+        record, for :meth:`follow` to go on after."""
         # Open before the log is read: live output meanwhile waits for it.
-        batch: list[Widget] = []
+        batch: list[Widget] = list(head)
         self._batch = batch
         try:
             try:
@@ -486,9 +486,9 @@ class TranscriptView(App[None]):
             self._batch = None
         if task_id != self.task_id:
             return 0
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         with self.batch_update():
-            await transcript.mount_all(batch)
+            await transcript.show_all(batch)
             transcript.scroll_end(animate=False)
         # Kept at the end as what comes next (a warning that wraps) grows it.
         self.call_after_refresh(self._follow_end)
@@ -521,7 +521,9 @@ class TranscriptView(App[None]):
         await self.say_notice("the task has ended")
 
     async def say_notice(self, text: str) -> None:
-        await self.query_one("#transcript").mount(Notice(text))
+        transcript = self.transcript()
+        await transcript.mount(Notice(text))
+        transcript.stick()
 
     @contextlib.asynccontextmanager
     async def failures_shown(self, what: str) -> AsyncIterator[None]:
@@ -629,7 +631,7 @@ class TranscriptView(App[None]):
                 self._refresh_cost(self.task_id)
             await self._add(Notice(f"task {ev.status}" + (f": {ev.error}" if ev.error else "")))
         if self._batch is None:
-            self.query_one("#transcript").scroll_end(animate=False)
+            self.transcript().stick()
             self.update_status()
 
     async def _render_record(self, rec: Recorded, ev: ExtensionRecorded) -> None:
@@ -1038,7 +1040,7 @@ class TranscriptView(App[None]):
                 await box.remove_children()
                 await box.mount_all(CleanMarkdown(m, classes="plugin-widget") for m in drawn)
                 box.set_class(bool(drawn), "-shown")
-        transcript = self.query_one("#transcript")
+        transcript = self.transcript()
         for i in items:
             key, text = (str(i.get("plugin") or ""), str(i.get("key") or "")), \
                 str(i.get("text") or "")
@@ -1048,7 +1050,7 @@ class TranscriptView(App[None]):
             level = str(i.get("level") or "")
             await transcript.mount(Notice(f"{key[0]}: {text}", classes=f"-{level}"
                                           if level in ("warn", "error") else ""))
-            transcript.scroll_end(animate=False)
+            transcript.stick()
         self._sync_footer()
 
     async def clear_ui(self) -> None:
