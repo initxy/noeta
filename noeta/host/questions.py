@@ -1,7 +1,10 @@
 """Answering a question a task waits on from a front end: typed lines
-become an answer (:func:`typed_answer`, :func:`next_question`), and
-:func:`answer_question` checks the answer against what was asked before
-posting it (the question form is ``noeta.core.questions``)."""
+become an answer (:func:`typed_answer`, :func:`next_question`,
+:func:`typed_one`), :func:`clarify_message` is what a person who would
+rather talk the questions over says instead (posted as a ``deny`` with
+``{"message": ...}``), and :func:`answer_question` checks the answer against
+what was asked before posting it (the question form is
+``noeta.core.questions``)."""
 
 from __future__ import annotations
 
@@ -17,7 +20,8 @@ from noeta.core.questions import (
 )
 from noeta.host.pending import pending
 
-__all__ = ["answer_question", "next_question", "typed_answer"]
+__all__ = ["answer_question", "answer_text", "clarify_message", "next_question",
+           "typed_answer", "typed_one"]
 
 
 def next_question(detail: dict[str, Any],
@@ -28,7 +32,10 @@ def next_question(detail: dict[str, Any],
     return next((q for q in detail_questions(detail) if q["id"] not in done), None)
 
 
-def _typed_one(question: dict[str, Any], text: str) -> dict[str, Any]:
+def typed_one(question: dict[str, Any], text: str) -> dict[str, Any]:
+    """One typed line as the answer to ``question``: an option's label (case
+    and surrounding space ignored) selects it, comma-separated labels select
+    several where the question allows it, anything else is ``other`` text."""
     labels = {str(o.get("label", "")).strip().lower(): str(o.get("label", ""))
               for o in question.get("options") or [] if isinstance(o, dict)}
     typed = text.strip()
@@ -71,9 +78,43 @@ def typed_answer(detail: dict[str, Any], text: str,
             return out
     for question in detail_questions(detail):
         if question["id"] not in out:
-            out[question["id"]] = _typed_one(question, text)
+            out[question["id"]] = typed_one(question, text)
             break
     return out
+
+
+#: What the model reads when the person would rather talk the questions
+#: over than answer them (Claude Code's "Chat about this", in our words);
+#: the questions follow, each with what was answered so far.
+CLARIFY = (
+    "The user wants to talk these questions over before answering: they may have more "
+    "information, context or questions of their own. Start by asking them what they would "
+    "like to clarify, take their reply into account, and then ask the questions again, "
+    "reworded, if they still apply.\n\nQuestions asked:\n{questions}")
+
+
+def answer_text(answer: Any) -> str:
+    """An answer (``{"selected", "other"}``) as one line: the chosen labels,
+    then the typed text (``""``: nothing answered)."""
+    if not isinstance(answer, dict):
+        return ""
+    chosen = [str(label) for label in answer.get("selected") or []]
+    other = answer.get("other")
+    if isinstance(other, str) and other.strip():
+        chosen.append(other.strip())
+    return ", ".join(chosen)
+
+
+def clarify_message(detail: dict[str, Any], answers: dict[str, Any] | None = None) -> str:
+    """What a person who chose to talk a pending question's ``detail`` over
+    says: :data:`CLARIFY` with each question and its answer so far
+    (``answers`` as posted: each ``{"selected", "other"}`` by question id)."""
+    lines: list[str] = []
+    for question in detail_questions(detail):
+        said = answer_text((answers or {}).get(question["id"]))
+        lines.append(f'- "{question.get("question", "")}"')
+        lines.append(f"  Answer: {said}" if said else "  (No answer provided)")
+    return CLARIFY.format(questions="\n".join(lines))
 
 
 async def answer_question(client: ClientAPI, task_id: str, request_id: str, data: Any) -> None:

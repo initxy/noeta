@@ -150,8 +150,19 @@ call's result.
 
 ![An approval card](https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/approval.svg)
 
-A question from the model (`AskUserQuestion`) shows its options; type the answer, or the number
-of an option (`2`, or `1, 3` for several). A question with several parts asks them one by one.
+A question from the model (`AskUserQuestion`) opens Claude Code's dialog: the question, its
+numbered options with a description under each, a "Type something." row to answer in your own
+words, and "Chat about this". `↑` / `↓` and `Enter` pick, or the digit of an option; typing on
+an option goes into the "Type something." box. A question that takes several answers has boxes:
+`Enter` or `Space` checks one, then "Next". Several questions sit on tabs
+(`← ☐ DB  ☐ Scope  ✔ Submit →`); `Tab` and `←` / `→` move between them, and the last tab
+reviews your answers before "Submit answers" sends them (unanswered ones are left out). When the
+options have previews, they sit left of the focused option's preview. "Chat about this" sends no
+answer: the model reads that you want to talk the questions over and asks you what to clarify.
+`Esc` declines and stops the turn, as in Claude Code. Afterwards the call's line says
+`User answered noeta's questions:` with each answer (or `User declined to answer questions`).
+A line typed in the prompt answers the current question too: an option's label or number, or
+your own words.
 
 While the task waits for you it holds no worker: the approval is a
 [parked call](../how-it-works/waiting.md), and closing the terminal leaves it waiting. Open the
@@ -168,8 +179,8 @@ highlighted one. The terminal UI's own commands (`tui/src/noeta_tui/slash.py`):
 |---|---|
 | `/help` | The shortcuts and every command, plugins' included |
 | `/status` | Version, task, agent, model, effort, permission mode, directory, settings |
-| `/model [name]` | Pick or set the model, from the next request on ([models](./models.md)) |
-| `/effort [level]` | Pick or set the effort: `low`, `medium`, `high`, `xhigh`, `max` (sent on any model; the provider maps it) |
+| `/model [name]` | Pick or set the model, from the next request on, saved for new sessions ([models](./models.md#switching-models)) |
+| `/effort [level]` | Pick or set the effort: `low`, `medium`, `high`, `xhigh`, `max` (sent on any model; the provider maps it), or `auto`; saved for the model, except `max` ([effort](./models.md#effort-and-thinking)) |
 | `/copy [n]` | Copy the last reply (`n`: the nth latest) to the clipboard |
 | `/context` | What fills the next request, as a grid |
 | `/cost` | Tokens and cost of this task and its sub-agents |

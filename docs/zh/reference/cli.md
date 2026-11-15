@@ -33,8 +33,8 @@ noeta mcp add|add-json|list|get|remove|login|logout
 
 | 参数 | 含义 |
 |---|---|
-| `--model MODEL` | 模型 id 或别名（`opus`、`sonnet`、`haiku`、`fable`）；不给就依次看 `NOETA_MODEL`、`config.toml`、设置文件里的 `model` |
-| `--effort {low,medium,high,xhigh,max}` | 模型思考的力度；不给就看 `NOETA_EFFORT`、`config.toml` 的 `effort` |
+| `--model MODEL` | 模型 id 或别名（`opus`、`sonnet`、`haiku`、`fable`）；不给就依次看 `NOETA_MODEL`、设置文件里的 `model`（`/model` 会存一个）、`config.toml` |
+| `--effort {low,medium,high,xhigh,max}` | 模型思考的力度；不给就看 `NOETA_EFFORT`、给这个模型记住的强度、`config.toml` 的 `effort`（见[推理强度](../guides/models.md#推理强度和思考)） |
 | `--permission-mode MODE` | 起始权限模式：`default`、`acceptEdits`、`plan`、`auto`、`dontAsk`、`bypassPermissions`，或 `manual`（`default` 的别名）。默认 `bypassPermissions`（关掉了 bypass 模式的地方是 `auto`），或设置文件里的 `permissions.defaultMode` |
 | `--provider {anthropic,openai_compat,openai_responses}` | 默认 provider 的类型；不给就看 `NOETA_PROVIDER`、`config.toml` 的 `provider`（后者也可以是某个 `[providers.<name>]` 表的名字） |
 | `--base-url URL` | 默认 provider 的地址；不给就看 `NOETA_BASE_URL` |
@@ -308,8 +308,8 @@ noeta: the full report is in ~/.noeta/logs/crash-20261109-101500-4242.txt (--ver
 |---|---|
 | `/help` | 显示帮助和命令列表 |
 | `/status` | 版本、模型、任务、目录和设置 |
-| `/model [MODEL]` | 选择或设置模型，下一次请求起生效；不带参数时列出所有 provider 的模型 |
-| `/effort [LEVEL]` | 选择或设置 effort（`low` … `max`） |
+| `/model [MODEL]` | 选择或设置模型，下一次请求起生效，并存成新会话的默认模型；不带参数时列出所有 provider 的模型 |
+| `/effort [LEVEL]` | 选择或设置 effort（`low` … `max`、`auto`），除了 `max` 都会给当前模型记住 |
 | `/context` | 下一次请求里都装了什么，按格子显示 |
 | `/cost` | 本任务及其子代理的 token 和花费 |
 | `/memory` | 列出项目说明和记忆文件；在 `$EDITOR` 里打开其中一个 |

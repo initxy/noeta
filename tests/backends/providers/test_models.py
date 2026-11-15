@@ -215,13 +215,13 @@ def test_an_unknown_model_is_announced() -> None:
     assert models.unknown_model_notice("sonnet") is None
     notice = models.unknown_model_notice("my-gateway-model")
     assert notice is not None
-    assert "'my-gateway-model'" in notice and "128,000 tokens" in notice
+    assert "'my-gateway-model'" in notice and "128,000-token context window" in notice
 
 
 def test_an_announced_unknown_model_is_not_announced_again_for_its_price(
         caplog: pytest.LogCaptureFixture) -> None:
     notice = models.unknown_model_notice("deepseek-chat")
-    assert notice is not None and "$0.00" in notice
+    assert notice is not None and "cost counted as $0" in notice
     with caplog.at_level("WARNING", logger=models._LOGGER.name):
         assert models.model_limits("deepseek-chat") == (
             models.UNKNOWN_MODEL_CONTEXT_WINDOW, models.UNKNOWN_MODEL_MAX_OUTPUT_TOKENS)
@@ -334,25 +334,26 @@ def test_find_spec_unknown_model_is_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _price_warnings(caplog: pytest.LogCaptureFixture, model: str, usage: Usage) -> list[str]:
+def _price_warnings(caplog: pytest.LogCaptureFixture, model: str, usage: Usage, *,
+                    budgeted: bool = False) -> list[tuple[int, str]]:
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="noeta.core.models"):
-        price(model, usage)
-        price(model, usage)
-    return [r.getMessage() for r in caplog.records if model in r.getMessage()]
+    with caplog.at_level(logging.INFO, logger="noeta.core.models"):
+        price(model, usage, budgeted=budgeted)
+        price(model, usage, budgeted=budgeted)
+    return [(r.levelno, r.getMessage()) for r in caplog.records if model in r.getMessage()]
 
 
-def test_price_uncatalogued_model_warns_once_and_charges_zero(
+def test_price_uncatalogued_model_says_so_once_as_info_and_charges_zero(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     usage = Usage(uncached=1_000_000, output=1_000_000)
     lines = _price_warnings(caplog, "totally-unknown-model", usage)
     assert price("totally-unknown-model", usage) == 0.0
-    assert len(lines) == 1
-    assert "not in the catalog" in lines[0]
+    assert lines == [(logging.INFO, "no price is known for model 'totally-unknown-model': "
+                                    "its cost counts as $0")]
 
 
-def test_price_catalogued_but_unpriced_row_warns_once_and_charges_zero(
+def test_price_catalogued_but_unpriced_row_says_so_once_as_info_and_charges_zero(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     spec = spec_for("gpt-5.5-2026-04-24")
@@ -361,8 +362,16 @@ def test_price_catalogued_but_unpriced_row_warns_once_and_charges_zero(
     usage = Usage(uncached=1_000_000, output=1_000_000)
     lines = _price_warnings(caplog, "gpt-5.5-2026-04-24", usage)
     assert price("gpt-5.5-2026-04-24", usage) == 0.0
-    assert len(lines) == 1
-    assert "without published prices" in lines[0]
+    assert [level for level, _ in lines] == [logging.INFO]
+
+
+def test_an_unpriced_model_under_a_cost_budget_is_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    usage = Usage(uncached=1_000_000)
+    lines = _price_warnings(caplog, "budgeted-unknown-model", usage, budgeted=True)
+    assert lines == [(logging.WARNING, "no price is known for model 'budgeted-unknown-model', "
+                                       "so the cost budget counts its calls as $0")]
 
 
 def test_priced_rows_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
@@ -452,16 +461,16 @@ def test_uncatalogued_model_has_no_family() -> None:
     assert model_family("claude-not-catalogued") is None
 
 
-def test_unpriced_extension_row_warns_once_and_charges_zero(
+def test_unpriced_extension_row_says_so_once_and_charges_zero(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     register_models({GATEWAY_ID: _gateway_spec()})
     usage = Usage(uncached=1_000_000)
-    with caplog.at_level(logging.WARNING, logger="noeta.core.models"):
+    with caplog.at_level(logging.INFO, logger="noeta.core.models"):
         assert price(GATEWAY_ID, usage) == 0.0
         assert price(GATEWAY_ID, usage) == 0.0
-    unpriced = [r for r in caplog.records if "without published prices" in r.getMessage()]
-    assert len(unpriced) == 1
+    unpriced = [r for r in caplog.records if "no price is known" in r.getMessage()]
+    assert [r.levelno for r in unpriced] == [logging.INFO]
 
 
 def test_priced_extension_row_charges_real_money() -> None:

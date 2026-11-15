@@ -16,7 +16,7 @@ from noeta.host.app import LoggedWarnings
 from noeta.testing import ScriptedProvider, reply
 from noeta_tui.widgets import Choices, Notice
 
-from support import AskBash, Lines, make_app, ready, settle, shown, type_line
+from support import AskBash, Lines, make_app, plain, ready, settle, shown, type_line
 
 
 def _refused(status: int, error: str) -> httpx.HTTPStatusError:
@@ -103,6 +103,9 @@ async def test_what_is_logged_is_said_in_the_transcript(tmp_path: Path) -> None:
         async with app.run_test(size=(100, 30)) as pilot:
             await settle(pilot, lambda: ready(app)
                          and "settings: a.json could not be read" in shown(app))
+            # Set apart from other notices: a mark and the warning colour.
+            [warned] = [n for n in app.query(Notice) if "-warn" in n.classes]
+            assert plain(warned) == "⚠ settings: a.json could not be read; ignored"
             log.error("mcp: the server x did not start")
             log.error("mcp: the server x did not start")
             await settle(pilot, lambda: "the server x did not start" in shown(app))

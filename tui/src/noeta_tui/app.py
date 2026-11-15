@@ -25,7 +25,7 @@ from noeta.core.types import Delta, Image
 from noeta.host.app import FrontEndStart
 from noeta.host.local import UnknownAgent
 from noeta.host.pending import answer_choice
-from noeta.host.questions import next_question, typed_answer
+from noeta.host.questions import clarify_message, next_question, typed_answer
 from noeta.host.rewind import RewindPoint
 from noeta.host.stream_json import find_latest_task
 from noeta.toolkit.interactive import BASH_MODE_KEY, follow
@@ -52,6 +52,7 @@ from noeta_tui.widgets import (
     ToolCall,
     UserMessage,
     Welcome,
+    warning_notice,
 )
 
 log = logging.getLogger("noeta_tui")
@@ -428,7 +429,7 @@ class NoetaApp(TranscriptView):
         head: list[Widget] = [Welcome(version=self.start.version, model=self.model,
                                       cwd=_short_path(self.task_cwd, 72) or SERVER_DIRECTORY,
                                       task_id=task_id)]
-        head += [Notice(notice) for notice in getattr(self.local, "notices", ())]
+        head += [warning_notice(notice) for notice in getattr(self.local, "notices", ())]
         if refused:
             head.append(Notice(f"read-only: {refused}. Its history is shown; "
                                "/new starts a task here.", classes="-error"))
@@ -538,8 +539,7 @@ class NoetaApp(TranscriptView):
     async def _say_warning(self, line: str, level: int) -> None:
         """A warning noeta logged (its stderr is under this screen)."""
         transcript = self.transcript()
-        await transcript.mount(Notice(line, classes="-error" if level >= logging.ERROR
-                                      else "-warn"))
+        await transcript.mount(warning_notice(line, error=level >= logging.ERROR))
         transcript.stick()
 
     async def say_markdown(self, text: str) -> None:
@@ -978,12 +978,16 @@ class NoetaApp(TranscriptView):
         self._take_modes(published_modes(events))
 
     async def answer_question(self, text: str) -> None:
-        """The typed line answers the pending question (one line per part of
-        a question with several); the answer is sent once all are in. A
-        number picks that option."""
+        """A line typed in the prompt while a question is open answers it
+        through its card (:meth:`QuestionCard.typed`): one line per
+        question, sent once all are in."""
         transcript = self.transcript()
         await transcript.mount(UserMessage(text))
         transcript.stick()
+        card = next((c for c in self.query(QuestionCard) if not c.done), None)
+        if card is not None:
+            await card.typed(text)
+            return
         answers = typed_answer(self.question_detail, self._numbered(text),
                                self.question_answers)
         nxt = next_question(self.question_detail, answers)
@@ -991,11 +995,35 @@ class NoetaApp(TranscriptView):
             self.question_answers = answers
             await self.say_notice(f"next: {nxt.get('question', '')}")
             return
-        task_id, call_id = self.question_task or self.task_id, self.waiting_question
+        await self.respond_question(self.question_task, self.waiting_question, "submit",
+                                    answers, self.question_detail)
+
+    async def respond_question(self, task_id: str, call_id: str, kind: str,
+                               answers: dict[str, dict[str, Any]],
+                               detail: dict[str, Any]) -> None:
+        """What the person did with the open question: sent ``answers``
+        (``submit``); chose to talk the questions over (``chat``: the model
+        reads :func:`clarify_message` and goes on); or declined (``cancel``:
+        as Claude Code's Esc, the agent's turn stops; a sub-agent's question
+        is withdrawn)."""
+        if call_id != self.waiting_question:
+            return
+        task = task_id or self.task_id
         self._set_question("", "", {})
-        for card in self.query(QuestionCard):
-            card.add_class("-answered")
-        await self.local.client.answer(task_id, call_id, data={"answers": answers})
+        self.waiting_for = ""
+        async with self.failures_shown("answering"):
+            if kind == "submit":
+                await self.local.client.answer(task, call_id, data={"answers": answers})
+            elif kind == "chat":
+                await self.local.client.answer(
+                    task, call_id, "deny", data={"message": clarify_message(detail, answers)})
+            elif task == self.task_id:
+                await self.interrupted()
+                self._cancel_turn(task)
+            else:
+                await self.local.client.answer(task, call_id, "deny")
+        self.update_status()
+        self._box().focus()
 
     def _numbered(self, text: str) -> str:
         """``2`` (or ``1, 3``) as the labels of the current question's options."""

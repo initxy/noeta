@@ -54,12 +54,13 @@ _LOGGER = logging.getLogger(__name__)
 _WARNED: set[tuple[str, str]] = set()
 
 
-def _warn_once(concern: str, model_id: str, message: str) -> None:
+def _warn_once(concern: str, model_id: str, message: str,
+               level: int = logging.WARNING) -> None:
     key = (concern, model_id)
     if key in _WARNED:
         return
     _WARNED.add(key)
-    _LOGGER.warning(message)
+    _LOGGER.log(level, message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,17 +590,16 @@ def model_limits(model: str) -> tuple[int, int]:
     real = resolve_alias(model)
     spec = find_spec(real)
     if spec is None:
-        _warn_once(
-            "limits",
-            real,
-            f"model {real!r} is not in the catalog: assuming a conservative "
-            f"{UNKNOWN_MODEL_CONTEXT_WINDOW}-token context window and a "
-            f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS}-token output cap. Add a "
-            "ModelSpec row (noeta.core.models.register_models) to use the model's "
-            "real limits.",
-        )
+        _warn_once("limits", real, _unknown_model_text(real))
         return UNKNOWN_MODEL_CONTEXT_WINDOW, UNKNOWN_MODEL_MAX_OUTPUT_TOKENS
     return spec.context_window, spec.max_output_tokens
+
+
+def _unknown_model_text(real: str) -> str:
+    return (f"unknown model {real!r}: assuming a {UNKNOWN_MODEL_CONTEXT_WINDOW:,}-token context "
+            f"window and a {UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,}-token output cap, with its cost "
+            "counted as $0; give it a row (a provider's models in config.toml, or a models "
+            "file) for its real limits and prices")
 
 
 def unknown_model_notice(model: str) -> str | None:
@@ -611,15 +611,11 @@ def unknown_model_notice(model: str) -> str | None:
     if not model or find_spec(model) is not None:
         return None
     real = resolve_alias(model)
-    _WARNED.update({("limits", real), ("pricing", real)})
-    return (f"noeta doesn't recognize the model {real!r}, so it assumes a "
-            f"context window of {UNKNOWN_MODEL_CONTEXT_WINDOW:,} tokens and an output cap of "
-            f"{UNKNOWN_MODEL_MAX_OUTPUT_TOKENS:,} and counts its cost as $0.00 (a cost budget "
-            "will under-report); describe it in a models file (NOETA_MODELS_FILE / "
-            "models_file) or with register_models to use its real limits and prices")
+    _WARNED.add(("limits", real))
+    return _unknown_model_text(real)
 
 
-def price(model_id: str, usage: Usage) -> float:
+def price(model_id: str, usage: Usage, *, budgeted: bool = False) -> float:
     """Cost in USD for one round-trip's :class:`Usage` on ``model_id``.
 
     Each token bucket carries its own per-MTok rate. ``reasoning`` tokens are
@@ -627,35 +623,27 @@ def price(model_id: str, usage: Usage) -> float:
     counted in ``output`` and billed at the output rate, so adding them would
     double-charge.
 
-    **Unknown price ⇒ warn once, charge 0.0.** Two rows land there: a model
-    absent from the catalog, and a catalogued row whose rates the vendor does
-    not publish. Returning 0.0 keeps cost folding and budget arithmetic total;
-    the warning is what makes the state visible.
+    **Unknown price ⇒ charge 0.0.** Two rows land there: a model absent
+    from the catalog, and a row with no rates (a vendor or gateway that
+    publishes none: the usual case behind a gateway). Returning 0.0 keeps
+    cost folding and budget arithmetic total. It is logged once per model:
+    a warning when ``budgeted`` (a cost budget counts on it), else an info
+    line, since a cost shown as $0 says as much.
     """
     real = resolve_alias(model_id)
     spec = find_spec(real)
-    if spec is None:
-        _warn_once(
-            "pricing",
-            real,
-            f"model {real!r} is not in the catalog: charging $0.00 for it. "
-            "Cost accounting and any cost budget will under-report until a "
-            "ModelSpec row is added.",
-        )
-        return 0.0
-    if (
+    if spec is None or (
         spec.input_price_per_mtok is None
         or spec.output_price_per_mtok is None
         or spec.cache_read_price_per_mtok is None
         or spec.cache_write_price_per_mtok is None
     ):
-        _warn_once(
-            "pricing",
-            real,
-            f"model {real!r} is catalogued without published prices: "
-            "charging $0.00 for it. Cost accounting and any cost budget will "
-            "under-report until its rates are filled in.",
-        )
+        if budgeted:
+            _warn_once("budget", real, f"no price is known for model {real!r}, so the cost "
+                       "budget counts its calls as $0")
+        else:
+            _warn_once("pricing", real, f"no price is known for model {real!r}: its cost "
+                       "counts as $0", logging.INFO)
         return 0.0
     return (
         usage.uncached / 1_000_000 * spec.input_price_per_mtok

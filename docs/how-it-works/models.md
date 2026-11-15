@@ -57,8 +57,9 @@ table, so a model has one row everywhere.
 
 **A model the catalog does not know** is a warning, never a silent default: it gets a
 conservative 128,000-token window and 16,384-token output cap (compaction still runs), its images
-are let through for the provider to judge, and its price is unknown: its cost counts as $0.00 with a
-warning, so a cost budget under-reports. Rows are
+are let through for the provider to judge, and its price is unknown: its cost counts as $0. So does
+a row without prices (usual behind a gateway); that is a warning only where a cost budget is set,
+since the budget then under-reports. Rows are
 added at run time with `register_models`, from a models file (`NOETA_MODELS_FILE`), from rows in a
 `[providers.<name>]` table's `models`, or from a provider's own `/models` listing when it
 publishes limits.

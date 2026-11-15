@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
-import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -27,7 +26,9 @@ from textual.widgets import Input, Markdown, Static, TextArea
 from textual.widgets._markdown import MarkdownBlock, MarkdownTable
 
 from noeta.core.events import Answer
+from noeta.core.questions import detail_partial, detail_questions
 from noeta.core.types import ToolUse
+from noeta.host.questions import answer_text, typed_one
 from noeta.toolkit.commands import parse_command_message
 from noeta_tui import render, reply
 from noeta_tui.selection import Unselectable
@@ -295,6 +296,16 @@ class Notice(Static):
         super().__init__(render.plain(content) if isinstance(content, str) else content, **kw)
 
 
+#: What sets a warning apart from the other notices (with its colour, ``.-warn``).
+WARNING_MARK = "⚠ "
+
+
+def warning_notice(line: str, *, error: bool = False) -> Notice:
+    """A warning noeta reports (an error when ``error``), in its colour."""
+    return Notice(line, classes="-error") if error else \
+        Notice(WARNING_MARK + line, classes="-warn")
+
+
 class Welcome(Horizontal):
     """The box a task opens with: the mark beside the version, a line on
     where to start, the model and the directory."""
@@ -409,6 +420,9 @@ class ToolCall(Vertical):
         self.call = call
         self.cwd = cwd
         self.state = "pending"
+        #: A question's line once answered (``User answered …``), shown in
+        #: full; until then the dialog stands for it (Claude Code's).
+        self.question_head = ""
         self.progressed = False
         #: Showing the folded result (``False`` while its output runs).
         self.collapsed = True
@@ -432,6 +446,8 @@ class ToolCall(Vertical):
         self.added = self.removed = 0
         #: An agent of several started together: one line.
         self.compact = False
+        if call.name == render.QUESTION_TOOL:
+            self.head.display = False
 
     @property
     def facts(self) -> render.CallFacts:
@@ -449,6 +465,8 @@ class ToolCall(Vertical):
 
     def _header(self, frame: int = -1) -> render.Hanging:
         """``● Name(argument)``; a long one wraps under the name, not the bullet."""
+        if self.question_head:
+            return render.Hanging(Text.assemble("● ", self.question_head), 2)
         glyph = render.SPINNER_FRAMES[frame % len(render.SPINNER_FRAMES)] if frame >= 0 else "●"
         out = Text().append(f"{glyph} ", style=self.STYLES[self.state])
         out.append(render.tool_name(self.call), style="bold")
@@ -499,6 +517,15 @@ class ToolCall(Vertical):
                 self.set_state("background")
             self.show_workflow()
             return
+        if self.call.name == render.QUESTION_TOOL:
+            self.head.display = True
+            summary = render.question_summary(self.call, meta, is_error=is_error)
+            if summary is not None:
+                self.question_head, self.rows = summary
+                self.set_state("done")
+                self.body.update(render.result_block(self.rows))
+                self.body.display = bool(self.rows)
+                return
         if not is_error:
             self.git = tuple(render.git_ops(self.call, text))
             self.added, self.removed = int(meta.get("added") or 0), int(meta.get("removed") or 0)
@@ -593,6 +620,8 @@ class ToolCall(Vertical):
         self.body.display = True
 
     def _show(self) -> None:
+        if self.question_head:
+            return  # shown whole
         rows = render.folded(self.rows, diff=self.is_diff, expanded=self.expanded,
                              read=self.call.name == "Read" and self.state == "done")
         self.body.update(render.result_block(rows))
@@ -986,33 +1015,467 @@ class Picker(Vertical):
         await self.on_pick_cb(choice)
 
 
-class QuestionCard(Vertical):
-    """The agent asked a question; the next input line answers it (an
-    option's number or label picks it)."""
+#: A question's rows after its options, and the review tab's (Claude Code's
+#: dialog): the box to answer in your own words, a multi-select question's
+#: button to the next one, talking the questions over instead, and the
+#: review's two choices.
+OTHER, NEXT, CHAT, SUBMIT, CANCEL = "other", "next", "chat", "submit", "cancel"
+#: ``respond(kind, answers)``: the person submitted ``answers`` (``submit``),
+#: would rather talk the questions over (``chat``, with what they answered so
+#: far), or declined (``cancel``).
+Respond = Callable[[str, dict[str, dict[str, Any]]], Awaitable[None]]
+#: The keys the card takes from its "Type something." box.
+_CARD_KEYS = frozenset({"up", "down", "ctrl+p", "ctrl+n", "tab", "escape"})
+
+
+class OtherLine(Input):
+    """A question's "Type something." row: Enter answers with what it holds
+    (``Input.Submitted``); up / down, Tab and Esc are the card's."""
+
+    async def _on_key(self, event: events.Key) -> None:
+        card = next((a for a in self.ancestors if isinstance(a, QuestionCard)), None)
+        if card is not None and event.key in _CARD_KEYS:
+            event.stop()
+            event.prevent_default()  # not Input's
+            await card.press(event.key)
+
+
+class QuestionCard(Vertical, can_focus=True):
+    """The agent's questions, as Claude Code's dialog: a tab per question
+    (``← ☐ DB  ☐ Scope  ✔ Submit →``) when there are several or one takes
+    several answers; the question, its numbered options (a description
+    under each), a "Type something." row to answer in your own words and
+    "Chat about this" to talk the questions over instead. ↑/↓ and Enter or
+    an option's number pick (Space or Enter checks an option of a
+    multi-select question), Tab and ←/→ go between questions, and the last
+    tab reviews the answers before they are sent; Esc declines. A single
+    question that takes one answer is sent as soon as it is picked. When an
+    option has a preview, the options sit left of it. A line typed in the
+    prompt answers the current question too (:meth:`typed`)."""
 
     DEFAULT_CLASSES = "question"
 
-    def __init__(self, detail: dict[str, Any], *, who: str = "") -> None:
+    def __init__(self, detail: dict[str, Any], respond: Respond, *, who: str = "",
+                 chat: bool = True) -> None:
+        """``who``: the sub-agent asking (``""``: the agent). ``chat``: offer
+        "Chat about this" (``AskUserQuestion``'s; a plugin's question cannot
+        take it)."""
         super().__init__()
         self.detail = detail
+        self.respond = respond
         self.who = who
+        self.chat = chat
+        self.questions = detail_questions(detail)
+        #: One question taking one answer: no tabs, no review.
+        self.single = len(self.questions) == 1 and not self.questions[0].get("multiSelect")
+        #: The answer may leave questions out (``AskUserQuestion``'s may).
+        self.partial = detail_partial(detail)
+        #: The tab shown (``len(questions)``: the review) and its picked row.
+        self.tab = 0
+        self.row = 0
+        self.answers: dict[str, dict[str, Any]] = {}
+        #: Each question's "Type something." text and checked options.
+        self.texts: dict[str, str] = {}
+        self.checked: dict[str, list[str]] = {}
+        self.done = False
+        #: What was answered (a sub-agent's card keeps it).
+        self.said = ""
+
+    # ------------------------------------------------------------ layout
 
     def compose(self) -> ComposeResult:
-        asker = render.plain(f"[{self.who}]" if self.who else "The agent", "bold")
-        yield Static(Text.assemble(asker, (" asks", "bold"),
-                                   (" (type a number, a label or your own answer; "
-                                    "one line per question)", "dim")))
-        questions = self.detail.get("questions") or []
-        if not questions:
-            yield Static(render.plain(json.dumps(self.detail, ensure_ascii=False, indent=2)))
-        for q in questions:
-            yield Static(render.plain(f"☐ {q.get('header') or ''} {q.get('question', '')}".strip(),
+        if self.said:
+            yield self._result()
+            return
+        yield Static(classes="question-head")
+        with Horizontal(classes="question-body"):
+            yield Static(classes="question-options")
+            yield Static(classes="question-preview")
+        with Horizontal(classes="question-other"):
+            yield Static(classes="question-other-mark")
+            yield OtherLine(classes="question-other-line", select_on_focus=False)
+        yield Static(classes="question-foot")
+        yield Static(classes="hint")
+
+    def on_mount(self) -> None:
+        if self.done or not self.query(OtherLine):
+            return
+        self.row = self._start_row()
+        self._draw()
+        self._focus_row()
+
+    def _question(self) -> dict[str, Any] | None:
+        return self.questions[self.tab] if self.tab < len(self.questions) else None
+
+    def _previews(self, q: dict[str, Any]) -> bool:
+        """Options left of a preview (Claude Code's: one answer, no typed one)."""
+        return not q.get("multiSelect") and any(
+            isinstance(o, dict) and o.get("preview") for o in q.get("options") or [])
+
+    def _rows(self) -> list[tuple[str, int]]:
+        """The current tab's rows, ``(kind, option index)``."""
+        q = self._question()
+        if q is None:
+            return [(SUBMIT, 0), (CANCEL, 0)]
+        rows = [("option", n) for n in range(len(q.get("options") or []))]
+        if not self._previews(q):
+            rows.append((OTHER, 0))
+        if q.get("multiSelect"):
+            rows.append((NEXT, 0))
+        if self.chat:
+            rows.append((CHAT, 0))
+        return rows
+
+    def _number(self, at: int) -> int:
+        """The number a row shows (the next button has none)."""
+        rows = self._rows()
+        return sum(1 for kind, _ in rows[:at + 1] if kind != NEXT)
+
+    def _start_row(self) -> int:
+        """Where a tab opens: on its answer when it has one."""
+        q = self._question()
+        if q is None:
+            return 0
+        picked = (self.answers.get(q["id"]) or {}).get("selected") or []
+        if not q.get("multiSelect") and picked:
+            labels = [str(o.get("label", "")) for o in q.get("options") or []]
+            if picked[0] in labels:
+                return labels.index(picked[0])
+        return 0
+
+    def _draw(self) -> None:
+        if not self.query(OtherLine):
+            return
+        q = self._question()
+        rows = self._rows()
+        head = Text()
+        if self.who:
+            head.append(f"From the {self.who} agent\n", style="dim")
+        if not self.single:
+            head.append_text(self._tabs())
+            head.append("\n\n")
+        head.append_text(render.plain(q.get("question", "") if q else "Review your answers",
                                       "bold"))
-            for n, opt in enumerate(q.get("options") or [], 1):
-                line = render.plain(f"  {n}. {opt.get('label', '')}")
-                if opt.get("description"):
-                    line.append(render.clean(f"  {opt['description']}"), style="dim")
-                yield Static(line, classes="question-option")
+        self.query_one(".question-head", Static).update(head)
+        previews = q is not None and self._previews(q)
+        self.set_class(previews, "-previews")
+        options = self.query_one(".question-options", Static)
+        options.update(render.Hanging(self._option_rows(q, rows), 5) if q is not None
+                       else render.Hanging(self._review(), 3))
+        preview = self.query_one(".question-preview", Static)
+        preview.display = previews
+        if previews and q is not None:
+            kind, n = rows[self.row]
+            option = q["options"][n] if kind == "option" else {}
+            preview.update(render.plain(str(option.get("preview") or "No preview available"),
+                                        "" if option.get("preview") else "dim"))
+        other_row = next((i for i, (kind, _) in enumerate(rows) if kind == OTHER), None)
+        self.query_one(".question-other", Horizontal).display = other_row is not None
+        if q is not None and other_row is not None:
+            here = self.row == other_row
+            mark = Text().append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
+            mark.append(f"{self._number(other_row)}. ", style=f"bold {render.ACCENT}"
+                        if here else "")
+            if q.get("multiSelect"):
+                mark.append("[✔] " if self.texts.get(q["id"], "").strip() else "[ ] ")
+            self.query_one(".question-other-mark", Static).update(mark)
+            line = self.query_one(OtherLine)
+            line.placeholder = "Type something" if q.get("multiSelect") else "Type something."
+            if line.value != self.texts.get(q["id"], ""):
+                line.value = self.texts.get(q["id"], "")
+        foot = Text()
+        for i, (kind, _) in enumerate(rows):
+            here = i == self.row
+            if kind == NEXT:
+                label = "Submit" if self.tab == len(self.questions) - 1 else "Next"
+                foot.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
+                foot.append(f" {label} ", style=f"bold reverse {render.ACCENT}" if here
+                            else "reverse")
+            elif kind == CHAT:
+                if foot.plain:
+                    foot.append("\n")
+                foot.append("─" * 24 + "\n", style="dim")
+                foot.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
+                foot.append(f"{self._number(i)}. Chat about this",
+                            style=f"bold {render.ACCENT}" if here else "")
+        foot_widget = self.query_one(".question-foot", Static)
+        foot_widget.update(foot)
+        foot_widget.display = bool(foot.plain)
+        navigate = "↑/↓ to navigate" if self.single else "Tab/Arrow keys to navigate"
+        self.query_one(".hint", Static).update(
+            f"Enter to select · {navigate} · Esc to cancel")
+
+    def _tabs(self) -> Text:
+        """``← ☐ DB  ☒ Scope  ✔ Submit →``: the tab shown highlighted, an
+        answered question checked."""
+        out = Text()
+        out.append("← ", style="dim" if self.tab == 0 else "")
+        for n, q in enumerate(self.questions):
+            mark = "☒" if q["id"] in self.answers else "☐"
+            label = f" {mark} {render.clean(str(q.get('header') or f'Q{n + 1}'))} "
+            out.append(label, style=f"bold reverse {render.ACCENT}" if n == self.tab else "")
+            out.append(" ")
+        review = self.tab == len(self.questions)
+        out.append(" ✔ Submit ", style=f"bold reverse {render.ACCENT}" if review else "")
+        out.append(" →", style="dim" if review else "")
+        return out
+
+    def _option_rows(self, q: dict[str, Any], rows: list[tuple[str, int]]) -> Text:
+        out = Text()
+        multi = bool(q.get("multiSelect"))
+        picked = (self.answers.get(q["id"]) or {}).get("selected") or []
+        for i, (kind, n) in enumerate(rows):
+            if kind != "option":
+                continue
+            option = q["options"][n]
+            label = str(option.get("label", ""))
+            here = i == self.row
+            if out.plain:
+                out.append("\n")
+            out.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
+            out.append(f"{self._number(i)}. ", style=f"bold {render.ACCENT}" if here else "")
+            if multi:
+                out.append("[✔] " if label in self.checked.get(q["id"], []) else "[ ] ")
+            chosen = not multi and label in picked
+            out.append(render.clean(label), style=f"bold {render.ACCENT}" if here
+                       else "green" if chosen else "")
+            if chosen:
+                out.append(" ✔", style="green")
+            if option.get("description") and not self._previews(q):
+                out.append("\n     ")
+                out.append(render.clean(str(option["description"])), style="dim")
+        return out
+
+    def _review(self) -> Text:
+        """The review tab: each answered question and its answer, then
+        ``Ready to submit your answers?`` and the two choices."""
+        out = Text()
+        if any(q["id"] not in self.answers for q in self.questions):
+            out.append(WARNING_MARK + "You have not answered all questions\n\n", style="yellow")
+        for q in self.questions:
+            said = answer_text(self.answers.get(q["id"]))
+            if said:
+                out.append(" · " + render.clean(str(q.get("question", ""))) + "\n")
+                out.append("   → " + render.clean(said) + "\n", style="green")
+        if self.answers:
+            out.append("\n")
+        out.append("Ready to submit your answers?\n\n", style="dim")
+        for i, label in enumerate(("Submit answers", "Cancel")):
+            here = i == self.row
+            out.append("❯ " if here else "  ", style=f"bold {render.ACCENT}")
+            out.append(f"{i + 1}. {label}", style=f"bold {render.ACCENT}" if here else "")
+            out.append("\n" if i == 0 else "")
+        return out
+
+    def _focus_row(self) -> None:
+        rows = self._rows()
+        if rows and rows[self.row][0] == OTHER:
+            self.query_one(OtherLine).focus()
+        else:
+            self.focus()
+
+    # ------------------------------------------------------------ keys
+
+    async def _on_key(self, event: events.Key) -> None:
+        if self.done or not self.query(OtherLine) or isinstance(self.app.focused, OtherLine):
+            return  # the box's keys are its own (its Enter is a binding, checked later)
+        if await self.press(event.key, event.character):
+            event.stop()
+            event.prevent_default()
+
+    async def press(self, key: str, character: str | None = None) -> bool:
+        """Act on ``key`` (from the card or its box); whether it was the card's."""
+        rows = self._rows()
+        kind, n = rows[self.row]
+        if key in ("up", "ctrl+p", "down", "ctrl+n"):
+            step = -1 if key in ("up", "ctrl+p") else 1
+            self.row = max(0, min(self.row + step, len(rows) - 1))
+        elif key in ("tab", "right"):
+            self._go(self.tab + 1)
+        elif key == "left":
+            self._go(self.tab - 1)
+        elif key == "escape":
+            await self._end(CANCEL)
+            return True
+        elif key in ("enter", "space"):
+            if key == "space" and kind != "option":
+                return False
+            await self._pick(kind, n)
+            return True
+        elif character is not None and character.isdigit() and character != "0":
+            at = next((i for i in range(len(rows)) if rows[i][0] != NEXT
+                       and self._number(i) == int(character)), None)
+            if at is None:
+                return True
+            self.row = at
+            if rows[at][0] != OTHER:
+                await self._pick(*rows[at])
+                return True
+        elif character is not None and character.isprintable() and kind != OTHER \
+                and any(k == OTHER for k, _ in rows):
+            # Typing on an option answers in your own words.
+            self.row = next(i for i, (k, _) in enumerate(rows) if k == OTHER)
+            self._draw()
+            self._focus_row()
+            self.query_one(OtherLine).insert_text_at_cursor(character)
+            return True
+        else:
+            return False
+        if not self.done:
+            self._draw()
+            self._focus_row()
+        return True
+
+    def _go(self, tab: int) -> None:
+        if self.single or not 0 <= tab <= len(self.questions):
+            return
+        self.tab = tab
+        self.row = self._start_row()
+
+    async def _pick(self, kind: str, n: int) -> None:
+        q = self._question()
+        if kind == SUBMIT:
+            missing = [i for i, x in enumerate(self.questions) if x["id"] not in self.answers]
+            if missing and not self.partial:
+                self._go(missing[0])
+            else:
+                await self._end(SUBMIT)
+        elif kind == CANCEL:
+            await self._end(CANCEL)
+        elif kind == CHAT:
+            await self._end(CHAT)
+        elif q is None:
+            return
+        elif kind == NEXT:
+            self._advance()
+        elif kind == "option" and q.get("multiSelect"):
+            label = str(q["options"][n].get("label", ""))
+            checked = self.checked.setdefault(q["id"], [])
+            if label in checked:
+                checked.remove(label)
+            else:
+                checked.append(label)
+            self._take_multi(q)
+        elif kind == "option":
+            self.answers[q["id"]] = {"selected": [str(q["options"][n].get("label", ""))]}
+            await self._answered()
+        if not self.done:
+            self._draw()
+            self._focus_row()
+
+    def _take_multi(self, q: dict[str, Any]) -> None:
+        """A multi-select question's answer as its boxes stand."""
+        labels = [str(o.get("label", "")) for o in q.get("options") or []]
+        checked = [label for label in labels if label in self.checked.get(q["id"], [])]
+        text = self.texts.get(q["id"], "").strip()
+        if checked or text:
+            self.answers[q["id"]] = {"selected": checked, **({"other": text} if text else {})}
+        else:
+            self.answers.pop(q["id"], None)
+
+    async def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()
+        q = self._question()
+        if q is None or self.done:
+            return
+        self.texts[q["id"]] = event.value
+        if q.get("multiSelect"):
+            self._take_multi(q)
+            self._draw()
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        q = self._question()
+        text = event.value.strip()
+        if q is None or self.done or not text:
+            return
+        if q.get("multiSelect"):
+            self.row = next(i for i, (k, _) in enumerate(self._rows()) if k == NEXT)
+        else:
+            self.answers[q["id"]] = {"other": text}
+            await self._answered()
+        if not self.done:
+            self._draw()
+            self._focus_row()
+
+    async def _answered(self) -> None:
+        """The current question took its answer: a single question is sent,
+        else the next tab opens (the review after the last)."""
+        if self.single:
+            await self._end(SUBMIT)
+        else:
+            self._advance()
+
+    def _advance(self) -> None:
+        self.tab = min(self.tab + 1, len(self.questions))
+        self.row = self._start_row()
+
+    async def typed(self, text: str) -> None:
+        """A line typed in the prompt answers the current question (or the
+        first unanswered): an option's number or label picks it, other text
+        is the answer in the person's words. Once every question has an
+        answer they are sent."""
+        q = self._question()
+        if q is None or q["id"] in self.answers:
+            q = next((x for x in self.questions if x["id"] not in self.answers), None)
+        if q is None or self.done:
+            await self._end(SUBMIT)
+            return
+        options = [str(o.get("label", "")) for o in q.get("options") or []]
+        parts = [p.strip() for p in text.split(",")]
+        if parts and all(p.isdigit() and 1 <= int(p) <= len(options) for p in parts):
+            text = ", ".join(options[int(p) - 1] for p in parts)
+        self.answers[q["id"]] = typed_one(q, text)
+        if all(x["id"] in self.answers for x in self.questions):
+            await self._end(SUBMIT)
+            return
+        self._go(next(i for i, x in enumerate(self.questions) if x["id"] not in self.answers))
+        self._draw()
+
+    # ------------------------------------------------------------ ending
+
+    async def _end(self, kind: str) -> None:
+        if self.done:
+            return
+        self.done = True
+        await self.respond(kind, {qid: dict(a) for qid, a in self.answers.items()})
+        await self._decided(self._summary(kind))
+
+    def _summary(self, kind: str) -> str:
+        if kind != SUBMIT:
+            return "Declined to answer" if kind == CANCEL else "Chose to talk it over"
+        lines = [f"· {q.get('question', '')} → {answer_text(self.answers.get(q['id']))}"
+                 for q in self.questions if answer_text(self.answers.get(q["id"]))]
+        return "\n".join(lines) or "Answered none of the questions"
+
+    def close(self) -> None:
+        """The question is no longer open (answered elsewhere, withdrawn, its
+        turn moved on): the card goes, its call's line says how it ended."""
+        if self.done:
+            return
+        self.done = True
+        if self.parent is not None:
+            self.remove()
+
+    async def _decided(self, said: str) -> None:
+        """A sub-agent's card stays as what was answered (its call is not in
+        this transcript); the agent's goes, its call's line takes over."""
+        if not self.who or not said:
+            if self.parent is not None:
+                await self.remove()
+            return
+        self.said = said
+        if composed(self):
+            await self.remove_children()
+            await self.mount(self._result())
+
+    def _result(self) -> Static:
+        lines = self.said.splitlines()
+        text = Text().append(f"[{self.who}] asked", style="bold")
+        for n, line in enumerate(lines):
+            text.append("\n  ⎿  " if n == 0 else "\n     ", style="dim")
+            text.append(render.clean(line), style="dim")
+        return Static(render.Hanging(text, 5), classes="approval-result")
 
 
 class Completions(Static):

@@ -6,6 +6,53 @@ All notable changes to Noeta are documented here. The format is based on
 `noeta-runtime` and `noeta-sdk`) were a different codebase; their history is not carried in
 this repository. Their versions are listed on PyPI.
 
+## [Unreleased]
+
+## [1.2.4] - 2026-11-15
+
+The terminal UI works more like Claude Code's: the model's questions come in its dialog, and
+`/model` and `/effort` are remembered for new sessions. Warnings are fewer and stand out, and the
+main prompt no longer carries the security-scope paragraph.
+
+### Changed
+
+- **The terminal UI's `/model` and `/effort` choices are saved for new sessions**, as Claude
+  Code's are, in `~/.noeta/settings.json`: `/model` as `model`, `/effort` per model as
+  `modelSettings.<model>.effortLevel` (`low` to `xhigh`; `max` lasts the session, `/effort auto`
+  forgets the saved level). Switching models switches to the effort saved for the new one, and
+  `/clear` keeps the session's choices. A terminal UI attached to a server saves neither.
+- **A settings file's `model` (and effort) now outranks `config.toml`'s**; `--model` /
+  `NOETA_MODEL` and `--effort` / `NOETA_EFFORT` still outrank both. A settings file's top-level
+  `effortLevel` is read too. `noeta -p` starts on the effort saved for its model.
+- **The main prompt no longer has the security-scope paragraph** (help with authorized
+  security work, refuse destructive techniques and the like). A host that wants it adds it with
+  `--append-system-prompt` or `~/.noeta/prompts/system/main.append.md`.
+- **Fewer, clearer warnings.** A model with no known price (any model behind a gateway) no
+  longer warns on every start: its cost shows as $0 and the line goes to the log, unless a cost
+  budget is set. An unknown model is one plain line. Off the terminal UI (`-p`, `serve`,
+  `worker`, …) warnings read `noeta: warning: …`, with the label in colour on a terminal
+  (`NO_COLOR` keeps it plain); in the terminal UI they carry a ⚠ in the warning colour.
+- **The terminal UI asks the model's questions in Claude Code's dialog**: numbered options with
+  their descriptions, picked with `↑` / `↓` and `Enter` or a digit, a "Type something." box,
+  multi-select boxes, a tab per question with a review before the answers are sent, options
+  beside their preview, and "Chat about this". `Esc` declines and stops the turn. The call's line
+  then reads `User answered noeta's questions:` with each answer. A line typed in the prompt
+  still answers the current question.
+
+### Added
+
+- **`AskUserQuestion` takes a refusal with words**: an answer of `deny` with
+  `{"message": text}` ends the question with `text` in its result, and the turn goes on (the
+  terminal's "Chat about this" sends `noeta.host.questions.clarify_message`). `deny` alone still
+  withdraws the question.
+
+### Fixed
+
+- **A long conversation scrolled to its top could hide the messages on screen** when new output
+  arrived: the terminal UI hid old messages by their distance from the end, not from the view.
+- The web packages are published to npm by the release workflow itself (trusted publishing, no
+  token), at noeta's version.
+
 ## [1.2.3] - 2026-11-10
 
 Noeta stays quick however long the conversation. New messages no longer wait on the skills

@@ -232,14 +232,31 @@ class TranscriptView(App[None]):
 
         async def close_agent(self) -> None: ...
 
+        async def respond_question(self, task_id: str, call_id: str, kind: str,
+                                   answers: dict[str, dict[str, Any]],
+                                   detail: dict[str, Any]) -> None: ...
+
     def transcript(self) -> TailScroll:
         return self.query_one("#transcript", TailScroll)
 
     def _set_question(self, call_id: str, task_id: str, detail: dict[str, Any]) -> None:
+        if not call_id:  # no question open: its card goes (its call's line tells the rest)
+            for card in self.query(QuestionCard):
+                card.close()
+            if self._batch:
+                self._batch[:] = [w for w in self._batch
+                                  if not (isinstance(w, QuestionCard) and not w.done)]
         self.waiting_question = call_id
         self.question_task = task_id
         self.question_detail = detail
         self.question_answers = {}
+
+    def _question_card(self, call_id: str, task_id: str, detail: dict[str, Any], *,
+                       who: str = "", chat: bool = True) -> QuestionCard:
+        async def respond(kind: str, answers: dict[str, dict[str, Any]]) -> None:
+            await self.respond_question(task_id, call_id, kind, answers, detail)
+
+        return QuestionCard(detail, respond, who=who, chat=chat)
 
     async def show_requests(self, found: list[Pending]) -> None:
         """Sub-agents' approvals and questions, shown with the sub-agent's
@@ -267,7 +284,9 @@ class TranscriptView(App[None]):
             else:
                 self.waiting_for = f"{who} waits for your answer"
                 self._set_question(p.request_id, p.task_id, p.detail)
-                await transcript.mount(QuestionCard(p.detail, who=who))
+                await transcript.mount(self._question_card(
+                    p.request_id, p.task_id, p.detail, who=who,
+                    chat=p.tool == render.QUESTION_TOOL))
         transcript.stick()
         self.update_status()
 
@@ -1016,9 +1035,12 @@ class TranscriptView(App[None]):
         elif ev.on == "question":
             questions = [k for k, v in ev.detail.items()
                          if isinstance(v, dict) and v.get("on") == "question"]
-            for call_id in questions[:1]:  # one at a time: the next line answers it
+            for call_id in questions[:1]:  # one at a time
                 self._set_question(call_id, self.task_id, ev.detail[call_id])
-                await self._add(QuestionCard(ev.detail[call_id]))
+                shown = self.calls.get(call_id)
+                await self._add(self._question_card(
+                    call_id, self.task_id, ev.detail[call_id],
+                    chat=shown is not None and shown.call.name == render.QUESTION_TOOL))
         elif ev.on == "input":
             self._set_question("", "", {})
             await self._turn_done()

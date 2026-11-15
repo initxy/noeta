@@ -34,8 +34,8 @@ Taken by the terminal UI, `-p`, `acp`, `serve`, `web` and `worker`.
 
 | Flag | Meaning |
 |---|---|
-| `--model MODEL` | the model id or an alias (`opus`, `sonnet`, `haiku`, `fable`); else `NOETA_MODEL`, `config.toml`, a settings file's `model` |
-| `--effort {low,medium,high,xhigh,max}` | how hard the model thinks; else `NOETA_EFFORT`, `config.toml` `effort` |
+| `--model MODEL` | the model id or an alias (`opus`, `sonnet`, `haiku`, `fable`); else `NOETA_MODEL`, a settings file's `model` (`/model` saves one), `config.toml` |
+| `--effort {low,medium,high,xhigh,max}` | how hard the model thinks; else `NOETA_EFFORT`, the effort saved for the model, `config.toml` `effort` ([effort](../guides/models.md#effort-and-thinking)) |
 | `--permission-mode MODE` | the starting permission mode: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`, or `manual` (an alias of `default`). Default: `bypassPermissions` (`auto` where bypass mode is switched off), or the settings files' `permissions.defaultMode` |
 | `--provider {anthropic,openai_compat,openai_responses}` | the default provider's family; else `NOETA_PROVIDER`, `config.toml` `provider` (which may also name a `[providers.<name>]` table) |
 | `--base-url URL` | the default provider's base URL; else `NOETA_BASE_URL` |
@@ -331,8 +331,8 @@ The terminal UI's own commands (`tui/src/noeta_tui/slash.py`):
 |---|---|
 | `/help` | show help and the commands |
 | `/status` | the version, model, task, directory and settings |
-| `/model [MODEL]` | pick or set the model, from the next request on; alone, lists every provider's models |
-| `/effort [LEVEL]` | pick or set the effort (`low` … `max`) |
+| `/model [MODEL]` | pick or set the model, from the next request on, saved for new sessions; alone, lists every provider's models |
+| `/effort [LEVEL]` | pick or set the effort (`low` … `max`, `auto`), saved for the model except `max` |
 | `/context` | what fills the next request, as a grid |
 | `/cost` | tokens and cost of this task and its sub-agents |
 | `/memory` | list the instruction and memory files; open one in `$EDITOR` |

@@ -181,7 +181,10 @@ task)` (`noeta/host/pending.py`) lists every open request in a task and its sub-
   `id`, `question`, optional `options` and `multiSelect`. Answer with
   `noeta.host.questions.answer_question(client, task_id, request_id, data)`, where `data` maps
   each question id to `{"selected": [labels]}` or `{"other": "text"}` (a plain string answers
-  a single question). It checks the answer before posting it.
+  a single question). It checks the answer before posting it. To decline instead,
+  `client.answer(task_id, request_id, "deny")` withdraws the question; with
+  `data={"message": text}` the model reads `text` and goes on (the terminal's "Chat about
+  this" sends `noeta.host.questions.clarify_message(detail, answers)`).
 
 Answers are idempotent per request id: a second answer to the same request is ignored.
 

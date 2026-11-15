@@ -1,5 +1,6 @@
 """AskUserQuestion: schema and limits, park and answer, the prose result,
-withdrawal on stop, and how stale or invalid answers are handled."""
+withdrawal on stop, declining with words, and how stale or invalid answers
+are handled."""
 
 from __future__ import annotations
 
@@ -13,8 +14,9 @@ from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.client import Client
 from noeta.core.events import ToolFinished
 from noeta.host.pending import pending
-from noeta.host.questions import answer_question
+from noeta.host.questions import answer_question, answer_text, clarify_message, typed_one
 from noeta.plugins.ask_user import (
+    DECLINED_WITH_MESSAGE,
     INPUT_SCHEMA,
     SINGLE_OPTION_ERROR,
     AnswerValidationError,
@@ -266,3 +268,37 @@ async def test_a_question_asked_before_the_task_stopped_asking_still_takes_its_a
     [result] = finished(await events(client, tid))
     assert not result.is_error and '"Which auth?"="API key"' in result.text
     assert "AskUserQuestion" not in [t.name for t in provider.requests[-1].tools]
+
+
+async def test_declining_with_words_lets_the_model_go_on(store: SqliteStore) -> None:
+    """The terminal's "Chat about this": a ``deny`` that says something. The
+    model reads it in the call's result and its turn goes on (an Esc stops
+    the turn instead: :func:`test_stopping_withdraws_the_question`)."""
+    two = {"questions": [q(), q(question="Layout?", header="UI")]}
+    provider = ScriptedProvider([reply("", ("AskUserQuestion", two)),
+                                 reply("What would you like to clarify?")])
+    client, tid, rt = await start(store, provider)
+    [item] = pending(await client.events(tid), tid)
+    said = clarify_message(item.detail, {"1": {"selected": ["API key"], "other": None}})
+    await client.answer(tid, item.request_id, "deny", data={"message": said})
+    await rt.run_until_idle()
+    [result] = finished(await events(client, tid))
+    assert result.is_error
+    assert result.text == DECLINED_WITH_MESSAGE.format(message=said)
+    assert result.text.startswith("The user did not answer these questions. To tell you how "
+                                  "to go on, they said:\nThe user wants to talk these "
+                                  "questions over before answering")
+    assert result.text.endswith('Questions asked:\n- "Which auth?"\n  (No answer provided)\n'
+                                '- "Layout?"\n  Answer: API key')
+    assert len(provider.requests) == 2  # the model was asked again
+
+
+def test_answer_text_and_one_typed_line() -> None:
+    assert answer_text({"selected": ["A", "B"], "other": " mine "}) == "A, B, mine"
+    assert answer_text({"selected": [], "other": None}) == ""
+    assert answer_text(None) == ""
+    asked = q(multiSelect=True)
+    assert typed_one(asked, "api key") == {"selected": ["API key"]}
+    assert typed_one(asked, "API key, oauth (recommended)") == \
+        {"selected": ["API key", "OAuth (Recommended)"]}
+    assert typed_one(asked, "something else") == {"other": "something else"}

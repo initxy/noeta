@@ -411,7 +411,7 @@ async def run(app: Any, s: Settings, args: argparse.Namespace, *, cwd: str,
             and args.permission_prompts == "host",
             resume=resume, fork=bool(args.fork), task_id=args.new_task_id,
             hook_callbacks=hook_callbacks,
-            config={**({"effort": s.effort} if s.effort else {}),
+            config={**({"effort": effort} if (effort := s.effort_for(s.model)) else {}),
                     **({"timezone": zone} if (zone := local_timezone()) else {})})
 
         async def emit(message: dict[str, Any]) -> None:

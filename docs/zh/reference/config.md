@@ -156,7 +156,9 @@ JSON 设置文件（`~/.noeta/settings.json`、`.noeta/settings.json`、`.noeta/
 | 键 | 谁读 | 含义 |
 |---|---|---|
 | `env` | `noeta` 命令 | 在读其他任何东西之前设进 noeta 进程的环境变量 |
-| `model` | `noeta` 命令 | 参数、环境变量、`config.toml` 都没指定时用的模型 |
+| `model` | `noeta` 命令 | 用哪个模型，比 `config.toml` 的优先、比参数和环境变量的靠后；`/model` 存在这里 |
+| `effortLevel` | `noeta` 命令 | 没在 `modelSettings` 单独记过的模型用的强度（`low`、`medium`、`high` 或 `xhigh`） |
+| `modelSettings.<模型>.effortLevel` | `noeta` 命令 | 某一个模型的强度；`/effort` 存在这里（见[推理强度和思考](../guides/models.md#推理强度和思考)） |
 | `agent` | 前端 | 新任务默认用的代理 |
 | `outputStyle` | — | 会读，但不生效（noeta 不支持输出风格） |
 | `language` | `environment` | 模型回答用的语言 |

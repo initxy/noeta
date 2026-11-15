@@ -20,9 +20,10 @@ file (`noeta/cli/config.py`).
 | Effort | `NOETA_EFFORT` | `--effort` | `effort` |
 | Models file | `NOETA_MODELS_FILE` | — | `models_file` |
 
-The model may also come from a settings file's `model` key (`~/.noeta/settings.json`, a
-trusted project's `.noeta/settings.json`), Claude Code's place for it, when nothing above sets
-one. Without any, `noeta` stops with `no model configured`.
+A settings file's `model` key (`~/.noeta/settings.json`, a trusted project's
+`.noeta/settings.json`), Claude Code's place for it and where `/model` saves, outranks
+`config.toml`'s; the variable and the flag outrank it. Without any, `noeta` stops with
+`no model configured`.
 
 ### Anthropic
 
@@ -152,7 +153,10 @@ provider, and tool-call ids another provider wrote are rewritten to the form Ant
 
 - **In the terminal UI:** `/model` lists the aliases and every provider's models, with the
   provider each comes from; `/model deepseek-flash` switches directly. The switch takes effect from
-  the next request and is recorded in the log, so a resumed task keeps it.
+  the next request and is recorded in the log, so a resumed task keeps it. As in Claude Code, the
+  model picked is also saved as the one new sessions start on (`model` in
+  `~/.noeta/settings.json`, which outranks `config.toml`'s), and the effort becomes the one saved
+  for that model; a terminal UI attached to a server keeps both for the session only.
 - **In the web app and editors:** the model picker; over ACP, `/model [name]` too.
 - **Headless:** `--model`, or the SDK's `set_model` control request.
 - **Per sub-agent:** an agent file's `model:` (`inherit`, an alias or an id), or the `model`
@@ -169,8 +173,18 @@ will use), so you can add a models-file row.
 Effort is how hard the model reasons: `low`, `medium`, `high`, `xhigh`, `max`. Set it with
 `--effort`, `NOETA_EFFORT`, `effort` in `config.toml`, `/effort` in the terminal UI, an agent
 file's or a skill's `effort:`, or the `effort` parameter of an `Agent` call. With none set, a
-request uses the catalog row's default for the model (Claude Code's), else `high`
-(`noeta/core/models.py` `default_effort`).
+catalogued reasoning model gets its catalog row's default (Claude Code's), else `high`
+(`noeta/core/models.py` `default_effort`); a model outside the catalog (a `config.toml` row
+without `efforts`) gets none, so its provider's default applies.
+
+`/effort` saves the level for the model in use, as Claude Code does: `low` to `xhigh` go to
+`modelSettings.<model>.effortLevel` in `~/.noeta/settings.json`, which the terminal UI and `-p`
+start that model's sessions with; `max` lasts the session; `/effort auto` forgets the saved level
+and goes back to the default. A settings file's top-level `effortLevel` is the effort of every
+model without its own entry. `--effort` and `NOETA_EFFORT` outrank the settings files, and they
+outrank `config.toml`'s `effort`. `serve`, `worker` and `acp` start every task, whatever its model,
+with the effort that names no model: `--effort`, `NOETA_EFFORT`, `effortLevel`, else
+`config.toml`'s.
 
 What each provider makes of it:
 

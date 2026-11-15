@@ -53,9 +53,19 @@ Screen { layout: vertical; background: transparent; }
 .choices { height: auto; margin: 1 0 0 0; }
 .hint { text-style: dim; margin: 1 0 0 0; }
 
-.question { border-top: solid $accent; padding: 0 1; margin: 1 0; height: auto; }
-.question.-answered { border-top: solid ansi_bright_black; }
-.question-option { padding: 0 1; }
+/* The agent's questions, as Claude Code's dialog: a grey rule above, the
+   tabs and the question, the options (left of a preview when they have
+   one), the "Type something." box, then "Chat about this" and the keys. */
+.question { border-top: solid ansi_bright_black; padding: 0 1; margin: 1 0; height: auto; }
+.question-head { height: auto; }
+.question-body { height: auto; margin: 1 0 0 0; }
+.question-options { width: 1fr; height: auto; }
+.question.-previews .question-options { width: 32; }
+.question-preview { width: 1fr; height: auto; border: round ansi_bright_black; padding: 0 1; }
+.question-other { height: 1; }
+.question-other-mark { width: auto; height: 1; }
+.question-other-line, .question-other-line:focus { border: none; height: 1; padding: 0; width: 1fr; background: transparent; }
+.question-foot { height: auto; }
 
 #overlay { height: auto; }
 .picker { border-top: solid $secondary; padding: 0 1; height: auto; }

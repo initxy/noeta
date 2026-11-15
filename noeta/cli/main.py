@@ -38,9 +38,11 @@ from noeta.cli import (
     mcp_command,
     plugin_command,
     service_command,
+    stderr_log,
     update_command,
 )
 from noeta.cli.config import ConfigError, Settings, load_settings
+from noeta.cli.settings_files import save_effort, save_model
 from noeta.toolkit.permission_modes import MODE_ALIASES, PERMISSION_MODES
 
 SUBCOMMANDS = ("acp", "worker", "serve", "service", "update", "trust", "plugins", "plugin", "mcp")
@@ -460,6 +462,7 @@ def _install_hint(module: str) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     words = list(sys.argv[1:] if argv is None else argv)
+    stderr_log.install()
     try:
         _main(words)
     except (ConfigError, AgentFileError, PluginArgumentError) as exc:
@@ -571,6 +574,7 @@ def _front(argv: list[str]) -> None:
     # The terminal UI's screen covers stderr: what is logged from here on
     # is shown in it instead.
     warnings = LoggedWarnings()
+    stderr_log.uninstall()
     logging.getLogger().addHandler(warnings)
     common: dict[str, Any] = {"cwd": cwd, "resume": args.resume, "warnings": warnings,
                               "continue_last": args.continue_last,
@@ -604,13 +608,28 @@ def _front(argv: list[str]) -> None:
         backend, s, _ = _local_app(args, cwd)
         backend.notices += [f"{flag} is used only with -p; ignored here" for flag in unused]
         warnings.forget(backend.notices)  # shown as the app's notices
+        effort = s.effort_for(s.model)
         start = FrontEndStart(agent=args.agent or backend.main_agent, model=s.model,
                               task_config={"cwd": cwd, "model": s.model,
-                                           **({"effort": s.effort} if s.effort else {})},
+                                           **({"effort": effort} if effort else {})},
                               settings=lambda: settings_rows(s, cwd),
+                              save_model=lambda model: save_model(home_dir.HOME / "settings.json",
+                                                                  model),
+                              save_effort=lambda model, level: _save_effort(s, model, level),
+                              effort_for=s.effort_for,
                               trust=None if project_trusted(cwd) else
                               lambda: trust_here(backend, cwd), **common)
     run(backend, start)
+
+
+def _save_effort(s: Settings, model: str, level: str | None) -> None:
+    """Save ``level`` as ``model``'s effort and start this session's new
+    tasks on ``model`` with it."""
+    save_effort(home_dir.HOME / "settings.json", model, level)
+    if level is None:
+        s.model_efforts.pop(model, None)
+    else:
+        s.model_efforts[model] = level
 
 
 def trust_here(app: Any, cwd: str) -> None:

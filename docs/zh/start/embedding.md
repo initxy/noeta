@@ -167,7 +167,10 @@ await app.client.send(task, "用一句话总结。")
 - **提问**（`AskUserQuestion`）：问题在 `detail["questions"]` 里，每个有 `id`、`question`，可能
   有 `options` 和 `multiSelect`。用 `noeta.host.questions.answer_question(client, task_id,
   request_id, data)` 回答，`data` 把每个问题 id 映射到 `{"selected": [选项]}` 或
-  `{"other": "文字"}`（只有一个问题时直接给字符串也行）。它会先校验，再提交。
+  `{"other": "文字"}`（只有一个问题时直接给字符串也行）。它会先校验，再提交。不想回答时，
+  `client.answer(task_id, request_id, "deny")` 会撤回这个问题；带上 `data={"message": 文字}`
+  的话，模型会读到这段话并接着往下做（终端里的"Chat about this"发的就是
+  `noeta.host.questions.clarify_message(detail, answers)`）。
 
 同一个请求 id 的回答是幂等的：对同一请求的第二次回答会被忽略。
 

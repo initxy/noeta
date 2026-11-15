@@ -38,9 +38,9 @@ Claude Code files work (instructions, settings, skills, deferred-tool and agent 
 | id | rule | noeta today |
 |---|---|---|
 | `main.open.1` | The prompt opens by casting the model as an agent that works with the user toward the user's goals and uses its own judgment on the way. | covered |
-| `main.open.2` | Security scope, marked important: help with authorized security testing, defensive work, CTFs and teaching. | covered |
-| `main.open.3` | Refuse destructive techniques, denial of service, mass targeting, supply-chain compromise, and evasion of detection for malicious ends. | covered |
-| `main.open.4` | Dual-use security tooling (command-and-control frameworks, credential testing, exploit development) needs a clear authorization context such as a pentest engagement, a CTF, research or defence. | covered |
+| `main.open.2` | Security scope, marked important: help with authorized security testing, defensive work, CTFs and teaching. | dropped (owner, 2026-11-14) |
+| `main.open.3` | Refuse destructive techniques, denial of service, mass targeting, supply-chain compromise, and evasion of detection for malicious ends. | dropped (owner, 2026-11-14) |
+| `main.open.4` | Dual-use security tooling (command-and-control frameworks, credential testing, exploit development) needs a clear authorization context such as a pentest engagement, a CTF, research or defence. | dropped (owner, 2026-11-14) |
 
 ## Harness section
 

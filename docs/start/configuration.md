@@ -26,9 +26,11 @@ of these that sets a value wins (`load_settings` in `noeta/cli/config.py`):
 1. a flag: `--model`, `--provider`, `--base-url`, `--store`, `--effort`;
 2. an environment variable: `NOETA_MODEL`, `NOETA_PROVIDER`, `NOETA_BASE_URL`, `NOETA_API_KEY`,
    `NOETA_STORE`, `NOETA_EFFORT`, `NOETA_MODELS_FILE`;
-3. a key in `~/.noeta/config.toml`: `model`, `provider`, `base_url`, `api_key`, `store`,
-   `effort`, `models_file`;
-4. for the model only: a settings file's `model`, when none of the above names one.
+3. for the model and the effort only: the settings files' `model`, and their
+   `modelSettings.<model>.effortLevel` or `effortLevel`, where the terminal UI's `/model` and
+   `/effort` save ([effort and thinking](../guides/models.md#effort-and-thinking));
+4. a key in `~/.noeta/config.toml`: `model`, `provider`, `base_url`, `api_key`, `store`,
+   `effort`, `models_file`.
 
 With no API key set, the `anthropic` provider also reads `ANTHROPIC_API_KEY` and
 `openai_compat` reads `OPENAI_API_KEY`; `openai_responses` reads no variable of its own. A

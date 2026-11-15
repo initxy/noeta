@@ -19,6 +19,7 @@ from rich.measure import Measurement
 from rich.text import Text
 
 from noeta.core.types import ToolUse
+from noeta.host.questions import answer_text
 
 #: Claude Code's names for the tools whose user-facing name differs.
 DISPLAY_NAMES = {"Edit": "Update", "MultiEdit": "Update", "NotebookEdit": "Update",
@@ -184,6 +185,32 @@ def result_rows(call: ToolUse, text: str, meta: Mapping[str, Any], *,
     return [(line, "") for line in lines]
 
 
+def question_summary(call: ToolUse, meta: Mapping[str, Any], *, is_error: bool
+                     ) -> tuple[str, list[tuple[str, str]]] | None:
+    """How a question call ended, as Claude Code's line says it: ``User
+    answered noeta's questions:`` with ``· question → answer`` for each
+    answered one, or ``User declined to answer questions`` with each
+    question and its options. ``None`` for any other ending (a refused
+    call, an answer that did not fit): its result shows as it is."""
+    raw = call.input.get("questions") if isinstance(call.input, Mapping) else None
+    questions = [q for q in raw if isinstance(q, dict)] if isinstance(raw, list) else []
+    answers = meta.get("answers")
+    if not is_error and isinstance(answers, dict):
+        rows = [(f"· {q.get('question', '')} → {answer_text(answers.get(str(n)))}", "dim")
+                for n, q in enumerate(questions) if answer_text(answers.get(str(n)))]
+        return ("User answered noeta's questions:", rows) if rows \
+            else ("User answered none of noeta's questions", [])
+    if meta.get("withdrawn") or meta.get("declined"):
+        rows = []
+        for q in questions:
+            labels = " / ".join(str(o.get("label", "")) for o in q.get("options") or []
+                                if isinstance(o, dict))
+            rows.append((f"· {q.get('question', '')}" + (f" ({labels})" if labels else ""),
+                         "dim"))
+        return "User declined to answer questions", rows
+    return None
+
+
 #: Diff lines an approval dialog shows of the edit it asks about.
 PREVIEW_LINES = 30
 
@@ -237,6 +264,9 @@ def folded(rows: list[tuple[str, str]], *, diff: bool, expanded: bool,
 #: a shell command by what it runs (:func:`shell_kind`).
 CALL_KINDS = {"Grep": "search", "Glob": "search", "Read": "read", "LS": "list",
               "WebFetch": "fetch", "WebSearch": "web", "Bash": "shell", "PowerShell": "shell"}
+#: The tool the model asks the person questions with (its call's line says
+#: how they answered: :func:`question_summary`).
+QUESTION_TOOL = "AskUserQuestion"
 #: The tools shown on their own, never in a run: an edit keeps its diff, an
 #: agent or a workflow its progress; the task list, a question, a plan, a skill.
 OWN_LINE = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit", "Agent", "Task", "Workflow",

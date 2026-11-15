@@ -24,9 +24,10 @@ noeta 有两套配置，管的是不同的事：
 1. 命令行参数：`--model`、`--provider`、`--base-url`、`--store`、`--effort`；
 2. 环境变量：`NOETA_MODEL`、`NOETA_PROVIDER`、`NOETA_BASE_URL`、`NOETA_API_KEY`、`NOETA_STORE`、
    `NOETA_EFFORT`、`NOETA_MODELS_FILE`；
-3. `~/.noeta/config.toml` 里的键：`model`、`provider`、`base_url`、`api_key`、`store`、`effort`、
-   `models_file`；
-4. 只对模型：上面都没指定时，用设置文件里的 `model`。
+3. 只对模型和 effort：设置文件里的 `model`，以及 `modelSettings.<模型>.effortLevel` 或
+   `effortLevel`，终端界面的 `/model`、`/effort` 就存在这里（见[推理强度和思考](../guides/models.md#推理强度和思考)）；
+4. `~/.noeta/config.toml` 里的键：`model`、`provider`、`base_url`、`api_key`、`store`、`effort`、
+   `models_file`。
 
 没配 API key 时，`anthropic` 会去读 `ANTHROPIC_API_KEY`，`openai_compat` 会去读 `OPENAI_API_KEY`；
 `openai_responses` 不读任何变量。

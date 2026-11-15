@@ -1,7 +1,7 @@
 """Settings for the ``noeta`` command and other ready-made front ends: which
 model, which provider, where tasks are stored, and how the plugins are set.
-Read from the environment, then ``~/.noeta/config.toml``; explicit arguments
-win. The plugin part of ``config.toml``::
+Read from ``~/.noeta/config.toml``, then the settings files (``model``,
+the effort), then the environment; explicit arguments win. The plugin part of ``config.toml``::
 
     [plugins.shell]            # arguments of a plugin, by its name
     background = true
@@ -153,7 +153,13 @@ class Settings:
     #: ``sqlite:///path`` or ``postgres://...``.
     store: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
+    #: The effort new tasks start with, on any model.
     effort: str | None = None
+    #: The settings files' effort of each model (``/effort`` saves one).
+    model_efforts: dict[str, str] = field(default_factory=dict)
+    #: ``effort`` is ``--effort``'s or ``NOETA_EFFORT``'s: it outranks
+    #: ``model_efforts``.
+    effort_given: bool = False
     #: A JSON file of extra models: ``{"models": [{"id", "context_window",
     #: "max_output_tokens", "supports_vision"?, "family"?, "provider"?}]}``.
     models_file: str | None = None
@@ -178,6 +184,14 @@ class Settings:
     add_plugins: dict[str, tuple[PluginEntry, ...]] = field(default_factory=dict)
     #: Per channel name: its arguments (``enabled = false`` turns it off).
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def effort_for(self, model: str) -> str | None:
+        """The effort a new task on ``model`` starts with (``None``: the
+        model's default)."""
+        if self.effort_given:
+            return self.effort
+        return self.model_efforts.get(models.resolve_alias(model)) \
+            or self.model_efforts.get(model) or self.effort
 
     def make_provider(self) -> Provider:
         """The default provider. Raises :class:`MissingAPIKey` when no key
@@ -289,8 +303,8 @@ def file_settings(cwd: str | None, *, sources: Collection[str] | None = None,
 def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = None,
                   flag: Path | None = None, **overrides: Any) -> Settings:
     """``cwd``: where the front end runs; its settings files set
-    environment variables (applied here, before the rest is read) and the
-    model when nothing else does. ``sources`` / ``flag``: as
+    environment variables (applied here, before the rest is read), and the
+    model and the effort over config.toml's. ``sources`` / ``flag``: as
     :func:`file_settings`."""
     found = file_settings(cwd, sources=sources, flag=flag)
     apply_env(found)
@@ -312,10 +326,16 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
         "effort": os.environ.get("NOETA_EFFORT"),
         "models_file": os.environ.get("NOETA_MODELS_FILE"),
     }
+    # What the settings files say (``/model`` and ``/effort`` save there)
+    # outranks config.toml; the environment and the arguments outrank both.
+    if found.model:
+        data["model"] = found.model
+    if found.effort:
+        data["effort"] = found.effort
+    data["model_efforts"] = dict(found.model_efforts)
     data.update({k: v for k, v in env.items() if v})
     data.update({k: v for k, v in overrides.items() if v is not None})
-    if not data.get("model") and found.model:
-        data["model"] = found.model
+    data["effort_given"] = bool(env["effort"] or overrides.get("effort"))
     data["plugins"] = _plugin_tables(data.get("plugins", {}))
     data["channels"] = _plugin_tables(data.get("channels", {}), "channels")
     data["add_plugins"] = _agent_tables(data.pop("agents", {}))
@@ -358,8 +378,8 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
 #: ``[agents.<name>]`` (read into ``add_plugins``). An unknown one warns
 #: rather than fails, so a key a newer or older noeta reads does not stop
 #: this one from starting.
-_TOP_LEVEL_KEYS = frozenset(Settings.__dataclass_fields__) - {"add_plugins",
-                                                              "model_providers"} | {"agents"}
+_TOP_LEVEL_KEYS = frozenset(Settings.__dataclass_fields__) - {
+    "add_plugins", "model_providers", "model_efforts", "effort_given"} | {"agents"}
 
 
 def _provider_tables(value: Any) -> dict[str, dict[str, Any]]:
@@ -970,7 +990,8 @@ def settings_rows(settings: Settings, cwd: str) -> list[tuple[str, str]]:
     with: provider, store, the settings files and their permission rules."""
     found = file_settings(cwd)
     rows = [("provider", settings.provider), ("base URL", settings.base_url or "(default)"),
-            ("store", settings.store_url), ("effort", settings.effort or "(default)"),
+            ("store", settings.store_url),
+            ("effort", settings.effort_for(settings.model) or "(default)"),
             ("settings files", ", ".join(str(f) for f in found.files) or "(none)")]
     for key in ("allow", "deny", "ask"):
         if found.permissions.get(key):
