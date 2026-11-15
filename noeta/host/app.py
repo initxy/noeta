@@ -161,6 +161,16 @@ class FrontEndStart:
     #: The warnings logged since the start, for the front end to show: its
     #: screen covers stderr, where they would otherwise go.
     warnings: LoggedWarnings | None = None
+    #: Saves a model picked as the one new sessions start on, as Claude
+    #: Code's ``/model`` does; ``None``: a pick lasts the session (a server's
+    #: front end).
+    save_model: Callable[[str], None] | None = None
+    #: Saves the effort picked for a model (``None``: forgets it), as Claude
+    #: Code's ``/effort`` does.
+    save_effort: Callable[[str, str | None], None] | None = None
+    #: The effort a new task on a model starts with (``None``: the model's
+    #: default), for a front end that switches models.
+    effort_for: Callable[[str], str | None] | None = None
 
 
 class LoggedWarnings(logging.Handler):

@@ -17,7 +17,10 @@ hosts that post themselves — the 0.6 behavior of rejecting before anything is 
 an invalid answer that is posted anyway ends the question with an error
 result naming what was wrong, so the model can ask again. A stale answer
 (for a call that is not waiting) is never read. ``decision="deny"`` with no
-data dismisses the question like a stop does.
+data dismisses the question like a stop does; with ``{"message": text}`` the
+person declined to answer and said ``text`` instead (the terminal's "Chat
+about this" sends ``noeta.host.questions.clarify_message``): the model reads
+it in the call's result and goes on.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ASK_USER_QUESTION_TOOL",
+    "DECLINED_WITH_MESSAGE",
     "SINGLE_OPTION_ERROR",
     "WITHDRAWN_ERROR",
     "AnswerValidationError",
@@ -73,6 +77,10 @@ def _text_problem(field: str, value: str) -> str | None:
     return None
 
 WITHDRAWN_ERROR = "Question withdrawn by user (no answer provided)."
+#: The person declined to answer and said something instead (Claude Code's
+#: refusal with feedback, in our words); what they said follows.
+DECLINED_WITH_MESSAGE = ("The user did not answer these questions. To tell you how to go on, "
+                         "they said:\n{message}")
 #: A question with one option (or none) has nothing to decide; the model is
 #: steered to go ahead with that path instead of padding the list.
 SINGLE_OPTION_ERROR = (
@@ -338,6 +346,16 @@ def render_answers(questions: list[dict[str, Any]], answers: dict[str, dict[str,
             "it actually says.")
 
 
+def declined_message(outcome: Any) -> str | None:
+    """What the person said when declining to answer (an ``Answer`` of
+    ``deny`` with ``{"message": text}``), else ``None``."""
+    if not isinstance(outcome, Answer) or outcome.decision != "deny" \
+            or not isinstance(outcome.data, dict):
+        return None
+    message = outcome.data.get("message")
+    return message.strip() if isinstance(message, str) and message.strip() else None
+
+
 class AskUserQuestionTool:
     name = ASK_USER_QUESTION_TOOL
     description = DESCRIPTION
@@ -362,6 +380,10 @@ class AskUserQuestionTool:
         if outcome is None or (isinstance(outcome, Answer) and outcome.decision == "deny"
                                and outcome.data is None):
             return text_output(WITHDRAWN_ERROR, is_error=True, question_id=qid, withdrawn=True)
+        said = declined_message(outcome)
+        if said is not None:
+            return text_output(DECLINED_WITH_MESSAGE.format(message=said), is_error=True,
+                               question_id=qid, declined=True)
         data = outcome.data if isinstance(outcome, Answer) else outcome
         try:
             answers = validate_answer(input, data)

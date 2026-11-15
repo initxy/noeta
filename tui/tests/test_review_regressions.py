@@ -1,6 +1,6 @@
 """Regressions from the front-end reviews, in the terminal UI: questions
-(the real AskUserQuestion's, a plugin's, a sub-agent's) answered by typing,
-a stop withdraws the pending question, a retry drops the failed attempt's
+(the real AskUserQuestion's, a plugin's, a sub-agent's) answered in their
+dialog or by a typed line, a stop withdraws the pending question, a retry drops the failed attempt's
 output, sub-agents' approvals reach the TUI, the footer's cost counts the
 whole tree, a task whose agent is missing opens read-only, and plugins'
 commands run through the app."""
@@ -175,11 +175,13 @@ async def test_tui_question_card_and_stop_clear_the_pending_question(tmp_path: P
         inbox = await app.local.store.inbox(app.task_id)
         assert not any(isinstance(i.body, Answer) for i in inbox)
         assert isinstance(inbox[-1].body, Say)
-        # Re-opening replays the log; the withdrawn question stays withdrawn.
+        # Re-opening replays the log; the withdrawn question stays withdrawn
+        # (its dialog is not shown again).
         await app.open_task(app.task_id)
-        await settle(pilot, lambda: len(app.query(QuestionCard)) == 1 and any(
+        await settle(pilot, lambda: any(
             m.source == "fresh start" for m in app.query(AssistantMessage)))  # all replayed
         assert app.waiting_question == ""
+        assert not app.query(QuestionCard)
 
 
 async def test_tui_drops_a_failed_attempts_output(tmp_path: Path) -> None:
@@ -298,6 +300,7 @@ async def results(app: LocalApp, task_id: str) -> list[ToolFinished]:
 
 
 async def test_tui_answers_the_real_ask_user_with_a_label(tmp_path: Path) -> None:
+    """A label typed in the prompt (not the dialog) picks that option."""
     provider = ScriptedProvider([reply("", ("AskUserQuestion", DB_QUESTION)),
                                  reply("using sqlite")])
     agent = Agent(name="main", model=MODEL, extensions=(AskUser(),))
@@ -305,6 +308,7 @@ async def test_tui_answers_the_real_ask_user_with_a_label(tmp_path: Path) -> Non
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press(*"set it up", "enter")
         await settle(pilot, lambda: bool(app.waiting_question))
+        app.query_one("#prompt").focus()
         await pilot.press(*"sqlite", "enter")
         await settle(pilot, lambda: provider.steps == [] and not app.busy)
         [done] = await results(app.local, app.task_id)
@@ -365,8 +369,12 @@ async def test_tui_shows_and_answers_a_sub_agents_question(tmp_path: Path) -> No
         await settle(pilot, lambda: len(app.query(QuestionCard)) == 1)
         [card] = list(app.query(QuestionCard))
         assert card.who == "worker"
-        await pilot.press(*"postgres", "enter")
+        await settle(pilot, lambda: "Chat about this" in shown(app))
+        await pilot.press("2")
         await settle(pilot, lambda: provider.steps == [] and not app.busy)
+        # The card stays as what was answered: the sub-agent's call is not here.
+        assert "[worker] asked" in shown(app)
+        assert "· Which database? → Postgres" in shown(app)
         [child] = await app.local.client.tasks(parent_id=app.task_id)
         [answer] = [i.body for i in await app.local.store.inbox(child.task_id)
                     if isinstance(i.body, Answer)]
@@ -407,8 +415,11 @@ async def test_the_tui_asks_for_a_plugin(tmp_path: Path) -> None:
         await pilot.press(*"ship it", "enter")
         await settle(pilot, lambda: bool(app.waiting_question))
         assert "deploy: asking where to" in shown(app)
-        await pilot.press(*"2", "enter")  # an option by its number
-        await pilot.press(*"first release", "enter")
+        assert "Chat about this" not in shown(app)  # a plugin's question takes answers only
+        await pilot.press("2")  # an option by its number
+        await pilot.press(*"first release", "enter")  # the second has no options: its box
+        await settle(pilot, lambda: "Review your answers" in shown(app))
+        await pilot.press("enter")  # Submit answers
         await settle(pilot, lambda: provider.steps == [])
         await settle(pilot, lambda: not app.busy)
         [done] = await results(app.local, app.task_id)

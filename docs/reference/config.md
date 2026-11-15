@@ -168,7 +168,9 @@ the files):
 | Key | Read by | Meaning |
 |---|---|---|
 | `env` | the `noeta` command | environment variables set in noeta's process before anything else is read |
-| `model` | the `noeta` command | the model, when no flag, variable or `config.toml` names one |
+| `model` | the `noeta` command | the model, over `config.toml`'s and under a flag's or a variable's; `/model` saves it |
+| `effortLevel` | the `noeta` command | the effort (`low`, `medium`, `high` or `xhigh`) of every model without its own `modelSettings` entry |
+| `modelSettings.<model>.effortLevel` | the `noeta` command | the effort of one model; `/effort` saves it ([effort and thinking](../guides/models.md#effort-and-thinking)) |
 | `agent` | front ends | the agent new tasks start with |
 | `outputStyle` | — | read; output styles are not applied |
 | `language` | `environment` | the language the model answers in |

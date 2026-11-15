@@ -139,9 +139,10 @@ def test_an_unknown_model_is_announced_once(home: Path, tmp_path: Path,
     with pytest.raises(SystemExit) as done:
         cli.main(["-p", "go", "--model", "gateway-model-x1", "--cwd", str(tmp_path)])
     assert done.value.code == 0
-    said = [*capsys.readouterr().err.splitlines(), *(r.getMessage() for r in caplog.records)]
+    said = capsys.readouterr().err.splitlines()
     limits = [line for line in said if "gateway-model-x1" in line and "context window" in line]
     assert len(limits) == 1  # once, not from the loader, the front end and the catalog each
+    assert limits[0].startswith("noeta: warning: unknown model 'gateway-model-x1'")
     # ... and its price is in that one notice, not announced again.
     assert [line for line in said if "gateway-model-x1" in line] == limits
 
@@ -159,9 +160,9 @@ def test_an_unknown_model_from_the_settings_file_is_announced_once(
     with pytest.raises(SystemExit) as done:
         cli.main(["-p", "go", "--cwd", str(tmp_path)])
     assert done.value.code == 0
-    said = [*capsys.readouterr().err.splitlines(), *(r.getMessage() for r in caplog.records)]
+    said = capsys.readouterr().err.splitlines()
     named = [line for line in said if "gateway-model-y2" in line]
-    assert len(named) == 1 and "doesn't recognize" in named[0], named
+    assert len(named) == 1 and "unknown model" in named[0], named
 
 
 def test_stream_json_input_reads_a_regular_file_on_stdin(tmp_path: Path) -> None:

@@ -28,6 +28,7 @@ from evals import engine
 from evals import live_env as _live_env
 from evals.core import EvalConfig, time_trial
 from evals.scenarios import SCENARIOS
+from noeta.cli import stderr_log
 
 _HERE = Path(__file__).resolve().parent
 BASELINE = _HERE / "baseline.json"
@@ -163,6 +164,7 @@ def _table(summary: dict[str, dict[str, Any]], overall: float, verdict: dict[str
 
 
 def main(argv: list[str] | None = None) -> int:
+    stderr_log.install()  # noeta's warnings read as the noeta command shows them
     args = _parse(argv)
     model = args.model or _live_env.live_model()
     if not (_live_env.have_live_env() and model):

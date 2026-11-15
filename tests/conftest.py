@@ -120,6 +120,16 @@ def no_shared_agents_skills(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.fixture(autouse=True)
+def no_stderr_lines_left() -> Iterator[None]:
+    """The ``noeta`` command puts logged warnings on stderr (a handler on the
+    root logger); a test that ran it leaves none behind for the next."""
+    yield
+    from noeta.cli import stderr_log
+
+    stderr_log.uninstall()
+
+
+@pytest.fixture(autouse=True)
 def no_model_listings(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test reads a provider's model listing over the network (a front
     end built from settings would, for a model the catalog does not know);

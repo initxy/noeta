@@ -15,7 +15,7 @@ noeta 需要一个模型 id，以及把它发给哪个 provider。每项都可�
 | 推理强度 | `NOETA_EFFORT` | `--effort` | `effort` |
 | 模型描述文件 | `NOETA_MODELS_FILE` | — | `models_file` |
 
-上面都没设模型时，还会看设置文件里的 `model` 键（`~/.noeta/settings.json`、已信任项目的 `.noeta/settings.json`），这是 Claude Code 放它的地方。一个都没有，`noeta` 会以 `no model configured` 退出。
+设置文件里的 `model` 键（`~/.noeta/settings.json`、已信任项目的 `.noeta/settings.json`）比 `config.toml` 的优先，这是 Claude Code 放它的地方，`/model` 也存在这里；环境变量和参数又比它优先。一个都没有，`noeta` 会以 `no model configured` 退出。
 
 ### Anthropic
 
@@ -114,7 +114,7 @@ list_models = true                     # 读它的 /models（默认）；false �
 
 ## 切换模型
 
-- **终端界面里**：`/model` 列出别名和每个 provider 的模型，并标出来自哪个 provider；`/model deepseek-flash` 直接切换。切换从下一次请求起生效，并记进日志，恢复任务时依然有效。
+- **终端界面里**：`/model` 列出别名和每个 provider 的模型，并标出来自哪个 provider；`/model deepseek-flash` 直接切换。切换从下一次请求起生效，并记进日志，恢复任务时依然有效。和 Claude Code 一样，选中的模型还会存成以后新会话的默认模型（`~/.noeta/settings.json` 的 `model`，比 `config.toml` 的优先），推理强度也换成给这个模型存过的那个；终端界面连着服务器时，两样都只管这一次。
 - **网页版和编辑器里**：用模型选择器；ACP 里也可以用 `/model [name]`。
 - **无界面模式**：`--model`，或 SDK 的 `set_model` 控制请求。
 - **单个子代理**：代理文件里的 `model:`（`inherit`、别名或 id），或模型调用 `Agent` 时传的 `model` 参数；否则子代理用调用者的模型（见[子代理](./subagents.md)）。
@@ -124,7 +124,9 @@ list_models = true                     # 读它的 /models（默认）；false �
 
 ## 推理强度和思考
 
-推理强度（effort）决定模型想得多深：`low`、`medium`、`high`、`xhigh`、`max`。可以用 `--effort`、`NOETA_EFFORT`、`config.toml` 里的 `effort`、终端界面里的 `/effort`、代理文件或技能里的 `effort:`、或 `Agent` 调用的 `effort` 参数来设。都没设时，请求用模型目录里这个模型的默认值（和 Claude Code 一样），没有默认值就用 `high`（`noeta/core/models.py` 里的 `default_effort`）。
+推理强度（effort）决定模型想得多深：`low`、`medium`、`high`、`xhigh`、`max`。可以用 `--effort`、`NOETA_EFFORT`、`config.toml` 里的 `effort`、终端界面里的 `/effort`、代理文件或技能里的 `effort:`、或 `Agent` 调用的 `effort` 参数来设。都没设时，模型目录里的推理模型用目录里给它写的默认值（和 Claude Code 一样），没写就用 `high`（`noeta/core/models.py` 里的 `default_effort`）；目录里没有的模型（`config.toml` 里登记、没写 `efforts` 的那种）什么都不发，由 provider 自己决定。
+
+`/effort` 会给当前模型记住这个强度，和 Claude Code 一样：`low` 到 `xhigh` 存进 `~/.noeta/settings.json` 的 `modelSettings.<模型>.effortLevel`，之后终端界面和 `-p` 开这个模型的新会话就用它；`max` 只管这一次；`/effort auto` 把记住的忘掉，回到默认。设置文件顶层的 `effortLevel` 是所有没单独记过的模型的强度。`--effort`、`NOETA_EFFORT` 比设置文件优先，设置文件又比 `config.toml` 的 `effort` 优先。`serve`、`worker`、`acp` 不管任务用哪个模型，都按不分模型的那个强度起步：`--effort`、`NOETA_EFFORT`、`effortLevel`，都没有就用 `config.toml` 的。
 
 各 provider 的处理：
 

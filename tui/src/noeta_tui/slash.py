@@ -43,8 +43,8 @@ __all__ = ["COMMANDS", "matches", "resume_picker", "run", "trust_picker"]
 COMMANDS = {
     "help": "Show help and the commands",
     "status": "Show the version, model, task, directory and settings",
-    "model": "Pick or set the model (from the next request on)",
-    "effort": "Pick or set how hard the model thinks (low … max)",
+    "model": "Pick or set the model (from the next request on; saved for new sessions)",
+    "effort": "Pick or set how hard the model thinks (low … max, auto)",
     "context": "Show what fills the next request, as a grid",
     "cost": "Show the tokens and cost of this task and its sub-agents",
     "copy": "Copy the last reply to the clipboard (or /copy N for the Nth-latest)",
@@ -208,15 +208,41 @@ async def _model(app: NoetaApp, arg: str) -> None:
 async def set_model(app: NoetaApp, name: str) -> None:
     real = models.resolve_alias(name)
     note = await prepare_model(app.local, real)
-    await _change(app, {"model": real})
+    changes: dict[str, str | None] = {"model": real}
+    # The effort follows the model: the one saved for it, as Claude Code's.
+    effort_for = app.start.effort_for
+    if effort_for is not None and (effort := effort_for(real)) != app.effort:
+        changes["effort"] = effort
+    await _change(app, changes)
     app.model = real
+    if "effort" in changes:
+        app.effort = changes["effort"]
     app.update_status()
-    await app.say_notice(f"model set to {real} from the next request on"
+    saved = _save(app.start.save_model, real)
+    effort_note = f"; effort {app.effort_said()}" if "effort" in changes else ""
+    await app.say_notice(f"model set to {real} from the next request on{saved}{effort_note}"
                          + (f" — {note}" if note else ""))
+
+
+def _save(save: Callable[..., None] | None, *args: str | None,
+          done: str = " (saved as your default for new sessions)") -> str:
+    """Save a choice for new sessions: what the notice says of it (``done``
+    once saved)."""
+    if save is None:
+        return " (this session only)"
+    try:
+        save(*args)
+    except (OSError, ValueError) as exc:
+        return f" (not saved: {exc})"
+    return done
 
 
 #: The effort levels ``/effort`` offers, lowest first.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+#: The levels saved for new sessions, as Claude Code's: ``max`` lasts the session.
+SAVED_EFFORTS = EFFORTS[:-1]
+#: What ``/effort`` takes for "the model's default" (forgetting the one saved).
+AUTO = ("auto", "default")
 
 
 async def _effort(app: NoetaApp, arg: str) -> None:
@@ -224,6 +250,7 @@ async def _effort(app: NoetaApp, arg: str) -> None:
         await set_effort(app, arg)
         return
     options = [Option(level, level) for level in EFFORTS]
+    options.append(Option("auto", "auto", "the model's default"))
     current = app.effort_level() or ""
     index = EFFORTS.index(current) if current in EFFORTS else 0
 
@@ -237,21 +264,33 @@ async def _effort(app: NoetaApp, arg: str) -> None:
 
 
 async def set_effort(app: NoetaApp, level: str) -> None:
+    if level in AUTO:
+        saved = _save(app.start.save_effort, app.model, None, done="")
+        effort_for = app.start.effort_for
+        effort = effort_for(app.model) if effort_for is not None else None
+        await _change(app, {"effort": effort})
+        app.effort = effort
+        app.update_status()
+        await app.say_notice(f"effort set to auto{saved}: {app.effort_said()}")
+        return
     if level not in EFFORTS:
-        await app.say_notice(f"effort is one of {', '.join(EFFORTS)}")
+        await app.say_notice(f"effort is one of {', '.join(EFFORTS)} or auto")
         return
     await _change(app, {"effort": level})
     app.effort = level
     app.update_status()
-    await app.say_notice(f"effort set to {level} from the next request on")
+    saved = _save(app.start.save_effort, app.model, level) if level in SAVED_EFFORTS \
+        else " (this session only)"
+    await app.say_notice(f"effort set to {level} from the next request on{saved}")
 
 
-async def _change(app: NoetaApp, changes: dict[str, str]) -> None:
-    """The task's config changed; a screen with no task yet starts its task with it."""
+async def _change(app: NoetaApp, changes: dict[str, str | None]) -> None:
+    """The task's config changed (``None`` removes a key); the tasks this
+    screen starts later (``/clear``) start with it too."""
     if app.task_id:
         await change_config(app.local.client, app.task_id, changes)
-    else:
-        app.task_config = {**app.task_config, **changes}
+    config = {**app.task_config, **changes}
+    app.task_config = {k: v for k, v in config.items() if v is not None}
 
 
 async def _picker(app: NoetaApp, picker: Picker, what: str = "that") -> None:

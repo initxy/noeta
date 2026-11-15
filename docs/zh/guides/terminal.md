@@ -89,7 +89,7 @@ noeta
 
 ![审批卡片](https://raw.githubusercontent.com/initxy/noeta/main/tui/screenshots/approval.svg)
 
-模型提问（`AskUserQuestion`）时会列出选项；直接输入答案，或输入选项编号（`2`，多选用 `1, 3`）。有几个小问题的会一个一个地问。
+模型提问（`AskUserQuestion`）时会弹出和 Claude Code 一样的提问框：问题、带编号的选项（每个选项下面一行说明）、一行"Type something."用来自己写答案，最后是"Chat about this"。用 `↑` / `↓` 加 `Enter` 选，或者直接按选项的数字；光标在选项上直接打字，字会进"Type something."那一行。可以多选的问题每个选项前有个方框，`Enter` 或空格勾选，选完按"Next"。一次问好几个问题时，顶上是一排标签（`← ☐ DB  ☐ Scope  ✔ Submit →`），`Tab` 和 `←` / `→` 在问题之间切换，最后一页把你的答案列出来核对，按"Submit answers"才发出去（没答的问题就不带）。选项带预览时，选项在左，右边显示当前选项的预览。选"Chat about this"不发答案：模型会知道你想先把问题聊清楚，接着问你想澄清什么。`Esc` 是不回答，这一轮随之停下，和 Claude Code 一样。答完以后，这次调用那一行显示 `User answered noeta's questions:` 和每个问题的答案（不回答的显示 `User declined to answer questions`）。在下面的输入框里打一行字也能回答当前这个问题：选项的名字、编号，或者你自己的话都行。
 
 任务等你回答期间不占用任何工人：这次调用是[挂起](../how-it-works/waiting.md)的，关掉终端它也还在等。重新打开任务（`noeta -c`），卡片会再出现。
 
@@ -103,8 +103,8 @@ noeta
 |---|---|
 | `/help` | 快捷键和所有命令，包括插件提供的 |
 | `/status` | 版本、任务、代理、模型、推理强度、权限模式、目录、设置 |
-| `/model [name]` | 选择或直接设置模型，从下一次请求起生效（见[模型](./models.md)） |
-| `/effort [level]` | 选择或设置推理强度：`low`、`medium`、`high`、`xhigh`、`max`（不管什么模型都会发出去，由各家 provider 换成自己的写法） |
+| `/model [name]` | 选择或直接设置模型，从下一次请求起生效，并存成新会话的默认模型（见[切换模型](./models.md#切换模型)） |
+| `/effort [level]` | 选择或设置推理强度：`low`、`medium`、`high`、`xhigh`、`max`（不管什么模型都会发出去，由各家 provider 换成自己的写法），或 `auto`；除了 `max`，都会给当前模型记住（见[推理强度](./models.md#推理强度和思考)） |
 | `/copy [n]` | 把最新一条回复（`n`：往前第 n 条）复制到剪贴板 |
 | `/context` | 用方格图显示下一次请求里都装了什么 |
 | `/cost` | 这个任务及其子代理用掉的 token 和花费 |

@@ -73,3 +73,22 @@ def test_a_prompt_without_print_mode_is_the_front_ends_first_message(
     assert started["start"].prompt == "fix the test"
     cli.main([])
     assert started["start"].prompt is None
+
+
+def test_the_model_and_effort_picked_are_what_the_next_start_uses(
+        started: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    cli.main([])
+    start = started["start"]
+    start.save_effort("claude-opus-5-5", "high")
+    assert start.effort_for("claude-opus-5-5") == "high"  # this session's next /model too
+    start.save_model("claude-sonnet-5-5")
+    monkeypatch.delenv("NOETA_MODEL")
+    cli.main([])
+    start = started["start"]
+    assert (start.model, start.task_config.get("effort")) == ("claude-sonnet-5-5", None)
+    assert start.effort_for("claude-opus-5-5") == "high"
+    start.save_effort("claude-opus-5-5", None)
+    start.save_model("claude-opus-5-5")
+    cli.main([])
+    assert (started["start"].model, started["start"].task_config.get("effort")) == (
+        "claude-opus-5-5", None)

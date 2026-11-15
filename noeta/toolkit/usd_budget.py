@@ -58,7 +58,7 @@ def budget_text(used: float, total: float) -> str:
 
 
 def _price(model: str, usage: Usage) -> float:
-    return models.price(model, usage) if model else 0.0
+    return models.price(model, usage, budgeted=True) if model else 0.0
 
 
 async def _task(view: TaskView, task_id: str) -> _Read:

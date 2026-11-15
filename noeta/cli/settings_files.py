@@ -18,6 +18,12 @@ permission rule lists and ``additionalDirectories`` add up across files, without
 ``sandbox`` object merges as :func:`merge_sandbox` says. Hooks and
 MCP consent (``enabledMcpjsonServers``) are read from the same files by the
 hooks and MCP plugins, which take the file list.
+
+The effort is Claude Code's: ``modelSettings.<model>.effortLevel`` for one
+model, the top-level ``effortLevel`` for the rest; for a model, the file
+with the higher precedence that sets either wins, and within a file the
+model's own entry. The terminal UI's ``/model`` and ``/effort`` save their
+choice in the user's file (:func:`save_user_settings`), as Claude Code does.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -78,6 +84,16 @@ class FileSettings:
     #: Claude Code's skill listing settings (``skillListingBudgetFraction``,
     #: ``skillListingMaxDescChars``), the last file's of each.
     skill_listing: dict[str, Any] = field(default_factory=dict)
+    #: The top-level ``effortLevel``: the effort of a model with no entry of
+    #: its own in :attr:`model_efforts`.
+    effort: str | None = None
+    #: ``modelSettings.<model>.effortLevel``, by model.
+    model_efforts: dict[str, str] = field(default_factory=dict)
+
+
+#: The effort levels a settings file keeps (Claude Code's ``effortLevel``):
+#: ``max`` lasts one session.
+SAVED_EFFORTS = ("low", "medium", "high", "xhigh")
 
 
 #: Claude Code's skill listing settings, the range each takes and whether
@@ -247,6 +263,15 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
                                     if k in ("commit", "pr") and isinstance(v, str)})
         elif data.get("includeCoAuthoredBy") is False:
             out.attribution.update({"commit": "", "pr": ""})
+        if data.get("effortLevel") in SAVED_EFFORTS:
+            # It outranks the per-model entries of the files below.
+            out.effort = data["effortLevel"]
+            out.model_efforts.clear()
+        per_model = data.get("modelSettings")
+        if isinstance(per_model, dict):
+            out.model_efforts.update({
+                str(model): entry["effortLevel"] for model, entry in per_model.items()
+                if isinstance(entry, dict) and entry.get("effortLevel") in SAVED_EFFORTS})
         for key, (low, high, whole) in SKILL_LISTING_KEYS.items():
             value = data.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool) \
@@ -274,6 +299,52 @@ def load(files: list[Path], kinds: list[str] | None = None) -> FileSettings:
     out.sandbox_permissions = {**({"deny": lists["deny"]} if lists["deny"] else {}),
                                **{k: v for k, v in widening.items() if v}}
     return out
+
+
+def save_user_settings(path: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    """Apply ``change`` to the settings file at ``path`` (the user's) and
+    write it back at once, keeping its other keys and its file mode. A file
+    that is not a JSON object is left as it is: :class:`ValueError`."""
+    try:
+        text = path.read_text("utf-8")
+    except FileNotFoundError:
+        text = "{}"
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    change(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", "utf-8")
+    if path.exists():
+        os.chmod(tmp, path.stat().st_mode & 0o7777)
+    os.replace(tmp, path)
+
+
+def save_model(path: Path, model: str) -> None:
+    """Make ``model`` the one new sessions start on (``/model``)."""
+    save_user_settings(path, lambda data: data.__setitem__("model", model))
+
+
+def save_effort(path: Path, model: str, level: str | None) -> None:
+    """Keep ``level`` as ``model``'s effort for new sessions (``/effort``);
+    ``None`` forgets it (``/effort auto``)."""
+    def change(data: dict[str, Any]) -> None:
+        per_model = data.get("modelSettings")
+        if not isinstance(per_model, dict):
+            per_model = data["modelSettings"] = {}
+        entry = per_model.get(model)
+        if not isinstance(entry, dict):
+            entry = per_model[model] = {}
+        if level is None:
+            entry.pop("effortLevel", None)
+            if not entry:
+                del per_model[model]
+            if not per_model:
+                del data["modelSettings"]
+        else:
+            entry["effortLevel"] = level
+    save_user_settings(path, change)
 
 
 def apply_env(settings: FileSettings) -> None:

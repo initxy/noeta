@@ -160,7 +160,7 @@ class BudgetCaps(Extension):
         if usage is None:
             return
         model = model or str(view.state.config.get("model") or "")
-        view.record(NAME, "cost", {"usd": price(model, usage) if model else 0.0})
+        view.record(NAME, "cost", {"usd": price(model, usage, budgeted=True) if model else 0.0})
 
 
 def _state(view: TaskView) -> BudgetState:
