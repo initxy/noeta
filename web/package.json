@@ -17,8 +17,8 @@
     "ui"
   ],
   "dependencies": {
-    "@initxy/noeta-ui": "1.2.4",
-    "@initxy/noeta-web-sdk": "1.2.4",
+    "@initxy/noeta-ui": "1.2.5",
+    "@initxy/noeta-web-sdk": "1.2.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

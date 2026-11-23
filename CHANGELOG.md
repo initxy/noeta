@@ -8,6 +8,11 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-11-23
+
+A long task that reads many images keeps working: its requests stay under the provider's
+size limit.
+
 ### Added
 
 - **`max_request_bytes`** in `config.toml`, at the top level and in a `[providers.<name>]`
