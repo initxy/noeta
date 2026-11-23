@@ -127,8 +127,10 @@ models = [{id = "Qwen/Qwen3-Coder-30B-A3B-Instruct", context_window = 262144, ma
 list_models = true                     # read its /models (the default); false skips it
 ```
 
-A table takes exactly `family`, `base_url`, `api_key`, `headers`, `models`, `list_models` and
-`prompt_cache_ttl`; anything else is a config error, and so is a table named `default` (that name
+A table takes exactly `family`, `base_url`, `api_key`, `headers`, `models`, `list_models`,
+`prompt_cache_ttl` and `max_request_bytes` (the largest request body the endpoint takes:
+[the request size limit](../how-it-works/context.md#request-size-limit)); anything
+else is a config error, and so is a table named `default` (that name
 is the top-level provider's). `{env:…}` and `{keyring:…}` are read in a table's `api_key` and
 `headers`, and in the top-level `api_key` and `extra_headers` too. `{keyring:…}` needs the `keyring` extra.
 

@@ -32,7 +32,9 @@ More providers than the default one (``model`` / ``provider`` / ``base_url`` /
 
 An ``anthropic`` provider (the default one, or a table) also takes
 ``prompt_cache_ttl = "1h"``: the one-hour prompt cache, billed higher per
-write (default ``"5m"``, the API's).
+write (default ``"5m"``, the API's). A built-in provider takes
+``max_request_bytes``: the largest request body its endpoint accepts
+(default 33,554,432, 32 MiB).
 """
 
 from __future__ import annotations
@@ -117,10 +119,13 @@ DEFAULT_PROVIDER = "default"
 
 
 def _adapter(family: str, base_url: str | None, api_key: str | None,
-             headers: Mapping[str, str], cache_ttl: str | None = None) -> Provider:
+             headers: Mapping[str, str], cache_ttl: str | None = None,
+             max_request_bytes: int | None = None) -> Provider:
     kw: dict[str, Any] = {}
     if headers:
         kw["extra_headers"] = dict(headers)
+    if max_request_bytes is not None:
+        kw["max_request_bytes"] = max_request_bytes
     if family == "anthropic":
         kw["device_id"] = home_dir.device_id()
         if cache_ttl:
@@ -134,11 +139,17 @@ def _adapter(family: str, base_url: str | None, api_key: str | None,
         raise ConfigError(f"there is no provider {family!r} (NOETA_PROVIDER, --provider or "
                           f"provider in {home_dir.HOME / 'config.toml'}); one of: {known}") \
             from None
+    except TypeError as exc:
+        # A provider package's adapter that has no such argument.
+        if max_request_bytes is None or "max_request_bytes" not in str(exc):
+            raise
+        raise ConfigError(f"max_request_bytes is not a setting of the {family} provider") \
+            from None
 
 
 #: The keys of a ``[providers.<name>]`` table.
 _PROVIDER_KEYS = frozenset({"family", "base_url", "api_key", "headers", "models", "list_models",
-                            "prompt_cache_ttl"})
+                            "prompt_cache_ttl", "max_request_bytes"})
 
 
 @dataclass
@@ -174,6 +185,9 @@ class Settings:
     #: The default provider's prompt-cache lifetime (``anthropic`` only):
     #: ``"1h"`` or ``"5m"``; ``None`` is the API's default.
     prompt_cache_ttl: str | None = None
+    #: The default provider's request size limit in bytes; ``None``: the
+    #: adapter's default.
+    max_request_bytes: int | None = None
     #: Prompt overrides for every task this front end starts (name -> text,
     #: see ``noeta.core.prompts``): ``--system-prompt`` sets ``system/main``,
     #: ``--append-system-prompt`` ``system/main.append``.
@@ -207,7 +221,8 @@ class Settings:
                     f"no API key for the {self.provider} provider: set NOETA_API_KEY{also}, "
                     f"or api_key in {home_dir.HOME / 'config.toml'}"
                     + self._other_vendor_hint())
-        return _adapter(self.provider, self.base_url, key, headers, self.prompt_cache_ttl)
+        return _adapter(self.provider, self.base_url, key, headers, self.prompt_cache_ttl,
+                        self.max_request_bytes)
 
     def _other_vendor_hint(self) -> str:
         """For a model that does not look like Claude on the default
@@ -247,7 +262,7 @@ class Settings:
             raise MissingAPIKey(f"no API key for provider {name!r}: set api_key in its "
                                 f"[providers.{name}] table of {home_dir.HOME / 'config.toml'}")
         return _adapter(family, table.get("base_url"), key, headers,
-                        table.get("prompt_cache_ttl"))
+                        table.get("prompt_cache_ttl"), table.get("max_request_bytes"))
 
     def make_router(self) -> ProviderRouter:
         """Every configured provider behind one ``provider_for(model)``, the
@@ -317,6 +332,7 @@ def load_settings(*, cwd: str | None = None, sources: Collection[str] | None = N
             raise ConfigError(f"{path} is not valid TOML: {exc}") from None
         if unknown := sorted(set(data) - _TOP_LEVEL_KEYS):
             log.warning("%s: unknown top-level keys %s; ignored", path, unknown)
+        _check_request_limit(data.get("max_request_bytes"), str(path))
     env = {
         "model": os.environ.get("NOETA_MODEL"),
         "provider": os.environ.get("NOETA_PROVIDER"),
@@ -398,6 +414,7 @@ def _provider_tables(value: Any) -> dict[str, dict[str, Any]]:
                              "openai_responses or a provider package's)")
         if not isinstance(table.get("headers", {}), dict):
             raise ValueError(f"{where}: headers is a table of strings")
+        _check_request_limit(table.get("max_request_bytes"), where)
         rows = table.get("models", [])
         if not isinstance(rows, list) or not all(
                 (isinstance(r, str) and r) or (isinstance(r, dict) and isinstance(r.get("id"), str))
@@ -405,6 +422,14 @@ def _provider_tables(value: Any) -> dict[str, dict[str, Any]]:
             raise ValueError(f"{where}: models is a list of model ids or {{id = ..., "
                              "context_window = ..., max_output_tokens = ...}} rows")
     return tables
+
+
+def _check_request_limit(value: Any, where: str) -> None:
+    """A ``max_request_bytes`` that is set is a positive integer."""
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int)
+                              or value <= 0):
+        raise ConfigError(f"{where}: max_request_bytes is a positive integer (bytes), "
+                          f"got {value!r}")
 
 
 def _plugin_tables(value: Any, table: str = "plugins") -> dict[str, dict[str, Any]]:

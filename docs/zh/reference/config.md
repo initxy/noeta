@@ -22,6 +22,7 @@
 | `models_file` | 路径 | 无 | 描述更多模型的 JSON 文件（见下） | `NOETA_MODELS_FILE` |
 | `list_models` | 布尔 | `true` | 对目录里没有的模型，去读默认 provider 的 `/models` 列表 | — |
 | `prompt_cache_ttl` | `"5m"` 或 `"1h"` | 接口默认的（`5m`） | 仅 `anthropic`：一小时的提示词缓存，每次写入计费更高 | — |
+| `max_request_bytes` | 正整数 | `33554432`（32 MiB） | 默认 provider 的接口最多收多大的请求体：为了不超过它，最早的图片先让位，还是超了的请求不会发出去（见[请求体大小的上限](../how-it-works/context.md#request-size-limit)） | — |
 | `prompts` | 表 | 无 | 对这个前端启动的所有任务生效的提示词覆盖，按提示词名写（`"system/main.append" = "…"`） | `--system-prompt`、`--append-system-prompt` |
 
 另外还有这些表：`[providers.<name>]`、`[plugins.<name>]`、`[agents.<name>]`、`[channels.<name>]`
@@ -44,6 +45,7 @@
 | `models` | 否 | 这家提供的模型 id，可以是字符串，也可以是 `{id, context_window, max_output_tokens}` 行；两个上限都写了的行，会把目录里没有的模型登记进去 |
 | `list_models` | 否（默认 `true`） | 读这家的 `/models`，找更多模型和它们的上下文长度（在 `~/.noeta/cache/models` 缓存一天） |
 | `prompt_cache_ttl` | 否 | 仅 `anthropic`：`"1h"` 或 `"5m"` |
+| `max_request_bytes` | 否 | 同顶层的 `max_request_bytes`，管的是这一家 |
 
 写了别的键会报错。`default` 这个名字被占用了（指顶层那个 provider）。同一个模型写在两家名下也会
 报错。顶层写 `provider = "<表名>"`，就让这个表成为默认 provider。

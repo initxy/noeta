@@ -163,6 +163,15 @@ OpenAI 的两种接口没有标记可打；那边的服务器自己缓存前缀�
 
 每个 provider 都把自己的错误归成几类中立的错误（`noeta/backends/providers/_common.py`）：413，或者错误码是 `context_length_exceeded`、消息里说提示太长的 4xx（说限流或输出上限的不算），归为 `ContextOverflow`。如果消息里写明了输入长度和窗口大小（Anthropic 的 `input length and max_tokens exceed context limit: 188240 + 21333 > 200000`，OpenAI 和 vLLM 的 `maximum context length is …` 几种写法），重试逻辑（`noeta/core/retry.py`）就把 `max_tokens` 调成 `窗口 − 输入 − 1,000`，只要不低于 3,000、并且比这次调用原本要的上限小，就再发一次：输入本身放得下，只是加上要求的输出放不下。否则就挨个问各插件的 `on_context_overflow(view, request)`；压缩插件做一次压缩（提前写好的摘要还对得上就用它，否则把全部内容总结掉），然后重新调用。谁都腾不出地方，这一轮以 `context_overflow` 失败。
 
+### 请求体大小的上限 {#request-size-limit}
+
+接口对请求体的大小也有上限，挡在前面的中转站超了上限往往不回 413，而是直接断开连接。图片让请求体变大，却不怎么占上下文，所以读了很多图片的任务离压缩还远，请求体就先撑到了这个上限。每次发请求之前（主请求、总结请求、插件自己发的调用都算），内置的 provider 适配器都会把请求体控制在这个接口的 `max_request_bytes` 以内：默认 33,554,432，也就是 32 MiB（和 Claude Code 一样），可以按 provider [另设](../reference/config.md)。
+
+1. **最早的图片先让位**（`noeta/backends/providers/_request_size.py`，规则照 Claude Code）。按对话顺序数图片，直接放在消息里的和工具结果里的都算，但只数适配器真会发出去的（Chat Completions 的工具结果只发文字；目录里标了不支持图片的模型，工具结果里的图也不发）：base64 后的总大小一超过上限的四分之三（24 MiB），就从最早的开始换掉，直到剩下的不超过 14 MiB（上限减 10 MiB；上限很小时减一半）；张数一超过 100（窗口大于 200,000 token 的模型是 600），也从最早的开始去掉，直到比上限少 20 张。换掉的图片变成一段占位文字，告诉模型它之前看没看过这张图，并提醒它别把它们全读一遍。去不去掉一张图只看它前面的消息，所以提示词缓存每砍一次断一次，不会每次请求都断。日志里图片一张不少，只是请求里不带了。
+2. **还是超了的请求体不会发出去。** 适配器自己把请求体序列化，超了就抛 `RequestTooLarge`（一种 `ContextOverflow`），带上请求体多大、上限多少、其中图片占多少。它和上面一样走超长处理，也就是压缩；只有光文字就已经超了上限时例外：总结请求也得带着这些文字，所以这一轮直接以 `context_overflow` 失败，并写明这几个大小。
+
+服务端回了 413 时，错误里会写明被拒的请求体有多大。请求体在 1 MiB 以上、还没收到任何回应连接就断了时，错误里也会写明大小，并指向 `max_request_bytes`：上限不到 32 MiB 的接口得把它设上。
+
 ## 日志留着全部，折叠结果只留下一步要用的
 
 <Diagram name="ctx-log-fold" caption="ADR-030：日志是唯一完整的记录" />
@@ -188,6 +197,7 @@ OpenAI 的两种接口没有标记可打；那边的服务器自己缓存前缀�
 | 超长输出 | `noeta/core/large_output.py` |
 | Anthropic 请求格式、缓存标记、缓存寿命 | `noeta/backends/providers/_anthropic_wire.py`、`anthropic.py` |
 | 超长错误的识别 | `noeta/backends/providers/_common.py` |
+| 请求体大小上限、图片占位文字 | `noeta/backends/providers/_request_size.py` |
 | 重试、调小输出上限 | `noeta/core/retry.py` |
 | 压缩、清理、后台写摘要、闲置压缩 | `noeta/plugins/compaction/` |
 | 延迟加载的工具 | `noeta/plugins/tool_search/` |

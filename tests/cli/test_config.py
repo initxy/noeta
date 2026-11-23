@@ -500,6 +500,55 @@ def test_an_anthropic_provider_takes_the_one_hour_cache(home: Path) -> None:
         s._table_provider("gw")
 
 
+def test_a_provider_takes_its_request_size_limit(home: Path) -> None:
+    (home / "config.toml").write_text(
+        'model = "claude-opus-5-5"\napi_key = "k"\nmax_request_bytes = 20000000\n'
+        '[providers.gw]\nfamily = "openai_compat"\nbase_url = "https://x/v1"\napi_key = "k"\n'
+        'max_request_bytes = 10000000\n'
+        '[providers.plain]\nfamily = "openai_responses"\nbase_url = "https://x/r"\n'
+        'api_key = "k"\n')
+    s = load_settings()
+    assert s.make_provider()._max_request_bytes == 20_000_000  # type: ignore[attr-defined]
+    assert s._table_provider("gw")._max_request_bytes == 10_000_000  # type: ignore[attr-defined]
+    assert s._table_provider("plain")._max_request_bytes == 32 * 1024 * 1024  # type: ignore[attr-defined]
+
+
+def test_an_unset_request_size_limit_is_not_passed(
+        home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A third-party provider family need not take it."""
+    given: list[dict[str, Any]] = []
+    monkeypatch.setattr(config.registry, "provider", lambda family, **kw: given.append(kw))
+    (home / "config.toml").write_text('provider = "theirs"\napi_key = "k"\n')
+    load_settings().make_provider()
+    assert "max_request_bytes" not in given[0]
+
+
+def test_a_provider_without_a_request_size_limit_says_so(
+        home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def theirs(family: str, *, base_url: str | None, api_key: str | None) -> None:
+        raise AssertionError("not reached")
+
+    monkeypatch.setattr(config.registry, "provider", theirs)
+    (home / "config.toml").write_text(
+        'provider = "theirs"\napi_key = "k"\nmax_request_bytes = 1000\n')
+    with pytest.raises(config.ConfigError,
+                       match="max_request_bytes is not a setting of the theirs provider"):
+        load_settings().make_provider()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", "1.5", '"32MiB"'])
+def test_a_request_size_limit_is_a_positive_integer(home: Path, value: str) -> None:
+    (home / "config.toml").write_text(f"max_request_bytes = {value}\n")
+    with pytest.raises(config.ConfigError, match=r"config\.toml: max_request_bytes is a "
+                                                 r"positive integer"):
+        load_settings()
+    (home / "config.toml").write_text(
+        f'[providers.gw]\nfamily = "openai_compat"\nmax_request_bytes = {value}\n')
+    with pytest.raises(config.ConfigError,
+                       match=r"config\.toml \[providers\.gw\]: max_request_bytes"):
+        load_settings()
+
+
 @pytest.mark.parametrize(("text", "match"), [
     ('[providers.a]\nbase_url = "x"\n', "family is required"),
     ('[providers.a]\nfamily = "openai_compat"\nkey = "x"\n', "unknown keys"),

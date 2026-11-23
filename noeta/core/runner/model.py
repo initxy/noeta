@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING, Any
 import msgspec
 
 from noeta.core import records
-from noeta.core.errors import ContextOverflow, ModelError, RequestStale, TurnDone, TurnFailed
+from noeta.core.errors import (
+    ContextOverflow,
+    ModelError,
+    RequestStale,
+    RequestTooLarge,
+    TurnDone,
+    TurnFailed,
+)
 from noeta.core.events import ModelCalled, ModelReplied
 from noeta.core.extension import Reminder, TaskView
 from noeta.core.loop.request import build_request, cache_breakpoints, request_hash
@@ -151,7 +158,12 @@ def _overflow_hook(ext: Any, view: TaskView, request: ModelRequest) -> Any:
 
 async def _on_overflow(run: TaskRun, exc: ContextOverflow, request: ModelRequest) -> bool:
     """The model refused ``request`` as too long: an extension makes room
-    and the next boundary calls again, or the turn fails."""
+    and the next boundary calls again, or the turn fails. A body over the
+    size limit without its images fails at once: a summary request would
+    carry that text too."""
+    if isinstance(exc, RequestTooLarge) and exc.text_too_large:
+        return await closing.fail_turn(run, texts.CONTEXT_OVERFLOW,
+                                       texts.REQUEST_TEXT_TOO_LARGE.format(error=exc))
     overflow_view = run.view()
     try:
         for ext in run.exts:
