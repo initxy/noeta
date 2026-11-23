@@ -340,6 +340,36 @@ the compaction plugin compacts (with the summary written ahead when it fits, els
 everything) and the call is made again. When nobody makes room the turn fails with
 `context_overflow`.
 
+### The request size limit {#request-size-limit}
+
+An endpoint also refuses a request body over a size, and a relay in front of it often drops the
+connection instead of answering 413. Images make a body large without making the context long,
+so a task that reads many of them reaches that size far from compaction. Before every request
+(the main one, a summary, a plugin's own call) the built-in provider adapters keep the body under
+the endpoint's `max_request_bytes`: 33,554,432 (32 MiB, Claude Code's) unless
+[set](../reference/config.md) for that provider.
+
+1. **The oldest images give way** (`noeta/backends/providers/_request_size.py`, Claude Code's
+   rule). Counting images in conversation order, at a message's top level and in tool results
+   alike (only those the adapter sends: Chat Completions sends a tool result as text only, and a
+   model catalogued without vision gets none of a tool result's images): once their base64 size
+   passes three quarters of the limit (24 MiB), the oldest are replaced until at most 14 MiB
+   remain (the cap less 10 MiB, or less half of it under a small
+   limit); once there are more than 100 (600 on a model whose window is over 200,000 tokens), the
+   oldest go until 20 fewer remain. Each becomes a text placeholder that tells the model whether
+   it had already seen the image, and not to read them all again. A removal depends only on the
+   messages before it, so the prompt cache breaks once per cut, not on every request. The log
+   keeps every image; only the request leaves them out.
+2. **A body still over the limit is never sent.** The adapter serializes the body itself and,
+   over the limit, raises `RequestTooLarge` (a `ContextOverflow`) with the body's size, the limit
+   and how much of it is images. It takes the overflow path above, unless the text alone is over
+   the limit: a summary request would carry that text too, so the turn fails at once with
+   `context_overflow` and the sizes.
+
+A 413 names the size of the body it refused. A connection dropped before any answer, on a body
+of 1 MiB or more, says the size too and points at `max_request_bytes`: an endpoint that takes
+less than 32 MiB needs it set.
+
 ## The log keeps everything, the fold keeps what the next step needs
 
 <Diagram name="ctx-log-fold" caption="ADR-030: the log is the only full transcript" />
@@ -382,6 +412,7 @@ Three different limits watch what a task spends:
 | Long outputs | `noeta/core/large_output.py` |
 | Anthropic wire, cache marks, TTL | `noeta/backends/providers/_anthropic_wire.py`, `anthropic.py` |
 | Overflow classification | `noeta/backends/providers/_common.py` |
+| Request size limit, image placeholders | `noeta/backends/providers/_request_size.py` |
 | Retries, smaller output cap | `noeta/core/retry.py` |
 | Compaction, clearing, write-ahead, idle | `noeta/plugins/compaction/` |
 | Deferred tools | `noeta/plugins/tool_search/` |

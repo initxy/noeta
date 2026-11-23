@@ -87,6 +87,25 @@ class ContextOverflow(ModelError):
         self.context_limit = context_limit
 
 
+class RequestTooLarge(ContextOverflow):
+    """The request body is over the provider's size limit, measured before
+    it was sent: nothing was sent. ``body_bytes`` against ``limit_bytes``,
+    ``media_bytes`` of the body images. Past the limit even without its
+    images, no compaction can make it fit."""
+
+    def __init__(self, message: str, *, body_bytes: int, limit_bytes: int,
+                 media_bytes: int, **kw: object) -> None:
+        super().__init__(message, **kw)  # type: ignore[arg-type]
+        self.body_bytes = body_bytes
+        self.limit_bytes = limit_bytes
+        self.media_bytes = media_bytes
+
+    @property
+    def text_too_large(self) -> bool:
+        """The body is over the limit without its images."""
+        return self.body_bytes - self.media_bytes > self.limit_bytes
+
+
 class Fatal(ModelError):
     """Retrying the same request cannot help (auth, bad request, refusal)."""
 

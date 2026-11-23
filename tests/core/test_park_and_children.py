@@ -13,7 +13,7 @@ import pytest
 from noeta.backends.stores.sqlite import SqliteStore
 from noeta.core.agent import Agent
 from noeta.core.client import Client
-from noeta.core.errors import ContextOverflow
+from noeta.core.errors import ContextOverflow, RequestTooLarge
 from noeta.core.events import (
     Answer,
     ChildEnded,
@@ -256,6 +256,58 @@ async def test_an_overflow_a_smaller_cap_cannot_fix_still_compacts(store: Sqlite
     await rt.run_until_idle()
     assert provider.requests[1].messages[0].text == "(summary)"
     assert provider.requests[1].max_tokens == 32_000
+
+
+_MIB = 1024 * 1024
+
+
+def _too_large(body: int, media: int) -> RequestTooLarge:
+    """A body of ``body`` MiB, ``media`` of them images, over a 32 MiB limit."""
+    return RequestTooLarge(
+        f"Request too large: {body:.1f} MB, over the 32.0 MB request limit "
+        f"({media:.1f} MB of it images)",
+        body_bytes=body * _MIB, limit_bytes=32 * _MIB, media_bytes=media * _MIB)
+
+
+class AskedOnOverflow(MakeRoom):
+    def __init__(self) -> None:
+        self.asked = 0
+
+    async def on_context_overflow(self, view: TaskView, request: Any) -> bool:
+        self.asked += 1
+        return await super().on_context_overflow(view, request)
+
+
+async def test_a_request_whose_text_alone_is_too_large_fails_at_once(
+        store: SqliteStore) -> None:
+    """No compaction can help: a summary request would carry that text too."""
+    room = AskedOnOverflow()
+    provider = ScriptedProvider([_too_large(40, 2)])
+    rt = runtime(store, provider, Agent(name="a", model="m", extensions=[room]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert room.asked == 0 and len(provider.requests) == 1
+    events = [r.event for r in await client.events(tid)]
+    waiting = events[-1]
+    assert isinstance(waiting, Waiting)
+    failed = waiting.detail["turn_failed"]
+    assert failed.startswith(
+        "context_overflow: Request too large: 40.0 MB, over the 32.0 MB request limit "
+        "(2.0 MB of it images). Without its images it is still over the limit")
+    assert "max_request_bytes" in failed
+
+
+async def test_a_request_too_large_for_its_images_compacts(store: SqliteStore) -> None:
+    room = AskedOnOverflow()
+    provider = ScriptedProvider([_too_large(40, 20), reply("fits now")])
+    rt = runtime(store, provider, Agent(name="a", model="m", extensions=[room]))
+    client = Client(store)
+    tid = await client.create("a", "go")
+    await rt.run_until_idle()
+    assert room.asked == 1
+    assert provider.requests[1].messages[0].text == "(summary)"
+    assert (await client.get(tid)).waiting_on == "input"
 
 
 class OldMakeRoom(Extension):

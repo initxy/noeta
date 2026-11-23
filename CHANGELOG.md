@@ -8,6 +8,24 @@ this repository. Their versions are listed on PyPI.
 
 ## [Unreleased]
 
+### Added
+
+- **`max_request_bytes`** in `config.toml`, at the top level and in a `[providers.<name>]`
+  table: the largest request body that provider's endpoint takes (default 32 MiB), for a relay
+  whose limit is lower.
+
+### Fixed
+
+- **A task that reads many images no longer fails once its requests grow too large to send.**
+  A request body has a size limit, and a relay over it often drops the connection rather than
+  answering: a task that had read 44 screenshots retried nine times and failed with
+  `llm_error: ReadError: `. Now, as in Claude Code, the oldest images give way to a short
+  placeholder once the images pass three quarters of the limit (24 MiB) or 100 images (600 on a
+  model with a window over 200,000 tokens), so the request fits; the task's log keeps every
+  image. A request still over the limit is not sent: it is compacted, or, when its text alone is
+  over the limit, the turn fails at once and says the sizes. A connection dropped on a large
+  request, and a 413, now say how large the request was.
+
 ## [1.2.4] - 2026-11-15
 
 The terminal UI works more like Claude Code's: the model's questions come in its dialog, and

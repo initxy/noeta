@@ -57,6 +57,11 @@ LLM_ERROR = "llm_error"
 LLM_EMPTY_RESPONSE = "llm_empty_response"
 LLM_TRUNCATED = "llm_truncated"
 CONTEXT_OVERFLOW = "context_overflow"
+#: The detail of a request whose text alone is over the size limit
+#: (``RequestTooLarge``, whose message gives the sizes).
+REQUEST_TEXT_TOO_LARGE = (
+    "{error}. Without its images it is still over the limit, so compacting cannot make it "
+    "fit: start a new conversation, or set max_request_bytes if the endpoint takes more")
 #: The turn reached ``config["max_turns"]`` model calls (Claude Code's
 #: ``--max-turns``); the detail says how many.
 MAX_TURNS = "max_turns"

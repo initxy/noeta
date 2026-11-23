@@ -43,6 +43,12 @@ from noeta.backends.providers._openai_responses_stream import (
 from noeta.backends.providers._openai_responses_stream import (
     translate_usage as translate_usage,
 )
+from noeta.backends.providers._request_size import (
+    DEFAULT_MAX_REQUEST_BYTES,
+    encode_body,
+    fit_request,
+    valid_limit,
+)
 from noeta.core.errors import ModelError
 from noeta.core.provider import OnDelta
 from noeta.core.types import (
@@ -108,11 +114,14 @@ class OpenAIResponsesProvider:
         reasoning_continuation: ReasoningContinuation = "responses",
         transport: httpx.AsyncBaseTransport | None = None,
         first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
+        max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
     ) -> None:
         """``timeout_seconds`` bounds silence on the stream once it began;
         ``first_byte_timeout_seconds`` the wait for the response headers (a
         gateway that holds the stream until the answer is complete sends
-        nothing before then)."""
+        nothing before then). ``max_request_bytes`` is the endpoint's request
+        size limit (:mod:`._request_size`)."""
+        self._max_request_bytes = valid_limit(max_request_bytes)
         # The httpx client gets no base_url (which would re-join the endpoint
         # as a relative path); the whole endpoint string is POSTed verbatim.
         self._endpoint = base_url.rstrip("/")
@@ -138,51 +147,54 @@ class OpenAIResponsesProvider:
         body = self.build_body(request)
         body["stream"] = True
         try:
+            return await self._stream(body, request, on_delta)
+        except _StaleReasoning:
+            # Stale cross-turn reasoning recovery: echoed ``reasoning``
+            # items carry ``encrypted_content`` that is only verifiable
+            # inside the continuation window the gateway minted it for —
+            # across a long suspend (key rotation / TTL) the gateway
+            # rejects it with 400 ``invalid_encrypted_content``. The
+            # ciphertext is only needed for in-flight continuation, never
+            # to make a fresh turn valid, so every echoed reasoning item is
+            # dropped and the request re-sent ONCE (``reasoning`` /
+            # ``include`` stay, so this turn still reasons fresh).
+            retry = dict(body)
+            retry["input"] = [
+                item for item in body["input"] if item.get("type") != "reasoning"
+            ]
             try:
-                return await self._stream(body, request, on_delta)
-            except _StaleReasoning:
-                # Stale cross-turn reasoning recovery: echoed ``reasoning``
-                # items carry ``encrypted_content`` that is only verifiable
-                # inside the continuation window the gateway minted it for —
-                # across a long suspend (key rotation / TTL) the gateway
-                # rejects it with 400 ``invalid_encrypted_content``. The
-                # ciphertext is only needed for in-flight continuation, never
-                # to make a fresh turn valid, so every echoed reasoning item is
-                # dropped and the request re-sent ONCE (``reasoning`` /
-                # ``include`` stay, so this turn still reasons fresh).
-                retry = dict(body)
-                retry["input"] = [
-                    item for item in body["input"] if item.get("type") != "reasoning"
-                ]
-                try:
-                    return await self._stream(retry, request, on_delta)
-                except _StaleReasoning as again:
-                    raise again.error from None
-        except httpx.RequestError as exc:
-            raise transport_error(exc) from exc
+                return await self._stream(retry, request, on_delta)
+            except _StaleReasoning as again:
+                raise again.error from None
 
     async def _stream(
         self, body: dict[str, Any], request: ModelRequest, on_delta: OnDelta | None
     ) -> ModelResponse:
-        async with self._client.stream(
-            "POST",
-            self._endpoint,
-            params=self._params,
-            json=body,
-            headers=request.headers or None,
-            timeout=stream_timeout(self._silence, self._first_byte_timeout),
-        ) as response:
-            if response.is_error:
-                await response.aread()
-                error = translate_http_error(response)
-                if (
-                    response.status_code == 400
-                    and is_invalid_encrypted_content(response)
-                    and any(item.get("type") == "reasoning" for item in body["input"])
-                ):
-                    raise _StaleReasoning(error)
-                raise error
-            final = await consume_stream(response, on_delta, self._silence)
+        content = encode_body(body, self._max_request_bytes)
+        answered = False
+        try:
+            async with self._client.stream(
+                "POST",
+                self._endpoint,
+                params=self._params,
+                content=content,
+                headers=request.headers or None,
+                timeout=stream_timeout(self._silence, self._first_byte_timeout),
+            ) as response:
+                answered = True
+                if response.is_error:
+                    await response.aread()
+                    error = translate_http_error(response, body_bytes=len(content))
+                    if (
+                        response.status_code == 400
+                        and is_invalid_encrypted_content(response)
+                        and any(item.get("type") == "reasoning" for item in body["input"])
+                    ):
+                        raise _StaleReasoning(error)
+                    raise error
+                final = await consume_stream(response, on_delta, self._silence)
+        except httpx.RequestError as exc:
+            raise transport_error(exc, body_bytes=None if answered else len(content)) from exc
         return restore_tool_names(parse_responses_payload(final, request.model), request)
 
     # ------------------------------------------------------------------
@@ -190,8 +202,10 @@ class OpenAIResponsesProvider:
     # ------------------------------------------------------------------
 
     def build_body(self, request: ModelRequest) -> dict[str, Any]:
-        """The wire body for ``request`` (without ``stream``)."""
+        """The wire body for ``request`` (without ``stream``), its images
+        within the request size limit."""
         vision = model_admits_images(request.model)
+        request = fit_request(request, self._max_request_bytes, in_tool_results=vision)
         items: list[dict[str, Any]] = []
         for message in request.messages:
             items.extend(_message_to_items(message, self._reasoning_continuation, vision))

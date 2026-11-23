@@ -23,6 +23,7 @@ from typing import Any, Literal
 import httpx
 import msgspec
 
+from noeta.backends.providers._request_size import refused_note, transport_note
 from noeta.core import models
 from noeta.core.errors import (
     ContextOverflow,
@@ -460,17 +461,20 @@ def http_error_is_context_overflow(response: httpx.Response) -> bool:
     return error_dict_is_context_overflow(error)
 
 
-def translate_http_error(response: httpx.Response) -> ModelError:
+def translate_http_error(response: httpx.Response, *,
+                         body_bytes: int | None = None) -> ModelError:
     """Map an HTTP error status into the neutral taxonomy. The body must have
     been read (``await response.aread()``) first.
 
     429 → :class:`RateLimited` with ``Retry-After``; 5xx (incl. Anthropic's
     529 overloaded) → :class:`Transient`; a 4xx whose body says the prompt is
     too long (or a 413) → :class:`ContextOverflow`; every other 4xx →
-    :class:`Fatal`.
+    :class:`Fatal`. A 413 says the size of the request body, ``body_bytes``.
     """
     status = response.status_code
     message = describe_http_error(response)
+    if status == 413 and body_bytes is not None:
+        message += refused_note(body_bytes)
     body = _body_text(response)
     if status == 429:
         return RateLimited(
@@ -486,10 +490,12 @@ def translate_http_error(response: httpx.Response) -> ModelError:
     return Fatal(message, status=status, body=body)
 
 
-def transport_error(exc: httpx.HTTPError) -> Transient:
+def transport_error(exc: httpx.HTTPError, *, body_bytes: int | None = None) -> Transient:
     """A timeout or transport failure — including a disconnect mid-stream — is
-    worth retrying as is."""
-    return Transient(f"{type(exc).__name__}: {exc}")
+    worth retrying as is. ``body_bytes``: the size of a request that failed
+    before its response, which a large one's message says."""
+    note = transport_note(body_bytes) if body_bytes is not None else ""
+    return Transient(f"{type(exc).__name__}: {exc}{note}")
 
 
 #: How long a streamed call waits for the response headers: Claude Code's

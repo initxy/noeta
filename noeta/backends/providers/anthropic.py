@@ -69,6 +69,12 @@ from noeta.backends.providers._common import (
     translate_http_error,
     transport_error,
 )
+from noeta.backends.providers._request_size import (
+    DEFAULT_MAX_REQUEST_BYTES,
+    encode_body,
+    fit_request,
+    valid_limit,
+)
 from noeta.backends.providers._sse import iter_sse_events
 from noeta.core import models
 from noeta.core.errors import Fatal, StreamBroken, TimedOut
@@ -180,6 +186,7 @@ class AnthropicProvider:
         whole_timeout_seconds: float = WHOLE_TIMEOUT_SECONDS,
         first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
         prompt_cache_ttl: str = "5m",
+        max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
     ) -> None:
         """``api_key`` defaults to the ``ANTHROPIC_API_KEY`` environment
         variable; an explicit argument still wins. Missing credentials raise
@@ -195,7 +202,10 @@ class AnthropicProvider:
         (:meth:`complete_whole`) from start to end. ``prompt_cache_ttl``
         ``"1h"`` asks for the one-hour prompt cache (its writes are billed
         higher; the cache outlasts longer breaks), and every reply says so
-        (``ModelResponse.cache_ttl``); ``"5m"`` is the API's default."""
+        (``ModelResponse.cache_ttl``); ``"5m"`` is the API's default.
+        ``max_request_bytes`` is the endpoint's request size limit
+        (:mod:`._request_size`)."""
+        self._max_request_bytes = valid_limit(max_request_bytes)
         if prompt_cache_ttl not in CACHE_TTLS:
             raise ValueError(f"prompt_cache_ttl must be one of {sorted(CACHE_TTLS)}, "
                              f"got {prompt_cache_ttl!r}")
@@ -261,13 +271,14 @@ class AnthropicProvider:
         guard_vision(request)
         body = self.build_body(request)
         body["stream"] = True
+        content = encode_body(body, self._max_request_bytes)
         accumulator = StreamAccumulator(on_delta)
         began = False
         try:
             async with self._client.stream(
                 "POST",
                 _MESSAGES_ENDPOINT,
-                json=body,
+                content=content,
                 headers=self.request_headers(request) or None,
                 timeout=stream_timeout(self._silence, self._first_byte_timeout),
             ) as response:
@@ -275,7 +286,7 @@ class AnthropicProvider:
                     # An unread streaming response cannot be sniffed for the
                     # overflow markers, so the (small) error body is read first.
                     await response.aread()
-                    raise translate_http_error(response)
+                    raise translate_http_error(response, body_bytes=len(content))
                 began = True
                 lines = bounded_silence(response.aiter_lines(), self._silence)
                 async with aclosing(iter_sse_events(lines)) as events:
@@ -287,7 +298,7 @@ class AnthropicProvider:
             # streamed again within the budget and silence once (Claude
             # Code's counts) before the call goes on in one piece.
             if not began:
-                raise transport_error(exc) from exc
+                raise transport_error(exc, body_bytes=len(content)) from exc
             silent = isinstance(exc, httpx.TimeoutException)
             raise StreamBroken(f"Anthropic stream broke: {type(exc).__name__}: {exc}",
                                stream_retries=1 if silent else None) from exc
@@ -313,17 +324,19 @@ class AnthropicProvider:
             else:
                 body["thinking"] = {**thinking, "budget_tokens": budget}
         body["stream"] = False
+        content = encode_body(body, self._max_request_bytes)
         try:
             response = await asyncio.wait_for(self._client.post(
-                _MESSAGES_ENDPOINT, json=body, headers=self.request_headers(request) or None,
+                _MESSAGES_ENDPOINT, content=content,
+                headers=self.request_headers(request) or None,
                 timeout=self._whole_timeout), self._whole_timeout)
         except (TimeoutError, httpx.TimeoutException) as exc:
             raise TimedOut(f"Anthropic call in one piece got no answer within "
                            f"{self._whole_timeout:g} s") from exc
         except httpx.RequestError as exc:
-            raise transport_error(exc) from exc
+            raise transport_error(exc, body_bytes=len(content)) from exc
         if response.is_error:
-            raise translate_http_error(response)
+            raise translate_http_error(response, body_bytes=len(content))
         try:
             payload = response.json()
         except ValueError as exc:
@@ -380,9 +393,11 @@ class AnthropicProvider:
     # ------------------------------------------------------------------
 
     def build_body(self, request: ModelRequest) -> dict[str, Any]:
-        """The wire body for ``request`` (without ``stream``). Public so tests
-        and diagnostics can see exactly what would be sent."""
+        """The wire body for ``request`` (without ``stream``), its images
+        within the request size limit. Public so tests and diagnostics can
+        see exactly what would be sent."""
         vision = model_admits_images(request.model)
+        request = fit_request(request, self._max_request_bytes, in_tool_results=vision)
         outbound, last_block, blocks_of = messages_to_wire(
             request.messages, vision, self._system_turns,
             tools=[t.name for t in request.tools])

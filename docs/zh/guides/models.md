@@ -100,7 +100,7 @@ models = [{id = "Qwen/Qwen3-Coder-30B-A3B-Instruct", context_window = 262144, ma
 list_models = true                     # 读它的 /models（默认）；false 不读
 ```
 
-一张表只接受 `family`、`base_url`、`api_key`、`headers`、`models`、`list_models` 和 `prompt_cache_ttl`；写了别的键算配置错误，表名叫 `default` 也算（这个名字留给顶层 provider）。`{env:…}` 和 `{keyring:…}` 在表里的 `api_key` 和 `headers` 中会被替换成真实值，顶层的 `api_key` 和 `extra_headers` 也一样。`{keyring:…}` 需要 `keyring` 这个 extra。
+一张表只接受 `family`、`base_url`、`api_key`、`headers`、`models`、`list_models`、`prompt_cache_ttl` 和 `max_request_bytes`（这个接口最多收多大的请求体，见[请求体大小的上限](../how-it-works/context.md#request-size-limit)）；写了别的键算配置错误，表名叫 `default` 也算（这个名字留给顶层 provider）。`{env:…}` 和 `{keyring:…}` 在表里的 `api_key` 和 `headers` 中会被替换成真实值，顶层的 `api_key` 和 `extra_headers` 也一样。`{keyring:…}` 需要 `keyring` 这个 extra。
 
 一个模型 id 发给哪个 provider：
 

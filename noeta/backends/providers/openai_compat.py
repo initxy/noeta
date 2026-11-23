@@ -48,6 +48,12 @@ from noeta.backends.providers._openai_compat_stream import (
 from noeta.backends.providers._openai_compat_stream import (
     translate_usage as translate_usage,
 )
+from noeta.backends.providers._request_size import (
+    DEFAULT_MAX_REQUEST_BYTES,
+    encode_body,
+    fit_request,
+    valid_limit,
+)
 from noeta.backends.providers._sse import iter_sse_events
 from noeta.core import models
 from noeta.core.errors import Fatal, Transient
@@ -109,6 +115,7 @@ class OpenAICompatProvider:
         max_tokens_param: MaxTokensParam = "auto",
         transport: httpx.AsyncBaseTransport | None = None,
         first_byte_timeout_seconds: float = FIRST_BYTE_TIMEOUT_SECONDS,
+        max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
     ) -> None:
         """``api_key`` defaults to the ``OPENAI_API_KEY`` environment variable.
         An **empty** key counts as absent — the usual way to arrive at one is
@@ -122,8 +129,10 @@ class OpenAICompatProvider:
         has gone quiet for five minutes is dead, not slow.
         ``first_byte_timeout_seconds`` bounds the wait for the response
         headers apart: a gateway that holds the stream until the answer is
-        complete sends nothing before then.
+        complete sends nothing before then. ``max_request_bytes`` is the
+        endpoint's request size limit (:mod:`._request_size`).
         """
+        self._max_request_bytes = valid_limit(max_request_bytes)
         if max_tokens_param not in ("auto", "max_tokens", "max_completion_tokens"):
             raise ValueError(
                 "max_tokens_param must be 'auto', 'max_tokens' or "
@@ -164,18 +173,21 @@ class OpenAICompatProvider:
         # Requests the terminal usage-only chunk. Some gateways never send it;
         # a missing usage object degrades to an empty ``Usage``.
         body["stream_options"] = {"include_usage": True}
+        content = encode_body(body, self._max_request_bytes)
         accumulator = ChatStreamAccumulator(on_delta)
+        answered = False
         try:
             async with self._client.stream(
                 "POST",
                 "/chat/completions",
-                json=body,
+                content=content,
                 headers=request.headers or None,
                 timeout=stream_timeout(self._silence, self._first_byte_timeout),
             ) as response:
+                answered = True
                 if response.is_error:
                     await response.aread()
-                    raise translate_http_error(response)
+                    raise translate_http_error(response, body_bytes=len(content))
                 lines = bounded_silence(response.aiter_lines(), self._silence)
                 async with aclosing(iter_sse_events(lines)) as events:
                     async for _event, data in events:
@@ -191,7 +203,7 @@ class OpenAICompatProvider:
                         if isinstance(chunk, dict):
                             accumulator.feed(chunk)
         except httpx.RequestError as exc:
-            raise transport_error(exc) from exc
+            raise transport_error(exc, body_bytes=None if answered else len(content)) from exc
         # No ``[DONE]`` and no ``finish_reason``: the stream was cut
         # mid-generation, which is a dropped connection (retryable), not a
         # finished turn — whatever partial content arrived. A gateway that
@@ -206,8 +218,11 @@ class OpenAICompatProvider:
     # ------------------------------------------------------------------
 
     def build_body(self, request: ModelRequest) -> dict[str, Any]:
-        """The wire body for ``request`` (without the stream flags)."""
+        """The wire body for ``request`` (without the stream flags), its
+        images within the request size limit."""
         guard_vision(request)
+        # A Chat tool message carries text only: its images are never sent.
+        request = fit_request(request, self._max_request_bytes, in_tool_results=False)
         outbound: list[dict[str, Any]] = []
         system = "\n".join(part.text for part in request.system)
         if request.system:

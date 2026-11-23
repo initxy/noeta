@@ -23,6 +23,7 @@ comes from and which wins is explained in [Configuration](../start/configuration
 | `models_file` | path | none | a JSON file describing more models (below) | `NOETA_MODELS_FILE` |
 | `list_models` | bool | `true` | read the default provider's `/models` listing for models the catalog does not know | — |
 | `prompt_cache_ttl` | `"5m"` or `"1h"` | the API's (`5m`) | `anthropic` only: the one-hour prompt cache, billed higher per write | — |
+| `max_request_bytes` | positive integer | `33554432` (32 MiB) | the largest request body the default provider's endpoint takes: the oldest images give way to stay under it, and a body still over it is not sent ([the request size limit](../how-it-works/context.md#request-size-limit)) | — |
 | `prompts` | table | none | prompt overrides for every task this front end starts, by prompt name (`"system/main.append" = "…"`) | `--system-prompt`, `--append-system-prompt` |
 
 Tables: `[providers.<name>]`, `[plugins.<name>]`, `[agents.<name>]`, `[channels.<name>]`
@@ -47,6 +48,7 @@ provider ([Providers and model routing](../how-it-works/models.md)).
 | `models` | no | model ids this provider serves, as strings or rows `{id, context_window, max_output_tokens}`; a row with both limits teaches the catalog a model it does not know |
 | `list_models` | no (default `true`) | read this provider's `/models` for more models and their windows (kept a day in `~/.noeta/cache/models`) |
 | `prompt_cache_ttl` | no | `anthropic` only: `"1h"` or `"5m"` |
+| `max_request_bytes` | no | as the top-level `max_request_bytes`, for this provider |
 
 Any other key is an error. The name `default` is taken (it names the top-level provider). One
 model named for two providers is an error. `provider = "<table name>"` at the top level makes
